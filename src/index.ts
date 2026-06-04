@@ -1,6 +1,8 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { streamText, type ModelMessage } from "ai";
+import { stepCountIs, streamText, type ModelMessage } from "ai";
 import { createInterface } from "readline";
+import { calculatorTool, weatherTool } from "./tools";
+import { agentLoop } from "./agent";
 
 const model = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -25,21 +27,15 @@ const ask = () => {
 
     messages.push({ role: "user", content: trimmed });
 
-    const result = streamText({
+    await agentLoop({
       model,
+      systemPrompt:
+        "you are Vela, an assistant that can call tools to answer user questions.",
+      tools: [weatherTool, calculatorTool],
       messages,
     });
 
-    process.stdout.write("Assistant: \n");
-    let fullResponse = "";
-    for await (const chunk of result.textStream) {
-      process.stdout.write(chunk);
-      fullResponse += chunk;
-    }
     console.log("\n");
-
-    messages.push({ role: "assistant", content: fullResponse });
-
     ask();
   });
 };
