@@ -1,0 +1,19 @@
+{
+  "name": "vela",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch run src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.67",
+    "ai": "^6.0.194"
+  }
+}
