@@ -1,11 +1,10 @@
-import type { Tool, ToolSet } from "ai";
+import type { FlexibleSchema, Tool, ToolSet } from "ai";
 import { tool as AITool } from "ai";
-import type { ZodType } from "zod";
 
 export interface ToolDefinition {
   name: string;
   description: string;
-  inputSchema: ZodType;
+  inputSchema: FlexibleSchema<any>;
   execute: (input: any) => Promise<unknown>;
 
   isConcurrencySafe?: boolean;
