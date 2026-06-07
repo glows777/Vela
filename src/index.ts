@@ -1,9 +1,10 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { stepCountIs, streamText, type ModelMessage } from "ai";
 import { createInterface } from "readline";
-import { calculatorTool, weatherTool } from "./tools";
+import { allTools, calculatorTool, weatherTool } from "./tools";
 import { agentLoop, type BudgetState } from "./agent";
 import { createMockModel } from "./mock";
+import { ToolRegistry } from "./tools/register";
 
 // const model = createOpenAI({
 //   apiKey: process.env.OPENAI_API_KEY!,
@@ -19,6 +20,19 @@ const rl = createInterface({
 
 const messages: ModelMessage[] = [];
 const budget: BudgetState = { used: 0, limit: 15000 };
+const toolRegistry = new ToolRegistry();
+toolRegistry.register(...allTools);
+
+console.log(
+  `has registered tool count: ${toolRegistry.getAllTools().length}：`,
+);
+for (const tool of toolRegistry.getAllTools()) {
+  const flags = [
+    tool.isConcurrencySafe ? "concurrency" : "parrecel",
+    tool.isReadOnly ? "read only" : "read and write",
+  ].join(", ");
+  console.log(`  - ${tool.name}（${flags}）`);
+}
 
 const ask = () => {
   rl.question("You: ", async (input) => {
@@ -35,7 +49,7 @@ const ask = () => {
       model,
       systemPrompt:
         "You are Vela, an assistant that can call tools to answer user questions.",
-      tools: [weatherTool, calculatorTool],
+      toolRegistry,
       messages,
       budget,
     });

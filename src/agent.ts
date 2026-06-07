@@ -12,6 +12,7 @@ import {
   resetHistory,
 } from "./tools/loop-detection";
 import { calculateDelay, isRetryable, sleep } from "./utils/retry";
+import type { ToolRegistry } from "./tools/register";
 
 const MAX_TURN = 15;
 const MAX_RETRIES = 3;
@@ -24,7 +25,7 @@ export interface BudgetState {
 interface AgentLoopParameter {
   model: LanguageModel;
   systemPrompt: string;
-  tools: ToolSet | Tool[];
+  toolRegistry: ToolRegistry;
   messages: ModelMessage[];
   budget: BudgetState;
 }
@@ -54,7 +55,7 @@ const resolveTools = (tools: ToolSet | Tool[]): ToolSet => {
 export const agentLoop = async ({
   model,
   systemPrompt,
-  tools,
+  toolRegistry,
   messages,
   budget,
 }: AgentLoopParameter) => {
@@ -79,7 +80,7 @@ export const agentLoop = async ({
         const result = streamText({
           model,
           system: systemPrompt,
-          tools: resolveTools(tools),
+          tools: toolRegistry.toAISDKFormat(),
           messages,
           maxRetries: 0, // 禁止 streamText 内部重试，交由外层控制重试逻辑
         });
