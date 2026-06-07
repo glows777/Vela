@@ -1,7 +1,19 @@
-import { join, relative, resolve } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
 import z from "zod";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import type { ToolDefinition } from "./register";
+import TurndownService from "turndown";
+import { pickSearchTool } from "./web-search";
+
+const turndown = new TurndownService({
+  headingStyle: "atx",
+  codeBlockStyle: "fenced",
+});
+turndown.remove(["script", "style", "nav", "footer", "header", "iframe"]);
+
+function htmlToMarkdown(html: string): string {
+  return turndown.turndown(html);
+}
 
 export const weatherToolParamSchema = z.object({
   city: z.string().describe("要查询天气的城市名称"),
@@ -309,6 +321,94 @@ export const bashTool: ToolDefinition = {
   },
 };
 
+const webFetchToolParamSchema = z.object({
+  url: z.string().describe("完整 URL"),
+});
+export const webFetchTool: ToolDefinition = {
+  name: "web_fetch",
+  description: "抓取指定 URL 的网页内容，转换为 Markdown 格式",
+  inputSchema: webFetchToolParamSchema,
+  isConcurrencySafe: true,
+  isReadOnly: true,
+  maxResultChars: 3000,
+  execute: async ({ url }: { url: string }) => {
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; SuperAgent/1.0)" },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) return `抓取失败: HTTP ${res.status}`;
+      const html = await res.text();
+      return htmlToMarkdown(html);
+    } catch (err: any) {
+      return `抓取失败: ${err.message}`;
+    }
+  },
+};
+
+let previewServer: Bun.Server<undefined> | null = null;
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".tsx": "application/javascript; charset=utf-8", // 让浏览器把 .tsx 当 JS 加载
+  ".ts": "application/javascript; charset=utf-8",
+  // ...
+};
+
+const startPreviewToolParamSchema = z.object({
+  port: z.number(),
+});
+export const startPreviewTool: ToolDefinition = {
+  name: "start_preview",
+  description: "启动 app/ 目录的预览服务器。生成应用文件后必须立即调用此工具",
+  inputSchema: startPreviewToolParamSchema,
+  isConcurrencySafe: false,
+  isReadOnly: false,
+  execute: async ({ port = 8080 }: { port?: number } = {}) => {
+    if (previewServer) return `预览服务器已在运行 → http://localhost:${port}`;
+    const root = resolve("app");
+    if (!existsSync(root)) return "错误：app/ 目录不存在";
+
+    previewServer = Bun.serve({
+      port,
+      async fetch(req) {
+        let urlPath: string;
+        try {
+          const pathname = new URL(req.url).pathname;
+          urlPath = decodeURIComponent(pathname).replace(/\/$/, "/index.html");
+        } catch {
+          return new Response("Bad Request", { status: 400 });
+        }
+
+        const filePath = resolve(root, `.${urlPath}`);
+        const relativePath = relative(root, filePath);
+
+        if (relativePath.startsWith("..")) {
+          return new Response(null, { status: 403 });
+        }
+
+        const file = Bun.file(filePath);
+        if (!(await file.exists())) {
+          return new Response("Not Found", { status: 404 });
+        }
+
+        return new Response(file, {
+          headers: {
+            "Content-Type":
+              MIME[extname(filePath).toLowerCase()] ||
+              "application/octet-stream",
+            "Cache-Control": "no-cache",
+          },
+        });
+      },
+    });
+
+    return `✓ 预览服务器已启动 → http://localhost:${previewServer.port}`;
+  },
+};
+
 export const allTools: ToolDefinition[] = [
   weatherTool,
   calculatorTool,
@@ -319,4 +419,7 @@ export const allTools: ToolDefinition[] = [
   grepTool,
   globTool,
   bashTool,
+  startPreviewTool,
+  webFetchTool,
+  pickSearchTool(),
 ];

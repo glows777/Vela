@@ -6,12 +6,12 @@ import { agentLoop, type BudgetState } from "./agent";
 import { createMockModel } from "./mock";
 import { ToolRegistry } from "./tools/register";
 
-// const model = createOpenAI({
-//   apiKey: process.env.OPENAI_API_KEY!,
-//   baseURL: process.env.OPENAI_API_BASE_URL,
-// }).chat(process.env.OPENAI_API_MODEL_NAME!);
+const model = createOpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+  baseURL: process.env.OPENAI_API_BASE_URL,
+}).chat(process.env.OPENAI_API_MODEL_NAME!);
 
-const model = createMockModel();
+// const model = createMockModel();
 
 const rl = createInterface({
   input: process.stdin,

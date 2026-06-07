@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NOVA GPU — 重新定义游戏性能</title>
+    <style>
+        /* ========== Reset & Base ========== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', Roboto, 'Helvetica Neue', sans-serif;
+            background: #0b0d12;
+            color: #eaeef2;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        a {
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* ========== Navbar ========== */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            z-index: 100;
+            padding: 20px 0;
+            background: rgba(11, 13, 18, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            transition: all 0.3s;
+        }
+
+        .navbar .container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            background: linear-gradient(135deg, #f0c27f, #fc5c7d);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .logo span {
+            font-weight: 300;
+            -webkit-text-fill-color: #8899aa;
+            color: #8899aa;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 36px;
+            list-style: none;
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .nav-links a {
+            color: #9aa8b9;
+            transition: color 0.25s;
+        }
+
+        .nav-links a:hover {
+            color: #fff;
+        }
+
+        .nav-cta {
+            background: linear-gradient(135deg, #fc5c7d, #f0c27f);
+            color: #fff !important;
+            padding: 8px 22px;
+            border-radius: 50px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .nav-cta:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 24px rgba(252, 92, 125, 0.4);
+        }
+
+        /* ========== Hero ========== */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            padding-top: 80px;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -40%;
+            right: -20%;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(252, 92, 125, 0.15) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .hero::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -10%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(240, 194, 127, 0.10) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .hero .container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 60px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-content {
+            flex: 1;
+        }
+
+        .hero-badge {
+            display: inline-block;
+            background: rgba(252, 92, 125, 0.15);
+            color: #fc5c7d;
+            padding: 6px 18px;
+            border-radius: 50px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(252, 92, 125, 0.25);
+        }
+
+        .hero h1 {
+            font-size: 64px;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 20px;
+        }
+
+        .hero h1 .highlight {
+            background: linear-gradient(135deg, #f0c27f, #fc5c7d);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero p {
+            font-size: 18px;
+            color: #8899aa;
+            max-width: 520px;
+            margin-bottom: 36px;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .btn-primary {
+            display: inline-block;
+            background: linear-gradient(135deg, #fc5c7d, #f0c27f);
+            color: #fff;
+            padding: 14px 38px;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(252, 92, 125, 0.35);
+        }
+
+        .btn-secondary {
+            display: inline-block;
+            background: transparent;
+            color: #eaeef2;
+            padding: 14px 38px;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .hero-visual {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        .gpu-card {
+            width: 340px;
+            height: 440px;
+            background: linear-gradient(145deg, #161a24, #1e2432);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+            box-shadow: 0 40px 80px rgba(0, 0, 0, 0.6);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .gpu-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: conic-gradient(from 0deg, transparent, rgba(252, 92, 125, 0.06), transparent, rgba(240, 194, 127, 0.06), transparent);
+            animation: rotate-glow 8s linear infinite;
+        }
+
+        @keyframes rotate-glow {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .gpu-card-content {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+        }
+
+        .gpu-icon {
+            font-size: 100px;
+            line-height: 1;
+            margin-bottom: 20px;
+            filter: drop-shadow(0 0 40px rgba(252, 92, 125, 0.3));
+        }
+
+        .gpu-card h3 {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+
+        .gpu-card .sub {
+            color: #8899aa;
+            font-size: 14px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+        }
+
+        .gpu-card .price-tag {
+            margin-top: 24px;
+            font-size: 36px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #f0c27f, #fc5c7d);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .gpu-card .price-tag small {
+            font-size: 16px;
+            font-weight: 400;
+            -webkit-text-fill-color: #8899aa;
+            color: #8899aa;
+        }
+
+        /* ========== Features ========== */
+        .features {
+            padding: 120px 0;
+            position: relative;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 72px;
+        }
+
+        .section-header h2 {
+            font-size: 44px;
+            font-weight: 800;
+            margin-bottom: 16px;
+        }
+
+        .section-header p {
+            color: #8899aa;
+            font-size: 18px;
+            max-width: 540px;
+            margin: 0 auto;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+        }
+
+        .feature-card {
+            background: linear-gradient(145deg, #161a24, #1e2432);
+            border-radius: 20px;
+            padding: 36px 28px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-6px);
+            border-color: rgba(252, 92, 125, 0.2);
+            box-shadow: 0 20px 48px rgba(0, 0, 0, 0.4);
+        }
+
+        .feature-icon {
+            font-size: 40px;
+            margin-bottom: 20px;
+        }
+
+        .feature-card h3 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .feature-card p {
+            color: #8899aa;
+            font-size: 15px;
+        }
+
+        /* ========== Products ========== */
+        .products {
+            padding: 100px 0;
+            background: linear-gradient(180deg, #0b0d12 0%, #10131c 100%);
+        }
+
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+        }
+
+        .product-card {
+            background: linear-gradient(145deg, #161a24, #1e2432);
+            border-radius: 20px;
+            padding: 40px 28px 32px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            transition: transform 0.3s, border-color 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .product-card.featured {
+            border-color: rgba(252, 92, 125, 0.3);
+            transform: scale(1.04);
+        }
+
+        .product-card.featured::after {
+            content: '热门推荐';
+            position: absolute;
+            top: 16px;
+            right: -32px;
+            background: linear-gradient(135deg, #fc5c7d, #f0c27f);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 40px;
+            transform: rotate(45deg);
+        }
+
+        .product-card:hover {
+            transform: translateY(-6px);
+            border-color: rgba(252, 92, 125, 0.25);
+        }
+
+        .product-card.featured:hover {
+            transform: scale(1.04) translateY(-6px);
+        }
+
+        .product-icon {
+            font-size: 60px;
+            margin-bottom: 16px;
+        }
+
+        .product-card h3 {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .product-card .product-cat {
+            color: #fc5c7d;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 16px;
+        }
+
+        .product-card .specs {
+            list-style: none;
+            margin: 16px 0 24px;
+            text-align: left;
+        }
+
+        .product-card .specs li {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            font-size: 14px;
+            color: #9aa8b9;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .product-card .specs li span {
+            color: #eaeef2;
+            font-weight: 600;
+        }
+
+        .product-card .product-price {
+            font-size: 32px;
+            font-weight: 800;
+            margin: 16px 0;
+            background: linear-gradient(135deg, #f0c27f, #fc5c7d);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .product-card .product-price small {
+            font-size: 14px;
+            -webkit-text-fill-color: #8899aa;
+            color: #8899aa;
+        }
+
+        .btn-buy {
+            display: inline-block;
+            width: 100%;
+            padding: 12px 0;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 15px;
+            background: linear-gradient(135deg, #fc5c7d, #f0c27f);
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn-buy:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(252, 92, 125, 0.3);
+        }
+
+        .btn-buy-outline {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #eaeef2;
+        }
+
+        .btn-buy-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* ========== Stats ========== */
+        .stats {
+            padding: 100px 0;
+            background: linear-gradient(135deg, rgba(252, 92, 125, 0.04), rgba(240, 194, 127, 0.04));
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 32px;
+            text-align: center;
+        }
+
+        .stat-item h3 {
+            font-size: 48px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #f0c27f, #fc5c7d);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-item p {
+            color: #8899aa;
+            font-size: 15px;
+            margin-top: 4px;
+        }
+
+        /* ========== Reviews ========== */
+        .reviews {
+            padding: 120px 0;
+        }
+
+        .reviews-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+        }
+
+        .review-card {
+            background: linear-gradient(145deg, #161a24, #1e2432);
+            border-radius: 20px;
+            padding: 32px 28px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .review-stars {
+            color: #f0c27f;
+            font-size: 18px;
+            margin-bottom: 16px;
+            letter-spacing: 2px;
+        }
+
+        .review-card blockquote {
+            font-size: 16px;
+            color: #c8d0db;
+            font-style: italic;
+            margin-bottom: 20px;
+            line-height: 1.7;
+        }
+
+        .review-author {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .review-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #fc5c7d, #f0c27f);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 18px;
+            color: #fff;
+        }
+
+        .review-author .name {
+            font-weight: 700;
+            font-size: 15px;
+        }
+
+        .review-author .title {
+            font-size: 13px;
+            color: #8899aa;
+        }
+
+        /* ========== CTA Section ========== */
+        .cta-section {
+            padding: 120px 0;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cta-section::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(252, 92, 125, 0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .cta-section h2 {
+            font-size: 48px;
+            font-weight: 800;
+            margin-bottom: 16px;
+            position: relative;
+        }
+
+        .cta-section p {
+            color: #8899aa;
+            font-size: 18px;
+            max-width: 500px;
+            margin: 0 auto 36px;
+            position: relative;
+        }
+
+        .cta-section .btn-primary {
+            position: relative;
+            font-size: 18px;
+            padding: 16px 48px;
+        }
+
+        /* ========== Footer ========== */
+        .footer {
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+            padding: 48px 0;
+            color: #8899aa;
+            font-size: 14px;
+        }
+
+        .footer .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 28px;
+            list-style: none;
+        }
+
+        .footer-links a:hover {
+            color: #eaeef2;
+        }
+
+        /* ========== Responsive ========== */
+        @media (max-width: 1024px) {
+            .features-grid,
+            .products-grid,
+            .reviews-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .hero h1 {
+                font-size: 48px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .navbar .container {
+                flex-wrap: wrap;
+                gap: 12px;
+            }
+
+            .nav-links {
+                gap: 18px;
+                font-size: 14px;
+            }
+
+            .hero .container {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .hero h1 {
+                font-size: 36px;
+            }
+
+            .hero p {
+                margin: 0 auto 36px;
+            }
+
+            .hero-buttons {
+                justify-content: center;
+            }
+
+            .gpu-card {
+                width: 280px;
+                height: 360px;
+            }
+
+            .gpu-icon {
+                font-size: 70px;
+            }
+
+            .features-grid,
+            .products-grid,
+            .reviews-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .product-card.featured {
+                transform: none;
+            }
+
+            .product-card.featured:hover {
+                transform: translateY(-6px);
+            }
+
+            .section-header h2 {
+                font-size: 32px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 24px;
+            }
+
+            .stat-item h3 {
+                font-size: 36px;
+            }
+
+            .cta-section h2 {
+                font-size: 32px;
+            }
+
+            .footer .container {
+                flex-direction: column;
+                text-align: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .nav-links {
+                gap: 12px;
+                font-size: 13px;
+            }
+
+            .hero h1 {
+                font-size: 28px;
+            }
+
+            .gpu-card {
+                width: 240px;
+                height: 310px;
+                padding: 20px;
+            }
+
+            .gpu-icon {
+                font-size: 56px;
+            }
+
+            .gpu-card .price-tag {
+                font-size: 28px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ========== Navbar ========== -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="logo">NOVA <span>| GPU</span></div>
+            <ul class="nav-links">
+                <li><a href="#features">产品特点</a></li>
+                <li><a href="#products">显卡系列</a></li>
+                <li><a href="#reviews">玩家评价</a></li>
+                <li><a href="#buy" class="nav-cta">立即购买</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- ========== Hero ========== -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-badge">🔥 全新架构 · 性能飞跃</div>
+                <h1>
+                    为游戏而生<br />
+                    <span class="highlight">重新定义性能</span>
+                </h1>
+                <p>
+                    NOVA 系列显卡搭载最新一代 GPU 架构，融合 AI 加速与实时光线追踪技术，
+                    带你进入前所未有的视觉盛宴。
+                </p>
+                <div class="hero-buttons">
+                    <a href="#products" class="btn-primary">探索全系列 →</a>
+                    <a href="#features" class="btn-secondary">了解更多</a>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="gpu-card">
+                    <div class="gpu-card-content">
+                        <div class="gpu-icon">🎮</div>
+                        <h3>NOVA X4</h3>
+                        <div class="sub">旗舰级游戏显卡</div>
+                        <div class="price-tag">
+                            ¥5,299 <small>起</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== Features ========== -->
+    <section class="features" id="features">
+        <div class="container">
+            <div class="section-header">
+                <h2>为什么选择 NOVA？</h2>
+                <p>从底层架构到散热设计，每一个细节都为极致性能而生。</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>全新架构</h3>
+                    <p>基于 5nm 制程工艺，晶体管密度提升 60%，能效比大幅超越上一代。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">❄️</div>
+                    <h3>冰霜散热系统</h3>
+                    <p>三风扇 + 均热板设计，双滚珠轴承，满载温度控制在 65°C 以下。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🌈</div>
+                    <h3>实时光线追踪</h3>
+                    <p>第三代 RT Core，光线追踪性能提升 2 倍，游戏画面栩栩如生。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🧠</div>
+                    <h3>AI 加速</h3>
+                    <p>全新 Tensor Core 支持 DLSS 4.0，AI 超分辨率让帧率飙升。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔗</div>
+                    <h3>PCIe 5.0 支持</h3>
+                    <p>带宽翻倍至 128 GB/s，告别数据传输瓶颈，畅享高速游戏体验。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🎨</div>
+                    <h3>RGB 神光同步</h3>
+                    <p>支持主流主板灯效联动，1680 万色自定义，打造专属电竞氛围。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== Stats ========== -->
+    <section class="stats">
+        <div class="container">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <h3>3.2M+</h3>
+                    <p>全球玩家信赖</p>
+                </div>
+                <div class="stat-item">
+                    <h3>98%</h3>
+                    <p>用户好评率</p>
+                </div>
+                <div class="stat-item">
+                    <h3>150+</h3>
+                    <p>合作游戏厂商</p>
+                </div>
+                <div class="stat-item">
+                    <h3>12</h3>
+                    <p>项国际设计大奖</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== Products ========== -->
+    <section class="products" id="products">
+        <div class="container">
+            <div class="section-header">
+                <h2>选择你的显卡</h2>
+                <p>覆盖入门到旗舰，满足不同玩家的需求。</p>
+            </div>
+            <div class="products-grid">
+                <div class="product-card">
+                    <div class="product-icon">🎯</div>
+                    <h3>NOVA X2</h3>
+                    <div class="product-cat">入门甜品</div>
+                    <ul class="specs">
+                        <li>CUDA 核心 <span>3072</span></li>
+                        <li>显存 <span>8GB GDDR6</span></li>
+                        <li>核心频率 <span>2.2 GHz</span></li>
+                        <li>功耗 <span>150W</span></li>
+                    </ul>
+                    <div class="product-price">¥2,299 <small>起</small></div>
+                    <button class="btn-buy btn-buy-outline">了解详情</button>
+                </div>
+
+                <div class="product-card featured">
+                    <div class="product-icon">🔥</div>
+                    <h3>NOVA X4</h3>
+                    <div class="product-cat">高端旗舰</div>
+                    <ul class="specs">
+                        <li>CUDA 核心 <span>6144</span></li>
+                        <li>显存 <span>16GB GDDR6X</span></li>
+                        <li>核心频率 <span>2.6 GHz</span></li>
+                        <li>功耗 <span>280W</span></li>
+                    </ul>
+                    <div class="product-price">¥5,299 <small>起</small></div>
+                    <button class="btn-buy">立即购买</button>
+                </div>
+
+                <div class="product-card">
+                    <div class="product-icon">👑</div>
+                    <h3>NOVA X6</h3>
+                    <div class="product-cat">极致性能</div>
+                    <ul class="specs">
+                        <li>CUDA 核心 <span>10240</span></li>
+                        <li>显存 <span>24GB GDDR6X</span></li>
+                        <li>核心频率 <span>2.8 GHz</span></li>
+                        <li>功耗 <span>350W</span></li>
+                    </ul>
+                    <div class="product-price">¥9,899 <small>起</small></div>
+                    <button class="btn-buy btn-buy-outline">了解详情</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== Reviews ========== -->
+    <section class="reviews" id="reviews">
+        <div class="container">
+            <div class="section-header">
+                <h2>玩家怎么说</h2>
+                <p>来自全球玩家的真实评价。</p>
+            </div>
+            <div class="reviews-grid">
+                <div class="review-card">
+                    <div class="review-stars">★★★★★</div>
+                    <blockquote>
+                        "换上了 NOVA X4 之后，4K 光追游戏终于稳 60 帧了！散热也非常给力，
+                        满载才 62 度，强烈推荐。"
+                    </blockquote>
+                    <div class="review-author">
+                        <div class="review-avatar">C</div>
+                        <div>
+                            <div class="name">Chris</div>
+                            <div class="title">硬核玩家 · 上海</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="review-card">
+                    <div class="review-stars">★★★★★</div>
+                    <blockquote>
+                        "做 3D 渲染工作，NOVA X6 的 24GB 显存太香了。大场景也能流畅操作，
+                        工作效率翻倍。"
+                    </blockquote>
+                    <div class="review-author">
+                        <div class="review-avatar">M</div>
+                        <div>
+                            <div class="name">Mia</div>
+                            <div class="title">3D 设计师 · 深圳</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="review-card">
+                    <div class="review-stars">★★★★☆</div>
+                    <blockquote>
+                        "X2 性价比超高，1080P 下通吃所有游戏。RGB 灯效也很漂亮，
+                        这个价位很能打！"
+                    </blockquote>
+                    <div class="review-author">
+                        <div class="review-avatar">J</div>
+                        <div>
+                            <div class="name">Jay</div>
+                            <div class="title">学生党 · 北京</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== CTA ========== -->
+    <section class="cta-section" id="buy">
+        <div class="container">
+            <h2>准备好升级你的装备了吗？</h2>
+            <p>限时优惠：购买任意 NOVA 显卡即赠定制鼠标垫 + 游戏礼包。</p>
+            <a href="#" class="btn-primary">立即抢购 →</a>
+        </div>
+    </section>
+
+    <!-- ========== Footer ========== -->
+    <footer class="footer">
+        <div class="container">
+            <div>© 2025 NOVA GPU. All rights reserved.</div>
+            <ul class="footer-links">
+                <li><a href="#">隐私政策</a></li>
+                <li><a href="#">服务条款</a></li>
+                <li><a href="#">售后支持</a></li>
+                <li><a href="#">联系我们</a></li>
+            </ul>
+        </div>
+    </footer>
+
+</body>
+</html>
