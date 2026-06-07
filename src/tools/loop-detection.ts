@@ -23,9 +23,9 @@ export type DetectionResult =
     };
 
 const HISTORY_SIZE = 30; // 滑动窗口大小
-const WARNING_THRESHOLD = 5; // 警告阈值 10
-const CRITICAL_THRESHOLD = 8; // 严重阈值 20
-const BREAKER_THRESHOLD = 10; // 熔断阈值 30
+const WARNING_THRESHOLD = 10; // 警告阈值
+const CRITICAL_THRESHOLD = 20; // 严重阈值
+const BREAKER_THRESHOLD = 30; // 熔断阈值
 
 function stringifyValue(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
