@@ -1,5 +1,6 @@
 import type { FlexibleSchema, Tool, ToolSet } from "ai";
-import { tool as AITool } from "ai";
+import { jsonSchema, tool as AITool, type JSONSchema7 } from "ai";
+import type { Client, Transport } from "@modelcontextprotocol/client";
 
 export interface ToolDefinition {
   name: string;
@@ -125,6 +126,57 @@ export class ToolRegistry {
     }
     return result;
   }
+
+  private mcpClients: Array<Client> = [];
+
+  async registerMCPServer(
+    serverName: string,
+    client: Client,
+    transport: Transport,
+  ): Promise<string[]> {
+    await client.connect(transport);
+    this.mcpClients.push(client);
+
+    const tools = await listAllMCPTools(client);
+    const registered: string[] = [];
+
+    for (const tool of tools) {
+      const prefixedName = `mcp__${serverName}__${tool.name}`;
+      if (this.tools.has(prefixedName)) continue;
+
+      const toolClient = client;
+      const originalName = tool.name;
+
+      this.register({
+        name: prefixedName,
+        description: `[MCP:${serverName}] ${tool.description ?? ""}`,
+        inputSchema: jsonSchema(tool.inputSchema as JSONSchema7),
+        // readOnlyHint is only an MCP behavior hint, not a concurrency contract.
+        // Treat it as a conservative signal: unknown or mutating MCP tools run exclusively.
+        isConcurrencySafe: tool.annotations?.readOnlyHint === true,
+        isReadOnly: tool.annotations?.readOnlyHint === true,
+        maxResultChars: 3000,
+        execute: async (input: any) => {
+          const result = await toolClient.callTool({
+            name: originalName,
+            arguments: input,
+          });
+          return formatMCPToolResult(result);
+        },
+      });
+
+      registered.push(prefixedName);
+    }
+
+    return registered;
+  }
+
+  async closeAllMCP(): Promise<void> {
+    for (const client of this.mcpClients) {
+      await client.close();
+    }
+    this.mcpClients = [];
+  }
 }
 
 function truncateResult(text: string, maxChars: number) {
@@ -137,4 +189,37 @@ function truncateResult(text: string, maxChars: number) {
   const dropped = text.length - headSize - tailSize;
 
   return `${head}\n\n...[ ${dropped} text has been truncated ] ...\n\n${tail}`;
+}
+
+async function listAllMCPTools(client: Client) {
+  const tools: Awaited<ReturnType<Client["listTools"]>>["tools"] = [];
+  let cursor: string | undefined;
+
+  do {
+    const result = await client.listTools(cursor ? { cursor } : undefined);
+    tools.push(...result.tools);
+    cursor = result.nextCursor;
+  } while (cursor);
+
+  return tools;
+}
+
+function formatMCPToolResult(
+  result: Awaited<ReturnType<Client["callTool"]>>,
+): string {
+  const content = result.content
+    .map((block) => {
+      if (block.type === "text") {
+        return block.text;
+      }
+      return JSON.stringify(block, null, 2);
+    })
+    .filter((text) => text.length > 0)
+    .join("\n");
+  const structuredContent = result.structuredContent
+    ? `\n\nstructuredContent:\n${JSON.stringify(result.structuredContent, null, 2)}`
+    : "";
+  const errorPrefix = result.isError ? "[MCP tool error]\n" : "";
+
+  return `${errorPrefix}${content}${structuredContent}` || "empty response";
 }
