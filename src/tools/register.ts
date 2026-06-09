@@ -11,6 +11,9 @@ export interface ToolDefinition {
   isConcurrencySafe?: boolean;
   isReadOnly?: boolean;
   maxResultChars?: number;
+
+  shouldDefer?: boolean; // 是否延迟加载
+  searchHint?: string; // 搜索提示词，帮助 ToolSearch 匹配
 }
 
 const DEFAULT_MAX_RESULT_CHARS = 3000; // 默认最大结果字符数， 超出则截断
@@ -26,6 +29,8 @@ export class ToolRegistry {
   private exclusiveLock = false; // 当前是否有独占锁持有者
   private concurrentCount = 0; // 当前共享锁持有数
   private waitQueue: Array<() => void> = []; // 阻塞等待中的 resolve 函数
+
+  private discoveredTools = new Set<string>();
 
   // * 获取共享锁
   private async acquireConcurrent() {
@@ -88,11 +93,14 @@ export class ToolRegistry {
   toAISDKFormat(): ToolSet {
     const result: Record<string, Tool> = {};
 
-    for (const [name, tool] of this.tools) {
+    const activeTools = this.getActiveTools();
+
+    for (const tool of activeTools) {
       const maxChar = tool.maxResultChars;
       const excuteFn = tool.execute;
       const isSafe = tool.isConcurrencySafe === true;
       const currentRegistryScope = this;
+      const name = tool.name;
 
       result[name] = AITool({
         description: tool.description,
@@ -153,8 +161,10 @@ export class ToolRegistry {
         inputSchema: jsonSchema(tool.inputSchema as JSONSchema7),
         // readOnlyHint is only an MCP behavior hint, not a concurrency contract.
         // Treat it as a conservative signal: unknown or mutating MCP tools run exclusively.
-        isConcurrencySafe: tool.annotations?.readOnlyHint === true,
+        isConcurrencySafe: true,
         isReadOnly: tool.annotations?.readOnlyHint === true,
+        shouldDefer: true,
+        searchHint: `${serverName} ${tool.name} ${tool.description}`,
         maxResultChars: 3000,
         execute: async (input: any) => {
           const result = await toolClient.callTool({
@@ -176,6 +186,74 @@ export class ToolRegistry {
       await client.close();
     }
     this.mcpClients = [];
+  }
+
+  getActiveTools() {
+    return this.getAllTools().filter((tool) => {
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  getDeferredToolSummary(): string {
+    const deferred = this.getAllTools().filter((tool) => {
+      return tool.shouldDefer && !this.discoveredTools.has(tool.name);
+    });
+
+    if (deferred.length === 0) return "";
+
+    const lines = deferred.map((t) => {
+      const hint = t.searchHint ? ` — ${t.searchHint}` : "";
+      return `  - ${t.name}${hint}`;
+    });
+    // 以下工具可用，但需要先通过 tool_search 搜索获取完整定义
+    return `\nBelow tools can be call, but before you call these tools, you should call too_search tool to get the competed tool schema
+    ${lines.join("\n")}`;
+  }
+
+  searchTools(query: string): ToolDefinition[] {
+    const q = query.trim();
+    const results: ToolDefinition[] = [];
+
+    const names = q.includes(",")
+      ? q
+          .split(",")
+          .map((n) => n.trim())
+          .filter(Boolean)
+      : [q];
+
+    for (const name of names) {
+      const tool = this.tools.get(name);
+      if (tool && tool.name !== "tool_search") {
+        results.push(tool);
+        this.discoveredTools.add(tool.name);
+      }
+    }
+    return results;
+  }
+
+  countTokenEstimate(): { active: number; deferred: number; total: number } {
+    let active = 0;
+    let deferred = 0;
+
+    for (const tool of this.tools.values()) {
+      const schemaSize = JSON.stringify({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      }).length;
+      const tokens = Math.ceil(schemaSize / 4);
+
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        deferred += tokens;
+      } else {
+        active += tokens;
+      }
+    }
+
+    return { active, deferred, total: active + deferred };
   }
 }
 

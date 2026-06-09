@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { allTools } from "./tools";
 import { agentLoop, type BudgetState } from "./agent";
 import { ToolRegistry } from "./tools/register";
+import { registerToolSearchTool } from "./tools/tool-search";
 
 const model = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -28,6 +29,8 @@ const messages: ModelMessage[] = [];
 const budget: BudgetState = { used: 0, limit: 15000 * 10 };
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
+
+registerToolSearchTool(toolRegistry);
 
 const MCP_INITIAL_RETRY_DELAY_MS = 30_000;
 const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000;
@@ -118,6 +121,20 @@ for (const tool of toolRegistry.getAllTools()) {
   console.log(`  - ${tool.name}（${flags}）`);
 }
 
+const allCount = toolRegistry.getAllTools().length;
+const activeTools = toolRegistry.getActiveTools();
+const estimate = toolRegistry.countTokenEstimate();
+
+console.log(`\n=== 工具统计 ===`);
+console.log(`  全部工具: ${allCount} 个`);
+console.log(`  活跃工具: ${activeTools.length} 个（非延迟）`);
+console.log(`  延迟工具: ${allCount - activeTools.length} 个`);
+console.log(
+  `  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`,
+);
+
+const deferredSummary = toolRegistry.getDeferredToolSummary();
+
 const ask = () => {
   if (rlClosed) {
     return;
@@ -135,10 +152,15 @@ const ask = () => {
 
     messages.push({ role: "user", content: trimmed });
 
+    const systemPrompt = `You are Vela, a helpful agent that can call tool.
+      You have serval built-in tools and mcp tools to use.
+      When the tools you need don't list in your tool call list, you can use tool_search tool to search it.
+      Answer should be clean and direct.${deferredSummary}
+      `;
+
     await agentLoop({
       model,
-      systemPrompt:
-        "You are Vela, an assistant that can call tools to answer user questions.",
+      systemPrompt,
       toolRegistry,
       messages,
       budget,
