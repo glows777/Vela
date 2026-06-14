@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "./registry";
 import z from "zod";
-import { join, resolve } from "node:path";
-import { readdirSync, statSync } from "node:fs";
+import { resolve } from "node:path";
+import { readdirSync } from "node:fs";
 
 export const readFileParamSchema = z.object({
   path: z.string().describe("文件路径"),
@@ -46,11 +46,8 @@ export const listDirectoryTool: ToolDefinition = {
   isReadOnly: true,
   execute: async ({ path = "." }: { path?: string }) => {
     const resolved = resolve(path);
-    return readdirSync(resolved)
-      .map((name) => {
-        const stat = statSync(join(resolved, name));
-        return `${stat.isDirectory() ? "[DIR]" : "[FILE]"} ${name}`;
-      })
+    return readdirSync(resolved, { withFileTypes: true })
+      .map((entry) => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`)
       .join("\n");
   },
 };
