@@ -10,9 +10,9 @@ import {
   recordToolCall,
   recordToolCallResult,
   resetHistory,
-} from "./tools/loop-detection";
-import { calculateDelay, isRetryable, sleep } from "./utils/retry";
-import type { ToolRegistry } from "./tools/register";
+} from "./loop-detection";
+import { calculateDelay, isRetryable, sleep } from "./retry";
+import type { ToolRegistry } from "../tools/registry";
 
 const MAX_TURN = 15;
 const MAX_RETRIES = 3;

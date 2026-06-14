@@ -1,5 +1,5 @@
 import z from "zod";
-import type { ToolDefinition, ToolRegistry } from "./register";
+import type { ToolDefinition, ToolRegistry } from "./registry";
 import type { Tool } from "ai";
 
 const toolSearchToolSchema = z.object({

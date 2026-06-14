@@ -8,8 +8,11 @@ import { type ModelMessage } from "ai";
 import { createInterface } from "node:readline";
 import { allTools } from "./tools";
 import { agentLoop, type BudgetState } from "./agent";
-import { ToolRegistry } from "./tools/register";
+import { ToolRegistry } from "./tools/registry";
 import { registerToolSearchTool } from "./tools/tool-search";
+import { SessionStore } from "./session";
+import { PromptPipeline, type PromptContext } from "./prompt/pipelins";
+import { coreRules, deferredTools, sessionContext, toolGuide } from "./prompt";
 
 const model = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -25,7 +28,7 @@ rl.on("close", () => {
   rlClosed = true;
 });
 
-const messages: ModelMessage[] = [];
+let messages: ModelMessage[] = [];
 const budget: BudgetState = { used: 0, limit: 15000 * 10 };
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
@@ -106,34 +109,33 @@ function scheduleMCPRetry() {
   console.log(`  MCP 将在 ${Math.round(delay / 1000)} 秒后再次尝试连接`);
 }
 
-await connectMCP();
+// await connectMCP();
 
-console.log(
-  `has registered tool count: ${toolRegistry.getAllTools().length}：`,
-);
-for (const tool of toolRegistry.getAllTools()) {
-  const isMCP = tool.name.startsWith("mcp__");
-  const flags = [
-    tool.isConcurrencySafe ? "concurrency" : "parrecel",
-    tool.isReadOnly ? "read only" : "read and write",
-    isMCP ? "MCP" : "built in tool",
-  ].join(", ");
-  console.log(`  - ${tool.name}（${flags}）`);
+const isContinue = process.argv.includes("--continue");
+const store = new SessionStore("default");
+
+if (isContinue && (await store.exists())) {
+  messages = await store.load();
+  console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
+} else {
+  console.log(`[Session] 新会话`);
 }
 
-const allCount = toolRegistry.getAllTools().length;
-const activeTools = toolRegistry.getActiveTools();
-const estimate = toolRegistry.countTokenEstimate();
+const builder = new PromptPipeline()
+  .pipe("coreRules", coreRules())
+  .pipe("toolGuide", toolGuide())
+  .pipe("deferredTools", deferredTools())
+  .pipe("sessionContext", sessionContext());
 
-console.log(`\n=== 工具统计 ===`);
-console.log(`  全部工具: ${allCount} 个`);
-console.log(`  活跃工具: ${activeTools.length} 个（非延迟）`);
-console.log(`  延迟工具: ${allCount - activeTools.length} 个`);
-console.log(
-  `  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟)`,
-);
+const promptCtx: PromptContext = {
+  toolCount: toolRegistry.getAllTools().length,
+  deferredToolSummary: toolRegistry.getDeferredToolSummary(),
+  sessionMessageCount: messages.length,
+  sessionId: "default",
+};
 
-const deferredSummary = toolRegistry.getDeferredToolSummary();
+const SYSTEM = builder.build(promptCtx);
+builder.debug(promptCtx); // 显示各模块状态
 
 const ask = () => {
   if (rlClosed) {
@@ -150,23 +152,24 @@ const ask = () => {
       return;
     }
 
-    messages.push({ role: "user", content: trimmed });
+    const userMessage: ModelMessage = { role: "user", content: trimmed };
+    store.append(userMessage);
+    messages.push(userMessage);
 
-    const systemPrompt = `You are Vela, a helpful agent that can call tool.
-      You have serval built-in tools and mcp tools to use.
-      When the tools you need don't list in your tool call list, you can use tool_search tool to search it.
-      Answer should be clean and direct.${deferredSummary}
-      `;
-
+    const beforeLen = messages.length;
     await agentLoop({
       model,
-      systemPrompt,
+      systemPrompt: SYSTEM,
       toolRegistry,
       messages,
       budget,
     });
 
     console.log("\n");
+    // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
+    const newMessages = messages.slice(beforeLen);
+    store.appendAll(newMessages);
+
     ask();
   });
 };
