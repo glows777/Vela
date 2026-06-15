@@ -142,9 +142,15 @@ export async function summarize(
         typeof msg.content === "string"
           ? msg.content
           : Array.isArray(msg.content)
-            ? msg.content.map(
-                (part) => part.text || JSON.stringify(part.output, null, 2),
-              )
+            ? msg.content
+                .map((part) =>
+                  "text" in part
+                    ? part.text
+                    : "output" in part
+                      ? JSON.stringify(part.output, null, 2)
+                      : "",
+                )
+                .join("\n")
             : "";
       return content ? `**${msg.role}**: ${content}` : "";
     })
