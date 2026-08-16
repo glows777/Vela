@@ -17,7 +17,7 @@ import type { TokenTracker } from "../context/defense";
 
 const MAX_TURN = 15;
 const MAX_RETRIES = 3;
-const TOKEN_BUDGET = 50 * 1000;
+const TOKEN_BUDGET = 200 * 1000;
 
 export interface BudgetState {
   used: number;
@@ -29,7 +29,8 @@ interface AgentLoopParameter {
   systemPrompt: string;
   toolRegistry: ToolRegistry;
   messages: ModelMessage[];
-  tracker: TokenTracker,
+  tracker: TokenTracker;
+  prepareContext?: (messages: ModelMessage[]) => Promise<void>;
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -59,7 +60,8 @@ export const agentLoop = async ({
   systemPrompt,
   toolRegistry,
   messages,
-  tracker
+  tracker,
+  prepareContext,
 }: AgentLoopParameter) => {
   let turn = 0;
   let totalTokens = 0;
@@ -68,6 +70,9 @@ export const agentLoop = async ({
   while (turn < MAX_TURN) {
     turn++;
     console.log(`\n--- Agent Loop Turn ${turn} ---\n`);
+
+    // Prepare context before every actual model request, including tool continuations.
+    await prepareContext?.(messages);
 
     let needToolCall = false;
     let fullContent = "";

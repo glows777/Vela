@@ -6,6 +6,24 @@ export interface MessageEntry {
   message: ModelMessage;
 }
 
+interface StoredMessage {
+  timestamp: string;
+  message: ModelMessage;
+}
+
+interface CheckpointEntry {
+  type: "checkpoint";
+  timestamp: string;
+  summary: string;
+  messages: StoredMessage[];
+}
+
+export interface SessionState {
+  messages: ModelMessage[];
+  timestamps: Map<ModelMessage, number>;
+  summary: string;
+}
+
 const SESSION_DIR = ".sessions";
 
 export class SessionStore {
@@ -21,53 +39,82 @@ export class SessionStore {
     this.dir = SESSION_DIR;
   }
 
-  async append(message: ModelMessage) {
-    const entry: MessageEntry = {
-      type: "message",
+  async replace(
+    messages: ModelMessage[],
+    timestamps: Map<ModelMessage, number>,
+    summary: string,
+  ): Promise<void> {
+    await Bun.$`mkdir -p ${this.dir}`;
+
+    const entry: CheckpointEntry = {
+      type: "checkpoint",
       timestamp: new Date().toISOString(),
-      message,
+      summary,
+      messages: messages.map(message => ({
+        timestamp: new Date(timestamps.get(message) ?? Date.now()).toISOString(),
+        message,
+      })),
     };
 
-    const file = Bun.file(this.filePath);
-    const current = (await file.exists()) ? await file.text() : "";
-
-    await Bun.write(this.filePath, current + JSON.stringify(entry) + "\n");
+    await Bun.write(this.filePath, JSON.stringify(entry) + "\n");
   }
 
-  async appendAll(messages: ModelMessage[]) {
-    for (const message of messages) {
-      await this.append(message);
-    }
-  }
-
-  async load(): Promise<ModelMessage[]> {
+  async loadState(): Promise<SessionState> {
     const file = Bun.file(this.filePath);
 
     if (!(await file.exists())) {
-      return [];
+      return { messages: [], timestamps: new Map(), summary: "" };
     }
 
     const content = (await file.text()).trim();
     if (!content) {
-      return [];
+      return { messages: [], timestamps: new Map(), summary: "" };
     }
 
-    const messages: ModelMessage[] = [];
+    let messages: ModelMessage[] = [];
+    let timestamps = new Map<ModelMessage, number>();
+    let summary = "";
+
+    const parseTimestamp = (value: string): number => {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : Date.now();
+    };
+
     for (const line of content.split("\n")) {
       if (!line.trim()) {
         continue;
       }
 
       try {
-        const entry: MessageEntry = JSON.parse(line);
+        const entry = JSON.parse(line) as MessageEntry | CheckpointEntry;
         if (entry.type === "message") {
           messages.push(entry.message);
+          timestamps.set(entry.message, parseTimestamp(entry.timestamp));
+        } else if (
+          entry.type === "checkpoint" &&
+          Array.isArray(entry.messages)
+        ) {
+          messages = [];
+          timestamps = new Map();
+          summary = entry.summary || "";
+          for (const storedMessage of entry.messages) {
+            messages.push(storedMessage.message);
+            timestamps.set(
+              storedMessage.message,
+              parseTimestamp(storedMessage.timestamp),
+            );
+          }
         }
       } catch (error) {
         console.error(`[session store]: read line error: ${error}`);
       }
     }
-    return messages;
+
+    return { messages, timestamps, summary };
+  }
+
+  async load(): Promise<ModelMessage[]> {
+    return (await this.loadState()).messages;
   }
 
   exists() {

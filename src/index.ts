@@ -7,15 +7,19 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { type ModelMessage } from "ai";
 import { createInterface } from "node:readline";
 import { allTools } from "./tools";
-import { agentLoop, type BudgetState } from "./agent";
+import { agentLoop } from "./agent";
 import { ToolRegistry } from "./tools/registry";
 import { registerToolSearchTool } from "./tools/tool-search";
 import { SessionStore } from "./session";
 import { PromptPipeline, type PromptContext } from "./prompt/pipelins";
 import { coreRules, deferredTools, sessionContext, toolGuide } from "./prompt";
-import { microcompact, summarize } from "./context/compressor";
+import {
+  microcompact,
+  MICROCOMPACT_TOKEN_THRESHOLD,
+  summarize,
+  SUMMARY_TOKEN_THRESHOLD,
+} from "./context/compressor";
 import { createMockModel } from "./mock";
-import { textToolResultOutput } from "./context/tool-result-output";
 import { applyDefense, estimateMessageTokens, TokenTracker } from "./context/defense";
 
 // const model = createOpenAI({
@@ -34,8 +38,7 @@ rl.on("close", () => {
   rlClosed = true;
 });
 
-let messages: ModelMessage[] = [];
-const budget: BudgetState = { used: 0, limit: 15000 * 10 };
+const messages: ModelMessage[] = [];
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
 
@@ -118,42 +121,21 @@ await connectMCP();
 const isContinue = process.argv.includes("--continue");
 const store = new SessionStore("default");
 const tracker = new TokenTracker();
+let summary = "";
+const timestamps = new Map<ModelMessage, number>();
 
 if (isContinue && (await store.exists())) {
-  messages = await store.load();
+  const state = await store.loadState();
+  messages.push(...state.messages);
+  for (const [message, timestamp] of state.timestamps) {
+    timestamps.set(message, timestamp);
+  }
+  summary = state.summary;
+  tracker.setEstimatedTokens(estimateMessageTokens(messages));
   console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
 } else {
   console.log(`[Session] 新会话`);
 }
-
-const timestamps = new Map<number, number>();
-
-// Inject fake history with varied ages
-injectFakeHistory(messages, timestamps);
-console.log(
-  `\n[Session] 新会话（已注入 ${messages.length} 条模拟历史，时间跨度 12 分钟）`,
-);
-
-// Apply three-layer defense
-const beforeTokens = estimateMessageTokens(messages);
-console.log(`\n=== 三层即时防线 ===`);
-console.log(`[防线前] ${messages.length} 条消息, ~${beforeTokens} tokens`);
-
-const defense = applyDefense(messages, timestamps);
-messages = defense.messages;
-console.log(`[Layer 2: 截断] ${defense.truncated} 个超长结果被截断`);
-console.log(
-  `[Layer 3: TTL] ${defense.softPruned} 个软修剪, ${defense.hardPruned} 个硬清除`,
-);
-console.log(
-  `[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`,
-);
-console.log(`====================\n`);
-
-// Clear injected history for chat — defense demo is done,
-// start fresh so mock model works properly
-messages = [];
-timestamps.clear();
 
 const builder = new PromptPipeline()
   .pipe("coreRules", coreRules())
@@ -170,6 +152,117 @@ const promptCtx: PromptContext = {
 
 const SYSTEM = builder.build(promptCtx);
 builder.debug(promptCtx); // 显示各模块状态
+
+function messagesChanged(
+  before: ModelMessage[],
+  after: ModelMessage[],
+): boolean {
+  return (
+    before.length !== after.length ||
+    before.some((message, index) => message !== after[index])
+  );
+}
+
+function replaceMessagesInPlace(
+  target: ModelMessage[],
+  replacement: ModelMessage[],
+): void {
+  const previous = target.slice();
+  const knownTimestamps = new Map(timestamps);
+  const fallbackTimestamp = Date.now();
+
+  target.splice(0, target.length, ...replacement);
+  timestamps.clear();
+
+  replacement.forEach((message, index) => {
+    const timestamp =
+      knownTimestamps.get(message) ??
+      (previous[index] ? knownTimestamps.get(previous[index]!) : undefined) ??
+      fallbackTimestamp;
+    timestamps.set(message, timestamp);
+  });
+}
+
+function ensureMessageTimestamps(history: ModelMessage[]): void {
+  const liveMessages = new Set(history);
+  const now = Date.now();
+
+  for (const message of history) {
+    if (!timestamps.has(message)) {
+      timestamps.set(message, now);
+    }
+  }
+
+  for (const message of timestamps.keys()) {
+    if (!liveMessages.has(message)) {
+      timestamps.delete(message);
+    }
+  }
+}
+
+function currentContextTokens(history: ModelMessage[]): number {
+  return Math.max(tracker.estimatedTokens, estimateMessageTokens(history));
+}
+
+async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
+  ensureMessageTimestamps(history);
+
+  const beforeDefense = history.slice();
+  const defense = applyDefense(history, timestamps);
+  if (messagesChanged(beforeDefense, defense.messages)) {
+    tracker.replaceMessages(beforeDefense, defense.messages);
+    replaceMessagesInPlace(history, defense.messages);
+  }
+
+  if (
+    defense.truncated > 0 ||
+    defense.compacted > 0 ||
+    defense.softPruned > 0 ||
+    defense.hardPruned > 0
+  ) {
+    console.log(
+      `  [Defense] truncated=${defense.truncated}, compacted=${defense.compacted}, softPruned=${defense.softPruned}, hardPruned=${defense.hardPruned}`,
+    );
+  }
+
+  let tokenEstimate = currentContextTokens(history);
+  if (tokenEstimate >= MICROCOMPACT_TOKEN_THRESHOLD) {
+    const beforeMicrocompact = history.slice();
+    const compacted = microcompact(history);
+    if (
+      compacted.cleared > 0 &&
+      messagesChanged(beforeMicrocompact, compacted.messages)
+    ) {
+      tracker.replaceMessages(beforeMicrocompact, compacted.messages);
+      replaceMessagesInPlace(history, compacted.messages);
+      tokenEstimate = currentContextTokens(history);
+      console.log(
+        `  [Microcompact] 清理了 ${compacted.cleared} 个工具结果，~${tokenEstimate} tokens`,
+      );
+    }
+  }
+
+  if (tokenEstimate >= SUMMARY_TOKEN_THRESHOLD) {
+    const beforeSummary = history.slice();
+    const compacted = await summarize(
+      model,
+      history,
+      summary,
+      tokenEstimate,
+    );
+    if (
+      compacted.compressedCount > 0 &&
+      messagesChanged(beforeSummary, compacted.messages)
+    ) {
+      tracker.replaceMessages(beforeSummary, compacted.messages);
+      replaceMessagesInPlace(history, compacted.messages);
+      summary = compacted.summary;
+      console.log(
+        `  [Summarization] 压缩了 ${compacted.compressedCount} 条消息，~${currentContextTokens(history)} tokens`,
+      );
+    }
+  }
+}
 
 const ask = () => {
   if (rlClosed) {
@@ -189,33 +282,24 @@ const ask = () => {
     const userMsg: ModelMessage = { role: 'user', content: trimmed };
     messages.push(userMsg);
     tracker.addMessage(userMsg);
-    timestamps.set(messages.length - 1, Date.now());
-    store.append(userMsg);
+    timestamps.set(userMsg, Date.now());
 
-    // Apply all three defense layers before every model turn.
-    const turnDefense = applyDefense(messages, timestamps);
-    tracker.replaceMessages(messages, turnDefense.messages);
-    messages = turnDefense.messages;
-
-    const beforeLen = messages.length;
-    await agentLoop({
-      model,
-      systemPrompt: SYSTEM,
-      toolRegistry,
-      messages,
-      tracker
-    });
-
-    const newMessages = messages.slice(beforeLen);
-    const now = Date.now();
-    for (let i = beforeLen; i < messages.length; i++) {
-      timestamps.set(i, now);
+    try {
+      await agentLoop({
+        model,
+        systemPrompt: SYSTEM,
+        toolRegistry,
+        messages,
+        tracker,
+        prepareContext: prepareContextForModel,
+      });
+    } finally {
+      ensureMessageTimestamps(messages);
+      await store.replace(messages, timestamps, summary);
     }
-    store.appendAll(newMessages);
 
     const status = tracker.status;
     console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`);
-
     ask();
   });
 };
@@ -224,34 +308,4 @@ if (rlClosed) {
   await toolRegistry.closeAllMCP();
 } else {
   ask();
-}
-
-/** Inject fake history with timestamps to demo TTL pruning. */
-function injectFakeHistory(messages: ModelMessage[], timestamps: Map<number, number>) {
-  const now = Date.now();
-  const fakeHistory: Array<{ msg: ModelMessage; ageMs: number }> = [
-    // 12 minutes ago — will be hard pruned
-    { ageMs: 12 * 60 * 1000, msg: { role: 'user', content: '帮我看看 package.json' } },
-    { ageMs: 12 * 60 * 1000, msg: { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'old-1', toolName: 'read_file', input: { path: 'package.json' } }] } },
-    { ageMs: 12 * 60 * 1000, msg: { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'old-1', toolName: 'read_file', output: textToolResultOutput('{\n  "name": "super-agent-09",\n  "version": "0.9.0",\n  "type": "module",\n  "scripts": { "start": "tsx src/index.ts" },\n  "dependencies": {\n    "ai": "5.0.98",\n    "@ai-sdk/openai": "2.0.44",\n    "zod": "3.25.76"\n  }\n}') }] } },
-    { ageMs: 12 * 60 * 1000, msg: { role: 'assistant', content: [{ type: 'text' as const, text: 'package.json：项目名 super-agent-09，依赖 ai 和 @ai-sdk/openai。' }] } },
-
-    // 7 minutes ago — will be soft pruned
-    { ageMs: 7 * 60 * 1000, msg: { role: 'user', content: '搜索 src 目录里的 export' } },
-    { ageMs: 7 * 60 * 1000, msg: { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'mid-1', toolName: 'grep', input: { pattern: 'export', path: 'src' } }] } },
-    { ageMs: 7 * 60 * 1000, msg: { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'mid-1', toolName: 'grep', output: textToolResultOutput('src/tools.ts:1: export const weatherTool = ...\nsrc/tools.ts:20: export const calculatorTool = ...\nsrc/tools.ts:40: export const readFileTool = ...\nsrc/tools.ts:60: export const writeFileTool = ...\nsrc/tools.ts:80: export const listDirectoryTool = ...\nsrc/tool-registry.ts:4: export interface ToolDefinition { ... }\nsrc/tool-registry.ts:18: export class ToolRegistry { ... }\nsrc/agent-loop.ts:7: export async function agentLoop(...) { ... }\nsrc/session-store.ts:8: export class SessionStore { ... }\nsrc/prompt-builder.ts:12: export class PromptBuilder { ... }\nsrc/context-defense.ts:5: export class TokenTracker { ... }\nsrc/context-defense.ts:50: export function estimateMessageTokens(...) { ... }\nsrc/context-defense.ts:70: export function truncateToolResults(...) { ... }\nsrc/context-defense.ts:110: export function ttlPrune(...) { ... }') }] } },
-    { ageMs: 7 * 60 * 1000, msg: { role: 'assistant', content: [{ type: 'text' as const, text: 'src 目录里的主要导出：tools.ts 定义了各种工具，tool-registry.ts 导出 ToolRegistry 类，context-defense.ts 导出了 TokenTracker、truncateToolResults、ttlPrune 等。' }] } },
-
-    // 1 minute ago — will NOT be pruned
-    { ageMs: 1 * 60 * 1000, msg: { role: 'user', content: '读一下 sample-data.txt' } },
-    { ageMs: 1 * 60 * 1000, msg: { role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: 'new-1', toolName: 'read_file', input: { path: 'sample-data.txt' } }] } },
-    { ageMs: 1 * 60 * 1000, msg: { role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: 'new-1', toolName: 'read_file', output: textToolResultOutput('Super Agent 工具系统设计文档\n=============================\n\n一、工具注册机制\n每个工具通过 ToolRegistry 统一注册。\n\n二、结果截断策略\nHead/Tail 60/40 分割。\n\n三、并发控制\n读写锁模式。\n\n四、最佳实践\n1. 工具描述要写"什么时候不该用"\n2. 参数描述要具体\n3. 错误信息要对模型友好\n4. 结果格式要结构化') }] } },
-    { ageMs: 1 * 60 * 1000, msg: { role: 'assistant', content: [{ type: 'text' as const, text: 'sample-data.txt 是工具系统设计文档，包含注册机制、截断策略、并发控制和最佳实践四个部分。' }] } },
-  ];
-
-  for (let i = 0; i < fakeHistory.length; i++) {
-    const { msg, ageMs } = fakeHistory[i]!;
-    messages.push(msg);
-    timestamps.set(messages.length - 1, now - ageMs);
-  }
 }

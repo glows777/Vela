@@ -6,6 +6,7 @@ import {
   type ToolResultPart,
 } from "ai";
 import { estimateMessageTokens } from "./defense";
+import { toolResultOutputToText } from "./tool-result-output";
 
 const CLEARABLE_TOOLS = new Set([
   "read_file",
@@ -45,8 +46,19 @@ export function microcompact(messages: ModelMessage[]): {
       return msg;
     }
 
-    cleared++;
     const toolMsg = msg as ToolModelMessage;
+    const hasLiveOutput = toolMsg.content.some(
+      part =>
+        part.type === "tool-result" &&
+        !/^\[(tool result cleared|compacted:|tool result expired:)/.test(
+          toolResultOutputToText(part.output).trim(),
+        ),
+    );
+    if (!hasLiveOutput) {
+      return msg;
+    }
+
+    cleared++;
     return {
       ...toolMsg,
       content: toolMsg.content.map((part) =>
@@ -91,7 +103,8 @@ const COMPRESS_PROMPT = `你是一个对话压缩系统。你的任务是把 Age
 - 不要写笼统的概述，只保留具体的、可操作的信息
 - 总长度控制在 800 字以内`;
 
-const CONTEXT_TOKEN_THRESHOLD = 300; // 200k 的话，设置为 170 * 1000 token开启压缩即可
+export const MICROCOMPACT_TOKEN_THRESHOLD = 120 * 1000;
+export const SUMMARY_TOKEN_THRESHOLD = 150 * 1000;
 const KEEP_RECENT_MESSAGES = 6;
 
 export interface CompactionResult {
@@ -104,9 +117,9 @@ export async function summarize(
   model: LanguageModel,
   messages: ModelMessage[],
   existingSummary?: string,
+  tokenEstimate = estimateMessageTokens(messages),
 ): Promise<CompactionResult> {
-  const tokenUsed = estimateMessageTokens(messages);
-  if (tokenUsed < CONTEXT_TOKEN_THRESHOLD) {
+  if (tokenEstimate < SUMMARY_TOKEN_THRESHOLD) {
     return {
       messages,
       summary: existingSummary || "",

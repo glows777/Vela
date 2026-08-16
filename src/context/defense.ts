@@ -12,6 +12,11 @@ export class TokenTracker {
     this.pendingChars = 0;
   }
 
+  setEstimatedTokens(tokens: number): void {
+    this.lastPreciseCount = Math.max(0, tokens);
+    this.pendingChars = 0;
+  }
+
   addMessage(message: ModelMessage): void {
     this.pendingChars += countMessageChars(message);
   }
@@ -174,18 +179,18 @@ export interface PruneResult {
 
 export function ttlPrune(
   messages: ModelMessage[],
-  timestamps: Map<number, number>,
+  timestamps: Map<ModelMessage, number>,
   config: TTLConfig = DEFAULT_TTL,
 ): PruneResult {
   const now = Date.now();
   let softPruned = 0;
   let hardPruned = 0;
 
-  const result = messages.map((msg, idx) => {
+  const result = messages.map(msg => {
     // Only prune tool results, never user/assistant messages
     if (msg.role !== 'tool' || !Array.isArray(msg.content)) return msg;
 
-    const ts = timestamps.get(idx);
+    const ts = timestamps.get(msg);
     if (!ts) return msg;
 
     const age = now - ts;
@@ -194,6 +199,8 @@ export function ttlPrune(
     const outputText = (msg.content as any[])
       .map((p: any) => p.output ? toolResultOutputToText(p.output) : '')
       .join('');
+    if (outputText.trim().startsWith('[tool result expired:')) return msg;
+
     const isError = /error|失败|不存在|denied|refused|timeout/i.test(outputText);
     if (isError) return msg;
 
@@ -249,14 +256,24 @@ export interface DefenseResult {
 
 export function applyDefense(
   messages: ModelMessage[],
-  timestamps: Map<number, number>,
+  timestamps: Map<ModelMessage, number>,
 ): DefenseResult {
   // Layer 2: truncate oversized tool results
   const trunc = truncateToolResults(messages);
   let result = trunc.messages;
 
+  // Truncation may clone tool messages, so carry their original timestamps
+  // into the next defense layer before pruning by age.
+  const timestampsAfterTruncation = new Map<ModelMessage, number>();
+  result.forEach((message, index) => {
+    const timestamp = timestamps.get(messages[index]!);
+    if (timestamp !== undefined) {
+      timestampsAfterTruncation.set(message, timestamp);
+    }
+  });
+
   // Layer 3: TTL prune old tool results
-  const prune = ttlPrune(result, timestamps);
+  const prune = ttlPrune(result, timestampsAfterTruncation);
   result = prune.messages;
 
   // Layer 1: estimate final token count
