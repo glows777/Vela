@@ -19,15 +19,18 @@ import {
   summarize,
   SUMMARY_TOKEN_THRESHOLD,
 } from "./context/compressor";
-import { createMockModel } from "./mock";
+import { createMockModel, setCacheEnabled } from "./mock";
 import { applyDefense, estimateMessageTokens, TokenTracker } from "./context/defense";
+import { buildContextSnapshot, renderContextView, renderUsageView } from "./context/view";
+import { UsageTracker } from "./usage/tracker";
+import { textToolResultOutput } from "./context/tool-result-output";
 
-// const model = createOpenAI({
-//   apiKey: process.env.OPENAI_API_KEY!,
-//   baseURL: process.env.OPENAI_API_BASE_URL,
-// }).chat(process.env.OPENAI_API_MODEL_NAME!);
+const model = createOpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+  baseURL: process.env.OPENAI_API_BASE_URL,
+}).chat(process.env.OPENAI_API_MODEL_NAME!);
 //
-const model = createMockModel();
+// const model = createMockModel();
 
 const rl = createInterface({
   input: process.stdin,
@@ -38,7 +41,7 @@ rl.on("close", () => {
   rlClosed = true;
 });
 
-const messages: ModelMessage[] = [];
+let messages: ModelMessage[] = [];
 const toolRegistry = new ToolRegistry();
 toolRegistry.register(...allTools);
 
@@ -120,9 +123,10 @@ await connectMCP();
 
 const isContinue = process.argv.includes("--continue");
 const store = new SessionStore("default");
-const tracker = new TokenTracker();
+const tokenTracker = new TokenTracker();
 let summary = "";
 const timestamps = new Map<ModelMessage, number>();
+const usageTracker = new UsageTracker('.usage/today.jsonl');
 
 if (isContinue && (await store.exists())) {
   const state = await store.loadState();
@@ -201,7 +205,7 @@ function ensureMessageTimestamps(history: ModelMessage[]): void {
 }
 
 function currentContextTokens(history: ModelMessage[]): number {
-  return Math.max(tracker.estimatedTokens, estimateMessageTokens(history));
+  return Math.max(tokenTracker.estimatedTokens, estimateMessageTokens(history));
 }
 
 async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
@@ -210,7 +214,7 @@ async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
   const beforeDefense = history.slice();
   const defense = applyDefense(history, timestamps);
   if (messagesChanged(beforeDefense, defense.messages)) {
-    tracker.replaceMessages(beforeDefense, defense.messages);
+    tokenTracker.replaceMessages(beforeDefense, defense.messages);
     replaceMessagesInPlace(history, defense.messages);
   }
 
@@ -233,7 +237,7 @@ async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
       compacted.cleared > 0 &&
       messagesChanged(beforeMicrocompact, compacted.messages)
     ) {
-      tracker.replaceMessages(beforeMicrocompact, compacted.messages);
+      tokenTracker.replaceMessages(beforeMicrocompact, compacted.messages);
       replaceMessagesInPlace(history, compacted.messages);
       tokenEstimate = currentContextTokens(history);
       console.log(
@@ -254,7 +258,7 @@ async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
       compacted.compressedCount > 0 &&
       messagesChanged(beforeSummary, compacted.messages)
     ) {
-      tracker.replaceMessages(beforeSummary, compacted.messages);
+      tokenTracker.replaceMessages(beforeSummary, compacted.messages);
       replaceMessagesInPlace(history, compacted.messages);
       summary = compacted.summary;
       console.log(
@@ -279,9 +283,14 @@ const ask = () => {
       return;
     }
 
+    if (handleQuickTrigger(trimmed)) {
+      ask();
+      return;
+    }
+
     const userMsg: ModelMessage = { role: 'user', content: trimmed };
     messages.push(userMsg);
-    tracker.addMessage(userMsg);
+    tokenTracker.addMessage(userMsg);
     timestamps.set(userMsg, Date.now());
 
     try {
@@ -290,7 +299,8 @@ const ask = () => {
         systemPrompt: SYSTEM,
         toolRegistry,
         messages,
-        tracker,
+        tokenTracker,
+        usageTracker,
         prepareContext: prepareContextForModel,
       });
     } finally {
@@ -298,7 +308,7 @@ const ask = () => {
       await store.replace(messages, timestamps, summary);
     }
 
-    const status = tracker.status;
+    const status = tokenTracker.status;
     console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`);
     ask();
   });
@@ -309,3 +319,80 @@ if (rlClosed) {
 } else {
   ask();
 }
+
+
+function handleQuickTrigger(cmd: string): boolean {
+    const now = Date.now();
+
+    if (cmd === '模拟长对话' || cmd === 'sim') {
+      console.log('\n[模拟] 注入 20 条历史消息（含大量工具结果）...');
+      for (let i = 0; i < 5; i++) {
+        const age = (20 - i * 4) * 60 * 1000;
+        const userIdx = messages.length;
+        messages.push({ role: 'user', content: `第 ${i + 1} 轮：帮我读文件 file-${i}.ts` });
+        timestamps.set(userIdx, now - age);
+        messages.push({ role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: `sim-${i}`, toolName: 'read_file', input: { path: `file-${i}.ts` } }] });
+        timestamps.set(userIdx + 1, now - age);
+        const bigContent = `// file-${i}.ts\n` + 'export function handler() {\n  // ...\n}\n'.repeat(200);
+        messages.push({ role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: `sim-${i}`, toolName: 'read_file', output: textToolResultOutput(bigContent) }] });
+        timestamps.set(userIdx + 2, now - age);
+        messages.push({ role: 'assistant', content: [{ type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` }] });
+        timestamps.set(userIdx + 3, now - age);
+      }
+      const tokens = estimateMessageTokens(messages);
+      console.log(`[模拟完成] ${messages.length} 条消息, ~${tokens} tokens\n`);
+      return true;
+    }
+
+    if (cmd === '执行防线' || cmd === 'defend') {
+      console.log('\n--- 执行三层防线 ---');
+      const before = estimateMessageTokens(messages);
+      const def = applyDefense(messages, timestamps);
+      messages = def.messages;
+      console.log(`  [Layer 2] 截断: ${def.truncated} 条, 预算清理: ${def.compacted} 条`);
+      console.log(`  [Layer 3] 软修剪: ${def.softPruned}, 硬清除: ${def.hardPruned}`);
+      console.log(`  [结果] ~${before} → ~${def.tokenEstimate} tokens (节省 ${before - def.tokenEstimate})\n`);
+      return true;
+    }
+
+    if (cmd === '查看状态' || cmd === 'status') {
+      const tokens = estimateMessageTokens(messages);
+      const toolMsgs = messages.filter(m => m.role === 'tool').length;
+      console.log(`\n[状态] ${messages.length} 条消息 (${toolMsgs} 条工具结果), ~${tokens} tokens\n`);
+      return true;
+    }
+
+    // /context: 终端可视化的 context 占用，参考 Claude Code 的 /context
+    if (cmd === '/context' || cmd === 'context') {
+      const snapshot = buildContextSnapshot({
+        modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model (开发用)',
+        modelId: process.env.DASHSCOPE_API_KEY ? 'qwen3-6-plus' : 'mock-model',
+        windowTokens: 1_000_000,
+        systemPromptChars: SYSTEM.length,
+        toolDescriptionChars: toolRegistry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.parameters || {}).length, 0),
+        memoryChars: 0,
+        skillsChars: 0,
+        messages,
+      });
+      console.log(renderContextView(snapshot));
+      return true;
+    }
+
+    if (cmd === '/usage' || cmd === 'usage') {
+      console.log(renderUsageView(usageTracker));
+      return true;
+    }
+
+    if (cmd === '/cache off' || cmd === 'cache off') {
+      setCacheEnabled(false);
+      console.log('\n  \x1b[38;5;220m⚠ 已关闭 cache 模拟\x1b[0m  接下来每次请求都按 cache miss 计算\n');
+      return true;
+    }
+    if (cmd === '/cache on' || cmd === 'cache on') {
+      setCacheEnabled(true);
+      console.log('\n  \x1b[38;5;36m✓ 已开启 cache 模拟\x1b[0m\n');
+      return true;
+    }
+
+    return false;
+  }

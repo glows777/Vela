@@ -13,6 +13,7 @@ import {
 } from "./loop-detection";
 import { calculateDelay, isRetryable, sleep } from "./retry";
 import type { ToolRegistry } from "../tools/registry";
+import { normalizeUsage, type UsageTracker } from "../usage/tracker";
 import type { TokenTracker } from "../context/defense";
 
 const MAX_TURN = 15;
@@ -29,7 +30,8 @@ interface AgentLoopParameter {
   systemPrompt: string;
   toolRegistry: ToolRegistry;
   messages: ModelMessage[];
-  tracker: TokenTracker;
+  usageTracker: UsageTracker;
+  tokenTracker: TokenTracker;
   prepareContext?: (messages: ModelMessage[]) => Promise<void>;
 }
 
@@ -60,7 +62,8 @@ export const agentLoop = async ({
   systemPrompt,
   toolRegistry,
   messages,
-  tracker,
+  tokenTracker,
+  usageTracker,
   prepareContext,
 }: AgentLoopParameter) => {
   let turn = 0;
@@ -164,13 +167,25 @@ export const agentLoop = async ({
 
     const inputToken = finalUsage?.inputTokens?.total ?? finalUsage?.inputTokens ?? 0;
     const outputToken = finalUsage?.outputTokens?.total ?? finalUsage?.outputTokens ?? 0;
-    if (inputToken > 0) tracker.updateFromAPI(inputToken);
+    if (inputToken > 0) tokenTracker.updateFromAPI(inputToken);
 
     const responseMessages = finalResponse!.messages as ModelMessage[];
     messages.push(...responseMessages);
-    tracker.addMessages(responseMessages);
-
+    tokenTracker.addMessages(responseMessages);
     totalTokens += inputToken + outputToken;
+
+    // 将 usage 归一化后记录到 usageTracker 中，方便后续统计和分析
+    const norm = normalizeUsage(finalUsage);
+    const stepRecord = usageTracker?.record(model?.modelId || 'mock-model', norm);
+    totalTokens += norm.inputTokens + norm.outputTokens + norm.cacheReadTokens + norm.cacheWriteTokens;
+
+    // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
+    if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {
+      const tag = norm.cacheReadTokens > 0 ? `\x1b[38;5;36m✓ cache hit\x1b[0m` : `\x1b[38;5;220m✎ cache write\x1b[0m`;
+      const detail = norm.cacheReadTokens > 0 ? `read ${norm.cacheReadTokens}` : `write ${norm.cacheWriteTokens}`;
+      console.log(`\n [${tag}] ${detail} tokens · current step $${stepRecord.cost.toFixed(5)}`);
+    }
+
     if (totalTokens > TOKEN_BUDGET * 0.9) {
       console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${Math.round(totalTokens / TOKEN_BUDGET * 100)}%)`);
     }
