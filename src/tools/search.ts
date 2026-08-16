@@ -1,6 +1,6 @@
-import type { ToolDefinition } from "./registry";
-import z from "zod";
 import { join, relative, resolve } from "node:path";
+import z from "zod";
+import type { ToolDefinition } from "./registry";
 
 const globToolParamSchema = z.object({
   pattern: z.string().describe('搜索模式，如 "**/*.ts"、"src/*.json"'),

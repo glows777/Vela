@@ -1,7 +1,7 @@
-import type { ToolDefinition } from "./registry";
-import z from "zod";
-import { resolve } from "node:path";
 import { readdirSync } from "node:fs";
+import { resolve } from "node:path";
+import z from "zod";
+import type { ToolDefinition } from "./registry";
 
 export const readFileParamSchema = z.object({
   path: z.string().describe("文件路径"),

@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai';
-import { textToolResultOutput, toolResultOutputToText } from './tool-result-output';
 import { CONTEXT_WINDOW, estimateMessageTokens } from '../usage/tracker';
+import { textToolResultOutput, toolResultOutputToText } from './tool-result-output';
 
 // Keep this export stable for the compressor and entrypoint imports.
 export { estimateMessageTokens } from '../usage/tracker';

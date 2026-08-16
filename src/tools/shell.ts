@@ -1,5 +1,5 @@
-import type { ToolDefinition } from "./registry";
 import z from "zod";
+import type { ToolDefinition } from "./registry";
 
 const bashToolParamSchema = z.object({
   command: z.string().describe("要执行的 shell 命令"),

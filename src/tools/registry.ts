@@ -1,6 +1,6 @@
-import type { FlexibleSchema, Tool, ToolSet } from "ai";
-import { jsonSchema, tool as AITool, type JSONSchema7 } from "ai";
 import type { Client, Transport } from "@modelcontextprotocol/client";
+import type { FlexibleSchema, Tool, ToolSet } from "ai";
+import { tool as AITool, type JSONSchema7, jsonSchema } from "ai";
 
 export interface ToolDefinition {
   name: string;
