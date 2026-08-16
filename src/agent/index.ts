@@ -13,8 +13,7 @@ import {
 } from "./loop-detection";
 import { calculateDelay, isRetryable, sleep } from "./retry";
 import type { ToolRegistry } from "../tools/registry";
-import { normalizeUsage, type UsageTracker } from "../usage/tracker";
-import type { TokenTracker } from "../context/defense";
+import { normalizeUsage, type TokenTracker } from "../usage/tracker";
 
 const MAX_TURN = 15;
 const MAX_RETRIES = 3;
@@ -30,7 +29,6 @@ interface AgentLoopParameter {
   systemPrompt: string;
   toolRegistry: ToolRegistry;
   messages: ModelMessage[];
-  usageTracker: UsageTracker;
   tokenTracker: TokenTracker;
   prepareContext?: (messages: ModelMessage[]) => Promise<void>;
 }
@@ -63,11 +61,10 @@ export const agentLoop = async ({
   toolRegistry,
   messages,
   tokenTracker,
-  usageTracker,
   prepareContext,
 }: AgentLoopParameter) => {
   let turn = 0;
-  let totalTokens = 0;
+  tokenTracker.beginLoop();
   resetHistory(); // 每次新的 agent loop 开始时重置工具调用历史
 
   while (turn < MAX_TURN) {
@@ -158,26 +155,13 @@ export const agentLoop = async ({
       throw new Error("Agent loop did not receive a final response.");
     }
 
-    if (shouldBreak) {
-      console.log(
-        "\nAgent is stuck in a loop and has reached the critical threshold. Ending loop.",
-      );
-      break;
-    }
-
     const inputToken = finalUsage.inputTokens ?? 0;
-    const outputToken = finalUsage.outputTokens ?? 0;
     if (inputToken > 0) tokenTracker.updateFromAPI(inputToken);
 
-    const responseMessages: ModelMessage[] = finalResponse.messages;
-    messages.push(...responseMessages);
-    tokenTracker.addMessages(responseMessages);
-    totalTokens += inputToken + outputToken;
-
-    // 将 usage 归一化后记录到 usageTracker 中，方便后续统计和分析
+    // 将 usage 归一化后记录到统一 tracker，并累计当前 loop 的完整 token 预算
     const norm = normalizeUsage(finalUsage);
     const modelId = typeof model === "string" ? model : model.modelId;
-    const stepRecord = usageTracker?.record(modelId || "mock-model", norm);
+    const stepRecord = tokenTracker.record(modelId || "mock-model", norm);
 
     // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
     if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {
@@ -186,10 +170,21 @@ export const agentLoop = async ({
       console.log(`\n [${tag}] ${detail} tokens · current step $${stepRecord.cost.toFixed(5)}`);
     }
 
-    if (totalTokens > TOKEN_BUDGET * 0.9) {
-      console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${Math.round(totalTokens / TOKEN_BUDGET * 100)}%)`);
+    if (shouldBreak) {
+      console.log(
+        "\nAgent is stuck in a loop and has reached the critical threshold. Ending loop.",
+      );
+      break;
     }
-    if (totalTokens > TOKEN_BUDGET) {
+
+    const responseMessages: ModelMessage[] = finalResponse.messages;
+    messages.push(...responseMessages);
+    tokenTracker.addMessages(responseMessages);
+
+    if (tokenTracker.loopTokens > TOKEN_BUDGET * 0.9) {
+      console.log(`  [Token] ${tokenTracker.loopTokens}/${TOKEN_BUDGET} (${Math.round(tokenTracker.loopTokens / TOKEN_BUDGET * 100)}%)`);
+    }
+    if (tokenTracker.loopTokens > TOKEN_BUDGET) {
       console.log('\n[Token has exceeded the budget limit. Ending loop.]');
       break;
     }

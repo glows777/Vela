@@ -1,87 +1,11 @@
 import type { ModelMessage } from 'ai';
 import { textToolResultOutput, toolResultOutputToText } from './tool-result-output';
+import { CONTEXT_WINDOW, estimateMessageTokens } from '../usage/tracker';
 
-// ── Layer 1: Token Estimation ────────────────────────
+// Keep this export stable for the compressor and entrypoint imports.
+export { estimateMessageTokens } from '../usage/tracker';
 
-export class TokenTracker {
-  private lastPreciseCount = 0;
-  private pendingChars = 0;
-
-  updateFromAPI(promptTokens: number): void {
-    this.lastPreciseCount = promptTokens;
-    this.pendingChars = 0;
-  }
-
-  setEstimatedTokens(tokens: number): void {
-    this.lastPreciseCount = Math.max(0, tokens);
-    this.pendingChars = 0;
-  }
-
-  addMessage(message: ModelMessage): void {
-    this.pendingChars += countMessageChars(message);
-  }
-
-  addMessages(messages: ModelMessage[]): void {
-    for (const message of messages) {
-      this.addMessage(message);
-    }
-  }
-
-  replaceMessages(before: ModelMessage[], after: ModelMessage[]): void {
-    this.pendingChars += countMessagesChars(after) - countMessagesChars(before);
-  }
-
-  get estimatedTokens(): number {
-    return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4));
-  }
-
-  get status(): { tokens: number; percent: number; needsAction: boolean } {
-    const tokens = this.estimatedTokens;
-    const percent = Math.round((tokens / CONTEXT_WINDOW) * 100);
-    return {
-      tokens,
-      percent,
-      needsAction: percent >= 75,
-    };
-  }
-}
-
-const CONTEXT_WINDOW = 200_000;
-
-function countMessageChars(message: ModelMessage): number {
-  let chars = 0;
-  if (typeof message.content === 'string') {
-    return message.content.length;
-  }
-  if (!Array.isArray(message.content)) return chars;
-
-  for (const part of message.content) {
-    if ('text' in part && typeof part.text === 'string') {
-      chars += part.text.length;
-    } else if ('output' in part) {
-      chars += toolResultOutputToText(part.output).length;
-    } else if ('input' in part) {
-      chars += JSON.stringify(part.input)?.length ?? 0;
-    }
-  }
-  return chars;
-}
-
-function countMessagesChars(messages: ModelMessage[]): number {
-  let chars = 0;
-  for (const message of messages) {
-    chars += countMessageChars(message);
-  }
-  return chars;
-}
-
-export function estimateMessageTokens(messages: ModelMessage[]): number {
-  const chars = countMessagesChars(messages);
-  // 4 chars per token, with 1.2x safety factor for Chinese
-  return Math.ceil((chars / 4) * 1.2);
-}
-
-// ── Layer 2: Dynamic Tool Result Truncation ──────────
+// ── Layer 1: Dynamic Tool Result Truncation ──────────
 
 interface TruncationConfig {
   maxSingleResult: number;

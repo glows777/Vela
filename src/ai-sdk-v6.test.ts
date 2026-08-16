@@ -1,11 +1,10 @@
 import { expect, test } from "bun:test";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { agentLoop } from "./agent/index";
-import { TokenTracker } from "./context/defense";
 import { createMockModel } from "./mock";
 import { allTools } from "./tools";
 import { ToolRegistry } from "./tools/registry";
-import { normalizeUsage, UsageTracker } from "./usage/tracker";
+import { normalizeUsage, TokenTracker } from "./usage/tracker";
 
 function createRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -15,21 +14,20 @@ function createRegistry(): ToolRegistry {
 
 async function runMockAgent(prompt: string): Promise<{
   messages: ModelMessage[];
-  usage: UsageTracker;
+  tracker: TokenTracker;
 }> {
   const messages: ModelMessage[] = [{ role: "user", content: prompt }];
-  const usage = new UsageTracker();
+  const tracker = new TokenTracker();
 
   await agentLoop({
     model: createMockModel(),
     systemPrompt: "你是一个用于测试的助手。",
     toolRegistry: createRegistry(),
     messages,
-    tokenTracker: new TokenTracker(),
-    usageTracker: usage,
+    tokenTracker: tracker,
   });
 
-  return { messages, usage };
+  return { messages, tracker };
 }
 
 test("normalizes AI SDK v6 usage detail fields", () => {
@@ -57,12 +55,12 @@ test("normalizes AI SDK v6 usage detail fields", () => {
 });
 
 test("keeps text response semantics with the v6 mock model", async () => {
-  const { messages, usage } = await runMockAgent("你好");
+  const { messages, tracker } = await runMockAgent("你好");
 
   expect(messages).toHaveLength(2);
   expect(messages[0]?.role).toBe("user");
   expect(messages[1]?.role).toBe("assistant");
-  expect(usage.totals().steps).toBe(1);
+  expect(tracker.totals().steps).toBe(1);
 });
 
 test("keeps tool-call continuation semantics with the v6 mock model", async () => {
@@ -75,3 +73,23 @@ test("keeps tool-call continuation semantics with the v6 mock model", async () =
     "assistant",
   ]);
 }, 10_000);
+
+test("keeps loop budget separate from cumulative usage", () => {
+  const tracker = new TokenTracker();
+  tracker.record("mock-model", {
+    inputTokens: 60,
+    cacheReadTokens: 30,
+    cacheWriteTokens: 10,
+    outputTokens: 7,
+  });
+
+  expect(tracker.loopTokens).toBe(107);
+  expect(tracker.totals().steps).toBe(1);
+  expect(tracker.totals().inputTokens).toBe(60);
+  expect(tracker.totals().cacheReadTokens).toBe(30);
+  expect(tracker.totals().cacheWriteTokens).toBe(10);
+
+  tracker.beginLoop();
+  expect(tracker.loopTokens).toBe(0);
+  expect(tracker.totals().steps).toBe(1);
+});

@@ -5,7 +5,7 @@
  * 不同类别用不同颜色（ANSI 256 色），让"谁在吃 context"一眼看清楚。
  */
 import type { ModelMessage } from 'ai';
-import type { UsageTracker } from '../usage/tracker.js';
+import type { TokenTracker } from '../usage/tracker.js';
 
 export interface ContextSlice {
   name: string;
@@ -191,7 +191,7 @@ export function buildContextSnapshot(input: BuildSnapshotInput): ContextSnapshot
 
 // ── /usage 视图：累计成本 + cache 命中率 ─────────────────────────
 
-export function renderUsageView(tracker: UsageTracker): string {
+export function renderUsageView(tracker: TokenTracker): string {
   const t = tracker.totals();
   const lines: string[] = [];
   const C = (n: number, s: string) => fg(n, s);

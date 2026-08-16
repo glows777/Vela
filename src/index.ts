@@ -20,9 +20,9 @@ import {
   SUMMARY_TOKEN_THRESHOLD,
 } from "./context/compressor";
 import { createMockModel, setCacheEnabled } from "./mock";
-import { applyDefense, estimateMessageTokens, TokenTracker } from "./context/defense";
+import { applyDefense, estimateMessageTokens } from "./context/defense";
 import { buildContextSnapshot, renderContextView, renderUsageView } from "./context/view";
-import { UsageTracker } from "./usage/tracker";
+import { TokenTracker } from "./usage/tracker";
 import { textToolResultOutput } from "./context/tool-result-output";
 
 const model = createOpenAI({
@@ -123,10 +123,9 @@ await connectMCP();
 
 const isContinue = process.argv.includes("--continue");
 const store = new SessionStore("default");
-const tokenTracker = new TokenTracker();
+const tokenTracker = new TokenTracker('.usage/today.jsonl');
 let summary = "";
 const timestamps = new Map<ModelMessage, number>();
-const usageTracker = new UsageTracker('.usage/today.jsonl');
 
 if (isContinue && (await store.exists())) {
   const state = await store.loadState();
@@ -300,7 +299,6 @@ const ask = () => {
         toolRegistry,
         messages,
         tokenTracker,
-        usageTracker,
         prepareContext: prepareContextForModel,
       });
     } finally {
@@ -395,7 +393,7 @@ function handleQuickTrigger(cmd: string): boolean {
     }
 
     if (cmd === '/usage' || cmd === 'usage') {
-      console.log(renderUsageView(usageTracker));
+      console.log(renderUsageView(tokenTracker));
       return true;
     }
 
