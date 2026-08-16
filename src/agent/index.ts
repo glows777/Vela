@@ -84,7 +84,7 @@ export const agentLoop = async ({
     let finalResponse:
       | Awaited<ReturnType<typeof streamText>["response"]>
       | undefined;
-    let finalUsage: Awaited<ReturnType<typeof streamText>["usage"]>;
+    let finalUsage: Awaited<ReturnType<typeof streamText>["usage"]> | undefined;
 
     for (let attempt = 1; ; attempt++) {
       try {
@@ -154,7 +154,7 @@ export const agentLoop = async ({
       }
     }
 
-    if (!finalResponse) {
+    if (!finalResponse || !finalUsage) {
       throw new Error("Agent loop did not receive a final response.");
     }
 
@@ -165,19 +165,19 @@ export const agentLoop = async ({
       break;
     }
 
-    const inputToken = finalUsage?.inputTokens?.total ?? finalUsage?.inputTokens ?? 0;
-    const outputToken = finalUsage?.outputTokens?.total ?? finalUsage?.outputTokens ?? 0;
+    const inputToken = finalUsage.inputTokens ?? 0;
+    const outputToken = finalUsage.outputTokens ?? 0;
     if (inputToken > 0) tokenTracker.updateFromAPI(inputToken);
 
-    const responseMessages = finalResponse!.messages as ModelMessage[];
+    const responseMessages: ModelMessage[] = finalResponse.messages;
     messages.push(...responseMessages);
     tokenTracker.addMessages(responseMessages);
     totalTokens += inputToken + outputToken;
 
     // 将 usage 归一化后记录到 usageTracker 中，方便后续统计和分析
     const norm = normalizeUsage(finalUsage);
-    const stepRecord = usageTracker?.record(model?.modelId || 'mock-model', norm);
-    totalTokens += norm.inputTokens + norm.outputTokens + norm.cacheReadTokens + norm.cacheWriteTokens;
+    const modelId = typeof model === "string" ? model : model.modelId;
+    const stepRecord = usageTracker?.record(modelId || "mock-model", norm);
 
     // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
     if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {

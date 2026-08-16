@@ -1,3 +1,5 @@
+import type { LanguageModel } from 'ai';
+
 /**
  * Mock Model v0.10 — 模拟 prompt cache 行为
  *
@@ -60,7 +62,7 @@ function approxMessageTokens(prompt: any[]): number {
   return approxTokensFromChars(chars);
 }
 
-/** 根据 prompt 算这次调用的 usage，并模拟 cache 命中。 */
+/** 根据 prompt 算这次调用的 v3 usage，并模拟 cache 命中。 */
 function makeUsage(prompt: any[], outputChars = 80) {
   const system = extractSystemContent(prompt);
   const prefixContent = system;
@@ -90,23 +92,29 @@ function makeUsage(prompt: any[], outputChars = 80) {
     lastPrefixHash = null;
   }
 
-  // 返回 AI SDK v5 标准字段（number），跟真实模型一致
-  // cacheCreationInputTokens 是 Anthropic provider 元数据里的字段名，AI SDK 透传
+  // AI SDK v6 的 provider v3 usage：inputTokens.total 包含三类输入，
+  // 细分字段用于区分普通输入、cache read 和 cache write。
   return {
-    inputTokens: input,
-    outputTokens: outputTokens,
-    totalTokens: input + outputTokens,
-    cachedInputTokens: cacheRead,
-    cacheCreationInputTokens: cacheWrite,
+    inputTokens: {
+      total: input + cacheRead + cacheWrite,
+      noCache: input,
+      cacheRead,
+      cacheWrite,
+    },
+    outputTokens: {
+      total: outputTokens,
+      text: outputTokens,
+      reasoning: undefined,
+    },
   };
 }
 
-const TEXT_RESPONSES: Record<string, string> = {
+const TEXT_RESPONSES = {
   default:
     '你好！我是 Super Agent v0.10。试试 /context 看上下文占用，/usage 看 token 用量和缓存命中率，/cache off 关掉缓存对比成本差异。',
   greeting:
     '你好！我是 Super Agent v0.10，已经接上 prompt cache 和成本追踪 :) 多聊几轮，输入 /usage 看节省了多少。',
-};
+} satisfies Record<string, string>;
 
 interface ToolCallIntent {
   toolName: string;
@@ -318,9 +326,9 @@ function makeToolCallChunks(intents: ToolCallIntent[], prompt: any[]): any[] {
   return chunks;
 }
 
-export function createMockModel() {
+export function createMockModel(): LanguageModel {
   return {
-    specificationVersion: 'v2' as const,
+    specificationVersion: 'v3' as const,
     provider: 'mock',
     modelId: 'mock-model',
 
@@ -337,7 +345,7 @@ export function createMockModel() {
       }).join(' ');
 
       if (allText.includes('对话压缩系统') || allText.includes('压缩成一份结构化摘要')) {
-        const mockSummary = `## 用户意图\n用户在探索项目结构和代码，了解工具系统的设计。\n\n## 已完成的操作\n- 列出了当前目录文件（.env, package.json, sample-data.txt, src/）\n- 读取了 package.json（项目名 super-agent-08-compaction, 版本 0.8.0）\n- 读取了 sample-data.txt（工具系统设计文档）\n- 搜索了 src/ 目录中的 export（找到 ToolRegistry, agentLoop, SessionStore 等导出）\n\n## 关键发现\n- 项目使用 ai@5.0.98 和 @ai-sdk/openai@2.0.44\n- 工具系统包含 ToolRegistry、truncateResult、并发控制（读写锁）\n- 已实现 SessionStore（JSONL 持久化）和 PromptBuilder（模块化 Prompt）\n\n## 当前状态\n用户刚完成项目结构探索，尚未开始修改代码。\n\n## 需要保留的细节\n- 项目路径：当前工作目录\n- 关键文件：src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`;
+        const mockSummary = `## 用户意图\n用户在探索项目结构和代码，了解工具系统的设计。\n\n## 已完成的操作\n- 列出了当前目录文件（.env, package.json, sample-data.txt, src/）\n- 读取了 package.json（项目名 super-agent-08-compaction, 版本 0.8.0）\n- 读取了 sample-data.txt（工具系统设计文档）\n- 搜索了 src/ 目录中的 export（找到 ToolRegistry, agentLoop, SessionStore 等导出）\n\n## 关键发现\n- 项目使用 ai@6 和 @ai-sdk/openai@3\n- 工具系统包含 ToolRegistry、truncateResult、并发控制（读写锁）\n- 已实现 SessionStore（JSONL 持久化）和 PromptBuilder（模块化 Prompt）\n\n## 当前状态\n用户刚完成项目结构探索，尚未开始修改代码。\n\n## 需要保留的细节\n- 项目路径：当前工作目录\n- 关键文件：src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`;
         return {
           content: [{ type: 'text' as const, text: mockSummary }],
           finishReason: { unified: 'stop' as const, raw: undefined },
@@ -369,7 +377,7 @@ export function createMockModel() {
             type: 'tool-call' as const,
             toolCallId: `call-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             toolName: intent.toolName,
-            input: intent.args,
+            input: JSON.stringify(intent.args),
           })),
           finishReason: { unified: 'tool-calls' as const, raw: undefined },
           usage: makeUsage(prompt),
@@ -384,7 +392,7 @@ export function createMockModel() {
             type: 'tool-call' as const,
             toolCallId: `call-${Date.now()}`,
             toolName: intent.toolName,
-            input: intent.args,
+            input: JSON.stringify(intent.args),
           }],
           finishReason: { unified: 'tool-calls' as const, raw: undefined },
           usage: makeUsage(prompt),

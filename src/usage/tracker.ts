@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { LanguageModelUsage } from 'ai';
 
 /**
  * 各家模型的 prompt cache 计费规则（单位：$ / 1M tokens，2026-05 数据）。
@@ -121,31 +122,24 @@ export function computeCost(model: string, usage: StepUsage): number {
 /**
  * 把 AI SDK 返回的 usage 对象规范化成四类 token。
  *
- * AI SDK v5 把 cache read 标准化到顶层 `cachedInputTokens`（OpenAI、DashScope 都映射到这里）。
- * cache write 没有 AI SDK 标准字段，Anthropic provider 元数据用 `cacheCreationInputTokens`。
- * 这里把两个来源都兜一遍，以后接新 provider 就在对应位置补一行。
+ * AI SDK v6 把输入 token 拆分到 `inputTokenDetails`：未命中、cache read 和 cache write。
+ * `inputTokens` 是三类输入 token 的总数，这里保留原有 tracker 的四类计费口径，
+ * 因此 `StepUsage.inputTokens` 表示未命中的输入 token。
  */
-export function normalizeUsage(usage: any): StepUsage {
+export function normalizeUsage(usage: LanguageModelUsage | undefined): StepUsage {
   if (!usage) return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
-  const cacheRead =
-    usage.cachedInputTokens                                        // AI SDK 标准字段
-    ?? usage.providerMetadata?.openai?.cachedTokens                // OpenAI 原生
-    ?? 0;
-
-  const cacheWrite =
-    usage.cacheCreationInputTokens                                 // Anthropic SDK 直接挂顶层
-    ?? usage.providerMetadata?.anthropic?.cacheCreationInputTokens // AI SDK 走 provider 元数据
-    ?? 0;
-
-  // OpenAI 把 cached tokens 含在 inputTokens 总数里 → 减出来；Anthropic 单列 → 不用减
-  let inputTokens = usage.inputTokens ?? 0;
-  if (cacheRead && inputTokens >= cacheRead) inputTokens -= cacheRead;
+  const cacheReadTokens = usage.inputTokenDetails.cacheReadTokens ?? 0;
+  const cacheWriteTokens = usage.inputTokenDetails.cacheWriteTokens ?? 0;
+  const totalInputTokens = usage.inputTokens ?? 0;
+  const inputTokens =
+    usage.inputTokenDetails.noCacheTokens
+    ?? Math.max(0, totalInputTokens - cacheReadTokens - cacheWriteTokens);
 
   return {
     inputTokens: Math.max(0, inputTokens),
     outputTokens: usage.outputTokens ?? 0,
-    cacheReadTokens: cacheRead,
-    cacheWriteTokens: cacheWrite,
+    cacheReadTokens,
+    cacheWriteTokens,
   };
 }

@@ -135,7 +135,7 @@ if (isContinue && (await store.exists())) {
     timestamps.set(message, timestamp);
   }
   summary = state.summary;
-  tracker.setEstimatedTokens(estimateMessageTokens(messages));
+  tokenTracker.setEstimatedTokens(estimateMessageTokens(messages));
   console.log(`[Session] 恢复会话，${messages.length} 条历史消息`);
 } else {
   console.log(`[Session] 新会话`);
@@ -328,16 +328,32 @@ function handleQuickTrigger(cmd: string): boolean {
       console.log('\n[模拟] 注入 20 条历史消息（含大量工具结果）...');
       for (let i = 0; i < 5; i++) {
         const age = (20 - i * 4) * 60 * 1000;
-        const userIdx = messages.length;
-        messages.push({ role: 'user', content: `第 ${i + 1} 轮：帮我读文件 file-${i}.ts` });
-        timestamps.set(userIdx, now - age);
-        messages.push({ role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: `sim-${i}`, toolName: 'read_file', input: { path: `file-${i}.ts` } }] });
-        timestamps.set(userIdx + 1, now - age);
+        const timestamp = now - age;
+        const userMessage: ModelMessage = {
+          role: 'user',
+          content: `第 ${i + 1} 轮：帮我读文件 file-${i}.ts`,
+        };
+        messages.push(userMessage);
+        timestamps.set(userMessage, timestamp);
+        const toolCallMessage: ModelMessage = {
+          role: 'assistant',
+          content: [{ type: 'tool-call' as const, toolCallId: `sim-${i}`, toolName: 'read_file', input: { path: `file-${i}.ts` } }],
+        };
+        messages.push(toolCallMessage);
+        timestamps.set(toolCallMessage, timestamp);
         const bigContent = `// file-${i}.ts\n` + 'export function handler() {\n  // ...\n}\n'.repeat(200);
-        messages.push({ role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: `sim-${i}`, toolName: 'read_file', output: textToolResultOutput(bigContent) }] });
-        timestamps.set(userIdx + 2, now - age);
-        messages.push({ role: 'assistant', content: [{ type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` }] });
-        timestamps.set(userIdx + 3, now - age);
+        const toolResultMessage: ModelMessage = {
+          role: 'tool',
+          content: [{ type: 'tool-result' as const, toolCallId: `sim-${i}`, toolName: 'read_file', output: textToolResultOutput(bigContent) }],
+        };
+        messages.push(toolResultMessage);
+        timestamps.set(toolResultMessage, timestamp);
+        const assistantMessage: ModelMessage = {
+          role: 'assistant',
+          content: [{ type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` }],
+        };
+        messages.push(assistantMessage);
+        timestamps.set(assistantMessage, timestamp);
       }
       const tokens = estimateMessageTokens(messages);
       console.log(`[模拟完成] ${messages.length} 条消息, ~${tokens} tokens\n`);
@@ -369,7 +385,7 @@ function handleQuickTrigger(cmd: string): boolean {
         modelId: process.env.DASHSCOPE_API_KEY ? 'qwen3-6-plus' : 'mock-model',
         windowTokens: 1_000_000,
         systemPromptChars: SYSTEM.length,
-        toolDescriptionChars: toolRegistry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.parameters || {}).length, 0),
+        toolDescriptionChars: toolRegistry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.inputSchema || {}).length, 0),
         memoryChars: 0,
         skillsChars: 0,
         messages,
