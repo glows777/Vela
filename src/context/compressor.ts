@@ -1,4 +1,3 @@
-import type { OpenAIChatLanguageModel } from "@ai-sdk/openai/internal";
 import {
   generateText,
   type LanguageModel,
@@ -6,6 +5,7 @@ import {
   type ToolModelMessage,
   type ToolResultPart,
 } from "ai";
+import { estimateMessageTokens } from "./defense";
 
 const CLEARABLE_TOOLS = new Set([
   "read_file",
@@ -91,7 +91,7 @@ const COMPRESS_PROMPT = `你是一个对话压缩系统。你的任务是把 Age
 - 不要写笼统的概述，只保留具体的、可操作的信息
 - 总长度控制在 800 字以内`;
 
-const CONTEXT_TOKEN_THRESHOLD = 300;
+const CONTEXT_TOKEN_THRESHOLD = 300; // 200k 的话，设置为 170 * 1000 token开启压缩即可
 const KEEP_RECENT_MESSAGES = 6;
 
 export interface CompactionResult {
@@ -105,7 +105,7 @@ export async function summarize(
   messages: ModelMessage[],
   existingSummary?: string,
 ): Promise<CompactionResult> {
-  const tokenUsed = estimateTokens(messages);
+  const tokenUsed = estimateMessageTokens(messages);
   if (tokenUsed < CONTEXT_TOKEN_THRESHOLD) {
     return {
       messages,
@@ -187,23 +187,4 @@ export async function summarize(
     console.error("[Compaction] LLM 摘要失败:", error);
     return { messages, summary: existingSummary || "", compressedCount: 0 };
   }
-}
-
-/** Estimate token count: ~4 chars per token for mixed Chinese/English. */
-export function estimateTokens(messages: ModelMessage[]): number {
-  let chars = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === "string") {
-      chars += msg.content.length;
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if ("text" in part && typeof part.text === "string") {
-          chars += part.text.length;
-        } else if ("output" in part) {
-          chars += JSON.stringify(part.output).length;
-        }
-      }
-    }
-  }
-  return Math.ceil(chars / 4);
 }

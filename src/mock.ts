@@ -1,26 +1,18 @@
 /**
- * Mock Model v0.4 — Tool System
+ * Mock Model v0.9 — Context Defense
  *
- * 在 v0.3 基础上新增：
- * - 文件操作工具支持（read_file, list_directory）
- * - "测试并发"：同时调用 3 个工具，验证并发执行
- * - "测试截断"：读取大文件，验证结果截断
- * - 多工具调用（parallel tool calls）
+ * 在 v0.4 基础上新增：
+ * - tool_search 流程：先搜索延迟工具，再调用
+ * - 延迟工具不直接调用，先 tool_search 发现
  */
-
-import type {
-  LanguageModelV3,
-  LanguageModelV3StreamPart,
-  LanguageModelV3Usage,
-} from "@ai-sdk/provider";
 
 let retryTestCount = 0;
 
-const TEXT_RESPONSES = {
+const TEXT_RESPONSES: Record<string, string> = {
   default:
-    '你好！我是 Super Agent v0.4.1，现在有 9 个内置工具了。试试"测试编辑"、"测试搜索"、"测试glob"、"测试bash"看看新功能。',
-  greeting: "你好！我是 Super Agent v0.4.1，支持文件编辑、搜索、命令执行 :)",
-} as const;
+    "你好！我是 Super Agent v0.9。三层即时防线已就绪，试试 sim 和 defend 命令。。",
+  greeting: "你好！我是 Super Agent v0.6，支持 Profile 过滤和延迟加载 :)",
+};
 
 interface ToolCallIntent {
   toolName: string;
@@ -47,6 +39,35 @@ function hasToolResults(prompt: any[]): boolean {
   return false;
 }
 
+function getToolResultContent(prompt: any[]): string {
+  const msgs = prompt || [];
+  const parts: string[] = [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "tool") {
+      const content = msgs[i].content || [];
+      for (const c of content) {
+        const val = c.output?.value || c.output || c.result || "";
+        parts.push(String(val));
+      }
+    } else if (msgs[i].role === "user") break;
+  }
+  return parts.join("\n");
+}
+
+function wasToolSearchCalled(prompt: any[]): boolean {
+  const msgs = prompt || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "assistant") {
+      const content = msgs[i].content || [];
+      for (const c of content) {
+        if (c.type === "tool-call" && c.toolName === "tool_search") return true;
+      }
+    }
+    if (msgs[i].role === "user") return false;
+  }
+  return false;
+}
+
 function detectParallelIntent(text: string): ToolCallIntent[] | null {
   if (text.includes("测试并发") || text.includes("test parallel")) {
     return [
@@ -60,17 +81,99 @@ function detectParallelIntent(text: string): ToolCallIntent[] | null {
 
 function detectToolIntent(prompt: any[]): ToolCallIntent | null {
   const text = extractUserText(prompt);
+  const toolResults = getToolResultContent(prompt);
 
   if (text.includes("测试死循环")) {
     return { toolName: "get_weather", args: { city: "北京" } };
   }
 
+  // 如果刚刚 tool_search 返回了结果，现在要调用发现的工具
+  if (hasToolResults(prompt) && wasToolSearchCalled(prompt)) {
+    if (
+      toolResults.includes("list_issues") ||
+      toolResults.includes("mcp__github")
+    ) {
+      const repoMatch = text.match(/(\w+)\/(\w[\w-]*)/);
+      const owner = repoMatch ? repoMatch[1] : "vercel";
+      const repo = repoMatch ? repoMatch[2] : "ai";
+      return { toolName: "mcp__github__list_issues", args: { owner, repo } };
+    }
+    if (
+      toolResults.includes("search_pages") ||
+      toolResults.includes("mcp__notion")
+    ) {
+      return {
+        toolName: "mcp__notion__search_pages",
+        args: { query: "project roadmap" },
+      };
+    }
+    if (
+      toolResults.includes("navigate") ||
+      toolResults.includes("mcp__browser")
+    ) {
+      return {
+        toolName: "mcp__browser__navigate",
+        args: { url: "https://example.com" },
+      };
+    }
+    if (
+      toolResults.includes("supabase") ||
+      toolResults.includes("mcp__supabase")
+    ) {
+      return { toolName: "mcp__supabase__list_tables", args: {} };
+    }
+    return null;
+  }
+
   if (hasToolResults(prompt)) return null;
 
+  // 延迟工具场景：先 tool_search，传精确的工具名
+  if (
+    text.includes("issue") ||
+    text.includes("issues") ||
+    text.includes("github")
+  ) {
+    return {
+      toolName: "tool_search",
+      args: { query: "mcp__github__list_issues" },
+    };
+  }
+  if (
+    text.includes("notion") ||
+    text.includes("笔记") ||
+    text.includes("文档")
+  ) {
+    return {
+      toolName: "tool_search",
+      args: { query: "mcp__notion__search_pages" },
+    };
+  }
+  if (
+    text.includes("浏览器") ||
+    text.includes("browser") ||
+    text.includes("网页")
+  ) {
+    return {
+      toolName: "tool_search",
+      args: { query: "mcp__browser__navigate" },
+    };
+  }
+  if (
+    text.includes("数据库") ||
+    text.includes("database") ||
+    text.includes("supabase") ||
+    text.includes("sql")
+  ) {
+    return {
+      toolName: "tool_search",
+      args: { query: "mcp__supabase__list_tables" },
+    };
+  }
+
+  // 内置工具（非延迟，直接调用）
   if (text.includes("测试截断") || text.includes("test truncation")) {
     return { toolName: "read_file", args: { path: "sample-data.txt" } };
   }
-
   if (text.includes("测试编辑") || text.includes("test edit")) {
     return {
       toolName: "edit_file",
@@ -81,36 +184,24 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
       },
     };
   }
-
   if (text.includes("测试搜索") || text.includes("test grep")) {
     return { toolName: "grep", args: { pattern: "export", path: "src" } };
   }
-
   if (text.includes("测试glob") || text.includes("test glob")) {
     return { toolName: "glob", args: { pattern: "**/*.ts" } };
   }
-
   if (text.includes("测试bash") || text.includes("test bash")) {
     return {
       toolName: "bash",
       args: { command: 'echo "Hello from bash!" && date' },
     };
   }
-
   if (
     text.includes("目录") ||
     text.includes("文件列表") ||
     text.includes("ls")
   ) {
     return { toolName: "list_directory", args: { path: "." } };
-  }
-
-  if (
-    (text.includes("搜") || text.includes("找") || text.includes("grep")) &&
-    !text.includes("文件")
-  ) {
-    const keyword = text.replace(/.*(?:搜|找|grep)\s*/, "").trim() || "TODO";
-    return { toolName: "grep", args: { pattern: keyword, path: "." } };
   }
 
   const fileMatch = text.match(/(\S+\.[\w]+)/);
@@ -152,38 +243,28 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
 
 function pickTextResponse(prompt: any[]): string {
   if (hasToolResults(prompt)) {
-    const msgs = prompt || [];
-    const toolMsgs = [];
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === "tool") {
-        toolMsgs.unshift(msgs[i]);
-      } else if (msgs[i].role === "user") break;
-    }
-
-    const parts: string[] = [];
-    for (const tm of toolMsgs) {
-      const content = tm.content || [];
-      for (const c of content) {
-        const val = c.output?.value || c.output || c.result || "";
-        parts.push(String(val));
-      }
-    }
-    const combined = parts.join("\n");
+    const combined = getToolResultContent(prompt);
 
     if (combined.includes("[DIR]") || combined.includes("[FILE]")) {
       return `当前目录的文件列表：\n${combined}`;
     }
-    if (combined.includes("省略") || combined.includes("truncat")) {
-      return `文件内容已读取（注意部分内容被截断了）：\n${combined}`;
-    }
     if (combined.includes("°C") || combined.includes("天气")) {
-      if (parts.length > 1) {
-        return `查询到多个城市的天气：\n${parts.map((p) => `- ${p}`).join("\n")}`;
-      }
       return `根据查询结果：${combined}`;
     }
-    if (combined.includes("已写入")) {
-      return `文件操作完成：${combined}`;
+    if (
+      combined.includes("已发送") ||
+      combined.includes("已导航") ||
+      combined.includes("已点击") ||
+      combined.includes("已填写")
+    ) {
+      return `操作完成：${combined}`;
+    }
+    if (
+      combined.includes("number") ||
+      combined.includes("title") ||
+      combined.includes("state")
+    ) {
+      return `查询结果：\n${combined}`;
     }
     return `工具返回了以下信息：\n${combined}`;
   }
@@ -194,7 +275,7 @@ function pickTextResponse(prompt: any[]): string {
   return TEXT_RESPONSES.default;
 }
 
-const USAGE: LanguageModelV3Usage = {
+const USAGE = {
   inputTokens: {
     total: 10,
     noCache: 10,
@@ -204,7 +285,7 @@ const USAGE: LanguageModelV3Usage = {
   outputTokens: { total: 20, text: 20, reasoning: undefined },
 };
 
-function createDelayedStream<T>(chunks: T[], delayMs = 30): ReadableStream<T> {
+function createDelayedStream(chunks: any[], delayMs = 30): ReadableStream {
   return new ReadableStream({
     start(controller) {
       let i = 0;
@@ -221,8 +302,8 @@ function createDelayedStream<T>(chunks: T[], delayMs = 30): ReadableStream<T> {
   });
 }
 
-function makeToolCallChunks(intents: ToolCallIntent[]): LanguageModelV3StreamPart[] {
-  const chunks: LanguageModelV3StreamPart[] = [];
+function makeToolCallChunks(intents: ToolCallIntent[]): any[] {
+  const chunks: any[] = [];
   for (const intent of intents) {
     const callId = `call-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const argsJson = JSON.stringify(intent.args);
@@ -246,17 +327,40 @@ function makeToolCallChunks(intents: ToolCallIntent[]): LanguageModelV3StreamPar
   return chunks;
 }
 
-export function createMockModel(): LanguageModelV3 {
+export function createMockModel() {
   return {
     specificationVersion: "v3" as const,
     provider: "mock",
-    modelId: "mock-model-v0.4.1",
+    modelId: "mock-model-v0.6",
 
     get supportedUrls() {
       return Promise.resolve({});
     },
 
     async doGenerate({ prompt }: any) {
+      // Detect compression request (called via generateText with compress system prompt)
+      const allText = (prompt || [])
+        .map((m: any) => {
+          if (typeof m.content === "string") return m.content;
+          if (Array.isArray(m.content))
+            return m.content.map((c: any) => c.text || "").join("");
+          return "";
+        })
+        .join(" ");
+
+      if (
+        allText.includes("对话压缩系统") ||
+        allText.includes("压缩成一份结构化摘要")
+      ) {
+        const mockSummary = `## 用户意图\n用户在探索项目结构和代码，了解工具系统的设计。\n\n## 已完成的操作\n- 列出了当前目录文件（.env, package.json, sample-data.txt, src/）\n- 读取了 package.json（项目名 super-agent-08-compaction, 版本 0.8.0）\n- 读取了 sample-data.txt（工具系统设计文档）\n- 搜索了 src/ 目录中的 export（找到 ToolRegistry, agentLoop, SessionStore 等导出）\n\n## 关键发现\n- 项目使用 ai@5.0.98 和 @ai-sdk/openai@2.0.44\n- 工具系统包含 ToolRegistry、truncateResult、并发控制（读写锁）\n- 已实现 SessionStore（JSONL 持久化）和 PromptBuilder（模块化 Prompt）\n\n## 当前状态\n用户刚完成项目结构探索，尚未开始修改代码。\n\n## 需要保留的细节\n- 项目路径：当前工作目录\n- 关键文件：src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`;
+        return {
+          content: [{ type: "text" as const, text: mockSummary }],
+          finishReason: { unified: "stop" as const, raw: undefined },
+          usage: USAGE,
+          warnings: [],
+        };
+      }
+
       const text = extractUserText(prompt);
 
       if (text.includes("测试重试") || text.includes("test retry")) {
@@ -280,7 +384,7 @@ export function createMockModel(): LanguageModelV3 {
             type: "tool-call" as const,
             toolCallId: `call-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             toolName: intent.toolName,
-            input: JSON.stringify(intent.args),
+            input: intent.args,
           })),
           finishReason: { unified: "tool-calls" as const, raw: undefined },
           usage: USAGE,
@@ -296,7 +400,7 @@ export function createMockModel(): LanguageModelV3 {
               type: "tool-call" as const,
               toolCallId: `call-${Date.now()}`,
               toolName: intent.toolName,
-              input: JSON.stringify(intent.args),
+              input: intent.args,
             },
           ],
           finishReason: { unified: "tool-calls" as const, raw: undefined },

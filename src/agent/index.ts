@@ -13,9 +13,11 @@ import {
 } from "./loop-detection";
 import { calculateDelay, isRetryable, sleep } from "./retry";
 import type { ToolRegistry } from "../tools/registry";
+import type { TokenTracker } from "../context/defense";
 
 const MAX_TURN = 15;
 const MAX_RETRIES = 3;
+const TOKEN_BUDGET = 50 * 1000;
 
 export interface BudgetState {
   used: number;
@@ -27,7 +29,7 @@ interface AgentLoopParameter {
   systemPrompt: string;
   toolRegistry: ToolRegistry;
   messages: ModelMessage[];
-  budget: BudgetState;
+  tracker: TokenTracker,
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -57,9 +59,10 @@ export const agentLoop = async ({
   systemPrompt,
   toolRegistry,
   messages,
-  budget,
+  tracker
 }: AgentLoopParameter) => {
   let turn = 0;
+  let totalTokens = 0;
   resetHistory(); // 每次新的 agent loop 开始时重置工具调用历史
 
   while (turn < MAX_TURN) {
@@ -154,16 +157,20 @@ export const agentLoop = async ({
       break;
     }
 
-    messages.push(...finalResponse.messages);
+    const inputToken = finalUsage?.inputTokens?.total ?? finalUsage?.inputTokens ?? 0;
+    const outputToken = finalUsage?.outputTokens?.total ?? finalUsage?.outputTokens ?? 0;
+    if (inputToken > 0) tracker.updateFromAPI(inputToken);
 
-    // Token 预算追踪：budget 由调用方持有，跨轮持续累计
-    budget.used +=
-      finalUsage.totalTokens ??
-      (finalUsage.inputTokens ?? 0) + (finalUsage.outputTokens ?? 0);
-    const pct = Math.round((budget.used / budget.limit) * 100);
-    console.log(`\n[Token] ${budget.used}/${budget.limit} (${pct}%)`);
-    if (budget.used > budget.limit) {
-      console.log("\nAgent has exceeded the token budget. Ending loop.");
+    const responseMessages = finalResponse!.messages as ModelMessage[];
+    messages.push(...responseMessages);
+    tracker.addMessages(responseMessages);
+
+    totalTokens += inputToken + outputToken;
+    if (totalTokens > TOKEN_BUDGET * 0.9) {
+      console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${Math.round(totalTokens / TOKEN_BUDGET * 100)}%)`);
+    }
+    if (totalTokens > TOKEN_BUDGET) {
+      console.log('\n[Token has exceeded the budget limit. Ending loop.]');
       break;
     }
 
