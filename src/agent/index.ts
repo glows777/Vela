@@ -77,7 +77,6 @@ export const agentLoop = async ({
     let needToolCall = false
     let fullContent = ""
     let shouldBreak = false
-    let lastToolCall: { name: string; input: unknown } | null = null
     let finalStep:
       | Awaited<ReturnType<typeof streamText>["finalStep"]>
       | undefined
@@ -101,7 +100,6 @@ export const agentLoop = async ({
             }
             case "tool-call": {
               needToolCall = true
-              lastToolCall = { name: part.toolName, input: part.input }
               console.log(
                 `\n  [tool called: ${part.toolName}->(${JSON.stringify(part.input)})]`,
               )
@@ -118,13 +116,16 @@ export const agentLoop = async ({
                   })
                 }
               }
-              recordToolCall(part.toolName, part.input)
+              recordToolCall(part.toolCallId, part.toolName, part.input)
               break
             }
             case "tool-result": {
-              if (lastToolCall) {
-                recordToolCallResult(part.toolName, part.input, part.output)
-              }
+              recordToolCallResult(
+                part.toolCallId,
+                part.toolName,
+                part.input,
+                part.output,
+              )
               console.log(
                 `  [tool called result: ${part.toolName}->${JSON.stringify(part.output)}]`,
               )
@@ -145,7 +146,6 @@ export const agentLoop = async ({
         needToolCall = false
         fullContent = ""
         shouldBreak = false
-        lastToolCall = null
       }
     }
 

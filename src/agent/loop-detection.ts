@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 
 interface ToolHashedRecord {
+  toolCallId: string;
   name: string;
   argsHash: string;
   resultHash: string;
@@ -48,8 +49,13 @@ export function hashResult(result: unknown): string {
 
 const callHistory: ToolHashedRecord[] = [];
 
-export function recordToolCall(name: string, args: unknown) {
+export function recordToolCall(
+  toolCallId: string,
+  name: string,
+  args: unknown,
+) {
   callHistory.push({
+    toolCallId,
     name,
     argsHash: hashToolCall(name, args),
     resultHash: "", // 结果哈希将在调用完成后更新
@@ -59,24 +65,27 @@ export function recordToolCall(name: string, args: unknown) {
 }
 
 export function recordToolCallResult(
+  toolCallId: string,
   name: string,
   args: unknown,
   result: unknown,
-) {
+): boolean {
   const argsHash = hashToolCall(name, args);
   const resultHash = hashResult(result);
 
-  for (let i = 0; i < callHistory.length; i++) {
-    const currentRecord = callHistory[i];
-    if (
-      currentRecord?.name === name &&
-      currentRecord.argsHash === argsHash &&
-      currentRecord.resultHash === ""
-    ) {
-      currentRecord.resultHash = resultHash;
-      break;
-    }
+  const currentRecord = callHistory.find(
+    (record) =>
+      record.toolCallId === toolCallId &&
+      record.name === name &&
+      record.argsHash === argsHash &&
+      record.resultHash === "",
+  );
+  if (!currentRecord) {
+    return false;
   }
+
+  currentRecord.resultHash = resultHash;
+  return true;
 }
 
 export function resetHistory() {
