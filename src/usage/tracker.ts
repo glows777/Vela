@@ -280,7 +280,7 @@ export function computeCost(model: string, usage: StepUsage): number {
 /**
  * 把 AI SDK 返回的 usage 对象规范化成四类 token。
  *
- * AI SDK v6 把输入 token 拆分到 `inputTokenDetails`：未命中、cache read 和 cache write。
+ * AI SDK 把输入 token 拆分到 `inputTokenDetails`：未命中、cache read 和 cache write。
  * `inputTokens` 是三类输入 token 的总数，这里保留原有 tracker 的四类计费口径，
  * 因此 `StepUsage.inputTokens` 表示未命中的输入 token。
  */

@@ -14,10 +14,10 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/openai": "^4.0.42",
     "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/client": "^2.0.0-alpha.2",
-    "ai": "^6.0.194",
+    "ai": "^7.0.66",
     "turndown": "^7.2.4",
     "zod": "^4.4.3"
   }

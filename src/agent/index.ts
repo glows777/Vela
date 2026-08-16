@@ -78,22 +78,21 @@ export const agentLoop = async ({
     let fullContent = "";
     let shouldBreak = false;
     let lastToolCall: { name: string; input: unknown } | null = null;
-    let finalResponse:
-      | Awaited<ReturnType<typeof streamText>["response"]>
+    let finalStep:
+      | Awaited<ReturnType<typeof streamText>["finalStep"]>
       | undefined;
-    let finalUsage: Awaited<ReturnType<typeof streamText>["usage"]> | undefined;
 
     for (let attempt = 1; ; attempt++) {
       try {
         const result = streamText({
           model,
-          system: systemPrompt,
+          instructions: systemPrompt,
           tools: toolRegistry.toAISDKFormat(),
           messages,
           maxRetries: 0, // 禁止 streamText 内部重试，交由外层控制重试逻辑
         });
 
-        for await (const part of result.fullStream) {
+        for await (const part of result.stream) {
           switch (part.type) {
             case "text-delta": {
               process.stdout.write(part.text);
@@ -134,8 +133,7 @@ export const agentLoop = async ({
           }
         }
 
-        finalResponse = await result.response;
-        finalUsage = await result.usage;
+        finalStep = await result.finalStep;
         break;
       } catch (error) {
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error;
@@ -151,15 +149,15 @@ export const agentLoop = async ({
       }
     }
 
-    if (!finalResponse || !finalUsage) {
+    if (!finalStep) {
       throw new Error("Agent loop did not receive a final response.");
     }
 
-    const inputToken = finalUsage.inputTokens ?? 0;
+    const inputToken = finalStep.usage.inputTokens ?? 0;
     if (inputToken > 0) tokenTracker.updateFromAPI(inputToken);
 
     // 将 usage 归一化后记录到统一 tracker，并累计当前 loop 的完整 token 预算
-    const norm = normalizeUsage(finalUsage);
+    const norm = normalizeUsage(finalStep.usage);
     const modelId = typeof model === "string" ? model : model.modelId;
     const stepRecord = tokenTracker.record(modelId || "mock-model", norm);
 
@@ -177,7 +175,7 @@ export const agentLoop = async ({
       break;
     }
 
-    const responseMessages: ModelMessage[] = finalResponse.messages;
+    const responseMessages: ModelMessage[] = finalStep.response.messages;
     messages.push(...responseMessages);
     tokenTracker.addMessages(responseMessages);
 

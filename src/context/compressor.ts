@@ -180,7 +180,7 @@ export async function summarize(
   try {
     const result = await generateText({
       model,
-      system: COMPRESS_PROMPT,
+      instructions: COMPRESS_PROMPT,
       prompt: userPrompt,
     });
 

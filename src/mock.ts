@@ -92,7 +92,7 @@ function makeUsage(prompt: any[], outputChars = 80) {
     lastPrefixHash = null;
   }
 
-  // AI SDK v6 的 provider v3 usage：inputTokens.total 包含三类输入，
+  // AI SDK provider v3 usage：inputTokens.total 包含三类输入，
   // 细分字段用于区分普通输入、cache read 和 cache write。
   return {
     inputTokens: {
@@ -345,7 +345,7 @@ export function createMockModel(): LanguageModel {
       }).join(' ');
 
       if (allText.includes('对话压缩系统') || allText.includes('压缩成一份结构化摘要')) {
-        const mockSummary = `## 用户意图\n用户在探索项目结构和代码，了解工具系统的设计。\n\n## 已完成的操作\n- 列出了当前目录文件（.env, package.json, sample-data.txt, src/）\n- 读取了 package.json（项目名 super-agent-08-compaction, 版本 0.8.0）\n- 读取了 sample-data.txt（工具系统设计文档）\n- 搜索了 src/ 目录中的 export（找到 ToolRegistry, agentLoop, SessionStore 等导出）\n\n## 关键发现\n- 项目使用 ai@6 和 @ai-sdk/openai@3\n- 工具系统包含 ToolRegistry、truncateResult、并发控制（读写锁）\n- 已实现 SessionStore（JSONL 持久化）和 PromptBuilder（模块化 Prompt）\n\n## 当前状态\n用户刚完成项目结构探索，尚未开始修改代码。\n\n## 需要保留的细节\n- 项目路径：当前工作目录\n- 关键文件：src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`;
+        const mockSummary = `## 用户意图\n用户在探索项目结构和代码，了解工具系统的设计。\n\n## 已完成的操作\n- 列出了当前目录文件（.env, package.json, sample-data.txt, src/）\n- 读取了 package.json（项目名 super-agent-08-compaction, 版本 0.8.0）\n- 读取了 sample-data.txt（工具系统设计文档）\n- 搜索了 src/ 目录中的 export（找到 ToolRegistry, agentLoop, SessionStore 等导出）\n\n## 关键发现\n- 项目使用 ai@7 和 @ai-sdk/openai@4\n- 工具系统包含 ToolRegistry、truncateResult、并发控制（读写锁）\n- 已实现 SessionStore（JSONL 持久化）和 PromptBuilder（模块化 Prompt）\n\n## 当前状态\n用户刚完成项目结构探索，尚未开始修改代码。\n\n## 需要保留的细节\n- 项目路径：当前工作目录\n- 关键文件：src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`;
         return {
           content: [{ type: 'text' as const, text: mockSummary }],
           finishReason: { unified: 'stop' as const, raw: undefined },

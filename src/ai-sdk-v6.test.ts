@@ -30,7 +30,7 @@ async function runMockAgent(prompt: string): Promise<{
   return { messages, tracker };
 }
 
-test("normalizes AI SDK v6 usage detail fields", () => {
+test("normalizes AI SDK usage detail fields", () => {
   const usage: LanguageModelUsage = {
     inputTokens: 100,
     inputTokenDetails: {
@@ -54,7 +54,7 @@ test("normalizes AI SDK v6 usage detail fields", () => {
   });
 });
 
-test("keeps text response semantics with the v6 mock model", async () => {
+test("keeps text response semantics with the mock model", async () => {
   const { messages, tracker } = await runMockAgent("你好");
 
   expect(messages).toHaveLength(2);
@@ -63,7 +63,7 @@ test("keeps text response semantics with the v6 mock model", async () => {
   expect(tracker.totals().steps).toBe(1);
 });
 
-test("keeps tool-call continuation semantics with the v6 mock model", async () => {
+test("keeps tool-call continuation semantics with the mock model", async () => {
   const { messages } = await runMockAgent("测试bash");
 
   expect(messages.map(message => message.role)).toEqual([
