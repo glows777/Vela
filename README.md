@@ -36,19 +36,19 @@ bun install
 
 ### 配置环境变量 / Environment Variables
 
-复制 `.env.example`（或手动创建 `.env`）：
+复制 `.env.example` 并填写（`.env` 已被 gitignore，不会入库）：
 
 ```bash
-# 必填 / Required
-OPENAI_API_KEY=sk-xxx
-OPENAI_API_MODEL_NAME=gpt-5
-
-# 可选 / Optional
-OPENAI_API_BASE_URL=https://api.openai.com/v1   # 自定义 Base URL（代理 / 兼容服务）
-TAVILY_API_KEY=xxx                               # Web 搜索（Tavily，二选一）
-SERPER_API_KEY=xxx                               # Web 搜索（Serper，二选一）
-GITHUB_PERSONAL_ACCESS_TOKEN=xxx                 # GitHub MCP Server（开发中）
+cp .env.example .env
 ```
+
+| 变量 / Variable | 必填 / Required | 说明 / Notes |
+|---|---|---|
+| `OPENAI_API_KEY` | ✅ | OpenAI 兼容 API 密钥 / API key |
+| `OPENAI_API_MODEL_NAME` | ✅ | 模型名，如 `gpt-5` / model name |
+| `OPENAI_API_BASE_URL` | ❌ | 自定义 Base URL（代理 / 兼容服务），缺省为官方端点 |
+| `TAVILY_API_KEY` / `SERPER_API_KEY` | ❌ | Web 搜索服务，二选一即可，`web_search` 自动检测 |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | GitHub MCP Server（stdio 传输）|
 
 > **搜索服务**：`web_search` 工具会自动检测 `TAVILY_API_KEY` 或 `SERPER_API_KEY`，配置任一即可。
 >
@@ -97,6 +97,21 @@ bun run src/index.ts  # 直接运行 / direct run
 通过官方 `@modelcontextprotocol/client` 接入 MCP Server（stdio 传输），例如 GitHub MCP Server。MCP 工具会自动注册到工具列表，也可通过 `tool_search` 延迟发现。当前 GitHub 连接代码处于开发中（见 `src/index.ts`）。
 
 MCP servers (stdio transport) are supported via the official `@modelcontextprotocol/client` — e.g. GitHub MCP Server. MCP tools auto-register into the tool list and can also be discovered on demand via `tool_search`. GitHub integration is currently under development (see `src/index.ts`).
+
+#### 实操：接入 GitHub MCP Server / Example: GitHub MCP
+
+```bash
+# 1. 创建 GitHub Personal Access Token（需 repo / read:org 权限）
+#    https://github.com/settings/tokens
+# 2. 写入 .env
+GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
+# 3. 启动 Vela（需要本机可执行 npx）
+bun run dev
+```
+
+启动时 Vela 会通过 `npx @modelcontextprotocol/server-github`（stdio）连接 GitHub MCP Server，并把注册到的工具并入工具列表；连接失败会自动指数退避重试（初始 30s → 最大 5min）。未配置 Token 时跳过连接并使用 Mock MCP，不影响主流程。
+
+On startup, Vela connects to the GitHub MCP Server via `npx @modelcontextprotocol/server-github` (stdio) and merges its tools into the registry; failures retry with exponential backoff (30s → 5min max). Without a token, it skips the connection and uses a Mock MCP, so the main flow is unaffected.
 
 ---
 
@@ -162,9 +177,23 @@ user input → command dispatch (slash commands take priority)
 bun test
 ```
 
-测试覆盖：AI SDK v6 usage 归一化、Mock 模型语义、OpenAI prompt cache 计费字段等。
+| 测试文件 / File | 覆盖内容 / Coverage |
+|---|---|
+| `src/ai-sdk-v6.test.ts` | AI SDK v6 usage 归一化 + Mock 模型下完整 agent 循环 / usage normalization & full agent loop on mock |
+| `src/openai-cache-usage.test.ts` | OpenAI prompt cache 计费字段（miss / read / write）/ cache billing fields |
+| `src/agent/loop-detection.test.ts` | 循环检测（重复调用 / ping-pong / 熔断）/ loop detection detectors |
 
-Tests cover AI SDK v6 usage normalization, mock model semantics, and OpenAI prompt-cache billing fields.
+---
+
+## 📁 其他目录 / Misc Directories
+
+| 目录 / Dir | 说明 / Notes |
+|---|---|
+| `app/` | 计算器 demo 页面（与 `calculator/` 内容一致，疑似冗余）/ calculator demo page (identical to `calculator/`, likely redundant) |
+| `calculator/` | 计算器 demo 页面 / calculator demo page |
+| `sample/` | 带 TODO/FIXME 的示例代码，供代码分析 / 工具演示用 / sample code with intentional TODO/FIXME for tool demos |
+| `.sessions/` | 运行时会话 checkpoint（JSONL，已 gitignore）/ runtime session checkpoints (gitignored) |
+| `.usage/` | 运行时 Token 用量记录（JSONL，未忽略，建议加入 .gitignore）/ runtime usage records (JSONL, not gitignored — consider adding) |
 
 ---
 

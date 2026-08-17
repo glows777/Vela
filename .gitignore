@@ -18,6 +18,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # runtime sessions
 .sessions
 
+# runtime usage records
+.usage
+
+# cross-session memory store
+.memory
+
 # dotenv environment variable files
 .env
 .env.development.local
