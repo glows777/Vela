@@ -99,7 +99,6 @@ export class ToolRegistry {
       const maxChar = tool.maxResultChars;
       const excuteFn = tool.execute;
       const isSafe = tool.isConcurrencySafe === true;
-      const currentRegistryScope = this;
       const name = tool.name;
 
       result[name] = AITool({
@@ -107,10 +106,10 @@ export class ToolRegistry {
         inputSchema: tool.inputSchema,
         execute: async (input: unknown) => {
           if (isSafe) {
-            await currentRegistryScope.acquireConcurrent();
+            await this.acquireConcurrent();
             console.log(`  [concurrentCount] ${name} get concurrent lock`);
           } else {
-            await currentRegistryScope.acquireExclusive();
+            await this.acquireExclusive();
             console.log(
               `  [parrcell] ${name} get exclusiveLock，waiting other tool called`,
             );
@@ -124,9 +123,9 @@ export class ToolRegistry {
           } finally {
             // 释放锁
             if (isSafe) {
-              currentRegistryScope.releaseConcurrent();
+              this.releaseConcurrent();
             } else {
-              currentRegistryScope.releaseExclusive();
+              this.releaseExclusive();
             }
           }
         },

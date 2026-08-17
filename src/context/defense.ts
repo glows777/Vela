@@ -25,7 +25,7 @@ export function truncateToolResults(
   let compacted = 0;
 
   // Pass 1: single-result truncation (Head/Tail 60/40)
-  let result = messages.map(msg => {
+  const result = messages.map(msg => {
     if (msg.role !== 'tool' || !Array.isArray(msg.content)) return msg;
 
     const newContent = msg.content.map((part: any) => {

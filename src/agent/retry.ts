@@ -37,7 +37,7 @@ export function calculateDelay(
   baseMs = 500,
   maxMs = 30000,
 ): number {
-  const exponential = baseMs * Math.pow(2, attempt - 1);
+  const exponential = baseMs * 2 ** (attempt - 1);
   const capped = Math.min(exponential, maxMs);
   const jitterRange = capped * 0.25;
   const jittered = capped + (Math.random() * 2 - 1) * jitterRange;

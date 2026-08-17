@@ -65,7 +65,7 @@ registerToolSearchTool(toolRegistry)
 const MCP_INITIAL_RETRY_DELAY_MS = 30_000
 const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000
 
-let mcpConnection: Promise<boolean> | null = null
+const mcpConnection: Promise<boolean> | null = null
 let mcpFailureCount = 0
 let nextMCPRetryAt = 0
 
