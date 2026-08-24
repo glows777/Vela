@@ -1,6 +1,8 @@
-import type { PipeFn } from "./pipelins"
+import type { MemoryStore } from '../memory'
+import type { VectorStore } from '../rag/store'
+import type { PipeFn, PromptContext } from './pipelins'
 
-export * from "./pipelins"
+export * from './pipelins'
 
 export function coreRules(): PipeFn {
   return () => `You are Vela, a helpful agent that can call tool.
@@ -26,5 +28,22 @@ export function sessionContext(): PipeFn {
 export function deferredTools(): PipeFn {
   return (ctx) => {
     return ctx.deferredToolSummary
+  }
+}
+
+export function memoryContext(
+  memoryStore: MemoryStore,
+): (ctx: PromptContext) => string | null {
+  return () => memoryStore.buildPromptSection()
+}
+
+export function ragContext(
+  vectorStore: VectorStore,
+): (ctx: PromptContext) => string | null {
+  return () => {
+    const size = vectorStore.size()
+    if (size === 0) return null
+    const sources = vectorStore.sources()
+    return `[知识库] 已导入 ${size} 个文档片段（来源: ${sources.join(', ')}）。使用 rag_search 工具搜索知识库。`
   }
 }

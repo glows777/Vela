@@ -1,42 +1,64 @@
-import { createInterface } from "node:readline"
-import { createOpenAI } from "@ai-sdk/openai"
+import fs from 'node:fs'
+import { createInterface } from 'node:readline'
+import { createOpenAI } from '@ai-sdk/openai'
 import {
   Client,
   getDefaultEnvironment,
   StdioClientTransport,
-} from "@modelcontextprotocol/client"
-import type { ModelMessage } from "ai"
-import { agentLoop } from "./agent"
+} from '@modelcontextprotocol/client'
+import type { ModelMessage } from 'ai'
+import { agentLoop } from './agent'
 import {
   type CommandContext,
   contextCommands,
   createDispatcher,
   debugCommands,
   memoryCommands,
-} from "./commands"
+} from './commands'
 import {
   MICROCOMPACT_TOKEN_THRESHOLD,
   microcompact,
   SUMMARY_TOKEN_THRESHOLD,
   summarize,
-} from "./context/compressor"
-import { applyDefense, estimateMessageTokens } from "./context/defense"
-import { MemoryStore } from "./memory"
-import { coreRules, deferredTools, sessionContext, toolGuide } from "./prompt"
-import { type PromptContext, PromptPipeline } from "./prompt/pipelins"
-import { SessionStore } from "./session"
-import { allTools } from "./tools"
-import { createMemoryTool } from "./tools/memory-tool"
-import { ToolRegistry } from "./tools/registry"
-import { registerToolSearchTool } from "./tools/tool-search"
-import { TokenTracker } from "./usage/tracker"
+} from './context/compressor'
+import { applyDefense, estimateMessageTokens } from './context/defense'
+import { MemoryStore } from './memory'
+import {
+  coreRules,
+  deferredTools,
+  memoryContext,
+  ragContext,
+  sessionContext,
+  toolGuide,
+} from './prompt'
+import { type PromptContext, PromptPipeline } from './prompt/pipelins'
+import { chunkDocument } from './rag/chunker'
+import { createEmbedder, embed } from './rag/embedder'
+import { SqliteVectorStore } from './rag/sqllite-store'
+import { SessionStore } from './session'
+import { allTools } from './tools'
+import { createMemoryTool } from './tools/memory-tool'
+import { createRagTools } from './tools/rag'
+import { ToolRegistry } from './tools/registry'
+import { registerToolSearchTool } from './tools/tool-search'
+import { TokenTracker } from './usage/tracker'
 
 const apiKey = process.env.OPENAI_API_KEY
 const modelName = process.env.OPENAI_API_MODEL_NAME
+const embeddingApiKey = process.env.EMBEDDING_MODEL_KEY
+const embeddingModel = process.env.EMBEDDING_MODEL
+const embeddingBaseUrl = process.env.EMBEDDING_MODEL_BASE_URL
 
 if (!apiKey || !modelName) {
   console.error(
-    "api key or model name is not set, please set OPENAI_API_KEY and OPENAI_API_MODEL_NAME in your environment.",
+    'api key or model name is not set, please set OPENAI_API_KEY and OPENAI_API_MODEL_NAME in your environment.',
+  )
+  process.exit(1)
+}
+
+if (!embeddingApiKey || !embeddingModel || !embeddingBaseUrl) {
+  console.error(
+    'embedding api key or model name or url is not set, please set ..... in your environment',
   )
   process.exit(1)
 }
@@ -52,7 +74,7 @@ const rl = createInterface({
   output: process.stdout,
 })
 let rlClosed = false
-rl.on("close", () => {
+rl.on('close', () => {
   rlClosed = true
 })
 
@@ -95,23 +117,23 @@ async function connectGitHubMCP(): Promise<boolean> {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN
 
   if (!githubToken) {
-    console.log("\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN，使用 Mock MCP")
+    console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN，使用 Mock MCP')
     return true
   }
 
-  console.log("\n连接 GitHub MCP Server...")
+  console.log('\n连接 GitHub MCP Server...')
   try {
     const transport = new StdioClientTransport({
-      command: "bunx",
-      args: ["@modelcontextprotocol/server-github"],
+      command: 'bunx',
+      args: ['@modelcontextprotocol/server-github'],
       env: {
         ...getDefaultEnvironment(),
         GITHUB_PERSONAL_ACCESS_TOKEN: githubToken,
       },
     })
-    const client = new Client({ name: "Vela-agent", version: "1.0.0" })
+    const client = new Client({ name: 'Vela-agent', version: '1.0.0' })
     const tools = await toolRegistry.registerMCPServer(
-      "github",
+      'github',
       client,
       transport,
     )
@@ -136,26 +158,34 @@ function scheduleMCPRetry() {
 
 await connectMCP()
 
-const isContinue = process.argv.includes("--continue")
-const store = new SessionStore("default")
-const tokenTracker = new TokenTracker(".usage/today.jsonl")
-let summary = ""
+const isContinue = process.argv.includes('--continue')
+const store = new SessionStore('default')
+const tokenTracker = new TokenTracker('.usage/today.jsonl')
+let summary = ''
 const timestamps = new Map<ModelMessage, number>()
 const dispatch = createDispatcher([
   ...debugCommands,
   ...contextCommands,
   ...memoryCommands,
 ])
-const memoryStore = new MemoryStore(".")
+const memoryStore = new MemoryStore('.')
 memoryStore.init()
 toolRegistry.register(createMemoryTool(memoryStore))
+
+const vectorStore = new SqliteVectorStore('knowledge.db')
+const embedFn = createEmbedder({
+  apiKey: embeddingApiKey,
+  url: embeddingBaseUrl,
+  modelId: embeddingModel,
+})
+toolRegistry.register(...createRagTools(vectorStore, embedFn))
 
 function makePromptCtx(): PromptContext {
   return {
     toolCount: toolRegistry.getActiveTools().length,
     deferredToolSummary: toolRegistry.getDeferredToolSummary(),
     sessionMessageCount: messages.length,
-    sessionId: "default",
+    sessionId: 'default',
   }
 }
 
@@ -173,17 +203,18 @@ if (isContinue && (await store.exists())) {
 }
 
 const builder = new PromptPipeline()
-  .pipe("coreRules", coreRules())
-  .pipe("toolGuide", toolGuide())
-  .pipe("deferredTools", deferredTools())
-  .pipe("memoryContext", () => memoryStore.buildPromptSection())
-  .pipe("sessionContext", sessionContext())
+  .pipe('coreRules', coreRules())
+  .pipe('toolGuide', toolGuide())
+  .pipe('deferredTools', deferredTools())
+  .pipe('memoryContext', memoryContext(memoryStore))
+  .pipe('ragContext', ragContext(vectorStore))
+  .pipe('sessionContext', sessionContext())
 
 const promptCtx: PromptContext = {
   toolCount: toolRegistry.getAllTools().length,
   deferredToolSummary: toolRegistry.getDeferredToolSummary(),
   sessionMessageCount: messages.length,
-  sessionId: "default",
+  sessionId: 'default',
 }
 
 builder.debug(promptCtx) // 显示各模块状态
@@ -294,16 +325,37 @@ async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
   }
 }
 
+// if (fs.existsSync('docs')) {
+//   const files = fs.readdirSync('docs').filter((f) => f.endsWith('.md'))
+//   if (files.length > 0) {
+//     console.log(`  发现 ${files.length} 个文档，u...`)
+//     for (const f of files) {
+//       const path = `docs/${f}`
+//       const text = fs.readFileSync(path, 'utf-8')
+//       const chunks = chunkDocument(path, text)
+//       const embeddings = await embed(
+//         embedFn,
+//         chunks.map((c) => c.text),
+//       )
+//       vectorStore.addBatch(
+//         chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i]! })),
+//       )
+//       console.log(`    ${f} → ${chunks.length} 个片段`)
+//     }
+//     console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`)
+//   }
+// }
+
 const ask = () => {
   if (rlClosed) {
     return
   }
 
-  rl.question("You: ", async (input) => {
+  rl.question('You: ', async (input) => {
     await connectMCP()
     const trimmed = input.trim()
-    if (!trimmed || trimmed === "exit") {
-      console.log("Bye!")
+    if (!trimmed || trimmed === 'exit') {
+      console.log('Bye!')
       await toolRegistry.closeAllMCP()
       rl.close()
       return
@@ -322,19 +374,20 @@ const ask = () => {
       memoryStore,
     }
     const handled = dispatch(trimmed, ctx)
-    if (handled === "async") return
+    if (handled === 'async') return
     if (handled) {
       ask()
       return
     }
 
-    const userMsg: ModelMessage = { role: "user", content: trimmed }
+    const userMsg: ModelMessage = { role: 'user', content: trimmed }
     messages.push(userMsg)
     tokenTracker.addMessage(userMsg)
     timestamps.set(userMsg, Date.now())
 
     // * 在每次循环前重新构建system prompt，以便在工具注册或记忆更新后，系统 prompt 能够在下一轮对话中反映最新状态
     const currentSystem = builder.build(makePromptCtx())
+    console.log(currentSystem)
 
     try {
       await agentLoop({
