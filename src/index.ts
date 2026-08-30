@@ -15,6 +15,7 @@ import {
   debugCommands,
   memoryCommands,
 } from './commands'
+import { dreamCommands } from './commands/dream'
 import {
   MICROCOMPACT_TOKEN_THRESHOLD,
   microcompact,
@@ -22,7 +23,7 @@ import {
   summarize,
 } from './context/compressor'
 import { applyDefense, estimateMessageTokens } from './context/defense'
-import { MemoryStore } from './memory'
+import { MemoryStore } from './memory/store'
 import {
   coreRules,
   deferredTools,
@@ -167,6 +168,7 @@ const dispatch = createDispatcher([
   ...debugCommands,
   ...contextCommands,
   ...memoryCommands,
+  ...dreamCommands,
 ])
 const memoryStore = new MemoryStore('.')
 memoryStore.init()

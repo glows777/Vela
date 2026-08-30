@@ -1,17 +1,22 @@
-import { existsSync } from 'node:fs'
 import { Database } from 'bun:sqlite'
+import { existsSync } from 'node:fs'
 import * as sqliteVec from 'sqlite-vec'
 import type { Chunk } from './chunker'
 import { type EmbeddingFn, embed } from './embedder'
-import { mmrSelect, normalizeMinMax, type SearchResult } from './search'
+import {
+  mmrSelect,
+  normalizeFtsQuery,
+  normalizeMinMax,
+  type SearchResult,
+} from './search'
 
 export interface StoredChunk extends Chunk {
   embedding: number[]
   addedAt: number
 }
 
-// bun:sqlite 内置的 sqlite 不带 loadExtension，无法加载 sqlite-vec 扩展；
-// 需要换成系统里带扩展支持的 sqlite3（macOS 上是 Homebrew 装的）
+// Bun 1.4 的 bun:sqlite 支持 loadExtension；sqlite-vec 仍需要一个支持扩展加载的
+// SQLite 动态库（macOS 上需使用 Homebrew SQLite，而非 Apple 系统 SQLite）。
 const CUSTOM_SQLITE_CANDIDATES = [
   '/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib', // Apple Silicon Mac
   '/usr/local/opt/sqlite/lib/libsqlite3.dylib', // Intel Mac
@@ -26,7 +31,7 @@ function loadCustomSqlite(): void {
   const path = CUSTOM_SQLITE_CANDIDATES.find((p) => existsSync(p))
   if (!path) {
     throw new Error(
-      '未找到带扩展支持的 sqlite3：请安装 Homebrew sqlite（brew install sqlite3），bun:sqlite 内置库不支持 sqlite-vec',
+      '未找到支持 sqlite-vec 扩展加载的 SQLite 动态库：macOS 请安装 Homebrew SQLite（brew install sqlite），Linux 请确认系统 libsqlite3 路径',
     )
   }
   Database.setCustomSQLite(path)
@@ -85,7 +90,7 @@ export class SqliteVectorStore {
     this.db
       .prepare(`INSERT OR REPLACE INTO chunks_vec (id, embedding)
       VALUES (?, ?)`)
-      .run(chunk.id, Buffer.from(new Float32Array(embedding).buffer))
+      .run(chunk.id, new Uint8Array(new Float32Array(embedding).buffer))
 
     this.db
       .prepare(`INSERT OR REPLACE INTO chunks_fts (id, text, source)
@@ -104,7 +109,7 @@ export class SqliteVectorStore {
     queryEmbedding: number[],
     topK: number,
   ): Array<{ chunk: StoredChunk; score: number }> {
-    const buf = Buffer.from(new Float32Array(queryEmbedding).buffer)
+    const buf = new Uint8Array(new Float32Array(queryEmbedding).buffer)
     const rows = this.db
       .prepare(`
       SELECT v.id, v.distance, c.text, c.source, c.chunk_index, c.embedding
@@ -133,6 +138,9 @@ export class SqliteVectorStore {
     query: string,
     topK: number,
   ): Array<{ chunk: StoredChunk; score: number }> {
+    const ftsQuery = normalizeFtsQuery(query)
+    if (!ftsQuery) return []
+
     const rows = this.db
       .prepare(`
       SELECT f.id, bm25(chunks_fts) AS rank, c.text, c.source, c.chunk_index, c.embedding
@@ -142,7 +150,7 @@ export class SqliteVectorStore {
       ORDER BY rank
       LIMIT ?
     `)
-      .all(query, topK) as any[]
+      .all(ftsQuery, topK) as any[]
 
     return rows.map((r) => ({
       chunk: {

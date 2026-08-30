@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import z from 'zod'
 import { chunkDocument } from '../rag/chunker'
 import { type EmbeddingFn, embed } from '../rag/embedder'
@@ -27,7 +26,7 @@ export function createRagTools(
     isReadOnly: false,
     execute: async ({ path }: { path: string }) => {
       try {
-        const text = fs.readFileSync(path, 'utf-8')
+        const text = await Bun.file(path).text()
         const chunks = chunkDocument(path, text)
         const embeddings = await embed(
           embedFn,

@@ -1,5 +1,3 @@
-import { createHash } from "crypto";
-
 interface ToolHashedRecord {
   toolCallId: string;
   name: string;
@@ -36,7 +34,7 @@ function stringifyValue(value: unknown): string {
 }
 
 function hash(input: string): string {
-  return createHash("sha256").update(input).digest("hex").slice(0, 16);
+  return Bun.CryptoHasher.hash("sha256", input, "hex").slice(0, 16);
 }
 
 export function hashToolCall(toolName: string, params: unknown): string {

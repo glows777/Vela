@@ -17,12 +17,19 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 1)
 }
 
+export function normalizeFtsQuery(query: string): string {
+  return tokenize(query)
+    .map((term) => `"${term.replace(/"/g, '""')}"`)
+    .join(' ')
+}
+
 // ── Normalization ──────────────────────────
 export function normalizeMinMax(scores: number[]): number[] {
   if (scores.length === 0) return []
   const min = Math.min(...scores)
   const max = Math.max(...scores)
-  const range = max - min || 1
+  if (min === max) return scores.map(() => 0.5)
+  const range = max - min
   return scores.map((s) => (s - min) / range)
 }
 

@@ -1,5 +1,5 @@
-import type { MemoryStore } from '../memory'
-import type { VectorStore } from '../rag/store'
+import type { MemoryStore } from '../memory/store'
+import type { SqliteVectorStore } from '../rag/sqllite-store'
 import type { PipeFn, PromptContext } from './pipelins'
 
 export * from './pipelins'
@@ -38,7 +38,7 @@ export function memoryContext(
 }
 
 export function ragContext(
-  vectorStore: VectorStore,
+  vectorStore: SqliteVectorStore,
 ): (ctx: PromptContext) => string | null {
   return () => {
     const size = vectorStore.size()
