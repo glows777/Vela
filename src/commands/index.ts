@@ -18,6 +18,7 @@ export interface CommandContext {
   sessionStore: SessionStore
   model: any
   makePromptCtx: () => PromptContext
+  prepareContext: (messages: ModelMessage[]) => Promise<void>
   ask: () => void
   memoryStore?: MemoryStore
   [key: string]: any

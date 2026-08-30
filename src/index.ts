@@ -17,6 +17,7 @@ import {
 } from './commands'
 import { dreamCommands } from './commands/dream'
 import { ragCommands } from './commands/rag'
+import { createSkillCommands } from './commands/skill'
 import {
   MICROCOMPACT_TOKEN_THRESHOLD,
   microcompact,
@@ -38,6 +39,7 @@ import { chunkDocument } from './rag/chunker'
 import { createEmbedder, embed } from './rag/embedder'
 import { SqliteVectorStore } from './rag/sqllite-store'
 import { SessionStore } from './session'
+import { SkillLoader } from './skills/loader'
 import { allTools } from './tools'
 import { createMemoryTool } from './tools/memory-tool'
 import { createRagTools } from './tools/rag'
@@ -160,6 +162,10 @@ function scheduleMCPRetry() {
 
 await connectMCP()
 
+const skillLoader = new SkillLoader('.')
+const loadedSkills = skillLoader.load()
+const activeSkills = new Set<string>()
+
 const isContinue = process.argv.includes('--continue')
 const store = new SessionStore('default')
 const tokenTracker = new TokenTracker('.usage/today.jsonl')
@@ -171,6 +177,7 @@ const dispatch = createDispatcher([
   ...memoryCommands,
   ...dreamCommands,
   ...ragCommands,
+  ...createSkillCommands(skillLoader, activeSkills),
 ])
 const memoryStore = new MemoryStore('.')
 memoryStore.init()
@@ -212,6 +219,7 @@ const builder = new PromptPipeline()
   .pipe('deferredTools', deferredTools())
   .pipe('memoryContext', memoryContext(memoryStore))
   .pipe('ragContext', ragContext(vectorStore))
+  .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
   .pipe('sessionContext', sessionContext())
 
 const promptCtx: PromptContext = {
@@ -374,6 +382,7 @@ const ask = () => {
       sessionStore: store,
       model,
       makePromptCtx,
+      prepareContext: prepareContextForModel,
       ask,
       memoryStore,
       vectorStore,
