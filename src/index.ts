@@ -16,6 +16,7 @@ import {
   memoryCommands,
 } from './commands'
 import { dreamCommands } from './commands/dream'
+import { ragCommands } from './commands/rag'
 import {
   MICROCOMPACT_TOKEN_THRESHOLD,
   microcompact,
@@ -169,6 +170,7 @@ const dispatch = createDispatcher([
   ...contextCommands,
   ...memoryCommands,
   ...dreamCommands,
+  ...ragCommands,
 ])
 const memoryStore = new MemoryStore('.')
 memoryStore.init()
@@ -374,6 +376,7 @@ const ask = () => {
       makePromptCtx,
       ask,
       memoryStore,
+      vectorStore,
     }
     const handled = dispatch(trimmed, ctx)
     if (handled === 'async') return
