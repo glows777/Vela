@@ -39,6 +39,7 @@ export const dreamCommands: CommandHandler[] = [
       toolRegistry: ctx.registry,
       messages: ctx.messages,
       tokenTracker: ctx.tracker,
+      prepareContext: ctx.prepareContext,
     })
       .then(async () => {
         const newMessages = ctx.messages.slice(beforeLen)
