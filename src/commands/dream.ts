@@ -18,6 +18,10 @@ const DREAM_PROMPT = [
 export const dreamCommands: CommandHandler[] = [
   (cmd, ctx) => {
     if (cmd !== '/dream' && cmd !== 'dream') return false
+    if (ctx.busy.locked) {
+      console.log('\n[dream] 有任务正在执行中，请稍候再试\n')
+      return true
+    }
     console.log('\n[dream] 开始记忆整理...')
 
     const userMsg: ModelMessage = { role: 'user', content: DREAM_PROMPT }
@@ -28,6 +32,7 @@ export const dreamCommands: CommandHandler[] = [
     const currentSystem = ctx.builder.build(ctx.makePromptCtx())
     const beforeLen = ctx.messages.length
 
+    ctx.busy.locked = true
     void agentLoop({
       model: ctx.model,
       systemPrompt: currentSystem,
@@ -42,12 +47,14 @@ export const dreamCommands: CommandHandler[] = [
         const { summary } = await ctx.sessionStore.loadState()
         await ctx.sessionStore.replace(ctx.messages, ctx.timestamps, summary)
         console.log(`  [dream 完成]\n`)
+        ctx.busy.locked = false
         ctx.ask()
       })
       .catch((error: unknown) => {
         console.error(
           `  [dream 失败] ${error instanceof Error ? error.message : error}`,
         )
+        ctx.busy.locked = false
         ctx.ask()
       })
 

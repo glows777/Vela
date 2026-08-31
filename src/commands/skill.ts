@@ -3,6 +3,22 @@ import { agentLoop } from '../agent'
 import type { SkillLoader } from '../skills/loader'
 import type { CommandHandler } from './index'
 
+/**
+ * 判定 skill 正文是否已作为 user 消息注入过会话。
+ * 用 includes 而非 startsWith：/skill load 注入的消息带「已加载 skill」包裹前缀，
+ * 触发路径是无包裹拼接，两种形态都能命中。
+ */
+function contentAlreadyInjected(
+  messages: ModelMessage[],
+  content: string,
+): boolean {
+  if (!content) return false
+  return messages.some((m) => {
+    if (m.role !== 'user' || typeof m.content !== 'string') return false
+    return m.content.includes(content)
+  })
+}
+
 export function createSkillCommands(
   skillLoader: SkillLoader,
   activeSkills: Set<string>,
@@ -30,7 +46,11 @@ export function createSkillCommands(
     },
 
     // /skill load <name>
-    (cmd, _ctx) => {
+    (cmd, ctx) => {
+      if (cmd === '/skill load') {
+        console.log('\n[skills] 用法: /skill load <name>\n')
+        return true
+      }
       const match = cmd.match(/^\/skill\s+load\s+(\S+)$/)
       if (!match) return false
       const name = match[1]
@@ -41,12 +61,29 @@ export function createSkillCommands(
         return true
       }
       activeSkills.add(name)
+      // Codex 模式：激活即注入一次正文（system prompt 只保留索引）；
+      // 重复 load 不重复注入，避免消息历史线性堆积
+      if (contentAlreadyInjected(ctx.messages, skill.content)) {
+        console.log(`\n[skills] ${name} 内容已在会话中，跳过重复注入\n`)
+        return true
+      }
+      const userMsg: ModelMessage = {
+        role: 'user',
+        content: `[已加载 skill「${name}」，以下是指导内容]\n\n${skill.content}`,
+      }
+      ctx.messages.push(userMsg)
+      ctx.timestamps.set(userMsg, Date.now())
+      ctx.tracker.addMessage(userMsg)
       console.log(`\n[skills] 已激活: ${name} — ${skill.description}\n`)
       return true
     },
 
     // /skill unload <name>
     (cmd, _ctx) => {
+      if (cmd === '/skill unload') {
+        console.log('\n[skills] 用法: /skill unload <name>\n')
+        return true
+      }
       const match = cmd.match(/^\/skill\s+unload\s+(\S+)$/)
       if (!match) return false
       const name = match[1]
@@ -66,24 +103,44 @@ export function createSkillCommands(
       const parts = cmd.slice(1).split(/\s+/)
       const name = parts[0]
       if (!name) return false
+      // P0-3 闸：/skill 前缀穿透到此的一律拦截（残缺子命令在各自 handler 已处理）
+      if (name === 'skill') {
+        console.log(
+          '\n[skills] 未知子命令。可用: /skill list、/skill load <name>、/skill unload <name>\n',
+        )
+        return true
+      }
       const skill = skillLoader.get(name)
       if (!skill) return false
+
+      if (ctx.busy.locked) {
+        console.log(`\n[skills] 有任务正在执行中，请稍候再尝试 /${name}\n`)
+        return true
+      }
 
       activeSkills.add(name)
       console.log(`\n[skills] 激活 ${name}，开始执行...`)
 
       const args = parts.slice(1).join(' ')
-      const content = args
-        ? `${skill.content}\n\n用户指令: ${args}`
-        : skill.content
+      // P0-2 去重：正文已在会话中出现过则只追加注记，不再注入一遍正文
+      const alreadyLoaded = contentAlreadyInjected(ctx.messages, skill.content)
+      const content = alreadyLoaded
+        ? `[skill 已加载] /${name} 的注入内容已在会话中，直接执行。${
+            args ? `用户指令: ${args}` : ''
+          }`
+        : args
+          ? `${skill.content}\n\n用户指令: ${args}`
+          : skill.content
 
       const userMsg: ModelMessage = { role: 'user', content }
       ctx.messages.push(userMsg)
       ctx.timestamps.set(userMsg, Date.now())
+      ctx.tracker.addMessage(userMsg)
 
       const currentSystem = ctx.builder.build(ctx.makePromptCtx())
       const beforeLen = ctx.messages.length
 
+      ctx.busy.locked = true
       void agentLoop({
         model: ctx.model,
         toolRegistry: ctx.registry,
@@ -98,12 +155,14 @@ export function createSkillCommands(
           for (const message of newMessages) ctx.timestamps.set(message, now)
           const { summary } = await ctx.sessionStore.loadState()
           await ctx.sessionStore.replace(ctx.messages, ctx.timestamps, summary)
+          ctx.busy.locked = false
           ctx.ask()
         })
         .catch((error: unknown) => {
           console.error(
             `\n[skills] 执行失败: ${error instanceof Error ? error.message : error}\n`,
           )
+          ctx.busy.locked = false
           ctx.ask()
         })
       return 'async'

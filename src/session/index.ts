@@ -34,9 +34,9 @@ export class SessionStore {
     return `${this.dir}/${this.sessionId}.jsonl`;
   }
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, dir: string = SESSION_DIR) {
     this.sessionId = sessionId;
-    this.dir = SESSION_DIR;
+    this.dir = dir;
   }
 
   async replace(

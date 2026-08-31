@@ -165,6 +165,8 @@ await connectMCP()
 const skillLoader = new SkillLoader('.')
 const loadedSkills = skillLoader.load()
 const activeSkills = new Set<string>()
+/** agent 循环互斥锁（单飞）：任意 agentLoop 运行期间置位，拒绝并发启动第二个循环 */
+const busy = { locked: false }
 
 const isContinue = process.argv.includes('--continue')
 const store = new SessionStore('default')
@@ -386,6 +388,12 @@ const ask = () => {
       ask,
       memoryStore,
       vectorStore,
+      busy,
+    }
+    if (busy.locked) {
+      console.log('\n[system] 有任务正在执行中，请稍候再输入\n')
+      // 不调用 ask()：当前 agentLoop 的 .then/.catch 完成后会重新注册 question
+      return
     }
     const handled = dispatch(trimmed, ctx)
     if (handled === 'async') return
@@ -403,6 +411,7 @@ const ask = () => {
     const currentSystem = builder.build(makePromptCtx())
     console.log(currentSystem)
 
+    busy.locked = true
     try {
       await agentLoop({
         model,
@@ -413,6 +422,7 @@ const ask = () => {
         prepareContext: prepareContextForModel,
       })
     } finally {
+      busy.locked = false
       ensureMessageTimestamps(messages)
       await store.replace(messages, timestamps, summary)
     }

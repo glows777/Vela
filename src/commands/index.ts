@@ -21,6 +21,8 @@ export interface CommandContext {
   prepareContext: (messages: ModelMessage[]) => Promise<void>
   ask: () => void
   memoryStore?: MemoryStore
+  /** agent 循环互斥锁：任一 agentLoop 运行时置位，防止并发启动第二个循环共享 messages */
+  busy: { locked: boolean }
   [key: string]: any
 }
 

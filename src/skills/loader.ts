@@ -62,31 +62,18 @@ export class SkillLoader {
   buildPromptSection(activeSkills: Set<string>): string | null {
     if (this.skills.size === 0) return null
 
-    const lines: string[] = []
+    // Codex 模式：system prompt 只放 skill 索引（name + description）。
+    // 正文永不进 system prompt —— 触发时由 /<skill-name> 以消息注入一次，
+    // 避免正文在 system prompt 与对话消息中各出现一次。
+    const lines = ['可用的 Skills（输入 /skill load <name> 或直接 /<name> 激活）：']
 
-    if (activeSkills.size > 0) {
-      for (const name of activeSkills) {
-        const skill = this.skills.get(name)
-        if (!skill) continue
-        lines.push(`[激活的 Skill: ${skill.name}]`)
-        lines.push(skill.content)
-        lines.push('')
-      }
+    for (const skill of this.list()) {
+      const hint = skill.whenToUse ? ` (适用场景: ${skill.whenToUse})` : ''
+      const active = activeSkills.has(skill.name) ? ' ✓ 已激活' : ''
+      lines.push(`  /${skill.name} — ${skill.description}${hint}${active}`)
     }
 
-    const available = this.list()
-      .filter((s) => !activeSkills.has(s.name))
-      .map((s) => {
-        const hint = s.whenToUse ? ` (适用场景: ${s.whenToUse})` : ''
-        return `  /${s.name} — ${s.description}${hint}`
-      })
-
-    if (available.length > 0) {
-      lines.push('可用的 Skills（输入 /skill load <name> 激活）：')
-      lines.push(...available)
-    }
-
-    return lines.length > 0 ? lines.join('\n') : null
+    return lines.join('\n')
   }
 
   private parseFrontmatter(
