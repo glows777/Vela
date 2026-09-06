@@ -92,7 +92,7 @@ export class ContextManager {
         )
         return
       }
-      // Choose summary before changing history; its dedicated task sees only the old prefix.
+      // Summarize before micro changes history so the main request prefix stays intact.
       const compacted = await summarize(
         request,
         this.store.results,

@@ -7,10 +7,7 @@ import type { ModelMessage, ToolResultPart } from 'ai'
 import { generateText, stepCountIs } from 'ai'
 import { ToolRegistry } from './registry'
 import { readFileTool } from './file'
-import {
-  ToolResultStore,
-  getStoredResult,
-} from '../session/tool-results'
+import { ToolResultStore, getStoredResult } from '../session/tool-results'
 import { summarize } from '../context/compressor'
 import { createRequestSnapshot } from '../context/request'
 import { TokenTracker } from '../usage/tracker'
@@ -125,8 +122,14 @@ test('small results stay inline and invalid read cursors fail clearly', async ()
       { toolCallId: 'small', messages: [], context: {} },
     ),
   ).toBe('small')
-  const records = (await Bun.file(results.indexPath).text()).trim().split('\n').map(line => JSON.parse(line))
-  expect(records.map(record => record.type)).toEqual(['tool_call', 'tool_result'])
+  const records = (await Bun.file(results.indexPath).text())
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(records.map((record) => record.type)).toEqual([
+    'tool_call',
+    'tool_result',
+  ])
   expect(records[1].output).toBe('small')
   const path = join(dir, 'short.txt')
   await Bun.write(path, 'hello')
@@ -143,18 +146,41 @@ test('summary keeps a readable index even if the summarizer omits every file ref
   const results = new ToolResultStore(join(dir, 'summary-results'))
   const model = new MockLanguageModelV4({
     doGenerate: async ({ prompt }) => {
-      const user = prompt.find(message => message.role === 'user')
-      const part = user?.role === 'user' ? user.content.find(part => part.type === 'text') : undefined
-      const count = JSON.parse(part?.type === 'text' ? part.text : '{}').sourceMessageCount
+      const user = prompt.at(-1)
+      const part =
+        user?.role === 'user'
+          ? user.content.find((part) => part.type === 'text')
+          : undefined
+      const control = JSON.parse(part?.type === 'text' ? part.text : '{}')
+      const count = control.sourceMessageCount
+      const quote = control.sourceCatalog[0].anchor
       return {
-      content: [{ type: 'text', text: JSON.stringify({ sourceMessageCount: count, goal: 'preserve history', completed: ['A deliberately brief summary.'], pending: [], constraints: [], details: [] }) }],
-      finishReason: { unified: 'stop', raw: undefined },
-      usage: {
-        inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
-        outputTokens: { total: 1, text: 1, reasoning: 0 },
-      },
-      warnings: [],
-    } },
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              sourceMessageCount: count,
+              goal: { sourceMessageIndex: 0, quote },
+              completed: [
+                {
+                  sourceMessageIndex: 0,
+                  quote,
+                },
+              ],
+              pending: [],
+              constraints: [],
+              details: [],
+            }),
+          },
+        ],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 1, text: 1, reasoning: 0 },
+        },
+        warnings: [],
+      }
+    },
   })
   const history: ModelMessage[] = [
     { role: 'user', content: 'old request' },
@@ -174,17 +200,35 @@ test('summary keeps a readable index even if the summarizer omits every file ref
       (): ModelMessage => ({ role: 'user', content: 'recent' }),
     ),
   ]
-  const compacted = await summarize(await createRequestSnapshot(model, 'stable', {}, history), results, new TokenTracker())
+  const compacted = await summarize(
+    await createRequestSnapshot(model, 'stable', {}, history),
+    results,
+    new TokenTracker(),
+  )
   expect(compacted.compressedCount).toBe(2)
-  expect(compacted.summary).toContain(results.history.snapshotPath(compacted.historyViewSequence!))
-  expect(String(compacted.messages[0]!.content)).toContain('/snapshots/through-')
+  expect(compacted.summary).toContain(
+    results.history.snapshotPath(compacted.historyViewSequence!),
+  )
+  expect(String(compacted.messages[0]!.content)).toContain(
+    '/snapshots/through-',
+  )
   const entry = JSON.parse((await Bun.file(results.indexPath).text()).trim())
   expect(entry.type).toBe('legacy_result')
   expect(await Bun.file(entry.outputPath).text()).toBe('SUMMARY_EVIDENCE')
   const store = new SessionStore('summary', dir)
   await store.replace(compacted.messages, new Map(), compacted.summary)
   expect((await store.loadState()).summary).toContain('/snapshots/through-')
-  const repeated = await summarize(await createRequestSnapshot(model, 'stable', {}, [...compacted.messages, ...Array.from({ length: 6 }, (): ModelMessage => ({ role: 'user', content: 'next' }))]), results, new TokenTracker())
+  const repeated = await summarize(
+    await createRequestSnapshot(model, 'stable', {}, [
+      ...compacted.messages,
+      ...Array.from(
+        { length: 6 },
+        (): ModelMessage => ({ role: 'user', content: 'next' }),
+      ),
+    ]),
+    results,
+    new TokenTracker(),
+  )
   expect(repeated.summary).toContain('/snapshots/through-')
 })
 
@@ -265,7 +309,6 @@ test('Bash storage failure prevents command execution', async () => {
     bashTool.execute({ command: `touch '${marker}'` }, { results }),
   ).rejects.toThrow('保存工具结果失败')
   expect(await Bun.file(marker).exists()).toBe(false)
-
 })
 
 test('Bash timeout preserves output already written to disk', async () => {

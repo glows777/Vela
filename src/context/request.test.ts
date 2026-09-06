@@ -14,11 +14,12 @@ import { summarize } from './compressor'
 const dir = mkdtempSync(join(tmpdir(), 'vela-prefix-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-test('main HTTP prefix stays stable across restore; summary is an isolated task without tools', async () => {
+test('summary preserves the exact serialized main prefix and tool schemas, appending only its control message', async () => {
   const requests: {
     messages: unknown[]
     tools: unknown[]
     tool_choice?: unknown
+    response_format?: unknown
   }[] = []
   const model = createOpenAI({
     apiKey: 'synthetic-test-key',
@@ -34,7 +35,25 @@ test('main HTTP prefix stays stable across restore; summary is an isolated task 
           choices: [
             {
               index: 0,
-              message: { role: 'assistant', content: JSON.stringify({ sourceMessageCount: 2, goal: 'preserve history', completed: ['preserved summary'], pending: [], constraints: [], details: [] }) },
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  sourceMessageCount: 2,
+                  goal: {
+                    sourceMessageIndex: 0,
+                    quote: 'old',
+                  },
+                  completed: [
+                    {
+                      sourceMessageIndex: 1,
+                      quote: 'response',
+                    },
+                  ],
+                  pending: [],
+                  constraints: [],
+                  details: [],
+                }),
+              },
               finish_reason: 'stop',
             },
           ],
@@ -113,9 +132,18 @@ test('main HTTP prefix stays stable across restore; summary is an isolated task 
   expect(requests[1]!.messages.slice(0, requests[0]!.messages.length)).toEqual(
     requests[0]!.messages,
   )
-  expect(requests[2]!.messages).not.toEqual(requests[1]!.messages)
-  expect(JSON.stringify(requests[2]!.messages)).not.toContain('next-0')
-  expect(requests[2]!.tools).toBeUndefined()
+  expect(
+    JSON.stringify(
+      requests[2]!.messages.slice(0, requests[1]!.messages.length),
+    ),
+  ).toBe(JSON.stringify(requests[1]!.messages))
+  expect(requests[2]!.messages).toHaveLength(requests[1]!.messages.length + 1)
+  expect(JSON.stringify(requests[2]!.tools)).toBe(
+    JSON.stringify(requests[1]!.tools),
+  )
+  expect(requests[2]!.tool_choice).toEqual(requests[1]!.tool_choice)
+  expect(requests[1]!.response_format).toBeUndefined()
+  expect(requests[2]!.response_format).toEqual({ type: 'json_object' })
   registry.searchTools('later')
   const discovered = await createRequestSnapshot(
     model,

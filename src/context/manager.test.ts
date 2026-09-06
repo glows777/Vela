@@ -84,18 +84,46 @@ test('micro protects five completed calls even when results share one message', 
 function summaryModel(text = 'preserved decisions') {
   return new MockLanguageModelV4({
     doGenerate: async ({ prompt }) => {
-      const user = prompt.find(message => message.role === 'user')
-      const part = user?.role === 'user' ? user.content.find(part => part.type === 'text') : undefined
-      const count = JSON.parse(part?.type === 'text' ? part.text : '{}').sourceMessageCount
+      const user = prompt.at(-1)
+      const part =
+        user?.role === 'user'
+          ? user.content.find((part) => part.type === 'text')
+          : undefined
+      const control = JSON.parse(part?.type === 'text' ? part.text : '{}')
+      const count = control.sourceMessageCount
+      const quote = control.sourceCatalog[0].anchor
       return {
-      content: [{ type: 'text', text: text ? JSON.stringify({ sourceMessageCount: count, goal: 'preserve history', completed: [text], pending: [], constraints: [], details: [] }) : '' }],
-      finishReason: { unified: 'stop', raw: undefined },
-      usage: {
-        inputTokens: { total: 100, noCache: 20, cacheRead: 80, cacheWrite: 0 },
-        outputTokens: { total: 5, text: 5, reasoning: 0 },
-      },
-      warnings: [],
-    } },
+        content: [
+          {
+            type: 'text',
+            text: text
+              ? JSON.stringify({
+                  sourceMessageCount: count,
+                  goal: {
+                    sourceMessageIndex: 0,
+                    quote,
+                  },
+                  completed: [{ sourceMessageIndex: 0, quote }],
+                  pending: [],
+                  constraints: [],
+                  details: [],
+                })
+              : '',
+          },
+        ],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: {
+            total: 100,
+            noCache: 20,
+            cacheRead: 80,
+            cacheWrite: 0,
+          },
+          outputTokens: { total: 5, text: 5, reasoning: 0 },
+        },
+        warnings: [],
+      }
+    },
   })
 }
 
@@ -171,7 +199,10 @@ test('duplicates, unmatched, excluded and errors are not candidates', () => {
 test('summary chosen directly when a profitable micro still leaves >=150k', async () => {
   const m = summaryModel()
   const messages = history(10, 16000)
-  messages[0] = { role: 'user', content: 'x'.repeat(440000) }
+  messages[0] = {
+    role: 'user',
+    content: 'preserved decisions\n' + 'x'.repeat(440000),
+  }
   messages.push(
     ...Array.from(
       { length: 6 },
