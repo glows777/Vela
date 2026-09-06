@@ -1,12 +1,19 @@
 import type { Client, Transport } from "@modelcontextprotocol/client";
 import type { FlexibleSchema, Tool, ToolSet } from "ai";
 import { tool as AITool, type JSONSchema7, jsonSchema } from "ai";
+import { StoredToolResult, ToolResultStore } from '../session/tool-results';
+import type { ExecutionMetadata, ResultRecord } from '../session/tool-history';
+
+/** Internal tool return envelope: preserve native data separately from model-facing text. */
+export class ToolExecutionResult {
+  constructor(readonly value: unknown, readonly text: string, readonly execution: ExecutionMetadata = {}) {}
+}
 
 export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: FlexibleSchema<any>;
-  execute: (input: any) => Promise<unknown>;
+  execute: (input: any, context?: { results: ToolResultStore; toolCallId?: string; callId?: string; signal?: AbortSignal }) => Promise<unknown>;
 
   isConcurrencySafe?: boolean;
   isReadOnly?: boolean;
@@ -16,9 +23,36 @@ export interface ToolDefinition {
   searchHint?: string; // 搜索提示词，帮助 ToolSearch 匹配
 }
 
-const DEFAULT_MAX_RESULT_CHARS = 3000; // 默认最大结果字符数， 超出则截断
+const DEFAULT_MAX_RESULT_CHARS = 3000; // 超出时保存原文，只返回预览
 
 export class ToolRegistry {
+  constructor(readonly results = new ToolResultStore()) {}
+  private persistenceFailure: Error | undefined;
+  private readonly active = new Set<Promise<unknown>>();
+
+  private track<T>(run: () => Promise<T>): Promise<T> {
+    const job = run();
+    this.active.add(job);
+    void job.then(() => this.active.delete(job), () => this.active.delete(job));
+    return job;
+  }
+
+  async waitForIdle(): Promise<void> {
+    while (this.active.size) await Promise.allSettled([...this.active]);
+    this.assertHealthy();
+  }
+
+  assertHealthy(): void {
+    if (this.persistenceFailure) throw this.persistenceFailure;
+    this.results.history.assertHealthy();
+  }
+
+  async recordRejection(toolName: string, toolCallId: string, input: unknown, error: unknown): Promise<void> {
+    this.assertHealthy();
+    if (this.results.history.hasAttempt(toolCallId)) return;
+    const call = await this.results.history.begin(toolName, toolCallId, input);
+    await this.results.history.append<ResultRecord>({ type: 'tool_result', callId: call.callId, status: 'rejected', durationMs: 0, error: error instanceof Error ? error.message : String(error) });
+  }
   private tools: Map<string, ToolDefinition> = new Map();
 
   // 当前锁设计的已知缺陷：
@@ -104,7 +138,7 @@ export class ToolRegistry {
       result[name] = AITool({
         description: tool.description,
         inputSchema: tool.inputSchema,
-        execute: async (input: unknown) => {
+        execute: (input: unknown, options) => this.track(async () => {
           if (isSafe) {
             await this.acquireConcurrent();
             console.log(`  [concurrentCount] ${name} get concurrent lock`);
@@ -115,11 +149,50 @@ export class ToolRegistry {
             );
           }
           try {
-            const raw = await excuteFn(input);
-            const text =
-              typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
-
-            return truncateResult(text, maxChar ?? DEFAULT_MAX_RESULT_CHARS);
+            this.assertHealthy();
+            const history = this.results.history;
+            const call = await history.begin(name, options?.toolCallId, input, this.results.dir);
+            const started = performance.now();
+            let raw: unknown;
+            try {
+              options?.abortSignal?.throwIfAborted();
+              raw = await excuteFn(input, { results: this.results, toolCallId: options?.toolCallId, callId: call.callId, signal: options?.abortSignal });
+            } catch (error) {
+              await history.append<ResultRecord>({ type: 'tool_result', callId: call.callId, status: options?.abortSignal?.aborted ? 'cancelled' : 'failed', durationMs: performance.now() - started, error: error instanceof Error ? error.message : String(error) });
+              throw error;
+            }
+            // Persist native results before formatting/truncating the model response.
+            const value = raw instanceof ToolExecutionResult ? raw.value : raw;
+            const execution = raw instanceof ToolExecutionResult || raw instanceof StoredToolResult ? raw.execution ?? {} : {};
+            const maxChars = maxChar ?? DEFAULT_MAX_RESULT_CHARS;
+            let stored = raw instanceof StoredToolResult ? raw : undefined;
+            try {
+              const text = raw instanceof ToolExecutionResult ? raw.text : typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2) ?? String(raw);
+              if (!stored && (text.length > maxChars || JSON.stringify(value)?.length > maxChars)) {
+                stored = await this.results.save(typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? String(value), name, truncateResult(text, maxChars), options?.toolCallId, call.callId);
+              }
+              const record = await history.append<ResultRecord>({
+                type: 'tool_result', callId: call.callId,
+                status: options?.abortSignal?.aborted ? 'cancelled' : execution.isError ? 'failed' : 'completed',
+                durationMs: performance.now() - started, ...execution,
+                ...(stored ? { outputPath: stored.path, bytes: stored.bytes, format: raw instanceof StoredToolResult || typeof value === 'string' ? 'text' as const : 'json' as const } : { output: value ?? null }),
+              });
+              if (stored) {
+                stored.callId = call.callId;
+                stored.historySeq = record.seq;
+                stored.execution = execution;
+                return { ...stored };
+              }
+              return text;
+            } catch (error) {
+              // Do not invent a terminal result when the result could not be recorded.
+              const location = stored
+                ? `已保存原文路径：${stored.path}`
+                : `预留输出路径：${call.plannedOutputPath}（可能不存在或不完整）`;
+              const status = execution.exitCode === undefined ? '' : ` exitCode=${execution.exitCode}`;
+              this.persistenceFailure = new Error(`工具 ${name} 已执行，但保存工具调用结果失败；结果未确认，不要自动重跑。callId=${call.callId}${status}；${location}。原文位置也记录在 tool_call.plannedOutputPath，需核实完整性，不能据此认定调用成功。${error}`);
+              throw this.persistenceFailure;
+            }
           } finally {
             // 释放锁
             if (isSafe) {
@@ -128,7 +201,7 @@ export class ToolRegistry {
               this.releaseExclusive();
             }
           }
-        },
+        }),
       });
     }
     return result;
@@ -165,12 +238,12 @@ export class ToolRegistry {
         shouldDefer: true,
         searchHint: `${serverName} ${tool.name} ${tool.description}`,
         maxResultChars: 3000,
-        execute: async (input: any) => {
+        execute: async (input: any, context) => {
           const result = await toolClient.callTool({
             name: originalName,
             arguments: input,
-          });
-          return formatMCPToolResult(result);
+          }, { signal: context?.signal });
+          return new ToolExecutionResult(result, formatMCPToolResult(result), { isError: result.isError === true });
         },
       });
 
@@ -259,13 +332,16 @@ export class ToolRegistry {
 function truncateResult(text: string, maxChars: number) {
   if (text.length <= maxChars) return text;
 
-  const headSize = Math.floor(maxChars * 0.6);
+  let headSize = Math.floor(maxChars * 0.6);
   const tailSize = maxChars - headSize;
+  if (text.charCodeAt(headSize - 1) >= 0xd800 && text.charCodeAt(headSize - 1) <= 0xdbff) headSize--;
+  let tailStart = text.length - tailSize;
+  if (text.charCodeAt(tailStart) >= 0xdc00 && text.charCodeAt(tailStart) <= 0xdfff) tailStart++;
   const head = text.slice(0, headSize);
-  const tail = text.slice(-tailSize);
-  const dropped = text.length - headSize - tailSize;
+  const tail = text.slice(tailStart);
+  const dropped = text.length - head.length - tail.length;
 
-  return `${head}\n\n...[ ${dropped} text has been truncated ] ...\n\n${tail}`;
+  return `${head}\n\n[preview: first ${head.length} and last ${tail.length} of ${text.length} UTF-16 code units; ${dropped} omitted here, full output saved]\n\n${tail}`;
 }
 
 async function listAllMCPTools(client: Client) {

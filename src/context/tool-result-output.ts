@@ -1,4 +1,5 @@
 import type { ToolResultPart } from 'ai';
+import { getStoredResult } from '../session/tool-results';
 
 export type ToolResultOutput = ToolResultPart['output'];
 
@@ -7,6 +8,8 @@ export function textToolResultOutput(value: string): ToolResultOutput {
 }
 
 export function toolResultOutputToText(output: ToolResultOutput): string {
+  const stored = getStoredResult(output);
+  if (stored) return stored.preview;
   switch (output.type) {
     case 'text':
     case 'error-text':

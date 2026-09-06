@@ -160,7 +160,7 @@ function approxMessageTokens(messages: ModelMessage[]): number {
         else if (part.type === 'tool-result') {
           const out = part.output;
           if (typeof out === 'string') chars += out.length;
-          else if (out?.value) chars += String(out.value).length;
+          else if (out?.value) chars += typeof out.value === 'string' ? out.value.length : JSON.stringify(out.value).length;
           else chars += JSON.stringify(out || {}).length;
           chars += 80;
         }

@@ -1,5 +1,15 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ToolResultStore } from '../session/tool-results'
 import { ToolRegistry, type ToolDefinition } from './registry'
+
+const root = mkdtempSync(join(tmpdir(), 'vela-registry-test-'))
+afterAll(() => rmSync(root, { recursive: true, force: true }))
+function makeRegistry() {
+  return new ToolRegistry(new ToolResultStore(join(root, crypto.randomUUID(), 'outputs')))
+}
 
 function tool(name: string, overrides: Partial<ToolDefinition> = {}): ToolDefinition {
   return {
@@ -12,13 +22,13 @@ function tool(name: string, overrides: Partial<ToolDefinition> = {}): ToolDefini
 }
 
 test('重复注册同名工具抛错', () => {
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register(tool('dup'))
   expect(() => registry.register(tool('dup'))).toThrow(/already registered/)
 })
 
 test('延迟工具在 searchTools 发现前不可见', () => {
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register(tool('deferred', { shouldDefer: true, searchHint: 'xxx 工具 hint' }))
   expect(registry.getActiveTools().map((t) => t.name)).toEqual([])
 
@@ -28,7 +38,7 @@ test('延迟工具在 searchTools 发现前不可见', () => {
 })
 
 test('searchTools 精确匹配并跳过 tool_search 自身', () => {
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register(tool('tool_search'))
   registry.register(tool('present'))
   const hits = registry.searchTools('present')
@@ -37,14 +47,14 @@ test('searchTools 精确匹配并跳过 tool_search 自身', () => {
 })
 
 test('toAISDKFormat 只包含可用工具', () => {
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register(tool('active-a'))
   registry.register(tool('lazy-b', { shouldDefer: true }))
   expect(Object.keys(registry.toAISDKFormat())).toEqual(['active-a'])
 })
 
 test('非并发安全的工具由互斥锁串行执行', async () => {
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   const order: string[] = []
   let release!: () => void
   const gate = new Promise<void>((resolve) => {

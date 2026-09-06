@@ -4,6 +4,7 @@ import type { PromptContext, PromptPipeline } from '../prompt'
 import type { SessionStore } from '../session'
 import type { ToolRegistry } from '../tools/registry'
 import type { TokenTracker } from '../usage/tracker'
+import type { RequestSnapshot } from '../context/request'
 
 export * from './context'
 export * from './debug'
@@ -18,11 +19,12 @@ export interface CommandContext {
   sessionStore: SessionStore
   model: any
   makePromptCtx: () => PromptContext
-  prepareContext: (messages: ModelMessage[]) => Promise<void>
+  prepareContext: (request: RequestSnapshot, options?: { allowSummary?: boolean }) => Promise<void>
+  saveSession: () => Promise<void>
   ask: () => void
   memoryStore?: MemoryStore
   /** agent 循环互斥锁：任一 agentLoop 运行时置位，防止并发启动第二个循环共享 messages */
-  busy: { locked: boolean }
+  busy: { locked: boolean; controller?: AbortController }
   [key: string]: any
 }
 

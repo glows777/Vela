@@ -5,16 +5,58 @@ import type { ToolDefinition } from "./registry";
 
 export const readFileParamSchema = z.object({
   path: z.string().describe("文件路径"),
+  offset: z.number().int().positive().optional().describe('起始行，1-based，默认 1'),
+  limit: z.number().int().positive().optional().describe('最多读取行数，默认 200'),
+  column: z.number().int().nonnegative().optional().describe('起始行内的 UTF-16 偏移，默认 0；超长单行按返回的 column 续读'),
 });
 export const readFileTool: ToolDefinition = {
   name: "read_file",
-  description: "读取指定路径的文件内容",
+  description: "分页读取文本文件或工具结果文件。返回展示范围和下一页 offset/column；只有读到 EOF 才表示读取完毕。",
   inputSchema: readFileParamSchema,
   isConcurrencySafe: true,
   isReadOnly: true,
-  maxResultChars: 500, // 生产环境通常 50000+
-  execute: async ({ path }: { path: string }) => {
-    return Bun.file(resolve(path)).text();
+  maxResultChars: 12000,
+  execute: async (input: z.infer<typeof readFileParamSchema>) => {
+    const { path, offset = 1, limit = 200, column = 0 } = readFileParamSchema.parse(input);
+    const file = Bun.file(resolve(path));
+    const decoder = new TextDecoder();
+    let line = 1;
+    let col = 0;
+    let body = '';
+    let more = false;
+    let reachedStart = offset === 1 && column === 0;
+    let lastLine = offset;
+    const consume = (text: string): boolean => {
+      for (const char of text) {
+        if (line === offset && col < column && col + char.length > column) throw new Error('column 位于 Unicode 字符中间，请使用上次返回的 column');
+        if (line >= offset && (line > offset || col >= column)) {
+          reachedStart = true;
+          if (body.length + char.length > 8000 || line >= offset + limit) {
+            more = true;
+            return false;
+          }
+          body += char;
+          lastLine = line;
+        }
+        if (char === '\n') {
+          if (line === offset && col < column) throw new Error('column 超过起始行长度');
+          line++;
+          col = 0;
+        } else {
+          col += char.length;
+        }
+      }
+      return true;
+    };
+    for await (const chunk of file.stream()) {
+      if (!consume(decoder.decode(chunk, { stream: true }))) break;
+    }
+    if (!more) consume(decoder.decode());
+    if (!reachedStart && !(line === offset && col === column)) throw new Error('offset/column 超过文件范围');
+    const next = more
+      ? `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
+      : 'EOF: no more content.';
+    return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`;
   },
 };
 

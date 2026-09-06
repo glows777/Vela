@@ -29,33 +29,35 @@ export const dreamCommands: CommandHandler[] = [
     ctx.tracker.addMessage(userMsg)
     ctx.timestamps.set(userMsg, Date.now())
 
-    const currentSystem = ctx.builder.build(ctx.makePromptCtx())
-    const beforeLen = ctx.messages.length
-
     ctx.busy.locked = true
+    ctx.busy.controller = new AbortController()
     void agentLoop({
       model: ctx.model,
-      systemPrompt: currentSystem,
+      systemPrompt: () => ctx.builder.build(ctx.makePromptCtx()),
       toolRegistry: ctx.registry,
       messages: ctx.messages,
       tokenTracker: ctx.tracker,
       prepareContext: ctx.prepareContext,
+      abortSignal: ctx.busy.controller.signal,
     })
       .then(async () => {
-        const newMessages = ctx.messages.slice(beforeLen)
-        const now = Date.now()
-        for (const message of newMessages) ctx.timestamps.set(message, now)
-        const { summary } = await ctx.sessionStore.loadState()
-        await ctx.sessionStore.replace(ctx.messages, ctx.timestamps, summary)
+        await ctx.saveSession()
         console.log(`  [dream 完成]\n`)
         ctx.busy.locked = false
+        ctx.busy.controller = undefined
         ctx.ask()
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
+        try {
+          await ctx.saveSession()
+        } catch (saveError) {
+          console.error('[Session] 保存失败:', saveError)
+        }
         console.error(
           `  [dream 失败] ${error instanceof Error ? error.message : error}`,
         )
         ctx.busy.locked = false
+        ctx.busy.controller = undefined
         ctx.ask()
       })
 

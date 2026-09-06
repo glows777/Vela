@@ -18,13 +18,8 @@ import {
 import { dreamCommands } from './commands/dream'
 import { ragCommands } from './commands/rag'
 import { createSkillCommands } from './commands/skill'
-import {
-  MICROCOMPACT_TOKEN_THRESHOLD,
-  microcompact,
-  SUMMARY_TOKEN_THRESHOLD,
-  summarize,
-} from './context/compressor'
-import { applyDefense, estimateMessageTokens } from './context/defense'
+import { ContextManager } from './context/manager'
+import { estimateMessageTokens } from './context/defense'
 import { MemoryStore } from './memory/store'
 import {
   coreRules,
@@ -33,6 +28,7 @@ import {
   ragContext,
   sessionContext,
   toolGuide,
+  toolHistoryGuide,
 } from './prompt'
 import { type PromptContext, PromptPipeline } from './prompt/pipelins'
 import { chunkDocument } from './rag/chunker'
@@ -80,10 +76,12 @@ const rl = createInterface({
 let rlClosed = false
 rl.on('close', () => {
   rlClosed = true
+  busy.controller?.abort(new DOMException('输入已关闭', 'AbortError'))
 })
 
 const messages: ModelMessage[] = []
-const toolRegistry = new ToolRegistry()
+const store = new SessionStore('default')
+const toolRegistry = new ToolRegistry(store.results)
 toolRegistry.register(...allTools)
 
 registerToolSearchTool(toolRegistry)
@@ -166,13 +164,24 @@ const skillLoader = new SkillLoader('.')
 const loadedSkills = skillLoader.load()
 const activeSkills = new Set<string>()
 /** agent 循环互斥锁（单飞）：任意 agentLoop 运行期间置位，拒绝并发启动第二个循环 */
-const busy = { locked: false }
+const busy: CommandContext['busy'] = { locked: false }
+const cancelOrClose = () => {
+  if (busy.locked && busy.controller) {
+    if (!busy.controller.signal.aborted) {
+      busy.controller.abort(new DOMException('用户取消当前操作', 'AbortError'))
+      console.log('\n[取消] 正在停止当前请求和工具…')
+    }
+  } else rl.close()
+}
+rl.on('SIGINT', cancelOrClose)
+process.on('SIGINT', cancelOrClose)
 
 const isContinue = process.argv.includes('--continue')
-const store = new SessionStore('default')
 const tokenTracker = new TokenTracker('.usage/today.jsonl')
-let summary = ''
-const timestamps = new Map<ModelMessage, number>()
+const contextManager = new ContextManager(store, tokenTracker, { messages, timestamps: new Map(), summary: '' })
+const timestamps = contextManager.state.timestamps
+const prepareContextForModel = contextManager.prepare.bind(contextManager)
+const saveSession = contextManager.save.bind(contextManager)
 const dispatch = createDispatcher([
   ...debugCommands,
   ...contextCommands,
@@ -204,20 +213,20 @@ function makePromptCtx(): PromptContext {
 
 if (isContinue && (await store.exists())) {
   const state = await store.loadState()
-  messages.push(...state.messages)
-  for (const [message, timestamp] of state.timestamps) {
-    timestamps.set(message, timestamp)
-  }
-  summary = state.summary
+  contextManager.restore(state)
   tokenTracker.setEstimatedTokens(estimateMessageTokens(messages))
   console.log(`[Session] 恢复会话，${messages.length} 条历史消息`)
 } else {
   console.log(`[Session] 新会话`)
 }
 
+// Persist the history identity before any tool side effects, including on legacy resume.
+await saveSession()
+
 const builder = new PromptPipeline()
   .pipe('coreRules', coreRules())
   .pipe('toolGuide', toolGuide())
+  .pipe('toolHistoryGuide', toolHistoryGuide(store.results))
   .pipe('deferredTools', deferredTools())
   .pipe('memoryContext', memoryContext(memoryStore))
   .pipe('ragContext', ragContext(vectorStore))
@@ -232,112 +241,6 @@ const promptCtx: PromptContext = {
 }
 
 builder.debug(promptCtx) // 显示各模块状态
-
-function messagesChanged(
-  before: ModelMessage[],
-  after: ModelMessage[],
-): boolean {
-  return (
-    before.length !== after.length ||
-    before.some((message, index) => message !== after[index])
-  )
-}
-
-function replaceMessagesInPlace(
-  target: ModelMessage[],
-  replacement: ModelMessage[],
-): void {
-  const previous = target.slice()
-  const knownTimestamps = new Map(timestamps)
-  const fallbackTimestamp = Date.now()
-
-  target.splice(0, target.length, ...replacement)
-  timestamps.clear()
-
-  replacement.forEach((message, index) => {
-    const timestamp =
-      knownTimestamps.get(message) ??
-      (previous[index] ? knownTimestamps.get(previous[index]!) : undefined) ??
-      fallbackTimestamp
-    timestamps.set(message, timestamp)
-  })
-}
-
-function ensureMessageTimestamps(history: ModelMessage[]): void {
-  const liveMessages = new Set(history)
-  const now = Date.now()
-
-  for (const message of history) {
-    if (!timestamps.has(message)) {
-      timestamps.set(message, now)
-    }
-  }
-
-  for (const message of timestamps.keys()) {
-    if (!liveMessages.has(message)) {
-      timestamps.delete(message)
-    }
-  }
-}
-
-function currentContextTokens(history: ModelMessage[]): number {
-  return Math.max(tokenTracker.estimatedTokens, estimateMessageTokens(history))
-}
-
-async function prepareContextForModel(history: ModelMessage[]): Promise<void> {
-  ensureMessageTimestamps(history)
-
-  const beforeDefense = history.slice()
-  const defense = applyDefense(history, timestamps)
-  if (messagesChanged(beforeDefense, defense.messages)) {
-    tokenTracker.replaceMessages(beforeDefense, defense.messages)
-    replaceMessagesInPlace(history, defense.messages)
-  }
-
-  if (
-    defense.truncated > 0 ||
-    defense.compacted > 0 ||
-    defense.softPruned > 0 ||
-    defense.hardPruned > 0
-  ) {
-    console.log(
-      `  [Defense] truncated=${defense.truncated}, compacted=${defense.compacted}, softPruned=${defense.softPruned}, hardPruned=${defense.hardPruned}`,
-    )
-  }
-
-  let tokenEstimate = currentContextTokens(history)
-  if (tokenEstimate >= MICROCOMPACT_TOKEN_THRESHOLD) {
-    const beforeMicrocompact = history.slice()
-    const compacted = microcompact(history)
-    if (
-      compacted.cleared > 0 &&
-      messagesChanged(beforeMicrocompact, compacted.messages)
-    ) {
-      tokenTracker.replaceMessages(beforeMicrocompact, compacted.messages)
-      replaceMessagesInPlace(history, compacted.messages)
-      tokenEstimate = currentContextTokens(history)
-      console.log(
-        `  [Microcompact] 清理了 ${compacted.cleared} 个工具结果，~${tokenEstimate} tokens`,
-      )
-    }
-  }
-
-  if (tokenEstimate >= SUMMARY_TOKEN_THRESHOLD) {
-    const beforeSummary = history.slice()
-    const compacted = await summarize(model, history, summary, tokenEstimate)
-    if (
-      compacted.compressedCount > 0 &&
-      messagesChanged(beforeSummary, compacted.messages)
-    ) {
-      tokenTracker.replaceMessages(beforeSummary, compacted.messages)
-      replaceMessagesInPlace(history, compacted.messages)
-      summary = compacted.summary
-      console.log(
-        `  [Summarization] 压缩了 ${compacted.compressedCount} 条消息，~${currentContextTokens(history)} tokens`,
-      )
-    }
-  }
-}
 
 // if (fs.existsSync('docs')) {
 //   const files = fs.readdirSync('docs').filter((f) => f.endsWith('.md'))
@@ -385,6 +288,7 @@ const ask = () => {
       model,
       makePromptCtx,
       prepareContext: prepareContextForModel,
+      saveSession,
       ask,
       memoryStore,
       vectorStore,
@@ -412,19 +316,23 @@ const ask = () => {
     console.log(currentSystem)
 
     busy.locked = true
+    busy.controller = new AbortController()
     try {
       await agentLoop({
         model,
-        systemPrompt: currentSystem,
+        systemPrompt: () => builder.build(makePromptCtx()),
         toolRegistry,
         messages,
         tokenTracker,
         prepareContext: prepareContextForModel,
+        abortSignal: busy.controller.signal,
       })
+    } catch (error) {
+      console.error('[Agent] 本轮停止:', error instanceof Error ? error.message : error)
     } finally {
+      try { await saveSession() } catch (error) { console.error('[Session] 保存失败:', error instanceof Error ? error.message : error) }
       busy.locked = false
-      ensureMessageTimestamps(messages)
-      await store.replace(messages, timestamps, summary)
+      busy.controller = undefined
     }
 
     const status = tokenTracker.status

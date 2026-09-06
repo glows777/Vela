@@ -3,7 +3,7 @@ import { embedMany } from 'ai'
 
 const DIMS = 128
 
-export type EmbeddingFn = (texts: string[]) => Promise<number[][]>
+export type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
 
 export function createEmbedder({
   modelId,
@@ -14,7 +14,7 @@ export function createEmbedder({
   apiKey: string
   url: string
 }): EmbeddingFn {
-  return async (texts: string[]) => {
+  return async (texts: string[], signal?: AbortSignal) => {
     const model = createOpenAI({
       baseURL: url,
       apiKey,
@@ -22,6 +22,7 @@ export function createEmbedder({
     const { embeddings } = await embedMany({
       model,
       values: texts,
+      abortSignal: signal,
       providerOptions: { openai: { dimensions: DIMS } },
     })
     return embeddings
@@ -33,7 +34,9 @@ const embedCache = new Map<string, number[]>()
 export async function embed(
   fn: EmbeddingFn,
   texts: string[],
+  signal?: AbortSignal,
 ): Promise<number[][]> {
+  signal?.throwIfAborted()
   const results: number[][] = new Array(texts.length)
   const uncached: { idx: number; text: string }[] = []
 
@@ -47,7 +50,8 @@ export async function embed(
   }
 
   if (uncached.length > 0) {
-    const vectors = await fn(uncached.map((u) => u.text))
+    const vectors = await fn(uncached.map((u) => u.text), signal)
+    signal?.throwIfAborted()
     for (let i = 0; i < uncached.length; i++) {
       results[uncached[i]!.idx] = vectors[i]!
       embedCache.set(uncached[i]!.text, vectors[i]!)

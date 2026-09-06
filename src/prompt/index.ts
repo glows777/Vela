@@ -1,8 +1,14 @@
 import type { MemoryStore } from '../memory/store'
 import type { SqliteVectorStore } from '../rag/sqllite-store'
 import type { PipeFn, PromptContext } from './pipelins'
+import type { ToolResultStore } from '../session/tool-results'
 
 export * from './pipelins'
+
+export function toolHistoryGuide(results: ToolResultStore): PipeFn {
+  // No counters/timestamps in the system prefix; only the session's stable path/schema.
+  return () => results.readingGuide()
+}
 
 export function coreRules(): PipeFn {
   return () => `You are Vela, a helpful agent that can call tool.
@@ -19,10 +25,8 @@ export function toolGuide(): PipeFn {
 }
 
 export function sessionContext(): PipeFn {
-  return (ctx) => {
-    if (ctx.sessionMessageCount === 0) return null
-    return `[会话信息] 已有 ${ctx.sessionMessageCount} 条历史消息`
-  }
+  // Message counts belong in status output, not the cached system prefix.
+  return () => null
 }
 
 export function deferredTools(): PipeFn {

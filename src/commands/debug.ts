@@ -1,55 +1,56 @@
-import { applyDefense, estimateMessageTokens } from "../context/defense"
-import { textToolResultOutput } from "../context/tool-result-output"
-import { setCacheEnabled } from "../mock"
-import type { CommandHandler } from "./index.js"
+import { estimateMessageTokens } from '../context/defense'
+import { textToolResultOutput } from '../context/tool-result-output'
+import { setCacheEnabled } from '../mock'
+import type { CommandHandler } from './index.js'
+import { createRequestSnapshot } from '../context/request'
 
 export const debugCommands: CommandHandler[] = [
   (cmd, ctx) => {
-    if (cmd !== "模拟长对话" && cmd !== "sim") return false
+    if (cmd !== '模拟长对话' && cmd !== 'sim') return false
     const now = Date.now()
-    console.log("\n[模拟] 注入 20 条历史消息（含大量工具结果）...")
+    console.log('\n[模拟] 注入 20 条历史消息（含大量工具结果）...')
     for (let i = 0; i < 5; i++) {
       const age = (20 - i * 4) * 60 * 1000
       const idx = ctx.messages.length
       ctx.messages.push({
-        role: "user",
+        role: 'user',
         content: `第 ${i + 1} 轮：帮我读文件 file-${i}.ts`,
       })
-      ctx.timestamps.set(idx, now - age)
+      ctx.timestamps.set(ctx.messages[idx]!, now - age)
       ctx.messages.push({
-        role: "assistant",
+        role: 'assistant',
         content: [
           {
-            type: "tool-call" as const,
+            type: 'tool-call' as const,
             toolCallId: `sim-${i}`,
-            toolName: "read_file",
+            toolName: 'read_file',
             input: { path: `file-${i}.ts` },
           },
         ],
       })
-      ctx.timestamps.set(idx + 1, now - age)
+      ctx.timestamps.set(ctx.messages[idx + 1]!, now - age)
       const bigContent =
         `// file-${i}.ts\n` +
-        "export function handler() {\n  // ...\n}\n".repeat(200)
+        'export function handler() {\n  // ...\n}\n'.repeat(200)
       ctx.messages.push({
-        role: "tool",
+        role: 'tool',
         content: [
           {
-            type: "tool-result" as const,
+            type: 'tool-result' as const,
             toolCallId: `sim-${i}`,
-            toolName: "read_file",
+            toolName: 'read_file',
             output: textToolResultOutput(bigContent),
           },
         ],
       })
-      ctx.timestamps.set(idx + 2, now - age)
+      ctx.timestamps.set(ctx.messages[idx + 2]!, now - age)
       ctx.messages.push({
-        role: "assistant",
+        role: 'assistant',
         content: [
-          { type: "text" as const, text: `文件 file-${i}.ts 的内容已读取。` },
+          { type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` },
         ],
       })
-      ctx.timestamps.set(idx + 3, now - age)
+      ctx.timestamps.set(ctx.messages[idx + 3]!, now - age)
     }
     console.log(
       `[模拟完成] ${ctx.messages.length} 条消息, ~${estimateMessageTokens(ctx.messages)} tokens\n`,
@@ -58,25 +59,35 @@ export const debugCommands: CommandHandler[] = [
   },
 
   (cmd, ctx) => {
-    if (cmd !== "执行防线" && cmd !== "defend") return false
-    console.log("\n--- 执行三层防线 ---")
-    const before = estimateMessageTokens(ctx.messages)
-    const def = applyDefense(ctx.messages, ctx.timestamps)
-    ctx.messages = def.messages
-    console.log(
-      `  [Layer 2] 截断: ${def.truncated} 条, 预算清理: ${def.compacted} 条`,
-    )
-    console.log(
-      `  [Layer 3] 软修剪: ${def.softPruned}, 硬清除: ${def.hardPruned}`,
-    )
-    console.log(
-      `  [结果] ~${before} → ~${def.tokenEstimate} tokens (节省 ${before - def.tokenEstimate})\n`,
-    )
-    return true
+    if (cmd !== '执行防线' && cmd !== 'defend') return false
+    if (ctx.busy.locked) return true
+    ctx.busy.locked = true
+    const controller = new AbortController()
+    ctx.busy.controller = controller
+    void (async () => {
+      try {
+        const request = await createRequestSnapshot(
+          ctx.model,
+          ctx.builder.build(ctx.makePromptCtx()),
+          ctx.registry.toAISDKFormat(),
+          ctx.messages,
+          controller.signal,
+        )
+        await ctx.prepareContext(request, { allowSummary: false })
+        await ctx.saveSession()
+      } catch (error) {
+        console.error('[Defense] 未应用清理:', error)
+      } finally {
+        ctx.busy.locked = false
+        ctx.busy.controller = undefined
+        ctx.ask()
+      }
+    })()
+    return 'async'
   },
 
   (cmd, ctx) => {
-    if (cmd !== "status" && cmd !== "查看状态") return false
+    if (cmd !== 'status' && cmd !== '查看状态') return false
     const tokens = estimateMessageTokens(ctx.messages)
     const memCount = ctx.memoryStore?.list().length ?? 0
     console.log(
@@ -86,14 +97,14 @@ export const debugCommands: CommandHandler[] = [
   },
 
   (cmd) => {
-    if (cmd === "/cache off" || cmd === "cache off") {
+    if (cmd === '/cache off' || cmd === 'cache off') {
       setCacheEnabled(false)
-      console.log("\n  已关闭 cache 模拟\n")
+      console.log('\n  已关闭 cache 模拟\n')
       return true
     }
-    if (cmd === "/cache on" || cmd === "cache on") {
+    if (cmd === '/cache on' || cmd === 'cache on') {
       setCacheEnabled(true)
-      console.log("\n  已开启 cache 模拟\n")
+      console.log('\n  已开启 cache 模拟\n')
       return true
     }
     return false

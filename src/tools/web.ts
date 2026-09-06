@@ -22,11 +22,12 @@ export const tavilySearchTool: ToolDefinition = {
   }: {
     query: string;
     max_results?: number;
-  }) => {
+  }, context) => {
     const apiKey = process.env.TAVILY_API_KEY;
     if (!apiKey) return "[web_search] 未配置 TAVILY_API_KEY，请在 .env 中设置";
 
     const res = await fetch("https://api.tavily.com/search", {
+      signal: context?.signal,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -76,11 +77,12 @@ export const serperSearchTool: ToolDefinition = {
   }: {
     query: string;
     max_results?: number;
-  }) => {
+  }, context) => {
     const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) return "[web_search] 未配置 SERPER_API_KEY，请在 .env 中设置";
 
     const res = await fetch("https://google.serper.dev/search", {
+      signal: context?.signal,
       method: "POST",
       headers: {
         "X-API-KEY": apiKey,
@@ -138,11 +140,11 @@ export const webFetchTool: ToolDefinition = {
   isConcurrencySafe: true,
   isReadOnly: true,
   maxResultChars: 3000,
-  execute: async ({ url }: { url: string }) => {
+  execute: async ({ url }: { url: string }, context) => {
     try {
       const res = await fetch(url, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; SuperAgent/1.0)" },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.any([AbortSignal.timeout(15000), ...(context?.signal ? [context.signal] : [])]),
       });
       if (!res.ok) return `抓取失败: HTTP ${res.status}`;
       const html = await res.text();

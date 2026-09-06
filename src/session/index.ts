@@ -1,4 +1,7 @@
 import type { ModelMessage } from "ai";
+import { join } from 'node:path';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { ToolResultStore } from './tool-results';
 
 export interface MessageEntry {
   type: "message";
@@ -16,6 +19,9 @@ interface CheckpointEntry {
   timestamp: string;
   summary: string;
   messages: StoredMessage[];
+  toolHistoryId?: string;
+  toolHistorySeq?: number;
+  toolHistoryViewSeq?: number;
 }
 
 export interface SessionState {
@@ -27,6 +33,7 @@ export interface SessionState {
 const SESSION_DIR = ".sessions";
 
 export class SessionStore {
+  readonly results: ToolResultStore;
   private dir: string;
   private sessionId: string;
 
@@ -37,26 +44,38 @@ export class SessionStore {
   constructor(sessionId: string, dir: string = SESSION_DIR) {
     this.sessionId = sessionId;
     this.dir = dir;
+    this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'));
   }
 
   async replace(
     messages: ModelMessage[],
     timestamps: Map<ModelMessage, number>,
     summary: string,
+    historyViewSequence = this.results.historyViewSequence,
   ): Promise<void> {
-    await Bun.$`mkdir -p ${this.dir}`;
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
 
     const entry: CheckpointEntry = {
       type: "checkpoint",
       timestamp: new Date().toISOString(),
       summary,
+      toolHistoryId: this.results.historyId,
+      toolHistorySeq: this.results.history.throughSequence,
+      toolHistoryViewSeq: historyViewSequence,
       messages: messages.map(message => ({
         timestamp: new Date(timestamps.get(message) ?? Date.now()).toISOString(),
         message,
       })),
     };
 
-    await Bun.write(this.filePath, JSON.stringify(entry) + "\n");
+    const temporary = `${this.filePath}.${crypto.randomUUID()}.tmp`;
+    try {
+      const file = await open(temporary, 'wx', 0o600);
+      try { await file.writeFile(JSON.stringify(entry) + '\n'); await file.sync(); } finally { await file.close(); }
+      await rename(temporary, this.filePath);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 
   async loadState(): Promise<SessionState> {
@@ -74,6 +93,9 @@ export class SessionStore {
     let messages: ModelMessage[] = [];
     let timestamps = new Map<ModelMessage, number>();
     let summary = "";
+    let historyId: string | undefined;
+    let historySequence = 0;
+    let historyViewSequence: number | undefined;
 
     const parseTimestamp = (value: string): number => {
       const parsed = Date.parse(value);
@@ -97,6 +119,9 @@ export class SessionStore {
           messages = [];
           timestamps = new Map();
           summary = entry.summary || "";
+          historyId = entry.toolHistoryId;
+          historySequence = entry.toolHistorySeq ?? 0;
+          historyViewSequence = entry.toolHistoryViewSeq;
           for (const storedMessage of entry.messages) {
             messages.push(storedMessage.message);
             timestamps.set(
@@ -110,6 +135,7 @@ export class SessionStore {
       }
     }
 
+    if (historyId) await this.results.resumeHistory(historyId, historySequence, historyViewSequence);
     return { messages, timestamps, summary };
   }
 

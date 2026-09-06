@@ -1,4 +1,5 @@
 import type { LanguageModel } from 'ai';
+import { getStoredResult } from './session/tool-results';
 
 /**
  * Mock Model v0.10 — 模拟 prompt cache 行为
@@ -149,7 +150,8 @@ function getToolResultContent(prompt: any[]): string {
       const content = msgs[i].content || [];
       for (const c of content) {
         const val = c.output?.value || c.output || c.result || '';
-        parts.push(String(val));
+        const stored = c.output ? getStoredResult(c.output) : undefined;
+        parts.push(stored?.preview ?? (typeof val === 'string' ? val : JSON.stringify(val)));
       }
     } else if (msgs[i].role === 'user') break;
   }

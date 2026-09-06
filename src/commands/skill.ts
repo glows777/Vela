@@ -137,32 +137,34 @@ export function createSkillCommands(
       ctx.timestamps.set(userMsg, Date.now())
       ctx.tracker.addMessage(userMsg)
 
-      const currentSystem = ctx.builder.build(ctx.makePromptCtx())
-      const beforeLen = ctx.messages.length
-
       ctx.busy.locked = true
+      ctx.busy.controller = new AbortController()
       void agentLoop({
         model: ctx.model,
         toolRegistry: ctx.registry,
         messages: ctx.messages,
-        systemPrompt: currentSystem,
+        systemPrompt: () => ctx.builder.build(ctx.makePromptCtx()),
         tokenTracker: ctx.tracker,
         prepareContext: ctx.prepareContext,
+        abortSignal: ctx.busy.controller.signal,
       })
         .then(async () => {
-          const newMessages = ctx.messages.slice(beforeLen)
-          const now = Date.now()
-          for (const message of newMessages) ctx.timestamps.set(message, now)
-          const { summary } = await ctx.sessionStore.loadState()
-          await ctx.sessionStore.replace(ctx.messages, ctx.timestamps, summary)
+          await ctx.saveSession()
           ctx.busy.locked = false
+          ctx.busy.controller = undefined
           ctx.ask()
         })
-        .catch((error: unknown) => {
+        .catch(async (error: unknown) => {
+          try {
+            await ctx.saveSession()
+          } catch (saveError) {
+            console.error('[Session] 保存失败:', saveError)
+          }
           console.error(
             `\n[skills] 执行失败: ${error instanceof Error ? error.message : error}\n`,
           )
           ctx.busy.locked = false
+          ctx.busy.controller = undefined
           ctx.ask()
         })
       return 'async'

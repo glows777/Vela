@@ -56,6 +56,9 @@ export interface StepUsage {
 }
 
 export interface StepRecord extends StepUsage {
+  kind?: 'main' | 'summary';
+  usage?: LanguageModelUsage;
+  durationMs?: number;
   /** 这次模型请求完成时的 Unix 时间戳。 */
   ts: number;
   /** 这次请求使用的模型标识。 */
@@ -182,14 +185,14 @@ export class TokenTracker {
    * 记录一次模型请求，并把完整请求 token 加入当前 loop budget。
    * StepUsage.inputTokens 只代表未命中输入，所以预算需要加上两类 cache token。
    */
-  record(model: string, usage: StepUsage): StepRecord {
+  record(model: string, usage: StepUsage, details: Pick<StepRecord, 'kind' | 'usage' | 'durationMs'> = { kind: 'main' }): StepRecord {
     const requestPromptTokens =
       usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
     const requestTotalTokens = requestPromptTokens + usage.outputTokens;
     this.currentLoopTokens += requestTotalTokens;
 
     const cost = computeCost(model, usage);
-    const record: StepRecord = { ts: Date.now(), model, cost, ...usage };
+    const record: StepRecord = { ts: Date.now(), model, cost, ...usage, ...details };
     this.steps.push(record);
 
     if (this.logPath) {
@@ -243,7 +246,9 @@ function countMessageChars(message: ModelMessage): number {
     if ('text' in part && typeof part.text === 'string') {
       chars += part.text.length;
     } else if ('output' in part) {
-      chars += toolResultOutputToText(part.output).length;
+      chars += part.output.type === 'json'
+        ? JSON.stringify(part.output.value).length
+        : toolResultOutputToText(part.output).length;
     } else if ('input' in part) {
       chars += JSON.stringify(part.input)?.length ?? 0;
     }

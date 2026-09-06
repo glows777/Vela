@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { createTestFixture, type TestFixture } from '../testing/harness'
 import { ragCommands } from './rag'
+import z from 'zod'
 
 let fixtures: TestFixture[] = []
 afterEach(() => {
@@ -50,4 +51,29 @@ test('ingest <path> 走工具执行并回台结束后再次 ask', async () => {
   } finally {
     log.mockRestore()
   }
+})
+
+test('manual ingest exposes a cancellation controller and releases the busy state after abort', async () => {
+  const f = fixture()
+  let signal: AbortSignal | undefined
+  f.ctx.registry.register({
+    name: 'rag_ingest',
+    description: 'ingest',
+    inputSchema: z.object({ path: z.string() }),
+    execute: async (_input, context) =>
+      new Promise((_resolve, reject) => {
+        signal = context?.signal
+        signal?.addEventListener('abort', () => reject(signal?.reason), {
+          once: true,
+        })
+      }),
+  })
+  expect(f.dispatch('ingest fixture.txt', f.ctx)).toBe('async')
+  expect(f.ctx.busy.locked).toBe(true)
+  f.ctx.busy.controller?.abort(new Error('cancel import'))
+  for (let i = 0; i < 20 && !f.askCount(); i++) await Bun.sleep(5)
+  expect(signal?.aborted).toBe(true)
+  expect(f.ctx.busy.locked).toBe(false)
+  expect(f.ctx.busy.controller).toBeUndefined()
+  expect(f.askCount()).toBe(1)
 })

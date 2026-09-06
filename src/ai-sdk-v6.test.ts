@@ -1,4 +1,8 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ToolResultStore } from './session/tool-results';
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { agentLoop } from "./agent/index";
 import { createMockModel } from "./mock";
@@ -6,8 +10,11 @@ import { allTools } from "./tools";
 import { ToolRegistry } from "./tools/registry";
 import { normalizeUsage, TokenTracker } from "./usage/tracker";
 
+const resultDir = mkdtempSync(join(tmpdir(), 'vela-sdk-test-'));
+afterAll(() => rmSync(resultDir, { recursive: true, force: true }));
+
 function createRegistry(): ToolRegistry {
-  const registry = new ToolRegistry();
+  const registry = new ToolRegistry(new ToolResultStore(resultDir));
   registry.register(...allTools);
   return registry;
 }
@@ -72,6 +79,8 @@ test("keeps tool-call continuation semantics with the mock model", async () => {
     "tool",
     "assistant",
   ]);
+  expect(JSON.stringify(messages.at(-1))).not.toContain('[object Object]');
+  expect(JSON.stringify(messages.at(-1))).toContain('Hello from bash!');
 }, 10_000);
 
 test("keeps loop budget separate from cumulative usage", () => {

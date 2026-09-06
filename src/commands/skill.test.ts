@@ -176,3 +176,14 @@ test('P0-2: 正文已注入时二次触发只追加注记，不重复正文', as
   expect(countOccurrences(allPromptText(f), BODY)).toBe(1)
   await waitFor(() => f.askCount() > 1)
 }, 20_000)
+
+test('skill persists the updated summary produced during preparation', async () => {
+  const f = fixture()
+  await f.contextManager.commit([], 'old summary')
+  f.ctx.prepareContext = async () => {
+    await f.contextManager.commit(f.ctx.messages.slice(), 'new summary')
+  }
+  f.dispatch('/code-review', f.ctx)
+  await waitFor(() => f.askCount() > 0)
+  expect((await f.ctx.sessionStore.loadState()).summary).toBe('new summary')
+})

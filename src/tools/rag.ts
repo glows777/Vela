@@ -24,13 +24,14 @@ export function createRagTools(
     inputSchema: createRagToolsInputSchema,
     isConcurrencySafe: false,
     isReadOnly: false,
-    execute: async ({ path }: { path: string }) => {
+    execute: async ({ path }: { path: string }, context) => {
       try {
         const text = await Bun.file(path).text()
         const chunks = chunkDocument(path, text)
         const embeddings = await embed(
           embedFn,
           chunks.map((c) => c.text),
+          context?.signal,
         )
         vectorStore.addBatch(
           chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i]! })),
@@ -48,10 +49,10 @@ export function createRagTools(
     inputSchema: ragSearchToolInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
-    execute: async ({ query, top_k }: { query: string; top_k?: number }) => {
+    execute: async ({ query, top_k }: { query: string; top_k?: number }, context) => {
       if (vectorStore.size() === 0)
         return '知识库为空，请先使用 rag_ingest 导入文档。'
-      const results = await vectorStore.hybridSearch(embedFn, query, top_k || 5)
+      const results = await vectorStore.hybridSearch(texts => embedFn(texts, context?.signal), query, top_k || 5)
       if (results.length === 0) return `没有找到与 "${query}" 相关的内容。`
       return results
         .map(
