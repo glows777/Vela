@@ -16,11 +16,15 @@ import {
   memoryCommands,
 } from './commands'
 import { dreamCommands } from './commands/dream'
+import { createPluginCommands } from './commands/plugin'
 import { ragCommands } from './commands/rag'
 import { createSkillCommands } from './commands/skill'
-import { ContextManager } from './context/manager'
 import { estimateMessageTokens } from './context/defense'
+import { ContextManager } from './context/manager'
 import { MemoryStore } from './memory/store'
+import { supabasePlugin } from './plugins/built-in-plugins/supabase-plugin'
+import { PluginManager } from './plugins/manager'
+import type { PluginDefinition } from './plugins/types'
 import {
   coreRules,
   deferredTools,
@@ -176,9 +180,18 @@ const cancelOrClose = () => {
 rl.on('SIGINT', cancelOrClose)
 process.on('SIGINT', cancelOrClose)
 
+const pluginManager = new PluginManager(toolRegistry)
+const availablePlugins = new Map<string, PluginDefinition>([
+  ['supabase', supabasePlugin],
+])
+
 const isContinue = process.argv.includes('--continue')
 const tokenTracker = new TokenTracker('.usage/today.jsonl')
-const contextManager = new ContextManager(store, tokenTracker, { messages, timestamps: new Map(), summary: '' })
+const contextManager = new ContextManager(store, tokenTracker, {
+  messages,
+  timestamps: new Map(),
+  summary: '',
+})
 const timestamps = contextManager.state.timestamps
 const prepareContextForModel = contextManager.prepare.bind(contextManager)
 const saveSession = contextManager.save.bind(contextManager)
@@ -189,6 +202,7 @@ const dispatch = createDispatcher([
   ...dreamCommands,
   ...ragCommands,
   ...createSkillCommands(skillLoader, activeSkills),
+  ...createPluginCommands(pluginManager, availablePlugins),
 ])
 const memoryStore = new MemoryStore('.')
 memoryStore.init()
@@ -241,28 +255,15 @@ const promptCtx: PromptContext = {
 }
 
 builder.debug(promptCtx) // 显示各模块状态
-
-// if (fs.existsSync('docs')) {
-//   const files = fs.readdirSync('docs').filter((f) => f.endsWith('.md'))
-//   if (files.length > 0) {
-//     console.log(`  发现 ${files.length} 个文档，u...`)
-//     for (const f of files) {
-//       const path = `docs/${f}`
-//       const text = fs.readFileSync(path, 'utf-8')
-//       const chunks = chunkDocument(path, text)
-//       const embeddings = await embed(
-//         embedFn,
-//         chunks.map((c) => c.text),
-//       )
-//       vectorStore.addBatch(
-//         chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i]! })),
-//       )
-//       console.log(`    ${f} → ${chunks.length} 个片段`)
-//     }
-//     console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`)
-//   }
-// }
-
+console.log('  加载插件...')
+for (const [name, def] of availablePlugins) {
+  try {
+    const tools = await pluginManager.load(def)
+    console.log(`  ✓ ${name} — ${tools.length} 个工具`)
+  } catch {
+    console.log(`  ✗ ${name} — 加载失败`)
+  }
+}
 const ask = () => {
   if (rlClosed) {
     return
@@ -270,10 +271,12 @@ const ask = () => {
 
   rl.question('You: ', async (input) => {
     await connectMCP()
+
     const trimmed = input.trim()
     if (!trimmed || trimmed === 'exit') {
       console.log('Bye!')
       await toolRegistry.closeAllMCP()
+      await pluginManager.unloadAll()
       rl.close()
       return
     }
@@ -328,9 +331,19 @@ const ask = () => {
         abortSignal: busy.controller.signal,
       })
     } catch (error) {
-      console.error('[Agent] 本轮停止:', error instanceof Error ? error.message : error)
+      console.error(
+        '[Agent] 本轮停止:',
+        error instanceof Error ? error.message : error,
+      )
     } finally {
-      try { await saveSession() } catch (error) { console.error('[Session] 保存失败:', error instanceof Error ? error.message : error) }
+      try {
+        await saveSession()
+      } catch (error) {
+        console.error(
+          '[Session] 保存失败:',
+          error instanceof Error ? error.message : error,
+        )
+      }
       busy.locked = false
       busy.controller = undefined
     }

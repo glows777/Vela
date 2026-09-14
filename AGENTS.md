@@ -4,6 +4,13 @@ globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
 alwaysApply: false
 ---
 
+## Agent 执行边界
+
+- 用户当前指令优先于本文件、Skill 和历史上下文。只读取与当前任务相关的源码、配置、测试和文档；小改动不要求先遍历整个仓库。
+- 先确定可观察的完成条件。已授权的可逆实现、检查和修复应持续做到完成，不在首版补丁后提前交回；只有会改变范围/结果的未知信息或不可逆/外部写入才需要暂停。
+- 按变更风险选择验证：对受影响的 Bun 测试做定向回归；跨模块、运行时或协议改动再扩大到完整 `bun test`、类型检查或构建。不要为低风险改动机械运行无关的全套检查。
+- `.skills/<name>/SKILL.md` 是按需加载的工作流入口。新增或维护 Skill 时保持触发描述短而精确；多流程内容使用入口加引用/脚本的渐进式披露，不预加载无关正文，也不把一次任务的临时步骤写进共享规则。
+
 Default to using Bun instead of Node.js.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`
@@ -26,7 +33,7 @@ Default to using Bun instead of Node.js.
 
 ## Testing
 
-Use `bun test` to run tests.
+Use `bun test` for affected tests; run the full suite when the changed surface or a failure requires it.
 
 ```ts#index.test.ts
 import { test, expect } from "bun:test";
