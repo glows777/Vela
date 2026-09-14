@@ -4,17 +4,22 @@ import {
   streamText,
   type Tool,
   type ToolSet,
-} from "ai"
-import type { ToolRegistry } from "../tools/registry"
-import { normalizeUsage, type TokenTracker } from "../usage/tracker"
+} from 'ai'
+import {
+  createRequestSnapshot,
+  estimateRequestTokens,
+  MAX_INPUT_TOKENS,
+  type RequestSnapshot,
+} from '../context/request'
+import type { ToolRegistry } from '../tools/registry'
+import { normalizeUsage, type TokenTracker } from '../usage/tracker'
 import {
   detectLoop,
   recordToolCall,
   recordToolCallResult,
   resetHistory,
-} from "./loop-detection"
-import { calculateDelay, isRetryable, sleep } from "./retry"
-import { createRequestSnapshot, estimateRequestTokens, MAX_INPUT_TOKENS, type RequestSnapshot } from '../context/request'
+} from './loop-detection'
+import { calculateDelay, isRetryable, sleep } from './retry'
 
 const MAX_TURN = 15
 const MAX_RETRIES = 3
@@ -45,7 +50,7 @@ const resolveTools = (tools: ToolSet | Tool[]): ToolSet => {
     const title = tool.title?.trim()
 
     if (!title) {
-      throw new Error("Tool arrays require every tool to have a title.")
+      throw new Error('Tool arrays require every tool to have a title.')
     }
 
     if (Object.hasOwn(resolvedTools, title)) {
@@ -70,7 +75,8 @@ export const agentLoop = async ({
   tokenTracker.beginLoop()
   resetHistory() // 每次新的 agent loop 开始时重置工具调用历史
 
-  const currentSystem = () => typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
+  const currentSystem = () =>
+    typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   try {
     while (turn < MAX_TURN) {
       abortSignal?.throwIfAborted()
@@ -79,18 +85,29 @@ export const agentLoop = async ({
       console.log(`\n--- Agent Loop Turn ${turn} ---\n`)
 
       // Prepare context before every actual model request, including tool continuations.
-      const request = await createRequestSnapshot(model, currentSystem(), toolRegistry.toAISDKFormat(), messages, abortSignal)
+      const request = await createRequestSnapshot(
+        model,
+        currentSystem(),
+        toolRegistry.toAISDKFormat(),
+        messages,
+        abortSignal,
+      )
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
-      if (estimateRequestTokens({ ...request, systemPrompt: inferenceSystem }, messages) > MAX_INPUT_TOKENS)
+      if (
+        estimateRequestTokens(
+          { ...request, systemPrompt: inferenceSystem },
+          messages,
+        ) > MAX_INPUT_TOKENS
+      )
         throw new Error('当前请求超过安全容量，本轮已停止。')
 
       let needToolCall = false
-      let fullContent = ""
+      let fullContent = ''
       let shouldBreak = false
       let finalStep:
-        | Awaited<ReturnType<typeof streamText>["finalStep"]>
+        | Awaited<ReturnType<typeof streamText>['finalStep']>
         | undefined
 
       const started = performance.now()
@@ -107,12 +124,12 @@ export const agentLoop = async ({
 
           for await (const part of result.stream) {
             switch (part.type) {
-              case "text-delta": {
+              case 'text-delta': {
                 process.stdout.write(part.text)
                 fullContent += part.text
                 break
               }
-              case "tool-call": {
+              case 'tool-call': {
                 needToolCall = true
                 console.log(
                   `\n  [tool called: ${part.toolName}->(${JSON.stringify(part.input)})]`,
@@ -121,11 +138,11 @@ export const agentLoop = async ({
                 const detectResult = detectLoop(part.toolName, part.input)
                 if (detectResult.stuck) {
                   console.log(detectResult.message)
-                  if (detectResult.level === "critical") {
+                  if (detectResult.level === 'critical') {
                     shouldBreak = true
-                  } else if (detectResult.level === "warning") {
+                  } else if (detectResult.level === 'warning') {
                     messages.push({
-                      role: "user",
+                      role: 'user',
                       content: `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`,
                     })
                   }
@@ -133,12 +150,17 @@ export const agentLoop = async ({
                 recordToolCall(part.toolCallId, part.toolName, part.input)
                 break
               }
-              case "tool-error": {
-                await toolRegistry.recordRejection(part.toolName, part.toolCallId, part.input, part.error)
+              case 'tool-error': {
+                await toolRegistry.recordRejection(
+                  part.toolName,
+                  part.toolCallId,
+                  part.input,
+                  part.error,
+                )
                 toolRegistry.assertHealthy()
                 break
               }
-              case "tool-result": {
+              case 'tool-result': {
                 recordToolCallResult(
                   part.toolCallId,
                   part.toolName,
@@ -166,13 +188,13 @@ export const agentLoop = async ({
           )
           await sleep(delay, abortSignal)
           needToolCall = false
-          fullContent = ""
+          fullContent = ''
           shouldBreak = false
         }
       }
 
       if (!finalStep) {
-        throw new Error("Agent loop did not receive a final response.")
+        throw new Error('Agent loop did not receive a final response.')
       }
 
       const inputToken = finalStep.usage.inputTokens ?? 0
@@ -180,11 +202,18 @@ export const agentLoop = async ({
 
       // 将 usage 归一化后记录到统一 tracker，并累计当前 loop 的完整 token 预算
       const norm = normalizeUsage(finalStep.usage)
-      const modelId = typeof model === "string" ? model : model.modelId
-      const stepRecord = tokenTracker.record(modelId || "mock-model", norm, { kind: 'main', usage: finalStep.usage, durationMs: performance.now() - started })
+      const modelId = typeof model === 'string' ? model : model.modelId
+      const stepRecord = tokenTracker.record(modelId || 'mock-model', norm, {
+        kind: 'main',
+        usage: finalStep.usage,
+        durationMs: performance.now() - started,
+      })
 
       // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
-      if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {
+      if (
+        stepRecord &&
+        (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)
+      ) {
         const tag =
           norm.cacheReadTokens > 0
             ? `\x1b[38;5;36m✓ cache hit\x1b[0m`
@@ -200,7 +229,7 @@ export const agentLoop = async ({
 
       if (shouldBreak) {
         console.log(
-          "\nAgent is stuck in a loop and has reached the critical threshold. Ending loop.",
+          '\nAgent is stuck in a loop and has reached the critical threshold. Ending loop.',
         )
         break
       }
@@ -215,21 +244,21 @@ export const agentLoop = async ({
         )
       }
       if (tokenTracker.loopTokens > TOKEN_BUDGET) {
-        console.log("\n[Token has exceeded the budget limit. Ending loop.]")
+        console.log('\n[Token has exceeded the budget limit. Ending loop.]')
         break
       }
 
       if (!needToolCall) {
-        console.log("\n--- Agent has completed its response. Ending loop. ---")
+        console.log('\n--- Agent has completed its response. Ending loop. ---')
         break
       }
 
-      console.log("agent needs to call tool, continue to next turn")
+      console.log('agent needs to call tool, continue to next turn')
     }
 
     if (turn >= MAX_TURN) {
       console.log(
-        "\nReached maximum turn limit. Ending loop to prevent infinite execution.",
+        '\nReached maximum turn limit. Ending loop to prevent infinite execution.',
       )
     }
   } finally {

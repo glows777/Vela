@@ -398,7 +398,7 @@ for (const kind of ['bash', 'generic'] as const) {
     registry.register({
       name: kind,
       description: 'terminal write failure regression',
-      inputSchema: z.object({}),
+      inputSchema: kind === 'bash' ? z.object({ command: z.string() }) : z.object({}),
       execute: async (_input, context) => {
         executions++
         const result = kind === 'bash'
@@ -410,7 +410,7 @@ for (const kind of ['bash', 'generic'] as const) {
       },
     })
     let failure: unknown
-    try { await registry.toAISDKFormat()[kind]!.execute!({}, options(`terminal-${kind}`)) } catch (error) { failure = error }
+    try { await registry.toAISDKFormat()[kind]!.execute!(kind === 'bash' ? { command: "printf 'RECOVERY_EVIDENCE\\n'" } : {}, options(`terminal-${kind}`)) } catch (error) { failure = error }
     expect(failure).toBeInstanceOf(Error)
     const calls = (await Bun.file(backup).text()).trim().split('\n').map(line => JSON.parse(line))
     const files = await readdir(results.dir)

@@ -1,3 +1,4 @@
+import type { ChannelGateway } from '../channels/gateway'
 import type { ToolDefinition, ToolRegistry } from '../tools/registry'
 import type { PluginApi, PluginConfig, PluginDefinition } from './types'
 
@@ -10,7 +11,10 @@ export class PluginManager {
   private plugins = new Map<string, LoadedPlugin>()
   private registry: ToolRegistry
 
-  constructor(registry: ToolRegistry) {
+  constructor(
+    registry: ToolRegistry,
+    private gateway: ChannelGateway,
+  ) {
     this.registry = registry
   }
 
@@ -30,6 +34,9 @@ export class PluginManager {
     const registeredTools: string[] = []
 
     const api: PluginApi = {
+      registerChannel: (channel) => {
+        this.gateway.register(channel)
+      },
       registerTools: (tools: ToolDefinition[]) => {
         for (const tool of tools) {
           const prefixedName = `${definition.name}__${tool.name}`

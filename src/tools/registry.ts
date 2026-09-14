@@ -1,6 +1,10 @@
 import type { Client, Transport } from '@modelcontextprotocol/client'
+import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
-import { tool as AITool, type JSONSchema7, jsonSchema } from 'ai'
+import { tool as AITool, asSchema, type JSONSchema7, jsonSchema } from 'ai'
+import { classifyBashCommand } from '../security/bash-classifier'
+import type { HookPipeline } from '../security/hooks'
+import { canUseTool, type Role } from '../security/roles'
 import type { ExecutionMetadata, ResultRecord } from '../session/tool-history'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results'
 
@@ -80,6 +84,20 @@ export class ToolRegistry {
     })
   }
   private tools: Map<string, ToolDefinition> = new Map()
+  private currentRole: Role = 'owner'
+  private hookPipeline?: HookPipeline
+
+  setRole(role: Role): void {
+    this.currentRole = role
+  }
+
+  getRole(): Role {
+    return this.currentRole
+  }
+
+  setHookPipeline(pipeline: HookPipeline): void {
+    this.hookPipeline = pipeline
+  }
 
   // 当前锁设计的已知缺陷：
   // 1. 锁粒度是整个 ToolRegistry；一个独占工具执行时，不相关的工具也会被阻塞。
@@ -177,6 +195,66 @@ export class ToolRegistry {
             }
             try {
               this.assertHealthy()
+              const reject = async (reason: string) => {
+                await this.recordRejection(
+                  name,
+                  options?.toolCallId ?? crypto.randomUUID(),
+                  input,
+                  reason,
+                )
+                return reason
+              }
+              if (!canUseTool(this.currentRole, name)) {
+                return await reject(
+                  `[拒绝执行] 角色 ${this.currentRole} 无权使用 ${name}`,
+                )
+              }
+              const pipeline = this.hookPipeline
+              if (pipeline) {
+                const pre = await pipeline.runPre(name, input)
+                if (pre.action === 'block') {
+                  return await reject(
+                    `[Hook 拦截] ${pre.reason || '操作被阻止'}`,
+                  )
+                }
+                if (
+                  pre.action === 'modify' &&
+                  pre.modifiedInput !== undefined
+                ) {
+                  input = pre.modifiedInput
+                  try {
+                    const schema = asSchema(tool.inputSchema)
+                    if (schema.validate) {
+                      const validated = await schema.validate(input)
+                      if (!validated.success) throw validated.error
+                      input = validated.value
+                    } else {
+                      const validated = new Validator(
+                        await schema.jsonSchema,
+                      ).validate(input)
+                      if (!validated.valid)
+                        throw new Error(JSON.stringify(validated.errors))
+                    }
+                  } catch (error) {
+                    return await reject(
+                      `[拒绝执行] Hook 修改后的输入无效: ${error instanceof Error ? error.message : String(error)}`,
+                    )
+                  }
+                }
+              }
+              if (name === 'bash') {
+                const command = (input as { command?: unknown } | null)?.command
+                if (typeof command !== 'string')
+                  return await reject('[拒绝执行] bash command 必须是字符串')
+                const risk = classifyBashCommand(command)
+                if (risk.level === 'dangerous') {
+                  return await reject(
+                    `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${command}`,
+                  )
+                }
+                if (risk.level === 'moderate')
+                  console.log(`  [安全] ⚠ ${risk.reason}: ${command}`)
+              }
               const history = this.results.history
               const call = await history.begin(
                 name,
@@ -215,8 +293,9 @@ export class ToolRegistry {
                   : {}
               const maxChars = maxChar ?? DEFAULT_MAX_RESULT_CHARS
               let stored = raw instanceof StoredToolResult ? raw : undefined
+              let text: string
               try {
-                const text =
+                text =
                   raw instanceof ToolExecutionResult
                     ? raw.text
                     : typeof raw === 'string'
@@ -263,9 +342,7 @@ export class ToolRegistry {
                   stored.callId = call.callId
                   stored.historySeq = record.seq
                   stored.execution = execution
-                  return { ...stored }
                 }
-                return text
               } catch (error) {
                 // Do not invent a terminal result when the result could not be recorded.
                 const location = stored
@@ -280,6 +357,13 @@ export class ToolRegistry {
                 )
                 throw this.persistenceFailure
               }
+              let output = stored ? stored.preview : text
+              if (pipeline) {
+                const post = await pipeline.runPost(name, input, output)
+                if (post.modifiedOutput !== undefined)
+                  output = String(post.modifiedOutput)
+              }
+              return stored ? { ...stored, preview: output } : output
             } finally {
               // 释放锁
               if (isSafe) {
@@ -354,6 +438,9 @@ export class ToolRegistry {
 
   getActiveTools() {
     return this.getAllTools().filter((tool) => {
+      if (!canUseTool(this.currentRole, tool.name)) {
+        return false
+      }
       if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
         return false
       }

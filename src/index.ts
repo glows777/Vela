@@ -8,6 +8,7 @@ import {
 } from '@modelcontextprotocol/client'
 import type { ModelMessage } from 'ai'
 import { agentLoop } from './agent'
+import { ChannelGateway } from './channels/gateway'
 import {
   type CommandContext,
   contextCommands,
@@ -15,13 +16,16 @@ import {
   debugCommands,
   memoryCommands,
 } from './commands'
+import { createChannelCommands } from './commands/channel'
 import { dreamCommands } from './commands/dream'
 import { createPluginCommands } from './commands/plugin'
 import { ragCommands } from './commands/rag'
 import { createSkillCommands } from './commands/skill'
+import { createSecurityCommands } from './commands/security'
 import { estimateMessageTokens } from './context/defense'
 import { ContextManager } from './context/manager'
 import { MemoryStore } from './memory/store'
+import { feishuPlugin } from './plugins/built-in-plugins/feishu-plugin'
 import { supabasePlugin } from './plugins/built-in-plugins/supabase-plugin'
 import { PluginManager } from './plugins/manager'
 import type { PluginDefinition } from './plugins/types'
@@ -39,6 +43,7 @@ import { chunkDocument } from './rag/chunker'
 import { createEmbedder, embed } from './rag/embedder'
 import { SqliteVectorStore } from './rag/sqllite-store'
 import { SessionStore } from './session'
+import { HookPipeline } from './security/hooks'
 import { SkillLoader } from './skills/loader'
 import { allTools } from './tools'
 import { createMemoryTool } from './tools/memory-tool'
@@ -87,6 +92,25 @@ const messages: ModelMessage[] = []
 const store = new SessionStore('default')
 const toolRegistry = new ToolRegistry(store.results)
 toolRegistry.register(...allTools)
+
+const hookPipeline = new HookPipeline()
+hookPipeline.registerPre('audit-log', (toolName, input) => {
+  if (toolName === 'write_file' || toolName === 'edit_file') {
+    const path = (input as { path?: string } | null)?.path || 'unknown'
+    console.log(`  [audit] 文件写入操作: ${toolName} → ${path}`)
+  }
+  return { action: 'allow' }
+})
+hookPipeline.registerPost('bash-timestamp', (toolName, _input, output) => {
+  if (toolName === 'bash') {
+    return {
+      action: 'modify',
+      modifiedOutput: `[${new Date().toISOString()}]\n${output}`,
+    }
+  }
+  return { action: 'allow' }
+})
+toolRegistry.setHookPipeline(hookPipeline)
 
 registerToolSearchTool(toolRegistry)
 
@@ -180,11 +204,6 @@ const cancelOrClose = () => {
 rl.on('SIGINT', cancelOrClose)
 process.on('SIGINT', cancelOrClose)
 
-const pluginManager = new PluginManager(toolRegistry)
-const availablePlugins = new Map<string, PluginDefinition>([
-  ['supabase', supabasePlugin],
-])
-
 const isContinue = process.argv.includes('--continue')
 const tokenTracker = new TokenTracker('.usage/today.jsonl')
 const contextManager = new ContextManager(store, tokenTracker, {
@@ -195,6 +214,19 @@ const contextManager = new ContextManager(store, tokenTracker, {
 const timestamps = contextManager.state.timestamps
 const prepareContextForModel = contextManager.prepare.bind(contextManager)
 const saveSession = contextManager.save.bind(contextManager)
+
+const gateway = new ChannelGateway({
+  model,
+  registry: toolRegistry,
+  buildSystem: () => builder.build(makePromptCtx()),
+  prepareContext: prepareContextForModel,
+})
+
+const pluginManager = new PluginManager(toolRegistry, gateway)
+const availablePlugins = new Map<string, PluginDefinition>([
+  ['supabase', supabasePlugin],
+  ['feishu', feishuPlugin],
+])
 const dispatch = createDispatcher([
   ...debugCommands,
   ...contextCommands,
@@ -203,7 +235,10 @@ const dispatch = createDispatcher([
   ...ragCommands,
   ...createSkillCommands(skillLoader, activeSkills),
   ...createPluginCommands(pluginManager, availablePlugins),
+  ...createChannelCommands(gateway),
+  ...createSecurityCommands(toolRegistry, hookPipeline),
 ])
+
 const memoryStore = new MemoryStore('.')
 memoryStore.init()
 toolRegistry.register(createMemoryTool(memoryStore))
@@ -264,6 +299,9 @@ for (const [name, def] of availablePlugins) {
     console.log(`  ✗ ${name} — 加载失败`)
   }
 }
+
+console.log('  启动 Channel...')
+await gateway.startAll()
 const ask = () => {
   if (rlClosed) {
     return
@@ -277,6 +315,7 @@ const ask = () => {
       console.log('Bye!')
       await toolRegistry.closeAllMCP()
       await pluginManager.unloadAll()
+      await gateway.stopAll()
       rl.close()
       return
     }
