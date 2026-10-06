@@ -1,5 +1,6 @@
 import type { LanguageModel, ModelMessage } from 'ai'
 import { agentLoop } from '../agent'
+import type { VelaEventListener } from '../agent/events'
 import type { RequestSnapshot } from '../context/request'
 import type { ToolRegistry } from '../tools/registry'
 import { TokenTracker } from '../usage/tracker'
@@ -14,6 +15,9 @@ interface GatewayOptions {
   registry: ToolRegistry
   buildSystem: () => string
   prepareContext: (request: RequestSnapshot) => Promise<void>
+  /** 每轮对话使用的 token 记录器；默认写入 .usage/today.jsonl */
+  createTracker?: () => TokenTracker
+  onEvent?: VelaEventListener
 }
 
 export class ChannelGateway {
@@ -83,9 +87,12 @@ export class ChannelGateway {
         messages,
         // 传函数而非快照：agent loop 每轮都会重新构建 system prompt
         systemPrompt: this.options.buildSystem,
-        tokenTracker: new TokenTracker('.usage/today.jsonl'),
+        tokenTracker:
+          this.options.createTracker?.() ??
+          new TokenTracker('.usage/today.jsonl'),
         prepareContext: this.options.prepareContext,
         abortSignal: controller.signal,
+        onEvent: this.options.onEvent,
       })
     } catch (err) {
       if (controller.signal.aborted) {

@@ -5,6 +5,7 @@ import type { SessionStore } from '../session'
 import type { ToolRegistry } from '../tools/registry'
 import type { TokenTracker } from '../usage/tracker'
 import type { RequestSnapshot } from '../context/request'
+import type { VelaEventListener } from '../agent/events'
 
 export * from './context'
 export * from './debug'
@@ -25,6 +26,8 @@ export interface CommandContext {
   memoryStore?: MemoryStore
   /** agent 循环互斥锁：任一 agentLoop 运行时置位，防止并发启动第二个循环共享 messages */
   busy: { locked: boolean; controller?: AbortController }
+  /** 命令内启动的 agentLoop 使用的事件回调 */
+  onEvent?: VelaEventListener
   [key: string]: any
 }
 

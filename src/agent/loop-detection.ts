@@ -45,9 +45,8 @@ export function hashResult(result: unknown): string {
   return hash(stringifyValue(result));
 }
 
-const callHistory: ToolHashedRecord[] = [];
-
-export function recordToolCall(
+function recordToolCallIn(
+  callHistory: ToolHashedRecord[],
   toolCallId: string,
   name: string,
   args: unknown,
@@ -62,7 +61,8 @@ export function recordToolCall(
   if (callHistory.length > HISTORY_SIZE) callHistory.shift();
 }
 
-export function recordToolCallResult(
+function recordToolCallResultIn(
+  callHistory: ToolHashedRecord[],
   toolCallId: string,
   name: string,
   args: unknown,
@@ -86,9 +86,6 @@ export function recordToolCallResult(
   return true;
 }
 
-export function resetHistory() {
-  callHistory.length = 0;
-}
 
 /**
  * @description
@@ -98,7 +95,11 @@ export function resetHistory() {
  * @param string argsHash - 参数哈希
  * @returns number - 没有进展的连续调用次数
  */
-function getNoProgressStreak(name: string, argsHash: string): number {
+function getNoProgressStreak(
+  callHistory: ToolHashedRecord[],
+  name: string,
+  argsHash: string,
+): number {
   let streak = 0;
   let lastResultHash: string | null = null;
 
@@ -140,7 +141,10 @@ function getNoProgressStreak(name: string, argsHash: string): number {
  * @param string currentHash 当前调用的参数哈希，用于判断最后一次切换是否回到了当前参数哈希
  * @returns number - 来回切换的次数，如果没有来回切换或者来回切换的次数小于 2，返回 0；否则返回来回切换的次数
  */
-function getPingPongCount(currentHash: string): number {
+function getPingPongCount(
+  callHistory: ToolHashedRecord[],
+  currentHash: string,
+): number {
   if (callHistory.length < 3) {
     return 0;
   }
@@ -180,9 +184,13 @@ function getPingPongCount(currentHash: string): number {
   return 0;
 }
 
-export function detectLoop(name: string, args: unknown): DetectionResult {
+function detectLoopIn(
+  callHistory: ToolHashedRecord[],
+  name: string,
+  args: unknown,
+): DetectionResult {
   const argsHash = hashToolCall(name, args);
-  const noProgress = getNoProgressStreak(name, argsHash);
+  const noProgress = getNoProgressStreak(callHistory, name, argsHash);
 
   if (noProgress >= BREAKER_THRESHOLD) {
     return {
@@ -194,7 +202,7 @@ export function detectLoop(name: string, args: unknown): DetectionResult {
     };
   }
 
-  const pingPong = getPingPongCount(argsHash);
+  const pingPong = getPingPongCount(callHistory, argsHash);
   if (pingPong >= CRITICAL_THRESHOLD) {
     return {
       stuck: true,
@@ -238,3 +246,49 @@ export function detectLoop(name: string, args: unknown): DetectionResult {
 
   return { stuck: false };
 }
+
+/**
+ * 工具调用循环检测器。每个 agent loop 持有自己的实例，
+ * 并发会话（例如通道网关里的多个对话）不会共享调用历史。
+ */
+export class LoopDetector {
+  private readonly history: ToolHashedRecord[] = [];
+
+  record(toolCallId: string, name: string, args: unknown): void {
+    recordToolCallIn(this.history, toolCallId, name, args);
+  }
+
+  recordResult(
+    toolCallId: string,
+    name: string,
+    args: unknown,
+    result: unknown,
+  ): boolean {
+    return recordToolCallResultIn(this.history, toolCallId, name, args, result);
+  }
+
+  detect(name: string, args: unknown): DetectionResult {
+    return detectLoopIn(this.history, name, args);
+  }
+
+  reset(): void {
+    this.history.length = 0;
+  }
+}
+
+// 兼容旧的模块级 API：共享一个默认实例。
+const defaultDetector = new LoopDetector();
+export const recordToolCall = (
+  toolCallId: string,
+  name: string,
+  args: unknown,
+) => defaultDetector.record(toolCallId, name, args);
+export const recordToolCallResult = (
+  toolCallId: string,
+  name: string,
+  args: unknown,
+  result: unknown,
+) => defaultDetector.recordResult(toolCallId, name, args, result);
+export const detectLoop = (name: string, args: unknown) =>
+  defaultDetector.detect(name, args);
+export const resetHistory = () => defaultDetector.reset();

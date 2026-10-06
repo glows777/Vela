@@ -7,7 +7,7 @@ const bashToolParamSchema = z.object({
   command: z.string().describe('要执行的 shell 命令'),
 })
 
-export const bashTool: ToolDefinition = {
+export const createBashTool = (cwd?: string): ToolDefinition => ({
   name: 'bash',
   description:
     '执行 shell 命令（10 秒超时），保存完整 stdout/stderr，返回退出状态和日志尾部预览。可用 read_file 分页读取完整结果。',
@@ -24,6 +24,7 @@ export const bashTool: ToolDefinition = {
     try {
       const proc = Bun.spawn({
         cmd: ['bash', '-lc', command],
+        cwd,
         stdin: 'ignore',
         stdout: file.fd,
         stderr: file.fd,
@@ -99,4 +100,6 @@ export const bashTool: ToolDefinition = {
       context?.callId,
     )
   },
-}
+})
+
+export const bashTool = createBashTool()

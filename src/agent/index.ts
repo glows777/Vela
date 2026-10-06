@@ -13,12 +13,8 @@ import {
 } from '../context/request'
 import type { ToolRegistry } from '../tools/registry'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker'
-import {
-  detectLoop,
-  recordToolCall,
-  recordToolCallResult,
-  resetHistory,
-} from './loop-detection'
+import type { VelaEvent, VelaEventListener } from './events'
+import { LoopDetector } from './loop-detection'
 import { calculateDelay, isRetryable, sleep } from './retry'
 
 const MAX_TURN = 15
@@ -38,6 +34,8 @@ interface AgentLoopParameter {
   tokenTracker: TokenTracker
   prepareContext?: (request: RequestSnapshot) => Promise<void>
   abortSignal?: AbortSignal
+  /** 运行事件回调；不传时 agentLoop 不产生任何终端输出。 */
+  onEvent?: VelaEventListener
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -70,10 +68,14 @@ export const agentLoop = async ({
   tokenTracker,
   prepareContext,
   abortSignal,
+  onEvent,
 }: AgentLoopParameter) => {
   let turn = 0
   tokenTracker.beginLoop()
-  resetHistory() // 每次新的 agent loop 开始时重置工具调用历史
+  // 每次 agent loop 使用独立的调用历史，并发会话互不影响
+  const loopDetector = new LoopDetector()
+  const emit = (event: VelaEvent) => onEvent?.(event)
+  let endReason: Extract<VelaEvent, { type: 'agent_end' }>['reason'] | undefined
 
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
@@ -82,7 +84,7 @@ export const agentLoop = async ({
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
       turn++
-      console.log(`\n--- Agent Loop Turn ${turn} ---\n`)
+      emit({ type: 'turn_start', turn })
 
       // Prepare context before every actual model request, including tool continuations.
       const request = await createRequestSnapshot(
@@ -125,19 +127,30 @@ export const agentLoop = async ({
           for await (const part of result.stream) {
             switch (part.type) {
               case 'text-delta': {
-                process.stdout.write(part.text)
+                emit({ type: 'text_delta', text: part.text })
                 fullContent += part.text
                 break
               }
               case 'tool-call': {
                 needToolCall = true
-                console.log(
-                  `\n  [tool called: ${part.toolName}->(${JSON.stringify(part.input)})]`,
-                )
+                emit({
+                  type: 'tool_call',
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  input: part.input,
+                })
 
-                const detectResult = detectLoop(part.toolName, part.input)
+                const detectResult = loopDetector.detect(
+                  part.toolName,
+                  part.input,
+                )
                 if (detectResult.stuck) {
-                  console.log(detectResult.message)
+                  emit({
+                    type: 'loop_detected',
+                    level: detectResult.level,
+                    detector: detectResult.detector,
+                    message: detectResult.message,
+                  })
                   if (detectResult.level === 'critical') {
                     shouldBreak = true
                   } else if (detectResult.level === 'warning') {
@@ -147,10 +160,17 @@ export const agentLoop = async ({
                     })
                   }
                 }
-                recordToolCall(part.toolCallId, part.toolName, part.input)
+                loopDetector.record(part.toolCallId, part.toolName, part.input)
                 break
               }
               case 'tool-error': {
+                emit({
+                  type: 'tool_error',
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  input: part.input,
+                  error: part.error,
+                })
                 await toolRegistry.recordRejection(
                   part.toolName,
                   part.toolCallId,
@@ -161,15 +181,19 @@ export const agentLoop = async ({
                 break
               }
               case 'tool-result': {
-                recordToolCallResult(
+                loopDetector.recordResult(
                   part.toolCallId,
                   part.toolName,
                   part.input,
                   part.output,
                 )
-                console.log(
-                  `  [tool called result: ${part.toolName}->${JSON.stringify(part.output)}]`,
-                )
+                emit({
+                  type: 'tool_result',
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  input: part.input,
+                  output: part.output,
+                })
                 break
               }
             }
@@ -183,9 +207,13 @@ export const agentLoop = async ({
           toolRegistry.assertHealthy()
           if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
           const delay = calculateDelay(attempt)
-          console.log(
-            `  [Retry] Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
-          )
+          emit({
+            type: 'retry',
+            attempt,
+            maxRetries: MAX_RETRIES,
+            delayMs: delay,
+            error,
+          })
           await sleep(delay, abortSignal)
           needToolCall = false
           fullContent = ''
@@ -209,28 +237,16 @@ export const agentLoop = async ({
         durationMs: performance.now() - started,
       })
 
-      // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
-      if (
-        stepRecord &&
-        (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)
-      ) {
-        const tag =
-          norm.cacheReadTokens > 0
-            ? `\x1b[38;5;36m✓ cache hit\x1b[0m`
-            : `\x1b[38;5;220m✎ cache write\x1b[0m`
-        const detail =
-          norm.cacheReadTokens > 0
-            ? `read ${norm.cacheReadTokens}`
-            : `write ${norm.cacheWriteTokens}`
-        console.log(
-          `\n [${tag}] ${detail} tokens · current step $${stepRecord.cost.toFixed(5)}`,
-        )
-      }
+      emit({
+        type: 'usage',
+        modelId: modelId || 'mock-model',
+        usage: norm,
+        record: stepRecord ?? undefined,
+      })
 
       if (shouldBreak) {
-        console.log(
-          '\nAgent is stuck in a loop and has reached the critical threshold. Ending loop.',
-        )
+        emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
+        endReason = 'loop'
         break
       }
 
@@ -239,28 +255,33 @@ export const agentLoop = async ({
       tokenTracker.addMessages(responseMessages)
 
       if (tokenTracker.loopTokens > TOKEN_BUDGET * 0.9) {
-        console.log(
-          `  [Token] ${tokenTracker.loopTokens}/${TOKEN_BUDGET} (${Math.round((tokenTracker.loopTokens / TOKEN_BUDGET) * 100)}%)`,
-        )
+        emit({
+          type: 'budget_warning',
+          used: tokenTracker.loopTokens,
+          limit: TOKEN_BUDGET,
+        })
       }
+      // 每个 turn_start 都有对应的 turn_end，结束原因由随后的 agent_end 说明
+      emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
       if (tokenTracker.loopTokens > TOKEN_BUDGET) {
-        console.log('\n[Token has exceeded the budget limit. Ending loop.]')
+        endReason = 'budget'
         break
       }
-
       if (!needToolCall) {
-        console.log('\n--- Agent has completed its response. Ending loop. ---')
+        endReason = 'done'
         break
       }
-
-      console.log('agent needs to call tool, continue to next turn')
     }
 
-    if (turn >= MAX_TURN) {
-      console.log(
-        '\nReached maximum turn limit. Ending loop to prevent infinite execution.',
-      )
-    }
+    // 没有任何 break 时说明 while 条件耗尽，即达到轮次上限
+    emit({ type: 'agent_end', reason: endReason ?? 'max_turns' })
+  } catch (error) {
+    emit({
+      type: 'agent_end',
+      reason: abortSignal?.aborted ? 'aborted' : 'error',
+      error,
+    })
+    throw error
   } finally {
     // streamText may end before an aborted tool finishes recording its outcome.
     if (abortSignal?.aborted) await toolRegistry.waitForIdle()

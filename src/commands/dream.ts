@@ -39,6 +39,7 @@ export const dreamCommands: CommandHandler[] = [
       tokenTracker: ctx.tracker,
       prepareContext: ctx.prepareContext,
       abortSignal: ctx.busy.controller.signal,
+      onEvent: ctx.onEvent,
     })
       .then(async () => {
         await ctx.saveSession()
