@@ -12,8 +12,10 @@ import { pickSearchTool, webFetchTool } from './web'
 /** 核心工具集合；文件、搜索和 bash 工具的相对路径按 cwd 解析（默认进程工作目录）。 */
 export function createCoreTools({
   cwd,
+  bashTimeoutMs,
 }: {
   cwd?: string
+  bashTimeoutMs?: number
 } = {}): ToolDefinition[] {
   return [
     createReadFileTool(cwd),
@@ -22,7 +24,7 @@ export function createCoreTools({
     createListDirectoryTool(cwd),
     createGrepTool(cwd),
     createGlobTool(cwd),
-    createBashTool(cwd),
+    createBashTool(cwd, { timeoutMs: bashTimeoutMs }),
     webFetchTool,
     pickSearchTool(),
   ]

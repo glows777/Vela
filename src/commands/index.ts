@@ -1,3 +1,4 @@
+import type { VelaLimits } from '../limits'
 import type { ModelMessage } from 'ai'
 import type { MemoryStore } from '../memory/store'
 import type { PromptContext, PromptPipeline } from '../prompt'
@@ -28,6 +29,8 @@ export interface CommandContext {
   busy: { locked: boolean; controller?: AbortController }
   /** 命令内启动的 agentLoop 使用的事件回调 */
   onEvent?: VelaEventListener
+  /** 命令内启动的 agentLoop 使用的上限 */
+  limits?: Partial<VelaLimits>
   [key: string]: any
 }
 

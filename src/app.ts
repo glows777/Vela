@@ -6,6 +6,7 @@ import { ChannelGateway } from './channels/gateway'
 import type { CommandContext } from './commands'
 import { estimateMessageTokens } from './context/defense'
 import { ContextManager } from './context/manager'
+import { resolveLimits, type VelaLimits } from './limits'
 import { MemoryStore } from './memory/store'
 import { PluginManager } from './plugins/manager'
 import {
@@ -43,6 +44,8 @@ export interface VelaOptions {
   embedder?: EmbeddingFn
   /** 运行事件回调（agent loop、上下文压缩、通道）。 */
   onEvent?: VelaEventListener
+  /** 轮数、重试、预算、压缩阈值等上限；未给出的字段用默认值（见 src/limits.ts）。 */
+  limits?: Partial<VelaLimits>
 }
 
 export interface RunOptions {
@@ -58,13 +61,14 @@ export function createVela(options: VelaOptions) {
   const dataDir = resolve(cwd, options.dataDir ?? '.')
   const sessionId = options.sessionId ?? 'default'
   const { model, embedder } = options
+  const limits = resolveLimits(options.limits)
   let onEvent = options.onEvent
   const emit: VelaEventListener = (event) => onEvent?.(event)
 
   const messages: ModelMessage[] = []
   const sessionStore = new SessionStore(sessionId, join(dataDir, '.sessions'))
   const registry = new ToolRegistry(sessionStore.results)
-  registry.register(...createCoreTools({ cwd }))
+  registry.register(...createCoreTools({ cwd, bashTimeoutMs: limits.bashTimeoutMs }))
 
   const hooks = new HookPipeline()
   hooks.registerPre('audit-log', (toolName, input) => {
@@ -97,6 +101,7 @@ export function createVela(options: VelaOptions) {
     tracker,
     { messages, timestamps: new Map(), summary: '' },
     emit,
+    limits,
   )
   const timestamps = contextManager.state.timestamps
   const prepareContext = contextManager.prepare.bind(contextManager)
@@ -135,6 +140,7 @@ export function createVela(options: VelaOptions) {
     prepareContext,
     createTracker: () => new TokenTracker(usageLogPath),
     onEvent: emit,
+    limits,
   })
   const pluginManager = new PluginManager(registry, gateway)
 
@@ -146,6 +152,7 @@ export function createVela(options: VelaOptions) {
     dataDir,
     sessionId,
     model,
+    limits,
     messages,
     timestamps,
     registry,
@@ -202,6 +209,7 @@ export function createVela(options: VelaOptions) {
           prepareContext,
           abortSignal: busy.controller.signal,
           onEvent: emit,
+          limits,
         })
       } finally {
         runOptions.signal?.removeEventListener('abort', forward)
@@ -242,6 +250,7 @@ export function createVela(options: VelaOptions) {
         vectorStore,
         busy,
         onEvent: emit,
+        limits,
       }
     },
 

@@ -12,7 +12,10 @@ const usage = {
   outputTokens: { total: 5, text: 5, reasoning: 0 },
 }
 
-function toolCallStep(toolName: string, input: unknown): LanguageModelV4StreamPart[] {
+function toolCallStep(
+  toolName: string,
+  input: unknown,
+): LanguageModelV4StreamPart[] {
   return [
     { type: 'stream-start', warnings: [] },
     {
@@ -35,7 +38,11 @@ function textStep(text: string): LanguageModelV4StreamPart[] {
     { type: 'text-start', id: 't' },
     { type: 'text-delta', id: 't', delta: text },
     { type: 'text-end', id: 't' },
-    { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage },
+    {
+      type: 'finish',
+      finishReason: { unified: 'stop', raw: undefined },
+      usage,
+    },
   ]
 }
 
@@ -104,7 +111,10 @@ test('createVela runs a tool-calling turn end to end without a real model', asyn
 
 test('a resumed Vela sees the previous session', async () => {
   cwd = mkdtempSync(join(tmpdir(), 'vela-e2e-'))
-  const first = createVela({ model: scriptedModel([textStep('first answer')]), cwd })
+  const first = createVela({
+    model: scriptedModel([textStep('first answer')]),
+    cwd,
+  })
   await first.run('hi')
   await first.dispose()
 

@@ -1,4 +1,5 @@
 import z from 'zod'
+import { DEFAULT_LIMITS } from '../limits'
 import { ToolResultStore } from '../session/tool-results'
 import type { ToolDefinition } from './registry'
 import type { ExecutionMetadata } from '../session/tool-history'
@@ -7,10 +8,13 @@ const bashToolParamSchema = z.object({
   command: z.string().describe('要执行的 shell 命令'),
 })
 
-export const createBashTool = (cwd?: string): ToolDefinition => ({
+export const createBashTool = (
+  cwd?: string,
+  { timeoutMs = DEFAULT_LIMITS.bashTimeoutMs }: { timeoutMs?: number } = {},
+): ToolDefinition => ({
   name: 'bash',
   description:
-    '执行 shell 命令（10 秒超时），保存完整 stdout/stderr，返回退出状态和日志尾部预览。可用 read_file 分页读取完整结果。',
+    `执行 shell 命令（${Math.round(timeoutMs / 1000)} 秒超时），保存完整 stdout/stderr，返回退出状态和日志尾部预览。可用 read_file 分页读取完整结果。`,
   inputSchema: bashToolParamSchema,
   isConcurrencySafe: false,
   isReadOnly: false,
@@ -50,7 +54,7 @@ export const createBashTool = (cwd?: string): ToolDefinition => ({
       const timer = setTimeout(() => {
         execution.timedOut = true
         terminate()
-      }, 10000)
+      }, timeoutMs)
       context?.signal?.addEventListener('abort', terminate, { once: true })
       if (context?.signal?.aborted) terminate()
       let exitCode: number

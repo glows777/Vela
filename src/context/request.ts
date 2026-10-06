@@ -4,6 +4,7 @@ import {
   type ModelMessage,
   type ToolSet,
 } from 'ai'
+import { DEFAULT_LIMITS } from '../limits'
 
 export interface RequestSnapshot {
   model: LanguageModel
@@ -59,4 +60,4 @@ export function estimateRequestTokens(
   )
 }
 
-export const MAX_INPUT_TOKENS = 183616
+export const MAX_INPUT_TOKENS = DEFAULT_LIMITS.maxInputTokens

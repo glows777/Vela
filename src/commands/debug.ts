@@ -1,6 +1,6 @@
 import { estimateMessageTokens } from '../context/defense'
 import { textToolResultOutput } from '../context/tool-result-output'
-import { setCacheEnabled } from '../mock'
+import { setCacheEnabled } from '../testing/demo-model'
 import type { CommandHandler } from './index.js'
 import { createRequestSnapshot } from '../context/request'
 
