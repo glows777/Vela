@@ -23,6 +23,7 @@ const memoryToolParamSchema = z
       .describe('Search keywords (required for search)'),
     filename: z
       .string()
+      .optional()
       .describe(
         'Actual filename (required for read/delete; includes the type prefix and .md suffix). Do not provide the memory name/logical name. For example, user_favorite_language maps to user_user-favorite-language.md',
       ),
@@ -75,11 +76,13 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
           )
         }
         case 'read':
+          if (!args.filename) return '读取失败：需要 filename'
           return (
             memoryStore.loadFile(args.filename) ??
             `文件不存在: ${args.filename}`
           )
         case 'delete':
+          if (!args.filename) return '删除失败：需要 filename'
           return memoryStore.delete(args.filename)
             ? `已删除: ${args.filename}`
             : `文件不存在: ${args.filename}`

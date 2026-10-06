@@ -11,7 +11,12 @@ export const createRagToolsInputSchema = z.object({
 
 export const ragSearchToolInputSchema = z.object({
   query: z.string().describe('搜索查询'),
-  top_k: z.string().optional().describe('返回结果数量（默认 5）'),
+  top_k: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('返回结果数量（默认 5）'),
 })
 
 export function createRagTools(
@@ -52,10 +57,17 @@ export function createRagTools(
     inputSchema: ragSearchToolInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
-    execute: async ({ query, top_k }: { query: string; top_k?: number }, context) => {
+    execute: async (
+      { query, top_k }: { query: string; top_k?: number },
+      context,
+    ) => {
       if (vectorStore.size() === 0)
         return '知识库为空，请先使用 rag_ingest 导入文档。'
-      const results = await vectorStore.hybridSearch(texts => embedFn(texts, context?.signal), query, top_k || 5)
+      const results = await vectorStore.hybridSearch(
+        (texts) => embedFn(texts, context?.signal),
+        query,
+        top_k || 5,
+      )
       if (results.length === 0) return `没有找到与 "${query}" 相关的内容。`
       return results
         .map(

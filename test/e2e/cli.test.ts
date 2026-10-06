@@ -161,3 +161,27 @@ test.concurrent('interactive mode: a turn, a slash command, then exit', async ()
     '你好',
   )
 })
+
+test.concurrent('interactive mode reads piped stdin line by line and exits at EOF', async () => {
+  const dir = tempDir('vela-pipe-')
+  dirs.push(dir)
+  const proc = Bun.spawn(['bun', ENTRY], {
+    cwd: dir.path,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: process.env.HOME ?? '',
+      VELA_MODEL: `faux:${scenario('hello')}`,
+    },
+    stdin: new TextEncoder().encode('你好\n/memory\n'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    proc.exited,
+  ])
+  expect(code).toBe(0)
+  expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
+  expect(stdout).toContain('[记忆系统] 共 0 条记忆')
+  expect(stdout).toContain('Bye!')
+})

@@ -10,8 +10,6 @@ const save = {
   description: '用户最喜欢的编程语言',
   type: 'user',
   content: '用户最喜欢 TypeScript',
-  // 当前 schema 要求所有动作都带 filename（见 HANDOFF 里的待办）
-  filename: '',
 }
 
 test('a memory saved through the tool shows up in the next system prompt and survives a restart', async () => {
@@ -74,5 +72,31 @@ test('the memory tool rejects a save without content', async () => {
   })
   await t.run('存个空的')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('保存失败')
+  expect(t.vela.memoryStore.list()).toHaveLength(0)
+})
+
+test('read and delete need a filename; with one they work', async () => {
+  const t = createTestVela({
+    responses: [
+      [
+        fauxToolCall('memory', { action: 'read' }),
+        fauxToolCall('memory', { action: 'delete' }),
+      ],
+      fauxToolCall('memory', save),
+      fauxToolCall('memory', { action: 'list' }),
+      (req) => {
+        const filename =
+          req.toolResults[0]!.output.match(/\S+\.md/)?.[0] ??
+          'user_favorite-language.md'
+        return fauxToolCall('memory', { action: 'delete', filename })
+      },
+      fauxText('删掉了'),
+    ],
+  })
+  await t.run('读、删、存、列、删')
+  const outputs = t.model.calls[1]!.toolResults.map((r) => r.output).join('\n')
+  expect(outputs).toContain('读取失败：需要 filename')
+  expect(outputs).toContain('删除失败：需要 filename')
+  expect(t.model.calls[4]!.toolResults[0]!.output).toContain('已删除')
   expect(t.vela.memoryStore.list()).toHaveLength(0)
 })

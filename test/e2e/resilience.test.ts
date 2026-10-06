@@ -155,9 +155,18 @@ test('repeating the same tool call trips the loop detector: warning, then critic
   })
   expect(detections.at(-1)).toMatchObject({ level: 'critical' })
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'loop' })
-  // 警告以 system message 的形式提醒模型
-  expect(JSON.stringify(t.messages)).toContain(
-    "Don't repeat the same tool call again",
+  // 警告以 system message 的形式提醒模型，并且排在触发它的那次调用和结果之后
+  const firstWarning = t.messages.findIndex(
+    (m) =>
+      m.role === 'user' &&
+      String(m.content).includes("Don't repeat the same tool call again"),
+  )
+  expect(firstWarning).toBeGreaterThan(0)
+  expect(
+    t.messages.slice(firstWarning - 2, firstWarning).map((m) => m.role),
+  ).toEqual(['assistant', 'tool'])
+  expect(JSON.stringify(t.messages[firstWarning - 2]!.content)).toContain(
+    'faux-call-11-1',
   )
   expect(t.model.calls).toHaveLength(21)
 })

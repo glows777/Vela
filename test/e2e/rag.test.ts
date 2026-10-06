@@ -42,10 +42,12 @@ test('ingest a document relative to cwd, then search it, offline with the faux e
         expect(req.toolResults[0]!.output).toContain('已导入')
         // 导入后 system prompt 带上知识库概况
         expect(req.system).toContain('[知识库] 已导入')
-        return fauxToolCall('rag_search', { query: '怎么回滚部署' })
+        return fauxToolCall('rag_search', { query: '怎么回滚部署', top_k: 1 })
       },
       (req) => {
         expect(req.toolResults[0]!.output).toContain('deploy rollback')
+        // top_k 生效：只返回一个片段
+        expect(req.toolResults[0]!.output).not.toContain('[2]')
         return fauxText('执行 deploy rollback')
       },
     ],
