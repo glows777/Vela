@@ -2,12 +2,18 @@ import { afterEach, expect, test } from 'bun:test'
 import type { IncomingMessage, OutgoingMessage } from '../../src/channels/types'
 import { supabasePlugin } from '../../src/plugins/built-in-plugins/supabase-plugin'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
-import { captureConsole, cleanupTestVelas, createTestVela } from '../support/vela'
+import {
+  captureConsole,
+  cleanupTestVelas,
+  createTestVela,
+} from '../support/vela'
 
 afterEach(cleanupTestVelas)
 
 test('/context and /usage report the conversation after a run', async () => {
-  const t = createTestVela({ responses: [fauxText('ok', { usage: { input: 1234, output: 56 } })] })
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 1234, output: 56 } })],
+  })
   await t.run('hi')
 
   const { output } = await captureConsole(() => {
@@ -29,7 +35,10 @@ test('/plugin load registers plugin tools the model can call right away', async 
         expect(req.tools).toContain('supabase__list_tables')
         return fauxToolCall('supabase__list_tables', {})
       },
-      (req) => fauxText(req.toolResults[0]!.output.includes('users') ? '有 users 表' : '?'),
+      (req) =>
+        fauxText(
+          req.toolResults[0]!.output.includes('users') ? '有 users 表' : '?',
+        ),
     ],
   })
 
@@ -44,7 +53,9 @@ test('/plugin load registers plugin tools the model can call right away', async 
     t.dispatch('/plugin unload supabase')
     while (t.vela.pluginManager.get('supabase')) await Bun.sleep(1)
   })
-  expect(t.vela.registry.getAllTools().map((tool) => tool.name)).not.toContain('supabase__list_tables')
+  expect(t.vela.registry.getAllTools().map((tool) => tool.name)).not.toContain(
+    'supabase__list_tables',
+  )
 })
 
 test('a message from a channel runs through the same model and tools, and the reply is sent back', async () => {
@@ -52,7 +63,10 @@ test('a message from a channel runs through the same model and tools, and the re
   let deliver!: (msg: IncomingMessage) => void
   const t = createTestVela({
     files: { 'faq.md': '营业时间：9:00-18:00' },
-    responses: [fauxToolCall('read_file', { path: 'faq.md' }), fauxText('我们 9 点到 18 点营业')],
+    responses: [
+      fauxToolCall('read_file', { path: 'faq.md' }),
+      fauxText('我们 9 点到 18 点营业'),
+    ],
   })
   t.vela.gateway.register({
     name: 'fake',
@@ -68,11 +82,18 @@ test('a message from a channel runs through the same model and tools, and the re
   })
 
   await captureConsole(async () => {
-    deliver({ channelId: 'c1', senderId: 'u1', senderName: '小王', text: '几点营业？' })
+    deliver({
+      channelId: 'c1',
+      senderId: 'u1',
+      senderName: '小王',
+      text: '几点营业？',
+    })
     while (sent.length === 0) await Bun.sleep(1)
   })
 
-  expect(sent).toEqual([{ channelId: 'c1', recipientId: 'u1', text: '我们 9 点到 18 点营业' }])
+  expect(sent).toEqual([
+    { channelId: 'c1', recipientId: 'u1', text: '我们 9 点到 18 点营业' },
+  ])
   expect(t.eventsOf('tool_call')[0]).toMatchObject({ toolName: 'read_file' })
   // 通道会话独立于 CLI 会话
   expect(t.messages).toEqual([])

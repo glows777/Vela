@@ -1,13 +1,20 @@
 import { afterEach, expect, test } from 'bun:test'
 import z from 'zod'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
-import { captureConsole, cleanupTestVelas, createTestVela } from '../support/vela'
+import {
+  captureConsole,
+  cleanupTestVelas,
+  createTestVela,
+} from '../support/vela'
 
 afterEach(cleanupTestVelas)
 
 test('several tool calls in one response all run and all results go back together', async () => {
   const t = createTestVela({
-    files: { 'src/a.ts': 'export const a = 1\n', 'src/b.ts': 'export const b = 2\n' },
+    files: {
+      'src/a.ts': 'export const a = 1\n',
+      'src/b.ts': 'export const b = 2\n',
+    },
     responses: [
       [
         fauxToolCall('glob', { pattern: 'src/*.ts' }),
@@ -20,20 +27,36 @@ test('several tool calls in one response all run and all results go back togethe
 
   await t.run('看看 src 里有什么')
 
-  expect(t.eventsOf('tool_call').map((e) => e.toolName)).toEqual(['glob', 'grep', 'read_file'])
+  expect(t.eventsOf('tool_call').map((e) => e.toolName)).toEqual([
+    'glob',
+    'grep',
+    'read_file',
+  ])
   expect(t.eventsOf('tool_result')).toHaveLength(3)
   const second = t.model.calls[1]!
-  expect(second.toolResults.map((r) => r.toolName).sort()).toEqual(['glob', 'grep', 'read_file'])
-  expect(second.toolResults.find((r) => r.toolName === 'read_file')!.output).toContain(
-    'export const b = 2',
-  )
-  expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
+  expect(second.toolResults.map((r) => r.toolName).sort()).toEqual([
+    'glob',
+    'grep',
+    'read_file',
+  ])
+  expect(
+    second.toolResults.find((r) => r.toolName === 'read_file')!.output,
+  ).toContain('export const b = 2')
+  expect(t.messages.map((m) => m.role)).toEqual([
+    'user',
+    'assistant',
+    'tool',
+    'assistant',
+  ])
 })
 
 test('write_file writes into cwd and is reported as an audit event; edit_file changes it', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('write_file', { path: 'out/hello.txt', content: 'hello world\n' }),
+      fauxToolCall('write_file', {
+        path: 'out/hello.txt',
+        content: 'hello world\n',
+      }),
       fauxToolCall('edit_file', {
         path: 'out/hello.txt',
         old_string: 'world',
@@ -56,7 +79,10 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
 test('bash runs in cwd and its output carries the timestamp post-hook', async () => {
   const t = createTestVela({
     files: { 'marker.txt': 'here' },
-    responses: [fauxToolCall('bash', { command: 'ls && echo BASH_OK' }), fauxText('ok')],
+    responses: [
+      fauxToolCall('bash', { command: 'ls && echo BASH_OK' }),
+      fauxText('ok'),
+    ],
   })
 
   await t.run('跑个命令')
@@ -70,13 +96,18 @@ test('bash runs in cwd and its output carries the timestamp post-hook', async ()
 test('a dangerous bash command is refused before it runs and the model sees why', async () => {
   const t = createTestVela({
     files: { 'keep.txt': 'important' },
-    responses: [fauxToolCall('bash', { command: 'rm -rf /' }), fauxText('好的，不删')],
+    responses: [
+      fauxToolCall('bash', { command: 'rm -rf /' }),
+      fauxText('好的，不删'),
+    ],
   })
 
   await t.run('清理一下')
 
   expect(await t.readFile('keep.txt')).toBe('important')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('[拒绝执行] 检测到危险操作')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+    '[拒绝执行] 检测到危险操作',
+  )
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
 })
 
@@ -90,7 +121,11 @@ test('a tool that throws becomes a tool error the model can react to', async () 
 
   await t.run('读 missing.txt')
 
-  expect(t.eventTypes().slice(0, 3)).toEqual(['turn_start', 'tool_call', 'tool_error'])
+  expect(t.eventTypes().slice(0, 3)).toEqual([
+    'turn_start',
+    'tool_call',
+    'tool_error',
+  ])
   const result = t.model.calls[1]!.toolResults[0]!
   expect(result.toolName).toBe('read_file')
   expect(result.raw).toMatchObject({ type: 'error-text' })
@@ -112,10 +147,12 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
 
   await t.run('试试')
 
-  expect(t.eventsOf('tool_error').map((e) => e.toolName).sort()).toEqual([
-    'no_such_tool',
-    'read_file',
-  ])
+  expect(
+    t
+      .eventsOf('tool_error')
+      .map((e) => e.toolName)
+      .sort(),
+  ).toEqual(['no_such_tool', 'read_file'])
   expect(t.model.calls[1]!.toolResults).toHaveLength(2)
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
   // 被拒绝的调用也写进了工具历史

@@ -2,6 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import z from 'zod'
 import { ToolResultStore } from '../../../src/session/tool-results'
 import { ToolRegistry, type ToolDefinition } from '../../../src/tools/registry'
 
@@ -20,7 +21,7 @@ function tool(
   return {
     name,
     description: `tool ${name}`,
-    inputSchema: {},
+    inputSchema: z.object({}).passthrough(),
     execute: async () => 'ok',
     ...overrides,
   }
@@ -82,9 +83,15 @@ test('非并发安全的工具由互斥锁串行执行', async () => {
   const body = wrapped['exclusive']
   if (!body) throw new Error('exclusive tool expected in tool set')
 
-  const first = body.execute({ id: 'a' })
+  const execute = body.execute!
+  const options = (toolCallId: string) => ({
+    toolCallId,
+    messages: [],
+    context: {},
+  })
+  const first = execute({ id: 'a' }, options('a'))
   await Bun.sleep(20)
-  const second = body.execute({ id: 'b' })
+  const second = execute({ id: 'b' }, options('b'))
   await Bun.sleep(20)
   expect(order).toEqual(['a-start'])
 

@@ -66,7 +66,6 @@ test('agent cancellation reaches the tool, waits for its durable result, and nev
   })
 })
 
-
 test('the main request refreshes the history guide after context preparation', async () => {
   let instructions = 'OLD_LIVE_PATH'
   const model = createFauxModel({

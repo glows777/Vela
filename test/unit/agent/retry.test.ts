@@ -2,9 +2,20 @@ import { expect, test } from 'bun:test'
 import { calculateDelay, isRetryable, sleep } from '../../../src/agent/retry'
 
 test('rate limits, overload, timeouts and 5xx are retryable; other 4xx are not', () => {
-  for (const message of ['429 Too Many Requests', '529 overloaded', '408 timeout', '503 Service Unavailable', 'ECONNRESET', 'fetch failed'])
+  for (const message of [
+    '429 Too Many Requests',
+    '529 overloaded',
+    '408 timeout',
+    '503 Service Unavailable',
+    'ECONNRESET',
+    'fetch failed',
+  ])
     expect(isRetryable(new Error(message))).toBe(true)
-  for (const message of ['400 Bad Request', '401 Unauthorized', '404 model not found'])
+  for (const message of [
+    '400 Bad Request',
+    '401 Unauthorized',
+    '404 model not found',
+  ])
     expect(isRetryable(new Error(message))).toBe(false)
   expect(isRetryable('429')).toBe(false)
 })

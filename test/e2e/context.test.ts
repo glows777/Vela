@@ -1,7 +1,15 @@
 import { afterEach, expect, test } from 'bun:test'
-import { createRequestSnapshot, estimateRequestTokens } from '../../src/context/request'
+import {
+  createRequestSnapshot,
+  estimateRequestTokens,
+} from '../../src/context/request'
 import { fauxSummary, fauxText, fauxToolCall } from '../../src/testing/faux'
-import { captureConsole, cleanupTestVelas, createTestVela, type TestVela } from '../support/vela'
+import {
+  captureConsole,
+  cleanupTestVelas,
+  createTestVela,
+  type TestVela,
+} from '../support/vela'
 
 afterEach(cleanupTestVelas)
 
@@ -17,16 +25,25 @@ async function requestTokens(t: TestVela): Promise<number> {
   )
 }
 
-const bigFile = (i: number) => `// file ${i}\n${'export const value = 42 // padding\n'.repeat(120)}`
+const bigFile = (i: number) =>
+  `// file ${i}\n${'export const value = 42 // padding\n'.repeat(120)}`
 
 test('microcompact folds old tool results once more than five calls have completed', async () => {
-  const files = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`f${i}.ts`, bigFile(i)]))
+  const files = Object.fromEntries(
+    Array.from({ length: 8 }, (_, i) => [`f${i}.ts`, bigFile(i)]),
+  )
   const t = createTestVela({
     files,
     // 每次请求前都尝试微压缩；摘要永远不会触发
-    limits: { microcompactThreshold: 1, minMicroSavings: 1, summaryThreshold: 1e9 },
+    limits: {
+      microcompactThreshold: 1,
+      minMicroSavings: 1,
+      summaryThreshold: 1e9,
+    },
     responses: [
-      ...Array.from({ length: 8 }, (_, i) => fauxToolCall('read_file', { path: `f${i}.ts` })),
+      ...Array.from({ length: 8 }, (_, i) =>
+        fauxToolCall('read_file', { path: `f${i}.ts` }),
+      ),
       fauxText('都读完了'),
     ],
   })
@@ -48,7 +65,8 @@ test('microcompact folds old tool results once more than five calls have complet
 })
 
 test('summary compaction replaces old history with a grounded summary and keeps recent messages', async () => {
-  const filler = (i: number) => `第 ${i} 个问题：${'很长的背景说明。'.repeat(150)}`
+  const filler = (i: number) =>
+    `第 ${i} 个问题：${'很长的背景说明。'.repeat(150)}`
   const probe = createTestVela()
   const base = await requestTokens(probe)
   await probe.cleanup()
@@ -56,9 +74,7 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   const t = createTestVela({
     // 4 轮问答之后（8 条消息）再发第 5 个问题时触发摘要
     limits: { microcompactThreshold: 1e9, summaryThreshold: base + 4 * 400 },
-    responses: [
-      ...Array.from({ length: 5 }, (_, i) => fauxText(`回答 ${i}`)),
-    ],
+    responses: [...Array.from({ length: 5 }, (_, i) => fauxText(`回答 ${i}`))],
     generate: [fauxSummary()],
   })
   for (let i = 0; i < 5; i++) await t.run(filler(i))
@@ -81,14 +97,23 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   expect(JSON.stringify(firstUser.content)).toContain('第 0 个问题')
   expect(after.lastUserText).toContain('第 4 个问题')
   expect(t.vela.contextManager.state.summary).toContain('## 用户目标')
-  expect(t.tracker().recent(10).some((r) => r.kind === 'summary')).toBe(true)
+  expect(
+    t
+      .tracker()
+      .recent(10)
+      .some((r) => r.kind === 'summary'),
+  ).toBe(true)
 
   // 摘要落盘，新的 Vela 恢复后带着它
   const resumed = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
   expect(await resumed.vela.resume()).toBe(true)
-  expect(resumed.vela.contextManager.state.summary).toBe(t.vela.contextManager.state.summary)
+  expect(resumed.vela.contextManager.state.summary).toBe(
+    t.vela.contextManager.state.summary,
+  )
   await resumed.run('继续')
-  expect(JSON.stringify(resumed.model.calls[0]!.prompt)).toContain('[之前对话的摘要]')
+  expect(JSON.stringify(resumed.model.calls[0]!.prompt)).toContain(
+    '[之前对话的摘要]',
+  )
 })
 
 test('a summary that fails validation stops the turn and leaves history untouched', async () => {
@@ -100,10 +125,13 @@ test('a summary that fails validation stops the turn and leaves history untouche
     responses: Array.from({ length: 4 }, (_, i) => fauxText(`回答 ${i}`)),
     generate: [fauxText('好的，摘要准备完成。')],
   })
-  for (let i = 0; i < 4; i++) await t.run(`问题 ${i}：${'很长的背景说明。'.repeat(150)}`)
+  for (let i = 0; i < 4; i++)
+    await t.run(`问题 ${i}：${'很长的背景说明。'.repeat(150)}`)
   const before = JSON.stringify(t.messages)
 
-  await expect(t.run(`问题 4：${'很长的背景说明。'.repeat(150)}`)).rejects.toThrow('原历史保留')
+  await expect(
+    t.run(`问题 4：${'很长的背景说明。'.repeat(150)}`),
+  ).rejects.toThrow('原历史保留')
 
   expect(JSON.stringify(t.messages.slice(0, 8))).toBe(before)
   expect(t.vela.contextManager.state.summary).toBe('')
@@ -111,7 +139,11 @@ test('a summary that fails validation stops the turn and leaves history untouche
 
 test('/defend applies microcompact only and never pays for a summary', async () => {
   const t = createTestVela({
-    limits: { microcompactThreshold: 1, minMicroSavings: 1, summaryThreshold: 1 },
+    limits: {
+      microcompactThreshold: 1,
+      minMicroSavings: 1,
+      summaryThreshold: 1,
+    },
   })
   const { output } = await captureConsole(async () => {
     t.dispatch('sim')
@@ -119,6 +151,8 @@ test('/defend applies microcompact only and never pays for a summary', async () 
   })
   expect(output).toContain('[模拟完成]')
   // 超过摘要阈值但 /defend 不允许摘要：只报告需要摘要，不发请求
-  expect(t.eventsOf('context').map((e) => e.action)).toContain('summary-required')
+  expect(t.eventsOf('context').map((e) => e.action)).toContain(
+    'summary-required',
+  )
   expect(t.model.calls).toHaveLength(0)
 })

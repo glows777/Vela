@@ -59,7 +59,7 @@ export interface TestVelaOptions {
   allowPendingResponses?: boolean
 }
 
-const live: TestVela[] = []
+const live: { cleanup(): Promise<void> }[] = []
 
 /**
  * 用真实的 createVela() 装配一个 Vela：模型换成 faux，cwd/数据目录换成临时目录，

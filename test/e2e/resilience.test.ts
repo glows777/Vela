@@ -13,7 +13,11 @@ afterEach(cleanupTestVelas)
 
 test('a 429 is retried and the turn then succeeds', async () => {
   const t = createTestVela({
-    responses: [fauxError('429 Too Many Requests'), fauxError('503 overloaded'), fauxText('终于好了')],
+    responses: [
+      fauxError('429 Too Many Requests'),
+      fauxError('503 overloaded'),
+      fauxText('终于好了'),
+    ],
   })
 
   await t.run('hi')
@@ -30,7 +34,10 @@ test('a 429 is retried and the turn then succeeds', async () => {
 
 test('a stream that breaks midway is retried from scratch', async () => {
   const t = createTestVela({
-    responses: [fauxStreamError('ECONNRESET', '半截的回'), fauxText('完整的回答')],
+    responses: [
+      fauxStreamError('ECONNRESET', '半截的回'),
+      fauxText('完整的回答'),
+    ],
   })
 
   await t.run('hi')
@@ -42,7 +49,9 @@ test('a stream that breaks midway is retried from scratch', async () => {
 })
 
 test('a 400 is not retried: the run fails and the user message stays in the saved session', async () => {
-  const t = createTestVela({ responses: [fauxError('400 Bad Request: invalid model')] })
+  const t = createTestVela({
+    responses: [fauxError('400 Bad Request: invalid model')],
+  })
 
   await expect(t.run('hi')).rejects.toThrow('400 Bad Request')
 
@@ -63,14 +72,19 @@ test('retries give up after maxRetries', async () => {
 })
 
 test('aborting while the model is streaming stops the run; the next run works', async () => {
-  const t = createTestVela({ responses: [fauxHang('正在想'), fauxText('第二次正常')] })
+  const t = createTestVela({
+    responses: [fauxHang('正在想'), fauxText('第二次正常')],
+  })
 
   const running = t.run('慢慢想')
   while (!t.streamedText()) await Bun.sleep(1)
   t.vela.abort()
 
   await expect(running).rejects.toThrow()
-  expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'aborted' })
+  expect(t.events.at(-1)).toMatchObject({
+    type: 'agent_end',
+    reason: 'aborted',
+  })
   expect(t.vela.busy.locked).toBe(false)
 
   await t.run('再来')
@@ -90,9 +104,13 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
     execute: (_input, context) =>
       new Promise<string>((resolve) => {
         started()
-        context?.signal?.addEventListener('abort', () => resolve('stopped early'), {
-          once: true,
-        })
+        context?.signal?.addEventListener(
+          'abort',
+          () => resolve('stopped early'),
+          {
+            once: true,
+          },
+        )
       }),
   })
 
@@ -101,7 +119,10 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
   t.vela.abort()
 
   await expect(running).rejects.toThrow()
-  expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'aborted' })
+  expect(t.events.at(-1)).toMatchObject({
+    type: 'agent_end',
+    reason: 'aborted',
+  })
   // 只请求过一次模型：中断后不会再开新一轮
   expect(t.model.calls).toHaveLength(1)
   const history = await Bun.file(t.vela.registry.results.indexPath).text()
@@ -128,11 +149,16 @@ test('repeating the same tool call trips the loop detector: warning, then critic
   await t.run('一直列目录')
 
   const detections = t.eventsOf('loop_detected')
-  expect(detections[0]).toMatchObject({ level: 'warning', detector: 'generic_repeat' })
+  expect(detections[0]).toMatchObject({
+    level: 'warning',
+    detector: 'generic_repeat',
+  })
   expect(detections.at(-1)).toMatchObject({ level: 'critical' })
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'loop' })
   // 警告以 system message 的形式提醒模型
-  expect(JSON.stringify(t.messages)).toContain("Don't repeat the same tool call again")
+  expect(JSON.stringify(t.messages)).toContain(
+    "Don't repeat the same tool call again",
+  )
   expect(t.model.calls).toHaveLength(21)
 })
 
@@ -157,16 +183,32 @@ test('the token budget warns near the limit and stops above it', async () => {
   const t = createTestVela({
     limits: { tokenBudget: 1000 },
     responses: [
-      fauxToolCall('list_directory', { path: '.' }, { usage: { input: 920, output: 0 } }),
-      fauxToolCall('list_directory', { path: 'x' }, { usage: { input: 200, output: 0 } }),
+      fauxToolCall(
+        'list_directory',
+        { path: '.' },
+        { usage: { input: 920, output: 0 } },
+      ),
+      fauxToolCall(
+        'list_directory',
+        { path: 'x' },
+        { usage: { input: 200, output: 0 } },
+      ),
     ],
   })
 
   await t.run('干活')
 
   const warnings = t.eventsOf('budget_warning')
-  expect(warnings[0]).toEqual({ type: 'budget_warning', used: 920, limit: 1000 })
-  expect(t.eventTypes().slice(-3)).toEqual(['budget_warning', 'turn_end', 'agent_end'])
+  expect(warnings[0]).toEqual({
+    type: 'budget_warning',
+    used: 920,
+    limit: 1000,
+  })
+  expect(t.eventTypes().slice(-3)).toEqual([
+    'budget_warning',
+    'turn_end',
+    'agent_end',
+  ])
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'budget' })
 })
 

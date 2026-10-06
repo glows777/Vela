@@ -45,7 +45,11 @@ test('the model can search and read memories back', async () => {
   const t = createTestVela({
     responses: [
       fauxToolCall('memory', save),
-      fauxToolCall('memory', { action: 'search', query: 'TypeScript', filename: '' }),
+      fauxToolCall('memory', {
+        action: 'search',
+        query: 'TypeScript',
+        filename: '',
+      }),
       (req) => {
         expect(req.toolResults[0]!.output).toContain('favorite-language')
         return fauxText('找到了')
@@ -59,7 +63,12 @@ test('the model can search and read memories back', async () => {
 test('the memory tool rejects a save without content', async () => {
   const t = createTestVela({
     responses: [
-      fauxToolCall('memory', { action: 'save', name: 'x', type: 'user', filename: '' }),
+      fauxToolCall('memory', {
+        action: 'save',
+        name: 'x',
+        type: 'user',
+        filename: '',
+      }),
       fauxText('好'),
     ],
   })

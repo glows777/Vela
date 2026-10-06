@@ -12,9 +12,15 @@ test('matches parallel tool results by toolCallId', () => {
   recordToolCall('call-a', 'read_file', input)
   recordToolCall('call-b', 'read_file', input)
 
-  expect(recordToolCallResult('call-b', 'read_file', input, 'result-b')).toBe(true)
-  expect(recordToolCallResult('call-a', 'read_file', input, 'result-a')).toBe(true)
-  expect(recordToolCallResult('call-b', 'read_file', input, 'duplicate')).toBe(false)
+  expect(recordToolCallResult('call-b', 'read_file', input, 'result-b')).toBe(
+    true,
+  )
+  expect(recordToolCallResult('call-a', 'read_file', input, 'result-a')).toBe(
+    true,
+  )
+  expect(recordToolCallResult('call-b', 'read_file', input, 'duplicate')).toBe(
+    false,
+  )
   resetHistory()
 })
 
@@ -34,7 +40,10 @@ test('generic repeat: warning at 10 identical calls, critical at 20', () => {
 test('argument order does not matter; different arguments are different calls', () => {
   const detector = new LoopDetector()
   for (let i = 0; i < 10; i++) detector.record(`c${i}`, 't', { a: 1, b: 2 })
-  expect(detector.detect('t', { b: 2, a: 1 })).toMatchObject({ stuck: true, level: 'warning' })
+  expect(detector.detect('t', { b: 2, a: 1 })).toMatchObject({
+    stuck: true,
+    level: 'warning',
+  })
   expect(detector.detect('t', { a: 1, b: 3 })).toEqual({ stuck: false })
 })
 

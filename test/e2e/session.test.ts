@@ -12,7 +12,14 @@ test('a resumed Vela continues the saved conversation', async () => {
 
   const second = createTestVela({
     cwd: first.cwd,
-    responses: [(req) => fauxText(JSON.stringify(req.prompt).includes('第一次的回答') ? '记得' : '不记得')],
+    responses: [
+      (req) =>
+        fauxText(
+          JSON.stringify(req.prompt).includes('第一次的回答')
+            ? '记得'
+            : '不记得',
+        ),
+    ],
   })
   try {
     expect(await second.vela.resume()).toBe(true)
@@ -34,9 +41,17 @@ test('resume on an empty data dir reports no session', async () => {
 test('sessions with different ids are stored separately', async () => {
   const dir = tempDir()
   try {
-    const a = createTestVela({ cwd: dir.path, sessionId: 'a', responses: [fauxText('A')] })
+    const a = createTestVela({
+      cwd: dir.path,
+      sessionId: 'a',
+      responses: [fauxText('A')],
+    })
     await a.run('in a')
-    const b = createTestVela({ cwd: dir.path, sessionId: 'b', responses: [fauxText('B')] })
+    const b = createTestVela({
+      cwd: dir.path,
+      sessionId: 'b',
+      responses: [fauxText('B')],
+    })
     await b.run('in b')
     expect(a.exists('.sessions/a.jsonl')).toBe(true)
     expect(b.exists('.sessions/b.jsonl')).toBe(true)
@@ -53,31 +68,50 @@ test('sessions with different ids are stored separately', async () => {
 })
 
 test('dataDir keeps sessions, memory, usage and knowledge base out of the working directory', async () => {
-  const t = createTestVela({ dataDir: '.vela-data', responses: [fauxText('ok')] })
+  const t = createTestVela({
+    dataDir: '.vela-data',
+    responses: [fauxText('ok')],
+  })
   await t.run('hi')
 
-  for (const path of ['.sessions/default.jsonl', '.memory/MEMORY.md', '.usage/today.jsonl', 'knowledge.db'])
+  for (const path of [
+    '.sessions/default.jsonl',
+    '.memory/MEMORY.md',
+    '.usage/today.jsonl',
+    'knowledge.db',
+  ])
     expect(t.exists(path)).toBe(true)
   expect(t.dataDir).toBe(t.path('.vela-data'))
-  const top = Array.from(new Bun.Glob('*').scanSync({ cwd: t.cwd, onlyFiles: false, dot: true }))
+  const top = Array.from(
+    new Bun.Glob('*').scanSync({ cwd: t.cwd, onlyFiles: false, dot: true }),
+  )
   expect(top.sort()).toEqual(['.vela-data'])
 })
 
 test('token usage is appended to the usage log for every model step', async () => {
   const t = createTestVela({
-    responses: [fauxText('a', { usage: { input: 100, output: 10 } }), fauxText('b', { usage: { input: 120, output: 12 } })],
+    responses: [
+      fauxText('a', { usage: { input: 100, output: 10 } }),
+      fauxText('b', { usage: { input: 120, output: 12 } }),
+    ],
   })
   await t.run('1')
   await t.run('2')
 
-  const rows = (await t.readData('.usage/today.jsonl')).trim().split('\n').map((l) => JSON.parse(l))
+  const rows = (await t.readData('.usage/today.jsonl'))
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l))
   expect(rows).toHaveLength(2)
   expect(rows.map((r) => r.outputTokens)).toEqual([10, 12])
   expect(t.eventsOf('usage').map((e) => e.modelId)).toEqual(['faux', 'faux'])
 })
 
 test('prompt cache simulation: a stable system prompt is read from cache on the next request', async () => {
-  const t = createTestVela({ faux: { cache: true }, responses: [fauxText('a'), fauxText('b')] })
+  const t = createTestVela({
+    faux: { cache: true },
+    responses: [fauxText('a'), fauxText('b')],
+  })
   await t.run('1')
   await t.run('2')
   const usage = t.eventsOf('usage').map((e) => e.usage)

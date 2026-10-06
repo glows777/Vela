@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
-import { captureConsole, cleanupTestVelas, createTestVela } from '../support/vela'
+import {
+  captureConsole,
+  cleanupTestVelas,
+  createTestVela,
+} from '../support/vela'
 
 afterEach(cleanupTestVelas)
 
@@ -28,7 +32,9 @@ test('ingest a document relative to cwd, then search it, offline with the faux e
     files: { 'docs/guide.md': GUIDE },
     responses: [
       (req) => {
-        expect(req.tools).toEqual(expect.arrayContaining(['rag_ingest', 'rag_search']))
+        expect(req.tools).toEqual(
+          expect.arrayContaining(['rag_ingest', 'rag_search']),
+        )
         expect(req.system).not.toContain('[知识库]')
         return fauxToolCall('rag_ingest', { path: 'docs/guide.md' })
       },
@@ -57,7 +63,10 @@ test('ingest a document relative to cwd, then search it, offline with the faux e
 test('searching an empty knowledge base tells the model to ingest first', async () => {
   const t = createTestVela({
     embedder: true,
-    responses: [fauxToolCall('rag_search', { query: 'anything' }), fauxText('知识库是空的')],
+    responses: [
+      fauxToolCall('rag_search', { query: 'anything' }),
+      fauxText('知识库是空的'),
+    ],
   })
   await t.run('搜一下')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('知识库为空')
@@ -67,7 +76,10 @@ test('the knowledge base persists in the data dir across restarts', async () => 
   const t = createTestVela({
     embedder: true,
     files: { 'docs/guide.md': GUIDE },
-    responses: [fauxToolCall('rag_ingest', { path: 'docs/guide.md' }), fauxText('ok')],
+    responses: [
+      fauxToolCall('rag_ingest', { path: 'docs/guide.md' }),
+      fauxText('ok'),
+    ],
   })
   await t.run('导入')
   const size = t.vela.vectorStore.size()
