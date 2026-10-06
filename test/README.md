@@ -112,13 +112,13 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 |---|---|
 | e2e/basic | 纯文本回复的事件序列与落盘；模型收到的 system/工具/用户消息；多轮对话带历史；工具调用后回答 |
 | e2e/tools | 一次多个工具调用；write/edit 写入 cwd 并发 audit 事件；bash 在 cwd 运行并带时间戳 hook；危险 bash 被拒绝；工具报错回给模型；未知工具/参数不合法被拒绝并记录；deferred 工具经 tool_search 后才可用；guest 角色不能用 bash |
-| e2e/resilience | 429/503 重试后成功；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning → critical；maxTurns；token 预算告警与停止；超过 maxInputTokens 不发请求 |
+| e2e/resilience | 429/503 重试后成功；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；maxTurns；token 预算告警与停止；超过 maxInputTokens 不发请求 |
 | e2e/context | 微压缩折叠旧工具结果；摘要压缩替换旧历史、保留近期消息、写盘并在恢复后生效；摘要不合格时停止且历史不变；`defend` 只做微压缩不付费摘要 |
 | e2e/session | `--continue` 式恢复；空目录无会话；不同 sessionId 分开存；dataDir 与 cwd 分离；usage 日志；prompt cache 模拟 |
-| e2e/memory | 通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败 |
+| e2e/memory | 通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename |
 | e2e/rag | 没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留 |
 | e2e/commands | `/context` `/usage` `status`；`/plugin load/unload` 后模型立即能用插件工具；通道消息走同一模型和工具并回发 |
-| e2e/cli | `-p` 单次模式回放场景；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit |
+| e2e/cli | `-p` 单次模式回放场景；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出 |
 | unit/commands | skill 激活/去重/并发锁、dream、memory、rag 命令（走真实装配） |
 | unit/… | 其余模块级规则，见各文件 |
 
@@ -147,9 +147,6 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 - 不写固定的 sleep 等待；需要“进行中”状态时用 `fauxHang()` 或在工具里用 Promise 控制时机。
 - 一个用例只验证一件事，名字写清楚期望的行为。
 
-## 已知问题（测试里按现状断言，修复后要更新）
+## 已知问题
 
-- `memory` 工具的 schema 要求所有动作都传 `filename`（包括 save/list/search），描述里说只有 read/delete 需要。测试里传了 `filename: ''`。
-- 循环检测的 warning 消息在流式过程中插入，落在触发它的那次 assistant 消息之前；之后每次重复调用都会再插一条。
-- `rag_search` 的 `top_k` 在 schema 里是字符串，执行时当数字用。
-- 交互模式下管道输入一次性写完时，CLI 会在注册提示符之前读到 EOF 退出；CLI e2e 是等提示符出现再逐行输入的。
+暂无。发现问题时先写一个能复现的 faux 场景，修不了的写在这里，并在测试里按现状断言。

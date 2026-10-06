@@ -94,10 +94,30 @@ const rl = createInterface({
   output: process.stdout,
 })
 let rlClosed = false
+// 自己排队输入行：管道输入会一次性读完，rl.question 注册前到达的行会丢失
+const pendingLines: string[] = []
+let lineWaiter: ((line: string | undefined) => void) | undefined
+rl.on('line', (line) => {
+  const waiter = lineWaiter
+  lineWaiter = undefined
+  if (waiter) waiter(line)
+  else pendingLines.push(line)
+})
 rl.on('close', () => {
   rlClosed = true
-  vela.abort(new DOMException('输入已关闭', 'AbortError'))
+  lineWaiter?.(undefined)
+  lineWaiter = undefined
+  // 终端里 Ctrl+D 中断当前任务；管道输入读到 EOF 时让已排队的行照常跑完
+  if (process.stdin.isTTY)
+    vela.abort(new DOMException('输入已关闭', 'AbortError'))
 })
+const nextLine = (): Promise<string | undefined> => {
+  if (pendingLines.length) return Promise.resolve(pendingLines.shift())
+  if (rlClosed) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    lineWaiter = resolve
+  })
+}
 
 const MCP_INITIAL_RETRY_DELAY_MS = 30_000
 const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000
@@ -212,14 +232,15 @@ for (const [name, def] of availablePlugins) {
 console.log('  启动 Channel...')
 await vela.gateway.startAll()
 const ask = () => {
-  if (rlClosed) {
-    return
+  if (rlClosed) process.stdout.write('You: ')
+  else {
+    rl.setPrompt('You: ')
+    rl.prompt()
   }
-
-  rl.question('You: ', async (input) => {
+  void nextLine().then(async (input) => {
     await connectMCP()
 
-    const trimmed = input.trim()
+    const trimmed = (input ?? '').trim()
     if (!trimmed || trimmed === 'exit') {
       console.log('Bye!')
       await vela.dispose()
@@ -258,8 +279,4 @@ const ask = () => {
   })
 }
 
-if (rlClosed) {
-  await vela.registry.closeAllMCP()
-} else {
-  ask()
-}
+ask()

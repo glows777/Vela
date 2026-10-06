@@ -108,6 +108,7 @@ export const agentLoop = async ({
       let needToolCall = false
       let fullContent = ''
       let shouldBreak = false
+      let loopWarning: string | undefined
       let finalStep:
         | Awaited<ReturnType<typeof streamText>['finalStep']>
         | undefined
@@ -156,10 +157,8 @@ export const agentLoop = async ({
                   if (detectResult.level === 'critical') {
                     shouldBreak = true
                   } else if (detectResult.level === 'warning') {
-                    messages.push({
-                      role: 'user',
-                      content: `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`,
-                    })
+                    // 等本步的 assistant/tool 消息写入后再追加，保证提醒在触发它的调用之后
+                    loopWarning = `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`
                   }
                 }
                 loopDetector.record(part.toolCallId, part.toolName, part.input)
@@ -213,7 +212,8 @@ export const agentLoop = async ({
         } catch (error) {
           abortSignal?.throwIfAborted()
           toolRegistry.assertHealthy()
-          if (attempt > limits.maxRetries || !isRetryable(error as Error)) throw error
+          if (attempt > limits.maxRetries || !isRetryable(error as Error))
+            throw error
           const delay = calculateDelay(
             attempt,
             limits.retryBaseMs,
@@ -230,6 +230,7 @@ export const agentLoop = async ({
           needToolCall = false
           fullContent = ''
           shouldBreak = false
+          loopWarning = undefined
         }
       }
 
@@ -265,6 +266,11 @@ export const agentLoop = async ({
       const responseMessages: ModelMessage[] = finalStep.response.messages
       messages.push(...responseMessages)
       tokenTracker.addMessages(responseMessages)
+      if (loopWarning) {
+        const warning: ModelMessage = { role: 'user', content: loopWarning }
+        messages.push(warning)
+        tokenTracker.addMessage(warning)
+      }
 
       if (tokenTracker.loopTokens > limits.tokenBudget * 0.9) {
         emit({
