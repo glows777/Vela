@@ -69,9 +69,9 @@ bun run dev            # watch 模式，代码变更自动重启
 bun run src/index.ts   # 直接运行
 ```
 
-> **没有 API Key？** 取消 `src/index.ts` 中 `// const model = createMockModel();` 的注释，即可用内置 Mock 模型离线运行（模拟 prompt cache 行为）。
+> **没有 API Key？** 用 `VELA_MODEL=mock bun run src/index.ts` 即可用内置 Mock 模型离线运行（模拟 prompt cache 行为）。
 >
-> **No API key?** Uncomment `// const model = createMockModel();` in `src/index.ts` to run offline with the built-in mock model.
+> **No API key?** Run `VELA_MODEL=mock bun run src/index.ts` to use the built-in offline mock model.
 
 ---
 
@@ -115,8 +115,11 @@ MCP servers (stdio) via the official `@modelcontextprotocol/client` — e.g. Git
 ```
 src/
 ├── index.ts                # 入口：CLI、MCP 连接、命令分发 / entry: CLI, MCP, dispatcher
+├── app.ts                  # createVela()：装配工具、prompt、记忆、RAG、会话（CLI 与测试共用）/ assembly shared by CLI & tests
+├── cli/print-event.ts      # 把 agent 事件打印到终端 / prints agent events
 ├── agent/
 │   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (MAX_TURN=15)
+│   ├── events.ts           # VelaEvent：agent 对外报告的事件 / emitted events
 │   ├── retry.ts            # 指数退避 + 抖动重试 / exponential backoff with jitter
 │   └── loop-detection.ts   # 重复 / ping-pong / 熔断检测 / loop detection
 ├── tools/

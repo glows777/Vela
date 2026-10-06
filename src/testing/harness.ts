@@ -1,30 +1,18 @@
-import { ContextManager } from '../context/manager'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { LanguageModel, ModelMessage } from 'ai'
+import type { LanguageModel } from 'ai'
+import { createVela, type Vela } from '../app'
 import {
-  createDispatcher,
   type CommandContext,
   type CommandHandler,
+  createDispatcher,
 } from '../commands'
 import { createSkillCommands } from '../commands/skill'
-import { MemoryStore } from '../memory/store'
+import type { ContextManager } from '../context/manager'
+import type { MemoryStore } from '../memory/store'
 import { createMockModel } from '../mock'
-import {
-  coreRules,
-  deferredTools,
-  memoryContext,
-  ragContext,
-  sessionContext,
-  toolHistoryGuide,
-} from '../prompt'
-import { PromptPipeline } from '../prompt/pipelins'
-import { SqliteVectorStore } from '../rag/sqllite-store'
-import { SessionStore } from '../session'
-import { SkillLoader } from '../skills/loader'
-import { ToolRegistry } from '../tools/registry'
-import { TokenTracker } from '../usage/tracker'
+import type { SkillLoader } from '../skills/loader'
 
 export interface FixtureSkill {
   name: string
@@ -34,6 +22,7 @@ export interface FixtureSkill {
 }
 
 export interface TestFixture {
+  vela: Vela
   ctx: CommandContext
   contextManager: ContextManager
   dispatch: ReturnType<typeof createDispatcher>
@@ -46,10 +35,8 @@ export interface TestFixture {
 }
 
 /**
- * 在临时目录里装配一个和 src/index.ts 相同结构的运行环境：
- * 真实 PromptPipeline（coreRules/deferredTools/memory/rag/skill/session）、
- * 真实 MemoryStore / SqliteVectorStore / SessionStore / ToolRegistry，全部指向临时目录；
- * 模型用 createMockModel()（无网络）；ask() 只做计数。
+ * 在临时目录里用 createVela() 装配和 CLI 完全相同的运行环境，
+ * cwd 和数据目录都指向临时目录；模型默认用 createMockModel()（无网络）；ask() 只做计数。
  */
 export function createTestFixture(
   opts: {
@@ -59,7 +46,6 @@ export function createTestFixture(
   } = {},
 ): TestFixture {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vela-test-'))
-  const loader = new SkillLoader(rootDir)
 
   if (opts.skill) {
     const skillDir = path.join(rootDir, '.skills', opts.skill.name)
@@ -73,57 +59,17 @@ export function createTestFixture(
       'utf-8',
     )
   }
-  loader.load()
-
-  const activeSkills = new Set<string>()
-  const messages: ModelMessage[] = []
-  const timestamps = new Map<ModelMessage, number>()
-
-  const tracker = new TokenTracker()
-  const memoryStore = new MemoryStore(rootDir)
-  memoryStore.init()
-  const vectorStore = new SqliteVectorStore(path.join(rootDir, 'knowledge.db'))
-  const sessionStore = new SessionStore('test', path.join(rootDir, '.sessions'))
-  const registry = new ToolRegistry(sessionStore.results)
-  const contextManager = new ContextManager(sessionStore, tracker, {
-    messages,
-    timestamps,
-    summary: '',
+  const vela = createVela({
+    model: opts.model ?? createMockModel(),
+    cwd: rootDir,
   })
-
-  const builder = new PromptPipeline()
-    .pipe('coreRules', coreRules())
-    .pipe('toolHistoryGuide', toolHistoryGuide(sessionStore.results))
-    .pipe('deferredTools', deferredTools())
-    .pipe('memoryContext', memoryContext(memoryStore))
-    .pipe('ragContext', ragContext(vectorStore))
-    .pipe('skillContext', () => loader.buildPromptSection(activeSkills))
-    .pipe('sessionContext', sessionContext())
+  const loader = vela.skillLoader
 
   let asks = 0
-  const ctx: CommandContext = {
-    messages,
-    timestamps,
-    registry,
-    builder,
-    tracker,
-    sessionStore,
-    model: opts.model ?? createMockModel(),
-    makePromptCtx: () => ({
-      toolCount: registry.getActiveTools().length,
-      deferredToolSummary: registry.getDeferredToolSummary(),
-      sessionMessageCount: messages.length,
-      sessionId: 'test',
-    }),
-    prepareContext: contextManager.prepare.bind(contextManager),
-    saveSession: contextManager.save.bind(contextManager),
-    ask: () => {
-      asks++
-    },
-    memoryStore,
-    vectorStore,
-    busy: { locked: false },
-  }
+  const ctx: CommandContext = vela.commandContext(() => {
+    asks++
+  })
+  const { activeSkills, contextManager, memoryStore } = vela
 
   const dispatch = createDispatcher([
     ...(opts.commands ?? []),
@@ -131,6 +77,7 @@ export function createTestFixture(
   ])
 
   return {
+    vela,
     ctx,
     contextManager,
     dispatch,

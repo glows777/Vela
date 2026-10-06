@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import { createInterface } from 'node:readline'
 import { createOpenAI } from '@ai-sdk/openai'
 import {
@@ -6,9 +5,9 @@ import {
   getDefaultEnvironment,
   StdioClientTransport,
 } from '@modelcontextprotocol/client'
-import type { ModelMessage } from 'ai'
-import { agentLoop } from './agent'
-import { ChannelGateway } from './channels/gateway'
+import type { LanguageModel } from 'ai'
+import { createVela } from './app'
+import { printEvent } from './cli/print-event'
 import {
   type CommandContext,
   contextCommands,
@@ -20,63 +19,50 @@ import { createChannelCommands } from './commands/channel'
 import { dreamCommands } from './commands/dream'
 import { createPluginCommands } from './commands/plugin'
 import { ragCommands } from './commands/rag'
-import { createSkillCommands } from './commands/skill'
 import { createSecurityCommands } from './commands/security'
-import { estimateMessageTokens } from './context/defense'
-import { ContextManager } from './context/manager'
-import { MemoryStore } from './memory/store'
+import { createSkillCommands } from './commands/skill'
+import { createMockModel } from './mock'
 import { feishuPlugin } from './plugins/built-in-plugins/feishu-plugin'
 import { supabasePlugin } from './plugins/built-in-plugins/supabase-plugin'
-import { PluginManager } from './plugins/manager'
 import type { PluginDefinition } from './plugins/types'
-import {
-  coreRules,
-  deferredTools,
-  memoryContext,
-  ragContext,
-  sessionContext,
-  toolGuide,
-  toolHistoryGuide,
-} from './prompt'
-import { type PromptContext, PromptPipeline } from './prompt/pipelins'
-import { chunkDocument } from './rag/chunker'
-import { createEmbedder, embed } from './rag/embedder'
-import { SqliteVectorStore } from './rag/sqllite-store'
-import { SessionStore } from './session'
-import { HookPipeline } from './security/hooks'
-import { SkillLoader } from './skills/loader'
-import { allTools } from './tools'
-import { createMemoryTool } from './tools/memory-tool'
-import { createRagTools } from './tools/rag'
-import { ToolRegistry } from './tools/registry'
-import { registerToolSearchTool } from './tools/tool-search'
-import { TokenTracker } from './usage/tracker'
+import { createEmbedder, type EmbeddingFn } from './rag/embedder'
 
-const apiKey = process.env.OPENAI_API_KEY
-const modelName = process.env.OPENAI_API_MODEL_NAME
-const embeddingApiKey = process.env.EMBEDDING_MODEL_KEY
-const embeddingModel = process.env.EMBEDDING_MODEL
-const embeddingBaseUrl = process.env.EMBEDDING_MODEL_BASE_URL
-
-if (!apiKey || !modelName) {
-  console.error(
-    'api key or model name is not set, please set OPENAI_API_KEY and OPENAI_API_MODEL_NAME in your environment.',
-  )
-  process.exit(1)
+function resolveModel(): LanguageModel {
+  // VELA_MODEL=mock：用内置 Mock 模型离线运行（模拟 prompt cache 行为）
+  if (process.env.VELA_MODEL === 'mock') return createMockModel()
+  const apiKey = process.env.OPENAI_API_KEY
+  const modelName = process.env.OPENAI_API_MODEL_NAME
+  if (!apiKey || !modelName) {
+    console.error(
+      'api key or model name is not set, please set OPENAI_API_KEY and OPENAI_API_MODEL_NAME in your environment, or run with VELA_MODEL=mock to use the offline mock model.',
+    )
+    process.exit(1)
+  }
+  return createOpenAI({
+    apiKey,
+    baseURL: process.env.OPENAI_API_BASE_URL,
+  }).chat(modelName)
 }
 
-if (!embeddingApiKey || !embeddingModel || !embeddingBaseUrl) {
-  console.error(
-    'embedding api key or model name or url is not set, please set ..... in your environment',
-  )
-  process.exit(1)
+function resolveEmbedder(): EmbeddingFn | undefined {
+  const apiKey = process.env.EMBEDDING_MODEL_KEY
+  const modelId = process.env.EMBEDDING_MODEL
+  const url = process.env.EMBEDDING_MODEL_BASE_URL
+  if (!apiKey || !modelId || !url) {
+    console.log(
+      '[RAG] 未配置 EMBEDDING_MODEL_KEY / EMBEDDING_MODEL / EMBEDDING_MODEL_BASE_URL，知识库功能已关闭',
+    )
+    return
+  }
+  return createEmbedder({ apiKey, url, modelId })
 }
-const model = createOpenAI({
-  apiKey,
-  baseURL: process.env.OPENAI_API_BASE_URL,
-}).chat(modelName)
 
-// const model = createMockModel();
+const vela = createVela({
+  model: resolveModel(),
+  embedder: resolveEmbedder(),
+  onEvent: printEvent,
+})
+const { busy, messages } = vela
 
 const rl = createInterface({
   input: process.stdin,
@@ -85,34 +71,8 @@ const rl = createInterface({
 let rlClosed = false
 rl.on('close', () => {
   rlClosed = true
-  busy.controller?.abort(new DOMException('输入已关闭', 'AbortError'))
+  vela.abort(new DOMException('输入已关闭', 'AbortError'))
 })
-
-const messages: ModelMessage[] = []
-const store = new SessionStore('default')
-const toolRegistry = new ToolRegistry(store.results)
-toolRegistry.register(...allTools)
-
-const hookPipeline = new HookPipeline()
-hookPipeline.registerPre('audit-log', (toolName, input) => {
-  if (toolName === 'write_file' || toolName === 'edit_file') {
-    const path = (input as { path?: string } | null)?.path || 'unknown'
-    console.log(`  [audit] 文件写入操作: ${toolName} → ${path}`)
-  }
-  return { action: 'allow' }
-})
-hookPipeline.registerPost('bash-timestamp', (toolName, _input, output) => {
-  if (toolName === 'bash') {
-    return {
-      action: 'modify',
-      modifiedOutput: `[${new Date().toISOString()}]\n${output}`,
-    }
-  }
-  return { action: 'allow' }
-})
-toolRegistry.setHookPipeline(hookPipeline)
-
-registerToolSearchTool(toolRegistry)
 
 const MCP_INITIAL_RETRY_DELAY_MS = 30_000
 const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000
@@ -162,7 +122,7 @@ async function connectGitHubMCP(): Promise<boolean> {
       },
     })
     const client = new Client({ name: 'Vela-agent', version: '1.0.0' })
-    const tools = await toolRegistry.registerMCPServer(
+    const tools = await vela.registry.registerMCPServer(
       'github',
       client,
       transport,
@@ -188,15 +148,10 @@ function scheduleMCPRetry() {
 
 await connectMCP()
 
-const skillLoader = new SkillLoader('.')
-const loadedSkills = skillLoader.load()
-const activeSkills = new Set<string>()
-/** agent 循环互斥锁（单飞）：任意 agentLoop 运行期间置位，拒绝并发启动第二个循环 */
-const busy: CommandContext['busy'] = { locked: false }
 const cancelOrClose = () => {
   if (busy.locked && busy.controller) {
     if (!busy.controller.signal.aborted) {
-      busy.controller.abort(new DOMException('用户取消当前操作', 'AbortError'))
+      vela.abort()
       console.log('\n[取消] 正在停止当前请求和工具…')
     }
   } else rl.close()
@@ -205,24 +160,7 @@ rl.on('SIGINT', cancelOrClose)
 process.on('SIGINT', cancelOrClose)
 
 const isContinue = process.argv.includes('--continue')
-const tokenTracker = new TokenTracker('.usage/today.jsonl')
-const contextManager = new ContextManager(store, tokenTracker, {
-  messages,
-  timestamps: new Map(),
-  summary: '',
-})
-const timestamps = contextManager.state.timestamps
-const prepareContextForModel = contextManager.prepare.bind(contextManager)
-const saveSession = contextManager.save.bind(contextManager)
 
-const gateway = new ChannelGateway({
-  model,
-  registry: toolRegistry,
-  buildSystem: () => builder.build(makePromptCtx()),
-  prepareContext: prepareContextForModel,
-})
-
-const pluginManager = new PluginManager(toolRegistry, gateway)
 const availablePlugins = new Map<string, PluginDefinition>([
   ['supabase', supabasePlugin],
   ['feishu', feishuPlugin],
@@ -233,67 +171,29 @@ const dispatch = createDispatcher([
   ...memoryCommands,
   ...dreamCommands,
   ...ragCommands,
-  ...createSkillCommands(skillLoader, activeSkills),
-  ...createPluginCommands(pluginManager, availablePlugins),
-  ...createChannelCommands(gateway),
-  ...createSecurityCommands(toolRegistry, hookPipeline),
+  ...createSkillCommands(vela.skillLoader, vela.activeSkills),
+  ...createPluginCommands(vela.pluginManager, availablePlugins),
+  ...createChannelCommands(vela.gateway),
+  ...createSecurityCommands(vela.registry, vela.hooks),
 ])
 
-const memoryStore = new MemoryStore('.')
-memoryStore.init()
-toolRegistry.register(createMemoryTool(memoryStore))
-
-const vectorStore = new SqliteVectorStore('knowledge.db')
-const embedFn = createEmbedder({
-  apiKey: embeddingApiKey,
-  url: embeddingBaseUrl,
-  modelId: embeddingModel,
-})
-toolRegistry.register(...createRagTools(vectorStore, embedFn))
-
-function makePromptCtx(): PromptContext {
-  return {
-    toolCount: toolRegistry.getActiveTools().length,
-    deferredToolSummary: toolRegistry.getDeferredToolSummary(),
-    sessionMessageCount: messages.length,
-    sessionId: 'default',
-  }
-}
-
-if (isContinue && (await store.exists())) {
-  const state = await store.loadState()
-  contextManager.restore(state)
-  tokenTracker.setEstimatedTokens(estimateMessageTokens(messages))
+if (isContinue && (await vela.resume())) {
   console.log(`[Session] 恢复会话，${messages.length} 条历史消息`)
 } else {
   console.log(`[Session] 新会话`)
 }
 
 // Persist the history identity before any tool side effects, including on legacy resume.
-await saveSession()
+await vela.saveSession()
 
-const builder = new PromptPipeline()
-  .pipe('coreRules', coreRules())
-  .pipe('toolGuide', toolGuide())
-  .pipe('toolHistoryGuide', toolHistoryGuide(store.results))
-  .pipe('deferredTools', deferredTools())
-  .pipe('memoryContext', memoryContext(memoryStore))
-  .pipe('ragContext', ragContext(vectorStore))
-  .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
-  .pipe('sessionContext', sessionContext())
-
-const promptCtx: PromptContext = {
-  toolCount: toolRegistry.getAllTools().length,
-  deferredToolSummary: toolRegistry.getDeferredToolSummary(),
-  sessionMessageCount: messages.length,
-  sessionId: 'default',
-}
-
-builder.debug(promptCtx) // 显示各模块状态
+vela.builder.debug({
+  ...vela.makePromptCtx(),
+  toolCount: vela.registry.getAllTools().length,
+}) // 显示各模块状态
 console.log('  加载插件...')
 for (const [name, def] of availablePlugins) {
   try {
-    const tools = await pluginManager.load(def)
+    const tools = await vela.pluginManager.load(def)
     console.log(`  ✓ ${name} — ${tools.length} 个工具`)
   } catch {
     console.log(`  ✗ ${name} — 加载失败`)
@@ -301,7 +201,7 @@ for (const [name, def] of availablePlugins) {
 }
 
 console.log('  启动 Channel...')
-await gateway.startAll()
+await vela.gateway.startAll()
 const ask = () => {
   if (rlClosed) {
     return
@@ -313,29 +213,12 @@ const ask = () => {
     const trimmed = input.trim()
     if (!trimmed || trimmed === 'exit') {
       console.log('Bye!')
-      await toolRegistry.closeAllMCP()
-      await pluginManager.unloadAll()
-      await gateway.stopAll()
+      await vela.dispose()
       rl.close()
       return
     }
 
-    const ctx: CommandContext = {
-      messages,
-      timestamps,
-      registry: toolRegistry,
-      builder,
-      tracker: tokenTracker,
-      sessionStore: store,
-      model,
-      makePromptCtx,
-      prepareContext: prepareContextForModel,
-      saveSession,
-      ask,
-      memoryStore,
-      vectorStore,
-      busy,
-    }
+    const ctx: CommandContext = vela.commandContext(ask)
     if (busy.locked) {
       console.log('\n[system] 有任务正在执行中，请稍候再输入\n')
       // 不调用 ask()：当前 agentLoop 的 .then/.catch 完成后会重新注册 question
@@ -348,53 +231,26 @@ const ask = () => {
       return
     }
 
-    const userMsg: ModelMessage = { role: 'user', content: trimmed }
-    messages.push(userMsg)
-    tokenTracker.addMessage(userMsg)
-    timestamps.set(userMsg, Date.now())
+    // VELA_DEBUG=1 时打印每轮重新构建的 system prompt
+    if (process.env.VELA_DEBUG === '1') console.log(vela.buildSystem())
 
-    // * 在每次循环前重新构建system prompt，以便在工具注册或记忆更新后，系统 prompt 能够在下一轮对话中反映最新状态
-    const currentSystem = builder.build(makePromptCtx())
-    console.log(currentSystem)
-
-    busy.locked = true
-    busy.controller = new AbortController()
     try {
-      await agentLoop({
-        model,
-        systemPrompt: () => builder.build(makePromptCtx()),
-        toolRegistry,
-        messages,
-        tokenTracker,
-        prepareContext: prepareContextForModel,
-        abortSignal: busy.controller.signal,
-      })
+      await vela.run(trimmed)
     } catch (error) {
       console.error(
         '[Agent] 本轮停止:',
         error instanceof Error ? error.message : error,
       )
-    } finally {
-      try {
-        await saveSession()
-      } catch (error) {
-        console.error(
-          '[Session] 保存失败:',
-          error instanceof Error ? error.message : error,
-        )
-      }
-      busy.locked = false
-      busy.controller = undefined
     }
 
-    const status = tokenTracker.status
+    const status = vela.tracker.status
     console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`)
     ask()
   })
 }
 
 if (rlClosed) {
-  await toolRegistry.closeAllMCP()
+  await vela.registry.closeAllMCP()
 } else {
   ask()
 }

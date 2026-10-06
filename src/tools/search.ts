@@ -1,12 +1,13 @@
-import { join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
 import z from "zod";
+import { resolveIn } from "./file";
 import type { ToolDefinition } from "./registry";
 
 const globToolParamSchema = z.object({
   pattern: z.string().describe('搜索模式，如 "**/*.ts"、"src/*.json"'),
   path: z.string().optional().describe("搜索起始目录，默认当前目录"),
 });
-export const globTool: ToolDefinition = {
+export const createGlobTool = (cwd?: string): ToolDefinition => ({
   name: "glob",
   description:
     '按模式搜索文件。支持 * 和 ** 通配符，如 "src/**/*.ts" 匹配 src 下所有 TypeScript 文件',
@@ -25,7 +26,7 @@ export const globTool: ToolDefinition = {
     const results: string[] = [];
 
     for await (const result of glob.scan({
-      cwd: resolve(path),
+      cwd: resolveIn(cwd, path),
       dot: false,
       onlyFiles: true,
       followSymlinks: false,
@@ -39,13 +40,13 @@ export const globTool: ToolDefinition = {
     if (results.length === 0) return `没有找到匹配 "${pattern}" 的文件`;
     return results.sort().join("\n");
   },
-};
+});
 
 const grepToolParamSchema = z.object({
   pattern: z.string().describe("搜索模式（正则表达式）"),
   path: z.string().optional().describe("搜索路径（文件或目录），默认当前目录"),
 });
-export const grepTool: ToolDefinition = {
+export const createGrepTool = (cwd?: string): ToolDefinition => ({
   name: "grep",
   description: "在文件中搜索匹配指定模式的内容。返回匹配的行号和内容",
   inputSchema: grepToolParamSchema,
@@ -59,7 +60,7 @@ export const grepTool: ToolDefinition = {
     pattern: string;
     path?: string;
   }) => {
-    const baseDir = resolve(path);
+    const baseDir = resolveIn(cwd, path);
     const regex = new RegExp(pattern, "i");
     const matches: string[] = [];
     const SKIP = new Set(["node_modules", ".git", "dist"]);
@@ -116,4 +117,7 @@ export const grepTool: ToolDefinition = {
       matches.length >= 50 ? "\n... (结果已截断，共 50+ 条匹配)" : "";
     return matches.join("\n") + suffix;
   },
-};
+});
+
+export const globTool = createGlobTool();
+export const grepTool = createGrepTool();

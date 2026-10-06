@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai'
+import type { VelaEventListener } from '../agent/events'
 import type { SessionState, SessionStore } from '../session'
 import type { TokenTracker } from '../usage/tracker'
 import {
@@ -25,6 +26,8 @@ export class ContextManager {
       timestamps: new Map(),
       summary: '',
     },
+    /** 压缩动作通过事件报告；不传时静默。 */
+    public onEvent?: VelaEventListener,
   ) {}
 
   restore(state: SessionState): void {
@@ -80,16 +83,24 @@ export class ContextManager {
       request.abortSignal?.throwIfAborted()
       await this.commit(micro.messages)
       this.tracker.setEstimatedTokens(microAfter)
-      console.log(
-        `[Context] action=micro before=${before} after=${microAfter} saved=${savings} calls=${micro.candidates.length}`,
-      )
+      this.onEvent?.({
+        type: 'context',
+        action: 'micro',
+        before,
+        after: microAfter,
+        saved: savings,
+        calls: micro.candidates.length,
+      })
       return
     }
     if (before >= SUMMARY_TOKEN_THRESHOLD) {
       if (options.allowSummary === false) {
-        console.log(
-          `[Context] action=summary-required before=${before} microSavings=${savings}; 下次模型请求时生成摘要`,
-        )
+        this.onEvent?.({
+          type: 'context',
+          action: 'summary-required',
+          before,
+          saved: savings,
+        })
         return
       }
       // Summarize before micro changes history so the main request prefix stays intact.
@@ -108,9 +119,13 @@ export class ContextManager {
         compacted.historyViewSequence,
       )
       this.tracker.setEstimatedTokens(after)
-      console.log(
-        `[Context] action=summary before=${before} after=${after} messages=${compacted.compressedCount}`,
-      )
+      this.onEvent?.({
+        type: 'context',
+        action: 'summary',
+        before,
+        after,
+        messages: compacted.compressedCount,
+      })
       return
     }
     if (before > MAX_INPUT_TOKENS)
