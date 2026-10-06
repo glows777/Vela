@@ -204,7 +204,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
       approxTokens(
         (response.text ?? '') +
           (response.reasoning ?? '') +
-          JSON.stringify(response.toolCalls ?? []),
+          (response.toolCalls ? JSON.stringify(response.toolCalls) : ''),
       )
     let input =
       response.usage?.input ?? approxTokens(JSON.stringify(req.prompt))

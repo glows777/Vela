@@ -2,6 +2,7 @@ import z from 'zod'
 import { chunkDocument } from '../rag/chunker'
 import { type EmbeddingFn, embed } from '../rag/embedder'
 import type { SqliteVectorStore } from '../rag/sqllite-store'
+import { resolveIn } from './file'
 import type { ToolDefinition } from './registry'
 
 export const createRagToolsInputSchema = z.object({
@@ -16,6 +17,8 @@ export const ragSearchToolInputSchema = z.object({
 export function createRagTools(
   vectorStore: SqliteVectorStore,
   embedFn: EmbeddingFn,
+  /** 相对路径按 cwd 解析（和文件工具一致），默认进程工作目录 */
+  { cwd }: { cwd?: string } = {},
 ): ToolDefinition[] {
   const ragIngestTool: ToolDefinition = {
     name: 'rag_ingest',
@@ -26,7 +29,7 @@ export function createRagTools(
     isReadOnly: false,
     execute: async ({ path }: { path: string }, context) => {
       try {
-        const text = await Bun.file(path).text()
+        const text = await Bun.file(resolveIn(cwd, path)).text()
         const chunks = chunkDocument(path, text)
         const embeddings = await embed(
           embedFn,

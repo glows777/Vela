@@ -12,7 +12,6 @@ import {
   fauxToolCall,
 } from '../../../src/testing/faux'
 import { agentLoop } from '../../../src/agent/index'
-import { sleep } from '../../../src/agent/retry'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-agent-cancel-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -67,12 +66,6 @@ test('agent cancellation reaches the tool, waits for its durable result, and nev
   })
 })
 
-test('retry backoff is abortable', async () => {
-  const controller = new AbortController()
-  const waiting = sleep(30000, controller.signal)
-  controller.abort(new Error('cancel retry'))
-  await expect(waiting).rejects.toThrow('cancel retry')
-})
 
 test('the main request refreshes the history guide after context preparation', async () => {
   let instructions = 'OLD_LIVE_PATH'

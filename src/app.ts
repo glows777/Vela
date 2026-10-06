@@ -112,7 +112,7 @@ export function createVela(options: VelaOptions) {
   registry.register(createMemoryTool(memoryStore))
 
   const vectorStore = new SqliteVectorStore(join(dataDir, 'knowledge.db'))
-  if (embedder) registry.register(...createRagTools(vectorStore, embedder))
+  if (embedder) registry.register(...createRagTools(vectorStore, embedder, { cwd }))
 
   const makePromptCtx = (): PromptContext => ({
     toolCount: registry.getActiveTools().length,

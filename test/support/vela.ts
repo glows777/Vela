@@ -121,6 +121,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
 
     run: (input: string, runOptions?: RunOptions) =>
       vela.run(input, runOptions),
+    tracker: () => vela.tracker,
 
     /** 事件类型序列，断言流程用 */
     eventTypes: (): VelaEvent['type'][] => events.map((e) => e.type),

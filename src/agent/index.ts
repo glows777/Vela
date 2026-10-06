@@ -122,6 +122,8 @@ export const agentLoop = async ({
             messages,
             maxRetries: 0, // 禁止 streamText 内部重试，交由外层控制重试逻辑
             abortSignal,
+            // 错误在下面的 'error' 分支里抛出并通过 retry/agent_end 事件报告，不再由 SDK 打印
+            onError: () => {},
           })
 
           for await (const part of result.stream) {
@@ -179,6 +181,12 @@ export const agentLoop = async ({
                 )
                 toolRegistry.assertHealthy()
                 break
+              }
+              case 'error': {
+                // 模型请求或流中途的错误：抛出原始错误，交给下面按真实原因判断是否重试。
+                // 不处理的话 AI SDK 会在 finalStep 统一报 NoOutputGeneratedError（400 也会被重试），
+                // 或者把中途断开前的半截文本当成完整回答。
+                throw part.error
               }
               case 'tool-result': {
                 loopDetector.recordResult(
