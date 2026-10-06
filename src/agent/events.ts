@@ -58,5 +58,7 @@ export type VelaEvent =
       messages?: number
     }
   | { type: 'session_save_failed'; error: unknown }
+  /** 文件写入类工具调用前的审计记录（pre hook 发出） */
+  | { type: 'audit'; toolName: string; path: string }
 
 export type VelaEventListener = (event: VelaEvent) => void

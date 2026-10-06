@@ -74,7 +74,7 @@ export function createVela(options: VelaOptions) {
   hooks.registerPre('audit-log', (toolName, input) => {
     if (toolName === 'write_file' || toolName === 'edit_file') {
       const path = (input as { path?: string } | null)?.path || 'unknown'
-      console.log(`  [audit] 文件写入操作: ${toolName} → ${path}`)
+      emit({ type: 'audit', toolName, path })
     }
     return { action: 'allow' }
   })
