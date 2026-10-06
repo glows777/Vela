@@ -1,3 +1,4 @@
+import { APICallError } from '@ai-sdk/provider'
 import { expect, test } from 'bun:test'
 import { calculateDelay, isRetryable, sleep } from '../../../src/agent/retry'
 
@@ -18,6 +19,14 @@ test('rate limits, overload, timeouts and 5xx are retryable; other 4xx are not',
   ])
     expect(isRetryable(new Error(message))).toBe(false)
   expect(isRetryable('429')).toBe(false)
+})
+
+test('provider API errors are classified by status code, not by message text', () => {
+  const apiError = (statusCode: number, message: string) =>
+    new APICallError({ message, statusCode, url: 'x', requestBodyValues: {} })
+  expect(isRetryable(apiError(429, 'Rate limit reached for gpt'))).toBe(true)
+  expect(isRetryable(apiError(500, 'The server had an error'))).toBe(true)
+  expect(isRetryable(apiError(400, 'Invalid value: 500 tokens'))).toBe(false)
 })
 
 test('backoff grows exponentially with ±25% jitter, is capped, and 0 means no wait', () => {

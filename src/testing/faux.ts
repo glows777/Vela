@@ -44,8 +44,8 @@ export interface FauxResponse {
   finishReason?: FauxFinishReason
   /** 覆盖默认的确定性 usage 估算 */
   usage?: FauxUsage
-  /** 请求直接失败（例如 '429 Too Many Requests'），不产生任何输出 */
-  error?: string
+  /** 请求直接失败（例如 '429 Too Many Requests'，或真实 provider 抛的 APICallError），不产生任何输出 */
+  error?: string | Error
   /** 先流出 text，再在流中途报这个错误 */
   streamError?: string
   /** 一直不结束，直到请求被 abort（测试中断用） */
@@ -122,7 +122,10 @@ export const fauxToolCall = (
   return { ...rest, toolCalls: [{ name, input, id }] }
 }
 
-export const fauxError = (message: string): FauxResponse => ({ error: message })
+export const fauxError = (error: string | Error): FauxResponse => ({ error })
+
+const toError = (error: string | Error) =>
+  typeof error === 'string' ? new Error(error) : error
 
 export const fauxStreamError = (
   message: string,
@@ -241,7 +244,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
     async doGenerate(opts): Promise<LanguageModelV4GenerateResult> {
       opts.abortSignal?.throwIfAborted()
       const { req, response } = next('generate', opts)
-      if (response.error) throw new Error(response.error)
+      if (response.error) throw toError(response.error)
       if (response.streamError) throw new Error(response.streamError)
       if (response.hang) await waitForAbort(opts.abortSignal)
       const content: LanguageModelV4Content[] = []
@@ -262,7 +265,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
     async doStream(opts) {
       opts.abortSignal?.throwIfAborted()
       const { req, response } = next('stream', opts)
-      if (response.error) throw new Error(response.error)
+      if (response.error) throw toError(response.error)
       const parts = streamParts(req.index, response, chunkSize)
       const signal = opts.abortSignal
       let i = 0

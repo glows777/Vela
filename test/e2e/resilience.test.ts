@@ -1,3 +1,4 @@
+import { APICallError } from '@ai-sdk/provider'
 import { afterEach, expect, test } from 'bun:test'
 import z from 'zod'
 import {
@@ -30,6 +31,27 @@ test('a 429 is retried and the turn then succeeds', async () => {
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
   // 失败的请求不留下半截消息
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+})
+
+test('a provider 429 whose message has no status code is still retried', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxError(
+        new APICallError({
+          message: 'Rate limit reached for requests',
+          statusCode: 429,
+          url: 'https://api.example.com/v1/chat/completions',
+          requestBodyValues: {},
+        }),
+      ),
+      fauxText('好了'),
+    ],
+  })
+
+  await t.run('hi')
+
+  expect(t.eventsOf('retry')).toHaveLength(1)
+  expect(t.lastAssistantText()).toBe('好了')
 })
 
 test('a stream that breaks midway is retried from scratch', async () => {
