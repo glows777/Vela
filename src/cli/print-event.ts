@@ -94,6 +94,9 @@ export function printEvent(event: VelaEvent): void {
         event.error instanceof Error ? event.error.message : event.error,
       )
       break
+    case 'audit':
+      console.log(`  [audit] 文件写入操作: ${event.toolName} → ${event.path}`)
+      break
     case 'tool_error':
       break
   }

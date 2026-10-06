@@ -120,3 +120,48 @@ test('without an embedder, RAG tools are not registered', async () => {
   expect(names).toContain('read_file')
   expect(names).not.toContain('rag_search')
 })
+
+test('file writes are reported as audit events instead of printed', async () => {
+  cwd = mkdtempSync(join(tmpdir(), 'vela-e2e-'))
+  const events: VelaEvent[] = []
+  vela = createVela({
+    model: scriptedModel([
+      toolCallStep('write_file', { path: 'out.txt', content: 'hi' }),
+      textStep('done'),
+    ]),
+    cwd,
+    onEvent: (e) => events.push(e),
+  })
+
+  await vela.run('write out.txt')
+
+  expect(events).toContainEqual({
+    type: 'audit',
+    toolName: 'write_file',
+    path: 'out.txt',
+  })
+  expect(existsSync(join(cwd, 'out.txt'))).toBe(true)
+})
+
+test('a turn that exceeds the token budget still ends with turn_end', async () => {
+  cwd = mkdtempSync(join(tmpdir(), 'vela-e2e-'))
+  const events: VelaEvent[] = []
+  const huge = {
+    inputTokens: { total: 250_000, noCache: 250_000, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 5, text: 5, reasoning: 0 },
+  }
+  const step = toolCallStep('list_directory', {}).map((part) =>
+    part.type === 'finish' ? { ...part, usage: huge } : part,
+  )
+  vela = createVela({
+    model: scriptedModel([step]),
+    cwd,
+    onEvent: (e) => events.push(e),
+  })
+
+  await vela.run('list files')
+
+  const types = events.map((e) => e.type)
+  expect(types.slice(-3)).toEqual(['budget_warning', 'turn_end', 'agent_end'])
+  expect(events.at(-1)).toEqual({ type: 'agent_end', reason: 'budget' })
+})

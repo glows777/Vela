@@ -245,6 +245,7 @@ export const agentLoop = async ({
       })
 
       if (shouldBreak) {
+        emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
         endReason = 'loop'
         break
       }
@@ -260,12 +261,12 @@ export const agentLoop = async ({
           limit: TOKEN_BUDGET,
         })
       }
+      // 每个 turn_start 都有对应的 turn_end，结束原因由随后的 agent_end 说明
+      emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
       if (tokenTracker.loopTokens > TOKEN_BUDGET) {
         endReason = 'budget'
         break
       }
-
-      emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
       if (!needToolCall) {
         endReason = 'done'
         break
