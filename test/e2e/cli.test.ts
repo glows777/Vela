@@ -359,6 +359,30 @@ test.if(hasScript)(
   },
 )
 
+test.if(hasScript)(
+  '-r lists saved sessions and resumes the chosen one',
+  async () => {
+    const first = await cli(['-p', '你好'], {
+      model: `faux:${scenario('hello')}`,
+    })
+    expect(first.code).toBe(0)
+    const picked = await cli(['-r'], {
+      model: `faux:${scenario('hello')}`,
+      cwd: first.cwd,
+      agentDir: first.agentDir,
+      stdin: '1\n/memory\nexit\n',
+      terminal: true,
+    })
+    expect(picked.code).toBe(0)
+    expect(picked.stdout).toContain('选择要恢复的会话')
+    expect(picked.stdout).toContain('1. 你好')
+    expect(picked.stdout).not.toContain('开新会话')
+    expect(picked.stdout).toContain('Bye!')
+    // 恢复的是同一个会话，没有另存一个新的
+    expect(sessionFiles(first.dataDir)).toHaveLength(1)
+  },
+)
+
 test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline', async () => {
   const dir = tempDir('vela-cli-')
   dirs.push(dir)
