@@ -46,7 +46,7 @@ const env = process.env
 const cwd = process.cwd()
 
 /**
- * 运行方式（同 pi）：`--mode rpc` / `--mode json` 显式选；`-p` 或 stdin / stdout 被重定向时是单次模式；
+ * 运行方式（同 pi）：`--mode rpc` / `--mode json` 显式选；`-p`、`--mode text` 或 stdin / stdout 被重定向时是单次模式；
  * 否则（终端里）是交互模式。
  */
 const mode: 'interactive' | 'print' | 'json' | 'rpc' =
@@ -54,7 +54,10 @@ const mode: 'interactive' | 'print' | 'json' | 'rpc' =
     ? 'rpc'
     : args.mode === 'json'
       ? 'json'
-      : args.print || !process.stdin.isTTY || !process.stdout.isTTY
+      : args.print ||
+          args.mode === 'text' ||
+          !process.stdin.isTTY ||
+          !process.stdout.isTTY
         ? 'print'
         : 'interactive'
 // 非交互模式 stdout 只放结果 / 协议：扩展、SDK 的 console 输出都改到 stderr

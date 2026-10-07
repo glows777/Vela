@@ -29,6 +29,12 @@ export async function runPrintMode(options: {
 }): Promise<number> {
   const { vela, session, messages, mode } = options
   let writing = Promise.resolve()
+  // -p 只输出这次调用产生的回答：恢复的会话里旧的回答不算（例如 `vela -c -p /memory` 不该打印上次的回答）
+  let answer: ModelMessage | undefined
+  const offAnswer = session.subscribe((event) => {
+    if (event.type === 'message' && event.message.role === 'assistant')
+      answer = event.message
+  })
   const off: () => void =
     mode === 'json'
       ? vela.subscribe((event, sessionId) => {
@@ -64,7 +70,7 @@ export async function runPrintMode(options: {
   try {
     for (const message of messages) await session.prompt(message)
     if (mode === 'text') {
-      const text = lastAssistantText(session.messages)
+      const text = answer ? lastAssistantText([answer]) : ''
       if (text) await writeStdout(`${text}\n`)
     }
   } catch (error) {
@@ -75,6 +81,7 @@ export async function runPrintMode(options: {
     exitCode = 1
   } finally {
     off()
+    offAnswer()
     await writing
   }
   return exitCode

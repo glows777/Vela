@@ -180,6 +180,27 @@ test.concurrent('each run starts a new session; -c continues the most recent one
   // 三次启动 CLI 子进程，和其它并发用例一起时默认 5 秒不够
 }, 20_000)
 
+test.concurrent('-c -p with a command prints nothing on stdout, not the previous answer', async () => {
+  const first = await cli(['-p', '你好'], { model: `faux:${scenario('hello')}` })
+  expect(first.code).toBe(0)
+  const dir = tempDir('vela-ext-')
+  dirs.push(dir)
+  const ping = join(dir.path, 'ping.ts')
+  await Bun.write(
+    ping,
+    `export default (vela) => vela.registerCommand('ping', { handler: async (_args, ctx) => ctx.ui.notify('pong') })`,
+  )
+  const second = await cli(['-c', '-p', '/ping', '-e', ping], {
+    model: `faux:${scenario('hello')}`,
+    cwd: first.cwd,
+    agentDir: first.agentDir,
+  })
+  expect(second.code).toBe(0)
+  expect(second.stderr).toContain('pong')
+  // 上一次的回答在恢复的历史里，但不是这次产生的
+  expect(second.stdout).toBe('')
+}, 20_000)
+
 test.concurrent('--session opens a named session id; -r needs interactive mode', async () => {
   const first = await cli(['-p', '你好', '--session', 'work'], {
     model: `faux:${scenario('hello')}`,

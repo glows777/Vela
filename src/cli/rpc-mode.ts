@@ -233,7 +233,8 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       session.setName(
         typeof command.name === 'string' ? command.name : undefined,
       )
-      await session.save()
+      // 运行中不能另外保存（会和 loop 的写入交错、丢掉这期间新增的消息）：这次 run 结束时会一起存
+      if (!session.isRunning) await session.save()
     },
     get_commands: () => ({ commands: vela.commands() }),
   }

@@ -188,6 +188,11 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
     followUp: ['之后'],
   })
 
+  // 运行中改名：不另外保存（会和 loop 的写入交错），这次 run 结束时一起存
+  expect(
+    await rpc.call({ type: 'set_session_name', name: '跑着改名' }),
+  ).toMatchObject({ success: true })
+
   expect((await rpc.call({ type: 'clear_queue' })).data).toEqual({
     steering: ['改方向'],
     followUp: ['之后'],
@@ -201,6 +206,10 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   expect(rpc.records.find((r) => r.type === 'agent_end')).toMatchObject({
     reason: 'aborted',
   })
+  const list = await rpc.call({ type: 'list_sessions' })
+  expect((list.data as { sessions: unknown[] }).sessions).toEqual([
+    expect.objectContaining({ name: '跑着改名', firstMessage: '慢慢想' }),
+  ])
 
   expect(await rpc.close()).toBe(0)
 })
