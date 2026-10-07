@@ -130,18 +130,26 @@ test('a custom session storage receives every save and serves resume', async () 
       saved.set(id, checkpoint)
     },
   }
-  const model = createFauxModel({ responses: [fauxText('a'), fauxText('b')] })
+  // 第一个实例调过工具：工具历史在它的临时目录里，dispose 后就没了，恢复仍要成功
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('bash', { command: 'echo hi' }),
+      fauxText('a'),
+      fauxText('b'),
+    ],
+  })
   const first = createVela({ model, sessionStorage: storage })
   await first.session('db').prompt('hello')
   await first.dispose()
-  expect(saved.get('db')?.messages).toHaveLength(2)
+  expect(saved.get('db')?.messages).toHaveLength(4)
+  expect(saved.get('db')?.toolHistorySeq).toBeGreaterThan(0)
 
   const second = createVela({ model, sessionStorage: storage })
   try {
     const session = second.session('db')
     expect(await session.resume()).toBe(true)
     await session.prompt('again')
-    expect(saved.get('db')?.messages).toHaveLength(4)
+    expect(saved.get('db')?.messages).toHaveLength(6)
   } finally {
     await second.dispose()
   }

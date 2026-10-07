@@ -232,7 +232,7 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 
 ```
 ~/.vela/settings.json  extensions/  skills/  trust.json
-~/.vela/projects/--home-me-code-x--/   每个项目的数据：sessions/  usage/  memory/  rag/knowledge.db
+~/.vela/projects/--home-me-code-x--<哈希>/   每个项目的数据：sessions/  usage/  memory/  rag/knowledge.db
 <项目>/.vela/settings.json  extensions/  skills/   项目配置（第一次需要你信任这个项目）
 ```
 

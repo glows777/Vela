@@ -70,6 +70,8 @@ export interface SessionDeps {
   dataDir: string
   /** 会话历史存哪（文件 / 内存 / 自定义） */
   sessionStorage: SessionStorage
+  /** dataDir 是 dispose() 会删掉的临时目录（没给 dataDir）：恢复时工具历史可能已经不在了 */
+  temporaryDataDir?: boolean
   /** Vela 级工具 registry；会话用它 fork 出自己的 */
   registry: ToolRegistry
   builder: PromptPipeline
@@ -132,6 +134,7 @@ export class VelaSession {
       join(deps.dataDir, 'sessions'),
       deps.logger,
       deps.sessionStorage,
+      deps.temporaryDataDir,
     )
     this.hasUI = options.ui !== undefined
     this.ui = options.ui ?? headlessUI(this.emit)

@@ -27,8 +27,10 @@ export class SessionStore {
   constructor(
     private readonly sessionId: string,
     dir: string = SESSION_DIR,
-    logger: VelaLogger = silentLogger,
+    private readonly logger: VelaLogger = silentLogger,
     storage?: SessionStorage,
+    /** 工具历史在临时目录里（自定义存储 + 没给 dataDir）：恢复时找不到就重新开始，不报错 */
+    private readonly temporaryResults = false,
   ) {
     this.storage = storage ?? fileSessionStorage(dir, logger);
     this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'));
@@ -74,12 +76,21 @@ export class SessionStore {
       messages.push(stored.message);
       timestamps.set(stored.message, parseTimestamp(stored.timestamp));
     }
-    if (checkpoint.toolHistoryId)
-      await this.results.resumeHistory(
-        checkpoint.toolHistoryId,
-        checkpoint.toolHistorySeq ?? 0,
-        checkpoint.toolHistoryViewSeq,
-      );
+    if (checkpoint.toolHistoryId) {
+      try {
+        await this.results.resumeHistory(
+          checkpoint.toolHistoryId,
+          checkpoint.toolHistorySeq ?? 0,
+          checkpoint.toolHistoryViewSeq,
+        );
+      } catch (error) {
+        // 上一个 Vela 实例的临时目录已经删了：消息照常恢复，工具调用历史从头记
+        if (!this.temporaryResults) throw error;
+        this.logger.warn(
+          `[session] ${this.sessionId} 的工具调用历史在上次的临时目录里，已不存在；要保留请传 dataDir`,
+        );
+      }
+    }
     return { messages, timestamps, summary: checkpoint.summary || "" };
   }
 

@@ -1,8 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadConfig } from '../../../src/config'
+import { createVela } from '../../../src/vela'
+import { createFauxModel, fauxText } from '../../../src/testing/faux'
 import {
   extensionConfigFromEnv,
+  loadCliExtensions,
   legacyDataHint,
   parseArgs,
 } from '../../../src/cli/setup'
@@ -100,4 +104,42 @@ test('the migration commands keep old data, win over startup files and can run t
   expect(run().every((code) => code !== 0)).toBe(true)
   expect(read('sessions/default.jsonl')).toBe('old session')
   expect(read('rag/knowledge.db')).toBe('db')
+})
+
+test('an extension that throws or rejects while loading is reported and skipped, not fatal', async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const file = (name: string, body: string) => {
+    const path = join(dir.path, name)
+    writeFileSync(path, body)
+    return path
+  }
+  const sync = file('boom.ts', "export default () => { throw new Error('sync boom') }")
+  const async = file('later.ts', "export default async () => { throw new Error('async boom') }")
+  const good = file(
+    'good.ts',
+    "export default (vela) => { vela.registerCommand('hi', { description: 'hi', handler: async () => {} }) }",
+  )
+  const errors: string[] = []
+  const config = loadConfig({ cwd: dir.path, agentDir: join(dir.path, 'home') })
+  const extensions = await loadCliExtensions(
+    config,
+    parseArgs(['-e', sync, '-e', async, '-e', good]),
+    (message) => errors.push(message),
+  )
+  expect(extensions.map((extension) => extension.name)).toEqual(['boom', 'later', 'good'])
+  const vela = createVela({
+    model: createFauxModel({ responses: [fauxText('ok')] }),
+    extensions,
+  })
+  try {
+    await vela.ready()
+    await vela.session().prompt('hello')
+    expect(errors).toEqual([
+      `[扩展] ${sync} 加载失败: sync boom`,
+      `[扩展] ${async} 加载失败: async boom`,
+    ])
+  } finally {
+    await vela.dispose()
+  }
 })

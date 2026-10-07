@@ -160,8 +160,12 @@ test('the data directory defaults to <agentDir>/projects/<encoded cwd>; settings
   expect(loadConfig({ cwd, agentDir }).dataDir).toBe(
     projectDataDir(agentDir, cwd),
   )
-  expect(projectDataDir('/h/.vela', '/home/liam/code/x')).toBe(
-    '/h/.vela/projects/--home-liam-code-x--',
+  expect(projectDataDir('/h/.vela', '/home/liam/code/x')).toMatch(
+    /^\/h\/\.vela\/projects\/--home-liam-code-x--[0-9a-f]{8}$/,
+  )
+  // 连字符和分隔符编码相同的两个路径不能共用数据目录
+  expect(projectDataDir('/h', '/work/a-b/c')).not.toBe(
+    projectDataDir('/h', '/work/a/b-c'),
   )
   const custom = setup({
     'home/settings.json': json({ dataDir: 'data' }),

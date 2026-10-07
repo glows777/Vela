@@ -185,6 +185,7 @@ export function createVela(options: VelaOptions): Vela {
         limits,
         logger,
         dataDir,
+        temporaryDataDir: ephemeral,
         sessionStorage,
         registry,
         builder,

@@ -172,19 +172,45 @@ export async function loadCliExtensions(
     const key = 'builtin' in entry ? `builtin:${entry.name}` : entry.path
     if (seen.has(key)) continue
     seen.add(key)
-    try {
-      if ('builtin' in entry) {
-        const factory = BUILTIN_EXTENSIONS[entry.name]
-        if (!factory) throw new Error(`未知的内置扩展 builtin:${entry.name}`)
-        loaded.push(factory())
-      } else loaded.push(await importExtension(entry.path, entry.name))
-    } catch (error) {
+    const report = (error: unknown) =>
       onError(
         `[扩展] ${key} 加载失败: ${error instanceof Error ? error.message : error}`,
       )
+    try {
+      let extension: VelaExtension
+      if ('builtin' in entry) {
+        const factory = BUILTIN_EXTENSIONS[entry.name]
+        if (!factory) throw new Error(`未知的内置扩展 builtin:${entry.name}`)
+        extension = factory()
+      } else extension = await importExtension(entry.path, entry.name)
+      loaded.push(reportFailures(extension, report))
+    } catch (error) {
+      report(error)
     }
   }
   return loaded
+}
+
+/**
+ * 扩展函数本身在 createVela() 里才执行：同步抛错或 async 失败也只报告，不让 CLI 启动失败
+ * （SDK 的 createVela 仍然直接报错）。失败前已经注册的工具、命令保留。
+ */
+function reportFailures(
+  extension: VelaExtension,
+  report: (error: unknown) => void,
+): VelaExtension {
+  const { name } = extension
+  // 用计算属性名保留函数名：runner 用 extension.name 作扩展名
+  return {
+    [name]: (vela: Parameters<VelaExtension>[0]) => {
+      try {
+        const result = extension(vela)
+        if (result instanceof Promise) return result.catch(report)
+      } catch (error) {
+        report(error)
+      }
+    },
+  }[name] as VelaExtension
 }
 
 /**

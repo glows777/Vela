@@ -89,10 +89,9 @@ try {
   console.error(`[配置] ${error instanceof Error ? error.message : error}`)
   process.exit(2)
 }
-if (printMode === undefined) {
-  const hint = legacyDataHint(cwd, config.dataDir)
-  if (hint) console.log(hint)
-}
+// -p 模式也提示（--continue 找不到旧会话时用户要知道为什么）；走 stderr，stdout 留给结果
+const legacyHint = legacyDataHint(cwd, config.dataDir)
+if (legacyHint) console.error(legacyHint)
 
 // VELA_RECORD=<file.json>：把这次运行的模型响应和用户输入录成 faux 场景，之后用 VELA_MODEL=faux:<file> 回放
 const recorder = process.env.VELA_RECORD
