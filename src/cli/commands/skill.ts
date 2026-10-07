@@ -24,31 +24,31 @@ export function createSkillCommands(
 ): CommandHandler[] {
   return [
     // /skill list
-    (cmd, { session }) => {
+    (cmd, { print, session }) => {
       if (cmd !== '/skill' && cmd !== '/skill list' && cmd !== 'skill list')
         return false
       const activeSkills = session.activeSkills
       const skills = skillLoader.list()
       if (skills.length === 0) {
-        console.log(
+        print(
           '\n[skills] 没有找到任何 skill。在 .skills/ 目录下创建 skill-name/SKILL.md 即可。\n',
         )
         return true
       }
-      console.log(`\n[skills] 共 ${skills.length} 个可用：`)
+      print(`\n[skills] 共 ${skills.length} 个可用：`)
       for (const s of skills) {
         const active = activeSkills.has(s.name) ? ' ✓ 已激活' : ''
-        console.log(`  /${s.name} — ${s.description}${active}`)
-        if (s.whenToUse) console.log(`    适用场景: ${s.whenToUse}`)
+        print(`  /${s.name} — ${s.description}${active}`)
+        if (s.whenToUse) print(`    适用场景: ${s.whenToUse}`)
       }
-      console.log('')
+      print('')
       return true
     },
 
     // /skill load <name>
-    (cmd, { session }) => {
+    (cmd, { print, session }) => {
       if (cmd === '/skill load') {
-        console.log('\n[skills] 用法: /skill load <name>\n')
+        print('\n[skills] 用法: /skill load <name>\n')
         return true
       }
       const match = cmd.match(/^\/skill\s+load\s+(\S+)$/)
@@ -57,29 +57,29 @@ export function createSkillCommands(
       if (!name) return false
       const skill = skillLoader.get(name)
       if (!skill) {
-        console.log(`\n[skills] 找不到 skill: ${name}\n`)
+        print(`\n[skills] 找不到 skill: ${name}\n`)
         return true
       }
       session.activeSkills.add(name)
       // Codex 模式：激活即注入一次正文（system prompt 只保留索引）；
       // 重复 load 不重复注入，避免消息历史线性堆积
       if (contentAlreadyInjected(session.messages, skill.content)) {
-        console.log(`\n[skills] ${name} 内容已在会话中，跳过重复注入\n`)
+        print(`\n[skills] ${name} 内容已在会话中，跳过重复注入\n`)
         return true
       }
       session.append({
         role: 'user',
         content: `[已加载 skill「${name}」，以下是指导内容]\n\n${skill.content}`,
       })
-      console.log(`\n[skills] 已激活: ${name} — ${skill.description}\n`)
+      print(`\n[skills] 已激活: ${name} — ${skill.description}\n`)
       return true
     },
 
     // /skill unload <name>
-    (cmd, { session }) => {
+    (cmd, { print, session }) => {
       const activeSkills = session.activeSkills
       if (cmd === '/skill unload') {
-        console.log('\n[skills] 用法: /skill unload <name>\n')
+        print('\n[skills] 用法: /skill unload <name>\n')
         return true
       }
       const match = cmd.match(/^\/skill\s+unload\s+(\S+)$/)
@@ -87,23 +87,23 @@ export function createSkillCommands(
       const name = match[1]
       if (!name) return false
       if (!activeSkills.has(name)) {
-        console.log(`\n[skills] ${name} 未激活\n`)
+        print(`\n[skills] ${name} 未激活\n`)
         return true
       }
       activeSkills.delete(name)
-      console.log(`\n[skills] 已卸载: ${name}\n`)
+      print(`\n[skills] 已卸载: ${name}\n`)
       return true
     },
 
     // /<skill-name> — 直接用 /code-review 激活并触发
-    (cmd, { session, ask }) => {
+    (cmd, { print, session }) => {
       if (!cmd.startsWith('/')) return false
       const parts = cmd.slice(1).split(/\s+/)
       const name = parts[0]
       if (!name) return false
       // P0-3 闸：/skill 前缀穿透到此的一律拦截（残缺子命令在各自 handler 已处理）
       if (name === 'skill') {
-        console.log(
+        print(
           '\n[skills] 未知子命令。可用: /skill list、/skill load <name>、/skill unload <name>\n',
         )
         return true
@@ -112,12 +112,12 @@ export function createSkillCommands(
       if (!skill) return false
 
       if (session.busy.locked) {
-        console.log(`\n[skills] 有任务正在执行中，请稍候再尝试 /${name}\n`)
+        print(`\n[skills] 有任务正在执行中，请稍候再尝试 /${name}\n`)
         return true
       }
 
       session.activeSkills.add(name)
-      console.log(`\n[skills] 激活 ${name}，开始执行...`)
+      print(`\n[skills] 激活 ${name}，开始执行...`)
 
       const args = parts.slice(1).join(' ')
       // P0-2 去重：正文已在会话中出现过则只追加注记，不再注入一遍正文
@@ -133,15 +133,13 @@ export function createSkillCommands(
           ? `${skill.content}\n\n用户指令: ${args}`
           : skill.content
 
-      session
+      return session
         .prompt(content)
         .catch((error: unknown) =>
-          console.error(
+          print(
             `\n[skills] 执行失败: ${error instanceof Error ? error.message : error}\n`,
           ),
         )
-        .finally(ask)
-      return 'async'
     },
   ]
 }

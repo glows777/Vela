@@ -5,21 +5,23 @@ export * from './context'
 export * from './debug'
 
 /**
- * 斜杠命令属于 CLI：它们读 SDK 提供的数据（vela / session），自己负责打印。
- * ask() 让 CLI 重新显示输入提示；异步命令结束时调用。
+ * 斜杠命令属于 CLI：它们读 SDK 提供的数据（vela / session），输出交给 print()
+ * （TUI 写进对话区，测试捕获）。
  */
 export interface CommandContext {
   vela: Vela
   /** CLI 和 core 在同一个包里，命令可以读内部对象（记忆、知识库、hooks…） */
   internals: VelaInternals
   session: VelaSession
-  ask: () => void
+  /** 输出一段文字（可以多行） */
+  print: (text: string) => void
 }
 
+/** 返回 false 表示不是这个命令；true 表示已处理；Promise 表示已处理、还在异步执行。 */
 export type CommandHandler = (
   cmd: string,
   ctx: CommandContext,
-) => boolean | 'async'
+) => boolean | Promise<void>
 
 export function createDispatcher(handlers: CommandHandler[]): CommandHandler {
   return (cmd, ctx) => {

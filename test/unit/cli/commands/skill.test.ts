@@ -62,7 +62,7 @@ test('/skill unload 移除激活状态', async () => {
 test('/<skill> 触发：activeSkills 更新、正文以消息注入一次、system prompt 仍只含索引', async () => {
   const t = fixture({ responses: [fauxText('审查完成')] })
   const { result } = await captureConsole(() => t.command('/code-review extra'))
-  expect(result).toBe('async')
+  expect(result).toBe(true)
   expect(t.session.activeSkills.has('code-review')).toBe(true)
   expect(String(t.messages[0]!.content)).toBe(`${BODY}\n\n用户指令: extra`)
 
@@ -137,7 +137,7 @@ test('P0-2: load 之后再触发不注入第二份正文', async () => {
   const t = fixture({ responses: [fauxText('ok')] })
   await captureConsole(async () => {
     expect(t.dispatch('/skill load code-review')).toBe(true)
-    expect(await t.command('/code-review extra')).toBe('async')
+    expect(await t.command('/code-review extra')).toBe(true)
   })
   expect(t.messages.filter((m) => m.role === 'user')).toHaveLength(2)
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
@@ -146,14 +146,13 @@ test('P0-2: load 之后再触发不注入第二份正文', async () => {
 test('P0-2: 正文已注入时二次触发只追加注记，不重复正文', async () => {
   const t = fixture({ responses: [fauxText('first'), fauxText('second')] })
   await captureConsole(async () => {
-    expect(await t.command('/code-review extra')).toBe('async')
-    expect(await t.command('/code-review extra')).toBe('async')
+    expect(await t.command('/code-review extra')).toBe(true)
+    expect(await t.command('/code-review extra')).toBe(true)
   })
   const lastUser = t.messages.filter((m) => m.role === 'user').at(-1)!
   expect(String(lastUser.content)).toContain('[skill 已加载]')
   expect(String(lastUser.content)).not.toContain(BODY)
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
-  expect(t.askCount()).toBe(2)
 })
 
 test('skill persists the updated summary produced during preparation', async () => {

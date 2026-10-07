@@ -7,25 +7,22 @@ import type { VelaSession } from '../../vela-session'
 import type { CommandHandler } from './index'
 
 export const contextCommands: CommandHandler[] = [
-  (cmd, { session, ask }) => {
+  (cmd, { print, session }) => {
     if (cmd !== '/context' && cmd !== 'context') return false
-    void (async () => {
+    return (async () => {
       try {
         // 段落每次 prompt 才算：预览下一次 prompt 的段落，没 prompt 过时也能看到记忆占用
         const sections = await session.previewSections()
-        console.log(renderContextView(contextSnapshot(session, sections)))
+        print(renderContextView(contextSnapshot(session, sections)))
       } catch (error) {
-        console.error('[context] 失败:', error)
-      } finally {
-        ask()
+        print(`[context] 失败: ${error instanceof Error ? error.message : error}`)
       }
     })()
-    return 'async'
   },
 
-  (cmd, { session }) => {
+  (cmd, { print, session }) => {
     if (cmd !== '/usage' && cmd !== 'usage') return false
-    console.log(renderUsageView(session.tracker))
+    print(renderUsageView(session.tracker))
     return true
   },
 ]

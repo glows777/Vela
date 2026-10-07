@@ -45,6 +45,7 @@ CI（`.github/workflows/ci.yml`）在每个 PR 和 main 的 push 上依次跑 `b
 - **unit**：测单个模块的规则和边界（重试分类、循环检测、压缩切分、摘要校验、工具历史、安全规则……）。直接 new 出被测对象，模型用 faux。
 - **e2e**：用 `createTestVela()` 装配一个和 CLI 完全相同的 Vela（`createVela()` + CLI 的斜杠命令分发器），只把模型换成 faux、目录换成临时目录，断言事件序列、模型收到的请求、落盘的文件。
 - **e2e/cli.test.ts**：起真实的 `bun src/cli/main.ts` 子进程，用 `VELA_MODEL=faux:<场景.json>` 回放，断言 stdout/stderr/退出码。
+- **e2e/tui.test.ts**：交互模式（TUI）在进程内跑：`test/support/terminal.ts` 的 `startTui(vela)` 用实现 pi-tui `Terminal` 接口的假终端起 `InteractiveMode`，`terminal.type()` / `press(KEYS.xxx)` 送按键，`screen()` 取整屏文字（去掉颜色），`until('文字')` 等它出现。
 - **live**：真实模型，只验证“接得上”，不做细节断言。
 
 改了什么就跑对应那层；改到 agent loop、装配、事件、上下文管理或 CLI 入口时跑全套 `bun run test`。
@@ -108,7 +109,7 @@ t.eventsOf('tool_call')           // 某类事件，带类型
 t.eventsIn('other')               // 某个会话的事件
 t.streamedText(); t.lastAssistantText(); t.messages
 t.model.calls                     // 模型收到的请求
-t.dispatch('/context')            // CLI 自己的斜杠命令，返回 true/false/'async'
+t.dispatch('/context')            // CLI 自己的斜杠命令，返回 false / true / Promise（异步命令）；输出走 console.log，用 captureConsole() 捕获
 await t.command('/skill x')       // 异步命令，等它结束
 await t.run('/memory')            // 扩展命令走 session.prompt()；输出是 notify 事件：t.eventsOf('notify')
 t.readFile('a.txt'); t.readData('sessions/default.jsonl'); t.exists('rag/knowledge.db')  // 数据目录里：sessions/ usage/ memory/ rag/
@@ -165,7 +166,8 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存；`vela.listSessions()`（最近的在前，名字随会话保存和恢复） |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |
-| e2e/cli | 交互模式（伪终端）一轮对话 + 斜杠命令 + exit 并保存会话、`-r` 列出保存的会话并恢复选中的；`-p` 只把最后的回答写 stdout（诊断在 stderr）并保存一个新会话；`-c -p /命令` 不打印恢复历史里的旧回答；工具在进程 cwd 执行；管道 stdin 拼在 prompt 前；`--mode json` 会话头 + 每个事件一行、模型错误在 agent_end 里且退出码 1；每次启动新会话、`-c` 接最近的；`--session <id>`、`-r` 只能交互；`VELA_RECORD` 录制后用 `faux:` 回放；模型错误退出码 1；扩展注册的 provider 配 `--model` / `--thinking`，`--continue` 恢复保存的模型；未知 provider / 没选模型 / 缺 key 退出码 1，`--thinking` 不合法退出码 2；缺参数退出码 2；`VELA_MODEL=mock`；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
+| e2e/tui | 提交 prompt 后显示用户消息、工具块（参数和结果）、流式回答，底栏有会话 / 模型 / thinking；运行中 Enter = steer、Alt+Enter = followUp（排队区显示）、斜杠命令照常执行，Esc 把排队的消息放回输入框并中断；流式中输入的 steer 在同一次运行里回答；扩展 confirm 在输入框位置弹对话框；CLI 命令输出、扩展命令、/hotkeys 进对话区；Ctrl+L 选模型、/thinking 选级别（光标从当前项开始）、Shift+Tab 切 thinking；/name、/new、/resume 切会话并重画历史；`-r` 启动前选会话；Ctrl+C 清空 / Ctrl+D 退出 |
+| e2e/cli | 真实终端（伪终端）里的 TUI：一轮对话后 Ctrl+D 退出并保存会话、`-r` 选中保存的会话并画出历史；`-p` 只把最后的回答写 stdout（诊断在 stderr）并保存一个新会话；`-c -p /命令` 不打印恢复历史里的旧回答；工具在进程 cwd 执行；管道 stdin 拼在 prompt 前；`--mode json` 会话头 + 每个事件一行、模型错误在 agent_end 里且退出码 1；每次启动新会话、`-c` 接最近的；`--session <id>`、`-r` 只能交互；`VELA_RECORD` 录制后用 `faux:` 回放；模型错误退出码 1；扩展注册的 provider 配 `--model` / `--thinking`，`--continue` 恢复保存的模型；未知 provider / 没选模型 / 缺 key 退出码 1，`--thinking` 不合法退出码 2；缺参数退出码 2；`VELA_MODEL=mock`；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
 | unit/cli/commands | skill 激活/去重/并发锁（走真实装配） |
 | unit/cli/setup | 命令行参数；settings 的扩展配置覆盖环境变量；旧数据搬家提示 |
 | unit/models | `provider/id` 解析与错误；thinking → reasoning；按上下文窗口算上限 |
@@ -204,5 +206,5 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 
 ## 已知问题
 
-- 交互模式（`src/cli/interactive.ts` 的 readline REPL）只在终端里出现（管道输入走单次模式，同 pi），所以 `e2e/cli` 用 util-linux 的 `script` 给子进程一个伪终端来测；没有 `script` 的平台（macOS）跳过。第 2 步下半换成 TUI 时改用假终端在进程内测。
+- 真实终端里的 TUI 只有 `e2e/cli` 的两个冒烟测试（用 util-linux 的 `script` 给子进程一个伪终端，没有 `script` 的平台如 macOS 跳过）；按键和渲染的细节在 `e2e/tui` 里用假终端测。
 - 发现问题时先写一个能复现的 faux 场景，修不了的写在这里，并在测试里按现状断言。

@@ -3,7 +3,7 @@ import type { CommandHandler } from './index'
 
 export const securityCommands: CommandHandler[] = [
   // /role [owner|collaborator|guest]：只改当前会话
-  (cmd, { session }) => {
+  (cmd, { print, session }) => {
     const match = cmd.match(/^\/role(?:\s+(\S+))?$/)
     if (!match) return false
     const role = match[1]
@@ -11,7 +11,7 @@ export const securityCommands: CommandHandler[] = [
 
     if (role) session.role = role as Role
     const toolCount = session.getActiveTools().length
-    console.log(
+    print(
       role
         ? `\n[security] 角色切换为 ${role}，可用工具: ${toolCount} 个\n`
         : `\n[security] 当前角色: ${session.role}，可用工具: ${toolCount} 个\n`,
@@ -20,23 +20,23 @@ export const securityCommands: CommandHandler[] = [
   },
 
   // /hooks
-  (cmd, { internals }) => {
+  (cmd, { print, internals }) => {
     if (cmd !== '/hooks') return false
 
     const hooks = internals.hooks.list()
-    console.log('\n[hooks]')
+    print('\n[hooks]')
     if (hooks.pre.length > 0) {
-      console.log('  Pre-Tool Hooks:')
-      for (const name of hooks.pre) console.log(`    - ${name}`)
+      print('  Pre-Tool Hooks:')
+      for (const name of hooks.pre) print(`    - ${name}`)
     }
     if (hooks.post.length > 0) {
-      console.log('  Post-Tool Hooks:')
-      for (const name of hooks.post) console.log(`    - ${name}`)
+      print('  Post-Tool Hooks:')
+      for (const name of hooks.post) print(`    - ${name}`)
     }
     if (hooks.pre.length === 0 && hooks.post.length === 0) {
-      console.log('  没有注册的 Hook')
+      print('  没有注册的 Hook')
     }
-    console.log('')
+    print('')
     return true
   },
 ]

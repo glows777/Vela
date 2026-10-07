@@ -28,19 +28,21 @@ test('第一个返回 true 的 handler 获胜', () => {
   expect(history).toEqual(['a', 'b', 'c'])
 })
 
-test('handler 返回 "async" 时立即短路', () => {
+test('handler 返回 Promise（异步命令）时立即短路', async () => {
   const history: string[] = []
   const handlers: CommandHandler[] = [
     () => {
       history.push('a')
-      return 'async' as const
+      return Promise.resolve()
     },
     () => {
       history.push('b')
       return true
     },
   ]
-  expect(createDispatcher(handlers)('x', fakeCtx)).toBe('async')
+  const result = createDispatcher(handlers)('x', fakeCtx)
+  expect(result).toBeInstanceOf(Promise)
+  await result
   expect(history).toEqual(['a'])
 })
 
