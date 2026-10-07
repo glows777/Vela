@@ -120,6 +120,10 @@ export class TokenTracker {
   private pendingChars = 0;
   /** 当前一次 agentLoop 已消耗的输入加输出 token。 */
   private currentLoopTokens = 0;
+  /** 模型配置里写的价格（models.json 的 cost），优先于内置价目表。 */
+  private readonly pricing = new Map<string, ModelPricing>();
+  /** 当前模型的上下文窗口，用于 status 的百分比。 */
+  contextWindow = CONTEXT_WINDOW;
 
   constructor(logPath?: string) {
     this.logPath = logPath;
@@ -170,10 +174,19 @@ export class TokenTracker {
     return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4));
   }
 
-  /** 当前上下文相对 200k 窗口的状态。 */
+  /** 记录某个模型的价格（覆盖内置价目表）。 */
+  setPricing(model: string, pricing: ModelPricing): void {
+    this.pricing.set(model, pricing);
+  }
+
+  private priceOf(model: string): ModelPricing {
+    return (this.pricing.get(model) ?? PRICE_TABLE[model] ?? PRICE_TABLE['mock-model'])!;
+  }
+
+  /** 当前上下文相对模型窗口（默认 200k）的状态。 */
   get status(): TokenStatus {
     const tokens = this.estimatedTokens;
-    const percent = Math.round((tokens / CONTEXT_WINDOW) * 100);
+    const percent = Math.round((tokens / this.contextWindow) * 100);
     return {
       tokens,
       percent,
@@ -191,7 +204,7 @@ export class TokenTracker {
     const requestTotalTokens = requestPromptTokens + usage.outputTokens;
     this.currentLoopTokens += requestTotalTokens;
 
-    const cost = computeCost(model, usage);
+    const cost = computeCost(model, usage, this.priceOf(model));
     const record: StepRecord = { ts: Date.now(), model, cost, ...usage, ...details };
     this.steps.push(record);
 
@@ -219,7 +232,7 @@ export class TokenTracker {
     const baselineCost = (() => {
       let c = 0;
       for (const s of this.steps) {
-        const p = (PRICE_TABLE[s.model] || PRICE_TABLE['mock-model'])!;
+        const p = this.priceOf(s.model);
         const inputLike = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens;
         c += (inputLike * p.input) / 1_000_000;
         c += (s.outputTokens * p.output) / 1_000_000;
@@ -271,8 +284,11 @@ export function estimateMessageTokens(messages: ModelMessage[]): number {
   return Math.ceil((chars / 4) * 1.2);
 }
 
-export function computeCost(model: string, usage: StepUsage): number {
-  const p = (PRICE_TABLE[model] || PRICE_TABLE['mock-model'])!;
+export function computeCost(
+  model: string,
+  usage: StepUsage,
+  p: ModelPricing = (PRICE_TABLE[model] || PRICE_TABLE['mock-model'])!,
+): number {
   return (
     (usage.inputTokens * p.input
       + usage.outputTokens * p.output

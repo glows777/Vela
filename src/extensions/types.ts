@@ -1,6 +1,7 @@
 import type { VelaEvent } from '../agent/events'
 import type { ChannelDefinition } from '../channels/types'
 import type { VelaLogger } from '../logger'
+import type { ProviderDefinition } from '../models'
 import type { ToolDefinition } from '../tools/registry'
 import type { VelaSession } from '../vela-session'
 
@@ -128,6 +129,12 @@ export interface ExtensionAPI {
    * （memory 扩展的 `memory` 工具就叫 `memory`）。
    */
   registerTool(tool: ToolDefinition): void
+  /**
+   * 注册一个模型 provider（同 pi 的 registerProvider，只支持“给出 AI SDK 模型”这一种形式）：
+   * 之后 `provider/id` 可以用在 createVela 的 model、`session.setModel()`、CLI 的 `--model` / `/model`。
+   * provider 名不加扩展名前缀；和已有的重名会抛错。
+   */
+  registerProvider(name: string, provider: ProviderDefinition): void
   /** 注册 `/name` 命令：owner 会话里 `session.prompt('/name args')` 会执行它而不是发给模型。 */
   registerCommand(name: string, command: ExtensionCommand): void
   /** 注册一个消息通道（Vela 特有）：每个发送者一个会话，默认 guest 角色。 */

@@ -73,6 +73,8 @@ export interface FauxRequest {
   }[]
   /** 请求要求的 JSON 输出（例如压缩摘要的 Output.json()） */
   responseFormat?: LanguageModelV4CallOptions['responseFormat']
+  /** 请求带的 reasoning（thinking 级别映射后的值） */
+  reasoning?: LanguageModelV4CallOptions['reasoning']
   abortSignal?: AbortSignal
 }
 
@@ -444,6 +446,7 @@ function describeRequest(
     lastUserText: lastUser ? textOf(lastUser.content) : '',
     toolResults,
     responseFormat: opts.responseFormat,
+    reasoning: opts.reasoning,
     abortSignal: opts.abortSignal,
   }
 }

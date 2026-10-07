@@ -34,6 +34,8 @@ interface AgentLoopParameter {
   onEvent?: VelaEventListener
   /** 轮数、重试、预算等上限；未给出的字段用默认值。 */
   limits?: Partial<VelaLimits>
+  /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时用 provider 默认 */
+  reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -68,6 +70,7 @@ export const agentLoop = async ({
   abortSignal,
   onEvent,
   limits: limitOverrides,
+  reasoning,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
@@ -122,6 +125,7 @@ export const agentLoop = async ({
             tools: request.tools,
             messages,
             maxRetries: 0, // 禁止 streamText 内部重试，交由外层控制重试逻辑
+            ...(reasoning ? { reasoning } : {}),
             abortSignal,
             // 错误在下面的 'error' 分支里抛出并通过 retry/agent_end 事件报告，不再由 SDK 打印
             onError: () => {},

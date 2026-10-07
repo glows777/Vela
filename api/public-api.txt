@@ -13,7 +13,7 @@
     start: () => Promise<void> | void
     stop: () => Promise<void> | void
   function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
-  function createVela: (options: VelaOptions) => Vela
+  function createVela: (options?: VelaOptions) => Vela
   type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
   interface ExtensionAPI
     on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
@@ -23,6 +23,7 @@
     readonly logger: VelaLogger
     registerChannel: (channel: ChannelDefinition) => void
     registerCommand: (name: string, command: ExtensionCommand) => void
+    registerProvider: (name: string, provider: ProviderDefinition) => void
     registerTool: (tool: ToolDefinition) => void
   interface ExtensionCommand
     description?: string | undefined
@@ -73,9 +74,30 @@
     channels: string[]
     commands: string[]
     name: string
+    providers: string[]
     tools: string[]
+  function loadModels: (options: { agentDir: string; env?: Env; }) => Record<string, ProviderDefinition>
   function memory: () => VelaExtension
   function memorySessionStorage: () => SessionStorage
+  interface ModelInfo
+    contextWindow?: number | undefined
+    cost?: ModelPricing | undefined
+    id: string
+    name?: string | undefined
+    provider: string
+    reasoning?: boolean | undefined
+    ref: string
+  interface ModelPricing
+    cacheRead: number
+    cacheWrite: number
+    input: number
+    output: number
+  interface ModelSpec
+    contextWindow?: number | undefined
+    cost?: ModelPricing | undefined
+    id: string
+    name?: string | undefined
+    reasoning?: boolean | undefined
   interface OutgoingMessage
     channelId: string
     recipientId: string
@@ -84,18 +106,34 @@
   type PermissionRules = Record<string, PermissionDecision>
   interface PromptOptions
     signal?: AbortSignal | undefined
+  type ProviderApi = | 'openai-completions'
+      | 'openai-responses'
+      | 'anthropic-messages'
+  interface ProviderConfig
+    api?: ProviderApi | undefined
+    apiKey?: string | undefined
+    baseUrl?: string | undefined
+    headers?: Record<string, string> | undefined
+    models?: ModelSpec[] | undefined
+  interface ProviderDefinition
+    createModel: (id: string) => LanguageModel
+    models?: ModelSpec[] | undefined
   function rag: (options?: RagOptions) => VelaExtension
   interface RagOptions
     embedder?: EmbeddingFn | undefined
   type Role = 'owner' | 'collaborator' | 'guest'
   interface SessionCheckpoint
     messages: { timestamp: string; message: ModelMessage; }[]
+    model?: string | undefined
     summary: string
+    thinkingLevel?: ThinkingLevel | undefined
     timestamp: string
     type: "checkpoint"
   interface SessionOptions
+    model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     permissions?: PermissionRules | undefined
     role?: Role | undefined
+    thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
     ui?: ExtensionUI | undefined
   interface SessionShutdownEvent
@@ -110,6 +148,13 @@
   interface SupabaseOptions
     key?: string | undefined
     url?: string | undefined
+  type ThinkingLevel = | 'off'
+      | 'minimal'
+      | 'low'
+      | 'medium'
+      | 'high'
+      | 'xhigh'
+      | 'max'
   interface TokenStatus
     needsAction: boolean
     percent: number
@@ -158,6 +203,7 @@
     commands: () => { name: string; description?: string; extension: string; }[]
     dispose: () => Promise<void>
     extensions: () => LoadedExtension[]
+    models: () => ModelInfo[]
     readonly cwd: string
     readonly dataDir: string
     readonly limits: VelaLimits
@@ -174,6 +220,7 @@
     extensionConfig: Record<string, Record<string, unknown>>
     extensions: ExtensionEntry[]
     files: string[]
+    providers: Record<string, ProviderDefinition>
     settings: VelaSettings
     skillDirs: string[]
   type VelaEvent = | { type: 'agent_start'; input: string }
@@ -274,23 +321,29 @@
     extensions?: VelaExtension[] | undefined
     limits?: Partial<VelaLimits> | undefined
     logger?: VelaLogger | undefined
-    model: LanguageModel
+    model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
+    providers?: Record<string, ProviderDefinition> | undefined
     sessionStorage?: SessionStorage | undefined
     skillDirs?: string[] | undefined
+    thinkingLevel?: ThinkingLevel | undefined
   class VelaSession
     abort: (reason?: unknown) => void
     append: (message: ModelMessage) => void
     close: () => Promise<void>
+    get model: LanguageModel
+    get modelInfo: ModelInfo
+    get thinkingLevel: ThinkingLevel | undefined
     get usage: TokenStatus & { totals: UsageTotals; }
     getActiveTools: () => string[]
     prompt: (input: string, options?: PromptOptions) => Promise<void>
     readonly id: string
     readonly limits: VelaLimits
     readonly messages: ModelMessage[]
-    readonly model: LanguageModel
     resume: () => Promise<boolean>
     role: Role
     setActiveTools: (names: string[] | undefined) => void
+    setModel: (model: string | LanguageModel) => void
+    setThinkingLevel: (level: ThinkingLevel | undefined) => void
     subscribe: (listener: VelaEventListener) => () => void
   type VelaSessionEventListener = (
       event: VelaEvent,
@@ -298,6 +351,8 @@
       ) => void
   interface VelaSettings
     dataDir?: string | undefined
+    defaultModel?: string | undefined
+    defaultThinkingLevel?: ThinkingLevel | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: string[] | undefined
     limits?: Partial<VelaLimits> | undefined
@@ -339,7 +394,8 @@
     kind: "stream" | "generate"
     lastUserText: string
     prompt: LanguageModelV4Prompt
-    responseFormat?: { type: "text"; } | { type: "json"; schema?: JSONSchema7; name?: string; description?: string; } | undefined
+    reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "provider-default" | "none" | undefined
+    responseFormat?: { type: "text"; } | { type: "json"; schema?: JSONSchema7$1; name?: string; description?: string; } | undefined
     system: string
     toolResults: { toolCallId: string; toolName: string; output: string; raw: unknown; }[]
     tools: string[]
@@ -408,8 +464,10 @@
     generate?: FauxStep[] | undefined
     limits?: Partial<VelaLimits> | undefined
     logger?: VelaLogger | undefined
-    model?: LanguageModel | undefined
+    model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
+    providers?: Record<string, ProviderDefinition> | undefined
     responses?: FauxStep[] | undefined
     session?: SessionOptions | undefined
     sessionId?: string | undefined
     skills?: FixtureSkill[] | undefined
+    thinkingLevel?: ThinkingLevel | undefined

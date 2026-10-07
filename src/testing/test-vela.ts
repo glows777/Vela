@@ -12,6 +12,7 @@ import type { VelaEvent } from '../agent/events'
 import type { VelaExtension } from '../extensions/types'
 import type { VelaLimits } from '../limits'
 import type { VelaLogger } from '../logger'
+import type { ProviderDefinition, ThinkingLevel } from '../models'
 import { memory } from '../extensions/memory'
 import { rag } from '../extensions/rag'
 import type { EmbeddingFn } from '../extensions/rag/embedder'
@@ -43,8 +44,12 @@ export interface TestVelaOptions {
   generate?: FauxStep[]
   /** faux 的其他选项（chunkSize、cache…） */
   faux?: Omit<FauxModelOptions, 'responses' | 'generate'>
-  /** 直接指定模型（不用 faux）；此时 `t.model` 不可用 */
-  model?: LanguageModel
+  /** 直接指定模型（不用 faux），或 `provider/id`（配合 `providers`）；此时 `t.model` 不可用 */
+  model?: LanguageModel | string
+  /** 模型 provider，同 createVela 的 `providers` */
+  providers?: Record<string, ProviderDefinition>
+  /** 新会话默认的 thinking 级别 */
+  thinkingLevel?: ThinkingLevel
   /** 复用已有目录（例如测试会话恢复）；不传则新建临时目录 */
   cwd?: string
   /** 相对 cwd 的数据目录，默认 `.vela-data`（持久化，同一 cwd 再建 TestVela 能恢复会话） */
@@ -100,6 +105,8 @@ export function createTestVela(options: TestVelaOptions = {}) {
     model: options.model ?? (faux as FauxModel),
     cwd,
     dataDir: options.dataDir ?? '.vela-data',
+    providers: options.providers,
+    thinkingLevel: options.thinkingLevel,
     limits: { retryBaseMs: 0, ...options.limits },
     logger: options.logger,
     extensionConfig: options.extensionConfig,

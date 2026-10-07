@@ -131,6 +131,16 @@ test('mistakes in settings are reported with the file name', () => {
   expect(() => loadConfig({ ...unknown, builtins: ['memory'] })).toThrow(
     '未知的内置扩展 builtin:nope',
   )
+  const badModel = setup({ 'home/settings.json': json({ defaultModel: 'gpt' }) })
+  expect(() => loadConfig(badModel)).toThrow('defaultModel 要写成 "provider/id"')
+  const badThinking = setup({
+    'home/settings.json': json({ defaultThinkingLevel: 'huge' }),
+  })
+  expect(() => loadConfig(badThinking)).toThrow('defaultThinkingLevel 只能是')
+  const badModels = setup({
+    'home/models.json': json({ providers: { x: { api: 'grpc' } } }),
+  })
+  expect(() => loadConfig(badModels)).toThrow('providers.x.api 只支持')
 })
 
 test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal dollar', () => {

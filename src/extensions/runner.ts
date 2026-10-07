@@ -2,6 +2,7 @@ import type { VelaEvent } from '../agent/events'
 import type { ChannelGateway } from '../channels/gateway'
 import { errorMessage, type VelaLogger } from '../logger'
 import type { HookPipeline } from '../security/hooks'
+import type { ModelRegistry } from '../models'
 import type { ToolRegistry } from '../tools/registry'
 import type { VelaSession } from '../vela-session'
 import type {
@@ -21,6 +22,7 @@ interface RunnerDeps {
   extensionConfig: Record<string, Record<string, unknown>>
   logger: VelaLogger
   registry: ToolRegistry
+  models: ModelRegistry
   hooks: HookPipeline
   gateway: ChannelGateway
   /** 按 id 取已打开的会话（hooks 只知道会话 id） */
@@ -30,6 +32,8 @@ interface RunnerDeps {
 export interface LoadedExtension {
   name: string
   tools: string[]
+  /** 注册的模型 provider */
+  providers: string[]
   commands: string[]
   channels: string[]
 }
@@ -116,6 +120,7 @@ export class ExtensionRunner {
     const loaded: LoadedExtension = {
       name,
       tools: [],
+      providers: [],
       commands: [],
       channels: [],
     }
@@ -127,6 +132,10 @@ export class ExtensionRunner {
       dataDir: deps.dataDir,
       config: Object.freeze({ ...deps.extensionConfig[name] }),
       logger: deps.logger,
+      registerProvider: (providerName, provider) => {
+        deps.models.register(providerName, provider)
+        loaded.providers.push(providerName)
+      },
       registerTool: (tool) => {
         // 工具名加上扩展名前缀，避免和内置工具或其它扩展的工具重名；
         // 工具名就是扩展名时不重复（memory 扩展的 memory 工具不叫 memory_memory）
