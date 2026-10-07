@@ -45,11 +45,6 @@ export interface VelaOptions {
   env?: Record<string, string | undefined>
 }
 
-export interface SessionOptions {
-  /** 会话 id，默认 'default'；会成为 `.sessions/<id>.jsonl` 的文件名 */
-  id?: string
-}
-
 /**
  * 装配一个 Vela：工具、hooks、prompt、记忆、RAG、skills、插件和通道。
  * 对话通过 `vela.session(id)` 打开；同一个 Vela 可以同时开多个会话，
@@ -68,7 +63,9 @@ export function createVela(options: VelaOptions) {
     new ToolResultStore(join(dataDir, '.sessions', '.shared', 'tool-results')),
   )
   registry.setLogger(logger)
-  registry.register(...createCoreTools({ cwd, bashTimeoutMs: limits.bashTimeoutMs }))
+  registry.register(
+    ...createCoreTools({ cwd, bashTimeoutMs: limits.bashTimeoutMs }),
+  )
 
   const hooks = new HookPipeline(logger)
   hooks.registerPre('audit-log', (toolName, input, context) => {
@@ -98,7 +95,8 @@ export function createVela(options: VelaOptions) {
   registry.register(createMemoryTool(memoryStore))
 
   const vectorStore = new SqliteVectorStore(join(dataDir, 'knowledge.db'))
-  if (embedder) registry.register(...createRagTools(vectorStore, embedder, { cwd }))
+  if (embedder)
+    registry.register(...createRagTools(vectorStore, embedder, { cwd }))
 
   const builder = new PromptPipeline()
     .pipe('coreRules', coreRules())
@@ -117,13 +115,12 @@ export function createVela(options: VelaOptions) {
   const sessions = new Map<string, VelaSession>()
   let disposed = false
 
-  /** 打开（或取回已打开的）会话；需要恢复历史时再 `await session.resume()`。 */
-  const session = (idOrOptions: string | SessionOptions = {}): VelaSession => {
+  /**
+   * 打开（或取回已打开的）会话；id 会成为 `.sessions/<id>.jsonl` 的文件名。
+   * 需要恢复历史时再 `await session.resume()`。
+   */
+  const session = (id = 'default'): VelaSession => {
     if (disposed) throw new Error('Vela 已 dispose')
-    const id =
-      typeof idOrOptions === 'string'
-        ? idOrOptions
-        : (idOrOptions.id ?? 'default')
     const existing = sessions.get(id)
     if (existing) return existing
     const created = new VelaSession(id, {

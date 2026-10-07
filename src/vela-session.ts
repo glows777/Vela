@@ -10,7 +10,11 @@ import type { VelaLogger } from './logger'
 import type { PromptContext, PromptPipeline } from './prompt/pipelins'
 import { SessionStore } from './session/index'
 import type { ToolRegistry } from './tools/registry'
-import { TokenTracker, type TokenStatus, type UsageTotals } from './usage/tracker'
+import {
+  TokenTracker,
+  type TokenStatus,
+  type UsageTotals,
+} from './usage/tracker'
 
 export interface PromptOptions {
   signal?: AbortSignal
@@ -24,12 +28,6 @@ export function assertSessionId(id: string): void {
     throw new Error(
       `无效的会话 id "${id}"：只允许字母、数字、. _ -，不能以 . 开头，最长 128 个字符`,
     )
-}
-
-/** 把任意字符串（例如通道名 + 发送者 id）转换成合法的会话 id。 */
-export function toSessionId(raw: string): string {
-  const safe = raw.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\./, '_')
-  return safe.slice(0, 128) || '_'
 }
 
 /** createVela() 交给每个会话的共享部分。 */
@@ -81,7 +79,11 @@ export class VelaSession {
     this.model = deps.model
     this.limits = deps.limits
     this.builder = deps.builder
-    this.store = new SessionStore(id, join(deps.dataDir, '.sessions'), deps.logger)
+    this.store = new SessionStore(
+      id,
+      join(deps.dataDir, '.sessions'),
+      deps.logger,
+    )
     this.registry = deps.registry.fork(this.store.results, {
       onEvent: this.emit,
       sessionId: id,
@@ -158,10 +160,8 @@ export class VelaSession {
 
   /** 追加一条用户消息并跑完一次 agent loop，结束后保存会话。 */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
-    if (this.closed)
-      return Promise.reject(new Error(`会话 ${this.id} 已关闭`))
-    if (this.busy.locked)
-      return Promise.reject(new Error('有任务正在执行中'))
+    if (this.closed) return Promise.reject(new Error(`会话 ${this.id} 已关闭`))
+    if (this.busy.locked) return Promise.reject(new Error('有任务正在执行中'))
     const run = this.run(input, options)
     this.running = run.then(
       () => {},

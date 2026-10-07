@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ModelMessage } from 'ai'
 import { errorMessage, silentLogger, type VelaLogger } from '../logger'
-import { toSessionId, type VelaSession } from '../vela-session'
+import type { VelaSession } from '../vela-session'
 import type {
   ChannelDefinition,
   IncomingMessage,
@@ -19,8 +19,8 @@ const PLAIN = /^[A-Za-z0-9_]+$/
 /**
  * 通道发送者对应的会话 id，例如 `feishu-ou_123`。
  * 不同发送者必须落到不同会话（否则会看到彼此的历史）：通道名和发送者 id 都只含
- * 字母、数字、`_` 时直接拼接（恰好一个 `-`）；否则在清洗后的字符串后面加原文的哈希
- * （至少两个 `-`），两种形式互不重叠。
+ * 字母、数字、`_` 时直接拼接；否则清洗后加 `.` 和原文的哈希。直接拼接的 id 不含 `.`，
+ * 两种形式互不重叠。
  */
 export const channelSessionId = (channel: string, senderId: string) => {
   const plain = `${channel}-${senderId}`
@@ -30,7 +30,8 @@ export const channelSessionId = (channel: string, senderId: string) => {
     .update(`${channel}\0${senderId}`)
     .digest('hex')
     .slice(0, 16)
-  return `${toSessionId(plain).slice(0, 128 - 17)}-${hash}`
+  const safe = plain.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128 - 17)
+  return `${safe}.${hash}`
 }
 
 export class ChannelGateway {
