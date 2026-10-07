@@ -1,11 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
 import type { VelaEvent } from '../../src/agent/events'
-import {
-  fauxHang,
-  fauxText,
-  fauxToolCall,
-} from '../../src/testing/faux'
+import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux'
 import { cleanupTestVelas, createTestVela } from '../support/vela'
 
 afterEach(cleanupTestVelas)
@@ -74,7 +70,10 @@ test('session.subscribe only sees its own events; vela.subscribe sees all with t
 
   expect(mine.filter((type) => type === 'agent_end')).toHaveLength(1)
   expect(all).toEqual(['default', 'other', 'default'])
-  expect(t.eventsIn('other').at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsIn('other').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
 })
 
 test('tools discovered with tool_search are only active in the session that searched', async () => {
@@ -138,4 +137,17 @@ test('vela.dispose() aborts running sessions and refuses new ones', async () => 
   await expect(running).rejects.toThrow()
   expect(t.session.busy.locked).toBe(false)
   expect(() => t.vela.session('late')).toThrow('dispose')
+})
+
+test('resume() refuses to replace the history of a running session', async () => {
+  const t = createTestVela({ responses: [fauxHang()] })
+  const running = t.session.prompt('一直想')
+  while (t.model.calls.length === 0) await Bun.sleep(1)
+  await expect(t.session.resume()).rejects.toThrow()
+  t.session.abort()
+  await running.catch(() => {})
+  expect(t.session.messages[0]).toMatchObject({
+    role: 'user',
+    content: '一直想',
+  })
 })

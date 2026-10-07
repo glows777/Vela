@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { generateText } from 'ai'
 import type { VelaEvent } from '../../../src/agent/events'
@@ -158,6 +159,15 @@ test('replayScenario needs recorded inputs', async () => {
     const path = join(dir.path, 'no-inputs.json')
     await Bun.write(path, JSON.stringify({ responses: [{ text: 'x' }] }))
     await expect(replayScenario(path)).rejects.toThrow('inputs')
+  } finally {
+    dir.cleanup()
+  }
+})
+
+test('the recording is readable only by the current user', async () => {
+  const { path, dir } = await record({ responses: [fauxText('hi')] }, ['hello'])
+  try {
+    expect(statSync(path).mode & 0o777).toBe(0o600)
   } finally {
     dir.cleanup()
   }

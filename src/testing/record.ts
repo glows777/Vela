@@ -1,3 +1,5 @@
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type {
   LanguageModelV4,
   LanguageModelV4CallOptions,
@@ -49,15 +51,25 @@ export function recordModel(
   const scenario = (): FauxScenario => {
     const done = (list: (FauxResponse | undefined)[]) =>
       list.filter((r): r is FauxResponse => r !== undefined)
-    const result: FauxScenario = { inputs: [...inputs], responses: done(responses) }
+    const result: FauxScenario = {
+      inputs: [...inputs],
+      responses: done(responses),
+    }
     const generated = done(generate)
     if (generated.length) result.generate = generated
     return result
   }
   const save = () => {
-    writing = writing
-      .then(() => Bun.write(options.path, `${JSON.stringify(scenario(), null, 2)}\n`))
-      .then(() => {})
+    writing = writing.then(async () => {
+      // 文件里有对话原文，只给当前用户读写（Bun.write 不应用 mode）
+      await mkdir(dirname(options.path), { recursive: true })
+      await writeFile(
+        options.path,
+        `${JSON.stringify(scenario(), null, 2)}\n`,
+        { mode: 0o600 },
+      )
+      await chmod(options.path, 0o600)
+    })
     return writing
   }
   const settle = (
@@ -98,7 +110,8 @@ export function recordModel(
             controller.close()
             return
           }
-          if (value.type === 'error') finish({ streamError: errorText(value.error) })
+          if (value.type === 'error')
+            finish({ streamError: errorText(value.error) })
           else collected.add(value)
           controller.enqueue(value)
         } catch (error) {
@@ -123,13 +136,19 @@ export function recordModel(
     const slot = generate.push(undefined) - 1
     try {
       const result = await inner.doGenerate(opts)
-      settle(generate, slot, fromContent(result.content, result.finishReason.unified, result.usage))
+      settle(
+        generate,
+        slot,
+        fromContent(result.content, result.finishReason.unified, result.usage),
+      )
       return result
     } catch (error) {
       settle(
         generate,
         slot,
-        opts.abortSignal?.aborted ? { hang: true } : { error: errorText(error) },
+        opts.abortSignal?.aborted
+          ? { hang: true }
+          : { error: errorText(error) },
       )
       throw error
     }

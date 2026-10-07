@@ -7,7 +7,11 @@ import type {
   OutgoingMessage,
 } from '../../src/channels/types'
 import { fauxHang, fauxText } from '../../src/testing/faux'
-import { cleanupTestVelas, createTestVela, type TestVela } from '../support/vela'
+import {
+  cleanupTestVelas,
+  createTestVela,
+  type TestVela,
+} from '../support/vela'
 
 afterEach(cleanupTestVelas)
 
@@ -44,7 +48,9 @@ test('each sender gets its own persisted session', async () => {
   await Promise.all([deliver('u1', '我是 u1'), deliver('u2', '我是 u2')])
 
   expect(
-    sent.map((m) => [m.recipientId, m.text]).sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    sent
+      .map((m) => [m.recipientId, m.text])
+      .sort((a, b) => a[0]!.localeCompare(b[0]!)),
   ).toEqual([
     ['u1', '你好 u1'],
     ['u2', '你好 u2'],
@@ -93,7 +99,9 @@ test('messages from the same sender are handled one after another', async () => 
   expect(sent.map((m) => m.text)).toEqual(['第一条的回复', '第二条的回复'])
   // 第二次请求看到了第一轮的完整历史
   expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('第一条的回复')
-  expect(t.eventsIn('fake-u1').filter((e) => e.type === 'channel_error')).toEqual([])
+  expect(
+    t.eventsIn('fake-u1').filter((e) => e.type === 'channel_error'),
+  ).toEqual([])
 })
 
 test('stopping the gateway aborts a running channel session and reports it', async () => {
@@ -109,4 +117,46 @@ test('stopping the gateway aborts a running channel session and reports it', asy
   expect(t.eventsOf('channel_error')).toMatchObject([
     { channel: 'fake', senderId: 'u1', aborted: true },
   ])
+})
+
+test('senders whose ids sanitize to the same string get separate sessions', async () => {
+  // 只替换非法字符会让 a@b 和 a_b、或 (fake, x-y) 和 (fake-x, y) 落到同一个会话文件，互相看到历史
+  expect(channelSessionId('fake', 'a@b')).not.toBe(
+    channelSessionId('fake', 'a_b'),
+  )
+  expect(channelSessionId('fake', 'x-y')).not.toBe(
+    channelSessionId('fake-x', 'y'),
+  )
+  const long = 'u'.repeat(200)
+  expect(channelSessionId('fake', `${long}1`)).not.toBe(
+    channelSessionId('fake', `${long}2`),
+  )
+  // 普通 id 保持可读
+  expect(channelSessionId('feishu', 'ou_123')).toBe('feishu-ou_123')
+
+  const t = createTestVela({ responses: [fauxText('好'), fauxText('不知道')] })
+  const { deliver } = fakeChannel(t)
+  await deliver('a@b', '我的密码是 hunter2')
+  await deliver('a_b', '你知道什么？')
+  expect(JSON.stringify(t.model.calls[1]?.prompt)).not.toContain('hunter2')
+})
+
+test('a channel session closed while idle resumes its history when reopened', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxText('记住了：蓝色'),
+      (req) =>
+        fauxText(
+          JSON.stringify(req.prompt).includes('我喜欢蓝色') ? '蓝色' : '不知道',
+        ),
+    ],
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await deliver('u1', '我喜欢蓝色')
+  // 长期运行的机器人可能关掉空闲会话释放内存
+  await t.vela.session(channelSessionId('fake', 'u1')).close()
+
+  await deliver('u1', '我喜欢什么颜色？')
+  expect(sent.at(-1)?.text).toBe('蓝色')
+  expect(await t.readData('.sessions/fake-u1.jsonl')).toContain('我喜欢蓝色')
 })

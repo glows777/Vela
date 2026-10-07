@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { ModelMessage } from 'ai'
 import { errorMessage, silentLogger, type VelaLogger } from '../logger'
 import { toSessionId, type VelaSession } from '../vela-session'
@@ -13,15 +14,31 @@ interface GatewayOptions {
   logger?: VelaLogger
 }
 
-/** 通道发送者对应的会话 id，例如 `feishu-ou_123`。 */
-export const channelSessionId = (channel: string, senderId: string) =>
-  toSessionId(`${channel}-${senderId}`)
+const PLAIN = /^[A-Za-z0-9_]+$/
+
+/**
+ * 通道发送者对应的会话 id，例如 `feishu-ou_123`。
+ * 不同发送者必须落到不同会话（否则会看到彼此的历史）：通道名和发送者 id 都只含
+ * 字母、数字、`_` 时直接拼接（恰好一个 `-`）；否则在清洗后的字符串后面加原文的哈希
+ * （至少两个 `-`），两种形式互不重叠。
+ */
+export const channelSessionId = (channel: string, senderId: string) => {
+  const plain = `${channel}-${senderId}`
+  if (PLAIN.test(channel) && PLAIN.test(senderId) && plain.length <= 128)
+    return plain
+  const hash = createHash('sha256')
+    .update(`${channel}\0${senderId}`)
+    .digest('hex')
+    .slice(0, 16)
+  return `${toSessionId(plain).slice(0, 128 - 17)}-${hash}`
+}
 
 export class ChannelGateway {
   private channels = new Map<string, ChannelDefinition>()
   /** 每个会话串行处理消息：同一发送者连发两条时，第二条等第一条跑完 */
   private queues = new Map<string, Promise<void>>()
-  private resumed = new Set<string>()
+  /** 已从磁盘恢复过的会话对象；会话被关闭后重新打开是新对象，要再恢复一次 */
+  private resumed = new WeakSet<VelaSession>()
   private active = new Set<VelaSession>()
   private stopped = false
   private readonly logger: VelaLogger
@@ -68,7 +85,9 @@ export class ChannelGateway {
     const next = previous
       .then(() => this.process(id, channelName, msg))
       .catch((error) =>
-        this.logger.error(`[${channelName}] 处理消息失败: ${errorMessage(error)}`),
+        this.logger.error(
+          `[${channelName}] 处理消息失败: ${errorMessage(error)}`,
+        ),
       )
     this.queues.set(id, next)
     void next.then(() => {
@@ -84,8 +103,8 @@ export class ChannelGateway {
   ): Promise<void> {
     if (this.stopped) return
     const session = this.options.session(id)
-    if (!this.resumed.has(id)) {
-      this.resumed.add(id)
+    if (!this.resumed.has(session)) {
+      this.resumed.add(session)
       await session.resume()
     }
     session.emit({

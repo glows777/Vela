@@ -138,8 +138,10 @@ export class VelaSession {
     return this.contextManager.save()
   }
 
-  /** 从磁盘恢复会话；返回是否找到已有会话。 */
+  /** 从磁盘恢复会话（替换内存里的历史）；返回是否找到已有会话。运行中不能恢复。 */
   async resume(): Promise<boolean> {
+    if (this.busy.locked)
+      throw new Error(`会话 ${this.id} 正在运行，不能恢复历史`)
     if (!(await this.store.exists())) return false
     this.contextManager.restore(await this.store.loadState())
     this.tracker.setEstimatedTokens(estimateMessageTokens(this.messages))
