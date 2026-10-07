@@ -14,7 +14,8 @@ import { createVela } from '../vela'
 import type { VelaSession } from '../vela-session'
 import { runInteractive } from './interactive'
 import { redirectConsoleToStderr, writeStdout } from './json-event'
-import { createConsoleLogger } from './logger'
+import { join } from 'node:path'
+import { createConsoleLogger, createInteractiveLogger } from './logger'
 import { runPrintMode } from './print-mode'
 import { runRpcMode } from './rpc-mode'
 import { newSessionId } from './sessions'
@@ -139,10 +140,17 @@ if (env.VELA_RECORD) {
   }
 }
 
-const logger = createConsoleLogger({
-  debug: env.VELA_DEBUG === '1',
-  stderr: mode !== 'interactive',
-})
+// 交互模式的日志进 TUI 的对话区，debug 写 ~/.vela/debug.log；其它模式写 stderr
+const interactiveLogger =
+  mode === 'interactive'
+    ? createInteractiveLogger({
+        debugLog:
+          env.VELA_DEBUG === '1' ? join(agentDir, 'debug.log') : undefined,
+      })
+    : undefined
+const logger =
+  interactiveLogger?.logger ??
+  createConsoleLogger({ debug: env.VELA_DEBUG === '1', stderr: true })
 const vela = createVela({
   model: recorder?.model ?? chosenModel,
   providers: config.providers,
@@ -243,10 +251,13 @@ if (mode === 'print' || mode === 'json') {
     sessionId,
     resume,
     pick: args.resume,
+    newSessionId,
     configure: applyModelArgs,
+    attachLogger: interactiveLogger?.attach,
     onExit: async () => {
       await vela.dispose()
       await recorder?.flush()
     },
   })
+  process.exit(0)
 }

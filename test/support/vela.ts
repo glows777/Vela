@@ -23,18 +23,12 @@ export function createTestVela(options: TestVelaOptions = {}) {
   const t = createCoreTestVela(options)
   const internals = velaInternals(t.vela)
 
-  let asks = 0
-  let idleWaiters: (() => void)[] = []
   const ctx: CommandContext = {
     vela: t.vela,
     internals,
     session: t.session,
-    ask: () => {
-      asks++
-      const waiters = idleWaiters
-      idleWaiters = []
-      for (const resolve of waiters) resolve()
-    },
+    // 命令输出照旧走 console.log，用 captureConsole() 捕获
+    print: (text) => console.log(text),
   }
   const dispatch = createCliDispatcher(t.vela)
 
@@ -42,17 +36,14 @@ export function createTestVela(options: TestVelaOptions = {}) {
     /** createVela() 的内部对象（registry、记忆、知识库、通道网关…），只给测试用 */
     internals,
     ctx,
-    /** 执行斜杠命令；返回值同 CLI 分发器：true / false / 'async' */
+    /** 执行斜杠命令；返回值同 CLI 分发器：false / true / Promise（异步命令） */
     dispatch: (command: string) => dispatch(command, ctx),
-    /** 执行斜杠命令并等它结束（异步命令等到它调用 ask()） */
+    /** 执行斜杠命令并等它结束；返回是否认领了这个命令 */
     command: async (command: string) => {
-      const before = asks
-      const done = new Promise<void>((resolve) => idleWaiters.push(resolve))
       const result = dispatch(command, ctx)
-      if (result === 'async' && asks === before) await done
-      return result
+      if (result instanceof Promise) await result
+      return result !== false
     },
-    askCount: () => asks,
   })
 }
 
@@ -60,8 +51,8 @@ export type TestVela = ReturnType<typeof createTestVela>
 
 /** 捕获 console.log / console.error 的输出，返回拼好的文本 */
 export async function captureConsole<T>(
-  fn: () => T | Promise<T>,
-): Promise<{ result: T; output: string }> {
+  fn: () => T,
+): Promise<{ result: Awaited<T>; output: string }> {
   const lines: string[] = []
   const record = (...args: unknown[]) => {
     lines.push(args.map(String).join(' '))

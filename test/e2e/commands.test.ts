@@ -17,7 +17,7 @@ test('/context and /usage report the conversation after a run', async () => {
   await t.run('hi')
 
   const { output } = await captureConsole(async () => {
-    expect(await t.command('/context')).toBe('async')
+    expect(await t.command('/context')).toBe(true)
     expect(t.dispatch('/usage')).toBe(true)
     expect(t.dispatch('status')).toBe(true)
   })

@@ -3,15 +3,15 @@ import type { CommandHandler } from './index'
 
 /** `/model [provider/id]`、`/thinking [级别]`：查看或切换当前会话的模型和 thinking（选择器 UI 留给 TUI）。 */
 export const modelCommands: CommandHandler[] = [
-  (cmd, { vela, session }) => {
+  (cmd, { print, vela, session }) => {
     if (cmd !== '/model' && !cmd.startsWith('/model ')) return false
     const ref = cmd.slice('/model'.length).trim()
     if (ref) {
       try {
         session.setModel(ref)
-        console.log(`\n[模型] 当前会话改用 ${session.modelInfo.ref}`)
+        print(`\n[模型] 当前会话改用 ${session.modelInfo.ref}`)
       } catch (error) {
-        console.log(
+        print(
           `\n[模型] ${error instanceof Error ? error.message : String(error)}`,
         )
       }
@@ -38,24 +38,24 @@ export const modelCommands: CommandHandler[] = [
       }
     } else
       lines.push('  /model <provider/id> 切换，例如 /model anthropic/<模型 id>')
-    console.log(lines.join('\n'))
+    print(lines.join('\n'))
     return true
   },
-  (cmd, { session }) => {
+  (cmd, { print, session }) => {
     if (cmd !== '/thinking' && !cmd.startsWith('/thinking ')) return false
     const level = cmd.slice('/thinking'.length).trim()
     if (!level) {
-      console.log(
+      print(
         `\n[thinking] 当前: ${session.thinkingLevel}；可选 ${THINKING_LEVELS.join(' / ')}`,
       )
       return true
     }
     if (!THINKING_LEVELS.includes(level as ThinkingLevel)) {
-      console.log(`\n[thinking] 只能是 ${THINKING_LEVELS.join(' / ')}`)
+      print(`\n[thinking] 只能是 ${THINKING_LEVELS.join(' / ')}`)
       return true
     }
     session.setThinkingLevel(level as ThinkingLevel)
-    console.log(`\n[thinking] 当前会话: ${session.thinkingLevel}`)
+    print(`\n[thinking] 当前会话: ${session.thinkingLevel}`)
     return true
   },
 ]

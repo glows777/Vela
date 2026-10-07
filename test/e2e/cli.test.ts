@@ -1,6 +1,7 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { projectDataDir } from '../../src/config'
 import { tempDir } from '../support/vela'
 
@@ -31,8 +32,8 @@ async function cli(
     files?: Record<string, string>
     env?: Record<string, string>
     stdin?: string
-    /** 在伪终端里运行（交互模式） */
-    terminal?: boolean
+    /** 在伪终端里运行（交互模式）：屏幕上出现第一项后，输入第二项（按顺序） */
+    terminal?: [waitFor: string, send: string][]
   },
 ) {
   let cwd = options.cwd
@@ -57,10 +58,36 @@ async function cli(
     ...options.env,
   }
   const command = ['bun', ENTRY, ...args]
-  const argv = options.terminal
-    ? ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null']
-    : command
-  const proc = Bun.spawn(argv, {
+  if (options.terminal) {
+    const proc = Bun.spawn(
+      ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null'],
+      { cwd, env, stdout: 'pipe', stderr: 'pipe', stdin: 'pipe' },
+    )
+    const steps = [...options.terminal]
+    let stdout = ''
+    const decoder = new TextDecoder()
+    for await (const chunk of proc.stdout) {
+      stdout += decoder.decode(chunk, { stream: true })
+      const screen = stripTerminalSequences(stdout)
+      while (steps.length && screen.includes(steps[0]![0])) {
+        proc.stdin.write(steps.shift()![1])
+        await proc.stdin.flush()
+      }
+    }
+    const [stderr, code] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return {
+      stdout: stripTerminalSequences(stdout),
+      stderr,
+      code,
+      cwd,
+      agentDir,
+      dataDir: projectDataDir(agentDir, cwd),
+    }
+  }
+  const proc = Bun.spawn(command, {
     cwd,
     env,
     stdout: 'pipe',
@@ -337,22 +364,23 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
   expect(stdout.trim()).not.toBe('')
 }, 20_000)
 
-// 交互模式只在终端里出现（管道输入走单次模式，同 pi）：用 util-linux 的 script 给子进程一个伪终端
+// 交互模式（TUI）只在终端里出现（管道输入走单次模式，同 pi）：用 util-linux 的 script 给子进程一个伪终端。
+// TUI 本身的行为在 e2e/tui 里用假终端测，这里只确认真实终端里能启动、对话、退出
 const hasScript =
   process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
 
 test.if(hasScript)(
-  'interactive mode in a terminal: a turn, a slash command, then exit',
+  'interactive mode in a real terminal: a turn, then Ctrl+D exits and the session is saved',
   async () => {
     const { stdout, code, dataDir } = await cli([], {
       model: `faux:${scenario('hello')}`,
-      stdin: '你好\n/memory\nexit\n',
-      terminal: true,
+      terminal: [
+        ['Ctrl+D 退出', '你好\r'],
+        ['你好，我是 Vela（faux 回放）。', '\x04'],
+      ],
     })
     expect(code).toBe(0)
     expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
-    expect(stdout).toContain('[记忆系统] 共 0 条记忆')
-    expect(stdout).toContain('Bye!')
     const files = sessionFiles(dataDir)
     expect(files).toHaveLength(1)
     expect(await Bun.file(files[0]!).text()).toContain('你好')
@@ -370,15 +398,14 @@ test.if(hasScript)(
       model: `faux:${scenario('hello')}`,
       cwd: first.cwd,
       agentDir: first.agentDir,
-      stdin: '1\n/memory\nexit\n',
-      terminal: true,
+      terminal: [
+        ['选择要恢复的会话', '\r'],
+        ['恢复会话', '\x04'],
+      ],
     })
     expect(picked.code).toBe(0)
-    expect(picked.stdout).toContain('选择要恢复的会话')
-    expect(picked.stdout).toContain('1. 你好')
-    expect(picked.stdout).not.toContain('开新会话')
-    expect(picked.stdout).toContain('Bye!')
-    // 恢复的是同一个会话，没有另存一个新的
+    // 恢复的历史画出来了；恢复的是同一个会话，没有另存一个新的
+    expect(picked.stdout).toContain('你好，我是 Vela（faux 回放）。')
     expect(sessionFiles(first.dataDir)).toHaveLength(1)
   },
 )

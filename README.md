@@ -187,13 +187,13 @@ src/
 ├── models/                 # provider 注册表、provider/id 解析、thinking 级别、按上下文窗口算上限 / models
 ├── cli/
 │   ├── main.ts             # CLI 入口：读配置和环境变量、选会话、按模式分发 / CLI entry
-│   ├── interactive.ts      # 交互模式（readline REPL，之后换成 TUI）
+│   ├── interactive.ts      # 交互模式（TUI，基于 pi-tui，同 pi 的布局和快捷键）
+│   ├── tui/                # TUI 组件：消息、工具块、输入框快捷键、配色
 │   ├── print-mode.ts       # -p / --mode json 单次模式
 │   ├── rpc-mode.ts         # --mode rpc：stdin / stdout 的 JSONL 协议（同 pi）
 │   ├── setup.ts            # 命令行参数、项目信任询问、内置扩展、加载扩展
 │   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher
-│   ├── commands/           # CLI 自己的斜杠命令（context / usage / model / skill / role …）
-│   └── print-event.ts      # 把 agent 事件打印到终端 / prints agent events
+│   └── commands/           # CLI 自己的斜杠命令（context / usage / model / skill / role …）
 ├── agent/
 │   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (no turn cap, like pi)
 │   ├── events.ts           # VelaEvent：agent 对外报告的事件 / emitted events
@@ -288,6 +288,7 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 - 命令行：`--model provider/id`、`--thinking <级别>`、`-e <扩展文件>`（可重复）、`--no-extensions`、`--no-session`（会话不落盘）、`--approve` / `--no-approve`。
 - 会话（同 pi）：每次启动是一个新会话；`-c` / `--continue` 接最近的，`-r` / `--resume` 在交互模式里选，`--session <id>` 打开指定的。
 - 运行方式（同 pi）：终端里是交互模式；`vela -p "问题"` 或 stdin / stdout 被重定向时跑完就退出，stdout 只有最后的回答（管道进来的内容拼在 prompt 前面：`git diff | vela -p "review"`）；`--mode json "问题"` 每个事件一行 JSON；`--mode rpc` 从 stdin 收 JSONL 命令（`prompt` / `steer` / `follow_up` / `abort` / `get_state` / `set_model` …，命令名和扩展界面子协议同 pi 的 docs/rpc.md），事件是 Vela 自己的 `VelaEvent`（带 `sessionId`）。
+- 交互模式（TUI，同 pi）：运行中 `Enter` 插一句（steer，这一步的工具跑完后发给模型），`Alt+Enter` 排到任务最后（followUp），`Alt+Up` 把排队的消息拿回输入框，`Esc` 中断（排队的消息放回输入框）；`Shift+Tab` 切 thinking、`Ctrl+L` 选模型、`Ctrl+O` 展开工具输出、`Ctrl+T` 显示 / 隐藏 thinking、`Ctrl+C` 清空（连按两次退出）、`Ctrl+D` 空输入时退出。`/new`、`/resume`、`/name`、`/model`、`/thinking`、`/compact`、`/hotkeys`，`/` 和 `@` 有补全。扩展的 confirm / select / input 在输入框的位置弹出。`VELA_DEBUG=1` 时 debug 日志写到 `~/.vela/debug.log`。
 - 旧版本把 `.sessions`、`.memory`、`.usage`、`knowledge.db` 写在项目目录里；CLI 发现时会打印搬到新目录的命令。
 
 ### 环境变量 / Environment Variables
