@@ -151,3 +151,33 @@ test('resume() refuses to replace the history of a running session', async () =>
     content: '一直想',
   })
 })
+
+test('tool calls from sessions running at the same time are recorded in their own session', async () => {
+  const big = (tag: string) => `${tag}\n${'x'.repeat(5000)}`
+  // 两个会话并发，请求先后不确定：按请求里的用户消息决定读哪个文件
+  const readOwn = (req: { lastUserText: string }) =>
+    fauxToolCall('read_file', { path: `${req.lastUserText}.txt` })
+  const t = createTestVela({
+    files: { 'a.txt': big('AAA'), 'b.txt': big('BBB') },
+    responses: [readOwn, readOwn, fauxText('读完了'), fauxText('读完了')],
+  })
+  const a = t.vela.session('a')
+  const b = t.vela.session('b')
+
+  await Promise.all([a.prompt('a'), b.prompt('b')])
+
+  const recorded = async (id: string) => {
+    let text = ''
+    for await (const file of new Bun.Glob(`.sessions/${id}/**/*`).scan({
+      cwd: t.vela.dataDir,
+    }))
+      text += await t.readData(file)
+    return text
+  }
+  const inA = await recorded('a')
+  const inB = await recorded('b')
+  expect(inA).toContain('AAA')
+  expect(inA).not.toContain('BBB')
+  expect(inB).toContain('BBB')
+  expect(inB).not.toContain('AAA')
+})
