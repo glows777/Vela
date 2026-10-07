@@ -27,12 +27,29 @@ import { ToolResultStore } from './session/tool-results'
 import { SkillLoader } from './skills/loader'
 import { createCoreTools } from './tools'
 import { ToolRegistry } from './tools/registry'
+import {
+  DEFAULT_THINKING_LEVEL,
+  describeModel,
+  type ModelInfo,
+  ModelRegistry,
+  type ProviderDefinition,
+  type ResolvedModel,
+  type ThinkingLevel,
+} from './models'
 import { registerToolSearchTool } from './tools/tool-search'
 import { type SessionOptions, VelaSession } from './vela-session'
 
 export interface VelaOptions {
-  /** 主模型。core 不读环境变量：CLI 负责创建，测试传入 faux 模型。 */
-  model: LanguageModel
+  /**
+   * 默认模型：AI SDK 的 LanguageModel（测试传 faux），或 `provider/id`（在 `providers` 和扩展注册的
+   * provider 里找）。core 不读环境变量：CLI 用 loadConfig() 的 providers。
+   * 不给时会话要先 setModel()（或恢复一个保存了模型的会话）才能 prompt。
+   */
+  model?: LanguageModel | string
+  /** 模型 provider（loadConfig() 给的内置 openai / anthropic + models.json，或自己写的） */
+  providers?: Record<string, ProviderDefinition>
+  /** 新会话的 thinking 级别，默认 medium（同 pi） */
+  thinkingLevel?: ThinkingLevel
   /** 文件、搜索、bash 工具和 skill 的工作目录，默认 process.cwd()。 */
   cwd?: string
   /**
@@ -63,8 +80,11 @@ export interface VelaOptions {
 export interface Vela {
   readonly cwd: string
   readonly dataDir: string
+  /** 默认模型（按名字给的在第一次访问时解析；没给或解析不了时抛错） */
   readonly model: LanguageModel
   readonly limits: VelaLimits
+  /** provider 列出的模型（`provider/id`、上下文窗口、价格…），`/model` 用 */
+  models(): ModelInfo[]
   /**
    * 打开（或取回已打开的）会话；文件存储时 id 是 `sessions/<id>.jsonl` 的文件名。
    * options 只在第一次打开时生效。需要恢复历史时再 `await session.resume()`。
@@ -112,7 +132,7 @@ export function velaInternals(vela: Vela): VelaInternals {
  * 对话通过 `vela.session(id)` 打开；同一个 Vela 可以同时开多个会话，
  * 它们共享工具和扩展，各自有消息历史、上下文压缩、用量、角色和运行锁。
  */
-export function createVela(options: VelaOptions): Vela {
+export function createVela(options: VelaOptions = {}): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())
   // 没给 dataDir 时用临时目录（工具长输出、工具历史、扩展数据），dispose 时删掉
   const ephemeral = options.dataDir === undefined
@@ -125,6 +145,16 @@ export function createVela(options: VelaOptions): Vela {
       ? memorySessionStorage()
       : fileSessionStorage(join(dataDir, 'sessions'), options.logger))
   const { model } = options
+  const models = new ModelRegistry(options.providers)
+  const resolveModel = (
+    choice: string | LanguageModel | undefined,
+  ): ResolvedModel => {
+    if (choice === undefined)
+      throw new Error('没有选模型：给 createVela() 传 model，或调用 session.setModel()')
+    return typeof choice === 'string'
+      ? models.resolve(choice)
+      : { model: choice, info: describeModel(choice) }
+  }
   const limits = resolveLimits(options.limits)
   const logger = options.logger ?? silentLogger
 
@@ -182,7 +212,9 @@ export function createVela(options: VelaOptions): Vela {
       id,
       {
         model,
-        limits,
+        resolveModel,
+        thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+        limitOverrides: options.limits ?? {},
         logger,
         dataDir,
         temporaryDataDir: ephemeral,
@@ -219,6 +251,7 @@ export function createVela(options: VelaOptions): Vela {
       extensionConfig: options.extensionConfig ?? {},
       logger,
       registry,
+      models,
       hooks,
       gateway,
       session: (id) => sessions.get(id),
@@ -234,11 +267,16 @@ export function createVela(options: VelaOptions): Vela {
     return { action: 'allow' }
   })
 
+  let defaultModel: LanguageModel | undefined
   const vela: Vela = {
     cwd,
     dataDir,
-    model,
+    get model() {
+      defaultModel ??= resolveModel(model).model
+      return defaultModel
+    },
     limits,
+    models: () => models.list(),
     session,
     sessions: () => [...sessions.values()],
     subscribe(listener) {

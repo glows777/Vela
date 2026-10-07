@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { createInterface } from 'node:readline'
-import { createOpenAI } from '@ai-sdk/openai'
 import {
   Client,
   getDefaultEnvironment,
@@ -17,7 +16,9 @@ import { memorySessionStorage } from '../session/storage'
 import { createMockModel } from '../testing/demo-model'
 import { loadFauxScenario } from '../testing/faux'
 import { recordModel } from '../testing/record'
+import { ModelRegistry } from '../models'
 import { createVela, velaInternals } from '../vela'
+import type { VelaSession } from '../vela-session'
 import type { CommandContext } from './commands'
 import { createCliDispatcher } from './dispatcher'
 import { createConsoleLogger } from './logger'
@@ -32,33 +33,13 @@ import {
   resolveTrust,
 } from './setup'
 
-async function resolveModel(): Promise<LanguageModel> {
-  // VELA_MODEL=mock：用内置关键词 demo 模型离线体验（模拟 prompt cache 行为）
-  if (process.env.VELA_MODEL === 'mock') return createMockModel()
-  // VELA_MODEL=faux:<scenario.json>：按 JSON 场景脚本回放模型响应（复现问题、CLI e2e）
-  if (process.env.VELA_MODEL?.startsWith('faux:'))
-    return loadFauxScenario(process.env.VELA_MODEL.slice('faux:'.length))
-  const apiKey = process.env.OPENAI_API_KEY
-  const modelName = process.env.OPENAI_API_MODEL_NAME
-  if (!apiKey || !modelName) {
-    console.error(
-      'api key or model name is not set, please set OPENAI_API_KEY and OPENAI_API_MODEL_NAME in your environment, or run with VELA_MODEL=mock to use the offline mock model.',
-    )
-    process.exit(1)
-  }
-  return createOpenAI({
-    apiKey,
-    baseURL: process.env.OPENAI_API_BASE_URL,
-  }).chat(modelName)
-}
-
 let args: CliArgs
 try {
   args = parseArgs(process.argv.slice(2))
 } catch (error) {
   console.error(error instanceof Error ? error.message : error)
   console.error(
-    '用法: vela [-p "<prompt>"] [--continue] [-e <扩展>]... [--no-extensions] [--no-session] [--approve | --no-approve]',
+    '用法: vela [-p "<prompt>"] [--continue] [-e <扩展>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <级别>]',
   )
   process.exit(2)
 }
@@ -93,14 +74,50 @@ try {
 const legacyHint = legacyDataHint(cwd, config.dataDir)
 if (legacyHint) console.error(legacyHint)
 
+/**
+ * 默认模型：VELA_MODEL=mock / faux:<场景> 优先（离线体验、回放），否则 `--model` → settings 的
+ * defaultModel → `openai/$OPENAI_API_MODEL_NAME`（旧的环境变量写法）。
+ */
+const NO_MODEL =
+  '没有选模型：用 --model provider/id，或在 ~/.vela/settings.json 写 defaultModel（provider 见 ~/.vela/models.json，内置 openai / anthropic 读 OPENAI_API_KEY / ANTHROPIC_API_KEY），或设置 OPENAI_API_KEY + OPENAI_API_MODEL_NAME；离线体验用 VELA_MODEL=mock。'
+
+/** 默认模型；都没配置时是 undefined（--continue 恢复的会话可能保存了模型，否则启动时提示 NO_MODEL） */
+async function chooseModel(): Promise<LanguageModel | string | undefined> {
+  // VELA_MODEL=mock：用内置关键词 demo 模型离线体验（模拟 prompt cache 行为）
+  if (env.VELA_MODEL === 'mock') return createMockModel()
+  // VELA_MODEL=faux:<scenario.json>：按 JSON 场景脚本回放模型响应（复现问题、CLI e2e）
+  if (env.VELA_MODEL?.startsWith('faux:'))
+    return loadFauxScenario(env.VELA_MODEL.slice('faux:'.length))
+  return (
+    args.model ??
+    config.settings.defaultModel ??
+    (env.OPENAI_API_MODEL_NAME ? `openai/${env.OPENAI_API_MODEL_NAME}` : undefined)
+  )
+}
+const chosenModel = await chooseModel()
+
 // VELA_RECORD=<file.json>：把这次运行的模型响应和用户输入录成 faux 场景，之后用 VELA_MODEL=faux:<file> 回放
-const recorder = process.env.VELA_RECORD
-  ? recordModel(await resolveModel(), { path: process.env.VELA_RECORD })
-  : undefined
+// （只录默认模型；按名字选的模型这里先用 models.json / 内置 provider 解析，扩展注册的 provider 不支持录制）
+let recorder: ReturnType<typeof recordModel> | undefined
+if (env.VELA_RECORD) {
+  try {
+    if (!chosenModel) throw new Error(NO_MODEL)
+    const model =
+      typeof chosenModel === 'string'
+        ? new ModelRegistry(config.providers).resolve(chosenModel).model
+        : chosenModel
+    recorder = recordModel(model, { path: env.VELA_RECORD })
+  } catch (error) {
+    console.error(`[录制] ${error instanceof Error ? error.message : error}`)
+    process.exit(1)
+  }
+}
 
 const logger = createConsoleLogger({ debug: env.VELA_DEBUG === '1' })
 const vela = createVela({
-  model: recorder?.model ?? (await resolveModel()),
+  model: recorder?.model ?? chosenModel,
+  providers: config.providers,
+  thinkingLevel: args.thinking ?? config.settings.defaultThinkingLevel,
   cwd,
   dataDir: config.dataDir,
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
@@ -120,10 +137,39 @@ vela.subscribe((event, sessionId) => {
   printEvent(event)
 })
 
+/**
+ * 恢复的会话带着保存的模型和 thinking；命令行显式给的优先，VELA_MODEL=mock / faux 和
+ * VELA_RECORD 包装过的模型也优先（不然 --continue 会绕过回放 / 录制，改用保存的真实模型）。
+ * 返回模型是否可用。
+ */
+function applyModelArgs(target: VelaSession): boolean {
+  if (args.thinking) target.setThinkingLevel(args.thinking)
+  const override =
+    args.model ??
+    recorder?.model ??
+    (typeof chosenModel === 'string' ? undefined : chosenModel)
+  try {
+    if (override) target.setModel(override)
+    else void target.modelInfo
+    return true
+  } catch (error) {
+    console.error(
+      `[模型] ${chosenModel === undefined && !args.model ? NO_MODEL : error instanceof Error ? error.message : error}`,
+    )
+    return false
+  }
+}
+
 if (printMode !== undefined) {
   // -p 模式没有界面：扩展的 confirm 一律按“否”处理（同 pi 的 print 模式）
   const session = vela.session()
   if (isContinue) await session.resume()
+  // 扩展注册的 provider 要等扩展加载完才能解析（加载失败的话 prompt 会报）
+  await vela.ready().catch(() => {})
+  if (!applyModelArgs(session)) {
+    await vela.dispose()
+    process.exit(1)
+  }
   let exitCode = 0
   try {
     await session.prompt(printMode)
@@ -308,6 +354,11 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : error)
 }
+if (applyModelArgs(session))
+  console.log(
+    `  模型 ${session.modelInfo.ref}，thinking ${session.thinkingLevel}`,
+  )
+else console.error('  用 /model provider/id 换一个模型')
 for (const ext of vela.extensions())
   console.log(
     `  ✓ 扩展 ${ext.name}${ext.tools.length ? ` — ${ext.tools.length} 个工具` : ''}`,

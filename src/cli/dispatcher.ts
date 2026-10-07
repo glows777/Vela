@@ -2,6 +2,7 @@ import type { Vela } from '../vela'
 import { contextCommands, createDispatcher, debugCommands } from './commands'
 import { channelCommands } from './commands/channel'
 import { extensionCommands } from './commands/extensions'
+import { modelCommands } from './commands/model'
 import { securityCommands } from './commands/security'
 import { createSkillCommands } from './commands/skill'
 import { velaInternals } from '../vela'
@@ -15,6 +16,7 @@ export function createCliDispatcher(vela: Vela) {
   return createDispatcher([
     ...debugCommands,
     ...contextCommands,
+    ...modelCommands,
     ...createSkillCommands(velaInternals(vela).skillLoader),
     ...extensionCommands,
     ...channelCommands,

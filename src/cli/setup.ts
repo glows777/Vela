@@ -16,6 +16,7 @@ import { memory } from '../extensions/memory'
 import { rag } from '../extensions/rag'
 import { supabase } from '../extensions/supabase'
 import type { VelaExtension } from '../extensions/types'
+import { THINKING_LEVELS, type ThinkingLevel } from '../models'
 import { web } from '../extensions/web'
 
 type Env = Record<string, string | undefined>
@@ -41,6 +42,10 @@ export interface CliArgs {
   noSession: boolean
   /** `--approve` / `--no-approve`：这次运行信任 / 不信任项目配置，不保存 */
   approve?: boolean
+  /** `--model provider/id` */
+  model?: string
+  /** `--thinking <级别>` */
+  thinking?: ThinkingLevel
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -64,6 +69,13 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--no-session') args.noSession = true
     else if (arg === '--approve') args.approve = true
     else if (arg === '--no-approve') args.approve = false
+    else if (arg === '--model') args.model = value()
+    else if (arg === '--thinking') {
+      const level = value()
+      if (!THINKING_LEVELS.includes(level as ThinkingLevel))
+        throw new Error(`--thinking 只能是 ${THINKING_LEVELS.join(' / ')}`)
+      args.thinking = level as ThinkingLevel
+    }
     else throw new Error(`未知参数 ${arg}`)
   }
   return args

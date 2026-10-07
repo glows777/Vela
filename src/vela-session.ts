@@ -7,6 +7,14 @@ import type { ExtensionUI } from './extensions/types'
 import { ContextManager } from './context/manager'
 import type { RequestSnapshot } from './context/request'
 import type { VelaLimits } from './limits'
+import {
+  limitsForModel,
+  type ModelInfo,
+  type ResolvedModel,
+  reasoningOption,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from './models'
 import type { VelaLogger } from './logger'
 import type { PromptContext, PromptPipeline } from './prompt/pipelins'
 import type { PermissionRules, Role } from './security/roles'
@@ -14,6 +22,7 @@ import { SessionStore } from './session/index'
 import type { SessionStorage } from './session/storage'
 import type { ToolRegistry } from './tools/registry'
 import {
+  CONTEXT_WINDOW,
   TokenTracker,
   type TokenStatus,
   type UsageTotals,
@@ -33,6 +42,10 @@ export interface SessionOptions {
   tools?: string[]
   /** 扩展用来和用户交互的界面；不传时没有界面（confirm 一律 false） */
   ui?: ExtensionUI
+  /** 这个会话用的模型（`provider/id` 或 LanguageModel），默认 Vela 的模型 */
+  model?: string | LanguageModel
+  /** thinking 级别，默认 Vela 的（Vela 默认 medium，同 pi） */
+  thinkingLevel?: ThinkingLevel
 }
 
 /** 扩展运行时在会话生命周期里要做的事（createVela 提供）。 */
@@ -64,8 +77,13 @@ export function assertSessionId(id: string): void {
 
 /** createVela() 交给每个会话的共享部分。 */
 export interface SessionDeps {
-  model: LanguageModel
-  limits: VelaLimits
+  /** 默认模型 */
+  model: string | LanguageModel | undefined
+  /** 按名字或对象找模型（含 provider 注册表） */
+  resolveModel: (model: string | LanguageModel | undefined) => ResolvedModel
+  thinkingLevel: ThinkingLevel
+  /** 显式给的 limits；其余按模型的上下文窗口算 */
+  limitOverrides: Partial<VelaLimits>
   logger: VelaLogger
   dataDir: string
   /** 会话历史存哪（文件 / 内存 / 自定义） */
@@ -87,7 +105,7 @@ export interface SessionDeps {
  */
 export class VelaSession {
   readonly id: string
-  readonly model: LanguageModel
+  /** 当前生效的上限（换模型时按新模型的上下文窗口重算） */
   readonly limits: VelaLimits
   /** 消息历史（按顺序）。SDK 使用方应当只读，追加用 append()。 */
   readonly messages: ModelMessage[] = []
@@ -126,8 +144,9 @@ export class VelaSession {
     assertSessionId(id)
     this.id = id
     this.deps = deps
-    this.model = deps.model
-    this.limits = deps.limits
+    this.modelChoice = options.model ?? deps.model
+    this.thinking = options.thinkingLevel ?? deps.thinkingLevel
+    this.limits = limitsForModel({}, deps.limitOverrides)
     this.builder = deps.builder
     this.store = new SessionStore(
       id,
@@ -156,9 +175,71 @@ export class VelaSession {
       this.tracker,
       { messages: this.messages, timestamps: new Map(), summary: '' },
       this.emit,
-      deps.limits,
+      this.limits,
     )
     this.timestamps = this.contextManager.state.timestamps
+    this.store.settings = () => ({
+      model:
+        typeof this.modelChoice === 'string'
+          ? this.resolved?.info.ref ?? this.modelChoice
+          : undefined,
+      thinkingLevel: this.thinking,
+    })
+  }
+
+  /** 选定的模型（名字或对象），真正解析推迟到第一次用（扩展注册的 provider 可能还没加载完） */
+  private modelChoice: string | LanguageModel | undefined
+  private resolved?: ResolvedModel
+  private thinking: ThinkingLevel
+
+  private resolveModel(): ResolvedModel {
+    if (!this.resolved) this.applyModel(this.deps.resolveModel(this.modelChoice))
+    return this.resolved as ResolvedModel
+  }
+
+  private applyModel(resolved: ResolvedModel): void {
+    this.resolved = resolved
+    const limits = limitsForModel(resolved.info, this.deps.limitOverrides)
+    Object.assign(this.limits, limits)
+    Object.assign(this.contextManager.limits, limits)
+    this.tracker.contextWindow = resolved.info.contextWindow ?? CONTEXT_WINDOW
+    // 价格跟着当前模型（不按 modelId 记，不同 provider 的同名模型价格不同）
+    this.tracker.setPricing(resolved.info.cost)
+  }
+
+  /** 当前模型（AI SDK 的 LanguageModel）。名字解析不了时抛错。 */
+  get model(): LanguageModel {
+    return this.resolveModel().model
+  }
+
+  /** 当前模型的元数据：provider、id、`provider/id`、上下文窗口等。 */
+  get modelInfo(): ModelInfo {
+    return this.resolveModel().info
+  }
+
+  /**
+   * 换模型（同 pi 的 setModel）：`provider/id` 或 LanguageModel，从下一次 prompt() 起生效，
+   * 压缩阈值按新模型的上下文窗口重算。名字解析不了时抛错、不换。按名字选的模型会随会话保存。
+   */
+  setModel(model: string | LanguageModel): void {
+    const resolved = this.deps.resolveModel(model)
+    this.modelChoice = model
+    this.applyModel(resolved)
+  }
+
+  /** thinking 级别（off … max，默认 medium）。 */
+  get thinkingLevel(): ThinkingLevel {
+    return this.thinking
+  }
+
+  /**
+   * 设置 thinking 级别（同 pi 的 setThinkingLevel），从下一次请求起生效，随会话保存。
+   * 模型不支持 thinking 时 prompt() 会报错（模型条目 `reasoning: false`，或 provider 自己拒绝）。
+   */
+  setThinkingLevel(level: ThinkingLevel): void {
+    if (!THINKING_LEVELS.includes(level))
+      throw new Error(`thinking 级别只能是 ${THINKING_LEVELS.join(' / ')}`)
+    this.thinking = level
   }
 
   /** 会话角色：决定能用哪些工具（owner / collaborator / guest），也决定能否执行扩展命令。 */
@@ -250,6 +331,20 @@ export class VelaSession {
     const saved = await this.store.loadSaved()
     if (!saved) return false
     this.contextManager.restore(saved)
+    // 旧 checkpoint 没有这个字段：保留当前级别
+    if (saved.thinkingLevel && THINKING_LEVELS.includes(saved.thinkingLevel))
+      this.thinking = saved.thinkingLevel
+    if (saved.model) {
+      // 扩展注册的 provider 要等扩展加载完才能解析
+      await this.deps.extensions.ready.catch(() => {})
+      try {
+        this.setModel(saved.model)
+      } catch (error) {
+        this.deps.logger.warn(
+          `[session] ${this.id} 保存的模型 ${saved.model} 不可用，继续用当前模型: ${error instanceof Error ? error.message : error}`,
+        )
+      }
+    }
     this.tracker.setEstimatedTokens(estimateMessageTokens(this.messages))
     return true
   }
@@ -322,11 +417,15 @@ export class VelaSession {
     try {
       await this.start()
       busy.controller.signal.throwIfAborted()
+      const { model, info } = this.resolveModel()
+      // 模型不支持当前 thinking 级别时在这里报错，不发请求、不写历史
+      const reasoning = reasoningOption(this.thinking, info)
       this.sections = await this.deps.extensions.beforeAgentStart(this, input)
       this.emit({ type: 'agent_start', input })
       this.append({ role: 'user', content: input })
       await agentLoop({
-        model: this.model,
+        model,
+        reasoning,
         systemPrompt: () => this.buildSystem(),
         toolRegistry: this.registry,
         messages: this.messages,

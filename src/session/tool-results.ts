@@ -31,7 +31,8 @@ export function getStoredResult(
     Array.isArray(output.value)
   )
     return
-  const value = output.value
+  // Array.isArray 不收窄 readonly 数组，这里已经排除了数组
+  const value = output.value as Readonly<Record<string, unknown>>
   if (
     value.kind === 'vela-tool-result' &&
     typeof value.path === 'string' &&

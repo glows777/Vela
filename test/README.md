@@ -158,14 +158,16 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/memory | memory 扩展：通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename；`/memory`（search / lint）、`/dream`；guest 不能执行命令 |
 | e2e/rag | rag 扩展：没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留；`/rag`、`/rag ingest` 及中断 |
 | e2e/commands | `/context` `/usage` `status`；supabase 扩展的工具模型能直接用、`/extensions` 列出；通道消息走同一模型和工具并回发 |
-| e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
+| e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、registerProvider、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
+| e2e/models | 按名字选模型（provider、元数据、models.json 价格）；`setModel` 从下一轮起换模型并重算上限；会话各自选模型；thinking 级别映射到 `reasoning`（默认 medium、max→xhigh；`reasoning: false` 的模型 off 不发、其它级别 prompt 报错且不发请求）；Vela 级默认 thinking；恢复会话带回模型和 thinking、保存的模型不可用时告警并保留当前；对象模型不落盘；没有默认模型时要先 setModel；`/model` `/thinking` |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存 |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |
-| e2e/cli | `-p` 单次模式回放场景；`VELA_RECORD` 录制后用 `faux:` 回放；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
+| e2e/cli | `-p` 单次模式回放场景；`VELA_RECORD` 录制后用 `faux:` 回放；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；扩展注册的 provider 配 `--model` / `--thinking`，`--continue` 恢复保存的模型；未知 provider / 没选模型 / 缺 key 退出码 1，`--thinking` 不合法退出码 2；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
 | unit/cli/commands | skill 激活/去重/并发锁（走真实装配） |
 | unit/cli/setup | 命令行参数；settings 的扩展配置覆盖环境变量；旧数据搬家提示 |
-| unit/config | settings 合并（项目覆盖用户、资源列表合并、路径相对所在文件）；不信任时只读用户级；扩展目录发现；±builtin；错误带文件名；`$VAR` 插值；数据目录编码；skill 目录顺序；trust.json；在家目录里运行 |
+| unit/models | `provider/id` 解析与错误；thinking → reasoning；按上下文窗口算上限 |
+| unit/config | models.json（内置 openai / anthropic、合并、`$VAR`、缺 key、错误带文件名）；settings 的 defaultModel / defaultThinkingLevel 校验；settings 合并（项目覆盖用户、资源列表合并、路径相对所在文件）；不信任时只读用户级；扩展目录发现；±builtin；错误带文件名；`$VAR` 插值；数据目录编码；skill 目录顺序；trust.json；在家目录里运行 |
 | unit/session/storage | 内存存储按 id 保存并返回副本；文件存储读写、兼容旧的一行一条消息 |
 | unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
 | unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |

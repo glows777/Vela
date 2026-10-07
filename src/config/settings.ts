@@ -1,6 +1,12 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import type { VelaLimits } from '../limits'
+import {
+  type ProviderDefinition,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from '../models'
+import { loadModels } from './models'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate'
 import {
   defaultAgentDir,
@@ -12,6 +18,10 @@ type Env = Record<string, string | undefined>
 
 /** settings.json 的内容（用户级 `~/.vela/settings.json`，项目级 `<cwd>/.vela/settings.json`）。 */
 export interface VelaSettings {
+  /** 默认模型 `provider/id`（pi 分成 defaultProvider + defaultModel） */
+  defaultModel?: string
+  /** 默认 thinking 级别；不写时 medium（同 pi） */
+  defaultThinkingLevel?: ThinkingLevel
   /** 项目数据目录，相对路径按 cwd 解析；默认 `<agentDir>/projects/<编码后的 cwd>` */
   dataDir?: string
   /** 覆盖 VelaLimits 的任意子集 */
@@ -55,6 +65,8 @@ export interface VelaConfig {
   extensions: ExtensionEntry[]
   /** skill 目录，按优先级从低到高（同名 skill 后面的覆盖前面的） */
   skillDirs: string[]
+  /** 内置 provider（openai / anthropic）和 `<agentDir>/models.json` 里的，交给 createVela 的 `providers` */
+  providers: Record<string, ProviderDefinition>
   /** 每个扩展的配置段（已做 `$VAR` 插值） */
   extensionConfig: Record<string, Record<string, unknown>>
 }
@@ -127,6 +139,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     files,
     extensions,
     skillDirs,
+    providers: loadModels({ agentDir, env }),
     extensionConfig: interpolateDeep(settings.extensionConfig ?? {}, env),
   }
 }
@@ -170,6 +183,19 @@ function readSettings(file: string): VelaSettings | undefined {
       throw new Error(`${file}: ${key} 应该是对象`)
   if (settings.dataDir !== undefined && typeof settings.dataDir !== 'string')
     throw new Error(`${file}: dataDir 应该是字符串`)
+  if (
+    settings.defaultModel !== undefined &&
+    (typeof settings.defaultModel !== 'string' ||
+      !settings.defaultModel.includes('/'))
+  )
+    throw new Error(`${file}: defaultModel 要写成 "provider/id"`)
+  if (
+    settings.defaultThinkingLevel !== undefined &&
+    !THINKING_LEVELS.includes(settings.defaultThinkingLevel)
+  )
+    throw new Error(
+      `${file}: defaultThinkingLevel 只能是 ${THINKING_LEVELS.join(' / ')}`,
+    )
   return settings
 }
 

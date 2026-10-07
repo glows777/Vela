@@ -4,6 +4,7 @@ import type { ExtensionUI, VelaExtension } from 'vela'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous'
 import { echoChannel } from '../../examples/extensions/echo-channel'
 import hello from '../../examples/extensions/hello-tool'
+import localProvider from '../../examples/extensions/local-provider'
 import today from '../../examples/extensions/prompt-section'
 import readOnlyReview from '../../examples/extensions/read-only-session'
 import redact from '../../examples/extensions/redact-secrets'
@@ -49,7 +50,13 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
   expect(t.lastAssistantText()).toBe('你好，Liam！')
   // createTestVela 和 CLI 一样先加载内置的 memory 扩展
   expect(t.vela.extensions().filter((e) => e.name !== 'memory')).toEqual([
-    { name: 'hello', tools: ['hello_greet'], commands: [], channels: [] },
+    {
+      name: 'hello',
+      tools: ['hello_greet'],
+      providers: [],
+      commands: [],
+      channels: [],
+    },
   ])
 })
 
@@ -514,4 +521,22 @@ test('an extension reads its own config section; built-in web takes its search k
     'web_fetch',
     'web_search',
   ])
+})
+
+test('local-provider: models from a registered provider can be picked by name', async () => {
+  const t = createTestVela({
+    extensions: [localProvider],
+    extensionConfig: { localProvider: { baseUrl: 'http://127.0.0.1:1/v1' } },
+  })
+  await t.vela.ready()
+  expect(t.vela.extensions().find((e) => e.name === 'localProvider')).toMatchObject({
+    providers: ['local'],
+  })
+  expect(t.vela.models().map((m) => m.ref)).toContain('local/qwen3:8b')
+  t.session.setModel('local/qwen3:8b')
+  expect(t.session.model).toMatchObject({ modelId: 'qwen3:8b' })
+  expect(t.session.limits.maxInputTokens).toBe(40_960 - 16_384)
+  // 没列出的 id 也能用，只是没有元数据
+  t.session.setModel('local/llama3')
+  expect(t.session.modelInfo).toEqual({ id: 'llama3', provider: 'local', ref: 'local/llama3' })
 })

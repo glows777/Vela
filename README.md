@@ -53,13 +53,13 @@
 ### 环境要求 / Requirements
 
 - [Bun](https://bun.sh) ≥ 1.4
-- 一个 OpenAI 兼容的 API（`OPENAI_API_KEY`）
+- 一个模型 API：OpenAI 兼容（`OPENAI_API_KEY`）或 Anthropic（`ANTHROPIC_API_KEY`），其它 provider 写在 `~/.vela/models.json`
 
 ### 安装 / Install
 
 ```bash
 bun install
-cp .env.example .env   # 填入 OPENAI_API_KEY
+cp .env.example .env   # 填入 OPENAI_API_KEY + OPENAI_API_MODEL_NAME，或 ANTHROPIC_API_KEY 再用 --model anthropic/<模型 id>
 ```
 
 ### 运行 / Run
@@ -80,15 +80,17 @@ bun run src/cli/main.ts   # 直接运行（package.json 的 bin.vela）
 ```ts
 import { createVela } from 'vela'
 
-const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel；不给 dataDir 时什么都不落盘
+const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel 或 'provider/id'；不给 dataDir 时什么都不落盘
 const session = vela.session('default')                  // 同一个 Vela 可以同时开多个会话
-await session.resume()                                   // 有存档就恢复
+await session.resume()                                   // 有存档就恢复（连同它的模型和 thinking 级别）
+session.setModel('anthropic/claude-x')                   // 每个会话可以换模型，从下一次 prompt 起生效
+session.setThinkingLevel('high')                         // off / minimal / low / medium / high / xhigh / max
 session.subscribe((event) => { /* text_delta、tool_call、usage、agent_end … */ })
 await session.prompt('总结 docs/')
 await vela.dispose()
 ```
 
-core 不写终端、不读环境变量，也不隐式读 `~/.vela`；诊断输出通过 `logger` 注入。要持久化就传 `dataDir`（会话存在 `<dataDir>/sessions/`），或者用 `sessionStorage` 接自己的存储（`memorySessionStorage()`、`fileSessionStorage(dir)` 或实现 `load / save`）。想和 CLI 读同一套配置时用 `loadConfig({ cwd, env })`。离线测试用 `vela/testing`（faux 模型、`createTestVela()`、`recordModel()` / `replayScenario()`）。
+core 不写终端、不读环境变量，也不隐式读 `~/.vela`；诊断输出通过 `logger` 注入。要持久化就传 `dataDir`（会话存在 `<dataDir>/sessions/`），或者用 `sessionStorage` 接自己的存储（`memorySessionStorage()`、`fileSessionStorage(dir)` 或实现 `load / save`）。想和 CLI 读同一套配置时用 `loadConfig({ cwd, env })`，它的 `providers`（内置 openai / anthropic + `models.json`）传给 `createVela({ providers })` 就能按名字选模型。离线测试用 `vela/testing`（faux 模型、`createTestVela()`、`recordModel()` / `replayScenario()`）。
 
 #### 扩展 / Extensions
 
@@ -119,6 +121,8 @@ const vela = createVela({ model, extensions: [guard] })
 const session = vela.session('default', { ui })   // 有界面才会真正询问；没有 ui 时 confirm 一律 false
 ```
 
+扩展还可以 `vela.registerProvider('local', { models, createModel })` 加一个模型 provider（名字不加前缀），之后 `local/<id>` 可以用在 `--model`、`/model` 和 `session.setModel()`，见 [`examples/extensions/local-provider.ts`](examples/extensions/local-provider.ts)。
+
 会话有角色：`owner`（默认）全部工具；`collaborator` 不能用 bash；`guest` 只能用不碰本机的工具（知识库检索、网页搜索），也看不到主人的记忆。通道（飞书）的发送者默认是 `guest`，`FEISHU_OWNERS` 里的人是 `owner`。还可以按会话叠加权限（`{ permissions: { bash: 'ask' } }`）和只启用部分工具（`{ tools: [...] }` / `session.setActiveTools()`）。
 
 ---
@@ -136,6 +140,8 @@ const session = vela.session('default', { ui })   // 有界面才会真正询问
 | `/dream` | 让模型整理记忆库 / let the model tidy up memory |
 | `/rag` / `/rag ingest <path>` | 查看知识库、导入文档 / show KB, ingest a document |
 | `/cache on` / `/cache off` | 开关 Mock 模型 cache 模拟 / toggle mock cache simulation |
+| `/model [provider/id]` | 列出已配置的模型 / 当前会话换模型 / list models or switch this session's model |
+| `/thinking [级别]` | 查看 / 设置当前会话的 thinking 级别 / show or set the thinking level |
 | `/extensions` | 已加载的扩展和它们注册的工具、命令、通道 / loaded extensions |
 | `/role [owner\|collaborator\|guest]` | 查看 / 切换当前会话的角色 / show or switch the session role |
 | `sim` | 注入模拟长对话（调试压缩用）/ inject simulated long conversation |
@@ -177,12 +183,13 @@ src/
 │   ├── rag/                # rag_ingest / rag_search + /rag；分块、embedding、sqlite-vec + FTS5
 │   ├── web/                # web_fetch / web_search
 │   └── feishu/ supabase.ts
-├── config/                 # settings.json 合并、$VAR 插值、扩展发现、项目信任、数据目录 / config
+├── config/                 # settings.json 合并、models.json、$VAR 插值、扩展发现、项目信任、数据目录 / config
+├── models/                 # provider 注册表、provider/id 解析、thinking 级别、按上下文窗口算上限 / models
 ├── cli/
 │   ├── main.ts             # CLI 入口：读配置和环境变量、交互 / -p 模式、MCP / CLI entry
 │   ├── setup.ts            # 命令行参数、项目信任询问、内置扩展、加载扩展
 │   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher
-│   ├── commands/           # CLI 自己的斜杠命令（context / usage / skill / role …）
+│   ├── commands/           # CLI 自己的斜杠命令（context / usage / model / skill / role …）
 │   └── print-event.ts      # 把 agent 事件打印到终端 / prints agent events
 ├── agent/
 │   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (MAX_TURN=15)
@@ -231,13 +238,15 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 同 pi：用户级 `~/.vela/`（`VELA_DIR` 可改），项目级 `<项目>/.vela/`，项目覆盖用户（对象深合并，`extensions` / `skills` 合并）。
 
 ```
-~/.vela/settings.json  extensions/  skills/  trust.json
+~/.vela/settings.json  models.json  extensions/  skills/  trust.json
 ~/.vela/projects/--home-me-code-x--<哈希>/   每个项目的数据：sessions/  usage/  memory/  rag/knowledge.db
 <项目>/.vela/settings.json  extensions/  skills/   项目配置（第一次需要你信任这个项目）
 ```
 
 ```jsonc
 {
+  "defaultModel": "anthropic/claude-x",                 // provider/id；--model 优先
+  "defaultThinkingLevel": "medium",                     // 不写时 medium（同 pi）
   "limits": { "maxTurns": 20, "bashTimeoutMs": 30000 },
   "extensions": ["./my-ext.ts", "-builtin:supabase"],   // 路径相对这个文件；builtin:memory / rag / web / supabase / feishu 默认加载
   "skills": ["../shared-skills"],
@@ -251,16 +260,38 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 ```
 
 - 字符串支持 `$VAR` / `${VAR}`；没写的配置退回下面的环境变量。
+- 模型选择顺序：`--model` → `defaultModel` → `openai/$OPENAI_API_MODEL_NAME`；`--continue` 恢复的会话用它保存的模型和 thinking 级别（命令行给的仍然优先）。
+
+`~/.vela/models.json`（同 pi，只在用户级）：内置 `openai`（Chat Completions，`OPENAI_API_KEY` / `OPENAI_API_BASE_URL`）和 `anthropic`（`ANTHROPIC_API_KEY`），同名条目覆盖内置的字段，其它名字是新 provider。
+
+```jsonc
+{
+  "providers": {
+    "openai": { "models": [{ "id": "gpt-x", "contextWindow": 400000 }] },   // 只补模型元数据
+    "openrouter": {
+      "api": "openai-completions",                     // openai-completions / openai-responses / anthropic-messages
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "headers": { "X-Title": "vela" },
+      "models": [{ "id": "some/model", "name": "Some Model", "contextWindow": 128000, "reasoning": true,
+                   "cost": { "input": 1, "output": 4, "cacheRead": 0.1, "cacheWrite": 1.25 } }]   // $ / 1M tokens
+    }
+  }
+}
+```
+
+模型写了 `contextWindow` 时压缩阈值和输入上限按它算（输入上限 = 窗口 − 16384，同 pi）（`settings.json` 里显式写的 `limits` 仍然优先），写了 `cost` 时 `/usage` 按它计费。没列出的 id 也能用（`--model openrouter/other`），只是没有这些元数据。thinking 默认 medium；模型写了 `"reasoning": false` 时只能用 `off`，其它级别 prompt 直接报错；没写的模型照发，provider 不支持时它的报错会原样显示。
 - 项目有 `.vela/settings.json` 或 `.vela/extensions/` 时，交互模式会问一次是否信任（记在 `~/.vela/trust.json`）；`-p` 模式不问、直接跳过，加 `--approve` 才加载。
-- 命令行：`-e <扩展文件>`（可重复）、`--no-extensions`、`--no-session`（会话不落盘）、`--approve` / `--no-approve`。
+- 命令行：`--model provider/id`、`--thinking <级别>`、`-e <扩展文件>`（可重复）、`--no-extensions`、`--no-session`（会话不落盘）、`--approve` / `--no-approve`。
 - 旧版本把 `.sessions`、`.memory`、`.usage`、`knowledge.db` 写在项目目录里；CLI 发现时会打印搬到新目录的命令。
 
 ### 环境变量 / Environment Variables
 
 | 变量 / Variable | 必填 / Required | 说明 / Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | ✅ | OpenAI 兼容 API Key |
-| `OPENAI_API_MODEL_NAME` | ✅ | 模型名，如 `gpt-5` |
+| `OPENAI_API_KEY` | ❌ | 内置 `openai` provider 的 Key（OpenAI 兼容）|
+| `OPENAI_API_MODEL_NAME` | ❌ | 没有 `--model` / `defaultModel` 时用 `openai/<它>`，如 `gpt-5` |
+| `ANTHROPIC_API_KEY` | ❌ | 内置 `anthropic` provider 的 Key |
 | `OPENAI_API_BASE_URL` | ❌ | 自定义 Base URL（代理 / 兼容服务）|
 | `TAVILY_API_KEY` / `SERPER_API_KEY` | ❌ | Web 搜索（二选一，自动检测）|
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | GitHub MCP Server（stdio）|

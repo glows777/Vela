@@ -14,6 +14,9 @@ export interface SessionState {
   summary: string;
 }
 
+/** checkpoint 里除了消息以外、会话自己要还原的设置。 */
+export type SessionSettings = Pick<SessionCheckpoint, 'model' | 'thinkingLevel'>;
+
 const SESSION_DIR = "sessions";
 
 /**
@@ -23,6 +26,8 @@ const SESSION_DIR = "sessions";
 export class SessionStore {
   readonly results: ToolResultStore;
   private readonly storage: SessionStorage;
+  /** 每次保存时写进 checkpoint 的会话设置（模型、thinking） */
+  settings: () => SessionSettings = () => ({});
 
   constructor(
     private readonly sessionId: string,
@@ -49,6 +54,7 @@ export class SessionStore {
       toolHistoryId: this.results.historyId,
       toolHistorySeq: this.results.history.throughSequence,
       toolHistoryViewSeq: historyViewSequence,
+      ...this.settings(),
       messages: messages.map(message => ({
         timestamp: new Date(timestamps.get(message) ?? Date.now()).toISOString(),
         message,
@@ -63,7 +69,7 @@ export class SessionStore {
   }
 
   /** 读保存的会话；没有保存过返回 undefined。 */
-  async loadSaved(): Promise<SessionState | undefined> {
+  async loadSaved(): Promise<(SessionState & SessionSettings) | undefined> {
     const checkpoint = await this.storage.load(this.sessionId);
     if (!checkpoint) return;
     const parseTimestamp = (value: string): number => {
@@ -91,7 +97,13 @@ export class SessionStore {
         );
       }
     }
-    return { messages, timestamps, summary: checkpoint.summary || "" };
+    return {
+      messages,
+      timestamps,
+      summary: checkpoint.summary || "",
+      model: checkpoint.model,
+      thinkingLevel: checkpoint.thinkingLevel,
+    };
   }
 
   async load(): Promise<ModelMessage[]> {

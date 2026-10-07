@@ -2,6 +2,7 @@ import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { silentLogger, type VelaLogger } from '../logger'
+import type { ThinkingLevel } from '../models'
 
 /** 一次保存的会话内容（压缩后的完整历史）。 */
 export interface SessionCheckpoint {
@@ -16,6 +17,10 @@ export interface SessionCheckpoint {
   toolHistorySeq?: number
   /** @internal */
   toolHistoryViewSeq?: number
+  /** 会话用的模型 `provider/id`（用 setModel 选过、能按名字找回时才有），恢复时还原 */
+  model?: string
+  /** 会话的 thinking 级别，恢复时还原 */
+  thinkingLevel?: ThinkingLevel
 }
 
 /**

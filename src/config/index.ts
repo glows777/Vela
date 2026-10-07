@@ -1,5 +1,6 @@
 export { importExtension } from './extensions'
 export { interpolate } from './interpolate'
+export { loadModels, type ProviderApi, type ProviderConfig } from './models'
 export { defaultAgentDir, projectDataDir } from './paths'
 export {
   type ExtensionEntry,

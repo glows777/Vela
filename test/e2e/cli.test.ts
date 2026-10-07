@@ -347,3 +347,66 @@ test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline
   expect(replay.stdout).toContain('remember the milk')
   // 两次启动 CLI 子进程，CI 上每次 2~3 秒，默认 5 秒不够
 }, 20_000)
+
+test.concurrent('--model picks a provider registered by an extension; the choice is saved for --continue', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(
+    join(home.path, 'extensions/local.ts'),
+    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'src/testing/faux'))}
+export default (vela) => vela.registerProvider('local', {
+  models: [{ id: 'm', contextWindow: 32768 }],
+  createModel: (id) => createFauxModel({ modelId: id, responses: [(req) => fauxText('来自 ' + id + ' ' + (req.reasoning ?? '-'))] }),
+})
+`,
+  )
+  const first = await cli(['-p', '你好', '--model', 'local/m', '--thinking', 'high'], {
+    model: '',
+    agentDir: home.path,
+  })
+  expect(first.stderr).toBe('')
+  expect(first.code).toBe(0)
+  expect(first.stdout).toContain('来自 m high')
+
+  // 没给 --model：恢复会话里保存的模型和 thinking，不需要 OPENAI_API_MODEL_NAME
+  const second = await cli(['-p', '再来', '--continue'], {
+    model: '',
+    cwd: first.cwd,
+    agentDir: home.path,
+  })
+  expect(second.stderr).toBe('')
+  expect(second.code).toBe(0)
+  expect(second.stdout).toContain('来自 m high')
+
+  // VELA_MODEL=faux 回放时不被保存的模型覆盖
+  const third = await cli(['-p', '你好', '--continue'], {
+    model: `faux:${scenario('hello')}`,
+    cwd: first.cwd,
+    agentDir: home.path,
+  })
+  expect(third.code).toBe(0)
+  expect(third.stdout).not.toContain('来自 m')
+  // 三次启动 CLI 子进程
+}, 20_000)
+
+test.concurrent('an unknown --model or no model at all stops with a clear message', async () => {
+  const unknown = await cli(['-p', '你好', '--model', 'nope/x'], { model: '' })
+  expect(unknown.code).toBe(1)
+  expect(unknown.stderr).toContain('[模型] 没有名为 nope 的 provider')
+
+  const none = await cli(['-p', '你好'], { model: '' })
+  expect(none.code).toBe(1)
+  expect(none.stderr).toContain('没有选模型')
+
+  const missingKey = await cli(['-p', '你好', '--model', 'anthropic/claude-x'], {
+    model: '',
+  })
+  expect(missingKey.code).toBe(1)
+  expect(missingKey.stderr).toContain('ANTHROPIC_API_KEY')
+
+  const badThinking = await cli(['-p', '你好', '--thinking', 'huge'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(badThinking.code).toBe(2)
+  expect(badThinking.stderr).toContain('--thinking 只能是')
+})

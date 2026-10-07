@@ -14,6 +14,9 @@ export {
   importExtension,
   type LoadConfigOptions,
   loadConfig,
+  loadModels,
+  type ProviderApi,
+  type ProviderConfig,
   type VelaConfig,
   type VelaSettings,
 } from './config'
@@ -47,6 +50,12 @@ export type {
 } from './extensions/types'
 export { type WebOptions, web } from './extensions/web'
 export type { VelaLimits } from './limits'
+export type {
+  ModelInfo,
+  ModelSpec,
+  ProviderDefinition,
+  ThinkingLevel,
+} from './models'
 export { silentLogger, type VelaLogger } from './logger'
 export type {
   PermissionDecision,
@@ -60,7 +69,7 @@ export {
   type SessionStorage,
 } from './session/storage'
 export type { ToolContext, ToolDefinition } from './tools/registry'
-export type { TokenStatus, UsageTotals } from './usage/tracker'
+export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker'
 export { createVela, type Vela, type VelaOptions } from './vela'
 export {
   type PromptOptions,
