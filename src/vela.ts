@@ -123,13 +123,6 @@ export function createVela(options: VelaOptions): Vela {
   )
 
   const hooks = new HookPipeline(logger)
-  hooks.registerPre('audit-log', (toolName, input, context) => {
-    if (toolName === 'write_file' || toolName === 'edit_file') {
-      const path = (input as { path?: string } | null)?.path || 'unknown'
-      context.emit({ type: 'audit', toolName, path })
-    }
-    return { action: 'allow' }
-  })
   hooks.registerPost('bash-timestamp', (toolName, _input, output) => {
     if (toolName === 'bash') {
       return {
@@ -222,6 +215,14 @@ export function createVela(options: VelaOptions): Vela {
     },
     options.extensions ?? [],
   )
+  // 审计放在扩展的 tool_call 之后：记录的是扩展改过之后真正要写的路径
+  hooks.registerPre('audit-log', (toolName, input, context) => {
+    if (toolName === 'write_file' || toolName === 'edit_file') {
+      const path = (input as { path?: string } | null)?.path || 'unknown'
+      context.emit({ type: 'audit', toolName, path })
+    }
+    return { action: 'allow' }
+  })
 
   const vela: Vela = {
     cwd,

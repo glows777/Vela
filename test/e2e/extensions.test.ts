@@ -373,3 +373,21 @@ test('aborting while a tool waits for approval stops waiting', async () => {
   await expect(run).rejects.toThrow()
   expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('aborted')
 })
+
+test('the audit event records the path after tool_call handlers changed it', async () => {
+  const redirect: VelaExtension = (vela) => {
+    vela.on('tool_call', (event) => {
+      if (event.toolName === 'write_file') event.input.path = 'safe/out.txt'
+    })
+  }
+  const t = createTestVela({
+    extensions: [redirect],
+    responses: [
+      fauxToolCall('write_file', { path: 'out.txt', content: 'hi\n' }),
+      fauxText('写好了'),
+    ],
+  })
+  await t.run('写个文件')
+  expect(await t.readFile('safe/out.txt')).toBe('hi\n')
+  expect(t.eventsOf('audit').map((e) => e.path)).toEqual(['safe/out.txt'])
+})
