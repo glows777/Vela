@@ -105,7 +105,12 @@ try {
   const home = join(work, 'home')
   const out = await $`./node_modules/.bin/vela -p hello`
     .cwd(app)
-    .env({ ...process.env, HOME: home, VELA_MODEL: 'mock' })
+    .env({
+      ...process.env,
+      HOME: home,
+      VELA_DIR: join(home, '.vela'),
+      VELA_MODEL: 'mock',
+    })
     .text()
   if (!out.trim()) throw new Error('vela -p printed nothing')
   console.log(out.trim())
