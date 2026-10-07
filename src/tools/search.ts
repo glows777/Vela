@@ -96,17 +96,17 @@ export const createGrepTool = (cwd?: string): ToolDefinition => ({
     if ((await stat(baseDir)).isFile()) {
       await searchFile(baseDir, relative(baseDir, baseDir));
     } else {
-      const entries = await readdir(baseDir, {
-        recursive: true,
-        withFileTypes: true,
-      });
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        const rel = relative(baseDir, join(entry.parentPath, entry.name));
-        if (matches.length >= 50) break;
-        if (rel.split(/[\\/]/).some((segment) => SKIP.has(segment))) continue;
-        await searchFile(join(baseDir, rel), rel);
+      // 逐层读目录，跳过 SKIP 目录不进入，够 50 条就停（不一次读完整棵树）
+      async function walk(dir: string): Promise<void> {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          if (matches.length >= 50) return;
+          if (SKIP.has(entry.name)) continue;
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) await walk(full);
+          else if (entry.isFile()) await searchFile(full, relative(baseDir, full));
+        }
       }
+      await walk(baseDir);
     }
 
     if (matches.length === 0) return `没有找到匹配 "${pattern}" 的内容`;

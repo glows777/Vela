@@ -57,6 +57,20 @@ if (!JSON.stringify(model.calls[1]?.prompt).includes('hi Vela'))
 const t = createTestVela({ responses: [fauxText('ok')] })
 await t.run('hello')
 if (t.lastAssistantText() !== 'ok') throw new Error('createTestVela failed')
+
+// rag 扩展：sqlite-vec 经 Bun 的 bun:sqlite / Node 的 node:sqlite 加载（src/extensions/rag/sqlite.ts）
+const r = createTestVela({
+  embedder: true,
+  files: { 'guide.md': 'Vela runs on Node and Bun.' },
+  responses: [
+    fauxToolCall('rag_ingest', { path: 'guide.md' }),
+    fauxToolCall('rag_search', { query: 'runs on Node' }),
+    fauxText('ok'),
+  ],
+})
+await r.run('ingest and search')
+if (!JSON.stringify(r.model.calls[2]?.prompt).includes('Vela runs on Node and Bun.'))
+  throw new Error('rag_search did not return the ingested text')
 await cleanupTestVelas()
 console.log('sdk ok')
 `
