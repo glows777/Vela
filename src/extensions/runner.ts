@@ -126,8 +126,10 @@ export class ExtensionRunner {
       dataDir: deps.dataDir,
       logger: deps.logger,
       registerTool: (tool) => {
-        // 工具名加上扩展名前缀，避免和内置工具或其它扩展的工具重名
-        const toolName = `${prefix}_${tool.name}`
+        // 工具名加上扩展名前缀，避免和内置工具或其它扩展的工具重名；
+        // 工具名就是扩展名时不重复（memory 扩展的 memory 工具不叫 memory_memory）
+        const toolName =
+          tool.name === prefix ? prefix : `${prefix}_${tool.name}`
         deps.registry.register({ ...tool, name: toolName })
         loaded.tools.push(toolName)
       },

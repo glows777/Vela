@@ -15,6 +15,9 @@ export type {
   OutgoingMessage,
 } from './channels/types'
 export { type FeishuOptions, feishu } from './extensions/feishu'
+export { memory } from './extensions/memory'
+export { type RagOptions, rag } from './extensions/rag'
+export { createEmbedder, type EmbeddingFn } from './extensions/rag/embedder'
 export type { LoadedExtension } from './extensions/runner'
 export { type SupabaseOptions, supabase } from './extensions/supabase'
 export type {
@@ -34,15 +37,15 @@ export type {
   ToolResultEventResult,
   VelaExtension,
 } from './extensions/types'
+export { type WebOptions, web } from './extensions/web'
 export type { VelaLimits } from './limits'
 export { silentLogger, type VelaLogger } from './logger'
-export { createEmbedder, type EmbeddingFn } from './rag/embedder'
 export type {
   PermissionDecision,
   PermissionRules,
   Role,
 } from './security/roles'
-export type { ToolDefinition } from './tools/registry'
+export type { ToolContext, ToolDefinition } from './tools/registry'
 export type { TokenStatus, UsageTotals } from './usage/tracker'
 export { createVela, type Vela, type VelaOptions } from './vela'
 export {

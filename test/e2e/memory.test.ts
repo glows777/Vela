@@ -1,6 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
+import { MemoryStore } from '../../src/extensions/memory/store'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
-import { cleanupTestVelas, createTestVela } from '../support/vela'
+import {
+  cleanupTestVelas,
+  createTestVela,
+  type TestVela,
+} from '../support/vela'
 
 afterEach(cleanupTestVelas)
 
@@ -35,8 +40,9 @@ test('a memory saved through the tool shows up in the next system prompt and sur
   const index = await t.readData('.memory/MEMORY.md')
   expect(index).toContain('favorite-language')
 
-  const restarted = createTestVela({ cwd: t.cwd })
-  expect(restarted.session.buildSystem()).toContain('用户最喜欢的编程语言')
+  const restarted = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
+  await restarted.run('你好')
+  expect(restarted.model.calls[0]!.system).toContain('用户最喜欢的编程语言')
 })
 
 test('the model can search and read memories back', async () => {
@@ -72,7 +78,7 @@ test('the memory tool rejects a save without content', async () => {
   })
   await t.run('存个空的')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('保存失败')
-  expect(t.internals.memoryStore.list()).toHaveLength(0)
+  expect(new MemoryStore(t.dataDir).list()).toHaveLength(0)
 })
 
 test('read and delete need a filename; with one they work', async () => {
@@ -98,5 +104,57 @@ test('read and delete need a filename; with one they work', async () => {
   expect(outputs).toContain('读取失败：需要 filename')
   expect(outputs).toContain('删除失败：需要 filename')
   expect(t.model.calls[4]!.toolResults[0]!.output).toContain('已删除')
-  expect(t.internals.memoryStore.list()).toHaveLength(0)
+  expect(new MemoryStore(t.dataDir).list()).toHaveLength(0)
+})
+
+// ---------- 命令（memory 扩展注册，输出走 ui.notify） ----------
+
+function withMemory(options: Parameters<typeof createTestVela>[0] = {}) {
+  const t = createTestVela(options)
+  new MemoryStore(t.dataDir).save({
+    name: 'openai-null-chars',
+    description: 'openai 接口返回 null 字符问题',
+    type: 'feedback',
+    content: '正文',
+  })
+  return t
+}
+
+const notes = (t: TestVela) =>
+  t
+    .eventsOf('notify')
+    .map((e) => e.message)
+    .join('\n')
+
+test('/memory lists memories, /memory search uses BM25, /memory lint reports health', async () => {
+  const t = withMemory()
+  await t.run('/memory')
+  expect(notes(t)).toContain('共 1 条记忆')
+  expect(notes(t)).toContain('openai-null-chars')
+  await t.run('/memory search null 字符')
+  expect(notes(t)).toContain('BM25 搜索')
+  await t.run('/memory lint')
+  expect(notes(t)).toContain('记忆库健康')
+  // 命令不发给模型
+  expect(t.model.calls).toHaveLength(0)
+})
+
+test('/dream hands the memory clean-up prompt to the model', async () => {
+  const t = withMemory({ responses: [fauxText('记忆已整理')] })
+  await t.run('/dream')
+  expect(t.model.calls).toHaveLength(1)
+  expect(t.model.calls[0]!.lastUserText).toContain('memory lint')
+  expect(t.lastAssistantText()).toBe('记忆已整理')
+  expect(notes(t)).toContain('[dream] 完成')
+  expect(t.session.busy.locked).toBe(false)
+})
+
+test('guest sessions cannot run memory commands; the text goes to the model', async () => {
+  const t = withMemory({
+    responses: [fauxText('普通回答')],
+    session: { role: 'guest' },
+  })
+  await t.run('/memory')
+  expect(notes(t)).not.toContain('openai-null-chars')
+  expect(t.model.calls).toHaveLength(1)
 })

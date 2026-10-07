@@ -4,7 +4,7 @@ import {
   normalizeFtsQuery,
   normalizeMinMax,
   type SearchResult,
-} from '../../../src/rag/search'
+} from '../../../../src/extensions/rag/search'
 
 function makeResult(id: string, text: string, score: number): SearchResult {
   return {

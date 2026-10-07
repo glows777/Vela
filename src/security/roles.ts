@@ -5,6 +5,9 @@
  * - collaborator：除 bash 外全部
  * - guest：不碰本机的工具（知识库检索、网页搜索、延迟工具查询）；不能读写文件、跑命令、用记忆，
  *   system prompt 里也不注入主人的记忆
+ *
+ * rag_search / web_search 来自内置的 rag、web 扩展。扩展工具名都带 `<扩展名>_` 前缀，
+ * 所以只有名叫 rag / web 的扩展能注册出这两个名字（重名会抛错），别的扩展拿不到 guest 权限。
  */
 export type Role = 'owner' | 'collaborator' | 'guest'
 

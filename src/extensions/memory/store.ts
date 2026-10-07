@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { silentLogger, type VelaLogger } from '../logger'
+import type { VelaLogger } from '../../index'
 import { bm25Search, type SearchHit } from './search'
 import { lintAll, type ValidationReport } from './validator'
 
@@ -25,7 +25,7 @@ export class MemoryStore {
 
   constructor(
     baseDir: string = '.',
-    private logger: VelaLogger = silentLogger,
+    private logger?: VelaLogger,
   ) {
     this.baseDir = baseDir
   }
@@ -91,7 +91,7 @@ export class MemoryStore {
       lines[existingIdx] = newLine
     } else {
       if (lines.length >= MAX_INDEX_LINES) {
-        this.logger.info(
+        this.logger?.info(
           `[memory] 索引已达 ${MAX_INDEX_LINES} 行上限，移除最早的条目`,
         )
         const firstEntry = lines.findIndex((l) => l.startsWith('- '))

@@ -8,6 +8,7 @@ import readOnlyReview from '../../examples/extensions/read-only-session'
 import redact from '../../examples/extensions/redact-secrets'
 import todo from '../../examples/extensions/todo-command'
 import { z } from 'zod'
+import { MemoryStore } from '../../src/extensions/memory/store'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
 import { cleanupTestVelas, createTestVela } from '../support/vela'
 
@@ -44,7 +45,8 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
   })
   await t.run('打个招呼')
   expect(t.lastAssistantText()).toBe('你好，Liam！')
-  expect(t.vela.extensions()).toEqual([
+  // createTestVela 和 CLI 一样先加载内置的 memory 扩展
+  expect(t.vela.extensions().filter((e) => e.name !== 'memory')).toEqual([
     { name: 'hello', tools: ['hello_greet'], commands: [], channels: [] },
   ])
 })
@@ -60,7 +62,7 @@ test('todo-command: /todo runs the command instead of calling the model', async 
     '已记下：买牛奶',
     '买牛奶',
   ])
-  expect(t.vela.commands()).toEqual([
+  expect(t.vela.commands().filter((c) => c.extension !== 'memory')).toEqual([
     {
       name: 'todo',
       description: '记一条待办；不带参数时列出',
@@ -207,7 +209,7 @@ test('guest sessions do not get the owner memory in the system prompt', async ()
   const t = createTestVela({
     responses: [fauxText('owner'), fauxText('guest')],
   })
-  t.internals.memoryStore.save({
+  new MemoryStore(t.dataDir).save({
     name: '主人的私事',
     description: '只给主人看',
     type: 'user',
@@ -273,7 +275,8 @@ test('a tool_call handler that throws blocks the call', async () => {
       },
     ],
     responses: [
-      fauxToolCall('extension-1_touch', {}),
+      // 匿名扩展按加载顺序命名；内置的 memory 是第 1 个
+      fauxToolCall('extension-2_touch', {}),
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
@@ -412,5 +415,7 @@ test('extension tools are prefixed with the extension name, so they cannot shado
     ],
   })
   await t.run('看看工具')
-  expect(t.vela.extensions()[0]?.tools).toEqual(['shadow_read_file'])
+  expect(t.vela.extensions().find((e) => e.name === 'shadow')?.tools).toEqual([
+    'shadow_read_file',
+  ])
 })

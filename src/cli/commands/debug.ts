@@ -87,12 +87,11 @@ export const debugCommands: CommandHandler[] = [
     return 'async'
   },
 
-  (cmd, { internals, session }) => {
+  (cmd, { session }) => {
     if (cmd !== 'status' && cmd !== '查看状态') return false
     const tokens = estimateMessageTokens(session.messages)
-    const memCount = internals.memoryStore.list().length
     console.log(
-      `\n[状态] ${session.messages.length} 条消息, ~${tokens} tokens, ${memCount} 条记忆\n`,
+      `\n[状态] ${session.messages.length} 条消息, ~${tokens} tokens\n`,
     )
     return true
   },

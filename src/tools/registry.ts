@@ -24,6 +24,19 @@ export class ToolExecutionResult {
   ) {}
 }
 
+/** 工具执行时拿到的上下文。 */
+export interface ToolContext {
+  toolCallId?: string
+  /** 会话中断（abort、关闭）时触发；长时间运行的工具应该响应它 */
+  signal?: AbortSignal
+  /** @internal 会话的工具结果存储（bash 把大输出写成文件） */
+  results: ToolResultStore
+  /** @internal 这次调用在工具历史里的 id */
+  callId?: string
+  /** @internal 正在执行这次调用的（会话级）registry（tool_search 用） */
+  registry?: ToolRegistry
+}
+
 export interface ToolDefinition {
   name: string
   description: string
@@ -33,14 +46,7 @@ export interface ToolDefinition {
   execute: (
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool inputs
     input: any,
-    context?: {
-      results: ToolResultStore
-      toolCallId?: string
-      callId?: string
-      signal?: AbortSignal
-      /** 正在执行这次调用的（会话级）registry */
-      registry?: ToolRegistry
-    },
+    context?: ToolContext,
   ) => Promise<unknown>
 
   isConcurrencySafe?: boolean

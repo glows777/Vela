@@ -169,9 +169,12 @@ export class VelaSession {
     this.registry.setSelection(names)
   }
 
-  /** @internal 正在跑时的中断信号 */
+  /** 正在执行的扩展命令（命令不占运行锁，命令里可以再调用 prompt()） */
+  private command: AbortController | undefined
+
+  /** @internal 正在跑（agent loop 或扩展命令）时的中断信号 */
   get signal(): AbortSignal | undefined {
-    return this.busy.controller?.signal
+    return this.busy.controller?.signal ?? this.command?.signal
   }
 
   /** 订阅这个会话的事件；返回取消订阅的函数。 */
@@ -245,10 +248,26 @@ export class VelaSession {
     if (input.startsWith('/'))
       return (async () => {
         await this.start()
-        if (await this.deps.extensions.runCommand(this, input)) return
+        if (await this.runCommand(input, options.signal)) return
         return this.promptModel(input, options)
       })()
     return this.promptModel(input, options)
+  }
+
+  /** 执行扩展命令；abort() 和 options.signal 会中断命令的 ctx.signal。 */
+  private async runCommand(input: string, signal?: AbortSignal) {
+    const controller = new AbortController()
+    const forward = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', forward, { once: true })
+    if (signal?.aborted) forward()
+    const previous = this.command
+    this.command = controller
+    try {
+      return await this.deps.extensions.runCommand(this, input)
+    } finally {
+      this.command = previous
+      signal?.removeEventListener('abort', forward)
+    }
   }
 
   private promptModel(input: string, options: PromptOptions): Promise<void> {
@@ -307,10 +326,10 @@ export class VelaSession {
     }
   }
 
-  /** 中断当前 agent loop（如果有）。 */
+  /** 中断当前 agent loop 和扩展命令（如果有）。 */
   abort(reason: unknown = new DOMException('用户取消当前操作', 'AbortError')) {
-    const controller = this.busy.controller
-    if (controller && !controller.signal.aborted) controller.abort(reason)
+    for (const controller of [this.busy.controller, this.command])
+      if (controller && !controller.signal.aborted) controller.abort(reason)
   }
 
   /** token 估算、上下文占比和本会话累计用量。 */

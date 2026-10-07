@@ -6,10 +6,12 @@ import {
 import type { CommandHandler } from './index'
 
 export const contextCommands: CommandHandler[] = [
-  (cmd, { vela, internals, session }) => {
+  (cmd, { vela, session }) => {
     if (cmd !== '/context' && cmd !== 'context') return false
     const SYSTEM = session.buildSystem()
-    const memoryChars = internals.memoryStore.buildPromptSection()?.length ?? 0
+    // memory 扩展在上一轮 prompt 开始时写入的记忆段落
+    const memoryChars =
+      session.promptContext().extensionSections?.memory?.length ?? 0
     const model = vela.model
     const modelId = typeof model === 'string' ? model : model.modelId
     const provider = typeof model === 'string' ? '' : model.provider

@@ -89,7 +89,7 @@ const t = createTestVela({
   responses: [...], generate: [...], faux: { cache: true },
   files: { 'src/a.ts': '...' },          // 预置到临时 cwd
   skills: [{ name, description, body }], // 写到 .skills/<name>/SKILL.md
-  embedder: true,                        // 用 faux embedder 打开 RAG
+  embedder: true,                        // 加载 rag 扩展，用 faux embedder（memory 扩展总是加载，同 CLI）
   limits: { maxTurns: 3 },               // 覆盖上限；测试默认 retryBaseMs=0
   dataDir: '.vela-data', sessionId: 'a', cwd: existingDir,
   logger,                                // 注入 logger
@@ -98,7 +98,7 @@ const t = createTestVela({
 })
 
 t.vela                            // createVela() 的返回值（公开 API）
-t.internals                       // 内部对象：registry、hooks、memoryStore、vectorStore、gateway…（只有 test/support 版本有）
+t.internals                       // 内部对象：registry、hooks、builder、gateway…（只有 test/support 版本有）
 t.session                         // 默认会话（id 为 sessionId，默认 'default'）
 await t.run('读一下 a.txt')       // = t.session.prompt()
 t.vela.session('other')           // 同一个 Vela 再开一个会话
@@ -107,13 +107,14 @@ t.eventsOf('tool_call')           // 某类事件，带类型
 t.eventsIn('other')               // 某个会话的事件
 t.streamedText(); t.lastAssistantText(); t.messages
 t.model.calls                     // 模型收到的请求
-t.dispatch('/memory')             // 斜杠命令，返回 true/false/'async'
-await t.command('/dream')         // 异步命令，等它结束
+t.dispatch('/context')            // CLI 自己的斜杠命令，返回 true/false/'async'
+await t.command('/skill x')       // 异步命令，等它结束
+await t.run('/memory')            // 扩展命令走 session.prompt()；输出是 notify 事件：t.eventsOf('notify')
 t.readFile('a.txt'); t.readData('.sessions/default.jsonl'); t.exists('knowledge.db')
 await t.cleanup({ keepDir: true }) // 一般交给 cleanupTestVelas()
 ```
 
-斜杠命令（`t.dispatch` / `t.command`）作用在 `t.session` 上；它们来自 `test/support/vela.ts`，`vela/testing` 里的版本没有命令分发器。
+CLI 斜杠命令（`t.dispatch` / `t.command`）作用在 `t.session` 上；它们来自 `test/support/vela.ts`，`vela/testing` 里的版本没有命令分发器。扩展注册的命令（`/memory`、`/dream`、`/rag`…）不经过分发器，用 `t.run('/name args')`。
 
 cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一步其实没有”。确实不需要用完时传 `allowPendingResponses: true`。
 
@@ -153,15 +154,15 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/resilience | 429/503 重试后成功；provider 的 APICallError 按 statusCode 判断是否重试；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；maxTurns；token 预算告警与停止；超过 maxInputTokens 不发请求 |
 | e2e/context | 微压缩折叠旧工具结果；摘要压缩替换旧历史、保留近期消息、写盘并在恢复后生效；摘要不合格时停止且历史不变；`defend` 只做微压缩不付费摘要 |
 | e2e/session | `--continue` 式恢复；空目录无会话；不同 sessionId 分开存；dataDir 与 cwd 分离；usage 日志；prompt cache 模拟 |
-| e2e/memory | 通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename |
-| e2e/rag | 没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留 |
+| e2e/memory | memory 扩展：通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename；`/memory`（search / lint）、`/dream`；guest 不能执行命令 |
+| e2e/rag | rag 扩展：没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留；`/rag`、`/rag ingest` 及中断 |
 | e2e/commands | `/context` `/usage` `status`；supabase 扩展的工具模型能直接用、`/extensions` 列出；通道消息走同一模型和工具并回发 |
 | e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存 |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger |
 | e2e/cli | `-p` 单次模式回放场景；`VELA_RECORD` 录制后用 `faux:` 回放；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出 |
-| unit/cli/commands | skill 激活/去重/并发锁、dream、memory、rag 命令（走真实装配） |
+| unit/cli/commands | skill 激活/去重/并发锁（走真实装配） |
 | unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
 | unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |
 | unit/public-api | `vela`、`vela/testing` 的公开 API 和 `api/public-api.txt` 一致；改了公开面运行 `bun run api:update` |
