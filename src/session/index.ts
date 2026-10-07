@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { silentLogger, type VelaLogger } from '../logger.ts';
 import {
   fileSessionStorage,
+  SESSION_FORMAT_VERSION,
   type SessionCheckpoint,
   type SessionStorage,
 } from './storage.ts';
@@ -49,6 +50,7 @@ export class SessionStore {
   ): Promise<void> {
     const checkpoint: SessionCheckpoint = {
       type: "checkpoint",
+      version: SESSION_FORMAT_VERSION,
       timestamp: new Date().toISOString(),
       summary,
       toolHistoryId: this.results.historyId,
@@ -72,6 +74,11 @@ export class SessionStore {
   async loadSaved(): Promise<(SessionState & SessionSettings) | undefined> {
     const checkpoint = await this.storage.load(this.sessionId);
     if (!checkpoint) return;
+    const version = checkpoint.version ?? 1;
+    if (version > SESSION_FORMAT_VERSION)
+      throw new Error(
+        `会话 ${this.sessionId} 的文件格式版本是 ${version}，这个 Vela 只认识到 ${SESSION_FORMAT_VERSION}：请升级 Vela`,
+      );
     const parseTimestamp = (value: string): number => {
       const parsed = Date.parse(value);
       return Number.isFinite(parsed) ? parsed : Date.now();

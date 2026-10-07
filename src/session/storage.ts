@@ -4,9 +4,14 @@ import type { ModelMessage } from 'ai'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 
+/** 现在写的会话文件格式版本；格式不兼容地变化时加一，并在加载时迁移旧版本（同 pi）。 */
+export const SESSION_FORMAT_VERSION = 1
+
 /** 一次保存的会话内容（压缩后的完整历史）。 */
 export interface SessionCheckpoint {
   type: 'checkpoint'
+  /** 格式版本；Vela 写的总是有，没有的旧文件按 1 读 */
+  version?: number
   timestamp: string
   /** 上下文摘要（没压缩过时为空串） */
   summary: string

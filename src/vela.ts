@@ -12,11 +12,9 @@ import {
   coreRules,
   deferredTools,
   extensionSections,
-  sessionContext,
-  toolGuide,
   toolHistoryGuide,
 } from './prompt/index.ts'
-import { PromptPipeline } from './prompt/pipelins.ts'
+import { PromptPipeline } from './prompt/pipeline.ts'
 import { HookPipeline } from './security/hooks.ts'
 import {
   fileSessionStorage,
@@ -107,7 +105,7 @@ export interface Vela {
   channels(): { name: string; description: string }[]
   /** 启动所有通道（开始接收消息） */
   startChannels(): Promise<void>
-  /** 停止通道、关闭所有会话（中断正在跑的任务并保存）、断开 MCP */
+  /** 停止通道、关闭所有会话（中断正在跑的任务并保存） */
   dispose(): Promise<void>
 }
 
@@ -190,15 +188,13 @@ export function createVela(options: VelaOptions = {}): Vela {
   skillLoader.load()
 
   const builder = new PromptPipeline()
-    .pipe('coreRules', coreRules())
-    .pipe('toolGuide', toolGuide())
+    .pipe('coreRules', coreRules(cwd))
     .pipe('toolHistoryGuide', toolHistoryGuide())
     .pipe('deferredTools', deferredTools())
     .pipe('extensions', extensionSections())
     .pipe('skillContext', (ctx) =>
       skillLoader.buildPromptSection(ctx.activeSkills ?? new Set()),
     )
-    .pipe('sessionContext', sessionContext())
 
   const listeners = new Set<VelaSessionEventListener>()
   const sessions = new Map<string, VelaSession>()
@@ -297,7 +293,6 @@ export function createVela(options: VelaOptions = {}): Vela {
       disposed = true
       await gateway.stopAll()
       await Promise.all([...sessions.values()].map((s) => s.close()))
-      await registry.closeAllMCP()
       listeners.clear()
       if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
     },

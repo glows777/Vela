@@ -23,6 +23,8 @@ Default to using Bun instead of Node.js.
 
 ## APIs
 
+`src/` 是发布到 npm 的包（编译成 `dist/`），要在 Node ≥ 22.18 和 Bun 上都能跑：只用 `node:` 模块和 Web 标准 API，不用 `Bun.*` 全局和 `bun:` 模块（RAG 的 SQLite 经 `src/extensions/rag/sqlite.ts` 适配两边）；相对 import 写 `.ts` 扩展名。`bun run build` 出 `dist/`，`bun run smoke:consumer` 在 Node 和 Bun 的空项目里各验一遍。下面的 Bun API 建议只适用于 `scripts/` 和 `test/`。
+
 - `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
 - `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
 - `Bun.redis` for Redis. Don't use `ioredis`.

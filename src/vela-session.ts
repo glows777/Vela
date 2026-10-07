@@ -16,7 +16,7 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { VelaLogger } from './logger.ts'
-import type { PromptContext, PromptPipeline } from './prompt/pipelins.ts'
+import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
 import { SessionStore } from './session/index.ts'
 import type { SessionStorage } from './session/storage.ts'

@@ -1,7 +1,6 @@
-import type { Client, Transport } from '@modelcontextprotocol/client'
 import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
-import { tool as AITool, asSchema, type JSONSchema7, jsonSchema } from 'ai'
+import { tool as AITool, asSchema } from 'ai'
 import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { VelaEventListener } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
@@ -64,7 +63,7 @@ export interface ToolDefinition {
 const DEFAULT_MAX_RESULT_CHARS = 3000 // 超出时保存原文，只返回预览
 
 /**
- * 同一个 Vela 里所有会话共享的部分：工具定义、hooks、执行锁、MCP 连接。
+ * 同一个 Vela 里所有会话共享的部分：工具定义、hooks、执行锁。
  * 角色和权限、工具选择、已发现的延迟工具、工具结果存储和持久化失败状态是每个会话自己的。
  */
 interface SharedToolState {
@@ -78,7 +77,6 @@ interface SharedToolState {
   exclusiveLock: boolean // 当前是否有独占锁持有者
   concurrentCount: number // 当前共享锁持有数
   waitQueue: Array<() => void> // 阻塞等待中的 resolve 函数
-  mcpClients: Client[]
   logger: VelaLogger
 }
 
@@ -105,13 +103,12 @@ export class ToolRegistry {
       exclusiveLock: false,
       concurrentCount: 0,
       waitQueue: [],
-      mcpClients: [],
       logger: silentLogger,
     }
   }
 
   /**
-   * 给一个会话用的 registry：和本 registry 共享工具定义、角色、hooks、锁和 MCP，
+   * 给一个会话用的 registry：和本 registry 共享工具定义、角色、hooks 和锁，
    * 但有自己的工具结果存储、已发现的延迟工具和持久化状态。
    */
   fork(results: ToolResultStore, options: ToolRegistryForkOptions = {}) {
@@ -503,62 +500,6 @@ export class ToolRegistry {
     return result
   }
 
-  async registerMCPServer(
-    serverName: string,
-    client: Client,
-    transport: Transport,
-  ): Promise<string[]> {
-    await client.connect(transport)
-    this.shared.mcpClients.push(client)
-
-    const tools = await listAllMCPTools(client)
-    const registered: string[] = []
-
-    for (const tool of tools) {
-      const prefixedName = `mcp__${serverName}__${tool.name}`
-      if (this.tools.has(prefixedName)) continue
-
-      const toolClient = client
-      const originalName = tool.name
-
-      this.register({
-        name: prefixedName,
-        description: `[MCP:${serverName}] ${tool.description ?? ''}`,
-        inputSchema: jsonSchema(tool.inputSchema as JSONSchema7),
-        // readOnlyHint is only an MCP behavior hint, not a concurrency contract.
-        // Treat it as a conservative signal: unknown or mutating MCP tools run exclusively.
-        isConcurrencySafe: true,
-        isReadOnly: tool.annotations?.readOnlyHint === true,
-        exposure: 'deferred',
-        searchHint: `${serverName} ${tool.name} ${tool.description}`,
-        maxResultChars: 3000,
-        execute: async (input, context) => {
-          const result = await toolClient.callTool(
-            {
-              name: originalName,
-              arguments: input,
-            },
-            { signal: context?.signal },
-          )
-          return new ToolExecutionResult(result, formatMCPToolResult(result), {
-            isError: result.isError === true,
-          })
-        },
-      })
-
-      registered.push(prefixedName)
-    }
-
-    return registered
-  }
-
-  async closeAllMCP(): Promise<void> {
-    for (const client of this.shared.mcpClients) {
-      await client.close()
-    }
-    this.shared.mcpClients = []
-  }
-
   getActiveTools() {
     return this.getAllTools().filter((tool) => {
       if (this.decide(tool.name) === 'deny') {
@@ -688,37 +629,4 @@ function truncateResult(text: string, maxChars: number) {
   const dropped = text.length - head.length - tail.length
 
   return `${head}\n\n[preview: first ${head.length} and last ${tail.length} of ${text.length} UTF-16 code units; ${dropped} omitted here, full output saved]\n\n${tail}`
-}
-
-async function listAllMCPTools(client: Client) {
-  const tools: Awaited<ReturnType<Client['listTools']>>['tools'] = []
-  let cursor: string | undefined
-
-  do {
-    const result = await client.listTools(cursor ? { cursor } : undefined)
-    tools.push(...result.tools)
-    cursor = result.nextCursor
-  } while (cursor)
-
-  return tools
-}
-
-function formatMCPToolResult(
-  result: Awaited<ReturnType<Client['callTool']>>,
-): string {
-  const content = result.content
-    .map((block) => {
-      if (block.type === 'text') {
-        return block.text
-      }
-      return JSON.stringify(block, null, 2)
-    })
-    .filter((text) => text.length > 0)
-    .join('\n')
-  const structuredContent = result.structuredContent
-    ? `\n\nstructuredContent:\n${JSON.stringify(result.structuredContent, null, 2)}`
-    : ''
-  const errorPrefix = result.isError ? '[MCP tool error]\n' : ''
-
-  return `${errorPrefix}${content}${structuredContent}` || 'empty response'
 }

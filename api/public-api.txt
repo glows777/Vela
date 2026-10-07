@@ -134,6 +134,7 @@
     thinkingLevel?: ThinkingLevel | undefined
     timestamp: string
     type: "checkpoint"
+    version?: number | undefined
   interface SessionOptions
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     permissions?: PermissionRules | undefined
