@@ -127,7 +127,7 @@ export function reasoningOption(
 }
 
 /**
- * 按模型的上下文窗口算压缩阈值和输入上限（默认值就是按 200k 窗口定的比例）；
+ * 按模型的上下文窗口算压缩阈值和输入上限（默认值就是按 200k 窗口定的比例；tokenBudget 不跟窗口走）；
  * 没写 contextWindow 时用默认值。`overrides`（createVela / settings 里显式写的 limits）优先。
  */
 export function limitsForModel(
@@ -137,7 +137,7 @@ export function limitsForModel(
   const window = info.contextWindow
   const derived: Partial<VelaLimits> = window
     ? {
-        tokenBudget: window,
+        // tokenBudget 是一次 prompt 累计消耗的上限（每步都重发整段历史），不是窗口，不跟模型走
         // 留给输出的余量：200k 窗口是 16384（现在的默认值），小窗口按 15%，保证高于摘要阈值
         maxInputTokens: window - Math.min(16_384, Math.floor(window * 0.15)),
         summaryThreshold: Math.floor(window * 0.75),

@@ -57,7 +57,9 @@ test('a model chosen by name uses its provider, metadata and pricing', async () 
     ref: 'fake/big',
     contextWindow: 32_768,
   })
-  expect(t.session.limits.tokenBudget).toBe(32_768)
+  expect(t.session.limits.summaryThreshold).toBe(24_576)
+  // 一次 prompt 的累计预算不跟窗口走（小窗口模型走几步就会超）
+  expect(t.session.limits.tokenBudget).toBe(200_000)
   expect(t.session.tracker.contextWindow).toBe(32_768)
 
   await t.run('你好')

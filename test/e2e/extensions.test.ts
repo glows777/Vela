@@ -535,7 +535,7 @@ test('local-provider: models from a registered provider can be picked by name', 
   expect(t.vela.models().map((m) => m.ref)).toContain('local/qwen2.5-coder:7b')
   t.session.setModel('local/qwen2.5-coder:7b')
   expect(t.session.model).toMatchObject({ modelId: 'qwen2.5-coder:7b' })
-  expect(t.session.limits.tokenBudget).toBe(32_768)
+  expect(t.session.limits.summaryThreshold).toBe(24_576)
   // 没列出的 id 也能用，只是没有元数据
   t.session.setModel('local/llama3')
   expect(t.session.modelInfo).toEqual({ id: 'llama3', provider: 'local', ref: 'local/llama3' })

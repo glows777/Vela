@@ -137,11 +137,19 @@ vela.subscribe((event, sessionId) => {
   printEvent(event)
 })
 
-/** 恢复的会话带着保存的模型和 thinking；命令行显式给的优先。返回模型是否可用。 */
+/**
+ * 恢复的会话带着保存的模型和 thinking；命令行显式给的优先，VELA_MODEL=mock / faux 和
+ * VELA_RECORD 包装过的模型也优先（不然 --continue 会绕过回放 / 录制，改用保存的真实模型）。
+ * 返回模型是否可用。
+ */
 function applyModelArgs(target: VelaSession): boolean {
   if (args.thinking) target.setThinkingLevel(args.thinking)
+  const override =
+    args.model ??
+    recorder?.model ??
+    (typeof chosenModel === 'string' ? undefined : chosenModel)
   try {
-    if (args.model) target.setModel(args.model)
+    if (override) target.setModel(override)
     else void target.modelInfo
     return true
   } catch (error) {

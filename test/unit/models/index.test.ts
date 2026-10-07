@@ -44,7 +44,7 @@ test('context limits follow the model window; explicit limits win', () => {
   expect(limitsForModel({})).toEqual({ ...DEFAULT_LIMITS })
   const small = limitsForModel({ contextWindow: 32_768 })
   expect(small).toMatchObject({
-    tokenBudget: 32_768,
+    tokenBudget: DEFAULT_LIMITS.tokenBudget,
     maxInputTokens: 27_853,
     summaryThreshold: 24_576,
     microcompactThreshold: 19_660,

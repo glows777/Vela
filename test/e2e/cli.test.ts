@@ -377,7 +377,17 @@ export default (vela) => vela.registerProvider('local', {
   expect(second.stderr).toBe('')
   expect(second.code).toBe(0)
   expect(second.stdout).toContain('来自 m high')
-})
+
+  // VELA_MODEL=faux 回放时不被保存的模型覆盖
+  const third = await cli(['-p', '你好', '--continue'], {
+    model: `faux:${scenario('hello')}`,
+    cwd: first.cwd,
+    agentDir: home.path,
+  })
+  expect(third.code).toBe(0)
+  expect(third.stdout).not.toContain('来自 m')
+  // 三次启动 CLI 子进程
+}, 20_000)
 
 test.concurrent('an unknown --model or no model at all stops with a clear message', async () => {
   const unknown = await cli(['-p', '你好', '--model', 'nope/x'], { model: '' })
