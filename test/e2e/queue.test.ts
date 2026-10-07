@@ -63,7 +63,7 @@ test('a steer that arrives on the final answer keeps the loop going', async () =
   ])
 })
 
-test('followUp runs as its own loop after the current task, and prompt() waits for it', async () => {
+test('followUp waits until the model would stop, then continues in the same loop (pi)', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'A' },
     responses: [
@@ -81,9 +81,9 @@ test('followUp runs as its own loop after the current task, and prompt() waits f
   // followUp 没有插进第一个任务：第二次请求看到的还是工具结果
   expect(t.model.calls[1]!.toolResults).toHaveLength(1)
   expect(t.model.calls[2]!.lastUserText).toBe('然后总结一下')
-  expect(t.eventsOf('agent_start').map((e) => e.input)).toEqual([
-    '读 a',
-    '然后总结一下',
+  expect(t.eventsOf('agent_start').map((e) => e.input)).toEqual(['读 a'])
+  expect(t.eventsOf('agent_end')).toEqual([
+    { type: 'agent_end', reason: 'done' },
   ])
   expect(
     t.eventTypes().filter((type) => type === 'agent_settled'),

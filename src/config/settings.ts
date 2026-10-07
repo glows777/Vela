@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import type { VelaLimits } from '../limits'
+import { assertLimitKeys, type VelaLimits } from '../limits'
 import {
   type ProviderDefinition,
   THINKING_LEVELS,
@@ -181,6 +181,8 @@ function readSettings(file: string): VelaSettings | undefined {
   for (const key of ['limits', 'extensionConfig'] as const)
     if (settings[key] !== undefined && !isPlainObject(settings[key]))
       throw new Error(`${file}: ${key} 应该是对象`)
+  if (settings.limits !== undefined)
+    assertLimitKeys(settings.limits, `${file}: limits`)
   if (settings.dataDir !== undefined && typeof settings.dataDir !== 'string')
     throw new Error(`${file}: dataDir 应该是字符串`)
   if (

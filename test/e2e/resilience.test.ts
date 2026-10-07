@@ -169,7 +169,6 @@ test('a second run while one is in flight is refused', async () => {
 test('repeating the same tool call trips the loop detector: warning, then critical stop', async () => {
   const same = () => fauxToolCall('list_directory', { path: '.' })
   const t = createTestVela({
-    limits: { maxTurns: 30 },
     // 检测发生在记录之前：第 11 次同参调用时已有 10 次 → warning，第 21 次 → critical
     responses: Array.from({ length: 21 }, same),
   })
@@ -202,23 +201,22 @@ test('repeating the same tool call trips the loop detector: warning, then critic
   expect(t.model.calls).toHaveLength(21)
 })
 
-test('the loop stops at maxTurns', async () => {
+test('there is no turn limit: the loop runs until the model stops calling tools (same as pi)', async () => {
   const t = createTestVela({
-    limits: { maxTurns: 3 },
     responses: [
-      fauxToolCall('list_directory', { path: '.' }),
-      fauxToolCall('glob', { pattern: '*' }),
-      fauxToolCall('list_directory', { path: '..' }),
+      ...Array.from({ length: 20 }, (_, i) =>
+        fauxToolCall('glob', { pattern: `*${i}` }),
+      ),
+      fauxText('做完了'),
     ],
   })
 
   await t.run('一直干活')
 
-  expect(t.eventsOf('turn_start')).toHaveLength(3)
-  expect(t.eventsOf('turn_end')).toHaveLength(3)
+  expect(t.eventsOf('turn_start')).toHaveLength(21)
   expect(t.eventsOf('agent_end').at(-1)).toEqual({
     type: 'agent_end',
-    reason: 'max_turns',
+    reason: 'done',
   })
 })
 

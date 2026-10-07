@@ -41,6 +41,11 @@ interface AgentLoopParameter {
    * 取到的作为用户消息接在后面；模型本来要结束时取到了也会接着跑。
    */
   takeSteering?: () => string[]
+  /**
+   * 取出排队的 followUp 消息（同 pi 的 getFollowUpMessages）：模型本来要结束（没有工具调用、也没有 steer）时取，
+   * 取到就作为用户消息接着在同一个 loop 里跑。
+   */
+  takeFollowUp?: () => string[]
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -77,6 +82,7 @@ export const agentLoop = async ({
   limits: limitOverrides,
   reasoning,
   takeSteering,
+  takeFollowUp,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
@@ -89,7 +95,8 @@ export const agentLoop = async ({
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   try {
-    while (turn < limits.maxTurns) {
+    // 同 pi：不限轮数，一直跑到模型不再调用工具、也没有排队的消息（或被中断 / 预算 / 循环检测停下）
+    for (;;) {
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
       turn++
@@ -301,22 +308,22 @@ export const agentLoop = async ({
         endReason = 'budget'
         break
       }
-      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前
-      const steering = takeSteering?.() ?? []
-      for (const text of steering) {
+      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前；本来要结束时再看 followUp（同 pi）
+      let queued = takeSteering?.() ?? []
+      if (!needToolCall && queued.length === 0) queued = takeFollowUp?.() ?? []
+      for (const text of queued) {
         const message: ModelMessage = { role: 'user', content: text }
         messages.push(message)
         tokenTracker.addMessage(message)
         emit({ type: 'message', message })
       }
-      if (!needToolCall && steering.length === 0) {
+      if (!needToolCall && queued.length === 0) {
         endReason = 'done'
         break
       }
     }
 
-    // 没有任何 break 时说明 while 条件耗尽，即达到轮次上限
-    emit({ type: 'agent_end', reason: endReason ?? 'max_turns' })
+    emit({ type: 'agent_end', reason: endReason ?? 'done' })
   } catch (error) {
     emit({
       type: 'agent_end',

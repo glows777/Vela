@@ -3,8 +3,6 @@
  * 测试用它把重试退避降到 0、把压缩阈值调小，而不必构造十几万 token 的输入。
  */
 export interface VelaLimits {
-  /** 每次 agent loop 最多请求模型的轮数 */
-  maxTurns: number
   /** 可重试错误的最大重试次数 */
   maxRetries: number
   /** 重试退避基数（指数退避 + 抖动）；0 表示不等待 */
@@ -26,7 +24,6 @@ export interface VelaLimits {
 }
 
 export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
-  maxTurns: 15,
   maxRetries: 3,
   retryBaseMs: 500,
   retryMaxMs: 30_000,
@@ -38,7 +35,17 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   bashTimeoutMs: 10_000,
 })
 
+/** 没有的上限名（拼错的、或已经去掉的 maxTurns）直接报错，不悄悄忽略。 */
+export function assertLimitKeys(limits: object, where = 'limits'): void {
+  for (const key of Object.keys(limits))
+    if (!Object.hasOwn(DEFAULT_LIMITS, key))
+      throw new Error(
+        `${where} 里没有 ${key}；可用：${Object.keys(DEFAULT_LIMITS).join(', ')}`,
+      )
+}
+
 export function resolveLimits(overrides: Partial<VelaLimits> = {}): VelaLimits {
+  assertLimitKeys(overrides)
   const limits = { ...DEFAULT_LIMITS }
   for (const [key, value] of Object.entries(overrides))
     if (value !== undefined) limits[key as keyof VelaLimits] = value

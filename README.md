@@ -195,7 +195,7 @@ src/
 │   ├── commands/           # CLI 自己的斜杠命令（context / usage / model / skill / role …）
 │   └── print-event.ts      # 把 agent 事件打印到终端 / prints agent events
 ├── agent/
-│   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (MAX_TURN=15)
+│   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (no turn cap, like pi)
 │   ├── events.ts           # VelaEvent：agent 对外报告的事件 / emitted events
 │   ├── retry.ts            # 指数退避 + 抖动重试 / exponential backoff with jitter
 │   └── loop-detection.ts   # 重复 / ping-pong / 熔断检测 / loop detection
@@ -250,7 +250,7 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 {
   "defaultModel": "anthropic/claude-x",                 // provider/id；--model 优先
   "defaultThinkingLevel": "medium",                     // 不写时 medium（同 pi）
-  "limits": { "maxTurns": 20, "bashTimeoutMs": 30000 },
+  "limits": { "maxRetries": 5, "bashTimeoutMs": 30000 },
   "extensions": ["./my-ext.ts", "-builtin:supabase"],   // 路径相对这个文件；builtin:memory / rag / web / supabase / feishu 默认加载
   "skills": ["../shared-skills"],
   "dataDir": "./data",                                  // 可选，相对项目目录；默认 ~/.vela/projects/<编码>
@@ -309,7 +309,6 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 
 | 参数 / Parameter | 位置 / Location | 默认值 / Default | 说明 / Notes |
 |---|---|---|---|
-| `MAX_TURN` | `src/agent/index.ts` | 15 | 单轮最大工具调用轮数 / max tool-call turns |
 | `TOKEN_BUDGET` | `src/agent/index.ts` | 200,000 | 单轮 Token 预算，超限强制结束 / token budget |
 | `MAX_RETRIES` | `src/agent/index.ts` | 3 | 单步最大重试次数 / max retries per step |
 | 循环检测阈值 | `src/agent/loop-detection.ts` | warning 10 / critical 20 / breaker 30 | 滑动窗口阈值 / sliding-window thresholds |

@@ -386,8 +386,8 @@ export class VelaSession {
   }
 
   /**
-   * 追加一条用户消息并跑完一次 agent loop，结束后保存会话；之后排队的 steer / followUp 也跑完才 resolve
-   * （最后发 `agent_settled`）。这次输入的 loop 出错时，排队的消息仍会接着跑，然后再 reject。
+   * 追加一条用户消息并跑完 agent loop（同 pi 不限轮数），结束后保存会话；运行中排队的 steer / followUp
+   * 也在这次 run 里跑完才 resolve（最后发 `agent_settled`）。loop 出错时，排队的消息仍会接着跑，然后再 reject。
    * 运行中要给 `streamingBehavior`（或用 steer() / followUp()），这时入队后立即 resolve。
    * owner 会话里 `/name args` 如果是扩展注册的命令，就执行命令而不发给模型（运行中也立即执行）。
    */
@@ -423,7 +423,7 @@ export class VelaSession {
     return this.promptModel(input, { streamingBehavior: 'steer' })
   }
 
-  /** 运行中：等当前任务（包括 steer）结束后再跑。空闲时等于 prompt()。 */
+  /** 运行中：模型本来要结束时（没有工具调用、没有 steer）再作为用户消息接着跑。空闲时等于 prompt()。 */
   followUp(input: string): Promise<void> {
     return this.promptModel(input, { streamingBehavior: 'followUp' })
   }
@@ -533,8 +533,8 @@ export class VelaSession {
     }
     let saved = false
     try {
-      // 这次的输入，然后是排队的消息：剩下的 steer（loop 因预算 / 出错等提前结束时）优先，再是 followUp。
-      // 每批是一次新的 agent loop（自己的 agent_start / 预算 / 轮数）；中断后不再继续，队列留着。
+      // steer / followUp 正常在 agentLoop 里取（同 pi）；loop 因出错 / 预算 / 循环检测提前结束时
+      // 剩下的消息另起一个 loop 接着跑（steer 优先）。中断后不再继续，队列留着。
       let inputs = [input]
       while (inputs.length) {
         saved = false
@@ -594,6 +594,7 @@ export class VelaSession {
       onEvent: this.emit,
       limits: this.limits,
       takeSteering: () => this.dequeue('steering'),
+      takeFollowUp: () => this.dequeue('followUp'),
     })
   }
 

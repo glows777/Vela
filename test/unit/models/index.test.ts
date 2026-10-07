@@ -55,7 +55,7 @@ test('context limits follow the model window; explicit limits win', () => {
     summaryThreshold: 13_108,
     microcompactThreshold: 10_486,
     minMicroSavings: 3_276,
-    maxTurns: DEFAULT_LIMITS.maxTurns,
+    maxRetries: DEFAULT_LIMITS.maxRetries,
   })
   // 200k 窗口得到的就是现在的默认值
   expect(limitsForModel({ contextWindow: 200_000 })).toEqual({ ...DEFAULT_LIMITS })

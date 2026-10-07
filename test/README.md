@@ -90,7 +90,7 @@ const t = createTestVela({
   files: { 'src/a.ts': '...' },          // 预置到临时 cwd
   skills: [{ name, description, body }], // 写到 .skills/<name>/SKILL.md
   embedder: true,                        // 加载 rag 扩展，用 faux embedder（memory 扩展总是加载，同 CLI）
-  limits: { maxTurns: 3 },               // 覆盖上限；测试默认 retryBaseMs=0
+  limits: { maxRetries: 1 },             // 覆盖上限；测试默认 retryBaseMs=0
   dataDir: 'data', sessionId: 'a', cwd: existingDir,   // dataDir 默认 '.vela-data'（相对 cwd，持久化）
   extensionConfig: { web: { tavilyKey: 'x' } },        // 扩展的配置段（vela.config）
   logger,                                // 注入 logger
@@ -123,7 +123,7 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 
 ### 事件
 
-`session.subscribe(listener)` 只收这个会话的事件，`vela.subscribe((event, sessionId) => …)` 收所有会话的。一次 `prompt()` 的顺序是：`agent_start{input}` → `message`（用户输入）→ 每轮 `turn_start` …（`thinking_delta`、`text_delta`、`tool_call`、`tool_result` / `tool_error`、`retry`、`usage`）… `message`（这一轮新增的 assistant / tool 消息，以及循环检测提醒）→ `turn_end` →（运行中 steer 的消息：`message`，再下一轮）→ `agent_end{reason}` →（排队的 followUp 各自一组 `agent_start` … `agent_end`）→ 最后 `agent_settled`。队列变化发 `queue_update{steering, followUp}`。另有 `context`（压缩）、`audit`、`security_warning`、`session_save_failed`、`notify`（没有界面时扩展的 `ui.notify`），通道会话还有 `channel_message` / `channel_reply` / `channel_error`。
+`session.subscribe(listener)` 只收这个会话的事件，`vela.subscribe((event, sessionId) => …)` 收所有会话的。一次 `prompt()` 的顺序是：`agent_start{input}` → `message`（用户输入）→ 每轮 `turn_start` …（`thinking_delta`、`text_delta`、`tool_call`、`tool_result` / `tool_error`、`retry`、`usage`）… `message`（这一轮新增的 assistant / tool 消息，以及循环检测提醒）→ `turn_end` →（运行中 steer 的消息：`message`，再下一轮；模型本来要结束时取 followUp，同样 `message` 后在同一个 loop 里接着跑，同 pi）→ `agent_end{reason}` →（loop 出错 / 中断后还排着的消息开新 loop）→ 最后 `agent_settled`。队列变化发 `queue_update{steering, followUp}`。另有 `context`（压缩）、`audit`、`security_warning`、`session_save_failed`、`notify`（没有界面时扩展的 `ui.notify`），通道会话还有 `channel_message` / `channel_reply` / `channel_error`。
 
 core 不写终端（`test/unit/boundary.test.ts` 守着这条边界）：非事件的诊断输出走 `createVela({ logger })`，默认静默。
 
@@ -144,7 +144,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 
 ### 可调的上限（`src/limits.ts`）
 
-`createVela({ limits })` 可以覆盖：`maxTurns`、`maxRetries`、`retryBaseMs`、`retryMaxMs`、`tokenBudget`、`microcompactThreshold`、`summaryThreshold`、`minMicroSavings`、`maxInputTokens`、`bashTimeoutMs`。默认值就是 CLI 一直用的值。测试用它把阈值调小，而不是构造巨大的输入；例如 `test/e2e/context.test.ts` 先量出空会话的请求大小，再把摘要阈值设在它上面一点。
+`createVela({ limits })` 可以覆盖：`maxRetries`、`retryBaseMs`、`retryMaxMs`、`tokenBudget`、`microcompactThreshold`、`summaryThreshold`、`minMicroSavings`、`maxInputTokens`、`bashTimeoutMs`。默认值就是 CLI 一直用的值；不认识的键（比如已去掉的 `maxTurns`）直接报错。测试用它把阈值调小，而不是构造巨大的输入；例如 `test/e2e/context.test.ts` 先量出空会话的请求大小，再把摘要阈值设在它上面一点。
 
 ## 当前覆盖的场景
 
@@ -152,7 +152,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 |---|---|
 | e2e/basic | 纯文本回复的事件序列与落盘；模型收到的 system/工具/用户消息；多轮对话带历史；工具调用后回答 |
 | e2e/tools | 一次多个工具调用；write/edit 写入 cwd 并发 audit 事件；bash 在 cwd 运行并带时间戳 hook；危险 bash 被拒绝；工具报错回给模型；未知工具/参数不合法被拒绝并记录；deferred 工具经 tool_search 后才可用；guest 角色不能用 bash |
-| e2e/resilience | 429/503 重试后成功；provider 的 APICallError 按 statusCode 判断是否重试；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；maxTurns；token 预算告警与停止；超过 maxInputTokens 不发请求 |
+| e2e/resilience | 429/503 重试后成功；provider 的 APICallError 按 statusCode 判断是否重试；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；不限轮数（同 pi）；token 预算告警与停止；超过 maxInputTokens 不发请求 |
 | e2e/context | `session.compact(focus)` 手动摘要、运行中拒绝；微压缩折叠旧工具结果；摘要压缩替换旧历史、保留近期消息、写盘并在恢复后生效；摘要不合格时停止且历史不变；`defend` 只做微压缩不付费摘要 |
 | e2e/session | `--continue` 式恢复；空目录无会话；不同 sessionId 分开存；dataDir 与 cwd 分离；usage 日志；prompt cache 模拟 |
 | e2e/memory | memory 扩展：通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename；`/memory`（search / lint）、`/dream`；guest 不能执行命令 |
@@ -160,7 +160,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/commands | `/context` `/usage` `status`；supabase 扩展的工具模型能直接用、`/extensions` 列出；通道消息走同一模型和工具并回发 |
 | e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、registerProvider、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
 | e2e/models | 按名字选模型（provider、元数据、models.json 价格）；`setModel` 从下一轮起换模型并重算上限；会话各自选模型；thinking 级别映射到 `reasoning`（默认 medium、max→xhigh；`reasoning: false` 的模型 off 不发、其它级别 prompt 报错且不发请求）；Vela 级默认 thinking；恢复会话带回模型和 thinking、保存的模型不可用时告警并保留当前；对象模型不落盘；没有默认模型时要先 setModel；`/model` `/thinking` |
-| e2e/queue | steer 在这一步之后、下一次请求前插入；最后一步收到的 steer 让 loop 继续；followUp 是任务结束后的新 loop、prompt() 等它跑完；one-at-a-time / all；运行中 prompt 要 streamingBehavior；clearQueue + `await abort()`；abort 后队列保留；任务失败后排队消息仍跑、prompt 再 reject；空闲时 steer / followUp 等于 prompt；thinking_delta；扩展命令里 abort 不卡住；compact 占着会话时不能排队 |
+| e2e/queue | steer 在这一步之后、下一次请求前插入；最后一步收到的 steer 让 loop 继续；followUp 等模型要结束时在同一个 loop 里接着跑；one-at-a-time / all；运行中 prompt 要 streamingBehavior；clearQueue + `await abort()`；abort 后队列保留；任务失败后排队消息仍跑、prompt 再 reject；空闲时 steer / followUp 等于 prompt；thinking_delta；扩展命令里 abort 不卡住；compact 占着会话时不能排队 |
 | e2e/rpc | `--mode rpc` 子进程：prompt 的 disposition、事件带 sessionId、get_state / get_messages / set_session_name / list_sessions、解析失败和未知命令、new_session / switch_session；运行中 prompt 要 streamingBehavior、steer / follow_up 排队、clear_queue、abort 在停下后才回复；扩展界面 confirm / select / notify / setStatus 走 extension_ui_request / response |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存；`vela.listSessions()`（最近的在前，名字随会话保存和恢复） |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |

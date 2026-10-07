@@ -69,10 +69,6 @@ export function printEvent(event: VelaEvent): void {
         )
       else if (event.reason === 'budget')
         console.log('\n[Token has exceeded the budget limit. Ending loop.]')
-      else if (event.reason === 'max_turns')
-        console.log(
-          '\nReached maximum turn limit. Ending loop to prevent infinite execution.',
-        )
       break
     case 'context':
       if (event.action === 'micro')

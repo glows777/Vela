@@ -52,7 +52,7 @@ export type VelaEvent =
   | { type: 'turn_end'; turn: number; needsToolCall: boolean }
   | {
       type: 'agent_end'
-      reason: 'done' | 'max_turns' | 'budget' | 'loop' | 'aborted' | 'error'
+      reason: 'done' | 'budget' | 'loop' | 'aborted' | 'error'
       error?: unknown
     }
   /** 排队的消息变化（steer / followUp 入队、取出、清空），两个字段都是完整的当前队列 */
