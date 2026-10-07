@@ -32,9 +32,9 @@ test('plain text reply streams, ends the loop and saves the session', async () =
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
   expect(t.lastAssistantText()).toBe('你好，我是 Vela。有什么可以帮你？')
 
-  const session = await t.readData('.sessions/default.jsonl')
+  const session = await t.readData('sessions/default.jsonl')
   expect(session).toContain('你好，我是 Vela')
-  expect(t.exists('.usage/today.jsonl')).toBe(true)
+  expect(t.exists('usage/today.jsonl')).toBe(true)
 })
 
 test('the model receives the system prompt, the tool list and the user message', async () => {

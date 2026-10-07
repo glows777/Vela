@@ -9,29 +9,27 @@ export interface SkillDefinition {
   dirPath: string
 }
 
-const SKILLS_DIR = '.skills'
 const SKILL_FILE = 'SKILL.md'
 
 export class SkillLoader {
-  private readonly baseDir: string
   private skills = new Map<string, SkillDefinition>()
 
-  constructor(baseDir = '.') {
-    this.baseDir = baseDir
-  }
-
-  private get skillsDir(): string {
-    return path.join(this.baseDir, SKILLS_DIR)
-  }
+  /** `dirs`：skill 目录（每个子目录一个 SKILL.md），后面目录里的同名 skill 覆盖前面的 */
+  constructor(private readonly dirs: readonly string[] = ['.skills']) {}
 
   load(): SkillDefinition[] {
     this.skills.clear()
-    if (!fs.existsSync(this.skillsDir)) return []
+    for (const dir of this.dirs) this.loadDir(dir)
+    return this.list()
+  }
 
-    const entries = fs.readdirSync(this.skillsDir, { withFileTypes: true })
+  private loadDir(skillsDir: string): void {
+    if (!fs.existsSync(skillsDir)) return
+
+    const entries = fs.readdirSync(skillsDir, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
-      const skillFile = path.join(this.skillsDir, entry.name, SKILL_FILE)
+      const skillFile = path.join(skillsDir, entry.name, SKILL_FILE)
       if (!fs.existsSync(skillFile)) continue
 
       const raw = fs.readFileSync(skillFile, 'utf-8')
@@ -43,12 +41,10 @@ export class SkillLoader {
         description: parsed.description,
         whenToUse: parsed.whenToUse,
         content: parsed.content,
-        dirPath: path.join(this.skillsDir, entry.name),
+        dirPath: path.join(skillsDir, entry.name),
       }
       this.skills.set(skill.name, skill)
     }
-
-    return this.list()
   }
 
   list(): SkillDefinition[] {

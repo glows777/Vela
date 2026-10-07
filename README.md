@@ -80,7 +80,7 @@ bun run src/cli/main.ts   # 直接运行（package.json 的 bin.vela）
 ```ts
 import { createVela } from 'vela'
 
-const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel
+const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel；不给 dataDir 时什么都不落盘
 const session = vela.session('default')                  // 同一个 Vela 可以同时开多个会话
 await session.resume()                                   // 有存档就恢复
 session.subscribe((event) => { /* text_delta、tool_call、usage、agent_end … */ })
@@ -88,7 +88,7 @@ await session.prompt('总结 docs/')
 await vela.dispose()
 ```
 
-core 不写终端、不读环境变量；诊断输出通过 `logger` 注入。离线测试用 `vela/testing`（faux 模型、`createTestVela()`、`recordModel()` / `replayScenario()`）。
+core 不写终端、不读环境变量，也不隐式读 `~/.vela`；诊断输出通过 `logger` 注入。要持久化就传 `dataDir`（会话存在 `<dataDir>/sessions/`），或者用 `sessionStorage` 接自己的存储（`memorySessionStorage()`、`fileSessionStorage(dir)` 或实现 `load / save`）。想和 CLI 读同一套配置时用 `loadConfig({ cwd, env })`。离线测试用 `vela/testing`（faux 模型、`createTestVela()`、`recordModel()` / `replayScenario()`）。
 
 #### 扩展 / Extensions
 
@@ -177,8 +177,10 @@ src/
 │   ├── rag/                # rag_ingest / rag_search + /rag；分块、embedding、sqlite-vec + FTS5
 │   ├── web/                # web_fetch / web_search
 │   └── feishu/ supabase.ts
+├── config/                 # settings.json 合并、$VAR 插值、扩展发现、项目信任、数据目录 / config
 ├── cli/
-│   ├── main.ts             # CLI 入口：读环境变量、交互 / -p 模式、MCP / CLI entry
+│   ├── main.ts             # CLI 入口：读配置和环境变量、交互 / -p 模式、MCP / CLI entry
+│   ├── setup.ts            # 命令行参数、项目信任询问、内置扩展、加载扩展
 │   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher
 │   ├── commands/           # CLI 自己的斜杠命令（context / usage / skill / role …）
 │   └── print-event.ts      # 把 agent 事件打印到终端 / prints agent events
@@ -196,7 +198,7 @@ src/
 │   ├── defense.ts          # 3 层防御：截断 → TTL → Token 估算 / context defense
 │   ├── compressor.ts       # microcompact + LLM 摘要压缩 / compaction
 │   └── view.ts             # 上下文矩阵渲染 / matrix renderer
-├── session/                # JSONL 会话 checkpoint / session persistence
+├── session/                # 会话 checkpoint，SessionStorage（文件 / 内存 / 自定义）/ session persistence
 ├── usage/tracker.ts        # Token 追踪 + 9 家模型价格表 / token tracker & pricing
 ├── prompt/                 # System Prompt 片段 + 可插拔流水线 / prompt pipeline
 └── testing/                # vela/testing：faux 模型、createTestVela、录制回放、demo 模型
@@ -224,6 +226,35 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 
 ## ⚙️ 配置 / Configuration
 
+### 配置文件和数据目录 / Settings and Data
+
+同 pi：用户级 `~/.vela/`（`VELA_DIR` 可改），项目级 `<项目>/.vela/`，项目覆盖用户（对象深合并，`extensions` / `skills` 合并）。
+
+```
+~/.vela/settings.json  extensions/  skills/  trust.json
+~/.vela/projects/--home-me-code-x--<哈希>/   每个项目的数据：sessions/  usage/  memory/  rag/knowledge.db
+<项目>/.vela/settings.json  extensions/  skills/   项目配置（第一次需要你信任这个项目）
+```
+
+```jsonc
+{
+  "limits": { "maxTurns": 20, "bashTimeoutMs": 30000 },
+  "extensions": ["./my-ext.ts", "-builtin:supabase"],   // 路径相对这个文件；builtin:memory / rag / web / supabase / feishu 默认加载
+  "skills": ["../shared-skills"],
+  "dataDir": "./data",                                  // 可选，相对项目目录；默认 ~/.vela/projects/<编码>
+  "extensionConfig": {                                  // 每个扩展的配置段，扩展里用 vela.config 读
+    "feishu": { "appId": "cli_xxx", "appSecret": "$FEISHU_APP_SECRET", "owners": ["ou_xxx"] },
+    "web": { "tavilyKey": "$TAVILY_API_KEY" },
+    "rag": { "embedding": { "baseUrl": "https://…/v1", "model": "text-embedding-v3", "apiKey": "$EMBEDDING_MODEL_KEY" } }
+  }
+}
+```
+
+- 字符串支持 `$VAR` / `${VAR}`；没写的配置退回下面的环境变量。
+- 项目有 `.vela/settings.json` 或 `.vela/extensions/` 时，交互模式会问一次是否信任（记在 `~/.vela/trust.json`）；`-p` 模式不问、直接跳过，加 `--approve` 才加载。
+- 命令行：`-e <扩展文件>`（可重复）、`--no-extensions`、`--no-session`（会话不落盘）、`--approve` / `--no-approve`。
+- 旧版本把 `.sessions`、`.memory`、`.usage`、`knowledge.db` 写在项目目录里；CLI 发现时会打印搬到新目录的命令。
+
 ### 环境变量 / Environment Variables
 
 | 变量 / Variable | 必填 / Required | 说明 / Notes |
@@ -233,7 +264,10 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 | `OPENAI_API_BASE_URL` | ❌ | 自定义 Base URL（代理 / 兼容服务）|
 | `TAVILY_API_KEY` / `SERPER_API_KEY` | ❌ | Web 搜索（二选一，自动检测）|
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | GitHub MCP Server（stdio）|
-| `EMBEDING_MODEL_KEY` / `EMBEDING_MODEL` / `EMBEDING_MODEL_BASE_URL` | ❌ | RAG embedding 模型配置 |
+| `EMBEDDING_MODEL_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_MODEL_BASE_URL` | ❌ | RAG embedding 模型配置 |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_OWNERS` | ❌ | 飞书通道 |
+| `SUPABASE_URL` / `SUPABASE_KEY` | ❌ | Supabase 工具（不配用 mock 数据）|
+| `VELA_DIR` | ❌ | 用户级目录，默认 `~/.vela` |
 
 ### 调参参考 / Tuning Reference
 
@@ -276,7 +310,7 @@ Vela 使用指数退避自动重连（30s → 最大 5min）。检查 token 与 
 系统会自动 microcompact 清理旧工具结果并用 LLM 摘要压缩；也可用 `/context` 查看 Token 分布，`TOKEN_BUDGET` 超限会强制结束本轮。
 
 **Q: 知识库是空的？**
-先调用 `rag_ingest` 导入文档（如 `docs/*.md`），再 `rag_search` 检索。数据存在 `knowledge.db`。
+先调用 `rag_ingest` 导入文档（如 `docs/*.md`），再 `rag_search` 检索。数据存在 `~/.vela/projects/<编码>/rag/knowledge.db`。
 
 ---
 

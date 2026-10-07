@@ -114,8 +114,13 @@ export type ExtensionHandler<K extends ExtensionEventName> = (
 export interface ExtensionAPI {
   /** 工具的工作目录 */
   readonly cwd: string
-  /** Vela 的数据目录；扩展自己的数据建议放在它下面的子目录 */
+  /** Vela 的数据目录；扩展自己的数据放在 `<dataDir>/<扩展名>/` */
   readonly dataDir: string
+  /**
+   * 这个扩展的配置段：`createVela({ extensionConfig })` 里按扩展名取（CLI 来自 settings.json 的
+   * `extensionConfig.<扩展名>`，字符串已做 `$VAR` 插值）。没有配置时是 `{}`。
+   */
+  readonly config: Readonly<Record<string, unknown>>
   readonly logger: VelaLogger
   /**
    * 注册一个所有会话共享的工具。模型看到的名字是 `<扩展名>_<name>`（例如 supabase 扩展的

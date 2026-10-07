@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { afterEach, expect, test } from 'bun:test'
 import type { ExtensionUI, VelaExtension } from 'vela'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous'
@@ -9,6 +10,7 @@ import redact from '../../examples/extensions/redact-secrets'
 import todo from '../../examples/extensions/todo-command'
 import { z } from 'zod'
 import { MemoryStore } from '../../src/extensions/memory/store'
+import { web } from '../../src/extensions/web'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
 import { cleanupTestVelas, createTestVela } from '../support/vela'
 
@@ -209,7 +211,7 @@ test('guest sessions do not get the owner memory in the system prompt', async ()
   const t = createTestVela({
     responses: [fauxText('owner'), fauxText('guest')],
   })
-  new MemoryStore(t.dataDir).save({
+  new MemoryStore(join(t.dataDir, 'memory')).save({
     name: '主人的私事',
     description: '只给主人看',
     type: 'user',
@@ -486,4 +488,30 @@ test('closing the session waits for running commands to finish their clean-up', 
   await t.session.close()
   expect(cleanedUp).toBe(true)
   await run
+})
+
+test('an extension reads its own config section; built-in web takes its search key from config', async () => {
+  const seen: Record<string, unknown>[] = []
+  const t = createTestVela({
+    extensionConfig: {
+      reader: { greeting: 'hi', nested: { n: 1 } },
+      other: { secret: 'not yours' },
+      web: { tavilyKey: 'tvly-test' },
+    },
+    extensions: [
+      function reader(vela) {
+        seen.push({ ...vela.config })
+      },
+      function unconfigured(vela) {
+        seen.push({ ...vela.config })
+      },
+      web(),
+    ],
+  })
+  await t.vela.ready()
+  expect(seen).toEqual([{ greeting: 'hi', nested: { n: 1 } }, {}])
+  expect(t.vela.extensions().find((e) => e.name === 'web')?.tools).toEqual([
+    'web_fetch',
+    'web_search',
+  ])
 })

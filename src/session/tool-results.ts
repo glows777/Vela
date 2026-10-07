@@ -60,7 +60,7 @@ export class ToolResultStore {
     return this.history.path
   }
 
-  constructor(dir = '.sessions/default/tool-results') {
+  constructor(dir = 'sessions/default/tool-results') {
     this.dir = resolve(dir)
     this.historyId = crypto.randomUUID()
     this.history = this.makeHistory(this.historyId)

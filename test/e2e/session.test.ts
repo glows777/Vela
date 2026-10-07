@@ -53,9 +53,9 @@ test('sessions with different ids are stored separately', async () => {
       responses: [fauxText('B')],
     })
     await b.run('in b')
-    expect(a.exists('.sessions/a.jsonl')).toBe(true)
-    expect(b.exists('.sessions/b.jsonl')).toBe(true)
-    expect(await a.readData('.sessions/a.jsonl')).not.toContain('in b')
+    expect(a.exists('sessions/a.jsonl')).toBe(true)
+    expect(b.exists('sessions/b.jsonl')).toBe(true)
+    expect(await a.readData('sessions/a.jsonl')).not.toContain('in b')
 
     const again = createTestVela({ cwd: dir.path, sessionId: 'a' })
     await again.session.resume()
@@ -76,10 +76,10 @@ test('dataDir keeps sessions, memory, usage and knowledge base out of the workin
   await t.run('hi')
 
   for (const path of [
-    '.sessions/default.jsonl',
-    '.memory/MEMORY.md',
-    '.usage/today.jsonl',
-    'knowledge.db',
+    'sessions/default.jsonl',
+    'memory/MEMORY.md',
+    'usage/today.jsonl',
+    'rag/knowledge.db',
   ])
     expect(t.exists(path)).toBe(true)
   expect(t.dataDir).toBe(t.path('.vela-data'))
@@ -99,7 +99,7 @@ test('token usage is appended to the usage log for every model step', async () =
   await t.run('1')
   await t.run('2')
 
-  const rows = (await t.readData('.usage/today.jsonl'))
+  const rows = (await t.readData('usage/today.jsonl'))
     .trim()
     .split('\n')
     .map((l) => JSON.parse(l))

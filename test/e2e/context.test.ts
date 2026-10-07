@@ -59,7 +59,7 @@ test('microcompact folds old tool results once more than five calls have complet
   expect(last).toContain('tool result preview omitted')
   expect(last).toContain('// file 7')
   // 折叠后的结果可以通过路径找回原文
-  const saved = await t.readData('.sessions/default.jsonl')
+  const saved = await t.readData('sessions/default.jsonl')
   expect(saved).toContain('tool result preview omitted')
   expect(t.lastAssistantText()).toBe('都读完了')
 })

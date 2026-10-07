@@ -47,7 +47,7 @@ export interface TestVelaOptions {
   model?: LanguageModel
   /** 复用已有目录（例如测试会话恢复）；不传则新建临时目录 */
   cwd?: string
-  /** 相对 cwd 的数据目录，默认等于 cwd */
+  /** 相对 cwd 的数据目录，默认 `.vela-data`（持久化，同一 cwd 再建 TestVela 能恢复会话） */
   dataDir?: string
   /** 默认会话（`t.session`）的 id，默认 'default' */
   sessionId?: string
@@ -60,6 +60,8 @@ export interface TestVelaOptions {
   /** 覆盖上限；测试默认 retryBaseMs=0，重试不等待 */
   limits?: Partial<VelaLimits>
   logger?: VelaLogger
+  /** 每个扩展的配置段（`vela.config`），按扩展名 */
+  extensionConfig?: Record<string, Record<string, unknown>>
   /** 要加载的扩展（被测的扩展），排在内置的 memory（以及 embedder 对应的 rag）之后 */
   extensions?: VelaExtension[]
   /** 默认会话的选项（角色、权限、工具选择、ui） */
@@ -97,9 +99,10 @@ export function createTestVela(options: TestVelaOptions = {}) {
   const vela: Vela = createVela({
     model: options.model ?? (faux as FauxModel),
     cwd,
-    dataDir: options.dataDir,
+    dataDir: options.dataDir ?? '.vela-data',
     limits: { retryBaseMs: 0, ...options.limits },
     logger: options.logger,
+    extensionConfig: options.extensionConfig,
     // 和 CLI 一样带上内置的记忆和知识库扩展（网页工具要联网，测试里不带）
     extensions: [
       memory(),

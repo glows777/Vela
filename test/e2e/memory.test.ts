@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { afterEach, expect, test } from 'bun:test'
 import { MemoryStore } from '../../src/extensions/memory/store'
 import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux'
@@ -38,7 +39,7 @@ test('a memory saved through the tool shows up in the next system prompt and sur
   await t.run('我最喜欢什么语言？')
   expect(t.lastAssistantText()).toBe('你喜欢 TypeScript')
 
-  const index = await t.readData('.memory/MEMORY.md')
+  const index = await t.readData('memory/MEMORY.md')
   expect(index).toContain('favorite-language')
 
   const restarted = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
@@ -79,7 +80,7 @@ test('the memory tool rejects a save without content', async () => {
   })
   await t.run('存个空的')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('保存失败')
-  expect(new MemoryStore(t.dataDir).list()).toHaveLength(0)
+  expect(new MemoryStore(join(t.dataDir, 'memory')).list()).toHaveLength(0)
 })
 
 test('read and delete need a filename; with one they work', async () => {
@@ -105,14 +106,14 @@ test('read and delete need a filename; with one they work', async () => {
   expect(outputs).toContain('读取失败：需要 filename')
   expect(outputs).toContain('删除失败：需要 filename')
   expect(t.model.calls[4]!.toolResults[0]!.output).toContain('已删除')
-  expect(new MemoryStore(t.dataDir).list()).toHaveLength(0)
+  expect(new MemoryStore(join(t.dataDir, 'memory')).list()).toHaveLength(0)
 })
 
 // ---------- 命令（memory 扩展注册，输出走 ui.notify） ----------
 
 function withMemory(options: Parameters<typeof createTestVela>[0] = {}) {
   const t = createTestVela(options)
-  new MemoryStore(t.dataDir).save({
+  new MemoryStore(join(t.dataDir, 'memory')).save({
     name: 'openai-null-chars',
     description: 'openai 接口返回 null 字符问题',
     type: 'feedback',

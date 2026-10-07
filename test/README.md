@@ -91,7 +91,8 @@ const t = createTestVela({
   skills: [{ name, description, body }], // 写到 .skills/<name>/SKILL.md
   embedder: true,                        // 加载 rag 扩展，用 faux embedder（memory 扩展总是加载，同 CLI）
   limits: { maxTurns: 3 },               // 覆盖上限；测试默认 retryBaseMs=0
-  dataDir: '.vela-data', sessionId: 'a', cwd: existingDir,
+  dataDir: 'data', sessionId: 'a', cwd: existingDir,   // dataDir 默认 '.vela-data'（相对 cwd，持久化）
+  extensionConfig: { web: { tavilyKey: 'x' } },        // 扩展的配置段（vela.config）
   logger,                                // 注入 logger
   extensions: [myExtension],             // 被测的扩展
   session: { role: 'guest', ui, permissions: { bash: 'ask' }, tools: [...] }, // 默认会话的选项
@@ -110,7 +111,7 @@ t.model.calls                     // 模型收到的请求
 t.dispatch('/context')            // CLI 自己的斜杠命令，返回 true/false/'async'
 await t.command('/skill x')       // 异步命令，等它结束
 await t.run('/memory')            // 扩展命令走 session.prompt()；输出是 notify 事件：t.eventsOf('notify')
-t.readFile('a.txt'); t.readData('.sessions/default.jsonl'); t.exists('knowledge.db')
+t.readFile('a.txt'); t.readData('sessions/default.jsonl'); t.exists('rag/knowledge.db')  // 数据目录里：sessions/ usage/ memory/ rag/
 await t.cleanup({ keepDir: true }) // 一般交给 cleanupTestVelas()
 ```
 
@@ -160,9 +161,12 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存 |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
-| e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger |
-| e2e/cli | `-p` 单次模式回放场景；`VELA_RECORD` 录制后用 `faux:` 回放；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出 |
+| e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |
+| e2e/cli | `-p` 单次模式回放场景；`VELA_RECORD` 录制后用 `faux:` 回放；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
 | unit/cli/commands | skill 激活/去重/并发锁（走真实装配） |
+| unit/cli/setup | 命令行参数；settings 的扩展配置覆盖环境变量；旧数据搬家提示 |
+| unit/config | settings 合并（项目覆盖用户、资源列表合并、路径相对所在文件）；不信任时只读用户级；扩展目录发现；±builtin；错误带文件名；`$VAR` 插值；数据目录编码；skill 目录顺序；trust.json；在家目录里运行 |
+| unit/session/storage | 内存存储按 id 保存并返回副本；文件存储读写、兼容旧的一行一条消息 |
 | unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
 | unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |
 | unit/public-api | `vela`、`vela/testing` 的公开 API 和 `api/public-api.txt` 一致；改了公开面运行 `bun run api:update` |

@@ -1,5 +1,6 @@
 import z from 'zod'
 import type { ToolDefinition, VelaExtension } from '../index'
+import { configString } from './config'
 
 const listTablesInputSchema = z.object({})
 
@@ -22,10 +23,12 @@ export interface SupabaseOptions {
 
 /**
  * Supabase 数据库工具（supabase_list_tables / supabase_query / supabase_insert）。没有 url / key 时用内置的 mock 数据。
+ * 没传的选项从配置段（`extensionConfig.supabase`）取。
  */
 export function supabase(options: SupabaseOptions = {}): VelaExtension {
   return function supabase(vela) {
-    const { url, key } = options
+    const url = options.url ?? configString(vela.config, 'url')
+    const key = options.key ?? configString(vela.config, 'key')
     if (!url || !key)
       vela.logger.info('[supabase] 未配置 url / key，使用 Mock 模式')
 

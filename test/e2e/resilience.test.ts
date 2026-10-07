@@ -80,7 +80,7 @@ test('a 400 is not retried: the run fails and the user message stays in the save
   expect(t.eventsOf('retry')).toHaveLength(0)
   expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'error' })
   expect(t.session.busy.locked).toBe(false)
-  expect(await t.readData('.sessions/default.jsonl')).toContain('"hi"')
+  expect(await t.readData('sessions/default.jsonl')).toContain('"hi"')
 })
 
 test('retries give up after maxRetries', async () => {

@@ -11,6 +11,7 @@ import type { VelaLogger } from './logger'
 import type { PromptContext, PromptPipeline } from './prompt/pipelins'
 import type { PermissionRules, Role } from './security/roles'
 import { SessionStore } from './session/index'
+import type { SessionStorage } from './session/storage'
 import type { ToolRegistry } from './tools/registry'
 import {
   TokenTracker,
@@ -67,6 +68,10 @@ export interface SessionDeps {
   limits: VelaLimits
   logger: VelaLogger
   dataDir: string
+  /** 会话历史存哪（文件 / 内存 / 自定义） */
+  sessionStorage: SessionStorage
+  /** dataDir 是 dispose() 会删掉的临时目录（没给 dataDir）：恢复时工具历史可能已经不在了 */
+  temporaryDataDir?: boolean
   /** Vela 级工具 registry；会话用它 fork 出自己的 */
   registry: ToolRegistry
   builder: PromptPipeline
@@ -126,8 +131,10 @@ export class VelaSession {
     this.builder = deps.builder
     this.store = new SessionStore(
       id,
-      join(deps.dataDir, '.sessions'),
+      join(deps.dataDir, 'sessions'),
       deps.logger,
+      deps.sessionStorage,
+      deps.temporaryDataDir,
     )
     this.hasUI = options.ui !== undefined
     this.ui = options.ui ?? headlessUI(this.emit)
@@ -143,7 +150,7 @@ export class VelaSession {
     this.registry.setRole(options.role ?? 'owner')
     this.registry.setPermissions(options.permissions)
     this.registry.setSelection(options.tools)
-    this.tracker = new TokenTracker(join(deps.dataDir, '.usage', 'today.jsonl'))
+    this.tracker = new TokenTracker(join(deps.dataDir, 'usage', 'today.jsonl'))
     this.contextManager = new ContextManager(
       this.store,
       this.tracker,
@@ -236,12 +243,13 @@ export class VelaSession {
     return this.contextManager.save()
   }
 
-  /** 从磁盘恢复会话（替换内存里的历史）；返回是否找到已有会话。运行中不能恢复。 */
+  /** 从会话存储恢复历史（替换内存里的历史）；返回是否找到已有会话。运行中不能恢复。 */
   async resume(): Promise<boolean> {
     if (this.busy.locked)
       throw new Error(`会话 ${this.id} 正在运行，不能恢复历史`)
-    if (!(await this.store.exists())) return false
-    this.contextManager.restore(await this.store.loadState())
+    const saved = await this.store.loadSaved()
+    if (!saved) return false
+    this.contextManager.restore(saved)
     this.tracker.setEstimatedTokens(estimateMessageTokens(this.messages))
     return true
   }

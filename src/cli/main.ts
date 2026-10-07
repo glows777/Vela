@@ -7,13 +7,13 @@ import {
   StdioClientTransport,
 } from '@modelcontextprotocol/client'
 import type { LanguageModel } from 'ai'
-import { feishu } from '../extensions/feishu'
-import { memory } from '../extensions/memory'
-import { rag } from '../extensions/rag'
-import { createEmbedder, type EmbeddingFn } from '../extensions/rag/embedder'
-import { supabase } from '../extensions/supabase'
+import {
+  defaultAgentDir,
+  loadConfig,
+  type VelaConfig,
+} from '../config'
 import type { ExtensionUI } from '../extensions/types'
-import { web } from '../extensions/web'
+import { memorySessionStorage } from '../session/storage'
 import { createMockModel } from '../testing/demo-model'
 import { loadFauxScenario } from '../testing/faux'
 import { recordModel } from '../testing/record'
@@ -22,6 +22,15 @@ import type { CommandContext } from './commands'
 import { createCliDispatcher } from './dispatcher'
 import { createConsoleLogger } from './logger'
 import { printEvent } from './print-event'
+import {
+  BUILTIN_EXTENSIONS,
+  type CliArgs,
+  extensionConfigFromEnv,
+  legacyDataHint,
+  loadCliExtensions,
+  parseArgs,
+  resolveTrust,
+} from './setup'
 
 async function resolveModel(): Promise<LanguageModel> {
   // VELA_MODEL=mock：用内置关键词 demo 模型离线体验（模拟 prompt cache 行为）
@@ -43,59 +52,66 @@ async function resolveModel(): Promise<LanguageModel> {
   }).chat(modelName)
 }
 
-function resolveEmbedder(): EmbeddingFn | undefined {
-  const apiKey = process.env.EMBEDDING_MODEL_KEY
-  const modelId = process.env.EMBEDDING_MODEL
-  const url = process.env.EMBEDDING_MODEL_BASE_URL
-  if (!apiKey || !modelId || !url) {
-    if (!printMode)
-      console.log(
-        '[RAG] 未配置 EMBEDDING_MODEL_KEY / EMBEDDING_MODEL / EMBEDDING_MODEL_BASE_URL，知识库功能已关闭',
-      )
-    return
-  }
-  return createEmbedder({ apiKey, url, modelId })
+let args: CliArgs
+try {
+  args = parseArgs(process.argv.slice(2))
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  console.error(
+    '用法: vela [-p "<prompt>"] [--continue] [-e <扩展>]... [--no-extensions] [--no-session] [--approve | --no-approve]',
+  )
+  process.exit(2)
 }
+const printMode = args.print
+const isContinue = args.continue
+const env = process.env
+const cwd = process.cwd()
 
-/** `-p "<prompt>"` / `--print "<prompt>"`：跑一轮就退出，不进入交互循环。 */
-function printPrompt(argv: string[]): string | undefined {
-  const i = argv.findIndex((arg) => arg === '-p' || arg === '--print')
-  if (i === -1) return
-  const prompt = argv[i + 1]
-  if (!prompt) {
-    console.error('用法: vela -p "<prompt>" [--continue]')
-    process.exit(2)
-  }
-  return prompt
+// 配置：~/.vela/settings.json + 信任后的 <cwd>/.vela/settings.json（第 4 步，见 04-plan.md）
+const agentDir = defaultAgentDir(env)
+const trust = await resolveTrust({
+  cwd,
+  agentDir,
+  approve: args.approve,
+  interactive: printMode === undefined && process.stdin.isTTY === true,
+})
+if (trust.warning) console.error(trust.warning)
+let config: VelaConfig
+try {
+  config = loadConfig({
+    cwd,
+    agentDir,
+    env,
+    trusted: trust.trusted,
+    builtins: Object.keys(BUILTIN_EXTENSIONS),
+  })
+} catch (error) {
+  console.error(`[配置] ${error instanceof Error ? error.message : error}`)
+  process.exit(2)
 }
-
-const printMode = printPrompt(process.argv.slice(2))
-const isContinue = process.argv.includes('--continue')
+// -p 模式也提示（--continue 找不到旧会话时用户要知道为什么）；走 stderr，stdout 留给结果
+const legacyHint = legacyDataHint(cwd, config.dataDir)
+if (legacyHint) console.error(legacyHint)
 
 // VELA_RECORD=<file.json>：把这次运行的模型响应和用户输入录成 faux 场景，之后用 VELA_MODEL=faux:<file> 回放
 const recorder = process.env.VELA_RECORD
   ? recordModel(await resolveModel(), { path: process.env.VELA_RECORD })
   : undefined
 
-const env = process.env
-const embedder = resolveEmbedder()
+const logger = createConsoleLogger({ debug: env.VELA_DEBUG === '1' })
 const vela = createVela({
   model: recorder?.model ?? (await resolveModel()),
-  logger: createConsoleLogger({ debug: env.VELA_DEBUG === '1' }),
-  // CLI 默认带上的内置扩展；配置从环境变量读（第 4 步换成配置文件）
-  extensions: [
-    memory(),
-    ...(embedder ? [rag({ embedder })] : []),
-    web({ tavilyKey: env.TAVILY_API_KEY, serperKey: env.SERPER_API_KEY }),
-    supabase({ url: env.SUPABASE_URL, key: env.SUPABASE_KEY }),
-    feishu({
-      appId: env.FEISHU_APP_ID,
-      appSecret: env.FEISHU_APP_SECRET,
-      owners: env.FEISHU_OWNERS?.split(',')
-        .map((id) => id.trim())
-        .filter(Boolean),
-    }),
-  ],
+  cwd,
+  dataDir: config.dataDir,
+  sessionStorage: args.noSession ? memorySessionStorage() : undefined,
+  skillDirs: config.skillDirs,
+  limits: config.settings.limits,
+  logger,
+  extensionConfig: extensionConfigFromEnv(env, config.extensionConfig),
+  // 内置扩展（memory / rag / web / supabase / feishu）+ ~/.vela/extensions + .vela/extensions + settings + -e
+  extensions: await loadCliExtensions(config, args, (message) =>
+    console.error(message),
+  ),
 })
 const internals = velaInternals(vela)
 vela.subscribe((event, sessionId) => {

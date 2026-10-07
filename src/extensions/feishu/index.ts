@@ -1,4 +1,5 @@
 import type { VelaExtension } from '../../index'
+import { configString, configStrings } from '../config'
 import { FeishuChannel } from './channel'
 
 export interface FeishuOptions {
@@ -11,14 +12,15 @@ export interface FeishuOptions {
   owners?: string[]
 }
 
-/** 飞书 Bot 通道（长连接模式）：每个发送者一个会话。 */
+/** 飞书 Bot 通道（长连接模式）：每个发送者一个会话。没传的选项从配置段（`extensionConfig.feishu`）取。 */
 export function feishu(options: FeishuOptions = {}): VelaExtension {
   return function feishu(vela) {
     vela.registerChannel(
       new FeishuChannel({
-        appId: options.appId ?? '',
-        appSecret: options.appSecret ?? '',
-        owners: options.owners ?? [],
+        appId: options.appId ?? configString(vela.config, 'appId') ?? '',
+        appSecret:
+          options.appSecret ?? configString(vela.config, 'appSecret') ?? '',
+        owners: options.owners ?? configStrings(vela.config, 'owners') ?? [],
         logger: vela.logger,
       }),
     )

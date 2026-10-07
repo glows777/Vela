@@ -33,8 +33,8 @@ test('two sessions run at the same time with separate history, files, locks and 
   expect(a.busy.locked).toBe(false)
   expect(a.messages.map((m) => m.role)).toEqual(['user'])
 
-  expect(await t.readData('.sessions/b.jsonl')).toContain('b 的回答')
-  expect(await t.readData('.sessions/a.jsonl')).not.toContain('b 的回答')
+  expect(await t.readData('sessions/b.jsonl')).toContain('b 的回答')
+  expect(await t.readData('sessions/a.jsonl')).not.toContain('b 的回答')
   expect(b.usage.totals.steps).toBe(1)
   expect(a.usage.totals.steps).toBe(0)
   expect(t.session.messages).toEqual([])
@@ -120,7 +120,7 @@ test('close() stops a running prompt, saves it and removes the session', async (
   await s.close()
   await expect(running).rejects.toThrow()
   expect(t.vela.sessions().map((x) => x.id)).toEqual(['default'])
-  expect(await t.readData('.sessions/closing.jsonl')).toContain('一直想')
+  expect(await t.readData('sessions/closing.jsonl')).toContain('一直想')
   await expect(s.prompt('again')).rejects.toThrow('已关闭')
   // 同一个 id 再打开是一个新会话，可以从磁盘恢复
   const reopened = t.vela.session('closing')
@@ -168,7 +168,7 @@ test('tool calls from sessions running at the same time are recorded in their ow
 
   const recorded = async (id: string) => {
     let text = ''
-    for await (const file of new Bun.Glob(`.sessions/${id}/**/*`).scan({
+    for await (const file of new Bun.Glob(`sessions/${id}/**/*`).scan({
       cwd: t.vela.dataDir,
     }))
       text += await t.readData(file)

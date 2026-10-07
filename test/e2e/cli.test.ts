@@ -1,5 +1,6 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { join, resolve } from 'node:path'
+import { projectDataDir } from '../../src/config'
 import { tempDir } from '../support/vela'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -7,20 +8,28 @@ const ENTRY = join(ROOT, 'src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
 
+// 每个用例都起 CLI 子进程且并发运行；CI 的慢机器上十几个进程一起启动，默认 5 秒不够
+setDefaultTimeout(30_000)
+
 const dirs: { cleanup(): void }[] = []
 // 用例并发运行（每个都要起进程），统一在最后清理临时目录
 afterAll(() => {
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
-/** 在临时目录里起一个真实的 CLI 进程（数据目录 = 该目录） */
+/**
+ * 在临时目录里起一个真实的 CLI 进程。用户级目录（VELA_DIR，也是 HOME）是另一个临时目录，
+ * 不碰真实的 ~/.vela；数据目录是 `<VELA_DIR>/projects/<编码后的 cwd>`。
+ */
 async function cli(
   args: string[],
   options: {
     model: string
     cwd?: string
+    agentDir?: string
     files?: Record<string, string>
     env?: Record<string, string>
+    stdin?: string
   },
 ) {
   let cwd = options.cwd
@@ -29,11 +38,18 @@ async function cli(
     dirs.push(dir)
     cwd = dir.path
   }
+  let agentDir = options.agentDir
+  if (!agentDir) {
+    const dir = tempDir('vela-home-')
+    dirs.push(dir)
+    agentDir = dir.path
+  }
   for (const [path, content] of Object.entries(options.files ?? {}))
     await Bun.write(join(cwd, path), content)
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? '',
-    HOME: process.env.HOME ?? '',
+    HOME: agentDir,
+    VELA_DIR: agentDir,
     VELA_MODEL: options.model,
     ...options.env,
   }
@@ -49,17 +65,24 @@ async function cli(
     new Response(proc.stderr).text(),
     proc.exited,
   ])
-  return { stdout, stderr, code, cwd }
+  return {
+    stdout,
+    stderr,
+    code,
+    cwd,
+    agentDir,
+    dataDir: projectDataDir(agentDir, cwd),
+  }
 }
 
 test.concurrent('-p runs one turn with a faux scenario, prints the answer and exits 0', async () => {
-  const { stdout, code, cwd } = await cli(['-p', '你好'], {
+  const { stdout, code, dataDir } = await cli(['-p', '你好'], {
     model: `faux:${scenario('hello')}`,
   })
   expect(code).toBe(0)
   expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
   expect(stdout).toContain('Agent has completed its response')
-  expect(await Bun.file(join(cwd, '.sessions/default.jsonl')).text()).toContain(
+  expect(await Bun.file(join(dataDir, 'sessions/default.jsonl')).text()).toContain(
     'faux 回放',
   )
 })
@@ -82,13 +105,15 @@ test.concurrent('--continue resumes the saved session before the next prompt', a
   const second = await cli(['-p', '第二句', '--continue'], {
     model: `faux:${scenario('hello')}`,
     cwd: first.cwd,
+    agentDir: first.agentDir,
   })
   expect(second.code).toBe(0)
   const session = await Bun.file(
-    join(first.cwd, '.sessions/default.jsonl'),
+    join(first.dataDir, 'sessions/default.jsonl'),
   ).text()
   expect(session).toContain('第一句')
   expect(session).toContain('第二句')
+  // 两次启动 CLI 子进程，和其它并发用例一起时默认 5 秒不够
 }, 20_000)
 
 test.concurrent('a model error makes -p exit 1 with the real cause on stderr', async () => {
@@ -107,6 +132,99 @@ test.concurrent('-p without a prompt prints usage and exits 2', async () => {
   expect(stderr).toContain('用法')
 })
 
+const GREET = (label: string) =>
+  `export default function (vela) { vela.logger.info(\`[${label}] loaded \${JSON.stringify(vela.config)}\`) }`
+
+test.concurrent('extensions are discovered in ~/.vela/extensions and configured from settings.json with $VAR', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(join(home.path, 'extensions/greet.ts'), GREET('greet'))
+  await Bun.write(
+    join(home.path, 'settings.json'),
+    JSON.stringify({ extensionConfig: { greet: { token: '$GREET_TOKEN' } } }),
+  )
+  const { stdout, code } = await cli(['-p', '你好'], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+    env: { GREET_TOKEN: 't0k' },
+  })
+  expect(code).toBe(0)
+  expect(stdout).toContain('[greet] loaded {"token":"t0k"}')
+})
+
+test.concurrent('project extensions load only when the project is trusted', async () => {
+  const files = { '.vela/extensions/local.ts': GREET('local') }
+  const skipped = await cli(['-p', '你好'], {
+    model: `faux:${scenario('hello')}`,
+    files,
+  })
+  expect(skipped.code).toBe(0)
+  expect(skipped.stdout).not.toContain('[local] loaded')
+  expect(skipped.stderr).toContain('[信任] 没有加载')
+
+  const approved = await cli(['-p', '你好', '--approve'], {
+    model: `faux:${scenario('hello')}`,
+    files,
+  })
+  expect(approved.code).toBe(0)
+  expect(approved.stdout).toContain('[local] loaded')
+  expect(approved.stderr).not.toContain('[信任]')
+
+  // 保存过的决定
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  const project = tempDir('vela-cli-')
+  dirs.push(project)
+  await Bun.write(
+    join(home.path, 'trust.json'),
+    JSON.stringify({ [project.path]: true }),
+  )
+  const saved = await cli(['-p', '你好'], {
+    model: `faux:${scenario('hello')}`,
+    files,
+    cwd: project.path,
+    agentDir: home.path,
+  })
+  expect(saved.stdout).toContain('[local] loaded')
+}, 20_000)
+
+test.concurrent('-e loads an extension file; --no-extensions drops built-in and discovered ones', async () => {
+  const dir = tempDir('vela-ext-')
+  dirs.push(dir)
+  const extra = join(dir.path, 'extra.ts')
+  await Bun.write(extra, GREET('extra'))
+  const { stdout, code } = await cli(
+    ['-p', '你好', '--no-extensions', '-e', extra],
+    { model: `faux:${scenario('hello')}` },
+  )
+  expect(code).toBe(0)
+  expect(stdout).toContain('[extra] loaded {}')
+  // supabase 内置扩展没加载（它加载时会提示 Mock 模式）
+  expect(stdout).not.toContain('[supabase]')
+})
+
+test.concurrent('--no-session keeps the session in memory', async () => {
+  const { code, dataDir } = await cli(['-p', '你好', '--no-session'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(code).toBe(0)
+  expect(await Bun.file(join(dataDir, 'sessions/default.jsonl')).exists()).toBe(
+    false,
+  )
+})
+
+test.concurrent('a broken settings.json stops the CLI with the file name', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(join(home.path, 'settings.json'), '{ nope')
+  const { code, stderr } = await cli(['-p', '你好'], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+  })
+  expect(code).toBe(2)
+  expect(stderr).toContain(`[配置] ${join(home.path, 'settings.json')} 不是合法的 JSON`)
+})
+
 // demo 模型按字符流式输出、每字 30ms（约 2 秒），在 CI 的慢机器上和其它并发用例一起会超过默认 5 秒
 test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', async () => {
   const { code, stdout } = await cli(['-p', '你好'], { model: 'mock' })
@@ -114,15 +232,23 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
   expect(stdout).toContain('Agent has completed its response')
 }, 20_000)
 
+/** HOME 和 VELA_DIR 指向新的临时目录，不碰真实的 ~/.vela */
+function isolatedHome(): { HOME: string; VELA_DIR: string } {
+  const dir = tempDir('vela-home-')
+  dirs.push(dir)
+  return { HOME: dir.path, VELA_DIR: dir.path }
+}
+
 /** 交互模式：等到出现提示符再输入下一行，最后 exit */
 async function repl(lines: string[], model: string) {
   const dir = tempDir('vela-repl-')
   dirs.push(dir)
+  const home = isolatedHome()
   const proc = Bun.spawn(['bun', ENTRY], {
     cwd: dir.path,
     env: {
       PATH: process.env.PATH ?? '',
-      HOME: process.env.HOME ?? '',
+      ...home,
       VELA_MODEL: model,
     },
     stdin: 'pipe',
@@ -151,11 +277,15 @@ async function repl(lines: string[], model: string) {
     if (done) break
     stdout += decoder.decode(value)
   }
-  return { stdout, code: await proc.exited, cwd: dir.path }
+  return {
+    stdout,
+    code: await proc.exited,
+    dataDir: projectDataDir(home.VELA_DIR, dir.path),
+  }
 }
 
 test.concurrent('interactive mode: a turn, a slash command, then exit', async () => {
-  const { stdout, code, cwd } = await repl(
+  const { stdout, code, dataDir } = await repl(
     ['你好', '/memory'],
     `faux:${scenario('hello')}`,
   )
@@ -165,7 +295,7 @@ test.concurrent('interactive mode: a turn, a slash command, then exit', async ()
   expect(stdout).toContain('[Token]')
   expect(stdout).toContain('[记忆系统] 共 0 条记忆')
   expect(stdout).toContain('Bye!')
-  expect(await Bun.file(join(cwd, '.sessions/default.jsonl')).text()).toContain(
+  expect(await Bun.file(join(dataDir, 'sessions/default.jsonl')).text()).toContain(
     '你好',
   )
 })
@@ -177,7 +307,7 @@ test.concurrent('interactive mode reads piped stdin line by line and exits at EO
     cwd: dir.path,
     env: {
       PATH: process.env.PATH ?? '',
-      HOME: process.env.HOME ?? '',
+      ...isolatedHome(),
       VELA_MODEL: `faux:${scenario('hello')}`,
     },
     stdin: new TextEncoder().encode('你好\n/memory\n'),

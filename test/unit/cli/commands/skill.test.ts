@@ -74,7 +74,7 @@ test('/<skill> 触发：activeSkills 更新、正文以消息注入一次、syst
   // 模型收到的是 skill 正文 + 用户指令，回复写回会话并落盘
   expect(t.model.calls[0]!.lastUserText).toBe(`${BODY}\n\n用户指令: extra`)
   expect(t.lastAssistantText()).toBe('审查完成')
-  expect(await t.readData('.sessions/default.jsonl')).toContain('审查完成')
+  expect(await t.readData('sessions/default.jsonl')).toContain('审查完成')
 })
 
 test('/<skill> 不带参数：正文即为消息内容', async () => {

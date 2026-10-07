@@ -18,6 +18,7 @@ import type {
 interface RunnerDeps {
   cwd: string
   dataDir: string
+  extensionConfig: Record<string, Record<string, unknown>>
   logger: VelaLogger
   registry: ToolRegistry
   hooks: HookPipeline
@@ -124,6 +125,7 @@ export class ExtensionRunner {
     return {
       cwd: deps.cwd,
       dataDir: deps.dataDir,
+      config: Object.freeze({ ...deps.extensionConfig[name] }),
       logger: deps.logger,
       registerTool: (tool) => {
         // 工具名加上扩展名前缀，避免和内置工具或其它扩展的工具重名；

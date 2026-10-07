@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { VelaExtension } from '../../index'
 import { MemoryStore } from './store'
 import { createMemoryTool } from './tool'
@@ -16,13 +17,17 @@ const DREAM_PROMPT = [
 ].join('\n')
 
 /**
- * 跨会话记忆（存在 `<dataDir>/.memory`）：`memory` 工具、system prompt 里的记忆索引，
+ * 跨会话记忆（存在 `<dataDir>/memory`）：`memory` 工具、system prompt 里的记忆索引，
  * 以及 `/memory [search <关键词> | lint]`、`/dream` 命令。
  * 记忆是主人的私有数据：guest 会话（例如通道里的外部发送者）既不能用工具，也不注入索引。
  */
 export function memory(): VelaExtension {
   return function memory(vela) {
-    const store = new MemoryStore(vela.dataDir, vela.logger)
+    const store = new MemoryStore(
+      join(vela.dataDir, 'memory'),
+      vela.logger,
+      vela.cwd,
+    )
     store.init()
     vela.registerTool(createMemoryTool(store))
 
