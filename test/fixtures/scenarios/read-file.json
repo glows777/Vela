@@ -1,0 +1,8 @@
+{
+  "responses": [
+    {
+      "toolCalls": [{ "name": "read_file", "input": { "path": "notes.txt" } }]
+    },
+    { "text": "notes.txt 里写着 remember the milk" }
+  ]
+}

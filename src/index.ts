@@ -7,29 +7,19 @@ import {
 } from '@modelcontextprotocol/client'
 import type { LanguageModel } from 'ai'
 import { createVela } from './app'
+import { builtInPlugins, createCliDispatcher } from './cli/commands'
 import { printEvent } from './cli/print-event'
-import {
-  type CommandContext,
-  contextCommands,
-  createDispatcher,
-  debugCommands,
-  memoryCommands,
-} from './commands'
-import { createChannelCommands } from './commands/channel'
-import { dreamCommands } from './commands/dream'
-import { createPluginCommands } from './commands/plugin'
-import { ragCommands } from './commands/rag'
-import { createSecurityCommands } from './commands/security'
-import { createSkillCommands } from './commands/skill'
-import { createMockModel } from './mock'
-import { feishuPlugin } from './plugins/built-in-plugins/feishu-plugin'
-import { supabasePlugin } from './plugins/built-in-plugins/supabase-plugin'
-import type { PluginDefinition } from './plugins/types'
+import type { CommandContext } from './commands'
 import { createEmbedder, type EmbeddingFn } from './rag/embedder'
+import { createMockModel } from './testing/demo-model'
+import { loadFauxScenario } from './testing/faux'
 
-function resolveModel(): LanguageModel {
-  // VELA_MODEL=mock：用内置 Mock 模型离线运行（模拟 prompt cache 行为）
+async function resolveModel(): Promise<LanguageModel> {
+  // VELA_MODEL=mock：用内置关键词 demo 模型离线体验（模拟 prompt cache 行为）
   if (process.env.VELA_MODEL === 'mock') return createMockModel()
+  // VELA_MODEL=faux:<scenario.json>：按 JSON 场景脚本回放模型响应（复现问题、CLI e2e）
+  if (process.env.VELA_MODEL?.startsWith('faux:'))
+    return loadFauxScenario(process.env.VELA_MODEL.slice('faux:'.length))
   const apiKey = process.env.OPENAI_API_KEY
   const modelName = process.env.OPENAI_API_MODEL_NAME
   if (!apiKey || !modelName) {
@@ -49,19 +39,54 @@ function resolveEmbedder(): EmbeddingFn | undefined {
   const modelId = process.env.EMBEDDING_MODEL
   const url = process.env.EMBEDDING_MODEL_BASE_URL
   if (!apiKey || !modelId || !url) {
-    console.log(
-      '[RAG] 未配置 EMBEDDING_MODEL_KEY / EMBEDDING_MODEL / EMBEDDING_MODEL_BASE_URL，知识库功能已关闭',
-    )
+    if (!printMode)
+      console.log(
+        '[RAG] 未配置 EMBEDDING_MODEL_KEY / EMBEDDING_MODEL / EMBEDDING_MODEL_BASE_URL，知识库功能已关闭',
+      )
     return
   }
   return createEmbedder({ apiKey, url, modelId })
 }
 
+/** `-p "<prompt>"` / `--print "<prompt>"`：跑一轮就退出，不进入交互循环。 */
+function printPrompt(argv: string[]): string | undefined {
+  const i = argv.findIndex((arg) => arg === '-p' || arg === '--print')
+  if (i === -1) return
+  const prompt = argv[i + 1]
+  if (!prompt) {
+    console.error('用法: vela -p "<prompt>" [--continue]')
+    process.exit(2)
+  }
+  return prompt
+}
+
+const printMode = printPrompt(process.argv.slice(2))
+const isContinue = process.argv.includes('--continue')
+
 const vela = createVela({
-  model: resolveModel(),
+  model: await resolveModel(),
   embedder: resolveEmbedder(),
   onEvent: printEvent,
 })
+const availablePlugins = builtInPlugins()
+
+if (printMode !== undefined) {
+  if (isContinue) await vela.resume()
+  for (const def of availablePlugins.values())
+    await vela.pluginManager.load(def).catch(() => {})
+  let exitCode = 0
+  try {
+    await vela.run(printMode)
+  } catch (error) {
+    console.error(
+      '[Agent] 本轮停止:',
+      error instanceof Error ? error.message : error,
+    )
+    exitCode = 1
+  }
+  await vela.dispose()
+  process.exit(exitCode)
+}
 const { busy, messages } = vela
 
 const rl = createInterface({
@@ -69,10 +94,30 @@ const rl = createInterface({
   output: process.stdout,
 })
 let rlClosed = false
+// 自己排队输入行：管道输入会一次性读完，rl.question 注册前到达的行会丢失
+const pendingLines: string[] = []
+let lineWaiter: ((line: string | undefined) => void) | undefined
+rl.on('line', (line) => {
+  const waiter = lineWaiter
+  lineWaiter = undefined
+  if (waiter) waiter(line)
+  else pendingLines.push(line)
+})
 rl.on('close', () => {
   rlClosed = true
-  vela.abort(new DOMException('输入已关闭', 'AbortError'))
+  lineWaiter?.(undefined)
+  lineWaiter = undefined
+  // 终端里 Ctrl+D 中断当前任务；管道输入读到 EOF 时让已排队的行照常跑完
+  if (process.stdin.isTTY)
+    vela.abort(new DOMException('输入已关闭', 'AbortError'))
 })
+const nextLine = (): Promise<string | undefined> => {
+  if (pendingLines.length) return Promise.resolve(pendingLines.shift())
+  if (rlClosed) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    lineWaiter = resolve
+  })
+}
 
 const MCP_INITIAL_RETRY_DELAY_MS = 30_000
 const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000
@@ -159,23 +204,7 @@ const cancelOrClose = () => {
 rl.on('SIGINT', cancelOrClose)
 process.on('SIGINT', cancelOrClose)
 
-const isContinue = process.argv.includes('--continue')
-
-const availablePlugins = new Map<string, PluginDefinition>([
-  ['supabase', supabasePlugin],
-  ['feishu', feishuPlugin],
-])
-const dispatch = createDispatcher([
-  ...debugCommands,
-  ...contextCommands,
-  ...memoryCommands,
-  ...dreamCommands,
-  ...ragCommands,
-  ...createSkillCommands(vela.skillLoader, vela.activeSkills),
-  ...createPluginCommands(vela.pluginManager, availablePlugins),
-  ...createChannelCommands(vela.gateway),
-  ...createSecurityCommands(vela.registry, vela.hooks),
-])
+const dispatch = createCliDispatcher(vela, availablePlugins)
 
 if (isContinue && (await vela.resume())) {
   console.log(`[Session] 恢复会话，${messages.length} 条历史消息`)
@@ -203,14 +232,15 @@ for (const [name, def] of availablePlugins) {
 console.log('  启动 Channel...')
 await vela.gateway.startAll()
 const ask = () => {
-  if (rlClosed) {
-    return
+  if (rlClosed) process.stdout.write('You: ')
+  else {
+    rl.setPrompt('You: ')
+    rl.prompt()
   }
-
-  rl.question('You: ', async (input) => {
+  void nextLine().then(async (input) => {
     await connectMCP()
 
-    const trimmed = input.trim()
+    const trimmed = (input ?? '').trim()
     if (!trimmed || trimmed === 'exit') {
       console.log('Bye!')
       await vela.dispose()
@@ -249,8 +279,4 @@ const ask = () => {
   })
 }
 
-if (rlClosed) {
-  await vela.registry.closeAllMCP()
-} else {
-  ask()
-}
+ask()

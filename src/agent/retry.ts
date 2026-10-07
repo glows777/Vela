@@ -1,6 +1,11 @@
+import { APICallError } from "@ai-sdk/provider";
+
 // --- 错误分类 ---
 
 export function isRetryable(error: unknown): boolean {
+  // provider 的 HTTP 错误：message 是响应体里的说明（如 "Rate limit reached ..."），不含状态码，
+  // 按 statusCode 判断（AI SDK 默认 408/409/429/5xx 可重试）
+  if (APICallError.isInstance(error)) return error.isRetryable;
   if (!(error instanceof Error)) return false;
 
   const message = error.message || "";

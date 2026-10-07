@@ -8,18 +8,14 @@ import {
 import {
   createRequestSnapshot,
   estimateRequestTokens,
-  MAX_INPUT_TOKENS,
   type RequestSnapshot,
 } from '../context/request'
+import { resolveLimits, type VelaLimits } from '../limits'
 import type { ToolRegistry } from '../tools/registry'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker'
 import type { VelaEvent, VelaEventListener } from './events'
 import { LoopDetector } from './loop-detection'
 import { calculateDelay, isRetryable, sleep } from './retry'
-
-const MAX_TURN = 15
-const MAX_RETRIES = 3
-const TOKEN_BUDGET = 200 * 1000
 
 export interface BudgetState {
   used: number
@@ -36,6 +32,8 @@ interface AgentLoopParameter {
   abortSignal?: AbortSignal
   /** 运行事件回调；不传时 agentLoop 不产生任何终端输出。 */
   onEvent?: VelaEventListener
+  /** 轮数、重试、预算等上限；未给出的字段用默认值。 */
+  limits?: Partial<VelaLimits>
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -69,7 +67,9 @@ export const agentLoop = async ({
   prepareContext,
   abortSignal,
   onEvent,
+  limits: limitOverrides,
 }: AgentLoopParameter) => {
+  const limits = resolveLimits(limitOverrides)
   let turn = 0
   tokenTracker.beginLoop()
   // 每次 agent loop 使用独立的调用历史，并发会话互不影响
@@ -80,7 +80,7 @@ export const agentLoop = async ({
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   try {
-    while (turn < MAX_TURN) {
+    while (turn < limits.maxTurns) {
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
       turn++
@@ -101,13 +101,14 @@ export const agentLoop = async ({
         estimateRequestTokens(
           { ...request, systemPrompt: inferenceSystem },
           messages,
-        ) > MAX_INPUT_TOKENS
+        ) > limits.maxInputTokens
       )
         throw new Error('当前请求超过安全容量，本轮已停止。')
 
       let needToolCall = false
       let fullContent = ''
       let shouldBreak = false
+      let loopWarning: string | undefined
       let finalStep:
         | Awaited<ReturnType<typeof streamText>['finalStep']>
         | undefined
@@ -122,6 +123,8 @@ export const agentLoop = async ({
             messages,
             maxRetries: 0, // 禁止 streamText 内部重试，交由外层控制重试逻辑
             abortSignal,
+            // 错误在下面的 'error' 分支里抛出并通过 retry/agent_end 事件报告，不再由 SDK 打印
+            onError: () => {},
           })
 
           for await (const part of result.stream) {
@@ -154,10 +157,8 @@ export const agentLoop = async ({
                   if (detectResult.level === 'critical') {
                     shouldBreak = true
                   } else if (detectResult.level === 'warning') {
-                    messages.push({
-                      role: 'user',
-                      content: `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`,
-                    })
+                    // 等本步的 assistant/tool 消息写入后再追加，保证提醒在触发它的调用之后
+                    loopWarning = `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`
                   }
                 }
                 loopDetector.record(part.toolCallId, part.toolName, part.input)
@@ -179,6 +180,12 @@ export const agentLoop = async ({
                 )
                 toolRegistry.assertHealthy()
                 break
+              }
+              case 'error': {
+                // 模型请求或流中途的错误：抛出原始错误，交给下面按真实原因判断是否重试。
+                // 不处理的话 AI SDK 会在 finalStep 统一报 NoOutputGeneratedError（400 也会被重试），
+                // 或者把中途断开前的半截文本当成完整回答。
+                throw part.error
               }
               case 'tool-result': {
                 loopDetector.recordResult(
@@ -205,12 +212,17 @@ export const agentLoop = async ({
         } catch (error) {
           abortSignal?.throwIfAborted()
           toolRegistry.assertHealthy()
-          if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
-          const delay = calculateDelay(attempt)
+          if (attempt > limits.maxRetries || !isRetryable(error as Error))
+            throw error
+          const delay = calculateDelay(
+            attempt,
+            limits.retryBaseMs,
+            limits.retryMaxMs,
+          )
           emit({
             type: 'retry',
             attempt,
-            maxRetries: MAX_RETRIES,
+            maxRetries: limits.maxRetries,
             delayMs: delay,
             error,
           })
@@ -218,6 +230,7 @@ export const agentLoop = async ({
           needToolCall = false
           fullContent = ''
           shouldBreak = false
+          loopWarning = undefined
         }
       }
 
@@ -253,17 +266,22 @@ export const agentLoop = async ({
       const responseMessages: ModelMessage[] = finalStep.response.messages
       messages.push(...responseMessages)
       tokenTracker.addMessages(responseMessages)
+      if (loopWarning) {
+        const warning: ModelMessage = { role: 'user', content: loopWarning }
+        messages.push(warning)
+        tokenTracker.addMessage(warning)
+      }
 
-      if (tokenTracker.loopTokens > TOKEN_BUDGET * 0.9) {
+      if (tokenTracker.loopTokens > limits.tokenBudget * 0.9) {
         emit({
           type: 'budget_warning',
           used: tokenTracker.loopTokens,
-          limit: TOKEN_BUDGET,
+          limit: limits.tokenBudget,
         })
       }
       // 每个 turn_start 都有对应的 turn_end，结束原因由随后的 agent_end 说明
       emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
-      if (tokenTracker.loopTokens > TOKEN_BUDGET) {
+      if (tokenTracker.loopTokens > limits.tokenBudget) {
         endReason = 'budget'
         break
       }

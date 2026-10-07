@@ -33,15 +33,11 @@ Default to using Bun instead of Node.js.
 
 ## Testing
 
-Use `bun test` for affected tests; run the full suite when the changed surface or a failure requires it.
+测试怎么组织、怎么验收一次改动、怎么新增测试，见 [test/README.md](test/README.md)（改测试或改到 agent loop、装配、事件、上下文、CLI 前先读）。要点：
 
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
+- `bun run test` 跑 unit + e2e（约 5 秒，不联网、不需要环境变量）；定向时 `bun test test/unit/<模块>` 或 `bun test test/e2e/<场景>`。
+- 单元测试放 `test/unit/`，路径镜像 `src/`；整体流程放 `test/e2e/`，用 `test/support/vela.ts` 的 `createTestVela()` 和 `src/testing/faux.ts` 的脚本化 faux 模型。
+- 修 bug 先写一个能复现的 faux 场景；改了事件、faux 接口或测试约定时同步更新 test/README.md。
 
 ## Frontend
 

@@ -16,6 +16,7 @@ import {
   storedResultOutput,
   type ToolResultStore,
 } from '../session/tool-results'
+import { DEFAULT_LIMITS } from '../limits'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker'
 import {
   estimateRequestTokens,
@@ -23,9 +24,9 @@ import {
   type RequestSnapshot,
 } from './request'
 
-export const MICROCOMPACT_TOKEN_THRESHOLD = 120000
-export const SUMMARY_TOKEN_THRESHOLD = 150000
-export const MIN_MICRO_SAVINGS = 20000
+export const MICROCOMPACT_TOKEN_THRESHOLD = DEFAULT_LIMITS.microcompactThreshold
+export const SUMMARY_TOKEN_THRESHOLD = DEFAULT_LIMITS.summaryThreshold
+export const MIN_MICRO_SAVINGS = DEFAULT_LIMITS.minMicroSavings
 const KEEP_RECENT_CALLS = 5
 const KEEP_RECENT_MESSAGES = 6
 const CLEARABLE_TOOLS = new Set([
@@ -219,6 +220,7 @@ export async function summarize(
   request: RequestSnapshot,
   results: ToolResultStore,
   tracker: TokenTracker,
+  maxInputTokens = MAX_INPUT_TOKENS,
 ): Promise<CompactionResult> {
   const index = summaryBoundary(request.messages)
   request.abortSignal?.throwIfAborted()
@@ -265,7 +267,7 @@ export async function summarize(
     messages,
     tools,
   }
-  if (estimateRequestTokens(summaryRequest) > MAX_INPUT_TOKENS)
+  if (estimateRequestTokens(summaryRequest) > maxInputTokens)
     throw new Error('摘要输入超过安全容量，本轮已停止，原历史保留。')
   const started = performance.now()
   const modelId =

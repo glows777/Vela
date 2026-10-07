@@ -1,6 +1,7 @@
 import type { LanguageModel, ModelMessage } from 'ai'
 import { agentLoop } from '../agent'
 import type { VelaEventListener } from '../agent/events'
+import type { VelaLimits } from '../limits'
 import type { RequestSnapshot } from '../context/request'
 import type { ToolRegistry } from '../tools/registry'
 import { TokenTracker } from '../usage/tracker'
@@ -18,6 +19,7 @@ interface GatewayOptions {
   /** 每轮对话使用的 token 记录器；默认写入 .usage/today.jsonl */
   createTracker?: () => TokenTracker
   onEvent?: VelaEventListener
+  limits?: Partial<VelaLimits>
 }
 
 export class ChannelGateway {
@@ -93,6 +95,7 @@ export class ChannelGateway {
         prepareContext: this.options.prepareContext,
         abortSignal: controller.signal,
         onEvent: this.options.onEvent,
+        limits: this.options.limits,
       })
     } catch (err) {
       if (controller.signal.aborted) {

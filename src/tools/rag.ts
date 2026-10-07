@@ -2,6 +2,7 @@ import z from 'zod'
 import { chunkDocument } from '../rag/chunker'
 import { type EmbeddingFn, embed } from '../rag/embedder'
 import type { SqliteVectorStore } from '../rag/sqllite-store'
+import { resolveIn } from './file'
 import type { ToolDefinition } from './registry'
 
 export const createRagToolsInputSchema = z.object({
@@ -10,12 +11,19 @@ export const createRagToolsInputSchema = z.object({
 
 export const ragSearchToolInputSchema = z.object({
   query: z.string().describe('搜索查询'),
-  top_k: z.string().optional().describe('返回结果数量（默认 5）'),
+  top_k: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('返回结果数量（默认 5）'),
 })
 
 export function createRagTools(
   vectorStore: SqliteVectorStore,
   embedFn: EmbeddingFn,
+  /** 相对路径按 cwd 解析（和文件工具一致），默认进程工作目录 */
+  { cwd }: { cwd?: string } = {},
 ): ToolDefinition[] {
   const ragIngestTool: ToolDefinition = {
     name: 'rag_ingest',
@@ -26,7 +34,7 @@ export function createRagTools(
     isReadOnly: false,
     execute: async ({ path }: { path: string }, context) => {
       try {
-        const text = await Bun.file(path).text()
+        const text = await Bun.file(resolveIn(cwd, path)).text()
         const chunks = chunkDocument(path, text)
         const embeddings = await embed(
           embedFn,
@@ -49,10 +57,17 @@ export function createRagTools(
     inputSchema: ragSearchToolInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
-    execute: async ({ query, top_k }: { query: string; top_k?: number }, context) => {
+    execute: async (
+      { query, top_k }: { query: string; top_k?: number },
+      context,
+    ) => {
       if (vectorStore.size() === 0)
         return '知识库为空，请先使用 rag_ingest 导入文档。'
-      const results = await vectorStore.hybridSearch(texts => embedFn(texts, context?.signal), query, top_k || 5)
+      const results = await vectorStore.hybridSearch(
+        (texts) => embedFn(texts, context?.signal),
+        query,
+        top_k || 5,
+      )
       if (results.length === 0) return `没有找到与 "${query}" 相关的内容。`
       return results
         .map(

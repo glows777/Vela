@@ -2,19 +2,9 @@ import type { ModelMessage } from 'ai'
 import type { VelaEventListener } from '../agent/events'
 import type { SessionState, SessionStore } from '../session'
 import type { TokenTracker } from '../usage/tracker'
-import {
-  MICROCOMPACT_TOKEN_THRESHOLD,
-  MIN_MICRO_SAVINGS,
-  persistMicrocompact,
-  planMicrocompact,
-  SUMMARY_TOKEN_THRESHOLD,
-  summarize,
-} from './compressor'
-import {
-  estimateRequestTokens,
-  MAX_INPUT_TOKENS,
-  type RequestSnapshot,
-} from './request'
+import { resolveLimits, type VelaLimits } from '../limits'
+import { persistMicrocompact, planMicrocompact, summarize } from './compressor'
+import { estimateRequestTokens, type RequestSnapshot } from './request'
 export { createRequestSnapshot } from './request'
 
 export class ContextManager {
@@ -28,7 +18,13 @@ export class ContextManager {
     },
     /** 压缩动作通过事件报告；不传时静默。 */
     public onEvent?: VelaEventListener,
-  ) {}
+    /** 压缩阈值与输入上限；未给出的字段用默认值。 */
+    limits: Partial<VelaLimits> = {},
+  ) {
+    this.limits = resolveLimits(limits)
+  }
+
+  readonly limits: VelaLimits
 
   restore(state: SessionState): void {
     this.state.messages.splice(0, this.state.messages.length, ...state.messages)
@@ -67,7 +63,7 @@ export class ContextManager {
     request.abortSignal?.throwIfAborted()
     const before = estimateRequestTokens(request)
     const micro =
-      before >= MICROCOMPACT_TOKEN_THRESHOLD
+      before >= this.limits.microcompactThreshold
         ? planMicrocompact(request.messages, this.store.results)
         : null
     const microAfter = micro
@@ -76,8 +72,8 @@ export class ContextManager {
     const savings = before - microAfter
     if (
       micro &&
-      savings >= MIN_MICRO_SAVINGS &&
-      microAfter < SUMMARY_TOKEN_THRESHOLD
+      savings >= this.limits.minMicroSavings &&
+      microAfter < this.limits.summaryThreshold
     ) {
       await persistMicrocompact(micro.candidates, this.store.results)
       request.abortSignal?.throwIfAborted()
@@ -93,7 +89,7 @@ export class ContextManager {
       })
       return
     }
-    if (before >= SUMMARY_TOKEN_THRESHOLD) {
+    if (before >= this.limits.summaryThreshold) {
       if (options.allowSummary === false) {
         this.onEvent?.({
           type: 'context',
@@ -108,9 +104,10 @@ export class ContextManager {
         request,
         this.store.results,
         this.tracker,
+        this.limits.maxInputTokens,
       )
       const after = estimateRequestTokens(request, compacted.messages)
-      if (after > MAX_INPUT_TOKENS)
+      if (after > this.limits.maxInputTokens)
         throw new Error('摘要后上下文仍超过安全容量，本轮已停止，原历史保留。')
       request.abortSignal?.throwIfAborted()
       await this.commit(
@@ -128,7 +125,7 @@ export class ContextManager {
       })
       return
     }
-    if (before > MAX_INPUT_TOKENS)
+    if (before > this.limits.maxInputTokens)
       throw new Error('上下文超过安全容量，本轮已停止，原历史保留。')
     this.tracker.setEstimatedTokens(before)
   }

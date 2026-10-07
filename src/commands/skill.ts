@@ -148,6 +148,7 @@ export function createSkillCommands(
         prepareContext: ctx.prepareContext,
         abortSignal: ctx.busy.controller.signal,
         onEvent: ctx.onEvent,
+        limits: ctx.limits,
       })
         .then(async () => {
           await ctx.saveSession()
