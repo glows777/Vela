@@ -195,11 +195,11 @@ export class VelaSession {
     this.deps.forward(event, this.id)
   }
 
-  /** @internal */
-  promptContext(): PromptContext {
+  /** @internal `sections` 默认是这一轮 before_agent_start 收集到的段落 */
+  promptContext(sections = this.sections): PromptContext {
     return {
       role: this.role,
-      extensionSections: this.sections,
+      extensionSections: sections,
       toolCount: this.registry.getActiveTools().length,
       deferredToolSummary: this.registry.getDeferredToolSummary(),
       sessionMessageCount: this.messages.length,
@@ -210,8 +210,17 @@ export class VelaSession {
   }
 
   /** @internal 当前会话的 system prompt（每轮请求前重新构建）。 */
-  buildSystem(): string {
-    return this.builder.build(this.promptContext())
+  buildSystem(sections?: Record<string, string>): string {
+    return this.builder.build(this.promptContext(sections))
+  }
+
+  /**
+   * @internal 下一次 prompt 会得到的扩展段落：跑一遍 before_agent_start，但不替换这一轮的段落
+   * （/context 预览用；段落每次 prompt 才算，还没 prompt 过时这一轮的段落是空的）。
+   */
+  async previewSections(): Promise<Record<string, string>> {
+    await this.start()
+    return this.deps.extensions.beforeAgentStart(this, '')
   }
 
   /** @internal 在发请求前整理上下文（微压缩 / 摘要）。 */

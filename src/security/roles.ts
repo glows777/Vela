@@ -56,7 +56,3 @@ export function canUseTool(role: Role, toolName: string): boolean {
 export function filterToolsForRole(toolNames: string[], role: Role): string[] {
   return toolNames.filter((name) => canUseTool(role, name))
 }
-
-/** 能看到主人私有数据（记忆）的角色 */
-export const isTrustedRole = (role: Role) =>
-  role === 'owner' || role === 'collaborator'

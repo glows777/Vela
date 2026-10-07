@@ -26,5 +26,3 @@ export function createCoreTools({
     createBashTool(cwd, { timeoutMs: bashTimeoutMs }),
   ]
 }
-
-export const allTools: ToolDefinition[] = createCoreTools()

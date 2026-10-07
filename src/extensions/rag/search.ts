@@ -33,10 +33,6 @@ export function normalizeMinMax(scores: number[]): number[] {
   return scores.map((s) => (s - min) / range)
 }
 
-export function normalizeViaSigmoid(scores: number[]): number[] {
-  return scores.map((s) => 1 / (1 + Math.exp(-s)))
-}
-
 // ── MMR deduplication ──────────────────────
 // 用于去重
 export function mmrSelect(

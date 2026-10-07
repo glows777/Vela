@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { MemoryStore } from '../../src/extensions/memory/store'
 import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux'
 import {
+  captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
@@ -147,6 +148,23 @@ test('/dream hands the memory clean-up prompt to the model', async () => {
   expect(t.lastAssistantText()).toBe('记忆已整理')
   expect(notes(t)).toContain('[dream] 完成')
   expect(t.session.busy.locked).toBe(false)
+})
+
+test('/context previews the memory section before the first prompt', async () => {
+  const t = withMemory()
+  // 段落每次 prompt 才算，还没 prompt 过时这一轮是空的
+  expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
+  const sections = await t.session.previewSections()
+  expect(sections.memory).toContain('openai-null-chars')
+  expect(t.session.buildSystem(sections)).toContain('openai-null-chars')
+  // 预览不替换这一轮的段落
+  expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
+  const { output } = await captureConsole(() => t.command('/context'))
+  // 以前没 prompt 过时这里是 0 tokens
+  const memoryRow = output.split('\n').find((line) => line.includes('Memory'))
+  expect(memoryRow).toBeDefined()
+  expect(memoryRow).not.toMatch(/\b0 tokens/)
+  expect(t.model.calls).toHaveLength(0)
 })
 
 test('aborting the prompt signal of /dream stops the model run it started', async () => {
