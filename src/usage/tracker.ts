@@ -120,8 +120,10 @@ export class TokenTracker {
   private pendingChars = 0;
   /** 当前一次 agentLoop 已消耗的输入加输出 token。 */
   private currentLoopTokens = 0;
-  /** 模型配置里写的价格（models.json 的 cost），优先于内置价目表。 */
-  private readonly pricing = new Map<string, ModelPricing>();
+  /** 当前模型配置里写的价格（models.json 的 cost），优先于内置价目表；换模型时更新。 */
+  private pricing?: ModelPricing;
+  /** 没有 cache 时每步的"假想成本"之和，按请求当时的价格算（换模型后不重算旧请求）。 */
+  private baselineCost = 0;
   /** 当前模型的上下文窗口，用于 status 的百分比。 */
   contextWindow = CONTEXT_WINDOW;
 
@@ -174,13 +176,9 @@ export class TokenTracker {
     return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4));
   }
 
-  /** 记录某个模型的价格（覆盖内置价目表）。 */
-  setPricing(model: string, pricing: ModelPricing): void {
-    this.pricing.set(model, pricing);
-  }
-
-  private priceOf(model: string): ModelPricing {
-    return (this.pricing.get(model) ?? PRICE_TABLE[model] ?? PRICE_TABLE['mock-model'])!;
+  /** 当前模型的价格（覆盖内置价目表）；undefined 表示按内置价目表。只影响之后的请求。 */
+  setPricing(pricing: ModelPricing | undefined): void {
+    this.pricing = pricing;
   }
 
   /** 当前上下文相对模型窗口（默认 200k）的状态。 */
@@ -204,7 +202,10 @@ export class TokenTracker {
     const requestTotalTokens = requestPromptTokens + usage.outputTokens;
     this.currentLoopTokens += requestTotalTokens;
 
-    const cost = computeCost(model, usage, this.priceOf(model));
+    const price = (this.pricing ?? PRICE_TABLE[model] ?? PRICE_TABLE['mock-model'])!;
+    const cost = computeCost(model, usage, price);
+    const inputLike = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+    this.baselineCost += (inputLike * price.input + usage.outputTokens * price.output) / 1_000_000;
     const record: StepRecord = { ts: Date.now(), model, cost, ...usage, ...details };
     this.steps.push(record);
 
@@ -229,16 +230,7 @@ export class TokenTracker {
     const totalInputLike = t.inputTokens + t.cacheReadTokens + t.cacheWriteTokens;
     const hitRate = totalInputLike > 0 ? t.cacheReadTokens / totalInputLike : 0;
     // 没有 cache 时的"假想成本"：把所有 input-like token 当成 miss 全付
-    const baselineCost = (() => {
-      let c = 0;
-      for (const s of this.steps) {
-        const p = this.priceOf(s.model);
-        const inputLike = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens;
-        c += (inputLike * p.input) / 1_000_000;
-        c += (s.outputTokens * p.output) / 1_000_000;
-      }
-      return c;
-    })();
+    const baselineCost = this.baselineCost;
     return { ...t, hitRate, baselineCost, savedCost: baselineCost - t.cost, steps: this.steps.length };
   }
 

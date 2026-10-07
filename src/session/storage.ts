@@ -19,8 +19,8 @@ export interface SessionCheckpoint {
   toolHistoryViewSeq?: number
   /** 会话用的模型 `provider/id`（用 setModel 选过、能按名字找回时才有），恢复时还原 */
   model?: string
-  /** 会话的 thinking 级别，恢复时还原 */
-  thinkingLevel?: ThinkingLevel
+  /** 会话的 thinking 级别，恢复时还原；null 表示用 provider 默认 */
+  thinkingLevel?: ThinkingLevel | null
 }
 
 /**

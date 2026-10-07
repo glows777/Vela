@@ -183,7 +183,8 @@ export class VelaSession {
         typeof this.modelChoice === 'string'
           ? this.resolved?.info.ref ?? this.modelChoice
           : undefined,
-      thinkingLevel: this.thinking,
+      // null = 明确用 provider 默认（恢复时不退回 Vela 的默认级别）
+      thinkingLevel: this.thinking ?? null,
     })
   }
 
@@ -203,14 +204,8 @@ export class VelaSession {
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
     this.tracker.contextWindow = resolved.info.contextWindow ?? CONTEXT_WINDOW
-    if (resolved.info.cost)
-      // 用量按请求返回的 modelId 记账
-      this.tracker.setPricing(
-        typeof resolved.model === 'string'
-          ? resolved.model
-          : resolved.model.modelId,
-        resolved.info.cost,
-      )
+    // 价格跟着当前模型（不按 modelId 记，不同 provider 的同名模型价格不同）
+    this.tracker.setPricing(resolved.info.cost)
   }
 
   /** 当前模型（AI SDK 的 LanguageModel）。名字解析不了时抛错。 */
@@ -334,7 +329,9 @@ export class VelaSession {
     const saved = await this.store.loadSaved()
     if (!saved) return false
     this.contextManager.restore(saved)
-    if (saved.thinkingLevel !== undefined) this.thinking = saved.thinkingLevel
+    // 旧 checkpoint 没有这个字段：保留当前级别
+    if (saved.thinkingLevel !== undefined)
+      this.thinking = saved.thinkingLevel ?? undefined
     if (saved.model) {
       // 扩展注册的 provider 要等扩展加载完才能解析
       await this.deps.extensions.ready.catch(() => {})

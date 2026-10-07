@@ -126,7 +126,7 @@
     messages: { timestamp: string; message: ModelMessage; }[]
     model?: string | undefined
     summary: string
-    thinkingLevel?: ThinkingLevel | undefined
+    thinkingLevel?: ThinkingLevel | null | undefined
     timestamp: string
     type: "checkpoint"
   interface SessionOptions

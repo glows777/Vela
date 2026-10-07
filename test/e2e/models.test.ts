@@ -68,6 +68,38 @@ test('a model chosen by name uses its provider, metadata and pricing', async () 
   expect(t.session.usage.totals.cost).toBeCloseTo(3)
 })
 
+test('pricing follows the provider, not a shared model id', async () => {
+  const { big, providers } = fakeProvider()
+  const priced = createFauxModel({ modelId: 'big' })
+  const free = createFauxModel({ modelId: 'big' })
+  const usage = { usage: { input: 3, output: 0 } }
+  big.push(fauxText('a', usage))
+  priced.push(fauxText('b', usage))
+  free.push(fauxText('c', usage))
+  const t = createTestVela({
+    model: 'fake/big',
+    providers: {
+      ...providers,
+      priced: {
+        models: [{ id: 'big', cost: { input: 2_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+        createModel: () => priced,
+      },
+      // 同名模型但没写价格：按内置价目表，不沿用 fake/big 的价格
+      free: { createModel: () => free },
+    },
+  })
+
+  await t.run('一')
+  t.session.setModel('priced/big')
+  await t.run('二')
+  // 旧请求按当时的价格：3×1 + 3×2；没有 cache，假想成本相同
+  expect(t.session.usage.totals.cost).toBeCloseTo(9)
+  expect(t.session.usage.totals.baselineCost).toBeCloseTo(9)
+  t.session.setModel('free/big')
+  await t.run('三')
+  expect(t.session.usage.totals.cost).toBeLessThan(9.01)
+})
+
 test('setModel switches the model for the next prompt and recomputes limits', async () => {
   const { big, plain, providers } = fakeProvider()
   big.push(fauxText('big'))
@@ -175,6 +207,27 @@ test('a resumed session restores its model and thinking level', async () => {
     await b.run('继续')
     expect(second.plain.calls).toHaveLength(1)
     expect(second.big.calls).toHaveLength(0)
+    await b.cleanup()
+  } finally {
+    dir.cleanup()
+  }
+})
+
+test('clearing the thinking level to the provider default survives resume', async () => {
+  const dir = tempDir()
+  try {
+    const first = fakeProvider()
+    first.big.push(fauxText('saved'))
+    const options = { cwd: dir.path, model: 'fake/big', thinkingLevel: 'high' as const }
+    const a = createTestVela({ ...options, providers: first.providers })
+    a.session.setThinkingLevel(undefined)
+    await a.run('保存')
+    await a.cleanup()
+
+    const second = fakeProvider()
+    const b = createTestVela({ ...options, providers: second.providers })
+    expect(await b.session.resume()).toBe(true)
+    expect(b.session.thinkingLevel).toBeUndefined()
     await b.cleanup()
   } finally {
     dir.cleanup()
