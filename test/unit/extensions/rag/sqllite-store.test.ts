@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { SqliteVectorStore } from '../../../src/rag/sqllite-store'
+import { SqliteVectorStore } from '../../../../src/extensions/rag/sqllite-store'
 
 const embedding = Array.from({ length: 128 }, (_, index) => index / 128)
 

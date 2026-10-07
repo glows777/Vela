@@ -36,7 +36,7 @@
 
 | 特性 / Feature | 说明 / Description |
 |---|---|
-| 🤖 多轮工具调用 Agent | 9 个核心工具 + RAG/记忆工具 + MCP 扩展 + 延迟工具搜索（`tool_search`）<br>9 core tools + RAG/memory tools + MCP + deferred tool search (`tool_search`) |
+| 🤖 多轮工具调用 Agent | 7 个核心工具 + 网页/RAG/记忆扩展 + MCP 扩展 + 延迟工具搜索（`tool_search`）<br>7 core tools + web/RAG/memory extensions + MCP + deferred tool search (`tool_search`) |
 | 📚 **RAG 知识库** | `rag_ingest` 导入文档自动分块，`rag_search` 向量+关键词混合检索（sqlite-vec + FTS5）<br>Chunk documents via `rag_ingest`; hybrid vector+keyword retrieval via `rag_search` |
 | 🧠 跨会话记忆 | Markdown 存储 + 索引 + 搜索，四类记忆（user / feedback / project / reference）<br>Markdown-backed memory with index & search (4 types) |
 | 🛡️ 上下文防御 | 工具结果自动截断（Head/Tail 60/40）、过期结果 TTL 清理、Token 估算<br>Dynamic tool-result truncation, TTL pruning, token estimation |
@@ -92,7 +92,16 @@ core 不写终端、不读环境变量；诊断输出通过 `logger` 注入。�
 
 #### 扩展 / Extensions
 
-仿 pi 的扩展：一个 `(vela) => {}` 函数，注册工具、命令、通道和事件 handler。SDK 默认不带内置扩展，`createVela({ extensions: [...] })` 显式传入；CLI 默认加载 `supabase` 和 `feishu`。每个 API 的可运行示例在 [`examples/extensions/`](examples/extensions/)。
+仿 pi 的扩展：一个 `(vela) => {}` 函数，注册工具、命令、通道和事件 handler。扩展注册的工具名自动带上 `<扩展名>_` 前缀（工具名等于扩展名时不重复），不会和内置工具重名。SDK 默认不带内置扩展，`createVela({ extensions: [...] })` 显式传入；CLI 默认加载 `memory`、`rag`（配了 embedding 时）、`web`、`supabase` 和 `feishu`。每个 API 的可运行示例在 [`examples/extensions/`](examples/extensions/)。
+
+```ts
+import { createEmbedder, createVela, memory, rag, web } from 'vela'
+
+const vela = createVela({
+  model,
+  extensions: [memory(), rag({ embedder: createEmbedder({ apiKey, url, modelId }) }), web({ tavilyKey })],
+})
+```
 
 ```ts
 import { createVela, type VelaExtension } from 'vela'
@@ -123,11 +132,15 @@ const session = vela.session('default', { ui })   // 有界面才会真正询问
 | `/context` | 查看上下文 Token 分布矩阵 / context matrix visualization |
 | `/usage` | 查看 Token 消耗与预估成本 / token usage & estimated cost |
 | `/memory` | 列出所有记忆 / list memory entries |
-| `/memory search <q>` | 搜索记忆 / search memory |
+| `/memory search <q>` / `/memory lint` | 搜索记忆、检查记忆库 / search, lint memory |
+| `/dream` | 让模型整理记忆库 / let the model tidy up memory |
+| `/rag` / `/rag ingest <path>` | 查看知识库、导入文档 / show KB, ingest a document |
 | `/cache on` / `/cache off` | 开关 Mock 模型 cache 模拟 / toggle mock cache simulation |
 | `/extensions` | 已加载的扩展和它们注册的工具、命令、通道 / loaded extensions |
 | `/role [owner\|collaborator\|guest]` | 查看 / 切换当前会话的角色 / show or switch the session role |
 | `sim` | 注入模拟长对话（调试压缩用）/ inject simulated long conversation |
+
+`/memory`、`/dream`、`/rag` 由内置扩展注册（见上面的扩展）。
 
 ### 内置工具 / Built-in Tools
 
@@ -136,11 +149,11 @@ const session = vela.session('default', { ui })   // 有界面才会真正询问
 | `read_file` / `write_file` / `edit_file` | 文件读写与精确编辑 / file read, write, precise edit |
 | `list_directory` / `grep` / `glob` | 目录列举、正则搜索、模式匹配 / listing, regex search, glob |
 | `bash` | 执行 shell 命令 / run shell commands |
-| `web_fetch` | 抓取网页并转 Markdown / fetch web page to Markdown |
-| `web_search` | 互联网搜索（Tavily / Serper）/ web search |
-| `rag_ingest` | 导入文档到知识库（自动分块 + 向量化）/ ingest docs into KB |
-| `rag_search` | 从知识库混合检索相关片段 / hybrid search over KB |
-| `memory` | 跨会话记忆管理（save / list / search / read / delete）|
+| `web_fetch` | 抓取网页并转 Markdown（web 扩展）/ fetch web page to Markdown |
+| `web_search` | 互联网搜索（web 扩展，配了 Tavily / Serper key 时）/ web search |
+| `rag_ingest` | 导入文档到知识库（rag 扩展）/ ingest docs into KB |
+| `rag_search` | 从知识库混合检索相关片段（rag 扩展）/ hybrid search over KB |
+| `memory` | 跨会话记忆管理（memory 扩展；save / list / search / read / delete）|
 | `tool_search` | 搜索延迟加载的工具（如 MCP 工具）/ search deferred tools |
 
 ### MCP 扩展 / MCP Extension
@@ -156,14 +169,18 @@ MCP servers (stdio) via the official `@modelcontextprotocol/client` — e.g. Git
 ```
 src/
 ├── index.ts                # SDK 公开入口（import 'vela'）/ public SDK exports
-├── vela.ts                 # createVela()：装配工具、prompt、记忆、RAG、扩展、通道 / assembly
+├── vela.ts                 # createVela()：装配核心工具、prompt、扩展、通道 / assembly
 ├── vela-session.ts         # VelaSession：消息、压缩、用量、运行锁（一个 Vela 可开多个）/ sessions
 ├── logger.ts               # 可注入的 logger，默认静默 / injectable logger
-├── extensions/             # 扩展 API（types.ts）、运行时（runner.ts）、内置扩展 feishu / supabase
+├── extensions/             # 扩展 API（types.ts）、运行时（runner.ts）、内置扩展 / extensions
+│   ├── memory/             # memory 工具 + 记忆索引段落 + /memory /dream；Markdown 记忆存储
+│   ├── rag/                # rag_ingest / rag_search + /rag；分块、embedding、sqlite-vec + FTS5
+│   ├── web/                # web_fetch / web_search
+│   └── feishu/ supabase.ts
 ├── cli/
 │   ├── main.ts             # CLI 入口：读环境变量、交互 / -p 模式、MCP / CLI entry
 │   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher
-│   ├── commands/           # 斜杠命令（context / usage / memory / skill / dream …）
+│   ├── commands/           # CLI 自己的斜杠命令（context / usage / skill / role …）
 │   └── print-event.ts      # 把 agent 事件打印到终端 / prints agent events
 ├── agent/
 │   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (MAX_TURN=15)
@@ -171,22 +188,14 @@ src/
 │   ├── retry.ts            # 指数退避 + 抖动重试 / exponential backoff with jitter
 │   └── loop-detection.ts   # 重复 / ping-pong / 熔断检测 / loop detection
 ├── tools/
-│   ├── index.ts            # 9 个核心工具汇总 / core tools
+│   ├── index.ts            # 核心工具（文件、搜索、bash）/ core tools
 │   ├── registry.ts         # 工具注册表 + MCP 集成 / registry & MCP integration
-│   ├── file.ts / search.ts / shell.ts / web.ts
-│   ├── rag.ts              # rag_ingest / rag_search 工具
-│   ├── memory-tool.ts      # memory 工具
+│   ├── file.ts / search.ts / shell.ts
 │   └── tool-search.ts      # 延迟工具搜索 / deferred tool search
-├── rag/
-│   ├── chunker.ts          # 文档分块（段落 → 256 token/块）/ chunking
-│   ├── embedder.ts         # OpenAI embedding（128 维 + 缓存）/ embeddings
-│   ├── sqllite-store.ts    # sqlite-vec + FTS5 双路存储与混合检索 / vector+keyword store
-│   └── search.ts           # 分数归一化 + MMR 去重 / score fusion & MMR
 ├── context/
 │   ├── defense.ts          # 3 层防御：截断 → TTL → Token 估算 / context defense
 │   ├── compressor.ts       # microcompact + LLM 摘要压缩 / compaction
 │   └── view.ts             # 上下文矩阵渲染 / matrix renderer
-├── memory/                 # Markdown 记忆存储 + 索引 + 搜索 / memory store
 ├── session/                # JSONL 会话 checkpoint / session persistence
 ├── usage/tracker.ts        # Token 追踪 + 9 家模型价格表 / token tracker & pricing
 ├── prompt/                 # System Prompt 片段 + 可插拔流水线 / prompt pipeline

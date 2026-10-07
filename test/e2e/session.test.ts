@@ -70,6 +70,7 @@ test('sessions with different ids are stored separately', async () => {
 test('dataDir keeps sessions, memory, usage and knowledge base out of the working directory', async () => {
   const t = createTestVela({
     dataDir: '.vela-data',
+    embedder: true,
     responses: [fauxText('ok')],
   })
   await t.run('hi')

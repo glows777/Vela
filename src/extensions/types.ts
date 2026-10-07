@@ -119,7 +119,8 @@ export interface ExtensionAPI {
   readonly logger: VelaLogger
   /**
    * 注册一个所有会话共享的工具。模型看到的名字是 `<扩展名>_<name>`（例如 supabase 扩展的
-   * `query` 是 `supabase_query`），不会和内置工具重名；重名会抛错。
+   * `query` 是 `supabase_query`），不会和内置工具重名；重名会抛错。工具名和扩展名相同时不重复前缀
+   * （memory 扩展的 `memory` 工具就叫 `memory`）。
    */
   registerTool(tool: ToolDefinition): void
   /** 注册 `/name` 命令：owner 会话里 `session.prompt('/name args')` 会执行它而不是发给模型。 */

@@ -44,7 +44,11 @@ export interface SessionExtensionHooks {
     session: VelaSession,
     prompt: string,
   ): Promise<Record<string, string>>
-  runCommand(session: VelaSession, text: string): Promise<boolean>
+  runCommand(
+    session: VelaSession,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<boolean>
 }
 
 /** 会话 id 会成为文件名：只允许字母、数字、`.`、`_`、`-`，且不能以 `.` 开头。 */
@@ -169,9 +173,14 @@ export class VelaSession {
     this.registry.setSelection(names)
   }
 
-  /** @internal 正在跑时的中断信号 */
+  /** 正在执行的扩展命令（命令不占运行锁，可以同时跑几个，命令里也可以再调用 prompt()） */
+  private readonly commands = new Map<AbortController, Promise<boolean>>()
+
+  /** @internal 正在跑（agent loop 或扩展命令）时的中断信号 */
   get signal(): AbortSignal | undefined {
-    return this.busy.controller?.signal
+    return (
+      this.busy.controller?.signal ?? this.commands.keys().next().value?.signal
+    )
   }
 
   /** 订阅这个会话的事件；返回取消订阅的函数。 */
@@ -186,11 +195,11 @@ export class VelaSession {
     this.deps.forward(event, this.id)
   }
 
-  /** @internal */
-  promptContext(): PromptContext {
+  /** @internal `sections` 默认是这一轮 before_agent_start 收集到的段落 */
+  promptContext(sections = this.sections): PromptContext {
     return {
       role: this.role,
-      extensionSections: this.sections,
+      extensionSections: sections,
       toolCount: this.registry.getActiveTools().length,
       deferredToolSummary: this.registry.getDeferredToolSummary(),
       sessionMessageCount: this.messages.length,
@@ -201,8 +210,17 @@ export class VelaSession {
   }
 
   /** @internal 当前会话的 system prompt（每轮请求前重新构建）。 */
-  buildSystem(): string {
-    return this.builder.build(this.promptContext())
+  buildSystem(sections?: Record<string, string>): string {
+    return this.builder.build(this.promptContext(sections))
+  }
+
+  /**
+   * @internal 下一次 prompt 会得到的扩展段落：跑一遍 before_agent_start，但不替换这一轮的段落
+   * （/context 预览用；段落每次 prompt 才算，还没 prompt 过时这一轮的段落是空的）。
+   */
+  async previewSections(): Promise<Record<string, string>> {
+    await this.start()
+    return this.deps.extensions.beforeAgentStart(this, '')
   }
 
   /** @internal 在发请求前整理上下文（微压缩 / 摘要）。 */
@@ -245,10 +263,26 @@ export class VelaSession {
     if (input.startsWith('/'))
       return (async () => {
         await this.start()
-        if (await this.deps.extensions.runCommand(this, input)) return
+        if (await this.runCommand(input, options.signal)) return
         return this.promptModel(input, options)
       })()
     return this.promptModel(input, options)
+  }
+
+  /** 执行扩展命令；abort() 和 options.signal 会中断命令的 ctx.signal。 */
+  private async runCommand(input: string, signal?: AbortSignal) {
+    const controller = new AbortController()
+    const forward = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', forward, { once: true })
+    if (signal?.aborted) forward()
+    const task = this.deps.extensions.runCommand(this, input, controller.signal)
+    this.commands.set(controller, task)
+    try {
+      return await task
+    } finally {
+      this.commands.delete(controller)
+      signal?.removeEventListener('abort', forward)
+    }
   }
 
   private promptModel(input: string, options: PromptOptions): Promise<void> {
@@ -307,10 +341,10 @@ export class VelaSession {
     }
   }
 
-  /** 中断当前 agent loop（如果有）。 */
+  /** 中断当前 agent loop 和扩展命令（如果有）。 */
   abort(reason: unknown = new DOMException('用户取消当前操作', 'AbortError')) {
-    const controller = this.busy.controller
-    if (controller && !controller.signal.aborted) controller.abort(reason)
+    for (const controller of [this.busy.controller, ...this.commands.keys()])
+      if (controller && !controller.signal.aborted) controller.abort(reason)
   }
 
   /** token 估算、上下文占比和本会话累计用量。 */
@@ -323,6 +357,8 @@ export class VelaSession {
     if (this.closed) return
     this.closed = true
     this.abort(new DOMException('会话已关闭', 'AbortError'))
+    // 先等扩展命令收尾（/dream 这类命令自己也在等它发起的 prompt）
+    await Promise.allSettled(this.commands.values())
     await this.running
     await this.registry.waitForIdle().catch(() => {})
     // 只有触发过 session_start 的会话才发 session_shutdown

@@ -6,26 +6,19 @@ import { ExtensionRunner, type LoadedExtension } from './extensions/runner'
 import type { VelaExtension } from './extensions/types'
 import { resolveLimits, type VelaLimits } from './limits'
 import { silentLogger, type VelaLogger } from './logger'
-import { MemoryStore } from './memory/store'
 import {
   coreRules,
   deferredTools,
   extensionSections,
-  memoryContext,
-  ragContext,
   sessionContext,
   toolGuide,
   toolHistoryGuide,
 } from './prompt'
 import { PromptPipeline } from './prompt/pipelins'
-import type { EmbeddingFn } from './rag/embedder'
-import { SqliteVectorStore } from './rag/sqllite-store'
 import { HookPipeline } from './security/hooks'
 import { ToolResultStore } from './session/tool-results'
 import { SkillLoader } from './skills/loader'
 import { createCoreTools } from './tools'
-import { createMemoryTool } from './tools/memory-tool'
-import { createRagTools } from './tools/rag'
 import { ToolRegistry } from './tools/registry'
 import { registerToolSearchTool } from './tools/tool-search'
 import { type SessionOptions, VelaSession } from './vela-session'
@@ -37,14 +30,13 @@ export interface VelaOptions {
   cwd?: string
   /** .sessions / .memory / .usage / knowledge.db 的根目录，默认等于 cwd。 */
   dataDir?: string
-  /** embedding 函数；不传时不注册 RAG 工具，system prompt 也不包含知识库段落。 */
-  embedder?: EmbeddingFn
   /** 轮数、重试、预算、压缩阈值等上限；未给出的字段用默认值（见 src/limits.ts）。 */
   limits?: Partial<VelaLimits>
   /** 非事件类的诊断输出（扩展、hooks、会话文件坏行……），默认静默。 */
   logger?: VelaLogger
   /**
    * 要加载的扩展，按顺序运行（同 pi，SDK 默认不带内置扩展）。
+   * 记忆、知识库、网页工具也是扩展：`[memory(), rag({ embedder }), web({ tavilyKey })]`。
    * 扩展的配置通过工厂参数传入，例如 `feishu({ appId, appSecret })`。
    */
   extensions?: VelaExtension[]
@@ -85,8 +77,6 @@ export interface VelaInternals {
   registry: ToolRegistry
   hooks: HookPipeline
   builder: PromptPipeline
-  memoryStore: MemoryStore
-  vectorStore: SqliteVectorStore
   skillLoader: SkillLoader
   gateway: ChannelGateway
 }
@@ -101,14 +91,14 @@ export function velaInternals(vela: Vela): VelaInternals {
 }
 
 /**
- * 装配一个 Vela：工具、hooks、prompt、记忆、RAG、skills、扩展和通道。
+ * 装配一个 Vela：核心工具（文件、搜索、bash）、hooks、prompt、skills、扩展和通道。
  * 对话通过 `vela.session(id)` 打开；同一个 Vela 可以同时开多个会话，
- * 它们共享工具、扩展、记忆和知识库，各自有消息历史、上下文压缩、用量、角色和运行锁。
+ * 它们共享工具和扩展，各自有消息历史、上下文压缩、用量、角色和运行锁。
  */
 export function createVela(options: VelaOptions): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())
   const dataDir = resolve(cwd, options.dataDir ?? '.')
-  const { model, embedder } = options
+  const { model } = options
   const limits = resolveLimits(options.limits)
   const logger = options.logger ?? silentLogger
 
@@ -138,22 +128,11 @@ export function createVela(options: VelaOptions): Vela {
   const skillLoader = new SkillLoader(cwd)
   skillLoader.load()
 
-  const memoryStore = new MemoryStore(dataDir, logger)
-  memoryStore.init()
-  registry.register(createMemoryTool(memoryStore))
-
-  const vectorStore = new SqliteVectorStore(join(dataDir, 'knowledge.db'))
-  if (embedder)
-    registry.register(...createRagTools(vectorStore, embedder, { cwd }))
-
   const builder = new PromptPipeline()
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
     .pipe('toolHistoryGuide', toolHistoryGuide())
     .pipe('deferredTools', deferredTools())
-    .pipe('memoryContext', memoryContext(memoryStore))
-  if (embedder) builder.pipe('ragContext', ragContext(vectorStore))
-  builder
     .pipe('extensions', extensionSections())
     .pipe('skillContext', (ctx) =>
       skillLoader.buildPromptSection(ctx.activeSkills ?? new Set()),
@@ -185,7 +164,7 @@ export function createVela(options: VelaOptions): Vela {
           sessionStart: (s) => runner.sessionStart(s),
           sessionShutdown: (s) => runner.sessionShutdown(s),
           beforeAgentStart: (s, prompt) => runner.beforeAgentStart(s, prompt),
-          runCommand: (s, text) => runner.runCommand(s, text),
+          runCommand: (s, text, signal) => runner.runCommand(s, text, signal),
         },
         forward: (event, sessionId) => {
           for (const listener of listeners) listener(event, sessionId)
@@ -254,8 +233,6 @@ export function createVela(options: VelaOptions): Vela {
     registry,
     hooks,
     builder,
-    memoryStore,
-    vectorStore,
     skillLoader,
     gateway,
   })

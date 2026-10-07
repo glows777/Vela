@@ -7,8 +7,8 @@ import { join, relative, resolve } from 'node:path'
  */
 const SRC = resolve(import.meta.dir, '../../src')
 
-/** 允许的地方：CLI、测试工具，以及 1b 第二个 PR 会改写成内置扩展的 web 工具 */
-const ALLOWED = ['cli/', 'testing/', 'tools/web.ts']
+/** 允许的地方：CLI 和测试工具 */
+const ALLOWED = ['cli/', 'testing/']
 
 const FORBIDDEN: [RegExp, string][] = [
   [/\bconsole\.\w+/, 'console'],
@@ -30,7 +30,9 @@ test('core modules do not write to the terminal, exit, read env or use readline'
   for await (const file of new Bun.Glob('**/*.ts').scan(SRC)) {
     const path = file.replaceAll('\\', '/')
     if (ALLOWED.some((prefix) => path.startsWith(prefix))) continue
-    const lines = stripComments(await Bun.file(join(SRC, file)).text()).split('\n')
+    const lines = stripComments(await Bun.file(join(SRC, file)).text()).split(
+      '\n',
+    )
     lines.forEach((line, i) => {
       if (lines[i - 1]?.includes('vela-boundary: allow')) return
       for (const [pattern, name] of FORBIDDEN)

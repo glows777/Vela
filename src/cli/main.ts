@@ -8,9 +8,12 @@ import {
 } from '@modelcontextprotocol/client'
 import type { LanguageModel } from 'ai'
 import { feishu } from '../extensions/feishu'
+import { memory } from '../extensions/memory'
+import { rag } from '../extensions/rag'
+import { createEmbedder, type EmbeddingFn } from '../extensions/rag/embedder'
 import { supabase } from '../extensions/supabase'
 import type { ExtensionUI } from '../extensions/types'
-import { createEmbedder, type EmbeddingFn } from '../rag/embedder'
+import { web } from '../extensions/web'
 import { createMockModel } from '../testing/demo-model'
 import { loadFauxScenario } from '../testing/faux'
 import { recordModel } from '../testing/record'
@@ -75,12 +78,15 @@ const recorder = process.env.VELA_RECORD
   : undefined
 
 const env = process.env
+const embedder = resolveEmbedder()
 const vela = createVela({
   model: recorder?.model ?? (await resolveModel()),
-  embedder: resolveEmbedder(),
   logger: createConsoleLogger({ debug: env.VELA_DEBUG === '1' }),
   // CLI 默认带上的内置扩展；配置从环境变量读（第 4 步换成配置文件）
   extensions: [
+    memory(),
+    ...(embedder ? [rag({ embedder })] : []),
+    web({ tavilyKey: env.TAVILY_API_KEY, serperKey: env.SERPER_API_KEY }),
     supabase({ url: env.SUPABASE_URL, key: env.SUPABASE_KEY }),
     feishu({
       appId: env.FEISHU_APP_ID,
@@ -250,8 +256,10 @@ function scheduleMCPRetry() {
 await connectMCP()
 
 const cancelOrClose = () => {
-  if (busy.locked && busy.controller) {
-    if (!busy.controller.signal.aborted) {
+  // 正在跑 agent loop 或扩展命令（例如 /rag ingest）时取消它，空闲时退出
+  const signal = session.signal
+  if (signal) {
+    if (!signal.aborted) {
       session.abort()
       console.log('\n[取消] 正在停止当前请求和工具…')
     }

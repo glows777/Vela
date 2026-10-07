@@ -16,11 +16,12 @@ test('/context and /usage report the conversation after a run', async () => {
   })
   await t.run('hi')
 
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/context')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/context')).toBe('async')
     expect(t.dispatch('/usage')).toBe(true)
     expect(t.dispatch('status')).toBe(true)
   })
+  expect(output).toContain('System prompt')
   expect(output).toContain('Usage Summary')
   expect(output).toContain('1 步累计')
   expect(output).toMatch(/Input\s+1\.2k tokens/)

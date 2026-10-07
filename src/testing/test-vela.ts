@@ -12,7 +12,9 @@ import type { VelaEvent } from '../agent/events'
 import type { VelaExtension } from '../extensions/types'
 import type { VelaLimits } from '../limits'
 import type { VelaLogger } from '../logger'
-import type { EmbeddingFn } from '../rag/embedder'
+import { memory } from '../extensions/memory'
+import { rag } from '../extensions/rag'
+import type { EmbeddingFn } from '../extensions/rag/embedder'
 import { createVela, type Vela } from '../vela'
 import type {
   PromptOptions,
@@ -53,12 +55,12 @@ export interface TestVelaOptions {
   files?: Record<string, string>
   /** 预置到 cwd/.skills 的 skill */
   skills?: FixtureSkill[]
-  /** true 用确定性的 faux embedder 打开 RAG；也可以直接传 embedder */
+  /** 加载 rag 扩展：true 用确定性的 faux embedder，也可以直接传 embedder */
   embedder?: boolean | EmbeddingFn
   /** 覆盖上限；测试默认 retryBaseMs=0，重试不等待 */
   limits?: Partial<VelaLimits>
   logger?: VelaLogger
-  /** 要加载的扩展（被测的扩展） */
+  /** 要加载的扩展（被测的扩展），排在内置的 memory（以及 embedder 对应的 rag）之后 */
   extensions?: VelaExtension[]
   /** 默认会话的选项（角色、权限、工具选择、ui） */
   session?: SessionOptions
@@ -96,10 +98,14 @@ export function createTestVela(options: TestVelaOptions = {}) {
     model: options.model ?? (faux as FauxModel),
     cwd,
     dataDir: options.dataDir,
-    embedder,
     limits: { retryBaseMs: 0, ...options.limits },
     logger: options.logger,
-    extensions: options.extensions,
+    // 和 CLI 一样带上内置的记忆和知识库扩展（网页工具要联网，测试里不带）
+    extensions: [
+      memory(),
+      ...(embedder ? [rag({ embedder })] : []),
+      ...(options.extensions ?? []),
+    ],
   })
   const events: VelaEvent[] = []
   const sessionIds: string[] = []

@@ -3,7 +3,6 @@ import type { VelaSession } from '../../vela-session'
 
 export * from './context'
 export * from './debug'
-export * from './memory'
 
 /**
  * 斜杠命令属于 CLI：它们读 SDK 提供的数据（vela / session），自己负责打印。

@@ -61,18 +61,4 @@ export async function embed(
   return results
 }
 
-// 1000 个 chunk 以内的场景，纯 JS 的实现够用。
-// 生产环境可以考虑 用 sqlite-vec 的 vec_distance_cosine 做向量搜索也会快很多（C 实现 + 索引加速）
-export function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0,
-    normA = 0,
-    normB = 0
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i]! * b[i]!
-    normA += a[i]! * a[i]!
-    normB += b[i]! * b[i]!
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB) || 1)
-}
-
 export { DIMS }
