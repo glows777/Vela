@@ -107,15 +107,11 @@ test.concurrent('-p without a prompt prints usage and exits 2', async () => {
 })
 
 // demo 模型按字符流式输出、每字 30ms（约 2 秒），在 CI 的慢机器上和其它并发用例一起会超过默认 5 秒
-test.concurrent(
-  'VELA_MODEL=mock still runs the keyword demo model offline',
-  async () => {
-    const { code, stdout } = await cli(['-p', '你好'], { model: 'mock' })
-    expect(code).toBe(0)
-    expect(stdout).toContain('Agent has completed its response')
-  },
-  20_000,
-)
+test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', async () => {
+  const { code, stdout } = await cli(['-p', '你好'], { model: 'mock' })
+  expect(code).toBe(0)
+  expect(stdout).toContain('Agent has completed its response')
+}, 20_000)
 
 /** 交互模式：等到出现提示符再输入下一行，最后 exit */
 async function repl(lines: string[], model: string) {
@@ -218,4 +214,5 @@ test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline
   })
   expect(replay.code).toBe(0)
   expect(replay.stdout).toContain('remember the milk')
-})
+  // 两次启动 CLI 子进程，CI 上每次 2~3 秒，默认 5 秒不够
+}, 20_000)
