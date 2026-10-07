@@ -301,8 +301,10 @@ export const agentLoop = async ({
         endReason = 'budget'
         break
       }
-      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前
-      const steering = takeSteering?.() ?? []
+      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前；已经是最后一轮时留在队列里，
+      // 由会话另起一次 loop 发出（不然它进了历史却没有回答）
+      const steering =
+        turn < limits.maxTurns ? (takeSteering?.() ?? []) : []
       for (const text of steering) {
         const message: ModelMessage = { role: 'user', content: text }
         messages.push(message)

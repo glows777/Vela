@@ -63,6 +63,30 @@ test('a steer that arrives on the final answer keeps the loop going', async () =
   ])
 })
 
+test('a steer that arrives on the last allowed turn runs in a new loop instead of being dropped', async () => {
+  const t = createTestVela({
+    limits: { maxTurns: 1 },
+    responses: [
+      () => {
+        void t.session.steer('还有一件事')
+        return fauxText('第一句')
+      },
+      fauxText('第二句'),
+    ],
+  })
+
+  await t.run('说点什么')
+
+  // 第一轮已经用完轮数：steer 没进第一个 loop 的历史，而是另起一个 loop 得到回答
+  expect(t.model.calls).toHaveLength(2)
+  expect(t.model.calls[1]!.lastUserText).toBe('还有一件事')
+  expect(t.lastAssistantText()).toBe('第二句')
+  expect(t.eventsOf('agent_end')).toEqual([
+    { type: 'agent_end', reason: 'done' },
+    { type: 'agent_end', reason: 'done' },
+  ])
+})
+
 test('followUp runs as its own loop after the current task, and prompt() waits for it', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'A' },

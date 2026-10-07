@@ -205,6 +205,23 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   expect(await rpc.close()).toBe(0)
 })
 
+test.concurrent('rpc: a prompt that fails before the loop starts gets a failed response', async () => {
+  // 没有配置任何模型：prompt 先回 started，解析模型失败后再回一条 success:false（同 pi）
+  const rpc = startRpc('')
+
+  rpc.send({ id: 'p1', type: 'prompt', message: '你好' })
+  expect(
+    await rpc.waitFor((r) => r.id === 'p1' && r.success === true),
+  ).toMatchObject({ data: { disposition: 'started' } })
+  const failed = await rpc.waitFor((r) => r.id === 'p1' && r.success === false)
+  expect(failed).toMatchObject({ type: 'response', command: 'prompt' })
+  expect(String(failed.error)).not.toBe('')
+  // loop 里的错误只在 agent_end 里报一次，不再重复回响应
+  expect(rpc.records.some((r) => r.type === 'agent_start')).toBe(false)
+
+  expect(await rpc.close()).toBe(0)
+})
+
 test.concurrent('rpc: extension ui dialogs round-trip through extension_ui_request / response', async () => {
   const rpc = startRpc(`faux:${scenario('hello')}`, [], {
     'extensions/ask.ts': `export default (vela) => vela.registerCommand('ask', {
