@@ -1,16 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
-import { DEFAULT_LIMITS } from '../../src/limits'
-import type { VelaEvent } from '../../src/agent/events'
-import type { VelaLogger } from '../../src/logger'
-import { createVela } from '../../src/vela'
-import type { ProviderDefinition } from '../../src/models'
-import { createFauxModel, fauxText } from '../../src/testing/faux'
+import { DEFAULT_LIMITS } from '../../src/limits.ts'
+import type { VelaEvent } from '../../src/agent/events.ts'
+import type { VelaLogger } from '../../src/logger.ts'
+import { createVela } from '../../src/vela.ts'
+import type { ProviderDefinition } from '../../src/models/index.ts'
+import { createFauxModel, fauxText } from '../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
   tempDir,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

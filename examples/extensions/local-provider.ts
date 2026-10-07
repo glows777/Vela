@@ -4,7 +4,7 @@
  * 只是换地址和 key 的话也可以直接写 ~/.vela/models.json，不用扩展。
  */
 import { createOpenAI } from '@ai-sdk/openai'
-import type { VelaExtension } from 'vela'
+import type { VelaExtension } from '@glows777/vela'
 
 const localProvider: VelaExtension = (vela) => {
   const baseURL =

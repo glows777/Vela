@@ -78,7 +78,7 @@ bun run src/cli/main.ts   # 直接运行（package.json 的 bin.vela）
 ### 作为 SDK 使用 / Use as an SDK
 
 ```ts
-import { createVela } from 'vela'
+import { createVela } from '@glows777/vela'
 
 const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel 或 'provider/id'；不给 dataDir 时什么都不落盘
 const session = vela.session('default')                  // 同一个 Vela 可以同时开多个会话
@@ -97,7 +97,7 @@ core 不写终端、不读环境变量，也不隐式读 `~/.vela`；诊断输�
 仿 pi 的扩展：一个 `(vela) => {}` 函数，注册工具、命令、通道和事件 handler。扩展注册的工具名自动带上 `<扩展名>_` 前缀（工具名等于扩展名时不重复），不会和内置工具重名。SDK 默认不带内置扩展，`createVela({ extensions: [...] })` 显式传入；CLI 默认加载 `memory`、`rag`（配了 embedding 时）、`web`、`supabase` 和 `feishu`。每个 API 的可运行示例在 [`examples/extensions/`](examples/extensions/)。
 
 ```ts
-import { createEmbedder, createVela, memory, rag, web } from 'vela'
+import { createEmbedder, createVela, memory, rag, web } from '@glows777/vela'
 
 const vela = createVela({
   model,
@@ -106,7 +106,7 @@ const vela = createVela({
 ```
 
 ```ts
-import { createVela, type VelaExtension } from 'vela'
+import { createVela, type VelaExtension } from '@glows777/vela'
 
 const guard: VelaExtension = (vela) => {
   vela.registerCommand('hi', { handler: (args, ctx) => ctx.ui.notify(`hi ${args}`) })

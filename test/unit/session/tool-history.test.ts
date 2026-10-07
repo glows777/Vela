@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import {
   ToolHistoryStore,
   type ResultRecord,
-} from '../../../src/session/tool-history'
-import { SessionStore } from '../../../src/session/index'
+} from '../../../src/session/tool-history.ts'
+import { SessionStore } from '../../../src/session/index.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-history-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

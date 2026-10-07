@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
 import z from 'zod'
-import { fauxText, fauxToolCall } from '../../src/testing/faux'
+import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

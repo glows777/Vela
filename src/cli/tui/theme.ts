@@ -8,7 +8,7 @@ import {
   styleText,
   type TextStyle,
 } from '@earendil-works/pi-tui'
-import type { ThinkingLevel } from '../../models'
+import type { ThinkingLevel } from '../../models/index.ts'
 
 /** 配色照 pi 的默认深色主题（okhsl），只取 Vela 用到的几种。 */
 const c = (h: number, s: number, l: number) => okhslColor(h, s / 100, l / 100)

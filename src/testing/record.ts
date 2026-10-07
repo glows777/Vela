@@ -13,7 +13,7 @@ import type {
   FauxResponse,
   FauxScenario,
   FauxToolCall,
-} from './faux'
+} from './faux.ts'
 
 export interface RecordOptions {
   /** 场景 JSON 写到哪里；每个请求结束后整份重写，进程中途退出也能留下已录的部分 */
@@ -61,7 +61,7 @@ export function recordModel(
   }
   const save = () => {
     writing = writing.then(async () => {
-      // 文件里有对话原文，只给当前用户读写（Bun.write 不应用 mode）
+      // 文件里有对话原文，只给当前用户读写
       await mkdir(dirname(options.path), { recursive: true })
       await writeFile(
         options.path,

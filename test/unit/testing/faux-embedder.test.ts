@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { createFauxEmbedder } from '../../../src/testing/faux-embedder'
+import { createFauxEmbedder } from '../../../src/testing/faux-embedder.ts'
 
 const cosine = (a: number[], b: number[]) =>
   a.reduce((sum, v, i) => sum + v * b[i]!, 0)

@@ -1,7 +1,8 @@
+import { glob, readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import z from "zod";
-import { resolveIn } from "./file";
-import type { ToolDefinition } from "./registry";
+import { resolveIn } from "./file.ts";
+import type { ToolDefinition } from "./registry.ts";
 
 const globToolParamSchema = z.object({
   pattern: z.string().describe('搜索模式，如 "**/*.ts"、"src/*.json"'),
@@ -22,19 +23,16 @@ export const createGlobTool = (cwd?: string): ToolDefinition => ({
     path?: string;
   }) => {
     const ignored = new Set(["node_modules", ".git"]);
-    const glob = new Bun.Glob(pattern);
+    const base = resolveIn(cwd, path);
     const results: string[] = [];
 
-    for await (const result of glob.scan({
-      cwd: resolveIn(cwd, path),
-      dot: false,
-      onlyFiles: true,
-      followSymlinks: false,
+    for await (const entry of glob(pattern, {
+      cwd: base,
+      withFileTypes: true,
+      exclude: (entry) => ignored.has(entry.name),
     })) {
-      if (result.split(/[\\/]/).some((segment) => ignored.has(segment))) {
-        continue;
-      }
-      results.push(result);
+      if (!entry.isFile()) continue;
+      results.push(relative(base, join(entry.parentPath, entry.name)));
     }
 
     if (results.length === 0) return `没有找到匹配 "${pattern}" 的文件`;
@@ -81,7 +79,7 @@ export const createGrepTool = (cwd?: string): ToolDefinition => ({
 
       let content: string;
       try {
-        content = await Bun.file(filePath).text();
+        content = await readFile(filePath, "utf8");
       } catch {
         return;
       }
@@ -95,17 +93,16 @@ export const createGrepTool = (cwd?: string): ToolDefinition => ({
       }
     }
 
-    if (await Bun.file(baseDir).exists()) {
+    if ((await stat(baseDir)).isFile()) {
       await searchFile(baseDir, relative(baseDir, baseDir));
     } else {
-      const glob = new Bun.Glob("**/*");
-
-      for await (const rel of glob.scan({
-        cwd: baseDir,
-        dot: true,
-        onlyFiles: true,
-        followSymlinks: true,
-      })) {
+      const entries = await readdir(baseDir, {
+        recursive: true,
+        withFileTypes: true,
+      });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const rel = relative(baseDir, join(entry.parentPath, entry.name));
         if (matches.length >= 50) break;
         if (rel.split(/[\\/]/).some((segment) => SKIP.has(segment))) continue;
         await searchFile(join(baseDir, rel), rel);

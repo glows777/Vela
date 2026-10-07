@@ -6,7 +6,7 @@ import {
   fauxText,
   fauxToolCall,
   loadFauxScenario,
-} from '../../../src/testing/faux'
+} from '../../../src/testing/faux.ts'
 
 async function streamParts(
   model: ReturnType<typeof createFauxModel>,

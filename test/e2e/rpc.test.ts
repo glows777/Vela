@@ -1,7 +1,7 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { tempDir } from '../support/vela'
+import { tempDir } from '../support/vela.ts'
 
 // `vela --mode rpc` 子进程：stdin 写 JSONL 命令，stdout 读 response / 事件 / extension_ui_request
 

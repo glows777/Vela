@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
-import type { ModelSpec, ProviderDefinition } from '../models'
-import { interpolate, isPlainObject } from './interpolate'
+import type { ModelSpec, ProviderDefinition } from '../models/index.ts'
+import { interpolate, isPlainObject } from './interpolate.ts'
 
 type Env = Record<string, string | undefined>
 

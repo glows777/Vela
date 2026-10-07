@@ -1,12 +1,12 @@
 import type { ModelMessage } from "ai";
 import { join } from 'node:path';
-import { silentLogger, type VelaLogger } from '../logger';
+import { silentLogger, type VelaLogger } from '../logger.ts';
 import {
   fileSessionStorage,
   type SessionCheckpoint,
   type SessionStorage,
-} from './storage';
-import { ToolResultStore } from './tool-results';
+} from './storage.ts';
+import { ToolResultStore } from './tool-results.ts';
 
 export interface SessionState {
   messages: ModelMessage[];

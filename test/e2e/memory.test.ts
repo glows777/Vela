@@ -1,13 +1,13 @@
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'bun:test'
-import { MemoryStore } from '../../src/extensions/memory/store'
-import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux'
+import { MemoryStore } from '../../src/extensions/memory/store.ts'
+import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

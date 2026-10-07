@@ -5,23 +5,23 @@ import { join } from 'node:path'
 import z from 'zod'
 import type { ModelMessage, ToolResultPart } from 'ai'
 import { generateText, stepCountIs } from 'ai'
-import { ToolRegistry } from '../../../src/tools/registry'
-import { readFileTool } from '../../../src/tools/file'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
+import { readFileTool } from '../../../src/tools/file.ts'
 import {
   ToolResultStore,
   getStoredResult,
-} from '../../../src/session/tool-results'
-import { summarize } from '../../../src/context/compressor'
-import { createRequestSnapshot } from '../../../src/context/request'
-import { TokenTracker } from '../../../src/usage/tracker'
+} from '../../../src/session/tool-results.ts'
+import { summarize } from '../../../src/context/compressor.ts'
+import { createRequestSnapshot } from '../../../src/context/request.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
 import {
   createFauxModel,
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../../src/testing/faux'
-import { SessionStore } from '../../../src/session'
-import { bashTool, createBashTool } from '../../../src/tools/shell'
+} from '../../../src/testing/faux.ts'
+import { SessionStore } from '../../../src/session/index.ts'
+import { bashTool, createBashTool } from '../../../src/tools/shell.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-output-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import type {
   LanguageModelV4,
   LanguageModelV4CallOptions,
@@ -278,7 +279,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
             return
           }
           if (i < parts.length) {
-            if (chunkDelayMs > 0 && i > 0) await Bun.sleep(chunkDelayMs)
+            if (chunkDelayMs > 0 && i > 0) await new Promise((r) => setTimeout(r, chunkDelayMs))
             controller.enqueue(parts[i++]!)
             return
           }
@@ -479,7 +480,7 @@ export interface FauxScenario {
 }
 
 export async function readFauxScenario(path: string): Promise<FauxScenario> {
-  const scenario = (await Bun.file(path).json()) as FauxScenario
+  const scenario = JSON.parse(await readFile(path, 'utf8')) as FauxScenario
   if (!Array.isArray(scenario.responses))
     throw new Error(`faux scenario ${path} must have a "responses" array`)
   return scenario

@@ -1,18 +1,18 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { assertLimitKeys, type VelaLimits } from '../limits'
+import { assertLimitKeys, type VelaLimits } from '../limits.ts'
 import {
   type ProviderDefinition,
   THINKING_LEVELS,
   type ThinkingLevel,
-} from '../models'
-import { loadModels } from './models'
-import { deepMerge, interpolateDeep, isPlainObject } from './interpolate'
+} from '../models/index.ts'
+import { loadModels } from './models.ts'
+import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import {
   defaultAgentDir,
   projectDataDir,
   resolveConfigPath,
-} from './paths'
+} from './paths.ts'
 
 type Env = Record<string, string | undefined>
 

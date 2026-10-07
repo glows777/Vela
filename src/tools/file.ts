@@ -1,7 +1,14 @@
-import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { createReadStream, readdirSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import z from "zod";
-import type { ToolDefinition } from "./registry";
+import type { ToolDefinition } from "./registry.ts";
+
+/** 写文本文件，父目录不存在时先建（同 Bun.write）。 */
+async function writeText(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+}
 
 /** 相对路径按 cwd 解析；未指定 cwd 时沿用进程工作目录。 */
 export const resolveIn = (cwd: string | undefined, path: string) =>
@@ -22,7 +29,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof readFileParamSchema>) => {
     const { path, offset = 1, limit = 200, column = 0 } = readFileParamSchema.parse(input);
-    const file = Bun.file(resolveIn(cwd, path));
+    const file = resolveIn(cwd, path);
     const decoder = new TextDecoder();
     let line = 1;
     let col = 0;
@@ -52,7 +59,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       }
       return true;
     };
-    for await (const chunk of file.stream()) {
+    for await (const chunk of createReadStream(file)) {
       if (!consume(decoder.decode(chunk, { stream: true }))) break;
     }
     if (!more) consume(decoder.decode());
@@ -76,7 +83,7 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
   isConcurrencySafe: false, // 写操作不能并行
   isReadOnly: false,
   execute: async ({ path, content }: { path: string; content: string }) => {
-    await Bun.write(resolveIn(cwd, path), content);
+    await writeText(resolveIn(cwd, path), content);
     return `已写入 ${content.length} 字符到 ${path}`;
   },
 });
@@ -120,10 +127,13 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
     new_string: string;
   }) => {
     const resolved = resolveIn(cwd, path);
-    const file = Bun.file(resolved);
-    if (!(await file.exists())) return `文件不存在: ${path}`;
-
-    const content = await file.text();
+    let content: string;
+    try {
+      content = await readFile(resolved, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return `文件不存在: ${path}`;
+      throw error;
+    }
     const count = content.split(old_string).length - 1;
 
     if (count === 0) {
@@ -134,7 +144,7 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
     }
 
     const updated = content.replace(old_string, new_string);
-    await Bun.write(resolved, updated);
+    await writeText(resolved, updated);
     return `已替换 ${path} 中的内容（${old_string.length} → ${new_string.length} 字符）`;
   },
 });

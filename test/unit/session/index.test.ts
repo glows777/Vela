@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, expect, test } from 'bun:test'
 import type { ModelMessage } from 'ai'
-import { SessionStore } from '../../../src/session/index'
+import { SessionStore } from '../../../src/session/index.ts'
 
 const tempDirs: string[] = []
 function makeTempDir(): string {

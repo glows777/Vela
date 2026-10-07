@@ -1,8 +1,8 @@
-import type { SessionUI } from '../extensions/types'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models'
-import type { Vela } from '../vela'
-import type { QueueMode, VelaSession } from '../vela-session'
-import { jsonEvent, toJsonLine } from './json-event'
+import type { SessionUI } from '../extensions/types.ts'
+import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import type { Vela } from '../vela.ts'
+import type { QueueMode, VelaSession } from '../vela-session.ts'
+import { jsonEvent, toJsonLine } from './json-event.ts'
 
 /**
  * RPC 模式（同 pi 的 `--mode rpc`）：stdin 每行一个 JSON 命令，stdout 每行一个 `response` 或事件。
@@ -30,7 +30,7 @@ export interface RpcModeOptions {
   newSessionId: () => string
   /** 启动会话打开之后（恢复之后）调用：命令行的 --model / --thinking 覆盖保存的设置 */
   configure?: (session: VelaSession) => void
-  input: ReadableStream<Uint8Array>
+  input: AsyncIterable<Uint8Array>
   write: (text: string) => Promise<void>
 }
 

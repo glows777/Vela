@@ -7,8 +7,8 @@ import {
   type JSONRPCMessage,
   type Transport,
 } from '@modelcontextprotocol/client'
-import { ToolResultStore } from '../../../src/session/tool-results'
-import { ToolRegistry } from '../../../src/tools/registry'
+import { ToolResultStore } from '../../../src/session/tool-results.ts'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-mcp-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

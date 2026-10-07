@@ -9,13 +9,13 @@ import {
   createRequestSnapshot,
   estimateRequestTokens,
   type RequestSnapshot,
-} from '../context/request'
-import { resolveLimits, type VelaLimits } from '../limits'
-import type { ToolRegistry } from '../tools/registry'
-import { normalizeUsage, type TokenTracker } from '../usage/tracker'
-import type { VelaEvent, VelaEventListener } from './events'
-import { LoopDetector } from './loop-detection'
-import { calculateDelay, isRetryable, sleep } from './retry'
+} from '../context/request.ts'
+import { resolveLimits, type VelaLimits } from '../limits.ts'
+import type { ToolRegistry } from '../tools/registry.ts'
+import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
+import type { VelaEvent, VelaEventListener } from './events.ts'
+import { LoopDetector } from './loop-detection.ts'
+import { calculateDelay, isRetryable, sleep } from './retry.ts'
 
 interface AgentLoopParameter {
   model: LanguageModel

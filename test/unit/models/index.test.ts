@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
-import { DEFAULT_LIMITS } from '../../../src/limits'
+import { DEFAULT_LIMITS } from '../../../src/limits.ts'
 import {
   limitsForModel,
   ModelRegistry,
   reasoningOption,
-} from '../../../src/models'
-import { createFauxModel } from '../../../src/testing/faux'
+} from '../../../src/models/index.ts'
+import { createFauxModel } from '../../../src/testing/faux.ts'
 
 const provider = (models = [{ id: 'm', contextWindow: 64_000 }]) => ({
   models,

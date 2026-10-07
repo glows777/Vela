@@ -22,10 +22,10 @@ export {
   fauxToolCall,
   loadFauxScenario,
   readFauxScenario,
-} from './faux'
-export { createFauxEmbedder } from './faux-embedder'
-export { type Recorder, type RecordOptions, recordModel } from './record'
-export { type ReplayResult, replayScenario } from './replay'
+} from './faux.ts'
+export { createFauxEmbedder } from './faux-embedder.ts'
+export { type Recorder, type RecordOptions, recordModel } from './record.ts'
+export { type ReplayResult, replayScenario } from './replay.ts'
 export {
   cleanupTestVelas,
   createTestVela,
@@ -33,4 +33,4 @@ export {
   type TestVela,
   type TestVelaOptions,
   tempDir,
-} from './test-vela'
+} from './test-vela.ts'

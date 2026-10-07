@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
-import type { IncomingMessage, OutgoingMessage } from '../../src/channels/types'
-import { supabase } from '../../src/extensions/supabase'
-import { fauxText, fauxToolCall } from '../../src/testing/faux'
+import type { IncomingMessage, OutgoingMessage } from '../../src/channels/types.ts'
+import { supabase } from '../../src/extensions/supabase.ts'
+import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

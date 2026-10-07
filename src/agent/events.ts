@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import type { StepRecord, StepUsage } from '../usage/tracker'
+import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 
 /**
  * Agent 运行过程中对外报告的事件。核心代码只发事件，不直接写终端；

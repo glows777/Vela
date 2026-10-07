@@ -1,9 +1,9 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { VelaExtension } from '../../index'
-import { createEmbedder, type EmbeddingFn } from './embedder'
-import { SqliteVectorStore } from './sqllite-store'
-import { createRagTools, ingestDocument } from './tools'
+import type { VelaExtension } from '../../index.ts'
+import { createEmbedder, type EmbeddingFn } from './embedder.ts'
+import { SqliteVectorStore } from './sqlite-store.ts'
+import { createRagTools, ingestDocument } from './tools.ts'
 
 export interface RagOptions {
   /**

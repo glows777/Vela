@@ -8,7 +8,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import { markdownTheme, theme } from './theme'
+import { markdownTheme, theme } from './theme.ts'
 
 /** 用户消息：深色底的 Markdown（同 pi）；很长的（skill 正文）只显示前几行。 */
 export class UserMessage extends Container {

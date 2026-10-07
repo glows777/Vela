@@ -1,7 +1,7 @@
-import type { PipeFn, PromptContext } from './pipelins'
-import type { ToolResultStore } from '../session/tool-results'
+import type { PipeFn, PromptContext } from './pipelins.ts'
+import type { ToolResultStore } from '../session/tool-results.ts'
 
-export * from './pipelins'
+export * from './pipelins.ts'
 
 /** 不传 results 时用 PromptContext 里当前会话的工具结果存储。 */
 export function toolHistoryGuide(results?: ToolResultStore): PipeFn {

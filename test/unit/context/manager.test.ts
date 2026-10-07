@@ -8,15 +8,15 @@ import {
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../../src/testing/faux'
-import { SessionStore } from '../../../src/session'
-import { TokenTracker } from '../../../src/usage/tracker'
-import { getStoredResult } from '../../../src/session/tool-results'
+} from '../../../src/testing/faux.ts'
+import { SessionStore } from '../../../src/session/index.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
+import { getStoredResult } from '../../../src/session/tool-results.ts'
 import {
   ContextManager,
   createRequestSnapshot,
-} from '../../../src/context/manager'
-import { planMicrocompact } from '../../../src/context/compressor'
+} from '../../../src/context/manager.ts'
+import { planMicrocompact } from '../../../src/context/compressor.ts'
 const dir = mkdtempSync(join(tmpdir(), 'vela-context-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 function history(count: number, size: number): ModelMessage[] {
@@ -199,7 +199,7 @@ test('summary chosen directly when a profitable micro still leaves >=150k', asyn
 
 test('summary cannot execute tools and rejected summary leaves original history', async () => {
   let executions = 0
-  const { ToolRegistry } = await import('../../../src/tools/registry')
+  const { ToolRegistry } = await import('../../../src/tools/registry.ts')
   const z = (await import('zod')).default
   const registry = new ToolRegistry()
   registry.register({

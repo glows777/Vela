@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxText, fauxToolCall } from '../../src/testing/faux'
-import type { EmbeddingFn } from '../../src/index'
+import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import type { EmbeddingFn } from '../../src/index.ts'
 import {
   cleanupTestVelas,
   createTestVela,
   type TestVela,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

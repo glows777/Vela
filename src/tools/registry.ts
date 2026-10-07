@@ -2,18 +2,18 @@ import type { Client, Transport } from '@modelcontextprotocol/client'
 import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema, type JSONSchema7, jsonSchema } from 'ai'
-import { classifyBashCommand } from '../security/bash-classifier'
-import type { VelaEventListener } from '../agent/events'
-import { silentLogger, type VelaLogger } from '../logger'
-import type { HookPipeline } from '../security/hooks'
+import { classifyBashCommand } from '../security/bash-classifier.ts'
+import type { VelaEventListener } from '../agent/events.ts'
+import { silentLogger, type VelaLogger } from '../logger.ts'
+import type { HookPipeline } from '../security/hooks.ts'
 import {
   decidePermission,
   type PermissionDecision,
   type PermissionRules,
   type Role,
-} from '../security/roles'
-import type { ExecutionMetadata, ResultRecord } from '../session/tool-history'
-import { StoredToolResult, ToolResultStore } from '../session/tool-results'
+} from '../security/roles.ts'
+import type { ExecutionMetadata, ResultRecord } from '../session/tool-history.ts'
+import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 
 /** Internal tool return envelope: preserve native data separately from model-facing text. */
 export class ToolExecutionResult {

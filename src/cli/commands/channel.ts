@@ -1,4 +1,4 @@
-import type { CommandHandler } from './index'
+import type { CommandHandler } from './index.ts'
 
 export const channelCommands: CommandHandler[] = [
   (cmd, { print, vela }) => {

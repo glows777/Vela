@@ -1,3 +1,4 @@
+import { open } from 'node:fs/promises'
 import {
   generateText,
   Output,
@@ -8,21 +9,21 @@ import {
   type ToolSet,
 } from 'ai'
 import z from 'zod'
-import { toolResultOutputToText } from './tool-result-output'
+import { toolResultOutputToText } from './tool-result-output.ts'
 import {
   archiveToolResults,
   getStoredResult,
   StoredToolResult,
   storedResultOutput,
   type ToolResultStore,
-} from '../session/tool-results'
-import { DEFAULT_LIMITS } from '../limits'
-import { normalizeUsage, type TokenTracker } from '../usage/tracker'
+} from '../session/tool-results.ts'
+import { DEFAULT_LIMITS } from '../limits.ts'
+import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import {
   estimateRequestTokens,
   MAX_INPUT_TOKENS,
   type RequestSnapshot,
-} from './request'
+} from './request.ts'
 
 export const MICROCOMPACT_TOKEN_THRESHOLD = DEFAULT_LIMITS.microcompactThreshold
 export const SUMMARY_TOKEN_THRESHOLD = DEFAULT_LIMITS.summaryThreshold
@@ -142,9 +143,8 @@ export async function persistMicrocompact(
         candidate.toolCallId,
       )
     else {
-      const file = Bun.file(candidate.reference.path)
       // Open the reference, not just stat it, before removing the remaining preview.
-      await file.slice(0, 1).arrayBuffer()
+      await (await open(candidate.reference.path, 'r')).close()
     }
   }
 }

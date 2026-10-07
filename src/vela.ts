@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
-import type { VelaSessionEventListener } from './agent/events'
-import { ChannelGateway } from './channels/gateway'
-import { ExtensionRunner, type LoadedExtension } from './extensions/runner'
-import type { VelaExtension } from './extensions/types'
-import { resolveLimits, type VelaLimits } from './limits'
-import { silentLogger, type VelaLogger } from './logger'
+import type { VelaSessionEventListener } from './agent/events.ts'
+import { ChannelGateway } from './channels/gateway.ts'
+import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
+import type { VelaExtension } from './extensions/types.ts'
+import { resolveLimits, type VelaLimits } from './limits.ts'
+import { silentLogger, type VelaLogger } from './logger.ts'
 import {
   coreRules,
   deferredTools,
@@ -15,19 +15,19 @@ import {
   sessionContext,
   toolGuide,
   toolHistoryGuide,
-} from './prompt'
-import { PromptPipeline } from './prompt/pipelins'
-import { HookPipeline } from './security/hooks'
+} from './prompt/index.ts'
+import { PromptPipeline } from './prompt/pipelins.ts'
+import { HookPipeline } from './security/hooks.ts'
 import {
   fileSessionStorage,
   memorySessionStorage,
   type SessionStorage,
   type SessionSummary,
-} from './session/storage'
-import { ToolResultStore } from './session/tool-results'
-import { SkillLoader } from './skills/loader'
-import { createCoreTools } from './tools'
-import { ToolRegistry } from './tools/registry'
+} from './session/storage.ts'
+import { ToolResultStore } from './session/tool-results.ts'
+import { SkillLoader } from './skills/loader.ts'
+import { createCoreTools } from './tools/index.ts'
+import { ToolRegistry } from './tools/registry.ts'
 import {
   DEFAULT_THINKING_LEVEL,
   describeModel,
@@ -36,9 +36,9 @@ import {
   type ProviderDefinition,
   type ResolvedModel,
   type ThinkingLevel,
-} from './models'
-import { registerToolSearchTool } from './tools/tool-search'
-import { type SessionOptions, VelaSession } from './vela-session'
+} from './models/index.ts'
+import { registerToolSearchTool } from './tools/tool-search.ts'
+import { type SessionOptions, VelaSession } from './vela-session.ts'
 
 export interface VelaOptions {
   /**

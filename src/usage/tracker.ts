@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { LanguageModelUsage, ModelMessage } from 'ai';
-import { toolResultOutputToText } from '../context/tool-result-output';
+import { toolResultOutputToText } from '../context/tool-result-output.ts';
 
 /**
  * 各家模型的 prompt cache 计费规则（单位：$ / 1M tokens，2026-05 数据）。

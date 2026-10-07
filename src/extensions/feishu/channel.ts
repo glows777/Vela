@@ -5,7 +5,7 @@ import type {
   OutgoingMessage,
   Role,
   VelaLogger,
-} from '../../index'
+} from '../../index.ts'
 
 export interface FeishuChannelConfig {
   appId: string

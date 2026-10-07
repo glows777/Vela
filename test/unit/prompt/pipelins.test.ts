@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   PromptPipeline,
   type PromptContext,
-} from '../../../src/prompt/pipelins'
+} from '../../../src/prompt/pipelins.ts'
 
 const ctx: PromptContext = {
   toolCount: 1,

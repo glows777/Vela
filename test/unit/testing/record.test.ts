@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { generateText } from 'ai'
-import type { VelaEvent } from '../../../src/agent/events'
+import type { VelaEvent } from '../../../src/agent/events.ts'
 import {
   createFauxModel,
   type FauxScenario,
@@ -11,14 +11,14 @@ import {
   fauxStreamError,
   fauxText,
   fauxToolCall,
-} from '../../../src/testing/faux'
-import { recordModel } from '../../../src/testing/record'
-import { replayScenario } from '../../../src/testing/replay'
+} from '../../../src/testing/faux.ts'
+import { recordModel } from '../../../src/testing/record.ts'
+import { replayScenario } from '../../../src/testing/replay.ts'
 import {
   cleanupTestVelas,
   createTestVela,
   tempDir,
-} from '../../../src/testing/test-vela'
+} from '../../../src/testing/test-vela.ts'
 
 afterEach(cleanupTestVelas)
 

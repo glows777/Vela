@@ -1,5 +1,5 @@
-import { THINKING_LEVELS, type ThinkingLevel } from '../../models'
-import type { CommandHandler } from './index'
+import { THINKING_LEVELS, type ThinkingLevel } from '../../models/index.ts'
+import type { CommandHandler } from './index.ts'
 
 /** `/model [provider/id]`、`/thinking [级别]`：查看或切换当前会话的模型和 thinking（选择器 UI 留给 TUI）。 */
 export const modelCommands: CommandHandler[] = [

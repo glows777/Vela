@@ -1,4 +1,4 @@
-import type { CommandHandler } from './index'
+import type { CommandHandler } from './index.ts'
 
 export const extensionCommands: CommandHandler[] = [
   // /extensions：已加载的扩展和它们注册的东西

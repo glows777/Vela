@@ -1,4 +1,4 @@
-import type { EmbeddingFn } from '../extensions/rag/embedder'
+import type { EmbeddingFn } from '../extensions/rag/embedder.ts'
 
 /**
  * 确定性的离线 embedder：把文本切成词（中文按相邻两字）后哈希到固定维度，再做 L2 归一化。

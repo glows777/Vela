@@ -1,41 +1,17 @@
-import { Database } from 'bun:sqlite'
-import { existsSync } from 'node:fs'
 import * as sqliteVec from 'sqlite-vec'
-import type { Chunk } from './chunker'
-import { type EmbeddingFn, embed } from './embedder'
+import type { Chunk } from './chunker.ts'
+import { type EmbeddingFn, embed } from './embedder.ts'
 import {
   mmrSelect,
   normalizeFtsQuery,
   normalizeMinMax,
   type SearchResult,
-} from './search'
+} from './search.ts'
+import { openSqlite, type SqliteDatabase, transaction } from './sqlite.ts'
 
 export interface StoredChunk extends Chunk {
   embedding: number[]
   addedAt: number
-}
-
-// Bun 1.4 的 bun:sqlite 支持 loadExtension；sqlite-vec 仍需要一个支持扩展加载的
-// SQLite 动态库（macOS 上需使用 Homebrew SQLite，而非 Apple 系统 SQLite）。
-const CUSTOM_SQLITE_CANDIDATES = [
-  '/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib', // Apple Silicon Mac
-  '/usr/local/opt/sqlite/lib/libsqlite3.dylib', // Intel Mac
-  '/usr/lib/x86_64-linux-gnu/libsqlite3.so.0', // Linux x64
-  '/usr/lib/aarch64-linux-gnu/libsqlite3.so.0', // Linux ARM64
-]
-
-let customSqliteLoaded = false
-
-function loadCustomSqlite(): void {
-  if (customSqliteLoaded) return
-  const path = CUSTOM_SQLITE_CANDIDATES.find((p) => existsSync(p))
-  if (!path) {
-    throw new Error(
-      '未找到支持 sqlite-vec 扩展加载的 SQLite 动态库：macOS 请安装 Homebrew SQLite（brew install sqlite），Linux 请确认系统 libsqlite3 路径',
-    )
-  }
-  Database.setCustomSQLite(path)
-  customSqliteLoaded = true
 }
 
 /** chunks 表连查出来的一行（embedding 以 JSON 字符串存储） */
@@ -48,11 +24,10 @@ interface ChunkRow {
 }
 
 export class SqliteVectorStore {
-  private db: Database
+  private db: SqliteDatabase
 
   constructor(dbPath: string = 'knowledge.db') {
-    loadCustomSqlite()
-    this.db = new Database(dbPath)
+    this.db = openSqlite(dbPath)
     sqliteVec.load(this.db) // 加载向量搜索扩展
     this.createTables()
   }
@@ -108,10 +83,10 @@ export class SqliteVectorStore {
   }
 
   addBatch(items: Array<{ chunk: Chunk; embedding: number[] }>): void {
-    const tx = this.db.transaction(() => {
+    // 事务批量写入，比逐条快很多
+    transaction(this.db, () => {
       for (const { chunk, embedding } of items) this.add(chunk, embedding)
     })
-    tx() // 事务批量写入，比逐条快很多
   }
 
   vectorSearch(

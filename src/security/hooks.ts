@@ -1,5 +1,5 @@
-import type { VelaEvent } from '../agent/events'
-import { errorMessage, silentLogger, type VelaLogger } from '../logger'
+import type { VelaEvent } from '../agent/events.ts'
+import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 
 export type HookAction = 'allow' | 'block' | 'modify'
 

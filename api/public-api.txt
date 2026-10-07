@@ -1,4 +1,4 @@
-# vela
+# @glows777/vela
 
   interface BeforeAgentStartEvent
     prompt: string
@@ -388,7 +388,7 @@
     serperKey?: string | undefined
     tavilyKey?: string | undefined
 
-# vela/testing
+# @glows777/vela/testing
 
   function cleanupTestVelas: () => Promise<void>
   function createFauxEmbedder: (options?: { dims?: number; onCall?: (texts: string[]) => void; }) => EmbeddingFn
@@ -427,7 +427,7 @@
     tools: string[]
   interface FauxResponse
     error?: string | Error | undefined
-    finishReason?: "error" | "stop" | "length" | "content-filter" | "tool-calls" | "other" | undefined
+    finishReason?: "error" | "length" | "stop" | "content-filter" | "tool-calls" | "other" | undefined
     hang?: boolean | undefined
     reasoning?: string | undefined
     streamError?: string | undefined

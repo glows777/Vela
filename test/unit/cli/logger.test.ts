@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createInteractiveLogger } from '../../../src/cli/logger'
+import { createInteractiveLogger } from '../../../src/cli/logger.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-logger-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

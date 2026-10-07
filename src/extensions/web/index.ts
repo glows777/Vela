@@ -1,6 +1,6 @@
-import type { VelaExtension } from '../../index'
-import { configString } from '../config'
-import { serperSearchTool, tavilySearchTool, webFetchTool } from './tools'
+import type { VelaExtension } from '../../index.ts'
+import { configString } from '../config.ts'
+import { serperSearchTool, tavilySearchTool, webFetchTool } from './tools.ts'
 
 export interface WebOptions {
   /** Tavily API key；同时给了两个 key 时优先用 Tavily */

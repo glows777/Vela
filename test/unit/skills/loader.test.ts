@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, expect, test } from 'bun:test'
-import { SkillLoader } from '../../../src/skills/loader'
+import { SkillLoader } from '../../../src/skills/loader.ts'
 
 const tempDirs: string[] = []
 function makeTempDir(): string {

@@ -3,7 +3,7 @@ import type {
   LanguageModelV3StreamPart,
 } from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
-import { getStoredResult } from '../session/tool-results'
+import { getStoredResult } from '../session/tool-results.ts'
 
 /**
  * Mock Model v0.10 — 模拟 prompt cache 行为

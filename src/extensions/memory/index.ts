@@ -1,7 +1,7 @@
 import { join } from 'node:path'
-import type { VelaExtension } from '../../index'
-import { MemoryStore } from './store'
-import { createMemoryTool } from './tool'
+import type { VelaExtension } from '../../index.ts'
+import { MemoryStore } from './store.ts'
+import { createMemoryTool } from './tool.ts'
 
 const DREAM_PROMPT = [
   '请对记忆库做一次完整的整理（dream），按以下四个阶段执行：',

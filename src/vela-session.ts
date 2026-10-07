@@ -1,12 +1,12 @@
 import { join } from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
-import { agentLoop } from './agent'
-import type { VelaEvent, VelaEventListener } from './agent/events'
-import { estimateMessageTokens } from './context/defense'
-import type { ExtensionUI, SessionUI } from './extensions/types'
-import { ContextManager } from './context/manager'
-import { createRequestSnapshot, type RequestSnapshot } from './context/request'
-import type { VelaLimits } from './limits'
+import { agentLoop } from './agent/index.ts'
+import type { VelaEvent, VelaEventListener } from './agent/events.ts'
+import { estimateMessageTokens } from './context/defense.ts'
+import type { ExtensionUI, SessionUI } from './extensions/types.ts'
+import { ContextManager } from './context/manager.ts'
+import { createRequestSnapshot, type RequestSnapshot } from './context/request.ts'
+import type { VelaLimits } from './limits.ts'
 import {
   limitsForModel,
   type ModelInfo,
@@ -14,19 +14,19 @@ import {
   reasoningOption,
   THINKING_LEVELS,
   type ThinkingLevel,
-} from './models'
-import type { VelaLogger } from './logger'
-import type { PromptContext, PromptPipeline } from './prompt/pipelins'
-import type { PermissionRules, Role } from './security/roles'
-import { SessionStore } from './session/index'
-import type { SessionStorage } from './session/storage'
-import type { ToolRegistry } from './tools/registry'
+} from './models/index.ts'
+import type { VelaLogger } from './logger.ts'
+import type { PromptContext, PromptPipeline } from './prompt/pipelins.ts'
+import type { PermissionRules, Role } from './security/roles.ts'
+import { SessionStore } from './session/index.ts'
+import type { SessionStorage } from './session/storage.ts'
+import type { ToolRegistry } from './tools/registry.ts'
 import {
   CONTEXT_WINDOW,
   TokenTracker,
   type TokenStatus,
   type UsageTotals,
-} from './usage/tracker'
+} from './usage/tracker.ts'
 
 export interface PromptOptions {
   signal?: AbortSignal

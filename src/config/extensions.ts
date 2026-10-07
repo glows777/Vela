@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url'
-import type { VelaExtension } from '../extensions/types'
+import type { VelaExtension } from '../extensions/types.ts'
 
 /**
  * 加载一个扩展文件：默认导出 `(vela) => {}`。返回的函数名是扩展名（决定工具前缀和配置段）。

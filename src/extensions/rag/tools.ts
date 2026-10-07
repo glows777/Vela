@@ -1,9 +1,10 @@
+import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import z from 'zod'
-import type { ToolDefinition } from '../../index'
-import { chunkDocument } from './chunker'
-import { type EmbeddingFn, embed } from './embedder'
-import type { SqliteVectorStore } from './sqllite-store'
+import type { ToolDefinition } from '../../index.ts'
+import { chunkDocument } from './chunker.ts'
+import { type EmbeddingFn, embed } from './embedder.ts'
+import type { SqliteVectorStore } from './sqlite-store.ts'
 
 export const createRagToolsInputSchema = z.object({
   path: z.string().describe('文档路径'),
@@ -27,7 +28,7 @@ export async function ingestDocument(
   path: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const text = await Bun.file(resolve(cwd, path)).text()
+  const text = await readFile(resolve(cwd, path), 'utf8')
   const chunks = chunkDocument(path, text)
   const embeddings = await embed(
     embedFn,

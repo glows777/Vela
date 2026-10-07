@@ -7,8 +7,8 @@ import {
   fauxStreamError,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux'
-import { cleanupTestVelas, createTestVela } from '../support/vela'
+} from '../../src/testing/faux.ts'
+import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

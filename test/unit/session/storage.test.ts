@@ -5,8 +5,8 @@ import {
   fileSessionStorage,
   memorySessionStorage,
   type SessionCheckpoint,
-} from '../../../src/session/storage'
-import { tempDir } from '../../support/vela'
+} from '../../../src/session/storage.ts'
+import { tempDir } from '../../support/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {

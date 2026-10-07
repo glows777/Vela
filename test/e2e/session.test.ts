@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import { fauxText } from '../../src/testing/faux'
-import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela'
+import { fauxText } from '../../src/testing/faux.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

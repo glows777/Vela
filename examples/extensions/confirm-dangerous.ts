@@ -3,7 +3,7 @@
  * 没有界面（SDK、`-p`、通道会话）时 confirm 返回 false，于是直接拦下。
  * 也可以不写扩展，用会话权限 `vela.session(id, { permissions: { bash: 'ask' } })`。
  */
-import type { VelaExtension } from 'vela'
+import type { VelaExtension } from '@glows777/vela'
 
 const confirmDangerous: VelaExtension = (vela) => {
   vela.on('tool_call', async (event, ctx) => {

@@ -1,7 +1,7 @@
-export { importExtension } from './extensions'
-export { interpolate } from './interpolate'
-export { loadModels, type ProviderApi, type ProviderConfig } from './models'
-export { defaultAgentDir, projectDataDir } from './paths'
+export { importExtension } from './extensions.ts'
+export { interpolate } from './interpolate.ts'
+export { loadModels, type ProviderApi, type ProviderConfig } from './models.ts'
+export { defaultAgentDir, projectDataDir } from './paths.ts'
 export {
   type ExtensionEntry,
   extensionName,
@@ -10,5 +10,5 @@ export {
   projectTrustRequired,
   type VelaConfig,
   type VelaSettings,
-} from './settings'
-export { savedTrust, saveTrust } from './trust'
+} from './settings.ts'
+export { savedTrust, saveTrust } from './trust.ts'

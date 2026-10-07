@@ -8,8 +8,8 @@ import {
   projectTrustRequired,
   savedTrust,
   saveTrust,
-} from '../../../src/config'
-import { tempDir } from '../../support/vela'
+} from '../../../src/config/index.ts'
+import { tempDir } from '../../support/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {

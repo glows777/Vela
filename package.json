@@ -1,21 +1,36 @@
 {
-  "name": "vela",
+  "name": "@glows777/vela",
   "version": "0.1.0",
+  "description": "An embeddable TypeScript agent SDK and terminal agent, with pi-style extensions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glows777/Vela.git"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./src/testing/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
   },
   "bin": {
-    "vela": "./src/cli/main.ts"
+    "vela": "dist/cli/main.js"
   },
-  "private": true,
   "engines": {
+    "node": ">=22.18.0",
     "bun": ">=1.4.0"
   },
   "scripts": {
     "dev": "bun --watch run src/cli/main.ts",
     "start": "bun run src/cli/main.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli/main.js",
     "test": "bun test test/unit test/e2e",
     "test:unit": "bun test test/unit",
     "test:e2e": "bun test test/e2e",
@@ -24,13 +39,13 @@
     "lint": "biome lint",
     "lint:fix": "biome lint --write",
     "api:update": "bun scripts/api-report.ts",
-    "smoke:consumer": "bun scripts/consumer-smoke.ts"
+    "smoke:consumer": "bun scripts/consumer-smoke.ts",
+    "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.8",
-    "@types/bun": "1.4.0"
-  },
-  "peerDependencies": {
+    "@types/bun": "1.4.0",
+    "@types/node": "^25",
     "typescript": "^6.0.3"
   },
   "dependencies": {
@@ -50,7 +65,7 @@
     "zod": "^4.4.3"
   },
   "files": [
-    "src",
+    "dist",
     "examples",
     "README.md"
   ]

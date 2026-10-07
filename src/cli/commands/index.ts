@@ -1,8 +1,8 @@
-import type { Vela, VelaInternals } from '../../vela'
-import type { VelaSession } from '../../vela-session'
+import type { Vela, VelaInternals } from '../../vela.ts'
+import type { VelaSession } from '../../vela-session.ts'
 
-export * from './context'
-export * from './debug'
+export * from './context.ts'
+export * from './debug.ts'
 
 /**
  * 斜杠命令属于 CLI：它们读 SDK 提供的数据（vela / session），输出交给 print()

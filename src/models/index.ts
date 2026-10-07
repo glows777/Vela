@@ -1,6 +1,6 @@
 import type { LanguageModel } from 'ai'
-import { DEFAULT_LIMITS, type VelaLimits } from '../limits'
-import type { ModelPricing } from '../usage/tracker'
+import { DEFAULT_LIMITS, type VelaLimits } from '../limits.ts'
+import type { ModelPricing } from '../usage/tracker.ts'
 
 /** 默认 thinking 级别（同 pi）。 */
 export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'

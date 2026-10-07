@@ -7,18 +7,18 @@ import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '../../../src/testing/faux'
-import { agentLoop } from '../../../src/agent'
-import { TokenTracker } from '../../../src/usage/tracker'
-import { ToolRegistry, ToolExecutionResult } from '../../../src/tools/registry'
+} from '../../../src/testing/faux.ts'
+import { agentLoop } from '../../../src/agent/index.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
+import { ToolRegistry, ToolExecutionResult } from '../../../src/tools/registry.ts'
 import {
   ToolResultStore,
   getStoredResult,
   archiveToolResults,
-} from '../../../src/session/tool-results'
-import { ToolHistoryStore } from '../../../src/session/tool-history'
-import { SessionStore } from '../../../src/session'
-import { bashTool } from '../../../src/tools/shell'
+} from '../../../src/session/tool-results.ts'
+import { ToolHistoryStore } from '../../../src/session/tool-history.ts'
+import { SessionStore } from '../../../src/session/index.ts'
+import { bashTool } from '../../../src/tools/shell.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-tool-history-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

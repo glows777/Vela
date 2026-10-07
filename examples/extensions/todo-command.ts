@@ -3,7 +3,7 @@
  * 命令只在 owner 会话里执行（通道发送者发来的 `/todo` 是普通文本）。
  * 没有界面时 notify 变成 `notify` 事件。
  */
-import type { VelaExtension } from 'vela'
+import type { VelaExtension } from '@glows777/vela'
 
 const todo: VelaExtension = (vela) => {
   // 每个会话一份待办

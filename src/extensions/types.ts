@@ -1,9 +1,9 @@
-import type { VelaEvent } from '../agent/events'
-import type { ChannelDefinition } from '../channels/types'
-import type { VelaLogger } from '../logger'
-import type { ProviderDefinition } from '../models'
-import type { ToolDefinition } from '../tools/registry'
-import type { VelaSession } from '../vela-session'
+import type { VelaEvent } from '../agent/events.ts'
+import type { ChannelDefinition } from '../channels/types.ts'
+import type { VelaLogger } from '../logger.ts'
+import type { ProviderDefinition } from '../models/index.ts'
+import type { ToolDefinition } from '../tools/registry.ts'
+import type { VelaSession } from '../vela-session.ts'
 
 /**
  * 一个扩展：拿到 ExtensionAPI，注册工具、命令、通道和事件 handler（仿 pi 的 `(pi) => {}`）。

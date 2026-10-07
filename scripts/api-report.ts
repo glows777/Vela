@@ -1,5 +1,5 @@
 /**
- * 生成公开 API 报告：`vela` 和 `vela/testing` 导出的每个名字和它的类型。
+ * 生成公开 API 报告：`@glows777/vela` 和 `@glows777/vela/testing` 导出的每个名字和它的类型。
  * test/unit/public-api.test.ts 把它和 api/public-api.txt 比对；改公开面后运行
  * `bun run api:update` 更新快照，并在 PR 里能看到 API 的变化。
  * 带 `@internal` 的成员、private / protected 成员不算公开面。
@@ -9,8 +9,8 @@ import ts from 'typescript'
 
 const ROOT = resolve(import.meta.dir, '..')
 const ENTRIES: [string, string][] = [
-  ['vela', 'src/index.ts'],
-  ['vela/testing', 'src/testing/index.ts'],
+  ['@glows777/vela', 'src/index.ts'],
+  ['@glows777/vela/testing', 'src/testing/index.ts'],
 ]
 const FLAGS =
   ts.TypeFormatFlags.NoTruncation |

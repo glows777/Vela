@@ -5,12 +5,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import z from 'zod'
-import { ToolRegistry } from '../../../src/tools/registry'
-import { SessionStore } from '../../../src/session'
-import { TokenTracker } from '../../../src/usage/tracker'
-import { coreRules, sessionContext, PromptPipeline } from '../../../src/prompt'
-import { createRequestSnapshot } from '../../../src/context/request'
-import { summarize } from '../../../src/context/compressor'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
+import { SessionStore } from '../../../src/session/index.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
+import { coreRules, sessionContext, PromptPipeline } from '../../../src/prompt/index.ts'
+import { createRequestSnapshot } from '../../../src/context/request.ts'
+import { summarize } from '../../../src/context/compressor.ts'
 const dir = mkdtempSync(join(tmpdir(), 'vela-prefix-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

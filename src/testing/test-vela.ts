@@ -5,30 +5,31 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
-import type { VelaEvent } from '../agent/events'
-import type { VelaExtension } from '../extensions/types'
-import type { VelaLimits } from '../limits'
-import type { VelaLogger } from '../logger'
-import type { ProviderDefinition, ThinkingLevel } from '../models'
-import { memory } from '../extensions/memory'
-import { rag } from '../extensions/rag'
-import type { EmbeddingFn } from '../extensions/rag/embedder'
-import { createVela, type Vela } from '../vela'
+import type { VelaEvent } from '../agent/events.ts'
+import type { VelaExtension } from '../extensions/types.ts'
+import type { VelaLimits } from '../limits.ts'
+import type { VelaLogger } from '../logger.ts'
+import type { ProviderDefinition, ThinkingLevel } from '../models/index.ts'
+import { memory } from '../extensions/memory/index.ts'
+import { rag } from '../extensions/rag/index.ts'
+import type { EmbeddingFn } from '../extensions/rag/embedder.ts'
+import { createVela, type Vela } from '../vela.ts'
 import type {
   PromptOptions,
   SessionOptions,
   VelaSession,
-} from '../vela-session'
+} from '../vela-session.ts'
 import {
   createFauxModel,
   type FauxModel,
   type FauxModelOptions,
   type FauxStep,
-} from './faux'
-import { createFauxEmbedder } from './faux-embedder'
+} from './faux.ts'
+import { createFauxEmbedder } from './faux-embedder.ts'
 
 export interface FixtureSkill {
   name: string
@@ -174,8 +175,8 @@ export function createTestVela(options: TestVelaOptions = {}) {
     dataPath: (relative: string) => join(vela.dataDir, relative),
     exists: (relative: string) => existsSync(join(vela.dataDir, relative)),
     readData: (relative: string) =>
-      Bun.file(join(vela.dataDir, relative)).text(),
-    readFile: (relative: string) => Bun.file(join(cwd, relative)).text(),
+      readFile(join(vela.dataDir, relative), 'utf8'),
+    readFile: (relative: string) => readFile(join(cwd, relative), 'utf8'),
     writeFile: (relative: string, content: string) =>
       writeFile(join(cwd, relative), content),
 

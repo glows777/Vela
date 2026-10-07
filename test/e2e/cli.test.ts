@@ -2,8 +2,8 @@ import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { projectDataDir } from '../../src/config'
-import { tempDir } from '../support/vela'
+import { projectDataDir } from '../../src/config/index.ts'
+import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
 const ENTRY = join(ROOT, 'src/cli/main.ts')

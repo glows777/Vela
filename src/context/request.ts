@@ -4,7 +4,7 @@ import {
   type ModelMessage,
   type ToolSet,
 } from 'ai'
-import { DEFAULT_LIMITS } from '../limits'
+import { DEFAULT_LIMITS } from '../limits.ts'
 
 export interface RequestSnapshot {
   model: LanguageModel

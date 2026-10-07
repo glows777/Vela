@@ -1,5 +1,5 @@
-import type { Role } from "../security/roles";
-import type { ToolResultStore } from "../session/tool-results";
+import type { Role } from "../security/roles.ts";
+import type { ToolResultStore } from "../session/tool-results.ts";
 
 export interface PromptContext {
   toolCount: number;

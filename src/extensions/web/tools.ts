@@ -1,6 +1,6 @@
 import TurndownService from 'turndown'
 import z from 'zod'
-import type { ToolDefinition } from '../../index'
+import type { ToolDefinition } from '../../index.ts'
 
 const searchInputSchema = z.object({
   query: z.string().describe('搜索关键词'),

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { createOpenAI } from '@ai-sdk/openai'
-import { cleanupTestVelas, createTestVela } from '../support/vela'
+import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 // 真实模型冒烟测试：只在 VELA_LIVE=1 且配置了 OPENAI_API_KEY / OPENAI_API_MODEL_NAME 时运行（bun run test:live）
 const live =

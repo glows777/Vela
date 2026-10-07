@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { DEFAULT_LIMITS, resolveLimits } from '../../src/limits'
+import { DEFAULT_LIMITS, resolveLimits } from '../../src/limits.ts'
 
 test('defaults match the values the CLI has always used', () => {
   expect(DEFAULT_LIMITS).toEqual({

@@ -2,19 +2,19 @@ import { afterEach, expect, test } from 'bun:test'
 import {
   createRequestSnapshot,
   estimateRequestTokens,
-} from '../../src/context/request'
+} from '../../src/context/request.ts'
 import {
   fauxHang,
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux'
+} from '../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

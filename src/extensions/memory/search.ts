@@ -1,4 +1,4 @@
-import type { MemoryEntry } from './store'
+import type { MemoryEntry } from './store.ts'
 
 export interface SearchHit {
   entry: MemoryEntry
