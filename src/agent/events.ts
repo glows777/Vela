@@ -48,11 +48,10 @@ export type VelaEvent =
       usage: StepUsage
       record?: StepRecord
     }
-  | { type: 'budget_warning'; used: number; limit: number }
   | { type: 'turn_end'; turn: number; needsToolCall: boolean }
   | {
       type: 'agent_end'
-      reason: 'done' | 'budget' | 'loop' | 'aborted' | 'error'
+      reason: 'done' | 'loop' | 'aborted' | 'error'
       error?: unknown
     }
   /** 排队的消息变化（steer / followUp 入队、取出、清空），两个字段都是完整的当前队列 */

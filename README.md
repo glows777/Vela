@@ -221,7 +221,7 @@ src/
   → PromptPipeline 构建 System Prompt（core rules + 记忆 + 会话信息）
   → agentLoop 多轮循环：
       流式调用模型 → 需要工具？→ 执行工具（并发控制 + 结果截断）
-      → 检测循环 / 预算超限？→ 结束
+      → 检测到循环？→ 结束
   → 上下文防御（截断 + TTL）→ 会话 checkpoint 持久化 → Token 统计
 ```
 
@@ -309,7 +309,6 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 
 | 参数 / Parameter | 位置 / Location | 默认值 / Default | 说明 / Notes |
 |---|---|---|---|
-| `TOKEN_BUDGET` | `src/agent/index.ts` | 200,000 | 单轮 Token 预算，超限强制结束 / token budget |
 | `MAX_RETRIES` | `src/agent/index.ts` | 3 | 单步最大重试次数 / max retries per step |
 | 循环检测阈值 | `src/agent/loop-detection.ts` | warning 10 / critical 20 / breaker 30 | 滑动窗口阈值 / sliding-window thresholds |
 | `DEFAULT_MAX_RESULT_CHARS` | `src/tools/registry.ts` | 3000 | 工具结果默认截断长度 / default truncation |
@@ -342,7 +341,7 @@ macOS 执行 `brew install sqlite`，Linux 确认系统 `libsqlite3` 存在。Ve
 Vela 使用指数退避自动重连（30s → 最大 5min）。检查 token 与 stdio 命令配置，GitHub MCP 需要 `GITHUB_PERSONAL_ACCESS_TOKEN`。
 
 **Q: 上下文爆了 / 对话太长？**
-系统会自动 microcompact 清理旧工具结果并用 LLM 摘要压缩；也可用 `/context` 查看 Token 分布，`TOKEN_BUDGET` 超限会强制结束本轮。
+系统会自动 microcompact 清理旧工具结果并用 LLM 摘要压缩；也可用 `/context` 查看 Token 分布。
 
 **Q: 知识库是空的？**
 先调用 `rag_ingest` 导入文档（如 `docs/*.md`），再 `rag_search` 检索。数据存在 `~/.vela/projects/<编码>/rag/knowledge.db`。

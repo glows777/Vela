@@ -17,11 +17,6 @@ import type { VelaEvent, VelaEventListener } from './events'
 import { LoopDetector } from './loop-detection'
 import { calculateDelay, isRetryable, sleep } from './retry'
 
-export interface BudgetState {
-  used: number
-  limit: number
-}
-
 interface AgentLoopParameter {
   model: LanguageModel
   systemPrompt: string | (() => string)
@@ -32,7 +27,7 @@ interface AgentLoopParameter {
   abortSignal?: AbortSignal
   /** 运行事件回调；不传时 agentLoop 不产生任何终端输出。 */
   onEvent?: VelaEventListener
-  /** 轮数、重试、预算等上限；未给出的字段用默认值。 */
+  /** 重试、上下文等上限；未给出的字段用默认值。 */
   limits?: Partial<VelaLimits>
   /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时不发 */
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
@@ -86,7 +81,6 @@ export const agentLoop = async ({
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
-  tokenTracker.beginLoop()
   // 每次 agent loop 使用独立的调用历史，并发会话互不影响
   const loopDetector = new LoopDetector()
   const emit = (event: VelaEvent) => onEvent?.(event)
@@ -95,7 +89,7 @@ export const agentLoop = async ({
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   try {
-    // 同 pi：不限轮数，一直跑到模型不再调用工具、也没有排队的消息（或被中断 / 预算 / 循环检测停下）
+    // 同 pi：不限轮数，一直跑到模型不再调用工具、也没有排队的消息（或被中断 / 循环检测停下）
     for (;;) {
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
@@ -262,7 +256,7 @@ export const agentLoop = async ({
       const inputToken = finalStep.usage.inputTokens ?? 0
       if (inputToken > 0) tokenTracker.updateFromAPI(inputToken)
 
-      // 将 usage 归一化后记录到统一 tracker，并累计当前 loop 的完整 token 预算
+      // 将 usage 归一化后记录到统一 tracker
       const norm = normalizeUsage(finalStep.usage)
       const modelId = typeof model === 'string' ? model : model.modelId
       const stepRecord = tokenTracker.record(modelId || 'mock-model', norm, {
@@ -295,19 +289,8 @@ export const agentLoop = async ({
         emit({ type: 'message', message: warning })
       }
 
-      if (tokenTracker.loopTokens > limits.tokenBudget * 0.9) {
-        emit({
-          type: 'budget_warning',
-          used: tokenTracker.loopTokens,
-          limit: limits.tokenBudget,
-        })
-      }
       // 每个 turn_start 都有对应的 turn_end，结束原因由随后的 agent_end 说明
       emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
-      if (tokenTracker.loopTokens > limits.tokenBudget) {
-        endReason = 'budget'
-        break
-      }
       // 运行中排队的 steer 消息插在这一步之后、下一次请求之前；本来要结束时再看 followUp（同 pi）
       let queued = takeSteering?.() ?? []
       if (!needToolCall && queued.length === 0) queued = takeFollowUp?.() ?? []

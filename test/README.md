@@ -144,7 +144,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 
 ### 可调的上限（`src/limits.ts`）
 
-`createVela({ limits })` 可以覆盖：`maxRetries`、`retryBaseMs`、`retryMaxMs`、`tokenBudget`、`microcompactThreshold`、`summaryThreshold`、`minMicroSavings`、`maxInputTokens`、`bashTimeoutMs`。默认值就是 CLI 一直用的值；不认识的键（比如已去掉的 `maxTurns`）直接报错。测试用它把阈值调小，而不是构造巨大的输入；例如 `test/e2e/context.test.ts` 先量出空会话的请求大小，再把摘要阈值设在它上面一点。
+`createVela({ limits })` 可以覆盖：`maxRetries`、`retryBaseMs`、`retryMaxMs`、`microcompactThreshold`、`summaryThreshold`、`minMicroSavings`、`maxInputTokens`、`bashTimeoutMs`。默认值就是 CLI 一直用的值；不认识的键（比如已去掉的 `maxTurns` / `tokenBudget`）直接报错。测试用它把阈值调小，而不是构造巨大的输入；例如 `test/e2e/context.test.ts` 先量出空会话的请求大小，再把摘要阈值设在它上面一点。
 
 ## 当前覆盖的场景
 
@@ -152,7 +152,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 |---|---|
 | e2e/basic | 纯文本回复的事件序列与落盘；模型收到的 system/工具/用户消息；多轮对话带历史；工具调用后回答 |
 | e2e/tools | 一次多个工具调用；write/edit 写入 cwd 并发 audit 事件；bash 在 cwd 运行并带时间戳 hook；危险 bash 被拒绝；工具报错回给模型；未知工具/参数不合法被拒绝并记录；deferred 工具经 tool_search 后才可用；guest 角色不能用 bash |
-| e2e/resilience | 429/503 重试后成功；provider 的 APICallError 按 statusCode 判断是否重试；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；不限轮数（同 pi）；token 预算告警与停止；超过 maxInputTokens 不发请求 |
+| e2e/resilience | 429/503 重试后成功；provider 的 APICallError 按 statusCode 判断是否重试；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；不限轮数（同 pi）；超过 maxInputTokens 不发请求 |
 | e2e/context | `session.compact(focus)` 手动摘要、运行中拒绝；微压缩折叠旧工具结果；摘要压缩替换旧历史、保留近期消息、写盘并在恢复后生效；摘要不合格时停止且历史不变；`defend` 只做微压缩不付费摘要 |
 | e2e/session | `--continue` 式恢复；空目录无会话；不同 sessionId 分开存；dataDir 与 cwd 分离；usage 日志；prompt cache 模拟 |
 | e2e/memory | memory 扩展：通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename；`/memory`（search / lint）、`/dream`；guest 不能执行命令 |
