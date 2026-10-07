@@ -90,6 +90,28 @@ await vela.dispose()
 
 core 不写终端、不读环境变量；诊断输出通过 `logger` 注入。离线测试用 `vela/testing`（faux 模型、`createTestVela()`、`recordModel()` / `replayScenario()`）。
 
+#### 扩展 / Extensions
+
+仿 pi 的扩展：一个 `(vela) => {}` 函数，注册工具、命令、通道和事件 handler。SDK 默认不带内置扩展，`createVela({ extensions: [...] })` 显式传入；CLI 默认加载 `supabase` 和 `feishu`。每个 API 的可运行示例在 [`examples/extensions/`](examples/extensions/)。
+
+```ts
+import { createVela, type VelaExtension } from 'vela'
+
+const guard: VelaExtension = (vela) => {
+  vela.registerCommand('hi', { handler: (args, ctx) => ctx.ui.notify(`hi ${args}`) })
+  vela.on('before_agent_start', (e) => { e.sections.style = '回答尽量简短。' })
+  vela.on('tool_call', async (e, ctx) => {
+    if (e.toolName === 'bash' && !(await ctx.ui.confirm('运行命令？', String(e.input.command))))
+      return { block: true, reason: '用户拒绝' }
+  })
+}
+
+const vela = createVela({ model, extensions: [guard] })
+const session = vela.session('default', { ui })   // 有界面才会真正询问；没有 ui 时 confirm 一律 false
+```
+
+会话有角色：`owner`（默认）全部工具；`collaborator` 不能用 bash；`guest` 只能用不碰本机的工具（知识库检索、网页搜索），也看不到主人的记忆。通道（飞书）的发送者默认是 `guest`，`FEISHU_OWNERS` 里的人是 `owner`。还可以按会话叠加权限（`{ permissions: { bash: 'ask' } }`）和只启用部分工具（`{ tools: [...] }` / `session.setActiveTools()`）。
+
 ---
 
 ## 🧭 使用指南 / Usage
@@ -103,6 +125,8 @@ core 不写终端、不读环境变量；诊断输出通过 `logger` 注入。�
 | `/memory` | 列出所有记忆 / list memory entries |
 | `/memory search <q>` | 搜索记忆 / search memory |
 | `/cache on` / `/cache off` | 开关 Mock 模型 cache 模拟 / toggle mock cache simulation |
+| `/extensions` | 已加载的扩展和它们注册的工具、命令、通道 / loaded extensions |
+| `/role [owner\|collaborator\|guest]` | 查看 / 切换当前会话的角色 / show or switch the session role |
 | `sim` | 注入模拟长对话（调试压缩用）/ inject simulated long conversation |
 
 ### 内置工具 / Built-in Tools
@@ -132,9 +156,10 @@ MCP servers (stdio) via the official `@modelcontextprotocol/client` — e.g. Git
 ```
 src/
 ├── index.ts                # SDK 公开入口（import 'vela'）/ public SDK exports
-├── vela.ts                 # createVela()：装配工具、prompt、记忆、RAG、插件、通道 / assembly
+├── vela.ts                 # createVela()：装配工具、prompt、记忆、RAG、扩展、通道 / assembly
 ├── vela-session.ts         # VelaSession：消息、压缩、用量、运行锁（一个 Vela 可开多个）/ sessions
 ├── logger.ts               # 可注入的 logger，默认静默 / injectable logger
+├── extensions/             # 扩展 API（types.ts）、运行时（runner.ts）、内置扩展 feishu / supabase
 ├── cli/
 │   ├── main.ts             # CLI 入口：读环境变量、交互 / -p 模式、MCP / CLI entry
 │   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher

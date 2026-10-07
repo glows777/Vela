@@ -21,7 +21,8 @@
     "test:live": "VELA_LIVE=1 bun test test/live",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
-    "lint:fix": "biome lint --write"
+    "lint:fix": "biome lint --write",
+    "api:update": "bun scripts/api-report.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.8",

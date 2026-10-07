@@ -50,15 +50,14 @@ test('core writes nothing to the terminal; diagnostics go to the injected logger
         fauxToolCall('bash', { command: 'git status' }),
         fauxText('done'),
       ],
-    })
-    t.vela.hooks.registerPre('broken', () => {
-      throw new Error('hook bug')
-    })
-    await t.vela.pluginManager.load({
-      name: 'noisy',
-      version: '1',
-      description: 'logs on activate',
-      activate: (api) => api.log('activated'),
+      extensions: [
+        function noisy(vela) {
+          vela.logger.info('[noisy] activated')
+          vela.on('tool_result', () => {
+            throw new Error('handler bug')
+          })
+        },
+      ],
     })
     await t.run('看看状态')
     await t.cleanup()
@@ -66,8 +65,10 @@ test('core writes nothing to the terminal; diagnostics go to the injected logger
     expect(log).not.toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
     expect(write).not.toHaveBeenCalled()
-    expect(lines).toContain('error [hook:broken] pre 异常: hook bug')
-    expect(lines).toContain('info [plugin:noisy] activated')
+    expect(lines).toContain(
+      'error [extension:noisy] tool_result handler 出错: handler bug',
+    )
+    expect(lines).toContain('info [noisy] activated')
     expect(lines.some((l) => l.startsWith('debug [tools] bash'))).toBe(true)
   } finally {
     log.mockRestore()

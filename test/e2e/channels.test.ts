@@ -27,9 +27,9 @@ function fakeChannel(t: TestVela, name = 'fake') {
       sent.push(message)
     },
   }
-  t.vela.gateway.register(channel)
+  t.internals.gateway.register(channel)
   const deliver = (senderId: string, text: string) =>
-    t.vela.gateway.handleIncoming(name, {
+    t.internals.gateway.handleIncoming(name, {
       channelId: 'c1',
       senderId,
       senderName: senderId,
@@ -110,7 +110,7 @@ test('stopping the gateway aborts a running channel session and reports it', asy
 
   const handled = deliver('u1', '一直想')
   while (t.model.calls.length === 0) await Bun.sleep(1)
-  await t.vela.gateway.stopAll()
+  await t.internals.gateway.stopAll()
   await handled
 
   expect(sent).toEqual([])

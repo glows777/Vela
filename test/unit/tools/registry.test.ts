@@ -36,7 +36,7 @@ test('重复注册同名工具抛错', () => {
 test('延迟工具在 searchTools 发现前不可见', () => {
   const registry = makeRegistry()
   registry.register(
-    tool('deferred', { shouldDefer: true, searchHint: 'xxx 工具 hint' }),
+    tool('deferred', { exposure: 'deferred', searchHint: 'xxx 工具 hint' }),
   )
   expect(registry.getActiveTools().map((t) => t.name)).toEqual([])
 
@@ -57,7 +57,7 @@ test('searchTools 精确匹配并跳过 tool_search 自身', () => {
 test('toAISDKFormat 只包含可用工具', () => {
   const registry = makeRegistry()
   registry.register(tool('active-a'))
-  registry.register(tool('lazy-b', { shouldDefer: true }))
+  registry.register(tool('lazy-b', { exposure: 'deferred' }))
   expect(Object.keys(registry.toAISDKFormat())).toEqual(['active-a'])
 })
 

@@ -7,15 +7,8 @@ import { join, relative, resolve } from 'node:path'
  */
 const SRC = resolve(import.meta.dir, '../../src')
 
-/** 允许的地方：CLI、测试工具，以及第 1b 步会改写成内置扩展的模块 */
-const ALLOWED = [
-  'cli/',
-  'testing/',
-  // 1b：飞书 / supabase / web 改写成内置扩展，配置改由扩展 API 提供
-  'plugins/built-in-plugins/',
-  'channels/built-in-channels/',
-  'tools/web.ts',
-]
+/** 允许的地方：CLI、测试工具，以及 1b 第二个 PR 会改写成内置扩展的 web 工具 */
+const ALLOWED = ['cli/', 'testing/', 'tools/web.ts']
 
 const FORBIDDEN: [RegExp, string][] = [
   [/\bconsole\.\w+/, 'console'],

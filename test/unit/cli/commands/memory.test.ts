@@ -9,7 +9,7 @@ afterEach(cleanupTestVelas)
 
 function fixture() {
   const t = createTestVela()
-  t.vela.memoryStore.save({
+  t.internals.memoryStore.save({
     name: 'openai-null-chars',
     description: 'openai 接口返回 null 字符问题',
     type: 'feedback',

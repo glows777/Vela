@@ -72,7 +72,7 @@ test('the memory tool rejects a save without content', async () => {
   })
   await t.run('存个空的')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain('保存失败')
-  expect(t.vela.memoryStore.list()).toHaveLength(0)
+  expect(t.internals.memoryStore.list()).toHaveLength(0)
 })
 
 test('read and delete need a filename; with one they work', async () => {
@@ -98,5 +98,5 @@ test('read and delete need a filename; with one they work', async () => {
   expect(outputs).toContain('读取失败：需要 filename')
   expect(outputs).toContain('删除失败：需要 filename')
   expect(t.model.calls[4]!.toolResults[0]!.output).toContain('已删除')
-  expect(t.vela.memoryStore.list()).toHaveLength(0)
+  expect(t.internals.memoryStore.list()).toHaveLength(0)
 })

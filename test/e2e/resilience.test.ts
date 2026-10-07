@@ -119,7 +119,7 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
   const toolStarted = new Promise<void>((resolve) => {
     started = resolve
   })
-  t.vela.registry.register({
+  t.internals.registry.register({
     name: 'slow',
     description: 'slow',
     inputSchema: z.object({}),

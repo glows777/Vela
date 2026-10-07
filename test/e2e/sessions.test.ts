@@ -84,11 +84,11 @@ test('tools discovered with tool_search are only active in the session that sear
       fauxText('另一个会话'),
     ],
   })
-  t.vela.registry.register({
+  t.internals.registry.register({
     name: 'deferred_echo',
     description: 'echo',
     inputSchema: z.object({ text: z.string() }),
-    shouldDefer: true,
+    exposure: 'deferred',
     execute: async ({ text }: { text: string }) => text,
   })
 

@@ -1,3 +1,4 @@
+import type { Role } from "../security/roles";
 import type { ToolResultStore } from "../session/tool-results";
 
 export interface PromptContext {
@@ -9,6 +10,10 @@ export interface PromptContext {
   toolResults?: ToolResultStore;
   /** 当前会话已激活的 skill */
   activeSkills?: ReadonlySet<string>;
+  /** 当前会话的角色；不传按 owner */
+  role?: Role;
+  /** 扩展在 before_agent_start 里写的段落（段落名 → 内容），一轮内不变 */
+  extensionSections?: Readonly<Record<string, string>>;
 }
 
 export type PipeFn = (ctx: PromptContext) => string | null;

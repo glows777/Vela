@@ -1,13 +1,24 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events'
+import type { VelaExtension } from '../extensions/types'
 import type { VelaLimits } from '../limits'
 import type { VelaLogger } from '../logger'
 import type { EmbeddingFn } from '../rag/embedder'
 import { createVela, type Vela } from '../vela'
-import type { PromptOptions, VelaSession } from '../vela-session'
+import type {
+  PromptOptions,
+  SessionOptions,
+  VelaSession,
+} from '../vela-session'
 import {
   createFauxModel,
   type FauxModel,
@@ -47,8 +58,10 @@ export interface TestVelaOptions {
   /** 覆盖上限；测试默认 retryBaseMs=0，重试不等待 */
   limits?: Partial<VelaLimits>
   logger?: VelaLogger
-  /** 插件配置 `${VAR}` 用的环境变量 */
-  env?: Record<string, string | undefined>
+  /** 要加载的扩展（被测的扩展） */
+  extensions?: VelaExtension[]
+  /** 默认会话的选项（角色、权限、工具选择、ui） */
+  session?: SessionOptions
   /** cleanup 时不检查 faux 脚本是否用完 */
   allowPendingResponses?: boolean
 }
@@ -86,7 +99,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
     embedder,
     limits: { retryBaseMs: 0, ...options.limits },
     logger: options.logger,
-    env: options.env,
+    extensions: options.extensions,
   })
   const events: VelaEvent[] = []
   const sessionIds: string[] = []
@@ -94,7 +107,10 @@ export function createTestVela(options: TestVelaOptions = {}) {
     events.push(event)
     sessionIds.push(sessionId)
   })
-  const session: VelaSession = vela.session(options.sessionId ?? 'default')
+  const session: VelaSession = vela.session(
+    options.sessionId ?? 'default',
+    options.session,
+  )
 
   const t = {
     vela,

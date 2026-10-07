@@ -1,7 +1,7 @@
 import { spyOn } from 'bun:test'
 import type { CommandContext } from '../../src/cli/commands'
 import { createCliDispatcher } from '../../src/cli/dispatcher'
-import type { PluginDefinition } from '../../src/plugins/types'
+import { velaInternals } from '../../src/vela'
 import {
   createTestVela as createCoreTestVela,
   type TestVelaOptions as CoreTestVelaOptions,
@@ -13,10 +13,7 @@ export {
   tempDir,
 } from '../../src/testing/test-vela'
 
-export interface TestVelaOptions extends CoreTestVelaOptions {
-  /** 斜杠命令里可加载的插件，默认无 */
-  plugins?: Map<string, PluginDefinition>
-}
+export type TestVelaOptions = CoreTestVelaOptions
 
 /**
  * vela/testing 的 createTestVela()，再加上 CLI 的斜杠命令分发器：
@@ -24,11 +21,13 @@ export interface TestVelaOptions extends CoreTestVelaOptions {
  */
 export function createTestVela(options: TestVelaOptions = {}) {
   const t = createCoreTestVela(options)
+  const internals = velaInternals(t.vela)
 
   let asks = 0
   let idleWaiters: (() => void)[] = []
   const ctx: CommandContext = {
     vela: t.vela,
+    internals,
     session: t.session,
     ask: () => {
       asks++
@@ -37,9 +36,11 @@ export function createTestVela(options: TestVelaOptions = {}) {
       for (const resolve of waiters) resolve()
     },
   }
-  const dispatch = createCliDispatcher(t.vela, options.plugins ?? new Map())
+  const dispatch = createCliDispatcher(t.vela)
 
   return Object.assign(t, {
+    /** createVela() 的内部对象（registry、记忆、知识库、通道网关…），只给测试用 */
+    internals,
     ctx,
     /** 执行斜杠命令；返回值同 CLI 分发器：true / false / 'async' */
     dispatch: (command: string) => dispatch(command, ctx),

@@ -3,25 +3,33 @@ import type {
   ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-} from '../types'
+  Role,
+  VelaLogger,
+} from '../../index'
 
-interface FeishuConfig {
+export interface FeishuChannelConfig {
   appId: string
   appSecret: string
-  port: number
+  /** 这些发送者（open_id）是 owner；其余发送者是 guest */
+  owners: readonly string[]
+  logger: VelaLogger
 }
 
 export class FeishuChannel implements ChannelDefinition {
   name = 'feishu'
   description = '飞书 Bot 消息通道（长连接模式）'
 
-  private config: FeishuConfig
+  private config: FeishuChannelConfig
   private messageHandler?: (msg: IncomingMessage) => void
   private wsClient?: lark.WSClient
   private larkClient?: lark.Client
 
-  constructor(config: FeishuConfig) {
+  constructor(config: FeishuChannelConfig) {
     this.config = config
+  }
+
+  roleFor(msg: IncomingMessage): Role {
+    return this.config.owners.includes(msg.senderId) ? 'owner' : 'guest'
   }
 
   onMessage(handler: (msg: IncomingMessage) => void): void {
@@ -30,8 +38,9 @@ export class FeishuChannel implements ChannelDefinition {
 
   async start(): Promise<void> {
     if (!this.config.appId || !this.config.appSecret) {
-      console.log('    飞书未配置 APP_ID / APP_SECRET，仅启动 Dashboard')
-      console.log('    用页面上的「发送测试消息」或 curl 测试 Channel 流程')
+      this.config.logger.warn(
+        '[feishu] 未配置 appId / appSecret，通道不连接飞书',
+      )
       return
     }
 
@@ -74,7 +83,7 @@ export class FeishuChannel implements ChannelDefinition {
     })
 
     await this.wsClient.start({ eventDispatcher: dispatcher })
-    console.log('    飞书长连接已建立（无需 ngrok）')
+    this.config.logger.info('[feishu] 长连接已建立')
   }
 
   async stop(): Promise<void> {
@@ -83,8 +92,8 @@ export class FeishuChannel implements ChannelDefinition {
 
   async send(message: OutgoingMessage): Promise<void> {
     if (!this.larkClient) {
-      console.log(
-        `    [feishu] 未配置飞书，跳过发送: ${message.text.slice(0, 50)}`,
+      this.config.logger.warn(
+        `[feishu] 未配置飞书，跳过发送: ${message.text.slice(0, 50)}`,
       )
       return
     }
@@ -100,7 +109,7 @@ export class FeishuChannel implements ChannelDefinition {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`    [feishu] 发送失败: ${msg}`)
+      this.config.logger.error(`[feishu] 发送失败: ${msg}`)
     }
   }
 }

@@ -1,4 +1,5 @@
 import type { MemoryStore } from '../memory/store'
+import { isTrustedRole } from '../security/roles'
 import type { SqliteVectorStore } from '../rag/sqllite-store'
 import type { PipeFn, PromptContext } from './pipelins'
 import type { ToolResultStore } from '../session/tool-results'
@@ -39,7 +40,17 @@ export function deferredTools(): PipeFn {
 export function memoryContext(
   memoryStore: MemoryStore,
 ): (ctx: PromptContext) => string | null {
-  return () => memoryStore.buildPromptSection()
+  // 记忆是主人的私有数据：guest（例如通道里的外部发送者）的会话不注入
+  return (ctx) =>
+    isTrustedRole(ctx.role ?? 'owner') ? memoryStore.buildPromptSection() : null
+}
+
+/** 扩展在 before_agent_start 里写的段落，按写入顺序拼接 */
+export function extensionSections(): PipeFn {
+  return (ctx) => {
+    const sections = Object.values(ctx.extensionSections ?? {}).filter(Boolean)
+    return sections.length ? sections.join('\n\n') : null
+  }
 }
 
 export function ragContext(

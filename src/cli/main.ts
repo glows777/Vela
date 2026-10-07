@@ -7,13 +7,16 @@ import {
   StdioClientTransport,
 } from '@modelcontextprotocol/client'
 import type { LanguageModel } from 'ai'
+import { feishu } from '../extensions/feishu'
+import { supabase } from '../extensions/supabase'
+import type { ExtensionUI } from '../extensions/types'
 import { createEmbedder, type EmbeddingFn } from '../rag/embedder'
 import { createMockModel } from '../testing/demo-model'
 import { loadFauxScenario } from '../testing/faux'
 import { recordModel } from '../testing/record'
-import { createVela } from '../vela'
+import { createVela, velaInternals } from '../vela'
 import type { CommandContext } from './commands'
-import { builtInPlugins, createCliDispatcher } from './dispatcher'
+import { createCliDispatcher } from './dispatcher'
 import { createConsoleLogger } from './logger'
 import { printEvent } from './print-event'
 
@@ -71,24 +74,34 @@ const recorder = process.env.VELA_RECORD
   ? recordModel(await resolveModel(), { path: process.env.VELA_RECORD })
   : undefined
 
+const env = process.env
 const vela = createVela({
   model: recorder?.model ?? (await resolveModel()),
   embedder: resolveEmbedder(),
-  logger: createConsoleLogger({ debug: process.env.VELA_DEBUG === '1' }),
-  env: process.env,
+  logger: createConsoleLogger({ debug: env.VELA_DEBUG === '1' }),
+  // CLI 默认带上的内置扩展；配置从环境变量读（第 4 步换成配置文件）
+  extensions: [
+    supabase({ url: env.SUPABASE_URL, key: env.SUPABASE_KEY }),
+    feishu({
+      appId: env.FEISHU_APP_ID,
+      appSecret: env.FEISHU_APP_SECRET,
+      owners: env.FEISHU_OWNERS?.split(',')
+        .map((id) => id.trim())
+        .filter(Boolean),
+    }),
+  ],
 })
+const internals = velaInternals(vela)
 vela.subscribe((event, sessionId) => {
   if (recorder && event.type === 'agent_start' && sessionId === 'default')
     recorder.addInput(event.input)
   printEvent(event)
 })
-const availablePlugins = builtInPlugins()
-const session = vela.session()
 
 if (printMode !== undefined) {
+  // -p 模式没有界面：扩展的 confirm 一律按“否”处理（同 pi 的 print 模式）
+  const session = vela.session()
   if (isContinue) await session.resume()
-  for (const def of availablePlugins.values())
-    await vela.pluginManager.load(def).catch(() => {})
   let exitCode = 0
   try {
     await session.prompt(printMode)
@@ -103,8 +116,6 @@ if (printMode !== undefined) {
   await recorder?.flush()
   process.exit(exitCode)
 }
-const { busy, messages } = session
-
 const rl = createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -134,6 +145,35 @@ const nextLine = (): Promise<string | undefined> => {
     lineWaiter = resolve
   })
 }
+
+/** 交互模式下扩展的界面：在终端里提问，读下一行输入作为回答。 */
+const terminalUI: ExtensionUI = {
+  notify: (message, level = 'info') =>
+    console.log(level === 'info' ? `\n${message}` : `\n[${level}] ${message}`),
+  async confirm(title, message) {
+    console.log(`\n${title}\n${message}`)
+    process.stdout.write('允许？(y/N) ')
+    const answer = (await nextLine())?.trim().toLowerCase()
+    return answer === 'y' || answer === 'yes'
+  },
+  async select(title, options) {
+    console.log(`\n${title}`)
+    for (const [i, option] of options.entries())
+      console.log(`  ${i + 1}. ${option}`)
+    process.stdout.write('选择编号（回车取消）: ')
+    const index = Number((await nextLine())?.trim()) - 1
+    return options[index]
+  },
+  async input(title, placeholder) {
+    process.stdout.write(
+      `\n${title}${placeholder ? ` (${placeholder})` : ''}: `,
+    )
+    const answer = (await nextLine())?.trim()
+    return answer || undefined
+  },
+}
+const session = vela.session('default', { ui: terminalUI })
+const { busy, messages } = session
 
 const MCP_INITIAL_RETRY_DELAY_MS = 30_000
 const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000
@@ -183,7 +223,7 @@ async function connectGitHubMCP(): Promise<boolean> {
       },
     })
     const client = new Client({ name: 'Vela-agent', version: '1.0.0' })
-    const tools = await vela.registry.registerMCPServer(
+    const tools = await internals.registry.registerMCPServer(
       'github',
       client,
       transport,
@@ -220,7 +260,7 @@ const cancelOrClose = () => {
 rl.on('SIGINT', cancelOrClose)
 process.on('SIGINT', cancelOrClose)
 
-const dispatch = createCliDispatcher(vela, availablePlugins)
+const dispatch = createCliDispatcher(vela)
 
 if (isContinue && (await session.resume())) {
   console.log(`[Session] 恢复会话，${messages.length} 条历史消息`)
@@ -233,24 +273,23 @@ await session.save()
 
 // 显示各 prompt 段落的状态
 console.log('\n=== Prompt PipeLine Debug ===')
-for (const { name, chars } of vela.builder.status({
+for (const { name, chars } of internals.builder.status({
   ...session.promptContext(),
-  toolCount: vela.registry.getAllTools().length,
+  toolCount: internals.registry.getAllTools().length,
 }))
   console.log(`  ${name}: ${chars === null ? '[OFF]' : `[ON] ${chars} chars`}`)
 console.log('========================\n')
-console.log('  加载插件...')
-for (const [name, def] of availablePlugins) {
-  try {
-    const tools = await vela.pluginManager.load(def)
-    console.log(`  ✓ ${name} — ${tools.length} 个工具`)
-  } catch {
-    console.log(`  ✗ ${name} — 加载失败`)
-  }
+try {
+  await vela.ready()
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
 }
-
+for (const ext of vela.extensions())
+  console.log(
+    `  ✓ 扩展 ${ext.name}${ext.tools.length ? ` — ${ext.tools.length} 个工具` : ''}`,
+  )
 console.log('  启动 Channel...')
-await vela.gateway.startAll()
+await vela.startChannels()
 const ask = () => {
   if (rlClosed) process.stdout.write('You: ')
   else {
@@ -269,7 +308,7 @@ const ask = () => {
       return
     }
 
-    const ctx: CommandContext = { vela, session, ask }
+    const ctx: CommandContext = { vela, internals, session, ask }
     if (busy.locked) {
       console.log('\n[system] 有任务正在执行中，请稍候再输入\n')
       // 不调用 ask()：当前 agentLoop 的 .then/.catch 完成后会重新注册 question

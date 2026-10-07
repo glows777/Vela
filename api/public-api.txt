@@ -1,0 +1,365 @@
+# vela
+
+  interface BeforeAgentStartEvent
+    prompt: string
+    sections: Record<string, string>
+    type: "before_agent_start"
+  interface ChannelDefinition
+    description: string
+    name: string
+    onMessage?: ((handler: (msg: IncomingMessage) => void) => void) | undefined
+    roleFor?: ((msg: IncomingMessage) => Role) | undefined
+    send: (message: OutgoingMessage) => Promise<void>
+    start: () => Promise<void> | void
+    stop: () => Promise<void> | void
+  function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
+  function createVela: (options: VelaOptions) => Vela
+  type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
+  interface ExtensionAPI
+    on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    readonly cwd: string
+    readonly dataDir: string
+    readonly logger: VelaLogger
+    registerChannel: (channel: ChannelDefinition) => void
+    registerCommand: (name: string, command: ExtensionCommand) => void
+    registerTool: (tool: ToolDefinition) => void
+  interface ExtensionCommand
+    description?: string | undefined
+    handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+  interface ExtensionContext
+    cwd: string
+    hasUI: boolean
+    session: VelaSession
+    signal: AbortSignal | undefined
+    ui: ExtensionUI
+  type ExtensionEventName = keyof ExtensionEvents
+  type ExtensionEvents = InterceptEvents & NotifyEvents
+  type ExtensionHandler<K extends ExtensionEventName> = (
+      event: ExtensionEvents[K][0],
+      ctx: ExtensionContext,
+      ) =>
+      | ExtensionEvents[K][1]
+      | undefined
+      | Promise<ExtensionEvents[K][1] | undefined>
+  interface ExtensionUI
+    confirm: (title: string, message: string) => Promise<boolean>
+    input: (title: string, placeholder?: string) => Promise<string | undefined>
+    notify: (message: string, level?: "info" | "warning" | "error") => void
+    select: (title: string, options: string[]) => Promise<string | undefined>
+  function feishu: (options?: FeishuOptions) => VelaExtension
+  interface FeishuOptions
+    appId?: string | undefined
+    appSecret?: string | undefined
+    owners?: string[] | undefined
+  interface IncomingMessage
+    channelId: string
+    raw?: unknown
+    senderId: string
+    senderName: string
+    text: string
+  interface LoadedExtension
+    channels: string[]
+    commands: string[]
+    name: string
+    tools: string[]
+  interface OutgoingMessage
+    channelId: string
+    recipientId: string
+    text: string
+  type PermissionDecision = 'allow' | 'deny' | 'ask'
+  type PermissionRules = Record<string, PermissionDecision>
+  interface PromptOptions
+    signal?: AbortSignal | undefined
+  type Role = 'owner' | 'collaborator' | 'guest'
+  interface SessionOptions
+    permissions?: PermissionRules | undefined
+    role?: Role | undefined
+    tools?: string[] | undefined
+    ui?: ExtensionUI | undefined
+  interface SessionShutdownEvent
+    type: "session_shutdown"
+  interface SessionStartEvent
+    type: "session_start"
+  const silentLogger: VelaLogger
+  function supabase: (options?: SupabaseOptions) => VelaExtension
+  interface SupabaseOptions
+    key?: string | undefined
+    url?: string | undefined
+  interface TokenStatus
+    needsAction: boolean
+    percent: number
+    tokens: number
+  interface ToolCallEvent
+    input: Record<string, unknown>
+    toolCallId: string | undefined
+    toolName: string
+    type: "tool_call"
+  interface ToolCallEventResult
+    block?: boolean | undefined
+    reason?: string | undefined
+  interface ToolDefinition
+    description: string
+    execute: (input: any, context?: { results: ToolResultStore; toolCallId?: string; callId?: string; signal?: AbortSignal; registry?: ToolRegistry; }) => Promise<unknown>
+    exposure?: "direct" | "deferred" | undefined
+    inputSchema: FlexibleSchema<any>
+    isConcurrencySafe?: boolean | undefined
+    isReadOnly?: boolean | undefined
+    maxResultChars?: number | undefined
+    name: string
+    searchHint?: string | undefined
+  interface ToolResultEvent
+    input: unknown
+    output: string
+    toolCallId: string | undefined
+    toolName: string
+    type: "tool_result"
+  interface ToolResultEventResult
+    output?: string | undefined
+  interface UsageTotals
+    baselineCost: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    cost: number
+    hitRate: number
+    inputTokens: number
+    outputTokens: number
+    savedCost: number
+    steps: number
+  interface Vela
+    channels: () => { name: string; description: string; }[]
+    commands: () => { name: string; description?: string; extension: string; }[]
+    dispose: () => Promise<void>
+    extensions: () => LoadedExtension[]
+    readonly cwd: string
+    readonly dataDir: string
+    readonly limits: VelaLimits
+    readonly model: LanguageModel
+    ready: () => Promise<void>
+    session: (id?: string, options?: SessionOptions) => VelaSession
+    sessions: () => VelaSession[]
+    startChannels: () => Promise<void>
+    subscribe: (listener: VelaSessionEventListener) => () => void
+  type VelaEvent = | { type: 'agent_start'; input: string }
+      | { type: 'message'; message: ModelMessage }
+      | { type: 'turn_start'; turn: number }
+      | { type: 'text_delta'; text: string }
+      | { type: 'tool_call'; toolCallId: string; toolName: string; input: unknown }
+      | {
+      type: 'tool_result'
+      toolCallId: string
+      toolName: string
+      input: unknown
+      output: unknown
+      }
+      | {
+      type: 'tool_error'
+      toolCallId: string
+      toolName: string
+      input: unknown
+      error: unknown
+      }
+      | {
+      type: 'loop_detected'
+      level: 'warning' | 'critical'
+      detector: string
+      message: string
+      }
+      | {
+      type: 'retry'
+      attempt: number
+      maxRetries: number
+      delayMs: number
+      error: unknown
+      }
+      | {
+      type: 'usage'
+      modelId: string
+      usage: StepUsage
+      record?: StepRecord
+      }
+      | { type: 'budget_warning'; used: number; limit: number }
+      | { type: 'turn_end'; turn: number; needsToolCall: boolean }
+      | {
+      type: 'agent_end'
+      reason: 'done' | 'max_turns' | 'budget' | 'loop' | 'aborted' | 'error'
+      error?: unknown
+      }
+      | {
+      type: 'context'
+      action: 'micro' | 'summary' | 'summary-required'
+      before: number
+      after?: number
+      saved?: number
+      calls?: number
+      messages?: number
+      }
+      | { type: 'session_save_failed'; error: unknown }
+      | { type: 'audit'; toolName: string; path: string }
+      | { type: 'security_warning'; toolName: string; reason: string; command: string }
+      | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
+      | {
+      type: 'channel_message'
+      channel: string
+      senderId: string
+      senderName: string
+      text: string
+      }
+      | { type: 'channel_reply'; channel: string; recipientId: string; text: string }
+      | {
+      type: 'channel_error'
+      channel: string
+      senderId: string
+      error: unknown
+      aborted: boolean
+      }
+  type VelaEventListener = (event: VelaEvent) => void
+  type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
+  interface VelaLimits
+    bashTimeoutMs: number
+    maxInputTokens: number
+    maxRetries: number
+    maxTurns: number
+    microcompactThreshold: number
+    minMicroSavings: number
+    retryBaseMs: number
+    retryMaxMs: number
+    summaryThreshold: number
+    tokenBudget: number
+  interface VelaLogger
+    debug: (message: string) => void
+    error: (message: string) => void
+    info: (message: string) => void
+    warn: (message: string) => void
+  interface VelaOptions
+    cwd?: string | undefined
+    dataDir?: string | undefined
+    embedder?: EmbeddingFn | undefined
+    extensions?: VelaExtension[] | undefined
+    limits?: Partial<VelaLimits> | undefined
+    logger?: VelaLogger | undefined
+    model: LanguageModel
+  class VelaSession
+    abort: (reason?: unknown) => void
+    append: (message: ModelMessage) => void
+    close: () => Promise<void>
+    get usage: TokenStatus & { totals: UsageTotals; }
+    getActiveTools: () => string[]
+    prompt: (input: string, options?: PromptOptions) => Promise<void>
+    readonly id: string
+    readonly limits: VelaLimits
+    readonly messages: ModelMessage[]
+    readonly model: LanguageModel
+    resume: () => Promise<boolean>
+    role: Role
+    setActiveTools: (names: string[] | undefined) => void
+    subscribe: (listener: VelaEventListener) => () => void
+  type VelaSessionEventListener = (
+      event: VelaEvent,
+      sessionId: string,
+      ) => void
+
+# vela/testing
+
+  function cleanupTestVelas: () => Promise<void>
+  function createFauxEmbedder: (options?: { dims?: number; onCall?: (texts: string[]) => void; }) => EmbeddingFn
+  function createFauxModel: (options?: FauxModelOptions) => FauxModel
+  function createTestVela: (options?: TestVelaOptions) => { vela: Vela; session: VelaSession; cwd: string; dataDir: string; events: VelaEvent[]; readonly model: FauxModel; readonly messages: ModelMessage[]; run: (input: string, runOptions?: PromptOptions) => Promise<void>; tracker: () => TokenTracker; eventTypes: () => VelaEvent["type"][]; eventsOf: <T extends VelaEvent["type"]>(type: T) => (Extract<{ type: "agent_start"; input: string; }, { type: T; }> | Extract<{ type: "message"; message: ModelMessage; }, { type: T; }> | Extract<{ type: "turn_start"; turn: number; }, { type: T; }> | Extract<{ type: "text_delta"; text: string; }, { type: T; }> | Extract<{ type: "tool_call"; toolCallId: string; toolName: string; input: unknown; }, { type: T; }> | Extract<{ type: "tool_result"; toolCallId: string; toolName: string; input: unknown; output: unknown; }, { type: T; }> | Extract<{ type: "tool_error"; toolCallId: string; toolName: string; input: unknown; error: unknown; }, { type: T; }> | Extract<{ type: "loop_detected"; level: "warning" | "critical"; detector: string; message: string; }, { type: T; }> | Extract<{ type: "retry"; attempt: number; maxRetries: number; delayMs: number; error: unknown; }, { type: T; }> | Extract<{ type: "usage"; modelId: string; usage: StepUsage; record?: StepRecord; }, { type: T; }> | Extract<{ type: "budget_warning"; used: number; limit: number; }, { type: T; }> | Extract<{ type: "turn_end"; turn: number; needsToolCall: boolean; }, { type: T; }> | Extract<{ type: "agent_end"; reason: "done" | "max_turns" | "budget" | "loop" | "aborted" | "error"; error?: unknown; }, { type: T; }> | Extract<{ type: "context"; action: "micro" | "summary" | "summary-required"; before: number; after?: number; saved?: number; calls?: number; messages?: number; }, { type: T; }> | Extract<{ type: "session_save_failed"; error: unknown; }, { type: T; }> | Extract<{ type: "audit"; toolName: string; path: string; }, { type: T; }> | Extract<{ type: "security_warning"; toolName: string; reason: string; command: string; }, { type: T; }> | Extract<{ type: "notify"; message: string; level: "info" | "warning" | "error"; }, { type: T; }> | Extract<{ type: "channel_message"; channel: string; senderId: string; senderName: string; text: string; }, { type: T; }> | Extract<{ type: "channel_reply"; channel: string; recipientId: string; text: string; }, { type: T; }> | Extract<{ type: "channel_error"; channel: string; senderId: string; error: unknown; aborted: boolean; }, { type: T; }>)[]; eventsIn: (sessionId: string) => VelaEvent[]; clearEvents: () => void; streamedText: () => string; lastAssistantText: () => string; path: (relative: string) => string; dataPath: (relative: string) => string; exists: (relative: string) => boolean; readData: (relative: string) => Promise<string>; readFile: (relative: string) => Promise<string>; writeFile: (relative: string, content: string) => void; cleanup({ keepDir }?: { keepDir?: boolean | undefined; }): Promise<void>; }
+  const fauxError: (error: string | Error) => FauxResponse
+  const fauxHang: (partialText?: string) => FauxResponse
+  interface FauxModel
+    doGenerate: (options: LanguageModelV4CallOptions) => PromiseLike<LanguageModelV4GenerateResult>
+    doStream: (options: LanguageModelV4CallOptions) => PromiseLike<LanguageModelV4StreamResult>
+    pending: () => number
+    push: (...steps: FauxStep[]) => void
+    pushGenerate: (...steps: FauxStep[]) => void
+    readonly calls: FauxRequest[]
+    readonly modelId: string
+    readonly provider: string
+    readonly specificationVersion: "v4"
+    supportedUrls: Record<string, RegExp[]> | PromiseLike<Record<string, RegExp[]>>
+  interface FauxModelOptions
+    cache?: boolean | undefined
+    chunkDelayMs?: number | undefined
+    chunkSize?: number | undefined
+    generate?: FauxStep[] | undefined
+    modelId?: string | undefined
+    responses?: FauxStep[] | undefined
+  interface FauxRequest
+    abortSignal?: AbortSignal | undefined
+    index: number
+    kind: "stream" | "generate"
+    lastUserText: string
+    prompt: LanguageModelV4Prompt
+    responseFormat?: { type: "text"; } | { type: "json"; schema?: JSONSchema7; name?: string; description?: string; } | undefined
+    system: string
+    toolResults: { toolCallId: string; toolName: string; output: string; raw: unknown; }[]
+    tools: string[]
+  interface FauxResponse
+    error?: string | Error | undefined
+    finishReason?: "error" | "stop" | "length" | "content-filter" | "tool-calls" | "other" | undefined
+    hang?: boolean | undefined
+    reasoning?: string | undefined
+    streamError?: string | undefined
+    text?: string | undefined
+    toolCalls?: FauxToolCall[] | undefined
+    usage?: FauxUsage | undefined
+  interface FauxScenario
+    cache?: boolean | undefined
+    chunkDelayMs?: number | undefined
+    chunkSize?: number | undefined
+    generate?: FauxResponse[] | undefined
+    inputs?: string[] | undefined
+    responses: FauxResponse[]
+  type FauxStep = | FauxResponse
+      | FauxResponse[]
+      | ((req: FauxRequest) => FauxResponse | FauxResponse[])
+  const fauxStreamError: (message: string, partialText?: string) => FauxResponse
+  const fauxSummary: (pick?: { goal?: number; }) => (req: FauxRequest) => FauxResponse
+  const fauxText: (text: string, options?: Omit<FauxResponse, "text">) => FauxResponse
+  const fauxToolCall: (name: string, input: unknown, options?: Omit<FauxResponse, "toolCalls"> & { id?: string; }) => FauxResponse
+  interface FauxToolCall
+    id?: string | undefined
+    input: unknown
+    name: string
+  interface FauxUsage
+    cacheRead?: number | undefined
+    cacheWrite?: number | undefined
+    input?: number | undefined
+    output?: number | undefined
+  interface FixtureSkill
+    body: string
+    description: string
+    name: string
+    whenToUse?: string | undefined
+  function loadFauxScenario: (path: string) => Promise<FauxModel>
+  function readFauxScenario: (path: string) => Promise<FauxScenario>
+  interface Recorder
+    addInput: (input: string) => void
+    flush: () => Promise<void>
+    model: LanguageModel
+    scenario: () => FauxScenario
+  function recordModel: (model: LanguageModel, options: RecordOptions) => Recorder
+  interface RecordOptions
+    path: string
+  interface ReplayResult
+    errors: unknown[]
+    t: { vela: Vela; session: VelaSession; cwd: string; dataDir: string; events: VelaEvent[]; readonly model: FauxModel; readonly messages: ModelMessage[]; run: (input: string, runOptions?: PromptOptions) => Promise<void>; tracker: () => TokenTracker; eventTypes: () => VelaEvent["type"][]; eventsOf: <T extends VelaEvent["type"]>(type: T) => (Extract<{ type: "agent_start"; input: string; }, { type: T; }> | Extract<{ type: "message"; message: ModelMessage; }, { type: T; }> | Extract<{ type: "turn_start"; turn: number; }, { type: T; }> | Extract<{ type: "text_delta"; text: string; }, { type: T; }> | Extract<{ type: "tool_call"; toolCallId: string; toolName: string; input: unknown; }, { type: T; }> | Extract<{ type: "tool_result"; toolCallId: string; toolName: string; input: unknown; output: unknown; }, { type: T; }> | Extract<{ type: "tool_error"; toolCallId: string; toolName: string; input: unknown; error: unknown; }, { type: T; }> | Extract<{ type: "loop_detected"; level: "warning" | "critical"; detector: string; message: string; }, { type: T; }> | Extract<{ type: "retry"; attempt: number; maxRetries: number; delayMs: number; error: unknown; }, { type: T; }> | Extract<{ type: "usage"; modelId: string; usage: StepUsage; record?: StepRecord; }, { type: T; }> | Extract<{ type: "budget_warning"; used: number; limit: number; }, { type: T; }> | Extract<{ type: "turn_end"; turn: number; needsToolCall: boolean; }, { type: T; }> | Extract<{ type: "agent_end"; reason: "done" | "max_turns" | "budget" | "loop" | "aborted" | "error"; error?: unknown; }, { type: T; }> | Extract<{ type: "context"; action: "micro" | "summary" | "summary-required"; before: number; after?: number; saved?: number; calls?: number; messages?: number; }, { type: T; }> | Extract<{ type: "session_save_failed"; error: unknown; }, { type: T; }> | Extract<{ type: "audit"; toolName: string; path: string; }, { type: T; }> | Extract<{ type: "security_warning"; toolName: string; reason: string; command: string; }, { type: T; }> | Extract<{ type: "notify"; message: string; level: "info" | "warning" | "error"; }, { type: T; }> | Extract<{ type: "channel_message"; channel: string; senderId: string; senderName: string; text: string; }, { type: T; }> | Extract<{ type: "channel_reply"; channel: string; recipientId: string; text: string; }, { type: T; }> | Extract<{ type: "channel_error"; channel: string; senderId: string; error: unknown; aborted: boolean; }, { type: T; }>)[]; eventsIn: (sessionId: string) => VelaEvent[]; clearEvents: () => void; streamedText: () => string; lastAssistantText: () => string; path: (relative: string) => string; dataPath: (relative: string) => string; exists: (relative: string) => boolean; readData: (relative: string) => Promise<string>; readFile: (relative: string) => Promise<string>; writeFile: (relative: string, content: string) => void; cleanup({ keepDir }?: { keepDir?: boolean | undefined; }): Promise<void>; }
+  function replayScenario: (path: string, options?: Omit<TestVelaOptions, "responses" | "generate" | "model">) => Promise<ReplayResult>
+  function tempDir: (prefix?: string) => { path: string; cleanup(): void; }
+  type TestVela = ReturnType<typeof createTestVela>
+  interface TestVelaOptions
+    allowPendingResponses?: boolean | undefined
+    cwd?: string | undefined
+    dataDir?: string | undefined
+    embedder?: boolean | EmbeddingFn | undefined
+    extensions?: VelaExtension[] | undefined
+    faux?: Omit<FauxModelOptions, "generate" | "responses"> | undefined
+    files?: Record<string, string> | undefined
+    generate?: FauxStep[] | undefined
+    limits?: Partial<VelaLimits> | undefined
+    logger?: VelaLogger | undefined
+    model?: LanguageModel | undefined
+    responses?: FauxStep[] | undefined
+    session?: SessionOptions | undefined
+    sessionId?: string | undefined
+    skills?: FixtureSkill[] | undefined

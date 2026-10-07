@@ -19,7 +19,7 @@ async function requestTokens(t: TestVela): Promise<number> {
     await createRequestSnapshot(
       t.vela.model,
       t.session.buildSystem(),
-      t.vela.registry.toAISDKFormat(),
+      t.internals.registry.toAISDKFormat(),
       t.messages,
     ),
   )

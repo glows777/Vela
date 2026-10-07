@@ -1,10 +1,10 @@
 import type { CommandHandler } from './index'
 
 export const memoryCommands: CommandHandler[] = [
-  (cmd, { vela }) => {
+  (cmd, { internals }) => {
     if (cmd !== '/memory' && cmd !== 'memory') return false
-    const entries = vela.memoryStore.list()
-    const reports = vela.memoryStore.lint()
+    const entries = internals.memoryStore.list()
+    const reports = internals.memoryStore.lint()
     console.log(
       `\n[记忆系统] 共 ${entries.length} 条记忆，${reports.length} 条有警告`,
     )
@@ -17,9 +17,9 @@ export const memoryCommands: CommandHandler[] = [
     return true
   },
 
-  (cmd, { vela }) => {
+  (cmd, { internals }) => {
     if (cmd !== '/lint' && cmd !== 'lint') return false
-    const reports = vela.memoryStore.lint()
+    const reports = internals.memoryStore.lint()
     if (reports.length === 0) {
       console.log('\n[lint] 记忆库健康，没有发现问题。\n')
       return true
@@ -36,11 +36,11 @@ export const memoryCommands: CommandHandler[] = [
     return true
   },
 
-  (cmd, { vela }) => {
+  (cmd, { internals }) => {
     if (!cmd.startsWith('/memory search ') && !cmd.startsWith('搜记忆 '))
       return false
     const query = cmd.replace(/^\/memory search |^搜记忆 /, '').trim()
-    const results = vela.memoryStore.search(query, 5)
+    const results = internals.memoryStore.search(query, 5)
     if (results.length === 0) {
       console.log(`\n[记忆搜索] 没有找到与 "${query}" 相关的记忆。\n`)
       return true

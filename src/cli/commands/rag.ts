@@ -1,9 +1,9 @@
 import type { CommandHandler } from './index'
 
 export const ragCommands: CommandHandler[] = [
-  (cmd, { vela }) => {
+  (cmd, { internals }) => {
     if (cmd !== '/rag' && cmd !== 'rag') return false
-    const vs = vela.vectorStore
+    const vs = internals.vectorStore
     console.log(`\n[知识库] ${vs.size()} 个片段`)
     const sources = vs.sources()
     if (sources.length > 0) console.log(`  来源: ${sources.join(', ')}`)

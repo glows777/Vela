@@ -6,7 +6,12 @@ import { classifyBashCommand } from '../security/bash-classifier'
 import type { VelaEventListener } from '../agent/events'
 import { silentLogger, type VelaLogger } from '../logger'
 import type { HookPipeline } from '../security/hooks'
-import { canUseTool, type Role } from '../security/roles'
+import {
+  decidePermission,
+  type PermissionDecision,
+  type PermissionRules,
+  type Role,
+} from '../security/roles'
 import type { ExecutionMetadata, ResultRecord } from '../session/tool-history'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results'
 
@@ -42,19 +47,22 @@ export interface ToolDefinition {
   isReadOnly?: boolean
   maxResultChars?: number
 
-  shouldDefer?: boolean // 是否延迟加载
+  /**
+   * 模型怎么拿到这个工具（同 pi）：direct（默认）直接出现在工具列表里；
+   * deferred 只在 system prompt 里列名字，模型先用 tool_search 取到定义后才能调用
+   */
+  exposure?: 'direct' | 'deferred'
   searchHint?: string // 搜索提示词，帮助 ToolSearch 匹配
 }
 
 const DEFAULT_MAX_RESULT_CHARS = 3000 // 超出时保存原文，只返回预览
 
 /**
- * 同一个 Vela 里所有会话共享的部分：工具定义、角色、hooks、执行锁、MCP 连接。
- * 已发现的延迟工具、工具结果存储和持久化失败状态是每个会话自己的。
+ * 同一个 Vela 里所有会话共享的部分：工具定义、hooks、执行锁、MCP 连接。
+ * 角色和权限、工具选择、已发现的延迟工具、工具结果存储和持久化失败状态是每个会话自己的。
  */
 interface SharedToolState {
   tools: Map<string, ToolDefinition>
-  role: Role
   hookPipeline?: HookPipeline
   // 当前锁设计的已知缺陷：
   // 1. 锁粒度是整个 ToolRegistry（以及它 fork 出的所有会话）；一个独占工具执行时，不相关的工具也会被阻塞。
@@ -73,6 +81,8 @@ export interface ToolRegistryForkOptions {
   onEvent?: VelaEventListener
   /** 传给 hooks 的会话 id */
   sessionId?: string
+  /** 权限为 ask 时询问用户；不传时 ask 按拒绝处理 */
+  confirm?: (toolName: string, input: unknown) => Promise<boolean>
 }
 
 export class ToolRegistry {
@@ -86,7 +96,6 @@ export class ToolRegistry {
   ) {
     this.shared = shared ?? {
       tools: new Map(),
-      role: 'owner',
       exclusiveLock: false,
       concurrentCount: 0,
       waitQueue: [],
@@ -103,6 +112,7 @@ export class ToolRegistry {
     const forked = new ToolRegistry(results, this.shared)
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
+    forked.confirm = options.confirm
     return forked
   }
 
@@ -155,16 +165,34 @@ export class ToolRegistry {
     return this.shared.tools
   }
 
+  private role: Role = 'owner'
+  private permissions?: PermissionRules
+  /** 会话选定的工具；undefined 表示不限制（仍受角色约束） */
+  private selection?: ReadonlySet<string>
+  private confirm?: (toolName: string, input: unknown) => Promise<boolean>
+
   setRole(role: Role): void {
-    this.shared.role = role
+    this.role = role
   }
 
   getRole(): Role {
-    return this.shared.role
+    return this.role
   }
 
-  private get currentRole(): Role {
-    return this.shared.role
+  /** 会话自己的权限规则，叠加在角色规则上 */
+  setPermissions(rules: PermissionRules | undefined): void {
+    this.permissions = rules
+  }
+
+  /** 只让模型看到 / 调用这些工具；undefined 取消限制 */
+  setSelection(names: Iterable<string> | undefined): void {
+    this.selection = names ? new Set(names) : undefined
+  }
+
+  /** 这个会话对工具的权限决定：没被选中的工具一律 deny */
+  decide(toolName: string): PermissionDecision {
+    if (this.selection && !this.selection.has(toolName)) return 'deny'
+    return decidePermission(this.role, toolName, this.permissions)
   }
 
   setHookPipeline(pipeline: HookPipeline): void {
@@ -249,6 +277,88 @@ export class ToolRegistry {
         inputSchema: tool.inputSchema,
         execute: (input: unknown, options) =>
           this.track(async () => {
+            // 权限、hooks 和询问在拿锁之前做：等用户确认时不挡住其它会话的工具
+            this.assertHealthy()
+            const reject = async (reason: string) => {
+              await this.recordRejection(
+                name,
+                options?.toolCallId ?? crypto.randomUUID(),
+                input,
+                reason,
+              )
+              return reason
+            }
+            const decision = this.decide(name)
+            if (decision === 'deny') {
+              return await reject(
+                this.selection && !this.selection.has(name)
+                  ? `[拒绝执行] 本会话没有启用 ${name}`
+                  : `[拒绝执行] 角色 ${this.role} 无权使用 ${name}`,
+              )
+            }
+            const pipeline = this.shared.hookPipeline
+            const hookContext = {
+              sessionId: this.sessionId,
+              toolCallId: options?.toolCallId,
+              emit: (event: Parameters<VelaEventListener>[0]) =>
+                this.onEvent?.(event),
+            }
+            if (pipeline) {
+              const pre = await pipeline.runPre(name, input, hookContext)
+              if (pre.action === 'block') {
+                return await reject(`[Hook 拦截] ${pre.reason || '操作被阻止'}`)
+              }
+              if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
+                input = pre.modifiedInput
+                try {
+                  const schema = asSchema(tool.inputSchema)
+                  if (schema.validate) {
+                    const validated = await schema.validate(input)
+                    if (!validated.success) throw validated.error
+                    input = validated.value
+                  } else {
+                    const validated = new Validator(
+                      await schema.jsonSchema,
+                    ).validate(input)
+                    if (!validated.valid)
+                      throw new Error(JSON.stringify(validated.errors))
+                  }
+                } catch (error) {
+                  return await reject(
+                    `[拒绝执行] Hook 修改后的输入无效: ${error instanceof Error ? error.message : String(error)}`,
+                  )
+                }
+              }
+            }
+            if (name === 'bash') {
+              const command = (input as { command?: unknown } | null)?.command
+              if (typeof command !== 'string')
+                return await reject('[拒绝执行] bash command 必须是字符串')
+              const risk = classifyBashCommand(command)
+              if (risk.level === 'dangerous') {
+                return await reject(
+                  `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${command}`,
+                )
+              }
+              if (risk.level === 'moderate')
+                this.onEvent?.({
+                  type: 'security_warning',
+                  toolName: name,
+                  reason: risk.reason ?? '中等风险命令',
+                  command,
+                })
+            }
+            // ask 在 hooks 之后、按最终参数询问：扩展改过的参数也要经过批准
+            if (decision === 'ask') {
+              const approved = this.confirm
+                ? await untilAborted(
+                    this.confirm(name, input).catch(() => false),
+                    options?.abortSignal,
+                  )
+                : false
+              options?.abortSignal?.throwIfAborted()
+              if (!approved) return await reject(`[拒绝执行] ${name} 未获批准`)
+            }
             if (isSafe) {
               await this.acquireConcurrent()
               this.shared.logger.debug(`[tools] ${name} 获得共享锁`)
@@ -258,76 +368,6 @@ export class ToolRegistry {
             }
             try {
               this.assertHealthy()
-              const reject = async (reason: string) => {
-                await this.recordRejection(
-                  name,
-                  options?.toolCallId ?? crypto.randomUUID(),
-                  input,
-                  reason,
-                )
-                return reason
-              }
-              if (!canUseTool(this.currentRole, name)) {
-                return await reject(
-                  `[拒绝执行] 角色 ${this.currentRole} 无权使用 ${name}`,
-                )
-              }
-              const pipeline = this.shared.hookPipeline
-              const hookContext = {
-                sessionId: this.sessionId,
-                emit: (event: Parameters<VelaEventListener>[0]) =>
-                  this.onEvent?.(event),
-              }
-              if (pipeline) {
-                const pre = await pipeline.runPre(name, input, hookContext)
-                if (pre.action === 'block') {
-                  return await reject(
-                    `[Hook 拦截] ${pre.reason || '操作被阻止'}`,
-                  )
-                }
-                if (
-                  pre.action === 'modify' &&
-                  pre.modifiedInput !== undefined
-                ) {
-                  input = pre.modifiedInput
-                  try {
-                    const schema = asSchema(tool.inputSchema)
-                    if (schema.validate) {
-                      const validated = await schema.validate(input)
-                      if (!validated.success) throw validated.error
-                      input = validated.value
-                    } else {
-                      const validated = new Validator(
-                        await schema.jsonSchema,
-                      ).validate(input)
-                      if (!validated.valid)
-                        throw new Error(JSON.stringify(validated.errors))
-                    }
-                  } catch (error) {
-                    return await reject(
-                      `[拒绝执行] Hook 修改后的输入无效: ${error instanceof Error ? error.message : String(error)}`,
-                    )
-                  }
-                }
-              }
-              if (name === 'bash') {
-                const command = (input as { command?: unknown } | null)?.command
-                if (typeof command !== 'string')
-                  return await reject('[拒绝执行] bash command 必须是字符串')
-                const risk = classifyBashCommand(command)
-                if (risk.level === 'dangerous') {
-                  return await reject(
-                    `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${command}`,
-                  )
-                }
-                if (risk.level === 'moderate')
-                  this.onEvent?.({
-                    type: 'security_warning',
-                    toolName: name,
-                    reason: risk.reason ?? '中等风险命令',
-                    command,
-                  })
-              }
               const history = this.results.history
               const call = await history.begin(
                 name,
@@ -483,7 +523,7 @@ export class ToolRegistry {
         // Treat it as a conservative signal: unknown or mutating MCP tools run exclusively.
         isConcurrencySafe: true,
         isReadOnly: tool.annotations?.readOnlyHint === true,
-        shouldDefer: true,
+        exposure: 'deferred',
         searchHint: `${serverName} ${tool.name} ${tool.description}`,
         maxResultChars: 3000,
         execute: async (input, context) => {
@@ -515,10 +555,13 @@ export class ToolRegistry {
 
   getActiveTools() {
     return this.getAllTools().filter((tool) => {
-      if (!canUseTool(this.currentRole, tool.name)) {
+      if (this.decide(tool.name) === 'deny') {
         return false
       }
-      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+      if (
+        tool.exposure === 'deferred' &&
+        !this.discoveredTools.has(tool.name)
+      ) {
         return false
       }
       return true
@@ -527,7 +570,11 @@ export class ToolRegistry {
 
   getDeferredToolSummary(): string {
     const deferred = this.getAllTools().filter((tool) => {
-      return tool.shouldDefer && !this.discoveredTools.has(tool.name)
+      return (
+        tool.exposure === 'deferred' &&
+        !this.discoveredTools.has(tool.name) &&
+        this.decide(tool.name) !== 'deny'
+      )
     })
 
     if (deferred.length === 0) return ''
@@ -554,7 +601,11 @@ export class ToolRegistry {
 
     for (const name of names) {
       const tool = this.tools.get(name)
-      if (tool && tool.name !== 'tool_search') {
+      if (
+        tool &&
+        tool.name !== 'tool_search' &&
+        this.decide(tool.name) !== 'deny'
+      ) {
         results.push(tool)
         this.discoveredTools.add(tool.name)
       }
@@ -574,7 +625,10 @@ export class ToolRegistry {
       }).length
       const tokens = Math.ceil(schemaSize / 4)
 
-      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+      if (
+        tool.exposure === 'deferred' &&
+        !this.discoveredTools.has(tool.name)
+      ) {
         deferred += tokens
       } else {
         active += tokens
@@ -588,6 +642,23 @@ export class ToolRegistry {
     this.discoveredTools.delete(name)
     return this.tools.delete(name)
   }
+}
+
+/** 等 promise；signal 中断时提前以 false 结束（不再等用户回答）。 */
+function untilAborted(
+  promise: Promise<boolean>,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const onAbort = () => resolve(false)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then((value) => {
+      signal.removeEventListener('abort', onAbort)
+      resolve(value)
+    })
+  })
 }
 
 function truncateResult(text: string, maxChars: number) {

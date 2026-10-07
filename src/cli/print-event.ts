@@ -100,6 +100,9 @@ export function printEvent(event: VelaEvent): void {
     case 'security_warning':
       console.log(`  [安全] ⚠ ${event.reason}: ${event.command}`)
       break
+    case 'notify':
+      console.log(`  [${event.level}] ${event.message}`)
+      break
     case 'channel_message':
       console.log(
         `\n  [${event.channel}] ${event.senderName}: ${event.text}`,

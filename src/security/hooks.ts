@@ -6,6 +6,8 @@ export type HookAction = 'allow' | 'block' | 'modify'
 /** 调用 hook 时附带的会话信息：hook 可以通过 emit 往调用所在的会话发事件。 */
 export interface HookContext {
   sessionId?: string
+  /** 模型给这次工具调用的 id */
+  toolCallId?: string
   emit(event: VelaEvent): void
 }
 
