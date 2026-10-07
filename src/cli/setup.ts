@@ -10,7 +10,7 @@ import {
   saveTrust,
   type VelaConfig,
 } from '../config'
-import { isPlainObject } from '../config/interpolate'
+import { deepMerge } from '../config/interpolate'
 import { feishu } from '../extensions/feishu'
 import { memory } from '../extensions/memory'
 import { rag } from '../extensions/rag'
@@ -142,25 +142,10 @@ export function extensionConfigFromEnv(
       },
     },
   }
-  const merged: Record<string, Record<string, unknown>> = { ...defaults }
-  for (const [name, section] of Object.entries(fromSettings))
-    merged[name] = deepMerge(merged[name] ?? {}, section)
-  return merged
-}
-
-function deepMerge(
-  base: Record<string, unknown>,
-  override: Record<string, unknown>,
-): Record<string, unknown> {
-  const result = { ...base }
-  for (const [key, value] of Object.entries(override)) {
-    const current = result[key]
-    result[key] =
-      isPlainObject(current) && isPlainObject(value)
-        ? deepMerge(current, value)
-        : value
-  }
-  return result
+  return deepMerge(defaults, fromSettings) as Record<
+    string,
+    Record<string, unknown>
+  >
 }
 
 /**
@@ -202,27 +187,37 @@ export async function loadCliExtensions(
   return loaded
 }
 
-/** 旧版本把数据写在 cwd 里；发现时提示怎么搬到新的数据目录。 */
+/**
+ * 旧版本把数据写在 cwd 里（`.sessions` 等）；发现时提示怎么搬到新的数据目录（不自动搬）。
+ * 命令可以重复执行：旧数据不在了 cp / mv 就失败，不会删任何东西；复制失败也不删旧数据。
+ */
 export function legacyDataHint(cwd: string, dataDir: string): string | undefined {
-  if (resolve(cwd) === resolve(dataDir)) return
   const moves = (
     [
       ['.sessions', 'sessions'],
       ['.memory', 'memory'],
       ['.usage', 'usage'],
-      ['knowledge.db', 'rag/knowledge.db'],
+      ['knowledge.db', 'rag'],
     ] as const
   ).filter(([old]) => existsSync(join(cwd, old)))
   if (!moves.length) return
-  // 新目录可能已经有这次启动建的文件，用 cp -R 合并再删旧的
   const lines = moves.map(([old, next]) => {
-    const target = join(dataDir, next)
-    return old === 'knowledge.db'
-      ? `  mkdir -p "${dirname(target)}" && mv ${old} "${target}"`
-      : `  mkdir -p "${target}" && cp -R ${old}/. "${target}/" && rm -r ${old}`
+    const from = shellQuote(join(resolve(cwd), old))
+    const target = shellQuote(join(resolve(dataDir), next))
+    // knowledge.db* 连同可能存在的 -journal / -wal / -shm 一起搬
+    if (old === 'knowledge.db')
+      return `  mkdir -p ${target} && mv ${from}* ${target}/`
+    // 新目录里可能已有这次启动建的文件（例如空的 MEMORY.md）：合并进去，同名文件以旧数据为准
+    return `  mkdir -p ${target} && cp -R ${from}/. ${target}/ && rm -r ${from}`
   })
   return [
-    `[数据] 发现旧位置的数据（${moves.map(([old]) => old).join('、')}），现在的数据目录是 ${dataDir}。要继续使用，退出后在 ${resolve(cwd)} 里执行：`,
+    `[数据] 发现旧位置的数据（${moves.map(([old]) => old).join('、')}），现在的数据目录是 ${dataDir}。`,
+    '要继续使用，退出后执行下面的命令（同名文件以旧数据为准，最好在新目录里产生新会话 / 记忆之前执行）：',
     ...lines,
   ].join('\n')
+}
+
+/** 单引号包起来给 sh 用（路径里可能有空格、$、引号）。 */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }

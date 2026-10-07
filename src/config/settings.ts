@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import type { VelaLimits } from '../limits'
-import { interpolateDeep, isPlainObject } from './interpolate'
+import { deepMerge, interpolateDeep, isPlainObject } from './interpolate'
 import {
   defaultAgentDir,
   projectDataDir,
@@ -181,14 +181,6 @@ function mergeSettings(base: VelaSettings, override: VelaSettings): VelaSettings
     if (list.length) merged[key] = list
   }
   return merged
-}
-
-function deepMerge(base: unknown, override: unknown): unknown {
-  if (!isPlainObject(base) || !isPlainObject(override)) return override
-  const result: Record<string, unknown> = { ...base }
-  for (const [key, value] of Object.entries(override))
-    result[key] = key in base ? deepMerge(base[key], value) : value
-  return result
 }
 
 const EXTENSION_FILE = /\.(ts|js|mjs)$/

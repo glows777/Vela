@@ -29,3 +29,12 @@ export function interpolateDeep<T>(value: T, env: Env): T {
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
+/** 对象深合并：两边都是对象时递归，否则 override 覆盖（数组也直接覆盖）。 */
+export function deepMerge(base: unknown, override: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(override)) return override
+  const result: Record<string, unknown> = { ...base }
+  for (const [key, value] of Object.entries(override))
+    result[key] = key in base ? deepMerge(base[key], value) : value
+  return result
+}
