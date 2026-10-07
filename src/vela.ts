@@ -22,6 +22,7 @@ import {
   fileSessionStorage,
   memorySessionStorage,
   type SessionStorage,
+  type SessionSummary,
 } from './session/storage'
 import { ToolResultStore } from './session/tool-results'
 import { SkillLoader } from './skills/loader'
@@ -92,6 +93,8 @@ export interface Vela {
   session(id?: string, options?: SessionOptions): VelaSession
   /** 当前打开的会话 */
   sessions(): VelaSession[]
+  /** 保存过的会话（最近的在前），来自 SessionStorage.list()；存储没实现 list 时为空 */
+  listSessions(): Promise<SessionSummary[]>
   /** 订阅所有会话的事件；返回取消订阅的函数 */
   subscribe(listener: VelaSessionEventListener): () => void
   /** 等所有扩展（包括异步工厂）加载完；加载失败时 reject */
@@ -279,6 +282,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     models: () => models.list(),
     session,
     sessions: () => [...sessions.values()],
+    listSessions: async () => (await sessionStorage.list?.()) ?? [],
     subscribe(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)

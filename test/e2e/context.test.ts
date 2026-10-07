@@ -3,7 +3,12 @@ import {
   createRequestSnapshot,
   estimateRequestTokens,
 } from '../../src/context/request'
-import { fauxSummary, fauxText, fauxToolCall } from '../../src/testing/faux'
+import {
+  fauxHang,
+  fauxSummary,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux'
 import {
   captureConsole,
   cleanupTestVelas,
@@ -155,4 +160,32 @@ test('/defend applies microcompact only and never pays for a summary', async () 
     'summary-required',
   )
   expect(t.model.calls).toHaveLength(0)
+})
+
+test('session.compact() summarizes old history on demand, with an optional focus', async () => {
+  const t = createTestVela({
+    responses: Array.from({ length: 4 }, (_, i) => fauxText(`回答 ${i}`)),
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 4; i++) await t.run(`第 ${i} 个问题`)
+
+  await t.session.compact('保留第 0 个问题')
+
+  const compact = t.eventsOf('context').find((e) => e.action === 'compact')
+  expect(compact?.messages).toBe(2)
+  const generate = t.model.calls.find((c) => c.kind === 'generate')!
+  expect(generate.lastUserText).toContain('保留第 0 个问题')
+  expect(t.session.contextManager.state.summary).toContain('## 用户目标')
+  expect(await t.readData('sessions/default.jsonl')).toContain('第 0 个问题')
+  expect(t.session.isRunning).toBe(false)
+})
+
+test('session.compact() refuses while a task is running', async () => {
+  const t = createTestVela({ responses: [fauxHang('想')] })
+  const running = t.run('慢慢想')
+  while (!t.streamedText()) await Bun.sleep(1)
+
+  await expect(t.session.compact()).rejects.toThrow('有任务正在执行中')
+  await t.session.abort()
+  await expect(running).rejects.toThrow()
 })

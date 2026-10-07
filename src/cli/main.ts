@@ -1,28 +1,23 @@
 #!/usr/bin/env bun
-import { createInterface } from 'node:readline'
-import {
-  Client,
-  getDefaultEnvironment,
-  StdioClientTransport,
-} from '@modelcontextprotocol/client'
 import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
   loadConfig,
   type VelaConfig,
 } from '../config'
-import type { ExtensionUI } from '../extensions/types'
 import { memorySessionStorage } from '../session/storage'
 import { createMockModel } from '../testing/demo-model'
 import { loadFauxScenario } from '../testing/faux'
 import { recordModel } from '../testing/record'
 import { ModelRegistry } from '../models'
-import { createVela, velaInternals } from '../vela'
+import { createVela } from '../vela'
 import type { VelaSession } from '../vela-session'
-import type { CommandContext } from './commands'
-import { createCliDispatcher } from './dispatcher'
+import { runInteractive } from './interactive'
+import { redirectConsoleToStderr, writeStdout } from './json-event'
 import { createConsoleLogger } from './logger'
-import { printEvent } from './print-event'
+import { runPrintMode } from './print-mode'
+import { runRpcMode } from './rpc-mode'
+import { newSessionId } from './sessions'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -31,30 +26,58 @@ import {
   loadCliExtensions,
   parseArgs,
   resolveTrust,
+  USAGE,
 } from './setup'
+
+const usageError = (message: string): never => {
+  console.error(message)
+  console.error(USAGE)
+  process.exit(2)
+}
 
 let args: CliArgs
 try {
   args = parseArgs(process.argv.slice(2))
 } catch (error) {
-  console.error(error instanceof Error ? error.message : error)
-  console.error(
-    '用法: vela [-p "<prompt>"] [--continue] [-e <扩展>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <级别>]',
-  )
-  process.exit(2)
+  usageError(error instanceof Error ? error.message : String(error))
+  throw error
 }
-const printMode = args.print
-const isContinue = args.continue
 const env = process.env
 const cwd = process.cwd()
 
+/**
+ * 运行方式（同 pi）：`--mode rpc` / `--mode json` 显式选；`-p` 或 stdin / stdout 被重定向时是单次模式；
+ * 否则（终端里）是交互模式。
+ */
+const mode: 'interactive' | 'print' | 'json' | 'rpc' =
+  args.mode === 'rpc'
+    ? 'rpc'
+    : args.mode === 'json'
+      ? 'json'
+      : args.print || !process.stdin.isTTY || !process.stdout.isTTY
+        ? 'print'
+        : 'interactive'
+// 非交互模式 stdout 只放结果 / 协议：扩展、SDK 的 console 输出都改到 stderr
+if (mode !== 'interactive') redirectConsoleToStderr()
+if (mode === 'rpc' && args.messages.length)
+  usageError('--mode rpc 从 stdin 读命令，不接受命令行里的 prompt')
+if (mode !== 'interactive' && args.resume)
+  usageError('-r 只能在交互模式用；单次 / json / rpc 模式用 --session <id> 或 -c')
+
+// 单次模式：管道进来的 stdin 拼在第一个 prompt 前面（同 pi：`git diff | vela -p "review"`）
+const messages = [...args.messages]
+if (mode === 'print' || mode === 'json') {
+  const piped = process.stdin.isTTY ? '' : (await Bun.stdin.text()).trim()
+  if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
+  if (!messages.length) usageError('没有 prompt：在命令行给出，或从 stdin 输入')
+}
 // 配置：~/.vela/settings.json + 信任后的 <cwd>/.vela/settings.json（第 4 步，见 04-plan.md）
 const agentDir = defaultAgentDir(env)
 const trust = await resolveTrust({
   cwd,
   agentDir,
   approve: args.approve,
-  interactive: printMode === undefined && process.stdin.isTTY === true,
+  interactive: mode === 'interactive',
 })
 if (trust.warning) console.error(trust.warning)
 let config: VelaConfig
@@ -113,7 +136,10 @@ if (env.VELA_RECORD) {
   }
 }
 
-const logger = createConsoleLogger({ debug: env.VELA_DEBUG === '1' })
+const logger = createConsoleLogger({
+  debug: env.VELA_DEBUG === '1',
+  stderr: mode !== 'interactive',
+})
 const vela = createVela({
   model: recorder?.model ?? chosenModel,
   providers: config.providers,
@@ -130,12 +156,23 @@ const vela = createVela({
     console.error(message),
   ),
 })
-const internals = velaInternals(vela)
-vela.subscribe((event, sessionId) => {
-  if (recorder && event.type === 'agent_start' && sessionId === 'default')
-    recorder.addInput(event.input)
-  printEvent(event)
-})
+
+/**
+ * 用哪个会话（同 pi）：`--session <id>`；`-c` 接最近保存的（没有就开新的）；`-r` 交互模式里选；
+ * 否则每次启动一个新会话。
+ */
+const sessionId =
+  args.session ??
+  (args.continue ? (await vela.listSessions())[0]?.id : undefined) ??
+  newSessionId()
+const resume = args.session !== undefined || args.continue
+// 录制主会话的输入（-r 选中的会话 id 在 configure 时才知道），不录通道会话
+let recordedSession = sessionId
+if (recorder)
+  vela.subscribe((event, id) => {
+    if (event.type === 'agent_start' && id === recordedSession)
+      recorder.addInput(event.input)
+  })
 
 /**
  * 恢复的会话带着保存的模型和 thinking；命令行显式给的优先，VELA_MODEL=mock / faux 和
@@ -143,6 +180,7 @@ vela.subscribe((event, sessionId) => {
  * 返回模型是否可用。
  */
 function applyModelArgs(target: VelaSession): boolean {
+  recordedSession = target.id
   if (args.thinking) target.setThinkingLevel(args.thinking)
   const override =
     args.model ??
@@ -160,258 +198,52 @@ function applyModelArgs(target: VelaSession): boolean {
   }
 }
 
-if (printMode !== undefined) {
-  // -p 模式没有界面：扩展的 confirm 一律按“否”处理（同 pi 的 print 模式）
-  const session = vela.session()
-  if (isContinue) await session.resume()
-  // 扩展注册的 provider 要等扩展加载完才能解析（加载失败的话 prompt 会报）
-  await vela.ready().catch(() => {})
-  if (!applyModelArgs(session)) {
-    await vela.dispose()
-    process.exit(1)
-  }
-  let exitCode = 0
-  try {
-    await session.prompt(printMode)
-  } catch (error) {
-    console.error(
-      '[Agent] 本轮停止:',
-      error instanceof Error ? error.message : error,
-    )
-    exitCode = 1
-  }
+const exit = async (code: number): Promise<never> => {
   await vela.dispose()
   await recorder?.flush()
-  process.exit(exitCode)
+  process.exit(code)
 }
-const rl = createInterface({
-  input: process.stdin,
-  output: process.stdout,
-})
-let rlClosed = false
-// 自己排队输入行：管道输入会一次性读完，rl.question 注册前到达的行会丢失
-const pendingLines: string[] = []
-let lineWaiter: ((line: string | undefined) => void) | undefined
-rl.on('line', (line) => {
-  const waiter = lineWaiter
-  lineWaiter = undefined
-  if (waiter) waiter(line)
-  else pendingLines.push(line)
-})
-rl.on('close', () => {
-  rlClosed = true
-  lineWaiter?.(undefined)
-  lineWaiter = undefined
-  // 终端里 Ctrl+D 中断当前任务；管道输入读到 EOF 时让已排队的行照常跑完
-  if (process.stdin.isTTY)
-    session.abort(new DOMException('输入已关闭', 'AbortError'))
-})
-const nextLine = (): Promise<string | undefined> => {
-  if (pendingLines.length) return Promise.resolve(pendingLines.shift())
-  if (rlClosed) return Promise.resolve(undefined)
-  return new Promise((resolve) => {
-    lineWaiter = resolve
+
+if (mode === 'print' || mode === 'json') {
+  // 单次模式没有界面：扩展的 confirm 一律按“否”处理（同 pi 的 print 模式）
+  const session = vela.session(sessionId)
+  if (resume) await session.resume()
+  // 扩展注册的 provider 要等扩展加载完才能解析（加载失败的话 prompt 会报）
+  await vela.ready().catch(() => {})
+  if (!applyModelArgs(session)) await exit(1)
+  await exit(
+    await runPrintMode({
+      vela,
+      session,
+      messages,
+      mode: mode === 'json' ? 'json' : 'text',
+    }),
+  )
+} else if (mode === 'rpc') {
+  await vela.ready().catch((error) =>
+    console.error(error instanceof Error ? error.message : error),
+  )
+  await runRpcMode({
+    vela,
+    sessionId,
+    resume,
+    newSessionId,
+    // 没有模型时照样启动，客户端可以 set_model（错误打到 stderr）
+    configure: (session) => void applyModelArgs(session),
+    input: Bun.stdin.stream(),
+    write: writeStdout,
   })
-}
-
-/** 交互模式下扩展的界面：在终端里提问，读下一行输入作为回答。 */
-const terminalUI: ExtensionUI = {
-  notify: (message, level = 'info') =>
-    console.log(level === 'info' ? `\n${message}` : `\n[${level}] ${message}`),
-  async confirm(title, message) {
-    console.log(`\n${title}\n${message}`)
-    process.stdout.write('允许？(y/N) ')
-    const answer = (await nextLine())?.trim().toLowerCase()
-    return answer === 'y' || answer === 'yes'
-  },
-  async select(title, options) {
-    console.log(`\n${title}`)
-    for (const [i, option] of options.entries())
-      console.log(`  ${i + 1}. ${option}`)
-    process.stdout.write('选择编号（回车取消）: ')
-    const index = Number((await nextLine())?.trim()) - 1
-    return options[index]
-  },
-  async input(title, placeholder) {
-    process.stdout.write(
-      `\n${title}${placeholder ? ` (${placeholder})` : ''}: `,
-    )
-    const answer = (await nextLine())?.trim()
-    return answer || undefined
-  },
-}
-const session = vela.session('default', { ui: terminalUI })
-const { busy, messages } = session
-
-const MCP_INITIAL_RETRY_DELAY_MS = 30_000
-const MCP_MAX_RETRY_DELAY_MS = 5 * 60_000
-
-const mcpConnection: Promise<boolean> | null = null
-let mcpFailureCount = 0
-let nextMCPRetryAt = 0
-
-async function connectMCP() {
-  // if (mcpConnection) {
-  //   await mcpConnection;
-  //   return;
-  // }
-  // if (Date.now() < nextMCPRetryAt) {
-  //   return;
-  // }
-  // const connection = connectGitHubMCP();
-  // mcpConnection = connection;
-  // const connected = await connection;
-  // if (connected) {
-  //   mcpFailureCount = 0;
-  //   nextMCPRetryAt = 0;
-  // } else {
-  //   if (mcpConnection === connection) {
-  //     mcpConnection = null;
-  //   }
-  //   scheduleMCPRetry();
-  // }
-}
-
-async function connectGitHubMCP(): Promise<boolean> {
-  const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN
-
-  if (!githubToken) {
-    console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN，使用 Mock MCP')
-    return true
-  }
-
-  console.log('\n连接 GitHub MCP Server...')
-  try {
-    const transport = new StdioClientTransport({
-      command: 'bunx',
-      args: ['@modelcontextprotocol/server-github'],
-      env: {
-        ...getDefaultEnvironment(),
-        GITHUB_PERSONAL_ACCESS_TOKEN: githubToken,
-      },
-    })
-    const client = new Client({ name: 'Vela-agent', version: '1.0.0' })
-    const tools = await internals.registry.registerMCPServer(
-      'github',
-      client,
-      transport,
-    )
-    console.log(`  已注册 ${tools.length} 个 MCP 工具`)
-    return true
-  } catch (err) {
-    console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`)
-    console.log(err)
-    return false
-  }
-}
-
-function scheduleMCPRetry() {
-  mcpFailureCount++
-  const delay = Math.min(
-    MCP_INITIAL_RETRY_DELAY_MS * 2 ** (mcpFailureCount - 1),
-    MCP_MAX_RETRY_DELAY_MS,
-  )
-  nextMCPRetryAt = Date.now() + delay
-  console.log(`  MCP 将在 ${Math.round(delay / 1000)} 秒后再次尝试连接`)
-}
-
-await connectMCP()
-
-const cancelOrClose = () => {
-  // 正在跑 agent loop 或扩展命令（例如 /rag ingest）时取消它，空闲时退出
-  const signal = session.signal
-  if (signal) {
-    if (!signal.aborted) {
-      session.abort()
-      console.log('\n[取消] 正在停止当前请求和工具…')
-    }
-  } else rl.close()
-}
-rl.on('SIGINT', cancelOrClose)
-process.on('SIGINT', cancelOrClose)
-
-const dispatch = createCliDispatcher(vela)
-
-if (isContinue && (await session.resume())) {
-  console.log(`[Session] 恢复会话，${messages.length} 条历史消息`)
+  await exit(0)
 } else {
-  console.log(`[Session] 新会话`)
-}
-
-// Persist the history identity before any tool side effects, including on legacy resume.
-await session.save()
-
-// 显示各 prompt 段落的状态
-console.log('\n=== Prompt PipeLine Debug ===')
-for (const { name, chars } of internals.builder.status({
-  ...session.promptContext(),
-  toolCount: internals.registry.getAllTools().length,
-}))
-  console.log(`  ${name}: ${chars === null ? '[OFF]' : `[ON] ${chars} chars`}`)
-console.log('========================\n')
-try {
-  await vela.ready()
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error)
-}
-if (applyModelArgs(session))
-  console.log(
-    `  模型 ${session.modelInfo.ref}，thinking ${session.thinkingLevel}`,
-  )
-else console.error('  用 /model provider/id 换一个模型')
-for (const ext of vela.extensions())
-  console.log(
-    `  ✓ 扩展 ${ext.name}${ext.tools.length ? ` — ${ext.tools.length} 个工具` : ''}`,
-  )
-console.log('  启动 Channel...')
-await vela.startChannels()
-const ask = () => {
-  if (rlClosed) process.stdout.write('You: ')
-  else {
-    rl.setPrompt('You: ')
-    rl.prompt()
-  }
-  void nextLine().then(async (input) => {
-    await connectMCP()
-
-    const trimmed = (input ?? '').trim()
-    if (!trimmed || trimmed === 'exit') {
-      console.log('Bye!')
+  await runInteractive({
+    vela,
+    sessionId,
+    resume,
+    pick: args.resume,
+    configure: applyModelArgs,
+    onExit: async () => {
       await vela.dispose()
       await recorder?.flush()
-      rl.close()
-      return
-    }
-
-    const ctx: CommandContext = { vela, internals, session, ask }
-    if (busy.locked) {
-      console.log('\n[system] 有任务正在执行中，请稍候再输入\n')
-      // 不调用 ask()：当前 agentLoop 的 .then/.catch 完成后会重新注册 question
-      return
-    }
-    const handled = dispatch(trimmed, ctx)
-    if (handled === 'async') return
-    if (handled) {
-      ask()
-      return
-    }
-
-    // VELA_DEBUG=1 时打印每轮重新构建的 system prompt
-    if (process.env.VELA_DEBUG === '1') console.log(session.buildSystem())
-
-    try {
-      await session.prompt(trimmed)
-    } catch (error) {
-      console.error(
-        '[Agent] 本轮停止:',
-        error instanceof Error ? error.message : error,
-      )
-    }
-
-    const status = session.tracker.status
-    console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`)
-    ask()
+    },
   })
 }
-
-ask()

@@ -28,7 +28,10 @@ test('a 429 is retried and the turn then succeeds', async () => {
     [2, 3],
   ])
   expect(t.lastAssistantText()).toBe('终于好了')
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
   // 失败的请求不留下半截消息
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
 })
@@ -78,7 +81,10 @@ test('a 400 is not retried: the run fails and the user message stays in the save
   await expect(t.run('hi')).rejects.toThrow('400 Bad Request')
 
   expect(t.eventsOf('retry')).toHaveLength(0)
-  expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'error' })
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
+    type: 'agent_end',
+    reason: 'error',
+  })
   expect(t.session.busy.locked).toBe(false)
   expect(await t.readData('sessions/default.jsonl')).toContain('"hi"')
 })
@@ -103,7 +109,7 @@ test('aborting while the model is streaming stops the run; the next run works', 
   t.session.abort()
 
   await expect(running).rejects.toThrow()
-  expect(t.events.at(-1)).toMatchObject({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'aborted',
   })
@@ -141,7 +147,7 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
   t.session.abort()
 
   await expect(running).rejects.toThrow()
-  expect(t.events.at(-1)).toMatchObject({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'aborted',
   })
@@ -176,7 +182,10 @@ test('repeating the same tool call trips the loop detector: warning, then critic
     detector: 'generic_repeat',
   })
   expect(detections.at(-1)).toMatchObject({ level: 'critical' })
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'loop' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'loop',
+  })
   // 警告以 system message 的形式提醒模型，并且排在触发它的那次调用和结果之后
   const firstWarning = t.messages.findIndex(
     (m) =>
@@ -207,7 +216,10 @@ test('the loop stops at maxTurns', async () => {
 
   expect(t.eventsOf('turn_start')).toHaveLength(3)
   expect(t.eventsOf('turn_end')).toHaveLength(3)
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'max_turns' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'max_turns',
+  })
 })
 
 test('the token budget warns near the limit and stops above it', async () => {
@@ -235,12 +247,16 @@ test('the token budget warns near the limit and stops above it', async () => {
     used: 920,
     limit: 1000,
   })
-  expect(t.eventTypes().slice(-3)).toEqual([
+  expect(t.eventTypes().slice(-4)).toEqual([
     'budget_warning',
     'turn_end',
     'agent_end',
+    'agent_settled',
   ])
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'budget' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'budget',
+  })
 })
 
 test('a request over maxInputTokens is stopped before it is sent', async () => {

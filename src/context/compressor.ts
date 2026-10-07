@@ -221,6 +221,8 @@ export async function summarize(
   results: ToolResultStore,
   tracker: TokenTracker,
   maxInputTokens = MAX_INPUT_TOKENS,
+  /** 手动压缩时用户给的重点（同 pi 的 /compact 指令），只影响挑选哪些原句 */
+  focus?: string,
 ): Promise<CompactionResult> {
   const index = summaryBoundary(request.messages)
   request.abortSignal?.throwIfAborted()
@@ -243,6 +245,9 @@ export async function summarize(
         retainedMessageCount: request.messages.length - index,
         outputSchema: z.toJSONSchema(summarySchema),
         instruction: SUMMARY_CONTROL,
+        ...(focus
+          ? { focus: `挑选原句时优先保留和这些内容相关的：${focus}` }
+          : {}),
       }),
     },
   ]

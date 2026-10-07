@@ -186,7 +186,10 @@ src/
 ├── config/                 # settings.json 合并、models.json、$VAR 插值、扩展发现、项目信任、数据目录 / config
 ├── models/                 # provider 注册表、provider/id 解析、thinking 级别、按上下文窗口算上限 / models
 ├── cli/
-│   ├── main.ts             # CLI 入口：读配置和环境变量、交互 / -p 模式、MCP / CLI entry
+│   ├── main.ts             # CLI 入口：读配置和环境变量、选会话、按模式分发 / CLI entry
+│   ├── interactive.ts      # 交互模式（readline REPL，之后换成 TUI）
+│   ├── print-mode.ts       # -p / --mode json 单次模式
+│   ├── rpc-mode.ts         # --mode rpc：stdin / stdout 的 JSONL 协议（同 pi）
 │   ├── setup.ts            # 命令行参数、项目信任询问、内置扩展、加载扩展
 │   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher
 │   ├── commands/           # CLI 自己的斜杠命令（context / usage / model / skill / role …）
@@ -260,7 +263,7 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 ```
 
 - 字符串支持 `$VAR` / `${VAR}`；没写的配置退回下面的环境变量。
-- 模型选择顺序：`--model` → `defaultModel` → `openai/$OPENAI_API_MODEL_NAME`；`--continue` 恢复的会话用它保存的模型和 thinking 级别（命令行给的仍然优先）。
+- 模型选择顺序：`--model` → `defaultModel` → `openai/$OPENAI_API_MODEL_NAME`；`-c` / `--session` 恢复的会话用它保存的模型和 thinking 级别（命令行给的仍然优先）。
 
 `~/.vela/models.json`（同 pi，只在用户级）：内置 `openai`（Chat Completions，`OPENAI_API_KEY` / `OPENAI_API_BASE_URL`）和 `anthropic`（`ANTHROPIC_API_KEY`），同名条目覆盖内置的字段，其它名字是新 provider。
 
@@ -283,6 +286,8 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 模型写了 `contextWindow` 时压缩阈值和输入上限按它算（输入上限 = 窗口 − 16384，同 pi）（`settings.json` 里显式写的 `limits` 仍然优先），写了 `cost` 时 `/usage` 按它计费。没列出的 id 也能用（`--model openrouter/other`），只是没有这些元数据。thinking 默认 medium；模型写了 `"reasoning": false` 时只能用 `off`，其它级别 prompt 直接报错；没写的模型照发，provider 不支持时它的报错会原样显示。
 - 项目有 `.vela/settings.json` 或 `.vela/extensions/` 时，交互模式会问一次是否信任（记在 `~/.vela/trust.json`）；`-p` 模式不问、直接跳过，加 `--approve` 才加载。
 - 命令行：`--model provider/id`、`--thinking <级别>`、`-e <扩展文件>`（可重复）、`--no-extensions`、`--no-session`（会话不落盘）、`--approve` / `--no-approve`。
+- 会话（同 pi）：每次启动是一个新会话；`-c` / `--continue` 接最近的，`-r` / `--resume` 在交互模式里选，`--session <id>` 打开指定的。
+- 运行方式（同 pi）：终端里是交互模式；`vela -p "问题"` 或 stdin / stdout 被重定向时跑完就退出，stdout 只有最后的回答（管道进来的内容拼在 prompt 前面：`git diff | vela -p "review"`）；`--mode json "问题"` 每个事件一行 JSON；`--mode rpc` 从 stdin 收 JSONL 命令（`prompt` / `steer` / `follow_up` / `abort` / `get_state` / `set_model` …，命令名和扩展界面子协议同 pi 的 docs/rpc.md），事件是 Vela 自己的 `VelaEvent`（带 `sessionId`）。
 - 旧版本把 `.sessions`、`.memory`、`.usage`、`knowledge.db` 写在项目目录里；CLI 发现时会打印搬到新目录的命令。
 
 ### 环境变量 / Environment Variables

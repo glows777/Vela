@@ -30,7 +30,8 @@ test('the SDK and the testing helpers import by package name', async () => {
     const session = vela.session('sdk')
     session.subscribe((event) => events.push(event))
     await session.prompt('hello')
-    expect(events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+    expect(events.at(-2)).toEqual({ type: 'agent_end', reason: 'done' })
+    expect(events.at(-1)).toEqual({ type: 'agent_settled' })
     expect(session.messages.at(-1)).toMatchObject({ role: 'assistant' })
     expect(session.usage.totals.steps).toBe(1)
   } finally {

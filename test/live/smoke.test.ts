@@ -24,7 +24,10 @@ test.skipIf(!live)(
       limits: { retryBaseMs: 500 },
     })
     await t.run('只回复两个字：你好')
-    expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'done' })
+    expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
+      type: 'agent_end',
+      reason: 'done',
+    })
     expect(t.lastAssistantText().length).toBeGreaterThan(0)
   },
   60_000,

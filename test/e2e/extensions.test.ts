@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'bun:test'
-import type { ExtensionUI, VelaExtension } from 'vela'
+import type { SessionUI, VelaExtension } from 'vela'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous'
 import { echoChannel } from '../../examples/extensions/echo-channel'
 import hello from '../../examples/extensions/hello-tool'
@@ -21,7 +21,7 @@ afterEach(cleanupTestVelas)
 function scriptedUI(answer: boolean) {
   const asked: string[] = []
   const notes: string[] = []
-  const ui: ExtensionUI = {
+  const ui: SessionUI = {
     notify: (message) => notes.push(message),
     confirm: async (title, message) => {
       asked.push(`${title}: ${message}`)
@@ -366,7 +366,7 @@ test('aborting while a tool waits for approval stops waiting', async () => {
   const waiting = new Promise<void>((resolve) => {
     asked = resolve
   })
-  const ui: ExtensionUI = {
+  const ui: SessionUI = {
     notify: () => {},
     confirm: () => {
       asked()

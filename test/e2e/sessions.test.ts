@@ -70,7 +70,7 @@ test('session.subscribe only sees its own events; vela.subscribe sees all with t
 
   expect(mine.filter((type) => type === 'agent_end')).toHaveLength(1)
   expect(all).toEqual(['default', 'other', 'default'])
-  expect(t.eventsIn('other').at(-1)).toEqual({
+  expect(t.eventsIn('other').at(-2)).toEqual({
     type: 'agent_end',
     reason: 'done',
   })
@@ -180,4 +180,28 @@ test('tool calls from sessions running at the same time are recorded in their ow
   expect(inA).not.toContain('BBB')
   expect(inB).toContain('BBB')
   expect(inB).not.toContain('AAA')
+})
+
+test('saved sessions are listed newest first with name, size and first message', async () => {
+  const t = createTestVela({ responses: [fauxText('一'), fauxText('二')] })
+  await t.vela.session('older').prompt('第一个会话的问题')
+  const newer = t.vela.session('newer')
+  newer.setName('重构讨论')
+  await newer.prompt('第二个会话的问题')
+
+  const list = await t.vela.listSessions()
+
+  expect(list.map((s) => s.id)).toEqual(['newer', 'older'])
+  expect(list[0]).toMatchObject({
+    id: 'newer',
+    name: '重构讨论',
+    messageCount: 2,
+    firstMessage: '第二个会话的问题',
+  })
+
+  // 名字随会话保存，恢复时带回
+  const resumed = createTestVela({ cwd: t.cwd })
+  const again = resumed.vela.session('newer')
+  expect(await again.resume()).toBe(true)
+  expect(again.name).toBe('重构讨论')
 })

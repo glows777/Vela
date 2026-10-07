@@ -1,4 +1,4 @@
-import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readdir, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { silentLogger, type VelaLogger } from '../logger'
@@ -21,6 +21,19 @@ export interface SessionCheckpoint {
   model?: string
   /** 会话的 thinking 级别，恢复时还原 */
   thinkingLevel?: ThinkingLevel
+  /** 会话的显示名（`session.setName()`、CLI 的 /name） */
+  name?: string
+}
+
+/** `SessionStorage.list()` 的一项：会话选择器、`vela.listSessions()` 用。 */
+export interface SessionSummary {
+  id: string
+  name?: string
+  /** 最近一次保存的时间（ISO） */
+  updatedAt: string
+  messageCount: number
+  /** 第一条用户消息的开头（没有时为空串） */
+  firstMessage: string
 }
 
 /**
@@ -30,6 +43,37 @@ export interface SessionCheckpoint {
 export interface SessionStorage {
   load(id: string): Promise<SessionCheckpoint | undefined>
   save(id: string, checkpoint: SessionCheckpoint): Promise<void>
+  /** 列出保存过的会话，最近的在前（同 pi 的 SessionManager.list）。自定义存储可以不实现，列表就是空的。 */
+  list?(): Promise<SessionSummary[]>
+}
+
+/** 按最近保存时间排序（新的在前）。 */
+function newestFirst(summaries: SessionSummary[]): SessionSummary[] {
+  return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+/** checkpoint → 列表项 */
+export function summarizeCheckpoint(
+  id: string,
+  checkpoint: SessionCheckpoint,
+): SessionSummary {
+  const first = checkpoint.messages.find((m) => m.message.role === 'user')
+  const content = first?.message.content
+  const text =
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) => ('text' in part ? String(part.text) : ''))
+            .join('')
+        : ''
+  return {
+    id,
+    ...(checkpoint.name ? { name: checkpoint.name } : {}),
+    updatedAt: checkpoint.timestamp,
+    messageCount: checkpoint.messages.length,
+    firstMessage: text.replace(/\s+/g, ' ').trim().slice(0, 120),
+  }
 }
 
 /** 内存存储：进程结束就没了（CLI 的 --no-session，SDK 不给 dataDir 时的默认）。 */
@@ -43,6 +87,12 @@ export function memorySessionStorage(): SessionStorage {
     save: async (id, checkpoint) => {
       checkpoints.set(id, structuredClone(checkpoint))
     },
+    list: async () =>
+      newestFirst(
+        [...checkpoints].map(([id, checkpoint]) =>
+          summarizeCheckpoint(id, checkpoint),
+        ),
+      ),
   }
 }
 
@@ -76,6 +126,29 @@ export function fileSessionStorage(
         await rm(temporary, { force: true })
       }
     },
+    async list() {
+      let names: string[]
+      try {
+        names = await readdir(dir)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw error
+      }
+      const summaries: SessionSummary[] = []
+      for (const name of names) {
+        if (!name.endsWith('.jsonl')) continue
+        const id = name.slice(0, -'.jsonl'.length)
+        const path = pathOf(id)
+        const file = Bun.file(path)
+        const checkpoint = parseSessionFile(await file.text(), path, logger)
+        // 旧格式（一行一条消息）没有 checkpoint 时间：用文件修改时间
+        const summary = summarizeCheckpoint(id, checkpoint)
+        if (!checkpoint.saved)
+          summary.updatedAt = new Date(file.lastModified).toISOString()
+        summaries.push(summary)
+      }
+      return newestFirst(summaries)
+    },
   }
 }
 
@@ -93,8 +166,8 @@ function parseSessionFile(
   content: string,
   path: string,
   logger: VelaLogger,
-): SessionCheckpoint {
-  let checkpoint: SessionCheckpoint = {
+): SessionCheckpoint & { saved?: true } {
+  let checkpoint: SessionCheckpoint & { saved?: true } = {
     type: 'checkpoint',
     timestamp: new Date().toISOString(),
     summary: '',
@@ -110,7 +183,7 @@ function parseSessionFile(
           message: entry.message,
         })
       else if (entry.type === 'checkpoint' && Array.isArray(entry.messages))
-        checkpoint = { ...entry, summary: entry.summary || '' }
+        checkpoint = { ...entry, summary: entry.summary || '', saved: true }
     } catch (error) {
       logger.warn(`[session] ${path} 有一行无法解析，已跳过: ${error}`)
     }

@@ -56,6 +56,33 @@ export class ContextManager {
     await this.commit(this.state.messages.slice())
   }
 
+  /** 手动摘要（session.compact()）：不看阈值，把较早的历史换成摘要并保存。 */
+  async compact(request: RequestSnapshot, focus?: string): Promise<void> {
+    const before = estimateRequestTokens(request)
+    const compacted = await summarize(
+      request,
+      this.store.results,
+      this.tracker,
+      this.limits.maxInputTokens,
+      focus,
+    )
+    const after = estimateRequestTokens(request, compacted.messages)
+    request.abortSignal?.throwIfAborted()
+    await this.commit(
+      compacted.messages,
+      compacted.summary,
+      compacted.historyViewSequence,
+    )
+    this.tracker.setEstimatedTokens(after)
+    this.onEvent?.({
+      type: 'context',
+      action: 'compact',
+      before,
+      after,
+      messages: compacted.compressedCount,
+    })
+  }
+
   async prepare(
     request: RequestSnapshot,
     options: { allowSummary?: boolean } = {},

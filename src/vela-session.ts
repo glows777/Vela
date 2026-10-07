@@ -3,9 +3,9 @@ import type { LanguageModel, ModelMessage } from 'ai'
 import { agentLoop } from './agent'
 import type { VelaEvent, VelaEventListener } from './agent/events'
 import { estimateMessageTokens } from './context/defense'
-import type { ExtensionUI } from './extensions/types'
+import type { ExtensionUI, SessionUI } from './extensions/types'
 import { ContextManager } from './context/manager'
-import type { RequestSnapshot } from './context/request'
+import { createRequestSnapshot, type RequestSnapshot } from './context/request'
 import type { VelaLimits } from './limits'
 import {
   limitsForModel,
@@ -30,7 +30,15 @@ import {
 
 export interface PromptOptions {
   signal?: AbortSignal
+  /**
+   * 会话正在跑时怎么处理这条输入（同 pi）：`steer` 插进当前任务（这一步的工具跑完、下一次模型请求前），
+   * `followUp` 等当前任务结束后再跑。运行中不给会抛错；空闲时忽略。
+   */
+  streamingBehavior?: 'steer' | 'followUp'
 }
+
+/** 排队消息怎么取：每次取一条（默认，同 pi）或一次全取。 */
+export type QueueMode = 'one-at-a-time' | 'all'
 
 /** `vela.session(id, options)` 的选项；只在会话第一次打开时生效。 */
 export interface SessionOptions {
@@ -41,7 +49,7 @@ export interface SessionOptions {
   /** 只启用这些工具（仍受角色约束）；默认全部 */
   tools?: string[]
   /** 扩展用来和用户交互的界面；不传时没有界面（confirm 一律 false） */
-  ui?: ExtensionUI
+  ui?: SessionUI
   /** 这个会话用的模型（`provider/id` 或 LanguageModel），默认 Vela 的模型 */
   model?: string | LanguageModel
   /** thinking 级别，默认 Vela 的（Vela 默认 medium，同 pi） */
@@ -138,6 +146,12 @@ export class VelaSession {
   private running?: Promise<void>
   /** 这一轮 before_agent_start 收集到的扩展段落 */
   private sections: Record<string, string> = {}
+  private readonly steeringQueue: string[] = []
+  private readonly followUpQueue: string[] = []
+  /** steer 消息怎么取（默认 one-at-a-time，同 pi） */
+  steeringMode: QueueMode = 'one-at-a-time'
+  /** followUp 消息怎么取（默认 one-at-a-time，同 pi） */
+  followUpMode: QueueMode = 'one-at-a-time'
 
   /** @internal 由 vela.session() 创建 */
   constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
@@ -156,7 +170,7 @@ export class VelaSession {
       deps.temporaryDataDir,
     )
     this.hasUI = options.ui !== undefined
-    this.ui = options.ui ?? headlessUI(this.emit)
+    this.ui = options.ui ? withDefaults(options.ui) : headlessUI(this.emit)
     this.registry = deps.registry.fork(this.store.results, {
       onEvent: this.emit,
       sessionId: id,
@@ -184,7 +198,20 @@ export class VelaSession {
           ? this.resolved?.info.ref ?? this.modelChoice
           : undefined,
       thinkingLevel: this.thinking,
+      ...(this.displayName ? { name: this.displayName } : {}),
     })
+  }
+
+  private displayName?: string
+
+  /** 会话的显示名（同 pi 的 session name），随会话保存；会话列表里显示。 */
+  get name(): string | undefined {
+    return this.displayName
+  }
+
+  /** 设置显示名（空串清除），下次保存时写入；需要立刻写盘时再 `await save()`。 */
+  setName(name: string | undefined): void {
+    this.displayName = name?.trim() || undefined
   }
 
   /** 选定的模型（名字或对象），真正解析推迟到第一次用（扩展注册的 provider 可能还没加载完） */
@@ -331,6 +358,7 @@ export class VelaSession {
     const saved = await this.store.loadSaved()
     if (!saved) return false
     this.contextManager.restore(saved)
+    if (saved.name) this.displayName = saved.name
     // 旧 checkpoint 没有这个字段：保留当前级别
     if (saved.thinkingLevel && THINKING_LEVELS.includes(saved.thinkingLevel))
       this.thinking = saved.thinkingLevel
@@ -358,8 +386,10 @@ export class VelaSession {
   }
 
   /**
-   * 追加一条用户消息并跑完一次 agent loop，结束后保存会话。
-   * owner 会话里 `/name args` 如果是扩展注册的命令，就执行命令而不发给模型。
+   * 追加一条用户消息并跑完一次 agent loop，结束后保存会话；之后排队的 steer / followUp 也跑完才 resolve
+   * （最后发 `agent_settled`）。这次输入的 loop 出错时，排队的消息仍会接着跑，然后再 reject。
+   * 运行中要给 `streamingBehavior`（或用 steer() / followUp()），这时入队后立即 resolve。
+   * owner 会话里 `/name args` 如果是扩展注册的命令，就执行命令而不发给模型（运行中也立即执行）。
    */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
     if (this.closed) return Promise.reject(new Error(`会话 ${this.id} 已关闭`))
@@ -388,14 +418,91 @@ export class VelaSession {
     }
   }
 
+  /** 运行中：插进当前任务，这一步的工具跑完、下一次模型请求前作为用户消息发给模型。空闲时等于 prompt()。 */
+  steer(input: string): Promise<void> {
+    return this.promptModel(input, { streamingBehavior: 'steer' })
+  }
+
+  /** 运行中：等当前任务（包括 steer）结束后再跑。空闲时等于 prompt()。 */
+  followUp(input: string): Promise<void> {
+    return this.promptModel(input, { streamingBehavior: 'followUp' })
+  }
+
+  /** 清空排队的消息，返回它们（TUI 中断前把它们放回输入框）。 */
+  clearQueue(): { steering: string[]; followUp: string[] } {
+    const cleared = {
+      steering: this.steeringQueue.splice(0),
+      followUp: this.followUpQueue.splice(0),
+    }
+    if (cleared.steering.length || cleared.followUp.length)
+      this.emitQueue()
+    return cleared
+  }
+
+  /** 当前排队的消息（副本） */
+  get queue(): { steering: string[]; followUp: string[] } {
+    return {
+      steering: [...this.steeringQueue],
+      followUp: [...this.followUpQueue],
+    }
+  }
+
+  /** 是否正在跑 agent loop（包括排队消息的 loop、手动压缩） */
+  get isRunning(): boolean {
+    return this.busy.locked
+  }
+
+  /**
+   * 等 agent loop（包括排队消息的 loop、手动压缩）结束（同 pi 的 waitForIdle）。
+   * 不等扩展命令：命令里可以调用 abort()，等自己会卡住。
+   */
+  async waitForIdle(): Promise<void> {
+    while (this.running) await this.running
+  }
+
+  private emitQueue(): void {
+    this.emit({ type: 'queue_update', ...this.queue })
+  }
+
+  /** 按模式从队列取：先 steer 再 followUp。 */
+  private dequeue(kind: 'steering' | 'followUp'): string[] {
+    const [queue, mode] =
+      kind === 'steering'
+        ? [this.steeringQueue, this.steeringMode]
+        : [this.followUpQueue, this.followUpMode]
+    const taken = queue.splice(0, mode === 'all' ? queue.length : 1)
+    if (taken.length) this.emitQueue()
+    return taken
+  }
+
+  /** 编辑命令之外的 `/xxx`、普通输入：空闲时开跑，运行中按 streamingBehavior 入队。 */
   private promptModel(input: string, options: PromptOptions): Promise<void> {
     if (this.closed) return Promise.reject(new Error(`会话 ${this.id} 已关闭`))
-    if (this.busy.locked) return Promise.reject(new Error('有任务正在执行中'))
+    if (this.busy.locked) {
+      // 只有 prompt 的 loop 会取队列；/defend、skill、compact 占着锁时不能排队
+      if (!this.prompting || !options.streamingBehavior)
+        return Promise.reject(
+          new Error(
+            '有任务正在执行中：用 steer() / followUp()（或 streamingBehavior）排队，或等它结束',
+          ),
+        )
+      ;(options.streamingBehavior === 'steer'
+        ? this.steeringQueue
+        : this.followUpQueue
+      ).push(input)
+      this.emitQueue()
+      return Promise.resolve()
+    }
     const run = this.run(input, options)
-    this.running = run.then(
-      () => {},
-      () => {},
+    const running = run.then(
+      () => {
+        if (this.running === running) this.running = undefined
+      },
+      () => {
+        if (this.running === running) this.running = undefined
+      },
     )
+    this.running = running
     return run
   }
 
@@ -407,51 +514,135 @@ export class VelaSession {
     return this.started
   }
 
+  /** prompt() 的 run 正在进行（会在结束前取完队列） */
+  private prompting = false
+
   private async run(input: string, options: PromptOptions): Promise<void> {
     const busy = this.busy
     busy.locked = true
-    busy.controller = new AbortController()
-    const forward = () => busy.controller?.abort(options.signal?.reason)
+    this.prompting = true
+    const controller = new AbortController()
+    busy.controller = controller
+    const forward = () => controller.abort(options.signal?.reason)
     options.signal?.addEventListener('abort', forward, { once: true })
     if (options.signal?.aborted) forward()
+    let failure: { error: unknown } | undefined
+    const next = () => {
+      const steering = this.dequeue('steering')
+      return steering.length ? steering : this.dequeue('followUp')
+    }
+    let saved = false
     try {
-      await this.start()
-      busy.controller.signal.throwIfAborted()
-      const { model, info } = this.resolveModel()
-      // 模型不支持当前 thinking 级别时在这里报错，不发请求、不写历史
-      const reasoning = reasoningOption(this.thinking, info)
-      this.sections = await this.deps.extensions.beforeAgentStart(this, input)
-      this.emit({ type: 'agent_start', input })
-      this.append({ role: 'user', content: input })
-      await agentLoop({
-        model,
-        reasoning,
-        systemPrompt: () => this.buildSystem(),
-        toolRegistry: this.registry,
-        messages: this.messages,
-        tokenTracker: this.tracker,
-        prepareContext: (request) => this.prepareContext(request),
-        abortSignal: busy.controller.signal,
-        onEvent: this.emit,
-        limits: this.limits,
-      })
+      // 这次的输入，然后是排队的消息：剩下的 steer（loop 因预算 / 出错等提前结束时）优先，再是 followUp。
+      // 每批是一次新的 agent loop（自己的 agent_start / 预算 / 轮数）；中断后不再继续，队列留着。
+      let inputs = [input]
+      while (inputs.length) {
+        saved = false
+        try {
+          await this.runLoop(inputs, controller.signal)
+        } catch (error) {
+          failure ??= { error }
+        }
+        if (controller.signal.aborted) break
+        inputs = next()
+        if (!inputs.length) {
+          // 保存期间还可能有消息排进来：存完再看一次，之后到解锁之间没有 await
+          await this.saveOrReport()
+          saved = true
+          inputs = next()
+        }
+      }
     } finally {
       options.signal?.removeEventListener('abort', forward)
-      try {
-        await this.save()
-      } catch (error) {
-        this.emit({ type: 'session_save_failed', error })
-      } finally {
-        busy.locked = false
-        busy.controller = undefined
-      }
+      if (!saved) await this.saveOrReport()
+      busy.locked = false
+      busy.controller = undefined
+      this.prompting = false
+      this.emit({ type: 'agent_settled' })
+    }
+    if (failure) throw failure.error
+  }
+
+  private async saveOrReport(): Promise<void> {
+    try {
+      await this.save()
+    } catch (error) {
+      this.emit({ type: 'session_save_failed', error })
     }
   }
 
-  /** 中断当前 agent loop 和扩展命令（如果有）。 */
-  abort(reason: unknown = new DOMException('用户取消当前操作', 'AbortError')) {
+  /** 一次 agent loop：inputs 依次作为用户消息追加。 */
+  private async runLoop(inputs: string[], signal: AbortSignal): Promise<void> {
+    await this.start()
+    signal.throwIfAborted()
+    const { model, info } = this.resolveModel()
+    // 模型不支持当前 thinking 级别时在这里报错，不发请求、不写历史
+    const reasoning = reasoningOption(this.thinking, info)
+    const input = inputs.join('\n\n')
+    this.sections = await this.deps.extensions.beforeAgentStart(this, input)
+    this.emit({ type: 'agent_start', input })
+    for (const text of inputs) this.append({ role: 'user', content: text })
+    await agentLoop({
+      model,
+      reasoning,
+      systemPrompt: () => this.buildSystem(),
+      toolRegistry: this.registry,
+      messages: this.messages,
+      tokenTracker: this.tracker,
+      prepareContext: (request) => this.prepareContext(request),
+      abortSignal: signal,
+      onEvent: this.emit,
+      limits: this.limits,
+      takeSteering: () => this.dequeue('steering'),
+    })
+  }
+
+  /**
+   * 手动压缩上下文（同 pi 的 compact）：把较早的历史换成摘要，保留近期消息，然后保存。
+   * `focus` 是摘要时优先保留的内容（pi 的 customInstructions）。会话正在跑时抛错；可以被 abort() 中断。
+   */
+  async compact(focus?: string): Promise<void> {
+    if (this.closed) throw new Error(`会话 ${this.id} 已关闭`)
+    if (this.busy.locked) throw new Error('有任务正在执行中，结束后再压缩')
+    const busy = this.busy
+    busy.locked = true
+    const controller = new AbortController()
+    busy.controller = controller
+    const run = (async () => {
+      await this.start()
+      const request = await createRequestSnapshot(
+        this.model,
+        this.buildSystem(),
+        this.registry.toAISDKFormat(),
+        this.messages,
+        controller.signal,
+      )
+      await this.contextManager.compact(request, focus)
+    })()
+    const running = run.then(
+      () => {},
+      () => {},
+    )
+    this.running = running
+    try {
+      await run
+    } finally {
+      if (this.running === running) this.running = undefined
+      busy.locked = false
+      busy.controller = undefined
+    }
+  }
+
+  /**
+   * 中断当前 agent loop 和扩展命令（如果有），等 agent loop 真正停下（同 pi 的 `await abort()`）。
+   * 排队的消息留在队列里，需要的话先 clearQueue()。
+   */
+  async abort(
+    reason: unknown = new DOMException('用户取消当前操作', 'AbortError'),
+  ): Promise<void> {
     for (const controller of [this.busy.controller, ...this.commands.keys()])
       if (controller && !controller.signal.aborted) controller.abort(reason)
+    await this.waitForIdle()
   }
 
   /** token 估算、上下文占比和本会话累计用量。 */
@@ -486,5 +677,19 @@ function headlessUI(emit: (event: VelaEvent) => void): ExtensionUI {
     confirm: async () => false,
     select: async () => undefined,
     input: async () => undefined,
+    setStatus: () => {},
+    setWidget: () => {},
+  }
+}
+
+/** 补上界面没实现的 setStatus / setWidget（什么都不做）。 */
+function withDefaults(ui: SessionUI): ExtensionUI {
+  return {
+    notify: (message, level) => ui.notify(message, level),
+    confirm: (title, message) => ui.confirm(title, message),
+    select: (title, options) => ui.select(title, options),
+    input: (title, placeholder) => ui.input(title, placeholder),
+    setStatus: (key, text) => ui.setStatus?.(key, text),
+    setWidget: (key, lines) => ui.setWidget?.(key, lines),
   }
 }

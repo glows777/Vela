@@ -36,6 +36,11 @@ interface AgentLoopParameter {
   limits?: Partial<VelaLimits>
   /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时不发 */
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  /**
+   * 取出排队的 steer 消息（同 pi 的 getSteeringMessages）：每一步的工具跑完、下一次模型请求前取一次，
+   * 取到的作为用户消息接在后面；模型本来要结束时取到了也会接着跑。
+   */
+  takeSteering?: () => string[]
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -71,6 +76,7 @@ export const agentLoop = async ({
   onEvent,
   limits: limitOverrides,
   reasoning,
+  takeSteering,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
@@ -136,6 +142,10 @@ export const agentLoop = async ({
               case 'text-delta': {
                 emit({ type: 'text_delta', text: part.text })
                 fullContent += part.text
+                break
+              }
+              case 'reasoning-delta': {
+                emit({ type: 'thinking_delta', text: part.text })
                 break
               }
               case 'tool-call': {
@@ -291,7 +301,15 @@ export const agentLoop = async ({
         endReason = 'budget'
         break
       }
-      if (!needToolCall) {
+      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前
+      const steering = takeSteering?.() ?? []
+      for (const text of steering) {
+        const message: ModelMessage = { role: 'user', content: text }
+        messages.push(message)
+        tokenTracker.addMessage(message)
+        emit({ type: 'message', message })
+      }
+      if (!needToolCall && steering.length === 0) {
         endReason = 'done'
         break
       }
