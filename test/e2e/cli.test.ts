@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { join, resolve } from 'node:path'
 import { projectDataDir } from '../../src/config'
 import { tempDir } from '../support/vela'
@@ -7,6 +7,9 @@ const ROOT = resolve(import.meta.dir, '../..')
 const ENTRY = join(ROOT, 'src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
+
+// 每个用例都起 CLI 子进程且并发运行；CI 的慢机器上十几个进程一起启动，默认 5 秒不够
+setDefaultTimeout(30_000)
 
 const dirs: { cleanup(): void }[] = []
 // 用例并发运行（每个都要起进程），统一在最后清理临时目录
