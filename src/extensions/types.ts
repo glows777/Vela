@@ -117,7 +117,10 @@ export interface ExtensionAPI {
   /** Vela 的数据目录；扩展自己的数据建议放在它下面的子目录 */
   readonly dataDir: string
   readonly logger: VelaLogger
-  /** 注册一个所有会话共享的工具；重名会抛错。 */
+  /**
+   * 注册一个所有会话共享的工具。模型看到的名字是 `<扩展名>_<name>`（例如 supabase 扩展的
+   * `query` 是 `supabase_query`），不会和内置工具重名；重名会抛错。
+   */
   registerTool(tool: ToolDefinition): void
   /** 注册 `/name` 命令：owner 会话里 `session.prompt('/name args')` 会执行它而不是发给模型。 */
   registerCommand(name: string, command: ExtensionCommand): void

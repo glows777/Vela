@@ -21,8 +21,7 @@ export interface SupabaseOptions {
 }
 
 /**
- * Supabase 数据库工具（list_tables / query / insert）。没有 url / key 时用内置的 mock 数据。
- * 工具名带 `supabase__` 前缀（沿用旧插件的名字）。
+ * Supabase 数据库工具（supabase_list_tables / supabase_query / supabase_insert）。没有 url / key 时用内置的 mock 数据。
  */
 export function supabase(options: SupabaseOptions = {}): VelaExtension {
   return function supabase(vela) {
@@ -143,7 +142,6 @@ export function supabase(options: SupabaseOptions = {}): VelaExtension {
     for (const tool of tools)
       vela.registerTool({
         ...tool,
-        name: `supabase__${tool.name}`,
         description: `[supabase] ${tool.description}`,
       })
   }

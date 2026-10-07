@@ -120,13 +120,16 @@ export class ExtensionRunner {
     }
     this.loadedList.push(loaded)
     const { deps } = this
+    const prefix = name.replace(/[^A-Za-z0-9_-]/g, '_')
     return {
       cwd: deps.cwd,
       dataDir: deps.dataDir,
       logger: deps.logger,
       registerTool: (tool) => {
-        deps.registry.register(tool)
-        loaded.tools.push(tool.name)
+        // 工具名加上扩展名前缀，避免和内置工具或其它扩展的工具重名
+        const toolName = `${prefix}_${tool.name}`
+        deps.registry.register({ ...tool, name: toolName })
+        loaded.tools.push(toolName)
       },
       registerCommand: (commandName, command) => {
         if (!COMMAND_NAME.test(commandName))

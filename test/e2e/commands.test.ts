@@ -32,8 +32,8 @@ test('the supabase extension registers tools the model can call, listed by /exte
     extensions: [supabase()],
     responses: [
       (req) => {
-        expect(req.tools).toContain('supabase__list_tables')
-        return fauxToolCall('supabase__list_tables', {})
+        expect(req.tools).toContain('supabase_list_tables')
+        return fauxToolCall('supabase_list_tables', {})
       },
       (req) =>
         fauxText(
@@ -47,7 +47,7 @@ test('the supabase extension registers tools the model can call, listed by /exte
 
   const { output } = await captureConsole(() => t.dispatch('/extensions'))
   expect(output).toContain('supabase')
-  expect(output).toContain('supabase__list_tables')
+  expect(output).toContain('supabase_list_tables')
 })
 
 test('a message from a channel runs through the same model and tools, and the reply is sent back', async () => {
