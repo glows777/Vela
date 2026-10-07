@@ -74,6 +74,7 @@ test.concurrent('-p executes tools from the scenario in the process working dire
   expect(stdout).toContain('remember the milk')
 })
 
+// 两次冷启动 CLI；CI 上和其它并发用例一起，每次 2-3 秒，会超过默认 5 秒
 test.concurrent('--continue resumes the saved session before the next prompt', async () => {
   const first = await cli(['-p', '第一句'], {
     model: `faux:${scenario('hello')}`,
@@ -88,7 +89,7 @@ test.concurrent('--continue resumes the saved session before the next prompt', a
   ).text()
   expect(session).toContain('第一句')
   expect(session).toContain('第二句')
-})
+}, 20_000)
 
 test.concurrent('a model error makes -p exit 1 with the real cause on stderr', async () => {
   const { code, stderr } = await cli(['-p', 'hi'], {
