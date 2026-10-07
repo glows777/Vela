@@ -356,7 +356,7 @@ try {
 }
 if (applyModelArgs(session))
   console.log(
-    `  模型 ${session.modelInfo.ref}${session.thinkingLevel ? `，thinking ${session.thinkingLevel}` : ''}`,
+    `  模型 ${session.modelInfo.ref}，thinking ${session.thinkingLevel}`,
   )
 else console.error('  用 /model provider/id 换一个模型')
 for (const ext of vela.extensions())

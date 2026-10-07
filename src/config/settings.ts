@@ -20,7 +20,7 @@ type Env = Record<string, string | undefined>
 export interface VelaSettings {
   /** 默认模型 `provider/id`（pi 分成 defaultProvider + defaultModel） */
   defaultModel?: string
-  /** 默认 thinking 级别；不写时不发 reasoning 参数（用 provider 的默认） */
+  /** 默认 thinking 级别；不写时 medium（同 pi） */
   defaultThinkingLevel?: ThinkingLevel
   /** 项目数据目录，相对路径按 cwd 解析；默认 `<agentDir>/projects/<编码后的 cwd>` */
   dataDir?: string

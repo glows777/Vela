@@ -14,7 +14,7 @@ const localProvider: VelaExtension = (vela) => {
   const ollama = createOpenAI({ baseURL, apiKey: 'ollama', name: 'local' })
   vela.registerProvider('local', {
     // 列出的模型带元数据（上下文窗口决定压缩阈值）；没列出的 id 也能用
-    models: [{ id: 'qwen2.5-coder:7b', contextWindow: 32_768, reasoning: false }],
+    models: [{ id: 'qwen3:8b', contextWindow: 40_960 }],
     createModel: (id) => ollama.chat(id),
   })
 }

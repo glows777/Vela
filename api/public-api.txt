@@ -126,7 +126,7 @@
     messages: { timestamp: string; message: ModelMessage; }[]
     model?: string | undefined
     summary: string
-    thinkingLevel?: ThinkingLevel | null | undefined
+    thinkingLevel?: ThinkingLevel | undefined
     timestamp: string
     type: "checkpoint"
   interface SessionOptions
@@ -332,7 +332,7 @@
     close: () => Promise<void>
     get model: LanguageModel
     get modelInfo: ModelInfo
-    get thinkingLevel: ThinkingLevel | undefined
+    get thinkingLevel: ThinkingLevel
     get usage: TokenStatus & { totals: UsageTotals; }
     getActiveTools: () => string[]
     prompt: (input: string, options?: PromptOptions) => Promise<void>
@@ -343,7 +343,7 @@
     role: Role
     setActiveTools: (names: string[] | undefined) => void
     setModel: (model: string | LanguageModel) => void
-    setThinkingLevel: (level: ThinkingLevel | undefined) => void
+    setThinkingLevel: (level: ThinkingLevel) => void
     subscribe: (listener: VelaEventListener) => () => void
   type VelaSessionEventListener = (
       event: VelaEvent,

@@ -33,11 +33,15 @@ test('resolve and register report mistakes', () => {
 })
 
 test('thinking levels map to the AI SDK reasoning option', () => {
-  expect(reasoningOption(undefined, { id: 'm' })).toBeUndefined()
-  expect(reasoningOption('off', { id: 'm' })).toBe('none')
-  expect(reasoningOption('high', { id: 'm' })).toBe('high')
-  expect(reasoningOption('max', { id: 'm' })).toBe('xhigh')
-  expect(reasoningOption('high', { id: 'm', reasoning: false })).toBeUndefined()
+  const m = { id: 'm', provider: 'p', ref: 'p/m' }
+  expect(reasoningOption('off', m)).toBe('none')
+  expect(reasoningOption('high', m)).toBe('high')
+  expect(reasoningOption('max', m)).toBe('xhigh')
+  // 声明不支持 thinking 的模型：off 不发参数，其它级别报错而不是悄悄忽略
+  expect(reasoningOption('off', { ...m, reasoning: false })).toBeUndefined()
+  expect(() => reasoningOption('medium', { ...m, reasoning: false })).toThrow(
+    '模型 p/m 不支持 thinking',
+  )
 })
 
 test('context limits follow the model window; explicit limits win', () => {
@@ -45,16 +49,18 @@ test('context limits follow the model window; explicit limits win', () => {
   const small = limitsForModel({ contextWindow: 32_768 })
   expect(small).toMatchObject({
     tokenBudget: DEFAULT_LIMITS.tokenBudget,
-    maxInputTokens: 27_853,
-    summaryThreshold: 24_576,
-    microcompactThreshold: 19_660,
+    // 同 pi：给输出留 16384
+    maxInputTokens: 16_384,
+    // 摘要请求本身要放得下：比输入上限低 10% 窗口
+    summaryThreshold: 13_108,
+    microcompactThreshold: 10_486,
     minMicroSavings: 3_276,
     maxTurns: DEFAULT_LIMITS.maxTurns,
   })
   // 200k 窗口得到的就是现在的默认值
-  expect(limitsForModel({ contextWindow: 200_000 }).maxInputTokens).toBe(
-    DEFAULT_LIMITS.maxInputTokens,
-  )
+  expect(limitsForModel({ contextWindow: 200_000 })).toEqual({ ...DEFAULT_LIMITS })
+  // 很小的窗口最多留一半给输出
+  expect(limitsForModel({ contextWindow: 16_000 }).maxInputTokens).toBe(8_000)
   expect(
     limitsForModel({ contextWindow: 32_768 }, { maxInputTokens: 30_000 })
       .maxInputTokens,

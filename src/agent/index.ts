@@ -34,7 +34,7 @@ interface AgentLoopParameter {
   onEvent?: VelaEventListener
   /** 轮数、重试、预算等上限；未给出的字段用默认值。 */
   limits?: Partial<VelaLimits>
-  /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时用 provider 默认 */
+  /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时不发 */
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 }
 

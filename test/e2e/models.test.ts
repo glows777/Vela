@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import type { VelaEvent } from '../../src/agent/events'
 import type { VelaLogger } from '../../src/logger'
 import { createVela } from '../../src/vela'
 import type { ProviderDefinition } from '../../src/models'
@@ -57,7 +58,7 @@ test('a model chosen by name uses its provider, metadata and pricing', async () 
     ref: 'fake/big',
     contextWindow: 32_768,
   })
-  expect(t.session.limits.summaryThreshold).toBe(24_576)
+  expect(t.session.limits.maxInputTokens).toBe(32_768 - 16_384)
   // 一次 prompt 的累计预算不跟窗口走（小窗口模型走几步就会超）
   expect(t.session.limits.tokenBudget).toBe(200_000)
   expect(t.session.tracker.contextWindow).toBe(32_768)
@@ -108,6 +109,7 @@ test('setModel switches the model for the next prompt and recomputes limits', as
 
   await t.run('一')
   t.session.setModel('fake/plain')
+  t.session.setThinkingLevel('off')
   expect(t.session.modelInfo.ref).toBe('fake/plain')
   // plain 没写窗口：回到默认上限
   expect(t.session.limits.tokenBudget).toBe(200_000)
@@ -129,7 +131,10 @@ test('sessions pick models independently', async () => {
   big.push(fauxText('a'))
   plain.push(fauxText('b'))
   const t = createTestVela({ model: 'fake/big', providers })
-  const other = t.vela.session('other', { model: 'fake/plain' })
+  const other = t.vela.session('other', {
+    model: 'fake/plain',
+    thinkingLevel: 'off',
+  })
 
   await t.run('问 a')
   await other.prompt('问 b')
@@ -151,12 +156,12 @@ test('thinking levels map to the reasoning call option', async () => {
   await t.run('max')
   t.session.setThinkingLevel('off')
   await t.run('off')
-  // 不支持 thinking 的模型不发 reasoning
+  // 声明不支持 thinking 的模型：off 不发 reasoning
   t.session.setModel('fake/plain')
   await t.run('plain')
 
   expect(big.calls.map((c) => c.reasoning)).toEqual([
-    undefined,
+    'medium',
     'high',
     'xhigh',
     'none',
@@ -189,7 +194,7 @@ test('a resumed session restores its model and thinking level', async () => {
       providers: first.providers,
     })
     a.session.setModel('fake/plain')
-    a.session.setThinkingLevel('medium')
+    a.session.setThinkingLevel('off')
     first.plain.push(fauxText('saved'))
     await a.run('保存')
     await a.cleanup()
@@ -203,7 +208,7 @@ test('a resumed session restores its model and thinking level', async () => {
     })
     expect(await b.session.resume()).toBe(true)
     expect(b.session.modelInfo.ref).toBe('fake/plain')
-    expect(b.session.thinkingLevel).toBe('medium')
+    expect(b.session.thinkingLevel).toBe('off')
     await b.run('继续')
     expect(second.plain.calls).toHaveLength(1)
     expect(second.big.calls).toHaveLength(0)
@@ -213,25 +218,21 @@ test('a resumed session restores its model and thinking level', async () => {
   }
 })
 
-test('clearing the thinking level to the provider default survives resume', async () => {
-  const dir = tempDir()
-  try {
-    const first = fakeProvider()
-    first.big.push(fauxText('saved'))
-    const options = { cwd: dir.path, model: 'fake/big', thinkingLevel: 'high' as const }
-    const a = createTestVela({ ...options, providers: first.providers })
-    a.session.setThinkingLevel(undefined)
-    await a.run('保存')
-    await a.cleanup()
-
-    const second = fakeProvider()
-    const b = createTestVela({ ...options, providers: second.providers })
-    expect(await b.session.resume()).toBe(true)
-    expect(b.session.thinkingLevel).toBeUndefined()
-    await b.cleanup()
-  } finally {
-    dir.cleanup()
-  }
+test('a thinking level the model does not support fails the prompt with a clear error', async () => {
+  const { plain, providers } = fakeProvider()
+  const started: VelaEvent[] = []
+  const t = createTestVela({ model: 'fake/plain', providers })
+  expect(t.session.thinkingLevel).toBe('medium')
+  t.vela.subscribe((event) => {
+    if (event.type === 'agent_start') started.push(event)
+  })
+  await expect(t.session.prompt('你好')).rejects.toThrow(
+    '模型 fake/plain 不支持 thinking',
+  )
+  // 没发请求，也没把这句话记进历史
+  expect(plain.calls).toHaveLength(0)
+  expect(started).toHaveLength(0)
+  expect(t.session.messages).toHaveLength(0)
 })
 
 test('a saved model that no longer resolves warns and keeps the current one', async () => {
@@ -242,6 +243,7 @@ test('a saved model that no longer resolves warns and keeps the current one', as
     const a = createTestVela({
       cwd: dir.path,
       model: 'fake/plain',
+      thinkingLevel: 'off',
       providers: first.providers,
     })
     await a.run('保存')
@@ -307,6 +309,5 @@ test('/model lists and switches models; /thinking sets the level for the session
   const wrong = await captureConsole(() => t.command('/thinking huge'))
   expect(wrong.output).toContain('只能是')
   expect(t.session.thinkingLevel).toBe('high')
-  await captureConsole(() => t.command('/thinking default'))
-  expect(t.session.thinkingLevel).toBeUndefined()
+  expect(wrong.output).not.toContain('default')
 })

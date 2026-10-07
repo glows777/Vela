@@ -141,7 +141,7 @@ const session = vela.session('default', { ui })   // 有界面才会真正询问
 | `/rag` / `/rag ingest <path>` | 查看知识库、导入文档 / show KB, ingest a document |
 | `/cache on` / `/cache off` | 开关 Mock 模型 cache 模拟 / toggle mock cache simulation |
 | `/model [provider/id]` | 列出已配置的模型 / 当前会话换模型 / list models or switch this session's model |
-| `/thinking [级别\|default]` | 查看 / 设置当前会话的 thinking 级别 / show or set the thinking level |
+| `/thinking [级别]` | 查看 / 设置当前会话的 thinking 级别 / show or set the thinking level |
 | `/extensions` | 已加载的扩展和它们注册的工具、命令、通道 / loaded extensions |
 | `/role [owner\|collaborator\|guest]` | 查看 / 切换当前会话的角色 / show or switch the session role |
 | `sim` | 注入模拟长对话（调试压缩用）/ inject simulated long conversation |
@@ -246,7 +246,7 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 ```jsonc
 {
   "defaultModel": "anthropic/claude-x",                 // provider/id；--model 优先
-  "defaultThinkingLevel": "medium",                     // 不写时不发 reasoning 参数（用 provider 的默认）
+  "defaultThinkingLevel": "medium",                     // 不写时 medium（同 pi）
   "limits": { "maxTurns": 20, "bashTimeoutMs": 30000 },
   "extensions": ["./my-ext.ts", "-builtin:supabase"],   // 路径相对这个文件；builtin:memory / rag / web / supabase / feishu 默认加载
   "skills": ["../shared-skills"],
@@ -280,7 +280,7 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 }
 ```
 
-模型写了 `contextWindow` 时压缩阈值和输入上限按它算（`settings.json` 里显式写的 `limits` 仍然优先），写了 `cost` 时 `/usage` 按它计费。没列出的 id 也能用（`--model openrouter/other`），只是没有这些元数据。
+模型写了 `contextWindow` 时压缩阈值和输入上限按它算（输入上限 = 窗口 − 16384，同 pi）（`settings.json` 里显式写的 `limits` 仍然优先），写了 `cost` 时 `/usage` 按它计费。没列出的 id 也能用（`--model openrouter/other`），只是没有这些元数据。thinking 默认 medium；模型写了 `"reasoning": false` 时只能用 `off`，其它级别 prompt 直接报错；没写的模型照发，provider 不支持时它的报错会原样显示。
 - 项目有 `.vela/settings.json` 或 `.vela/extensions/` 时，交互模式会问一次是否信任（记在 `~/.vela/trust.json`）；`-p` 模式不问、直接跳过，加 `--approve` 才加载。
 - 命令行：`--model provider/id`、`--thinking <级别>`、`-e <扩展文件>`（可重复）、`--no-extensions`、`--no-session`（会话不落盘）、`--approve` / `--no-approve`。
 - 旧版本把 `.sessions`、`.memory`、`.usage`、`knowledge.db` 写在项目目录里；CLI 发现时会打印搬到新目录的命令。

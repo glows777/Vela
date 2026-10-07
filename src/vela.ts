@@ -28,6 +28,7 @@ import { SkillLoader } from './skills/loader'
 import { createCoreTools } from './tools'
 import { ToolRegistry } from './tools/registry'
 import {
+  DEFAULT_THINKING_LEVEL,
   describeModel,
   type ModelInfo,
   ModelRegistry,
@@ -47,7 +48,7 @@ export interface VelaOptions {
   model?: LanguageModel | string
   /** 模型 provider（loadConfig() 给的内置 openai / anthropic + models.json，或自己写的） */
   providers?: Record<string, ProviderDefinition>
-  /** 默认 thinking 级别；不给时不发 reasoning 参数（用 provider 默认），和 pi 默认 medium 不同 */
+  /** 新会话的 thinking 级别，默认 medium（同 pi） */
   thinkingLevel?: ThinkingLevel
   /** 文件、搜索、bash 工具和 skill 的工作目录，默认 process.cwd()。 */
   cwd?: string
@@ -212,7 +213,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       {
         model,
         resolveModel,
-        thinkingLevel: options.thinkingLevel,
+        thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
         limitOverrides: options.limits ?? {},
         logger,
         dataDir,

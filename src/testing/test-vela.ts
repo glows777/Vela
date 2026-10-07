@@ -48,7 +48,7 @@ export interface TestVelaOptions {
   model?: LanguageModel | string
   /** 模型 provider，同 createVela 的 `providers` */
   providers?: Record<string, ProviderDefinition>
-  /** 新会话默认的 thinking 级别 */
+  /** 新会话默认的 thinking 级别（默认 medium） */
   thinkingLevel?: ThinkingLevel
   /** 复用已有目录（例如测试会话恢复）；不传则新建临时目录 */
   cwd?: string

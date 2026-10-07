@@ -159,7 +159,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/rag | rag 扩展：没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留；`/rag`、`/rag ingest` 及中断 |
 | e2e/commands | `/context` `/usage` `status`；supabase 扩展的工具模型能直接用、`/extensions` 列出；通道消息走同一模型和工具并回发 |
 | e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、registerProvider、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
-| e2e/models | 按名字选模型（provider、元数据、models.json 价格）；`setModel` 从下一轮起换模型并重算上限；会话各自选模型；thinking 级别映射到 `reasoning`（max→xhigh、不支持 thinking 的模型不发）；Vela 级默认 thinking；恢复会话带回模型和 thinking、保存的模型不可用时告警并保留当前；对象模型不落盘；没有默认模型时要先 setModel；`/model` `/thinking` |
+| e2e/models | 按名字选模型（provider、元数据、models.json 价格）；`setModel` 从下一轮起换模型并重算上限；会话各自选模型；thinking 级别映射到 `reasoning`（默认 medium、max→xhigh；`reasoning: false` 的模型 off 不发、其它级别 prompt 报错且不发请求）；Vela 级默认 thinking；恢复会话带回模型和 thinking、保存的模型不可用时告警并保留当前；对象模型不落盘；没有默认模型时要先 setModel；`/model` `/thinking` |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存 |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |

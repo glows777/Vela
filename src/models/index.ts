@@ -2,6 +2,9 @@ import type { LanguageModel } from 'ai'
 import { DEFAULT_LIMITS, type VelaLimits } from '../limits'
 import type { ModelPricing } from '../usage/tracker'
 
+/** 默认 thinking 级别（同 pi）。 */
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'
+
 /** thinking 级别（同 pi）。映射到 AI SDK 的 `reasoning` 调用参数，`max` 按 `xhigh` 发。 */
 export type ThinkingLevel =
   | 'off'
@@ -115,19 +118,31 @@ export function describeModel(model: LanguageModel): ModelInfo {
   }
 }
 
-/** thinking 级别 → AI SDK 的 `reasoning`；不支持 thinking 的模型或没设置时不发。 */
+/**
+ * thinking 级别 → AI SDK 的 `reasoning`。模型条目写了 `reasoning: false` 时，`off` 不发参数，
+ * 其它级别直接报错（不悄悄忽略，用户要知道设置没生效）；没写的模型照发，provider 不支持时它的报错会原样抛出。
+ */
 export function reasoningOption(
-  level: ThinkingLevel | undefined,
-  info: ModelSpec,
+  level: ThinkingLevel,
+  info: ModelInfo,
 ): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
-  if (level === undefined || info.reasoning === false) return
+  if (info.reasoning === false) {
+    if (level === 'off') return
+    throw new Error(
+      `模型 ${info.ref} 不支持 thinking（reasoning: false），当前 thinking 级别是 ${level}：用 /thinking off 或 setThinkingLevel('off')`,
+    )
+  }
   if (level === 'off') return 'none'
   if (level === 'max') return 'xhigh'
   return level
 }
 
+/** 给输出留的 token（同 pi compaction 的 reserveTokens 默认值） */
+export const RESERVE_TOKENS = 16_384
+
 /**
- * 按模型的上下文窗口算压缩阈值和输入上限（默认值就是按 200k 窗口定的比例；tokenBudget 不跟窗口走）；
+ * 按模型的上下文窗口算压缩阈值和输入上限（200k 窗口得到的就是默认值；tokenBudget 不跟窗口走）：
+ * 输入上限 = 窗口 − 16384（同 pi），摘要阈值 75% 窗口、但至少比输入上限低 10% 窗口（摘要请求本身要放得下）。
  * 没写 contextWindow 时用默认值。`overrides`（createVela / settings 里显式写的 limits）优先。
  */
 export function limitsForModel(
@@ -135,16 +150,24 @@ export function limitsForModel(
   overrides: Partial<VelaLimits> = {},
 ): VelaLimits {
   const window = info.contextWindow
-  const derived: Partial<VelaLimits> = window
-    ? {
-        // tokenBudget 是一次 prompt 累计消耗的上限（每步都重发整段历史），不是窗口，不跟模型走
-        // 留给输出的余量：200k 窗口是 16384（现在的默认值），小窗口按 15%，保证高于摘要阈值
-        maxInputTokens: window - Math.min(16_384, Math.floor(window * 0.15)),
-        summaryThreshold: Math.floor(window * 0.75),
-        microcompactThreshold: Math.floor(window * 0.6),
-        minMicroSavings: Math.floor(window * 0.1),
-      }
-    : {}
+  let derived: Partial<VelaLimits> = {}
+  if (window) {
+    // 窗口不到 2 × 16384 时（很少见）最多留一半，免得输入上限变成 0
+    const maxInputTokens = Math.max(window - RESERVE_TOKENS, Math.floor(window / 2))
+    const summaryThreshold = Math.min(
+      Math.floor(window * 0.75),
+      maxInputTokens - Math.floor(window * 0.1),
+    )
+    derived = {
+      maxInputTokens,
+      summaryThreshold,
+      microcompactThreshold: Math.min(
+        Math.floor(window * 0.6),
+        Math.floor(summaryThreshold * 0.8),
+      ),
+      minMicroSavings: Math.floor(window * 0.1),
+    }
+  }
   const limits = { ...DEFAULT_LIMITS, ...derived }
   for (const [key, value] of Object.entries(overrides))
     if (value !== undefined) limits[key as keyof VelaLimits] = value

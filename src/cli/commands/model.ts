@@ -1,7 +1,7 @@
 import { THINKING_LEVELS, type ThinkingLevel } from '../../models'
 import type { CommandHandler } from './index'
 
-/** `/model [provider/id]`、`/thinking [级别|default]`：查看或切换当前会话的模型和 thinking（选择器 UI 留给 TUI）。 */
+/** `/model [provider/id]`、`/thinking [级别]`：查看或切换当前会话的模型和 thinking（选择器 UI 留给 TUI）。 */
 export const modelCommands: CommandHandler[] = [
   (cmd, { vela, session }) => {
     if (cmd !== '/model' && !cmd.startsWith('/model ')) return false
@@ -46,16 +46,16 @@ export const modelCommands: CommandHandler[] = [
     const level = cmd.slice('/thinking'.length).trim()
     if (!level) {
       console.log(
-        `\n[thinking] 当前: ${session.thinkingLevel ?? 'default（provider 默认）'}；可选 ${THINKING_LEVELS.join(' / ')} / default`,
+        `\n[thinking] 当前: ${session.thinkingLevel}；可选 ${THINKING_LEVELS.join(' / ')}`,
       )
       return true
     }
-    if (level !== 'default' && !THINKING_LEVELS.includes(level as ThinkingLevel)) {
-      console.log(`\n[thinking] 只能是 ${THINKING_LEVELS.join(' / ')} / default`)
+    if (!THINKING_LEVELS.includes(level as ThinkingLevel)) {
+      console.log(`\n[thinking] 只能是 ${THINKING_LEVELS.join(' / ')}`)
       return true
     }
-    session.setThinkingLevel(level === 'default' ? undefined : (level as ThinkingLevel))
-    console.log(`\n[thinking] 当前会话: ${session.thinkingLevel ?? 'default'}`)
+    session.setThinkingLevel(level as ThinkingLevel)
+    console.log(`\n[thinking] 当前会话: ${session.thinkingLevel}`)
     return true
   },
 ]

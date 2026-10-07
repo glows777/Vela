@@ -44,7 +44,7 @@ export interface SessionOptions {
   ui?: ExtensionUI
   /** 这个会话用的模型（`provider/id` 或 LanguageModel），默认 Vela 的模型 */
   model?: string | LanguageModel
-  /** thinking 级别，默认 Vela 的；没有时不发 reasoning 参数 */
+  /** thinking 级别，默认 Vela 的（Vela 默认 medium，同 pi） */
   thinkingLevel?: ThinkingLevel
 }
 
@@ -81,7 +81,7 @@ export interface SessionDeps {
   model: string | LanguageModel | undefined
   /** 按名字或对象找模型（含 provider 注册表） */
   resolveModel: (model: string | LanguageModel | undefined) => ResolvedModel
-  thinkingLevel?: ThinkingLevel
+  thinkingLevel: ThinkingLevel
   /** 显式给的 limits；其余按模型的上下文窗口算 */
   limitOverrides: Partial<VelaLimits>
   logger: VelaLogger
@@ -183,15 +183,14 @@ export class VelaSession {
         typeof this.modelChoice === 'string'
           ? this.resolved?.info.ref ?? this.modelChoice
           : undefined,
-      // null = 明确用 provider 默认（恢复时不退回 Vela 的默认级别）
-      thinkingLevel: this.thinking ?? null,
+      thinkingLevel: this.thinking,
     })
   }
 
   /** 选定的模型（名字或对象），真正解析推迟到第一次用（扩展注册的 provider 可能还没加载完） */
   private modelChoice: string | LanguageModel | undefined
   private resolved?: ResolvedModel
-  private thinking?: ThinkingLevel
+  private thinking: ThinkingLevel
 
   private resolveModel(): ResolvedModel {
     if (!this.resolved) this.applyModel(this.deps.resolveModel(this.modelChoice))
@@ -228,14 +227,17 @@ export class VelaSession {
     this.applyModel(resolved)
   }
 
-  /** thinking 级别；undefined 表示不发 reasoning 参数（用 provider 默认）。 */
-  get thinkingLevel(): ThinkingLevel | undefined {
+  /** thinking 级别（off … max，默认 medium）。 */
+  get thinkingLevel(): ThinkingLevel {
     return this.thinking
   }
 
-  /** 设置 thinking 级别（同 pi 的 setThinkingLevel），从下一次请求起生效，随会话保存。 */
-  setThinkingLevel(level: ThinkingLevel | undefined): void {
-    if (level !== undefined && !THINKING_LEVELS.includes(level))
+  /**
+   * 设置 thinking 级别（同 pi 的 setThinkingLevel），从下一次请求起生效，随会话保存。
+   * 模型不支持 thinking 时 prompt() 会报错（模型条目 `reasoning: false`，或 provider 自己拒绝）。
+   */
+  setThinkingLevel(level: ThinkingLevel): void {
+    if (!THINKING_LEVELS.includes(level))
       throw new Error(`thinking 级别只能是 ${THINKING_LEVELS.join(' / ')}`)
     this.thinking = level
   }
@@ -330,8 +332,8 @@ export class VelaSession {
     if (!saved) return false
     this.contextManager.restore(saved)
     // 旧 checkpoint 没有这个字段：保留当前级别
-    if (saved.thinkingLevel !== undefined)
-      this.thinking = saved.thinkingLevel ?? undefined
+    if (saved.thinkingLevel && THINKING_LEVELS.includes(saved.thinkingLevel))
+      this.thinking = saved.thinkingLevel
     if (saved.model) {
       // 扩展注册的 provider 要等扩展加载完才能解析
       await this.deps.extensions.ready.catch(() => {})
@@ -416,12 +418,14 @@ export class VelaSession {
       await this.start()
       busy.controller.signal.throwIfAborted()
       const { model, info } = this.resolveModel()
+      // 模型不支持当前 thinking 级别时在这里报错，不发请求、不写历史
+      const reasoning = reasoningOption(this.thinking, info)
       this.sections = await this.deps.extensions.beforeAgentStart(this, input)
       this.emit({ type: 'agent_start', input })
       this.append({ role: 'user', content: input })
       await agentLoop({
         model,
-        reasoning: reasoningOption(this.thinking, info),
+        reasoning,
         systemPrompt: () => this.buildSystem(),
         toolRegistry: this.registry,
         messages: this.messages,
