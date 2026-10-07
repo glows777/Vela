@@ -48,7 +48,6 @@ test('context limits follow the model window; explicit limits win', () => {
   expect(limitsForModel({})).toEqual({ ...DEFAULT_LIMITS })
   const small = limitsForModel({ contextWindow: 32_768 })
   expect(small).toMatchObject({
-    tokenBudget: DEFAULT_LIMITS.tokenBudget,
     // 同 pi：给输出留 16384
     maxInputTokens: 16_384,
     // 摘要请求本身要放得下：比输入上限低 10% 窗口

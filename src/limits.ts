@@ -9,8 +9,6 @@ export interface VelaLimits {
   retryBaseMs: number
   /** 重试退避上限 */
   retryMaxMs: number
-  /** 单次 agent loop 的 token 预算（超过 90% 告警，超过即停止） */
-  tokenBudget: number
   /** 估算输入达到该值时尝试微压缩（折叠旧工具结果） */
   microcompactThreshold: number
   /** 估算输入达到该值时生成历史摘要 */
@@ -27,7 +25,6 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   maxRetries: 3,
   retryBaseMs: 500,
   retryMaxMs: 30_000,
-  tokenBudget: 200_000,
   microcompactThreshold: 120_000,
   summaryThreshold: 150_000,
   minMicroSavings: 20_000,
@@ -35,7 +32,7 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   bashTimeoutMs: 10_000,
 })
 
-/** 没有的上限名（拼错的、或已经去掉的 maxTurns）直接报错，不悄悄忽略。 */
+/** 没有的上限名（拼错的、或已经去掉的 maxTurns / tokenBudget）直接报错，不悄悄忽略。 */
 export function assertLimitKeys(limits: object, where = 'limits'): void {
   for (const key of Object.keys(limits))
     if (!Object.hasOwn(DEFAULT_LIMITS, key))

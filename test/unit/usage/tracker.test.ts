@@ -26,7 +26,7 @@ test('normalizes AI SDK usage detail fields', () => {
   })
 })
 
-test('keeps loop budget separate from cumulative usage', () => {
+test('records cumulative usage per step', () => {
   const tracker = new TokenTracker()
   tracker.record('mock-model', {
     inputTokens: 60,
@@ -35,13 +35,9 @@ test('keeps loop budget separate from cumulative usage', () => {
     outputTokens: 7,
   })
 
-  expect(tracker.loopTokens).toBe(107)
   expect(tracker.totals().steps).toBe(1)
   expect(tracker.totals().inputTokens).toBe(60)
   expect(tracker.totals().cacheReadTokens).toBe(30)
   expect(tracker.totals().cacheWriteTokens).toBe(10)
 
-  tracker.beginLoop()
-  expect(tracker.loopTokens).toBe(0)
-  expect(tracker.totals().steps).toBe(1)
 })

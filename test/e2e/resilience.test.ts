@@ -220,43 +220,6 @@ test('there is no turn limit: the loop runs until the model stops calling tools 
   })
 })
 
-test('the token budget warns near the limit and stops above it', async () => {
-  const t = createTestVela({
-    limits: { tokenBudget: 1000 },
-    responses: [
-      fauxToolCall(
-        'list_directory',
-        { path: '.' },
-        { usage: { input: 920, output: 0 } },
-      ),
-      fauxToolCall(
-        'list_directory',
-        { path: 'x' },
-        { usage: { input: 200, output: 0 } },
-      ),
-    ],
-  })
-
-  await t.run('干活')
-
-  const warnings = t.eventsOf('budget_warning')
-  expect(warnings[0]).toEqual({
-    type: 'budget_warning',
-    used: 920,
-    limit: 1000,
-  })
-  expect(t.eventTypes().slice(-4)).toEqual([
-    'budget_warning',
-    'turn_end',
-    'agent_end',
-    'agent_settled',
-  ])
-  expect(t.eventsOf('agent_end').at(-1)).toEqual({
-    type: 'agent_end',
-    reason: 'budget',
-  })
-})
-
 test('a request over maxInputTokens is stopped before it is sent', async () => {
   const t = createTestVela({ limits: { maxInputTokens: 10 }, responses: [] })
   await expect(t.run('hi')).rejects.toThrow('安全容量')
