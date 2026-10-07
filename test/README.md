@@ -29,9 +29,12 @@ faux 和 demo 模型在 `src/testing/` 而不在 `test/`，因为 CLI 运行时�
 | `bun run test:e2e` | 只跑整体流程（含 CLI 子进程） | 约 4.5 秒 |
 | `bun run test:live` | 真实模型，需要 `OPENAI_API_KEY`、`OPENAI_API_MODEL_NAME` | 取决于模型 |
 | `bun test <文件或目录>` | 定向跑一部分 | |
-| `bun run typecheck` | `tsc --noEmit`；main 上还有 2 个已知错误（`lark.ts`、`supabase-plugin.ts`），不要新增 | |
+| `bun run typecheck` | `tsc --noEmit`，必须 0 错误 | |
+| `bun run lint` | `biome lint`，必须 0 error（warning 不挡；`app/`、`calculator/`、`sample/` 是演示文件，不参与 lint） | |
 
 整套测试不访问网络、不需要任何环境变量。每个用例都在自己的临时目录里跑，互不影响，跑完自动删掉。
+
+CI（`.github/workflows/ci.yml`）在每个 PR 和 main 的 push 上依次跑 `bun run test`、`bun run typecheck`、`bun run lint`，任何一步失败都会挡住 PR。`test/live/` 不在 CI 里跑。
 
 ## 分层
 
@@ -127,7 +130,7 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 1. 先写或改测试，让它表达期望的行为（修 bug 时先让它失败）。
 2. 定向跑相关文件：`bun test test/unit/<模块> test/e2e/<场景>`。
 3. 改到跨模块的东西（agent loop、`createVela`、事件、上下文、CLI）时跑 `bun run test`。
-4. `bun run typecheck` 不新增错误；`bunx biome lint <改动的文件>` 不新增 error。
+4. `bun run typecheck` 和 `bun run lint` 都要通过（CI 也会跑）。
 5. 涉及真实模型行为（provider、usage 字段、工具调用格式）时，有条件就跑一次 `bun run test:live`。
 6. 改了事件、faux 接口或测试约定时，同步更新本文件。
 

@@ -68,7 +68,11 @@ function invoke(
     }),
   )
 }
-async function rows(registry: ToolRegistry): Promise<any[]> {
+type HistoryRow = { type: string; status?: string; input?: unknown } & Record<
+  string,
+  unknown
+>
+async function rows(registry: ToolRegistry): Promise<HistoryRow[]> {
   return (await Bun.file(registry.results.history.path).text())
     .trim()
     .split('\n')
@@ -167,7 +171,7 @@ test('pre modifications chain through exceptions, allow, and final execution', a
     { command: 'final' },
   ])
   expect(
-    (await rows(registry)).find((row) => row.type === 'tool_call').input,
+    (await rows(registry)).find((row) => row.type === 'tool_call')?.input,
   ).toEqual({ command: 'final' })
   expect(pipeline.list().pre).toEqual(['first', 'throws', 'second', 'allow'])
 })
@@ -352,8 +356,8 @@ test('post changes model text while history preserves native small result', asyn
   const record = (await rows(registry)).find(
     (row) => row.type === 'tool_result',
   )
-  expect(record.output).toEqual({ native: true })
-  expect(record.exitCode).toBe(0)
+  expect(record?.output).toEqual({ native: true })
+  expect(record?.exitCode).toBe(0)
 })
 
 for (const preStored of [false, true]) {
@@ -382,21 +386,24 @@ for (const preStored of [false, true]) {
         },
       }),
     )
-    const result = (await invoke(registry, 'read_file')) as any
+    const result = (await invoke(registry, 'read_file')) as Record<
+      string,
+      unknown
+    >
     expect(result.kind).toBe('vela-tool-result')
     expect(result.preview).toBe('custom preview')
     expect(result.execution).toEqual({ exitCode: 0 })
     expect(result.bytes).toBe(Buffer.byteLength(original))
     expect(result.indexPath).toBe(registry.results.history.path)
     expect(typeof result.read).toBe('string')
-    expect(await Bun.file(result.path).text()).toBe(original)
+    expect(await Bun.file(String(result.path)).text()).toBe(original)
     const record = (await rows(registry)).find(
       (row) => row.type === 'tool_result',
     )
-    expect(result.callId).toBe(record.callId)
-    expect(result.historySeq).toBe(record.seq)
-    expect(result.path).toBe(record.outputPath)
-    expect(record.status).toBe('completed')
+    expect(result.callId).toBe(record?.callId)
+    expect(result.historySeq).toBe(record?.seq)
+    expect(result.path).toBe(record?.outputPath)
+    expect(record?.status).toBe('completed')
   })
 }
 
@@ -421,7 +428,7 @@ test('pre-aborted call never executes and existing cancelled history survives', 
   ).catch(() => {})
   expect(calls).toBe(0)
   expect(
-    (await rows(registry)).find((row) => row.type === 'tool_result').status,
+    (await rows(registry)).find((row) => row.type === 'tool_result')?.status,
   ).toBe('cancelled')
 })
 

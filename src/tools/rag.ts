@@ -45,8 +45,8 @@ export function createRagTools(
           chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i]! })),
         )
         return `已导入 ${chunks.length} 个文档片段（来源: ${path}）。知识库共 ${vectorStore.size()} 个片段。`
-      } catch (e: any) {
-        return `导入失败: ${e.message}`
+      } catch (e) {
+        return `导入失败: ${e instanceof Error ? e.message : String(e)}`
       }
     },
   }

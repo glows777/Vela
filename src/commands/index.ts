@@ -1,6 +1,7 @@
 import type { VelaLimits } from '../limits'
-import type { ModelMessage } from 'ai'
+import type { LanguageModel, ModelMessage } from 'ai'
 import type { MemoryStore } from '../memory/store'
+import type { SqliteVectorStore } from '../rag/sqllite-store'
 import type { PromptContext, PromptPipeline } from '../prompt'
 import type { SessionStore } from '../session'
 import type { ToolRegistry } from '../tools/registry'
@@ -19,19 +20,20 @@ export interface CommandContext {
   builder: PromptPipeline
   tracker: TokenTracker
   sessionStore: SessionStore
-  model: any
+  model: LanguageModel
   makePromptCtx: () => PromptContext
   prepareContext: (request: RequestSnapshot, options?: { allowSummary?: boolean }) => Promise<void>
   saveSession: () => Promise<void>
   ask: () => void
   memoryStore?: MemoryStore
+  vectorStore?: SqliteVectorStore
   /** agent 循环互斥锁：任一 agentLoop 运行时置位，防止并发启动第二个循环共享 messages */
   busy: { locked: boolean; controller?: AbortController }
   /** 命令内启动的 agentLoop 使用的事件回调 */
   onEvent?: VelaEventListener
   /** 命令内启动的 agentLoop 使用的上限 */
   limits?: Partial<VelaLimits>
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export type CommandHandler = (

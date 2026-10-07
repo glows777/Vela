@@ -17,9 +17,8 @@ export class FeishuChannel implements ChannelDefinition {
 
   private config: FeishuConfig
   private messageHandler?: (msg: IncomingMessage) => void
-  private httpServer?: any
-  private wsClient?: any
-  private larkClient?: any
+  private wsClient?: lark.WSClient
+  private larkClient?: lark.Client
 
   constructor(config: FeishuConfig) {
     this.config = config
@@ -71,7 +70,7 @@ export class FeishuChannel implements ChannelDefinition {
     this.wsClient = new lark.WSClient({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
-      loggerLevel: lark.LoggerLevel.WARN,
+      loggerLevel: lark.LoggerLevel.warn,
     })
 
     await this.wsClient.start({ eventDispatcher: dispatcher })
@@ -79,8 +78,7 @@ export class FeishuChannel implements ChannelDefinition {
   }
 
   async stop(): Promise<void> {
-    if (this.httpServer) this.httpServer.close()
-    if (this.wsClient) await this.wsClient.stop()
+    this.wsClient?.close()
   }
 
   async send(message: OutgoingMessage): Promise<void> {

@@ -20,8 +20,11 @@ export class ToolExecutionResult {
 export interface ToolDefinition {
   name: string
   description: string
+  // 每个工具的入参类型各不相同，注册表只能统一按 any 存放
+  // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool inputs
   inputSchema: FlexibleSchema<any>
   execute: (
+    // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool inputs
     input: any,
     context?: {
       results: ToolResultStore
@@ -409,7 +412,7 @@ export class ToolRegistry {
         shouldDefer: true,
         searchHint: `${serverName} ${tool.name} ${tool.description}`,
         maxResultChars: 3000,
-        execute: async (input: any, context) => {
+        execute: async (input, context) => {
           const result = await toolClient.callTool(
             {
               name: originalName,
