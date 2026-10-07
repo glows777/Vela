@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { MemoryStore } from '../../src/extensions/memory/store'
-import { fauxText, fauxToolCall } from '../../src/testing/faux'
+import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -146,6 +146,17 @@ test('/dream hands the memory clean-up prompt to the model', async () => {
   expect(t.model.calls[0]!.lastUserText).toContain('memory lint')
   expect(t.lastAssistantText()).toBe('记忆已整理')
   expect(notes(t)).toContain('[dream] 完成')
+  expect(t.session.busy.locked).toBe(false)
+})
+
+test('aborting the prompt signal of /dream stops the model run it started', async () => {
+  const t = withMemory({ responses: [fauxHang()] })
+  const controller = new AbortController()
+  const run = t.run('/dream', { signal: controller.signal })
+  while (t.model.calls.length === 0) await Bun.sleep(1)
+  controller.abort(new Error('stop dream'))
+  await expect(run).rejects.toThrow()
+  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('aborted')
   expect(t.session.busy.locked).toBe(false)
 })
 

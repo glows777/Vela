@@ -174,13 +174,12 @@ export class VelaSession {
   }
 
   /** 正在执行的扩展命令（命令不占运行锁，可以同时跑几个，命令里也可以再调用 prompt()） */
-  private readonly commands = new Set<AbortController>()
+  private readonly commands = new Map<AbortController, Promise<boolean>>()
 
   /** @internal 正在跑（agent loop 或扩展命令）时的中断信号 */
   get signal(): AbortSignal | undefined {
     return (
-      this.busy.controller?.signal ??
-      this.commands.values().next().value?.signal
+      this.busy.controller?.signal ?? this.commands.keys().next().value?.signal
     )
   }
 
@@ -267,13 +266,10 @@ export class VelaSession {
     const forward = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', forward, { once: true })
     if (signal?.aborted) forward()
-    this.commands.add(controller)
+    const task = this.deps.extensions.runCommand(this, input, controller.signal)
+    this.commands.set(controller, task)
     try {
-      return await this.deps.extensions.runCommand(
-        this,
-        input,
-        controller.signal,
-      )
+      return await task
     } finally {
       this.commands.delete(controller)
       signal?.removeEventListener('abort', forward)
@@ -338,7 +334,7 @@ export class VelaSession {
 
   /** 中断当前 agent loop 和扩展命令（如果有）。 */
   abort(reason: unknown = new DOMException('用户取消当前操作', 'AbortError')) {
-    for (const controller of [this.busy.controller, ...this.commands])
+    for (const controller of [this.busy.controller, ...this.commands.keys()])
       if (controller && !controller.signal.aborted) controller.abort(reason)
   }
 
@@ -352,6 +348,8 @@ export class VelaSession {
     if (this.closed) return
     this.closed = true
     this.abort(new DOMException('会话已关闭', 'AbortError'))
+    // 先等扩展命令收尾（/dream 这类命令自己也在等它发起的 prompt）
+    await Promise.allSettled(this.commands.values())
     await this.running
     await this.registry.waitForIdle().catch(() => {})
     // 只有触发过 session_start 的会话才发 session_shutdown

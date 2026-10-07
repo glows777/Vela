@@ -460,3 +460,30 @@ test('session.abort() reaches every running command, even after another one fini
   expect(signals[1]?.aborted).toBe(true)
   expect(t.session.signal).toBeUndefined()
 })
+
+test('closing the session waits for running commands to finish their clean-up', async () => {
+  let cleanedUp = false
+  let started!: () => void
+  const running = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const slow: VelaExtension = function slow(vela) {
+    vela.registerCommand('slow', {
+      handler: (_args, ctx) =>
+        new Promise<void>((resolve) => {
+          started()
+          ctx.signal?.addEventListener('abort', async () => {
+            await Bun.sleep(20)
+            cleanedUp = true
+            resolve()
+          })
+        }),
+    })
+  }
+  const t = createTestVela({ extensions: [slow] })
+  const run = t.run('/slow')
+  await running
+  await t.session.close()
+  expect(cleanedUp).toBe(true)
+  await run
+})

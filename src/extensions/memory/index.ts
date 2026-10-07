@@ -58,7 +58,7 @@ export function memory(): VelaExtension {
       description: '让模型整理记忆库（合并重复、删除过期）',
       handler: async (_args, ctx) => {
         ctx.ui.notify('[dream] 开始记忆整理...')
-        await ctx.session.prompt(DREAM_PROMPT)
+        await ctx.session.prompt(DREAM_PROMPT, { signal: ctx.signal })
         ctx.ui.notify('[dream] 完成')
       },
     })
