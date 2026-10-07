@@ -119,11 +119,57 @@ test('slash commands: CLI command output, extension commands and /hotkeys go to 
   await tui.started
 
   tui.submit('/extensions')
-  await tui.until('[extensions]')
+  // 命令逐行 print 的输出合成一段，行之间不空行
+  await tui.until('[extensions]\n   memory\n     工具: memory')
   tui.submit('/todo 买牛奶')
   await tui.until('买牛奶')
   tui.submit('/hotkeys')
   await tui.until('Alt+Up 把排队的消息拿回输入框')
+})
+
+test('terminal control sequences in tool output and channel messages are not written to the terminal', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'x\x1b]0;PWNED\x07y\x1b[31mred\x1b]52;c;ZXZpbA==\x07' },
+    responses: [
+      fauxToolCall('read_file', { path: 'a.txt' }),
+      fauxText('done'),
+      fauxText('回复'),
+    ],
+  })
+  t.internals.gateway.register({
+    name: 'fake',
+    description: 'test channel',
+    start: () => {},
+    stop: () => {},
+    send: async () => {},
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+  tui.submit('读 a.txt')
+  await tui.until('done')
+  await tui.until(() => !t.vela.session('tui').isRunning)
+  // 通道里的人（不受信任）发来的消息
+  await t.internals.gateway.handleIncoming('fake', {
+    channelId: 'c1',
+    senderId: 'guest',
+    senderName: 'guest',
+    text: 'hi\x1b]0;PWNED\x07there',
+  })
+  await tui.until('[fake] guest: hithere')
+  const raw = tui.mode.tui.render(100).join('\n')
+  expect(raw).not.toContain(']0;PWNED')
+  expect(raw).not.toContain(']52;')
+  expect(tui.screen()).toContain('xyred')
+})
+
+test('SIGTERM shuts the TUI down like Ctrl+D', async () => {
+  const t = createTestVela()
+  const tui = await startTui(t.vela)
+  await tui.started
+  process.emit('SIGTERM')
+  await tui.mode.exited
+  expect(tui.exited()).toBe(true)
+  expect(process.listenerCount('SIGTERM')).toBe(0)
 })
 
 test('slash commands still run while the agent is busy instead of being steered', async () => {

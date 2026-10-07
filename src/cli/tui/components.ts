@@ -3,6 +3,7 @@ import {
   Container,
   Markdown,
   Spacer,
+  stripTerminalSequences,
   Text,
   truncateToWidth,
   visibleWidth,
@@ -13,11 +14,11 @@ import { markdownTheme, theme } from './theme'
 export class UserMessage extends Container {
   constructor(text: string, maxLines = 12) {
     super()
-    const lines = text.split('\n')
+    const lines = sanitize(text).split('\n')
     const shown =
       lines.length > maxLines
         ? `${lines.slice(0, maxLines).join('\n')}\n…（还有 ${lines.length - maxLines} 行）`
-        : text
+        : lines.join('\n')
     this.addChild(new Spacer(1))
     this.addChild(
       new Markdown(shown, 1, 1, markdownTheme, {
@@ -54,15 +55,12 @@ export class AssistantMessage extends Container {
     this.rebuild()
   }
 
-  get isEmpty(): boolean {
-    return !this.text.trim() && !this.thinking.trim()
-  }
-
   private rebuild(): void {
     this.clear()
-    if (this.isEmpty) return
+    const thinking = sanitize(this.thinking).trim()
+    const text = sanitize(this.text).trim()
+    if (!thinking && !text) return
     this.addChild(new Spacer(1))
-    const thinking = this.thinking.trim()
     if (thinking) {
       this.addChild(
         this.hideThinking
@@ -76,10 +74,9 @@ export class AssistantMessage extends Container {
               italic: true,
             }),
       )
-      if (this.text.trim()) this.addChild(new Spacer(1))
+      if (text) this.addChild(new Spacer(1))
     }
-    if (this.text.trim())
-      this.addChild(new Markdown(this.text.trim(), 1, 0, markdownTheme))
+    if (text) this.addChild(new Markdown(text, 1, 0, markdownTheme))
   }
 }
 
@@ -140,10 +137,14 @@ export class ToolBlock implements Component {
   }
 }
 
-/** 对话区里的一行提示（错误、重试、压缩、扩展通知、命令输出…） */
+/**
+ * 对话区里的一行提示（错误、重试、压缩、扩展通知、命令输出…）。
+ * `raw`：CLI 命令自己的输出（如 /context 的配色），不去掉颜色序列。
+ */
 export function notice(
   text: string,
   level: 'info' | 'dim' | 'warning' | 'error' = 'info',
+  raw = false,
 ): Component {
   const color =
     level === 'error'
@@ -155,7 +156,7 @@ export function notice(
           : 'muted'
   const container = new Container()
   container.addChild(new Spacer(1))
-  container.addChild(new Text(theme.fg(color, text), 1, 0))
+  container.addChild(new Text(theme.fg(color, raw ? text : sanitize(text)), 1, 0))
   return container
 }
 
@@ -169,14 +170,18 @@ export function summarizeInput(name: string, input: unknown): string {
           key === 'pattern' && typeof record.path === 'string'
             ? ` (${record.path})`
             : ''
-        return `${record[key]}${extra}`.replace(/\s+/g, ' ')
+        return sanitize(`${record[key]}${extra}`).replace(/\s+/g, ' ')
       }
   }
-  const json = JSON.stringify(input) ?? ''
+  const json = sanitize(JSON.stringify(input) ?? '')
   return name && json === '{}' ? '' : json
 }
 
 function formatOutput(output: unknown): string {
+  return sanitize(rawOutput(output))
+}
+
+function rawOutput(output: unknown): string {
   if (typeof output === 'string') return output.trimEnd()
   if (output instanceof Error) return output.message
   // AI SDK 的工具结果：{ type: 'text', value } / { type: 'json', value } / { type: 'error-text', value }
@@ -185,4 +190,16 @@ function formatOutput(output: unknown): string {
     if (typeof value === 'string') return value.trimEnd()
   }
   return JSON.stringify(output, null, 2) ?? ''
+}
+
+/**
+ * 工具输出、模型回答、通道消息这些外部文本直接写进终端前，去掉终端控制序列和控制字符
+ * （同 pi 的 stripAnsi + sanitizeBinaryOutput）：否则文件内容或通道里的人能改终端标题、
+ * 写剪贴板（OSC 52）或打乱画面。保留换行和 Tab。
+ */
+export function sanitize(text: string): string {
+  return stripTerminalSequences(text)
+    .replace(/\r\n?/g, '\n')
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 就是要去掉控制字符
+    .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\uFFF9-\uFFFB]/g, '')
 }

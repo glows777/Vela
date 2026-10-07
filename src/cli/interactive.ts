@@ -27,6 +27,7 @@ import { createCliDispatcher } from './dispatcher'
 import {
   AssistantMessage,
   notice,
+  sanitize,
   ToolBlock,
   UserMessage,
 } from './tui/components'
@@ -127,6 +128,7 @@ export class InteractiveMode {
   private readonly widgetLines = new Map<string, string[]>()
   private dialogs = Promise.resolve()
   private restoreConsole?: () => void
+  private readonly cleanups: (() => void)[] = []
   private shuttingDown = false
   private resolveExit!: () => void
   readonly exited = new Promise<void>((resolve) => {
@@ -183,6 +185,7 @@ export class InteractiveMode {
     this.tui.start()
     this.tui.setFocus(this.editor)
     this.captureConsole()
+    this.registerSignalHandlers()
     options.attachLogger?.((level, message) => this.addNotice(message, level))
     vela.subscribe((event, sessionId) => this.onEvent(event, sessionId))
 
@@ -286,8 +289,8 @@ export class InteractiveMode {
       '选择要恢复的会话',
       saved.map((s) => ({
         value: s.id,
-        label: (s.name ?? s.firstMessage).replace(/\s+/g, ' ').slice(0, 60),
-        description: `${s.id} · ${s.messageCount} 条 · ${s.updatedAt}`,
+        label: oneLine(sanitize(s.name ?? s.firstMessage)).slice(0, 60),
+        description: `${sanitize(s.id)} · ${s.messageCount} 条 · ${s.updatedAt}`,
       })),
     )
   }
@@ -485,10 +488,14 @@ export class InteractiveMode {
     this.chat.addChild(block)
   }
 
-  private addNotice(text: string, level: LogLevel | 'dim' = 'info'): void {
+  private addNotice(
+    text: string,
+    level: LogLevel | 'dim' = 'info',
+    raw = false,
+  ): void {
     const trimmed = text.replace(/^\n+|\n+$/g, '')
     if (!trimmed.trim()) return
-    this.chat.addChild(notice(trimmed, level))
+    this.chat.addChild(notice(trimmed, level, raw))
     this.tui.requestRender()
   }
 
@@ -722,7 +729,7 @@ export class InteractiveMode {
         vela: this.vela,
         internals: velaInternals(this.vela),
         session: this.session,
-        print: (output) => this.addNotice(output),
+        print: this.commandOutput(),
       })
       if (handled instanceof Promise)
         await handled.catch((error) =>
@@ -746,6 +753,18 @@ export class InteractiveMode {
         this.addNotice(`出错: ${errorMessage(error)}`, 'error')
     }
     this.tui.requestRender()
+  }
+
+  /** 命令逐行 print：同一次同步调用里的几行合成一条提示，免得每行之间空一行；保留命令自己的配色 */
+  private commandOutput(): (text: string) => void {
+    const lines: string[] = []
+    return (text) => {
+      if (!lines.length)
+        queueMicrotask(() =>
+          this.addNotice(lines.splice(0).join('\n'), 'info', true),
+        )
+      lines.push(text)
+    }
   }
 
   private setThinking(level: ThinkingLevel): void {
@@ -879,9 +898,35 @@ export class InteractiveMode {
     this.restoreConsole = () => Object.assign(console, original)
   }
 
+  /**
+   * 同 pi：SIGTERM / SIGHUP 正常退出（会话收尾、扩展 session_shutdown）；
+   * 真实终端上未捕获的异常先还原终端再退出，免得终端停在 raw 模式、光标隐藏。
+   */
+  private registerSignalHandlers(): void {
+    const signals: NodeJS.Signals[] =
+      process.platform === 'win32' ? ['SIGTERM'] : ['SIGTERM', 'SIGHUP']
+    for (const signal of signals) {
+      const handler = () => void this.shutdown()
+      process.prependListener(signal, handler)
+      this.cleanups.push(() => process.off(signal, handler))
+    }
+    if (this.options.terminal) return
+    const crash = (error: Error) => {
+      try {
+        this.tui.stop()
+      } catch {}
+      this.restoreConsole?.()
+      console.error('vela 因未捕获的异常退出:', error)
+      process.exit(1)
+    }
+    process.prependListener('uncaughtException', crash)
+    this.cleanups.push(() => process.off('uncaughtException', crash))
+  }
+
   async shutdown(): Promise<void> {
     if (this.shuttingDown) return
     this.shuttingDown = true
+    for (const cleanup of this.cleanups.splice(0)) cleanup()
     this.stopLoader()
     this.tui.stop()
     this.restoreConsole?.()
@@ -936,7 +981,10 @@ class Footer implements Component {
       width - visibleWidth(left) - visibleWidth(right) - 2,
     )
     const lines = [
-      truncateToWidth(` ${dir} · ${session.name ?? session.id}`, width),
+      truncateToWidth(
+        ` ${dir} · ${sanitize(session.name ?? session.id)}`,
+        width,
+      ),
       truncateToWidth(` ${left}${' '.repeat(gap)}${right}`, width),
     ]
     if (this.statuses.size)
