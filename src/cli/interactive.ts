@@ -200,12 +200,12 @@ export async function runInteractive(options: {
     console.log(
       `[Session] 恢复会话 ${session.id}，${messages.length} 条历史消息`,
     )
+    // Persist the history identity before any tool side effects, including on legacy resume.
+    await session.save()
   } else {
+    // 新会话第一次 prompt 结束时才写盘（同 pi），只打开就退出不会留下空会话让 -c 接上
     console.log(`[Session] 新会话 ${session.id}`)
   }
-
-  // Persist the history identity before any tool side effects, including on legacy resume.
-  await session.save()
 
   // 显示各 prompt 段落的状态
   console.log('\n=== Prompt PipeLine Debug ===')

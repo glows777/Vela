@@ -85,8 +85,12 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   if (options.resume) await session.resume()
   options.configure?.(session)
 
+  // agent loop 里的失败已经在 agent_end 里报告过；prompt 的 Promise reject 时据此判断要不要再报
+  let reportedError: unknown
   vela.subscribe((event, sessionId) => {
     if (sessionId !== session.id) return
+    if (event.type === 'agent_end' && event.error !== undefined)
+      reportedError = event.error
     const line = jsonEvent(event, sessionId)
     output = output.then(() => options.write(line))
   })
@@ -104,8 +108,21 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   const isExtensionCommand = (message: string) =>
     message.startsWith('/') &&
     vela.commands().some((c) => c.name === commandName(message))
-  // prompt 被接受后它的 Promise 才结束；失败已经在 agent_end 事件里报告，这里只防止未处理的 rejection
-  const start = (run: Promise<void>) => void run.catch(() => {})
+  /**
+   * 已经回了 started 的 prompt：loop 开始前的失败（没有模型、模型不支持当前 thinking 级别、扩展钩子出错）
+   * 不会有 agent_end，同 pi 再回一条这个命令的 success:false 响应，客户端才知道出了什么错。
+   */
+  const start = (run: Promise<void>, command: RpcCommand) =>
+    void run.catch((error) => {
+      if (error === reportedError) return
+      void send({
+        ...(command.id === undefined ? {} : { id: command.id }),
+        type: 'response',
+        command: command.type,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
 
   const handlers: Record<
     string,
@@ -131,7 +148,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         await session.prompt(message, { streamingBehavior: behavior })
         return { disposition: 'queued' }
       }
-      start(session.prompt(message))
+      start(session.prompt(message), command)
       return { disposition: 'started' }
     },
     steer: (command) => enqueue(command, 'steer'),
@@ -226,7 +243,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     if (message.startsWith('/') && isExtensionCommand(message))
       throw new Error('扩展命令用 prompt 执行')
     if (!session.isRunning) {
-      start(session.prompt(message))
+      start(session.prompt(message), command)
       return { disposition: 'started' }
     }
     await (behavior === 'steer'

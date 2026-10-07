@@ -58,7 +58,7 @@ test('file storage writes <dir>/<id>.jsonl and reads old one-message-per-line fi
   expect(old?.messages.map((m) => m.message.content)).toEqual(['one', 'two'])
 })
 
-test('both storages list sessions newest first; a missing directory lists nothing', async () => {
+test('both storages list sessions newest first, skipping empty ones; a missing directory lists nothing', async () => {
   const dir = tempDir()
   dirs.push(dir)
   const later = { ...checkpoint('第二'), timestamp: '2026-10-08T00:00:00.000Z', name: '名字' }
@@ -66,6 +66,8 @@ test('both storages list sessions newest first; a missing directory lists nothin
     expect(await storage.list?.()).toEqual([])
     await storage.save('a', checkpoint('第一'))
     await storage.save('b', later)
+    // 没有消息的会话（只打开过）不列，-c 不会接到它
+    await storage.save('empty', { ...checkpoint('x'), messages: [], timestamp: '2026-10-09T00:00:00.000Z' })
     expect(await storage.list?.()).toEqual([
       { id: 'b', name: '名字', updatedAt: later.timestamp, messageCount: 1, firstMessage: '第二' },
       { id: 'a', updatedAt: '2026-10-07T00:00:00.000Z', messageCount: 1, firstMessage: '第一' },

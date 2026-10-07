@@ -161,7 +161,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、registerProvider、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
 | e2e/models | 按名字选模型（provider、元数据、models.json 价格）；`setModel` 从下一轮起换模型并重算上限；会话各自选模型；thinking 级别映射到 `reasoning`（默认 medium、max→xhigh；`reasoning: false` 的模型 off 不发、其它级别 prompt 报错且不发请求）；Vela 级默认 thinking；恢复会话带回模型和 thinking、保存的模型不可用时告警并保留当前；对象模型不落盘；没有默认模型时要先 setModel；`/model` `/thinking` |
 | e2e/queue | steer 在这一步之后、下一次请求前插入；最后一步收到的 steer 让 loop 继续；followUp 等模型要结束时在同一个 loop 里接着跑；one-at-a-time / all；运行中 prompt 要 streamingBehavior；clearQueue + `await abort()`；abort 后队列保留；任务失败后排队消息仍跑、prompt 再 reject；空闲时 steer / followUp 等于 prompt；thinking_delta；扩展命令里 abort 不卡住；compact 占着会话时不能排队 |
-| e2e/rpc | `--mode rpc` 子进程：prompt 的 disposition、事件带 sessionId、get_state / get_messages / set_session_name / list_sessions、解析失败和未知命令、new_session / switch_session；运行中 prompt 要 streamingBehavior、steer / follow_up 排队、clear_queue、abort 在停下后才回复；扩展界面 confirm / select / notify / setStatus 走 extension_ui_request / response |
+| e2e/rpc | `--mode rpc` 子进程：prompt 的 disposition、事件带 sessionId、get_state / get_messages / set_session_name / list_sessions、解析失败和未知命令、new_session / switch_session；运行中 prompt 要 streamingBehavior、steer / follow_up 排队、clear_queue、abort 在停下后才回复；loop 开始前就失败的 prompt（没有模型）再回一条 success:false；扩展界面 confirm / select / notify / setStatus 走 extension_ui_request / response |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存；`vela.listSessions()`（最近的在前，名字随会话保存和恢复） |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |
@@ -170,7 +170,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | unit/cli/setup | 命令行参数；settings 的扩展配置覆盖环境变量；旧数据搬家提示 |
 | unit/models | `provider/id` 解析与错误；thinking → reasoning；按上下文窗口算上限 |
 | unit/config | models.json（内置 openai / anthropic、合并、`$VAR`、缺 key、错误带文件名）；settings 的 defaultModel / defaultThinkingLevel 校验；settings 合并（项目覆盖用户、资源列表合并、路径相对所在文件）；不信任时只读用户级；扩展目录发现；±builtin；错误带文件名；`$VAR` 插值；数据目录编码；skill 目录顺序；trust.json；在家目录里运行 |
-| unit/session/storage | 内存存储按 id 保存并返回副本；文件存储读写、兼容旧的一行一条消息；两种存储的 list()（最近的在前、名字、第一条消息） |
+| unit/session/storage | 内存存储按 id 保存并返回副本；文件存储读写、兼容旧的一行一条消息；两种存储的 list()（最近的在前、跳过没有消息的、名字、第一条消息） |
 | unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
 | unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |
 | unit/public-api | `vela`、`vela/testing` 的公开 API 和 `api/public-api.txt` 一致；改了公开面运行 `bun run api:update` |

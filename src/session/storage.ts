@@ -47,9 +47,11 @@ export interface SessionStorage {
   list?(): Promise<SessionSummary[]>
 }
 
-/** 按最近保存时间排序（新的在前）。 */
+/** 按最近保存时间排序（新的在前）；没有消息的会话不列（没东西可接着聊，同 pi 不写空会话文件）。 */
 function newestFirst(summaries: SessionSummary[]): SessionSummary[] {
-  return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  return summaries
+    .filter((s) => s.messageCount > 0)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
 /** checkpoint → 列表项 */
