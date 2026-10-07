@@ -38,6 +38,15 @@ function loadCustomSqlite(): void {
   customSqliteLoaded = true
 }
 
+/** chunks 表连查出来的一行（embedding 以 JSON 字符串存储） */
+interface ChunkRow {
+  id: string
+  text: string
+  source: string
+  chunk_index: number
+  embedding: string
+}
+
 export class SqliteVectorStore {
   private db: Database
 
@@ -118,7 +127,7 @@ export class SqliteVectorStore {
       WHERE v.embedding MATCH ? AND k = ?
       ORDER BY v.distance
     `)
-      .all(buf, topK) as any[]
+      .all(buf, topK) as (ChunkRow & { distance: number })[]
 
     return rows.map((r) => ({
       chunk: {
@@ -150,7 +159,7 @@ export class SqliteVectorStore {
       ORDER BY rank
       LIMIT ?
     `)
-      .all(ftsQuery, topK) as any[]
+      .all(ftsQuery, topK) as (ChunkRow & { rank: number })[]
 
     return rows.map((r) => ({
       chunk: {
@@ -167,7 +176,9 @@ export class SqliteVectorStore {
   }
 
   size(): number {
-    return (this.db.prepare('SELECT COUNT(*) as n FROM chunks').get() as any).n
+    return (
+      this.db.prepare('SELECT COUNT(*) as n FROM chunks').get() as { n: number }
+    ).n
   }
 
   clear(): void {
@@ -178,7 +189,9 @@ export class SqliteVectorStore {
 
   sources(): string[] {
     return (
-      this.db.prepare('SELECT DISTINCT source FROM chunks').all() as any[]
+      this.db.prepare('SELECT DISTINCT source FROM chunks').all() as {
+        source: string
+      }[]
     ).map((r) => r.source)
   }
 

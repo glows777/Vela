@@ -1,3 +1,7 @@
+import type {
+  LanguageModelV3Prompt,
+  LanguageModelV3StreamPart,
+} from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
 import { getStoredResult } from '../session/tool-results'
 
@@ -33,32 +37,33 @@ function approxTokensFromChars(chars: number): number {
   return Math.ceil(chars / 3.5)
 }
 
-function extractSystemContent(prompt: any[]): string {
-  const sys = (prompt || []).find((m: any) => m.role === 'system')
-  if (!sys) return ''
-  if (typeof sys.content === 'string') return sys.content
-  if (Array.isArray(sys.content))
-    return sys.content.map((c: any) => c.text || '').join('')
-  return ''
+type Prompt = LanguageModelV3Prompt
+type Message = Prompt[number]
+
+/** 消息里所有 text part 拼起来（system 的 content 是字符串）。 */
+function messageText(m: Message): string {
+  if (typeof m.content === 'string') return m.content
+  return m.content.map((c) => ('text' in c ? c.text : '')).join('')
 }
 
-function approxMessageTokens(prompt: any[]): number {
+function extractSystemContent(prompt: Prompt): string {
+  const sys = (prompt || []).find((m) => m.role === 'system')
+  return sys ? messageText(sys) : ''
+}
+
+function approxMessageTokens(prompt: Prompt): number {
   let chars = 0
   for (const m of prompt || []) {
     if (m.role === 'system') continue
-    if (typeof m.content === 'string') chars += m.content.length
-    else if (Array.isArray(m.content)) {
-      for (const c of m.content as any[]) {
-        if (c.type === 'text') chars += (c.text || '').length
-        else if (c.type === 'tool-call')
-          chars += JSON.stringify(c.input || {}).length + 80
-        else if (c.type === 'tool-result') {
-          const out = c.output
-          if (typeof out === 'string') chars += out.length
-          else if (out?.value) chars += String(out.value).length
-          else chars += JSON.stringify(out || {}).length
-          chars += 80
-        }
+    for (const c of m.content) {
+      if (c.type === 'text') chars += (c.text || '').length
+      else if (c.type === 'tool-call')
+        chars += JSON.stringify(c.input || {}).length + 80
+      else if (c.type === 'tool-result') {
+        const out = c.output
+        if ('value' in out && out.value) chars += String(out.value).length
+        else chars += JSON.stringify(out || {}).length
+        chars += 80
       }
     }
   }
@@ -66,7 +71,7 @@ function approxMessageTokens(prompt: any[]): number {
 }
 
 /** 根据 prompt 算这次调用的 v3 usage，并模拟 cache 命中。 */
-function makeUsage(prompt: any[], outputChars = 80) {
+function makeUsage(prompt: Prompt, outputChars = 80) {
   const system = extractSystemContent(prompt)
   const prefixContent = system
   const prefixTokens = approxTokensFromChars(prefixContent.length)
@@ -124,55 +129,51 @@ interface ToolCallIntent {
   args: Record<string, unknown>
 }
 
-function extractUserText(prompt: any[]): string {
-  const userMsgs = (prompt || []).filter((m: any) => m.role === 'user')
+function extractUserText(prompt: Prompt): string {
+  const userMsgs = (prompt || []).filter((m) => m.role === 'user')
   const last = userMsgs[userMsgs.length - 1]
-  if (!last) return ''
-  if (typeof last.content === 'string') return last.content.toLowerCase()
-  return (last.content || [])
-    .map((c: any) => c.text || '')
-    .join('')
-    .toLowerCase()
+  return last ? messageText(last).toLowerCase() : ''
 }
 
-function hasToolResults(prompt: any[]): boolean {
+function hasToolResults(prompt: Prompt): boolean {
   const msgs = prompt || []
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === 'tool') return true
-    if (msgs[i].role === 'user') return false
+    if (msgs[i]?.role === 'tool') return true
+    if (msgs[i]?.role === 'user') return false
   }
   return false
 }
 
-function getToolResultContent(prompt: any[]): string {
+function getToolResultContent(prompt: Prompt): string {
   const msgs = prompt || []
   const parts: string[] = []
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === 'tool') {
-      const content = msgs[i].content || []
-      for (const c of content) {
-        const val = c.output?.value || c.output || c.result || ''
-        const stored = c.output ? getStoredResult(c.output) : undefined
+    const m = msgs[i]
+    if (m?.role === 'tool') {
+      for (const c of m.content) {
+        if (c.type !== 'tool-result') continue
+        const val = ('value' in c.output && c.output.value) || c.output || ''
+        const stored = getStoredResult(c.output)
         parts.push(
           stored?.preview ??
             (typeof val === 'string' ? val : JSON.stringify(val)),
         )
       }
-    } else if (msgs[i].role === 'user') break
+    } else if (m?.role === 'user') break
   }
   return parts.join('\n')
 }
 
-function wasToolSearchCalled(prompt: any[]): boolean {
+function wasToolSearchCalled(prompt: Prompt): boolean {
   const msgs = prompt || []
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === 'assistant') {
-      const content = msgs[i].content || []
-      for (const c of content) {
+    const m = msgs[i]
+    if (m?.role === 'assistant') {
+      for (const c of m.content) {
         if (c.type === 'tool-call' && c.toolName === 'tool_search') return true
       }
     }
-    if (msgs[i].role === 'user') return false
+    if (m?.role === 'user') return false
   }
   return false
 }
@@ -188,7 +189,7 @@ function detectParallelIntent(text: string): ToolCallIntent[] | null {
   return null
 }
 
-function detectToolIntent(prompt: any[]): ToolCallIntent | null {
+function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   const text = extractUserText(prompt)
   const toolResults = getToolResultContent(prompt)
 
@@ -345,7 +346,7 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
   return null
 }
 
-function pickTextResponse(prompt: any[]): string {
+function pickTextResponse(prompt: Prompt): string {
   if (hasToolResults(prompt)) {
     const combined = getToolResultContent(prompt)
 
@@ -379,13 +380,17 @@ function pickTextResponse(prompt: any[]): string {
   return TEXT_RESPONSES.default
 }
 
-function createDelayedStream(chunks: any[], delayMs = 30): ReadableStream {
+function createDelayedStream(
+  chunks: LanguageModelV3StreamPart[],
+  delayMs = 30,
+): ReadableStream<LanguageModelV3StreamPart> {
   return new ReadableStream({
     start(controller) {
       let i = 0
       function next() {
-        if (i < chunks.length) {
-          controller.enqueue(chunks[i++])
+        const chunk = chunks[i++]
+        if (chunk) {
+          controller.enqueue(chunk)
           setTimeout(next, delayMs)
         } else {
           controller.close()
@@ -396,8 +401,11 @@ function createDelayedStream(chunks: any[], delayMs = 30): ReadableStream {
   })
 }
 
-function makeToolCallChunks(intents: ToolCallIntent[], prompt: any[]): any[] {
-  const chunks: any[] = []
+function makeToolCallChunks(
+  intents: ToolCallIntent[],
+  prompt: Prompt,
+): LanguageModelV3StreamPart[] {
+  const chunks: LanguageModelV3StreamPart[] = []
   for (const intent of intents) {
     const callId = `call-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     const argsJson = JSON.stringify(intent.args)
@@ -431,16 +439,9 @@ export function createMockModel(): LanguageModel {
       return Promise.resolve({})
     },
 
-    async doGenerate({ prompt }: any) {
+    async doGenerate({ prompt }: { prompt: Prompt }) {
       // Detect compression request (called via generateText with compress system prompt)
-      const allText = (prompt || [])
-        .map((m: any) => {
-          if (typeof m.content === 'string') return m.content
-          if (Array.isArray(m.content))
-            return m.content.map((c: any) => c.text || '').join('')
-          return ''
-        })
-        .join(' ')
+      const allText = (prompt || []).map(messageText).join(' ')
 
       if (
         allText.includes('对话压缩系统') ||
@@ -511,7 +512,7 @@ export function createMockModel(): LanguageModel {
       }
     },
 
-    async doStream({ prompt }: any) {
+    async doStream({ prompt }: { prompt: Prompt }) {
       const text = extractUserText(prompt)
 
       if (text.includes('测试重试') || text.includes('test retry')) {
@@ -522,11 +523,15 @@ export function createMockModel(): LanguageModel {
         retryTestCount = 0
         const reply = '重试成功！'
         const id = 'text-1'
-        const chunks: any[] = [
+        const chunks: LanguageModelV3StreamPart[] = [
           { type: 'text-start', id },
-          ...reply
-            .split('')
-            .map((char: string) => ({ type: 'text-delta', id, delta: char })),
+          ...reply.split('').map(
+            (char): LanguageModelV3StreamPart => ({
+              type: 'text-delta',
+              id,
+              delta: char,
+            }),
+          ),
           { type: 'text-end', id },
           {
             type: 'finish',
@@ -556,11 +561,15 @@ export function createMockModel(): LanguageModel {
 
       const replyText = pickTextResponse(prompt)
       const id = 'text-1'
-      const chunks: any[] = [
+      const chunks: LanguageModelV3StreamPart[] = [
         { type: 'text-start', id },
-        ...replyText
-          .split('')
-          .map((char: string) => ({ type: 'text-delta', id, delta: char })),
+        ...replyText.split('').map(
+          (char): LanguageModelV3StreamPart => ({
+            type: 'text-delta',
+            id,
+            delta: char,
+          }),
+        ),
         { type: 'text-end', id },
         {
           type: 'finish',

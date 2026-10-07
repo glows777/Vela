@@ -30,7 +30,7 @@ function stringifyValue(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stringifyValue).join(",")}]`;
   const keys = Object.keys(value as Record<string, unknown>).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stringifyValue((value as any)[k])}`).join(",")}}`;
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stringifyValue((value as Record<string, unknown>)[k])}`).join(",")}}`;
 }
 
 function hash(input: string): string {

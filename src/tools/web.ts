@@ -40,7 +40,10 @@ export const tavilySearchTool: ToolDefinition = {
 
     if (!res.ok) return `[web_search] 请求失败: HTTP ${res.status}`;
 
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as {
+      answer?: string;
+      results?: { title: string; url: string; content?: string; snippet?: string }[];
+    };
     const lines: string[] = [];
 
     if (data.answer) {
@@ -93,7 +96,10 @@ export const serperSearchTool: ToolDefinition = {
 
     if (!res.ok) return `[web_search] 请求失败: HTTP ${res.status}`;
 
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as {
+      knowledgeGraph?: { title: string; description?: string };
+      organic?: { title: string; link: string; snippet?: string }[];
+    };
     const lines: string[] = [];
 
     if (data.knowledgeGraph) {
@@ -149,8 +155,8 @@ export const webFetchTool: ToolDefinition = {
       if (!res.ok) return `抓取失败: HTTP ${res.status}`;
       const html = await res.text();
       return htmlToMarkdown(html);
-    } catch (err: any) {
-      return `抓取失败: ${err.message}`;
+    } catch (err) {
+      return `抓取失败: ${err instanceof Error ? err.message : String(err)}`;
     }
   },
 };

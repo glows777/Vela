@@ -118,8 +118,7 @@ export class ChannelGateway {
         replyText = content
       } else if (Array.isArray(content)) {
         replyText = content
-          .filter((c: any) => c.type === 'text')
-          .map((c: any) => c.text)
+          .map((c) => (c.type === 'text' ? c.text : ''))
           .join('')
       }
     }

@@ -64,7 +64,7 @@ export const supabasePlugin: PluginDefinition = {
         }) => {
           const { table, select = '*', where, limit = 10 } = input
           if (!url) {
-            const mockData: Record<string, any[]> = {
+            const mockData: Record<string, Record<string, unknown>[]> = {
               users: [
                 {
                   id: 1,
@@ -108,7 +108,7 @@ export const supabasePlugin: PluginDefinition = {
             const rows = mockData[table] || []
             let filtered = rows
             if (where) {
-              const [field, value] = where.split('=')
+              const [field = '', value] = where.split('=')
               filtered = rows.filter((r) => String(r[field]) === value)
             }
             return JSON.stringify({
