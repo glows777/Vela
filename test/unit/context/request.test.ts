@@ -81,7 +81,7 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
       description: 'deferred',
       inputSchema: z.object({}),
       execute: async () => 'unused',
-      shouldDefer: true,
+      exposure: 'deferred',
     },
   )
   const builder = new PromptPipeline()

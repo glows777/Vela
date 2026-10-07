@@ -1,4 +1,4 @@
-import type { Vela } from '../../vela'
+import type { Vela, VelaInternals } from '../../vela'
 import type { VelaSession } from '../../vela-session'
 
 export * from './context'
@@ -11,6 +11,8 @@ export * from './memory'
  */
 export interface CommandContext {
   vela: Vela
+  /** CLI 和 core 在同一个包里，命令可以读内部对象（记忆、知识库、hooks…） */
+  internals: VelaInternals
   session: VelaSession
   ask: () => void
 }

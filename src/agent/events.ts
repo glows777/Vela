@@ -67,6 +67,8 @@ export type VelaEvent =
   | { type: 'audit'; toolName: string; path: string }
   /** bash 命令被判为中等风险，照常执行但提示一下 */
   | { type: 'security_warning'; toolName: string; reason: string; command: string }
+  /** 扩展在没有界面的会话里调用了 ui.notify() */
+  | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
   /** 通道收到一条消息（channel 会话） */
   | {
       type: 'channel_message'

@@ -5,11 +5,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { jsonSchema } from 'ai'
 import type { VelaEvent } from '../../../src/agent/events'
-import {
-  type CommandContext,
-  createDispatcher,
-} from '../../../src/cli/commands'
-import { createSecurityCommands } from '../../../src/cli/commands/security'
+import { cleanupTestVelas, createTestVela } from '../../support/vela'
 import { ToolResultStore } from '../../../src/session/tool-results'
 import {
   ToolExecutionResult,
@@ -20,6 +16,7 @@ import { classifyBashCommand } from '../../../src/security/bash-classifier'
 import { HookPipeline } from '../../../src/security/hooks'
 import {
   canUseTool,
+  decidePermission,
   filterToolsForRole,
   type Role,
 } from '../../../src/security/roles'
@@ -27,8 +24,9 @@ import {
 const root = mkdtempSync(join(tmpdir(), 'vela-security-acceptance-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 const spies: Array<{ mockRestore(): void }> = []
-afterEach(() => {
+afterEach(async () => {
   for (const spy of spies.splice(0)) spy.mockRestore()
+  await cleanupTestVelas()
 })
 function quiet(method: 'log' | 'warn' | 'error') {
   const spy = spyOn(console, method).mockImplementation(() => {})
@@ -93,7 +91,7 @@ async function rejected(registry: ToolRegistry, attempt: Promise<unknown>) {
   ).toEqual(['rejected'])
 }
 
-test('roles: owner all, collaborator excludes bash, guest exact existing whitelist', () => {
+test('roles: owner all, collaborator excludes bash, guest only tools that do not touch the machine', () => {
   const names = [
     'bash',
     'read_file',
@@ -101,12 +99,19 @@ test('roles: owner all, collaborator excludes bash, guest exact existing whiteli
     'glob',
     'grep',
     'rag_search',
+    'web_search',
+    'tool_search',
     'write_file',
+    'memory',
     'arbitrary',
   ]
   expect(filterToolsForRole(names, 'owner')).toEqual(names)
   expect(filterToolsForRole(names, 'collaborator')).toEqual(names.slice(1))
-  expect(filterToolsForRole(names, 'guest')).toEqual(names.slice(1, 6))
+  expect(filterToolsForRole(names, 'guest')).toEqual([
+    'rag_search',
+    'web_search',
+    'tool_search',
+  ])
   for (const role of ['owner', 'collaborator', 'guest'] as Role[]) {
     const { registry } = fixture()
     registry.register(...names.map((name) => fake(name)))
@@ -117,6 +122,48 @@ test('roles: owner all, collaborator excludes bash, guest exact existing whiteli
       names.filter((name) => canUseTool(role, name)),
     )
   }
+})
+
+test('session rules layer over the role: exact names first, then *', () => {
+  expect(decidePermission('guest', 'read_file', { read_file: 'ask' })).toBe(
+    'ask',
+  )
+  expect(decidePermission('owner', 'bash', { '*': 'ask' })).toBe('ask')
+  // 角色里点名的工具优先于会话的 *
+  expect(decidePermission('guest', 'rag_search', { '*': 'deny' })).toBe('allow')
+  expect(decidePermission('collaborator', 'bash', { '*': 'allow' })).toBe(
+    'deny',
+  )
+})
+
+test('ask runs the confirm callback with the final input; no callback means deny', async () => {
+  const { registry } = fixture()
+  let calls = 0
+  registry.register(
+    fake('bash', {
+      execute: async () => {
+        calls++
+        return 'ran'
+      },
+    }),
+  )
+  registry.setPermissions({ bash: 'ask' })
+  await rejected(registry, invoke(registry, 'bash'))
+  expect(calls).toBe(0)
+
+  const asked: unknown[] = []
+  const forked = registry.fork(
+    new ToolResultStore(join(root, crypto.randomUUID(), 'outputs')),
+    {
+      confirm: async (_name, input) => {
+        asked.push(input)
+        return true
+      },
+    },
+  )
+  forked.setPermissions({ bash: 'ask' })
+  expect(await invoke(forked, 'bash')).toContain('ran')
+  expect(asked).toEqual([{ command: 'echo hello' }])
 })
 
 test('role change rejects an already exposed tool and records rejection', async () => {
@@ -443,23 +490,24 @@ test('pre-aborted call never executes and existing cancelled history survives', 
   ).toBe('cancelled')
 })
 
-test('/role and /hooks commands expose current state and registered hooks', () => {
+test('/role changes only the current session and /hooks lists registered hooks', async () => {
+  const t = createTestVela()
+  const other = t.vela.session('other')
+  t.internals.hooks.registerPre('acceptance-pre', () => ({ action: 'allow' }))
+  t.internals.hooks.registerPost('acceptance-post', () => ({ action: 'allow' }))
   const log = quiet('log')
-  const { registry, pipeline } = fixture()
-  pipeline.registerPre('acceptance-pre', () => ({ action: 'allow' }))
-  pipeline.registerPost('acceptance-post', () => ({ action: 'allow' }))
-  const dispatch = createDispatcher(createSecurityCommands(registry, pipeline))
-  const ctx = {} as CommandContext
-  expect(dispatch('/role', ctx)).toBe(true)
+  expect(t.dispatch('/role')).toBe(true)
   expect(log.mock.calls.flat().join(' ')).toContain('owner')
   for (const role of ['guest', 'collaborator', 'owner'] as const) {
-    expect(dispatch(`/role ${role}`, ctx)).toBe(true)
-    expect(registry.getRole()).toBe(role)
+    expect(t.dispatch(`/role ${role}`)).toBe(true)
+    expect(t.session.role).toBe(role)
   }
-  expect(dispatch('/hooks', ctx)).toBe(true)
+  t.dispatch('/role guest')
+  expect(other.role).toBe('owner')
+  expect(t.dispatch('/hooks')).toBe(true)
   expect(log.mock.calls.flat().join(' ')).toContain('acceptance-pre')
   expect(log.mock.calls.flat().join(' ')).toContain('acceptance-post')
-  expect(dispatch('/role invalid', ctx)).toBe(false)
-  expect(registry.getRole()).toBe('owner')
-  expect(dispatch('/unrelated', ctx)).toBe(false)
+  expect(t.dispatch('/role invalid')).toBe(false)
+  expect(t.session.role).toBe('guest')
+  expect(t.dispatch('/unrelated')).toBe(false)
 })

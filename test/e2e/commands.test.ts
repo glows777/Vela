@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { IncomingMessage, OutgoingMessage } from '../../src/channels/types'
-import { supabasePlugin } from '../../src/plugins/built-in-plugins/supabase-plugin'
+import { supabase } from '../../src/extensions/supabase'
 import { fauxText, fauxToolCall } from '../../src/testing/faux'
 import {
   captureConsole,
@@ -27,13 +27,13 @@ test('/context and /usage report the conversation after a run', async () => {
   expect(output).toContain('[状态] 2 条消息')
 })
 
-test('/plugin load registers plugin tools the model can call right away', async () => {
+test('the supabase extension registers tools the model can call, listed by /extensions', async () => {
   const t = createTestVela({
-    plugins: new Map([['supabase', supabasePlugin]]),
+    extensions: [supabase()],
     responses: [
       (req) => {
-        expect(req.tools).toContain('supabase__list_tables')
-        return fauxToolCall('supabase__list_tables', {})
+        expect(req.tools).toContain('supabase_list_tables')
+        return fauxToolCall('supabase_list_tables', {})
       },
       (req) =>
         fauxText(
@@ -42,20 +42,12 @@ test('/plugin load registers plugin tools the model can call right away', async 
     ],
   })
 
-  await captureConsole(async () => {
-    expect(t.dispatch('/plugin load supabase')).toBe(true)
-    while (!t.vela.pluginManager.get('supabase')) await Bun.sleep(1)
-  })
   await t.run('有哪些表？')
   expect(t.lastAssistantText()).toBe('有 users 表')
 
-  await captureConsole(async () => {
-    t.dispatch('/plugin unload supabase')
-    while (t.vela.pluginManager.get('supabase')) await Bun.sleep(1)
-  })
-  expect(t.vela.registry.getAllTools().map((tool) => tool.name)).not.toContain(
-    'supabase__list_tables',
-  )
+  const { output } = await captureConsole(() => t.dispatch('/extensions'))
+  expect(output).toContain('supabase')
+  expect(output).toContain('supabase_list_tables')
 })
 
 test('a message from a channel runs through the same model and tools, and the reply is sent back', async () => {
@@ -67,18 +59,23 @@ test('a message from a channel runs through the same model and tools, and the re
       fauxToolCall('read_file', { path: 'faq.md' }),
       fauxText('我们 9 点到 18 点营业'),
     ],
-  })
-  t.vela.gateway.register({
-    name: 'fake',
-    description: 'test channel',
-    start: () => {},
-    stop: () => {},
-    send: async (message) => {
-      sent.push(message)
-    },
-    onMessage: (handler) => {
-      deliver = handler
-    },
+    extensions: [
+      (vela) =>
+        vela.registerChannel({
+          name: 'fake',
+          description: 'test channel',
+          start: () => {},
+          stop: () => {},
+          send: async (message) => {
+            sent.push(message)
+          },
+          onMessage: (handler) => {
+            deliver = handler
+          },
+          // 这个发送者是主人，能读文件；默认（不实现 roleFor）是 guest
+          roleFor: () => 'owner',
+        }),
+    ],
   })
 
   await captureConsole(async () => {

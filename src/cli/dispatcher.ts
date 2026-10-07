@@ -5,38 +5,28 @@ import {
   debugCommands,
   memoryCommands,
 } from './commands'
-import { createChannelCommands } from './commands/channel'
+import { channelCommands } from './commands/channel'
 import { dreamCommands } from './commands/dream'
-import { createPluginCommands } from './commands/plugin'
+import { extensionCommands } from './commands/extensions'
 import { ragCommands } from './commands/rag'
-import { createSecurityCommands } from './commands/security'
+import { securityCommands } from './commands/security'
 import { createSkillCommands } from './commands/skill'
-import { feishuPlugin } from '../plugins/built-in-plugins/feishu-plugin'
-import { supabasePlugin } from '../plugins/built-in-plugins/supabase-plugin'
-import type { PluginDefinition } from '../plugins/types'
+import { velaInternals } from '../vela'
 
-/** CLI 启动时加载的内置插件。 */
-export function builtInPlugins(): Map<string, PluginDefinition> {
-  return new Map<string, PluginDefinition>([
-    ['supabase', supabasePlugin],
-    ['feishu', feishuPlugin],
-  ])
-}
-
-/** CLI 的全部斜杠命令；测试用同一份分发器，保证命令行为和真实入口一致。 */
-export function createCliDispatcher(
-  vela: Vela,
-  plugins: Map<string, PluginDefinition> = builtInPlugins(),
-) {
+/**
+ * CLI 自己的斜杠命令；测试用同一份分发器，保证命令行为和真实入口一致。
+ * 扩展注册的命令不在这里：没被这些命令认领的 `/xxx` 交给 session.prompt()，由它执行扩展命令。
+ */
+export function createCliDispatcher(vela: Vela) {
   return createDispatcher([
     ...debugCommands,
     ...contextCommands,
     ...memoryCommands,
     ...dreamCommands,
     ...ragCommands,
-    ...createSkillCommands(vela.skillLoader),
-    ...createPluginCommands(vela.pluginManager, plugins),
-    ...createChannelCommands(vela.gateway),
-    ...createSecurityCommands(vela.registry, vela.hooks),
+    ...createSkillCommands(velaInternals(vela).skillLoader),
+    ...extensionCommands,
+    ...channelCommands,
+    ...securityCommands,
   ])
 }

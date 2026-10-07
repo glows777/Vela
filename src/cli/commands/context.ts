@@ -2,17 +2,17 @@ import {
   buildContextSnapshot,
   renderContextView,
   renderUsageView,
-} from "../../context/view"
-import type { CommandHandler } from "./index"
+} from '../../context/view'
+import type { CommandHandler } from './index'
 
 export const contextCommands: CommandHandler[] = [
-  (cmd, { vela, session }) => {
-    if (cmd !== "/context" && cmd !== "context") return false
+  (cmd, { vela, internals, session }) => {
+    if (cmd !== '/context' && cmd !== 'context') return false
     const SYSTEM = session.buildSystem()
-    const memoryChars = vela.memoryStore.buildPromptSection()?.length ?? 0
+    const memoryChars = internals.memoryStore.buildPromptSection()?.length ?? 0
     const model = vela.model
-    const modelId = typeof model === "string" ? model : model.modelId
-    const provider = typeof model === "string" ? "" : model.provider
+    const modelId = typeof model === 'string' ? model : model.modelId
+    const provider = typeof model === 'string' ? '' : model.provider
     const snapshot = buildContextSnapshot({
       modelName: provider ? `${provider} / ${modelId}` : modelId,
       modelId,
@@ -38,7 +38,7 @@ export const contextCommands: CommandHandler[] = [
   },
 
   (cmd, { session }) => {
-    if (cmd !== "/usage" && cmd !== "usage") return false
+    if (cmd !== '/usage' && cmd !== 'usage') return false
     console.log(renderUsageView(session.tracker))
     return true
   },

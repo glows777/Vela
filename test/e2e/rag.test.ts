@@ -20,7 +20,7 @@ const GUIDE = [
 
 test('without an embedder the RAG tools are not registered', () => {
   const t = createTestVela()
-  const names = t.vela.registry.getAllTools().map((tool) => tool.name)
+  const names = t.internals.registry.getAllTools().map((tool) => tool.name)
   expect(names).toContain('read_file')
   expect(names).not.toContain('rag_search')
   expect(names).not.toContain('rag_ingest')
@@ -56,8 +56,8 @@ test('ingest a document relative to cwd, then search it, offline with the faux e
   await t.run('导入部署指南，然后告诉我怎么回滚')
 
   expect(t.lastAssistantText()).toBe('执行 deploy rollback')
-  expect(t.vela.vectorStore.size()).toBeGreaterThan(0)
-  expect(t.vela.vectorStore.sources()).toEqual(['docs/guide.md'])
+  expect(t.internals.vectorStore.size()).toBeGreaterThan(0)
+  expect(t.internals.vectorStore.sources()).toEqual(['docs/guide.md'])
   const { output } = await captureConsole(() => t.dispatch('/rag'))
   expect(output).toContain('来源: docs/guide.md')
 })
@@ -84,9 +84,9 @@ test('the knowledge base persists in the data dir across restarts', async () => 
     ],
   })
   await t.run('导入')
-  const size = t.vela.vectorStore.size()
+  const size = t.internals.vectorStore.size()
 
   const again = createTestVela({ cwd: t.cwd, embedder: true })
-  expect(again.vela.vectorStore.size()).toBe(size)
+  expect(again.internals.vectorStore.size()).toBe(size)
   expect(again.session.buildSystem()).toContain('[知识库] 已导入')
 })

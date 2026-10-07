@@ -26,7 +26,7 @@ test('ingest 没有 RAG 工具时提示不可用', async () => {
 
 test('ingest <path> 走工具执行，结束后再次 ask', async () => {
   const t = createTestVela()
-  t.vela.registry.register({
+  t.internals.registry.register({
     name: 'rag_ingest',
     description: '导入文档',
     inputSchema: z.object({ path: z.string() }),
@@ -44,7 +44,7 @@ test('ingest <path> 走工具执行，结束后再次 ask', async () => {
 test('manual ingest exposes a cancellation controller and releases the busy state after abort', async () => {
   const t = createTestVela()
   let signal: AbortSignal | undefined
-  t.vela.registry.register({
+  t.internals.registry.register({
     name: 'rag_ingest',
     description: 'ingest',
     inputSchema: z.object({ path: z.string() }),

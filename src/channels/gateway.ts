@@ -104,6 +104,8 @@ export class ChannelGateway {
   ): Promise<void> {
     if (this.stopped) return
     const session = this.options.session(id)
+    // 每条消息都按通道的判断重新设置角色（名单可能变化）；默认 guest
+    session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
     if (!this.resumed.has(session)) {
       this.resumed.add(session)
       await session.resume()

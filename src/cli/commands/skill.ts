@@ -19,7 +19,9 @@ function contentAlreadyInjected(
 }
 
 /** skill 的激活状态属于会话：`session.activeSkills`。 */
-export function createSkillCommands(skillLoader: SkillLoader): CommandHandler[] {
+export function createSkillCommands(
+  skillLoader: SkillLoader,
+): CommandHandler[] {
   return [
     // /skill list
     (cmd, { session }) => {

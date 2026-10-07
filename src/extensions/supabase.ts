@@ -1,5 +1,5 @@
 import z from 'zod'
-import type { PluginApi, PluginDefinition } from '../types'
+import type { ToolDefinition, VelaExtension } from '../index'
 
 const listTablesInputSchema = z.object({})
 
@@ -15,25 +15,21 @@ const insertInputSchema = z.object({
   data: z.record(z.string(), z.unknown()).describe('要插入的数据'),
 })
 
-export const supabasePlugin: PluginDefinition = {
-  name: 'supabase',
-  version: '1.0.0',
-  description: '提供 Supabase 数据库操作能力（query / insert / list_tables）',
-  config: {
-    supabaseUrl: '${SUPABASE_URL}',
-    supabaseKey: '${SUPABASE_KEY}',
-  },
+export interface SupabaseOptions {
+  url?: string
+  key?: string
+}
 
-  activate(api: PluginApi) {
-    const config = api.getConfig()
-    const url = config.supabaseUrl as string
-    const key = config.supabaseKey as string
+/**
+ * Supabase 数据库工具（supabase_list_tables / supabase_query / supabase_insert）。没有 url / key 时用内置的 mock 数据。
+ */
+export function supabase(options: SupabaseOptions = {}): VelaExtension {
+  return function supabase(vela) {
+    const { url, key } = options
+    if (!url || !key)
+      vela.logger.info('[supabase] 未配置 url / key，使用 Mock 模式')
 
-    if (!url || !key) {
-      api.log('未配置 SUPABASE_URL / SUPABASE_KEY，使用 Mock 模式')
-    }
-
-    api.registerTools([
+    const tools: ToolDefinition[] = [
       {
         name: 'list_tables',
         description: '列出数据库中所有表',
@@ -142,12 +138,11 @@ export const supabasePlugin: PluginDefinition = {
           return `INSERT INTO ${table} — ${JSON.stringify(data)}`
         },
       },
-    ])
-
-    api.log(`已注册 3 个工具（list_tables / query / insert）`)
-  },
-
-  destroy() {
-    console.log('  [plugin:supabase] 连接已释放')
-  },
+    ]
+    for (const tool of tools)
+      vela.registerTool({
+        ...tool,
+        description: `[supabase] ${tool.description}`,
+      })
+  }
 }

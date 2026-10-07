@@ -91,11 +91,14 @@ const t = createTestVela({
   skills: [{ name, description, body }], // 写到 .skills/<name>/SKILL.md
   embedder: true,                        // 用 faux embedder 打开 RAG
   limits: { maxTurns: 3 },               // 覆盖上限；测试默认 retryBaseMs=0
-  dataDir: '.vela-data', sessionId: 'a', cwd: existingDir, plugins: new Map(...),
-  logger, env,                           // 注入 logger / 插件配置用的环境变量
+  dataDir: '.vela-data', sessionId: 'a', cwd: existingDir,
+  logger,                                // 注入 logger
+  extensions: [myExtension],             // 被测的扩展
+  session: { role: 'guest', ui, permissions: { bash: 'ask' }, tools: [...] }, // 默认会话的选项
 })
 
-t.vela                            // createVela() 的返回值
+t.vela                            // createVela() 的返回值（公开 API）
+t.internals                       // 内部对象：registry、hooks、memoryStore、vectorStore、gateway…（只有 test/support 版本有）
 t.session                         // 默认会话（id 为 sessionId，默认 'default'）
 await t.run('读一下 a.txt')       // = t.session.prompt()
 t.vela.session('other')           // 同一个 Vela 再开一个会话
@@ -118,7 +121,7 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 
 ### 事件
 
-`session.subscribe(listener)` 只收这个会话的事件，`vela.subscribe((event, sessionId) => …)` 收所有会话的。一次 `prompt()` 的顺序是：`agent_start{input}` → `message`（用户输入）→ 每轮 `turn_start` …（`text_delta`、`tool_call`、`tool_result` / `tool_error`、`retry`、`usage`）… `message`（这一轮新增的 assistant / tool 消息，以及循环检测提醒）→ `turn_end` → 最后 `agent_end{reason}`。另有 `context`（压缩）、`audit`、`security_warning`、`session_save_failed`，通道会话还有 `channel_message` / `channel_reply` / `channel_error`。
+`session.subscribe(listener)` 只收这个会话的事件，`vela.subscribe((event, sessionId) => …)` 收所有会话的。一次 `prompt()` 的顺序是：`agent_start{input}` → `message`（用户输入）→ 每轮 `turn_start` …（`text_delta`、`tool_call`、`tool_result` / `tool_error`、`retry`、`usage`）… `message`（这一轮新增的 assistant / tool 消息，以及循环检测提醒）→ `turn_end` → 最后 `agent_end{reason}`。另有 `context`（压缩）、`audit`、`security_warning`、`session_save_failed`、`notify`（没有界面时扩展的 `ui.notify`），通道会话还有 `channel_message` / `channel_reply` / `channel_error`。
 
 core 不写终端（`test/unit/boundary.test.ts` 守着这条边界）：非事件的诊断输出走 `createVela({ logger })`，默认静默。
 
@@ -152,7 +155,8 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/session | `--continue` 式恢复；空目录无会话；不同 sessionId 分开存；dataDir 与 cwd 分离；usage 日志；prompt cache 模拟 |
 | e2e/memory | 通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename |
 | e2e/rag | 没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留 |
-| e2e/commands | `/context` `/usage` `status`；`/plugin load/unload` 后模型立即能用插件工具；通道消息走同一模型和工具并回发 |
+| e2e/commands | `/context` `/usage` `status`；supabase 扩展的工具模型能直接用、`/extensions` 列出；通道消息走同一模型和工具并回发 |
+| e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存 |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger |
@@ -160,6 +164,8 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | unit/cli/commands | skill 激活/去重/并发锁、dream、memory、rag 命令（走真实装配） |
 | unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
 | unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |
+| unit/public-api | `vela`、`vela/testing` 的公开 API 和 `api/public-api.txt` 一致；改了公开面运行 `bun run api:update` |
+| unit/security | 角色（owner / collaborator / guest）、会话权限规则、ask 走 confirm、hooks 链、bash 分类、`/role` 只改当前会话 |
 | unit/… | 其余模块级规则，见各文件 |
 
 ## 验收一次改动
@@ -169,7 +175,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 3. 改到跨模块的东西（agent loop、`createVela`、事件、上下文、CLI）时跑 `bun run test`。
 4. `bun run typecheck` 和 `bun run lint` 都要通过（CI 也会跑）。
 5. 涉及真实模型行为（provider、usage 字段、工具调用格式）时，有条件就跑一次 `bun run test:live`。
-6. 改了事件、faux 接口或测试约定时，同步更新本文件。
+6. 改了事件、faux 接口或测试约定时，同步更新本文件；改了公开 API 时运行 `bun run api:update` 并提交 `api/public-api.txt`。
 
 ## 怎么新增测试
 

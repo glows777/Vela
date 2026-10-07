@@ -176,11 +176,11 @@ test('a deferred tool only reaches the model after tool_search discovers it', as
       (req) => fauxText(`查到：${req.toolResults[0]!.output}`),
     ],
   })
-  t.vela.registry.register({
+  t.internals.registry.register({
     name: 'mcp__fake__lookup',
     description: '[MCP:fake] look something up',
     inputSchema: z.object({ id: z.string() }),
-    shouldDefer: true,
+    exposure: 'deferred',
     execute: async ({ id }: { id: string }) => `record ${id}`,
   })
 

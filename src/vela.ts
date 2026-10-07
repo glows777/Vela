@@ -2,13 +2,15 @@ import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 import type { VelaSessionEventListener } from './agent/events'
 import { ChannelGateway } from './channels/gateway'
+import { ExtensionRunner, type LoadedExtension } from './extensions/runner'
+import type { VelaExtension } from './extensions/types'
 import { resolveLimits, type VelaLimits } from './limits'
 import { silentLogger, type VelaLogger } from './logger'
 import { MemoryStore } from './memory/store'
-import { PluginManager } from './plugins/manager'
 import {
   coreRules,
   deferredTools,
+  extensionSections,
   memoryContext,
   ragContext,
   sessionContext,
@@ -26,7 +28,7 @@ import { createMemoryTool } from './tools/memory-tool'
 import { createRagTools } from './tools/rag'
 import { ToolRegistry } from './tools/registry'
 import { registerToolSearchTool } from './tools/tool-search'
-import { VelaSession } from './vela-session'
+import { type SessionOptions, VelaSession } from './vela-session'
 
 export interface VelaOptions {
   /** 主模型。core 不读环境变量：CLI 负责创建，测试传入 faux 模型。 */
@@ -39,18 +41,71 @@ export interface VelaOptions {
   embedder?: EmbeddingFn
   /** 轮数、重试、预算、压缩阈值等上限；未给出的字段用默认值（见 src/limits.ts）。 */
   limits?: Partial<VelaLimits>
-  /** 非事件类的诊断输出（插件、hooks、会话文件坏行……），默认静默。 */
+  /** 非事件类的诊断输出（扩展、hooks、会话文件坏行……），默认静默。 */
   logger?: VelaLogger
-  /** 解析插件配置里 `${VAR}` 用的环境变量，默认为空；CLI 传 process.env。 */
-  env?: Record<string, string | undefined>
+  /**
+   * 要加载的扩展，按顺序运行（同 pi，SDK 默认不带内置扩展）。
+   * 扩展的配置通过工厂参数传入，例如 `feishu({ appId, appSecret })`。
+   */
+  extensions?: VelaExtension[]
+}
+
+/** createVela() 的返回值。 */
+export interface Vela {
+  readonly cwd: string
+  readonly dataDir: string
+  readonly model: LanguageModel
+  readonly limits: VelaLimits
+  /**
+   * 打开（或取回已打开的）会话；id 会成为 `.sessions/<id>.jsonl` 的文件名。
+   * options 只在第一次打开时生效。需要恢复历史时再 `await session.resume()`。
+   */
+  session(id?: string, options?: SessionOptions): VelaSession
+  /** 当前打开的会话 */
+  sessions(): VelaSession[]
+  /** 订阅所有会话的事件；返回取消订阅的函数 */
+  subscribe(listener: VelaSessionEventListener): () => void
+  /** 等所有扩展（包括异步工厂）加载完；加载失败时 reject */
+  ready(): Promise<void>
+  /** 已加载的扩展和它们注册的工具、命令、通道 */
+  extensions(): LoadedExtension[]
+  /** 扩展注册的命令 */
+  commands(): { name: string; description?: string; extension: string }[]
+  /** 扩展注册的通道 */
+  channels(): { name: string; description: string }[]
+  /** 启动所有通道（开始接收消息） */
+  startChannels(): Promise<void>
+  /** 停止通道、关闭所有会话（中断正在跑的任务并保存）、断开 MCP */
+  dispose(): Promise<void>
+}
+
+/** CLI 和测试用的内部对象，不属于公开 API。 */
+export interface VelaInternals {
+  logger: VelaLogger
+  registry: ToolRegistry
+  hooks: HookPipeline
+  builder: PromptPipeline
+  memoryStore: MemoryStore
+  vectorStore: SqliteVectorStore
+  skillLoader: SkillLoader
+  gateway: ChannelGateway
+}
+
+const internals = new WeakMap<Vela, VelaInternals>()
+
+/** @internal 取 Vela 的内部对象（CLI 命令、测试用）。 */
+export function velaInternals(vela: Vela): VelaInternals {
+  const found = internals.get(vela)
+  if (!found) throw new Error('不是 createVela() 创建的 Vela')
+  return found
 }
 
 /**
- * 装配一个 Vela：工具、hooks、prompt、记忆、RAG、skills、插件和通道。
+ * 装配一个 Vela：工具、hooks、prompt、记忆、RAG、skills、扩展和通道。
  * 对话通过 `vela.session(id)` 打开；同一个 Vela 可以同时开多个会话，
- * 它们共享工具、记忆和知识库，各自有消息历史、上下文压缩、用量和运行锁。
+ * 它们共享工具、扩展、记忆和知识库，各自有消息历史、上下文压缩、用量、角色和运行锁。
  */
-export function createVela(options: VelaOptions) {
+export function createVela(options: VelaOptions): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())
   const dataDir = resolve(cwd, options.dataDir ?? '.')
   const { model, embedder } = options
@@ -68,13 +123,6 @@ export function createVela(options: VelaOptions) {
   )
 
   const hooks = new HookPipeline(logger)
-  hooks.registerPre('audit-log', (toolName, input, context) => {
-    if (toolName === 'write_file' || toolName === 'edit_file') {
-      const path = (input as { path?: string } | null)?.path || 'unknown'
-      context.emit({ type: 'audit', toolName, path })
-    }
-    return { action: 'allow' }
-  })
   hooks.registerPost('bash-timestamp', (toolName, _input, output) => {
     if (toolName === 'bash') {
       return {
@@ -106,6 +154,7 @@ export function createVela(options: VelaOptions) {
     .pipe('memoryContext', memoryContext(memoryStore))
   if (embedder) builder.pipe('ragContext', ragContext(vectorStore))
   builder
+    .pipe('extensions', extensionSections())
     .pipe('skillContext', (ctx) =>
       skillLoader.buildPromptSection(ctx.activeSkills ?? new Set()),
     )
@@ -115,45 +164,93 @@ export function createVela(options: VelaOptions) {
   const sessions = new Map<string, VelaSession>()
   let disposed = false
 
-  /**
-   * 打开（或取回已打开的）会话；id 会成为 `.sessions/<id>.jsonl` 的文件名。
-   * 需要恢复历史时再 `await session.resume()`。
-   */
-  const session = (id = 'default'): VelaSession => {
+  const session = (
+    id = 'default',
+    sessionOptions?: SessionOptions,
+  ): VelaSession => {
     if (disposed) throw new Error('Vela 已 dispose')
     const existing = sessions.get(id)
     if (existing) return existing
-    const created = new VelaSession(id, {
-      model,
-      limits,
-      logger,
-      dataDir,
-      registry,
-      builder,
-      forward: (event, sessionId) => {
-        for (const listener of listeners) listener(event, sessionId)
+    const created: VelaSession = new VelaSession(
+      id,
+      {
+        model,
+        limits,
+        logger,
+        dataDir,
+        registry,
+        builder,
+        extensions: {
+          ready: runner.ready,
+          sessionStart: (s) => runner.sessionStart(s),
+          sessionShutdown: (s) => runner.sessionShutdown(s),
+          beforeAgentStart: (s, prompt) => runner.beforeAgentStart(s, prompt),
+          runCommand: (s, text) => runner.runCommand(s, text),
+        },
+        forward: (event, sessionId) => {
+          for (const listener of listeners) listener(event, sessionId)
+          const source = sessions.get(sessionId)
+          if (source) runner.notify(event, source)
+        },
+        onClose: (closed) => {
+          if (sessions.get(closed.id) === closed) sessions.delete(closed.id)
+        },
       },
-      onClose: (closed) => {
-        if (sessions.get(closed.id) === closed) sessions.delete(closed.id)
-      },
-    })
+      sessionOptions,
+    )
     sessions.set(id, created)
     return created
   }
 
-  const gateway = new ChannelGateway({ session, logger })
-  const pluginManager = new PluginManager(registry, gateway, {
-    logger,
-    env: options.env,
+  const gateway: ChannelGateway = new ChannelGateway({ session, logger })
+  const runner: ExtensionRunner = new ExtensionRunner(
+    {
+      cwd,
+      dataDir,
+      logger,
+      registry,
+      hooks,
+      gateway,
+      session: (id) => sessions.get(id),
+    },
+    options.extensions ?? [],
+  )
+  // 审计放在扩展的 tool_call 之后：记录的是扩展改过之后真正要写的路径
+  hooks.registerPre('audit-log', (toolName, input, context) => {
+    if (toolName === 'write_file' || toolName === 'edit_file') {
+      const path = (input as { path?: string } | null)?.path || 'unknown'
+      context.emit({ type: 'audit', toolName, path })
+    }
+    return { action: 'allow' }
   })
 
-  return {
+  const vela: Vela = {
     cwd,
     dataDir,
     model,
     limits,
+    session,
+    sessions: () => [...sessions.values()],
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    ready: () => runner.ready,
+    extensions: () => runner.loaded(),
+    commands: () => runner.commands(),
+    channels: () => gateway.list(),
+    startChannels: () => gateway.startAll(),
+    async dispose() {
+      if (disposed) return
+      disposed = true
+      await gateway.stopAll()
+      await Promise.all([...sessions.values()].map((s) => s.close()))
+      await registry.closeAllMCP()
+      listeners.clear()
+    },
+  }
+  internals.set(vela, {
     logger,
-    /** 共享的工具 registry：在这里注册的工具所有会话都能用 */
     registry,
     hooks,
     builder,
@@ -161,32 +258,6 @@ export function createVela(options: VelaOptions) {
     vectorStore,
     skillLoader,
     gateway,
-    pluginManager,
-
-    session,
-
-    /** 当前打开的会话。 */
-    sessions(): VelaSession[] {
-      return [...sessions.values()]
-    },
-
-    /** 订阅所有会话的事件；返回取消订阅的函数。 */
-    subscribe(listener: VelaSessionEventListener): () => void {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-
-    /** 停止通道、关闭所有会话（中断正在跑的任务并保存）、卸载插件、断开 MCP。 */
-    async dispose(): Promise<void> {
-      if (disposed) return
-      disposed = true
-      await gateway.stopAll()
-      await Promise.all([...sessions.values()].map((s) => s.close()))
-      await pluginManager.unloadAll()
-      await registry.closeAllMCP()
-      listeners.clear()
-    },
-  }
+  })
+  return vela
 }
-
-export type Vela = ReturnType<typeof createVela>
