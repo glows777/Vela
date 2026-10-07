@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { tempDir } from '../support/vela'
 
 const ROOT = resolve(import.meta.dir, '../..')
-const ENTRY = join(ROOT, 'src/index.ts')
+const ENTRY = join(ROOT, 'src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
 
@@ -16,7 +16,12 @@ afterAll(() => {
 /** 在临时目录里起一个真实的 CLI 进程（数据目录 = 该目录） */
 async function cli(
   args: string[],
-  options: { model: string; cwd?: string; files?: Record<string, string> },
+  options: {
+    model: string
+    cwd?: string
+    files?: Record<string, string>
+    env?: Record<string, string>
+  },
 ) {
   let cwd = options.cwd
   if (!cwd) {
@@ -30,6 +35,7 @@ async function cli(
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     VELA_MODEL: options.model,
+    ...options.env,
   }
   const proc = Bun.spawn(['bun', ENTRY, ...args], {
     cwd,
@@ -189,4 +195,27 @@ test.concurrent('interactive mode reads piped stdin line by line and exits at EO
   expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
   expect(stdout).toContain('[记忆系统] 共 0 条记忆')
   expect(stdout).toContain('Bye!')
+})
+
+test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline', async () => {
+  const dir = tempDir('vela-cli-')
+  dirs.push(dir)
+  const recorded = join(dir.path, 'recorded.json')
+  const files = { 'notes.txt': 'remember the milk' }
+  const first = await cli(['-p', '读 notes.txt'], {
+    model: `faux:${scenario('read-file')}`,
+    files,
+    env: { VELA_RECORD: recorded },
+  })
+  expect(first.code).toBe(0)
+  const saved = await Bun.file(recorded).json()
+  expect(saved.inputs).toEqual(['读 notes.txt'])
+  expect(saved.responses).toHaveLength(2)
+
+  const replay = await cli(['-p', '读 notes.txt'], {
+    model: `faux:${recorded}`,
+    files,
+  })
+  expect(replay.code).toBe(0)
+  expect(replay.stdout).toContain('remember the milk')
 })

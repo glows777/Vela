@@ -18,7 +18,7 @@ async function requestTokens(t: TestVela): Promise<number> {
   return estimateRequestTokens(
     await createRequestSnapshot(
       t.vela.model,
-      t.vela.buildSystem(),
+      t.session.buildSystem(),
       t.vela.registry.toAISDKFormat(),
       t.messages,
     ),
@@ -96,7 +96,7 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   expect(JSON.stringify(firstUser.content)).toContain('[之前对话的摘要]')
   expect(JSON.stringify(firstUser.content)).toContain('第 0 个问题')
   expect(after.lastUserText).toContain('第 4 个问题')
-  expect(t.vela.contextManager.state.summary).toContain('## 用户目标')
+  expect(t.session.contextManager.state.summary).toContain('## 用户目标')
   expect(
     t
       .tracker()
@@ -106,9 +106,9 @@ test('summary compaction replaces old history with a grounded summary and keeps 
 
   // 摘要落盘，新的 Vela 恢复后带着它
   const resumed = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
-  expect(await resumed.vela.resume()).toBe(true)
-  expect(resumed.vela.contextManager.state.summary).toBe(
-    t.vela.contextManager.state.summary,
+  expect(await resumed.session.resume()).toBe(true)
+  expect(resumed.session.contextManager.state.summary).toBe(
+    t.session.contextManager.state.summary,
   )
   await resumed.run('继续')
   expect(JSON.stringify(resumed.model.calls[0]!.prompt)).toContain(
@@ -134,7 +134,7 @@ test('a summary that fails validation stops the turn and leaves history untouche
   ).rejects.toThrow('原历史保留')
 
   expect(JSON.stringify(t.messages.slice(0, 8))).toBe(before)
-  expect(t.vela.contextManager.state.summary).toBe('')
+  expect(t.session.contextManager.state.summary).toBe('')
 })
 
 test('/defend applies microcompact only and never pays for a summary', async () => {

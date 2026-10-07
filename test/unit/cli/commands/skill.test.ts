@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxText } from '../../../src/testing/faux'
+import { fauxText } from '../../../../src/testing/faux'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
   type TestVelaOptions,
-} from '../../support/vela'
+} from '../../../support/vela'
 
 const BODY = '## 审查清单\n- 运行 diff\n- 确认没有回归'
 const SKILL = { name: 'code-review', description: '审查代码变更', body: BODY }
@@ -21,7 +21,7 @@ function countOccurrences(text: string, needle: string): number {
 }
 
 function allPromptText(t: TestVela): string {
-  const system = t.vela.buildSystem()
+  const system = t.session.buildSystem()
   const messages = t.messages
     .map((m) => (typeof m.content === 'string' ? m.content : ''))
     .join('\n')
@@ -44,7 +44,7 @@ test('/skill load 激活并注入正文一次（system prompt 无正文）', asy
   await captureConsole(() =>
     expect(t.dispatch('/skill load code-review')).toBe(true),
   )
-  expect(t.vela.activeSkills.has('code-review')).toBe(true)
+  expect(t.session.activeSkills.has('code-review')).toBe(true)
   expect(t.messages).toHaveLength(1)
   expect(t.messages[0]!.content).toContain(BODY)
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
@@ -56,17 +56,17 @@ test('/skill unload 移除激活状态', async () => {
     t.dispatch('/skill load code-review')
     expect(t.dispatch('/skill unload code-review')).toBe(true)
   })
-  expect(t.vela.activeSkills.has('code-review')).toBe(false)
+  expect(t.session.activeSkills.has('code-review')).toBe(false)
 })
 
 test('/<skill> 触发：activeSkills 更新、正文以消息注入一次、system prompt 仍只含索引', async () => {
   const t = fixture({ responses: [fauxText('审查完成')] })
   const { result } = await captureConsole(() => t.command('/code-review extra'))
   expect(result).toBe('async')
-  expect(t.vela.activeSkills.has('code-review')).toBe(true)
+  expect(t.session.activeSkills.has('code-review')).toBe(true)
   expect(String(t.messages[0]!.content)).toBe(`${BODY}\n\n用户指令: extra`)
 
-  const system = t.vela.buildSystem()
+  const system = t.session.buildSystem()
   expect(system).not.toContain(BODY)
   expect(system).toContain('/code-review — 审查代码变更 ✓ 已激活')
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
@@ -99,7 +99,7 @@ test('/skill load 不存在的名字返回 true 且提示', async () => {
 
 test('无 skill 目录时 system prompt 不含可用的 Skills 索引', () => {
   const t = createTestVela()
-  expect(t.vela.buildSystem()).not.toContain('可用的 Skills')
+  expect(t.session.buildSystem()).not.toContain('可用的 Skills')
 })
 
 test('P0-3: 残缺子命令被拦截，不穿透为 skill 触发', async () => {
@@ -111,15 +111,15 @@ test('P0-3: 残缺子命令被拦截，不穿透为 skill 触发', async () => {
   })
   expect(output).toContain('用法: /skill load <name>')
   expect(output).toContain('未知子命令')
-  expect(t.vela.activeSkills.size).toBe(0)
+  expect(t.session.activeSkills.size).toBe(0)
   expect(t.messages).toHaveLength(0)
 })
 
 test('P0-2: busy 锁拒绝并发触发', () => {
   const t = fixture()
-  t.ctx.busy.locked = true
+  t.session.busy.locked = true
   expect(t.dispatch('/code-review extra')).toBe(true)
-  expect(t.vela.activeSkills.has('code-review')).toBe(false)
+  expect(t.session.activeSkills.has('code-review')).toBe(false)
   expect(t.messages).toHaveLength(0)
 })
 
@@ -158,10 +158,10 @@ test('P0-2: 正文已注入时二次触发只追加注记，不重复正文', as
 
 test('skill persists the updated summary produced during preparation', async () => {
   const t = fixture({ responses: [fauxText('ok')] })
-  await t.vela.contextManager.commit([], 'old summary')
-  t.ctx.prepareContext = async () => {
-    await t.vela.contextManager.commit(t.messages.slice(), 'new summary')
+  await t.session.contextManager.commit([], 'old summary')
+  t.session.prepareContext = async () => {
+    await t.session.contextManager.commit(t.messages.slice(), 'new summary')
   }
   await captureConsole(() => t.command('/code-review'))
-  expect((await t.vela.sessionStore.loadState()).summary).toBe('new summary')
+  expect((await t.session.store.loadState()).summary).toBe('new summary')
 })

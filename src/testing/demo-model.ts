@@ -16,13 +16,16 @@ import { getStoredResult } from '../session/tool-results'
  * 这样在 /context、/usage 视图里能直观看到 cache 命中率随对话推进上涨。
  */
 
-let retryTestCount = 0
-let lastPrefixHash: string | null = null
-let cacheEnabled = true
+/** 每个 demo 模型实例自己的状态（重试演示计数、cache 前缀指纹、cache 开关）。 */
+interface DemoState {
+  retryTestCount: number
+  lastPrefixHash: string | null
+  cacheEnabled: boolean
+}
 
-export function setCacheEnabled(enabled: boolean): void {
-  cacheEnabled = enabled
-  if (!enabled) lastPrefixHash = null
+export type DemoModel = LanguageModel & {
+  /** `/cache on|off`：开关 prompt cache 模拟 */
+  setCacheEnabled(enabled: boolean): void
 }
 
 function simpleHash(s: string): string {
@@ -71,7 +74,7 @@ function approxMessageTokens(prompt: Prompt): number {
 }
 
 /** 根据 prompt 算这次调用的 v3 usage，并模拟 cache 命中。 */
-function makeUsage(prompt: Prompt, outputChars = 80) {
+function makeUsage(state: DemoState, prompt: Prompt, outputChars = 80) {
   const system = extractSystemContent(prompt)
   const prefixContent = system
   const prefixTokens = approxTokensFromChars(prefixContent.length)
@@ -81,7 +84,7 @@ function makeUsage(prompt: Prompt, outputChars = 80) {
   // 真实模型最小阈值各家不一（Qwen implicit 256、OpenAI 1024、Sonnet 4.7 2048、Opus 4.7 4096）。
   // 课程里用 512 让普通 SYSTEM 也能演示 cache 行为，等到讲生产配置时再讲各家阈值差异。
   const MIN_CACHE = 512
-  const cacheable = cacheEnabled && prefixTokens >= MIN_CACHE
+  const cacheable = state.cacheEnabled && prefixTokens >= MIN_CACHE
 
   const prefixHash = cacheable ? simpleHash(prefixContent) : null
   let cacheRead = 0
@@ -89,15 +92,15 @@ function makeUsage(prompt: Prompt, outputChars = 80) {
   let input = messageTokens
 
   if (cacheable) {
-    if (lastPrefixHash === prefixHash) {
+    if (state.lastPrefixHash === prefixHash) {
       cacheRead = prefixTokens
     } else {
       cacheWrite = prefixTokens
     }
-    lastPrefixHash = prefixHash
+    state.lastPrefixHash = prefixHash
   } else {
     input += prefixTokens
-    lastPrefixHash = null
+    state.lastPrefixHash = null
   }
 
   // AI SDK provider v3 usage：inputTokens.total 包含三类输入，
@@ -402,6 +405,7 @@ function createDelayedStream(
 }
 
 function makeToolCallChunks(
+  state: DemoState,
   intents: ToolCallIntent[],
   prompt: Prompt,
 ): LanguageModelV3StreamPart[] {
@@ -424,13 +428,22 @@ function makeToolCallChunks(
   chunks.push({
     type: 'finish',
     finishReason: { unified: 'tool-calls', raw: undefined },
-    usage: makeUsage(prompt),
+    usage: makeUsage(state, prompt),
   })
   return chunks
 }
 
-export function createMockModel(): LanguageModel {
+export function createMockModel(): DemoModel {
+  const state: DemoState = {
+    retryTestCount: 0,
+    lastPrefixHash: null,
+    cacheEnabled: true,
+  }
   return {
+    setCacheEnabled(enabled: boolean) {
+      state.cacheEnabled = enabled
+      if (!enabled) state.lastPrefixHash = null
+    },
     specificationVersion: 'v3' as const,
     provider: 'mock',
     modelId: 'mock-model',
@@ -451,7 +464,7 @@ export function createMockModel(): LanguageModel {
         return {
           content: [{ type: 'text' as const, text: mockSummary }],
           finishReason: { unified: 'stop' as const, raw: undefined },
-          usage: makeUsage(prompt),
+          usage: makeUsage(state, prompt),
           warnings: [],
         }
       }
@@ -459,15 +472,15 @@ export function createMockModel(): LanguageModel {
       const text = extractUserText(prompt)
 
       if (text.includes('测试重试') || text.includes('test retry')) {
-        retryTestCount++
-        if (retryTestCount <= 2) {
+        state.retryTestCount++
+        if (state.retryTestCount <= 2) {
           throw new Error('429 Too Many Requests - Rate limit exceeded')
         }
-        retryTestCount = 0
+        state.retryTestCount = 0
         return {
           content: [{ type: 'text' as const, text: '重试成功！' }],
           finishReason: { unified: 'stop' as const, raw: undefined },
-          usage: makeUsage(prompt),
+          usage: makeUsage(state, prompt),
           warnings: [],
         }
       }
@@ -482,7 +495,7 @@ export function createMockModel(): LanguageModel {
             input: JSON.stringify(intent.args),
           })),
           finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: makeUsage(prompt),
+          usage: makeUsage(state, prompt),
           warnings: [],
         }
       }
@@ -499,7 +512,7 @@ export function createMockModel(): LanguageModel {
             },
           ],
           finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: makeUsage(prompt),
+          usage: makeUsage(state, prompt),
           warnings: [],
         }
       }
@@ -507,7 +520,7 @@ export function createMockModel(): LanguageModel {
       return {
         content: [{ type: 'text' as const, text: pickTextResponse(prompt) }],
         finishReason: { unified: 'stop' as const, raw: undefined },
-        usage: makeUsage(prompt),
+        usage: makeUsage(state, prompt),
         warnings: [],
       }
     },
@@ -516,11 +529,11 @@ export function createMockModel(): LanguageModel {
       const text = extractUserText(prompt)
 
       if (text.includes('测试重试') || text.includes('test retry')) {
-        retryTestCount++
-        if (retryTestCount <= 2) {
+        state.retryTestCount++
+        if (state.retryTestCount <= 2) {
           throw new Error('429 Too Many Requests - Rate limit exceeded')
         }
-        retryTestCount = 0
+        state.retryTestCount = 0
         const reply = '重试成功！'
         const id = 'text-1'
         const chunks: LanguageModelV3StreamPart[] = [
@@ -536,7 +549,7 @@ export function createMockModel(): LanguageModel {
           {
             type: 'finish',
             finishReason: { unified: 'stop', raw: undefined },
-            usage: makeUsage(prompt),
+            usage: makeUsage(state, prompt),
           },
         ]
         return { stream: createDelayedStream(chunks, 30) }
@@ -546,7 +559,7 @@ export function createMockModel(): LanguageModel {
       if (parallelIntents && !hasToolResults(prompt)) {
         return {
           stream: createDelayedStream(
-            makeToolCallChunks(parallelIntents, prompt),
+            makeToolCallChunks(state, parallelIntents, prompt),
             15,
           ),
         }
@@ -555,7 +568,7 @@ export function createMockModel(): LanguageModel {
       const intent = detectToolIntent(prompt)
       if (intent) {
         return {
-          stream: createDelayedStream(makeToolCallChunks([intent], prompt), 20),
+          stream: createDelayedStream(makeToolCallChunks(state, [intent], prompt), 20),
         }
       }
 
@@ -574,7 +587,7 @@ export function createMockModel(): LanguageModel {
         {
           type: 'finish',
           finishReason: { unified: 'stop', raw: undefined },
-          usage: makeUsage(prompt),
+          usage: makeUsage(state, prompt),
         },
       ]
       return { stream: createDelayedStream(chunks, 30) }

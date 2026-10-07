@@ -3,7 +3,7 @@ import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
-} from '../../support/vela'
+} from '../../../support/vela'
 
 afterEach(cleanupTestVelas)
 

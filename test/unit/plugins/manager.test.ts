@@ -1,5 +1,4 @@
 import { expect, spyOn, test } from 'bun:test'
-import { createFauxModel } from '../../../src/testing/faux'
 import { FeishuChannel } from '../../../src/channels/built-in-channels/lark'
 import { ChannelGateway } from '../../../src/channels/gateway'
 import { ToolRegistry } from '../../../src/tools/registry'
@@ -9,10 +8,9 @@ import { PluginManager } from '../../../src/plugins/manager'
 test('飞书插件注册到 gateway，由 gateway 统一启停', async () => {
   const registry = new ToolRegistry()
   const gateway = new ChannelGateway({
-    model: createFauxModel(),
-    registry,
-    buildSystem: () => '',
-    prepareContext: async () => {},
+    session: () => {
+      throw new Error('no messages expected')
+    },
   })
   const manager = new PluginManager(registry, gateway)
   const start = spyOn(FeishuChannel.prototype, 'start').mockResolvedValue()

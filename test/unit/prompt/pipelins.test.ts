@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import {
   PromptPipeline,
   type PromptContext,
@@ -25,19 +25,14 @@ test('build 全部为 null 时输出空字符串', () => {
   expect(pipeline.build(ctx)).toBe('')
 })
 
-test('debug 对每个模块打印 ON/OFF 且不抛异常', () => {
+test('status 报告每个模块是否启用和字符数', () => {
   const pipeline = new PromptPipeline()
     .pipe('on', () => 'x')
     .pipe('off', () => null)
-  const log = spyOn(console, 'log').mockImplementation(() => {})
-  try {
-    expect(() => pipeline.debug(ctx)).not.toThrow()
-    const output = log.mock.calls.flat().join('\n')
-    expect(output).toContain('on: [ON]')
-    expect(output).toContain('off: [OFF]')
-  } finally {
-    log.mockRestore()
-  }
+  expect(pipeline.status(ctx)).toEqual([
+    { name: 'on', chars: 1 },
+    { name: 'off', chars: null },
+  ])
 })
 
 test('pipe 管道提供上下文给每个函数', () => {

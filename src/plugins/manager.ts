@@ -1,6 +1,13 @@
 import type { ChannelGateway } from '../channels/gateway'
+import { errorMessage, silentLogger, type VelaLogger } from '../logger'
 import type { ToolDefinition, ToolRegistry } from '../tools/registry'
 import type { PluginApi, PluginConfig, PluginDefinition } from './types'
+
+export interface PluginManagerOptions {
+  logger?: VelaLogger
+  /** 解析插件配置里 `${VAR}` 用的环境变量；core 不读 process.env，由调用方（CLI）传入 */
+  env?: Record<string, string | undefined>
+}
 
 interface LoadedPlugin {
   definition: PluginDefinition
@@ -10,12 +17,17 @@ interface LoadedPlugin {
 export class PluginManager {
   private plugins = new Map<string, LoadedPlugin>()
   private registry: ToolRegistry
+  private logger: VelaLogger
+  private env: Record<string, string | undefined>
 
   constructor(
     registry: ToolRegistry,
     private gateway: ChannelGateway,
+    options: PluginManagerOptions = {},
   ) {
     this.registry = registry
+    this.logger = options.logger ?? silentLogger
+    this.env = options.env ?? {}
   }
 
   async load(
@@ -51,15 +63,16 @@ export class PluginManager {
       },
       getConfig: () => resolvedConfig,
       log: (message: string) => {
-        console.log(`  [plugin:${definition.name}] ${message}`)
+        this.logger.info(`[plugin:${definition.name}] ${message}`)
       },
     }
 
     try {
       await definition.activate(api)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`  [plugin:${definition.name}] 激活失败: ${msg}`)
+      this.logger.error(
+        `[plugin:${definition.name}] 激活失败: ${errorMessage(err)}`,
+      )
       throw err
     }
 
@@ -79,8 +92,7 @@ export class PluginManager {
       try {
         await plugin.definition.destroy()
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.error(`  [plugin:${name}] destroy 出错: ${msg}`)
+        this.logger.error(`[plugin:${name}] destroy 出错: ${errorMessage(err)}`)
       }
     }
 
@@ -126,7 +138,7 @@ export class PluginManager {
         value.endsWith('}')
       ) {
         const envKey = value.slice(2, -1)
-        resolved[key] = process.env[envKey] || ''
+        resolved[key] = this.env[envKey] || ''
       } else {
         resolved[key] = value
       }

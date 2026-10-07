@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import { join } from 'node:path';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { silentLogger, type VelaLogger } from '../logger';
 import { ToolResultStore } from './tool-results';
 
 export interface MessageEntry {
@@ -41,7 +42,11 @@ export class SessionStore {
     return `${this.dir}/${this.sessionId}.jsonl`;
   }
 
-  constructor(sessionId: string, dir: string = SESSION_DIR) {
+  constructor(
+    sessionId: string,
+    dir: string = SESSION_DIR,
+    private logger: VelaLogger = silentLogger,
+  ) {
     this.sessionId = sessionId;
     this.dir = dir;
     this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'));
@@ -131,7 +136,7 @@ export class SessionStore {
           }
         }
       } catch (error) {
-        console.error(`[session store]: read line error: ${error}`);
+        this.logger.warn(`[session] ${this.filePath} 有一行无法解析，已跳过: ${error}`);
       }
     }
 

@@ -5,9 +5,10 @@ import type { ToolResultStore } from '../session/tool-results'
 
 export * from './pipelins'
 
-export function toolHistoryGuide(results: ToolResultStore): PipeFn {
+/** 不传 results 时用 PromptContext 里当前会话的工具结果存储。 */
+export function toolHistoryGuide(results?: ToolResultStore): PipeFn {
   // No counters/timestamps in the system prefix; only the session's stable path/schema.
-  return () => results.readingGuide()
+  return (ctx) => (results ?? ctx.toolResults)?.readingGuide() ?? null
 }
 
 export function coreRules(): PipeFn {

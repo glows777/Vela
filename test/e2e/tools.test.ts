@@ -121,7 +121,7 @@ test('a tool that throws becomes a tool error the model can react to', async () 
 
   await t.run('读 missing.txt')
 
-  expect(t.eventTypes().slice(0, 3)).toEqual([
+  expect(t.eventTypes().slice(2, 5)).toEqual([
     'turn_start',
     'tool_call',
     'tool_error',
@@ -156,7 +156,7 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
   expect(t.model.calls[1]!.toolResults).toHaveLength(2)
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
   // 被拒绝的调用也写进了工具历史
-  const history = await Bun.file(t.vela.registry.results.indexPath).text()
+  const history = await Bun.file(t.session.registry.results.indexPath).text()
   expect(history).toContain('no_such_tool')
   expect(history).toContain('"status":"rejected"')
 })

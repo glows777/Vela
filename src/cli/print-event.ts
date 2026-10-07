@@ -97,6 +97,30 @@ export function printEvent(event: VelaEvent): void {
     case 'audit':
       console.log(`  [audit] 文件写入操作: ${event.toolName} → ${event.path}`)
       break
+    case 'security_warning':
+      console.log(`  [安全] ⚠ ${event.reason}: ${event.command}`)
+      break
+    case 'channel_message':
+      console.log(
+        `\n  [${event.channel}] ${event.senderName}: ${event.text}`,
+      )
+      break
+    case 'channel_reply': {
+      const text = event.text
+      console.log(
+        `  [${event.channel}] → ${text.slice(0, 80)}${text.length > 80 ? '...' : ''}`,
+      )
+      break
+    }
+    case 'channel_error':
+      if (event.aborted) console.log(`  [${event.channel}] 本轮已中断`)
+      else
+        console.error(
+          `  [${event.channel}] 本轮停止: ${event.error instanceof Error ? event.error.message : String(event.error)}`,
+        )
+      break
+    case 'agent_start':
+    case 'message':
     case 'tool_error':
       break
   }

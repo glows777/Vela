@@ -79,7 +79,7 @@ test('a 400 is not retried: the run fails and the user message stays in the save
 
   expect(t.eventsOf('retry')).toHaveLength(0)
   expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'error' })
-  expect(t.vela.busy.locked).toBe(false)
+  expect(t.session.busy.locked).toBe(false)
   expect(await t.readData('.sessions/default.jsonl')).toContain('"hi"')
 })
 
@@ -100,14 +100,14 @@ test('aborting while the model is streaming stops the run; the next run works', 
 
   const running = t.run('慢慢想')
   while (!t.streamedText()) await Bun.sleep(1)
-  t.vela.abort()
+  t.session.abort()
 
   await expect(running).rejects.toThrow()
   expect(t.events.at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'aborted',
   })
-  expect(t.vela.busy.locked).toBe(false)
+  expect(t.session.busy.locked).toBe(false)
 
   await t.run('再来')
   expect(t.lastAssistantText()).toBe('第二次正常')
@@ -138,7 +138,7 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
 
   const running = t.run('跑个慢工具')
   await toolStarted
-  t.vela.abort()
+  t.session.abort()
 
   await expect(running).rejects.toThrow()
   expect(t.events.at(-1)).toMatchObject({
@@ -147,7 +147,7 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
   })
   // 只请求过一次模型：中断后不会再开新一轮
   expect(t.model.calls).toHaveLength(1)
-  const history = await Bun.file(t.vela.registry.results.indexPath).text()
+  const history = await Bun.file(t.session.registry.results.indexPath).text()
   expect(history).toContain('"status":"cancelled"')
 })
 
@@ -156,7 +156,7 @@ test('a second run while one is in flight is refused', async () => {
   const running = t.run('first')
   await expect(t.run('second')).rejects.toThrow('有任务正在执行中')
   while (t.model.calls.length === 0) await Bun.sleep(1)
-  t.vela.abort()
+  t.session.abort()
   await expect(running).rejects.toThrow()
 })
 

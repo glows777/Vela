@@ -466,6 +466,8 @@ function findCompactionControl(prompt: LanguageModelV4Prompt):
 
 /** JSON 场景文件的格式（CLI 的 `VELA_MODEL=faux:<file>` 读取它）。 */
 export interface FauxScenario {
+  /** 用户输入（按顺序）；`replayScenario()` 用它把整段会话重跑一遍，CLI 回放时忽略 */
+  inputs?: string[]
   responses: FauxResponse[]
   generate?: FauxResponse[]
   chunkSize?: number
@@ -473,9 +475,13 @@ export interface FauxScenario {
   cache?: boolean
 }
 
-export async function loadFauxScenario(path: string): Promise<FauxModel> {
+export async function readFauxScenario(path: string): Promise<FauxScenario> {
   const scenario = (await Bun.file(path).json()) as FauxScenario
   if (!Array.isArray(scenario.responses))
     throw new Error(`faux scenario ${path} must have a "responses" array`)
-  return createFauxModel(scenario)
+  return scenario
+}
+
+export async function loadFauxScenario(path: string): Promise<FauxModel> {
+  return createFauxModel(await readFauxScenario(path))
 }

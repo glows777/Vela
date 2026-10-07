@@ -65,13 +65,30 @@ cp .env.example .env   # 填入 OPENAI_API_KEY
 ### 运行 / Run
 
 ```bash
-bun run dev            # watch 模式，代码变更自动重启
-bun run src/index.ts   # 直接运行
+bun run dev               # watch 模式，代码变更自动重启
+bun run src/cli/main.ts   # 直接运行（package.json 的 bin.vela）
 ```
 
-> **没有 API Key？** 用 `VELA_MODEL=mock bun run src/index.ts` 即可用内置 Mock 模型离线运行（模拟 prompt cache 行为）。
+> **没有 API Key？** 用 `VELA_MODEL=mock bun run src/cli/main.ts` 即可用内置 Mock 模型离线运行（模拟 prompt cache 行为）。
 >
-> **No API key?** Run `VELA_MODEL=mock bun run src/index.ts` to use the built-in offline mock model.
+> **No API key?** Run `VELA_MODEL=mock bun run src/cli/main.ts` to use the built-in offline mock model.
+
+`VELA_RECORD=run.json` 把这次运行的模型响应和输入录成 faux 场景，之后用 `VELA_MODEL=faux:run.json` 离线回放（文件包含对话原文，不要直接提交）。
+
+### 作为 SDK 使用 / Use as an SDK
+
+```ts
+import { createVela } from 'vela'
+
+const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel
+const session = vela.session('default')                  // 同一个 Vela 可以同时开多个会话
+await session.resume()                                   // 有存档就恢复
+session.subscribe((event) => { /* text_delta、tool_call、usage、agent_end … */ })
+await session.prompt('总结 docs/')
+await vela.dispose()
+```
+
+core 不写终端、不读环境变量；诊断输出通过 `logger` 注入。离线测试用 `vela/testing`（faux 模型、`createTestVela()`、`recordModel()` / `replayScenario()`）。
 
 ---
 
@@ -114,9 +131,15 @@ MCP servers (stdio) via the official `@modelcontextprotocol/client` — e.g. Git
 
 ```
 src/
-├── index.ts                # 入口：CLI、MCP 连接、命令分发 / entry: CLI, MCP, dispatcher
-├── app.ts                  # createVela()：装配工具、prompt、记忆、RAG、会话（CLI 与测试共用）/ assembly shared by CLI & tests
-├── cli/print-event.ts      # 把 agent 事件打印到终端 / prints agent events
+├── index.ts                # SDK 公开入口（import 'vela'）/ public SDK exports
+├── vela.ts                 # createVela()：装配工具、prompt、记忆、RAG、插件、通道 / assembly
+├── vela-session.ts         # VelaSession：消息、压缩、用量、运行锁（一个 Vela 可开多个）/ sessions
+├── logger.ts               # 可注入的 logger，默认静默 / injectable logger
+├── cli/
+│   ├── main.ts             # CLI 入口：读环境变量、交互 / -p 模式、MCP / CLI entry
+│   ├── dispatcher.ts       # 斜杠命令分发 / slash command dispatcher
+│   ├── commands/           # 斜杠命令（context / usage / memory / skill / dream …）
+│   └── print-event.ts      # 把 agent 事件打印到终端 / prints agent events
 ├── agent/
 │   ├── index.ts            # agentLoop：多轮工具调用主循环 / main loop (MAX_TURN=15)
 │   ├── events.ts           # VelaEvent：agent 对外报告的事件 / emitted events
@@ -142,8 +165,7 @@ src/
 ├── session/                # JSONL 会话 checkpoint / session persistence
 ├── usage/tracker.ts        # Token 追踪 + 9 家模型价格表 / token tracker & pricing
 ├── prompt/                 # System Prompt 片段 + 可插拔流水线 / prompt pipeline
-├── commands/               # 斜杠命令（context / usage / memory / debug）
-└── mock.ts                 # Mock 模型（模拟 prompt cache）/ mock model
+└── testing/                # vela/testing：faux 模型、createTestVela、录制回放、demo 模型
 ```
 
 ### 请求流程 / Request Flow
@@ -208,7 +230,7 @@ bun test          # 运行测试（Bun 内置）/ run tests
 ## ❓ 常见问题 / FAQ
 
 **Q: 没有 OpenAI API Key 能体验吗？**
-可以。取消 `src/index.ts` 中 `createMockModel()` 的注释即可离线运行，Mock 模型会模拟 prompt cache 行为。
+可以。用 `VELA_MODEL=mock bun run src/cli/main.ts` 即可离线运行，Mock 模型会模拟 prompt cache 行为。
 
 **Q: RAG 提示"未找到支持 sqlite-vec 的 SQLite 动态库"？**
 macOS 执行 `brew install sqlite`，Linux 确认系统 `libsqlite3` 存在。Vela 会自动探测常见路径。

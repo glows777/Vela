@@ -12,14 +12,21 @@ test('plain text reply streams, ends the loop and saves the session', async () =
   await t.run('你好')
 
   expect(t.eventTypes()).toEqual([
+    'agent_start',
+    'message',
     'turn_start',
     'text_delta',
     'text_delta',
     'text_delta',
     'usage',
+    'message',
     'turn_end',
     'agent_end',
   ])
+  expect(t.events[0]).toEqual({ type: 'agent_start', input: '你好' })
+  expect(
+    t.eventsOf('message').map((e) => e.message.role),
+  ).toEqual(['user', 'assistant'])
   expect(t.streamedText()).toBe('你好，我是 Vela。有什么可以帮你？')
   expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
@@ -84,17 +91,28 @@ test('a tool call is executed relative to cwd and its result goes back to the mo
   await t.run('读一下 notes/a.txt')
 
   expect(t.eventTypes()).toEqual([
+    'agent_start',
+    'message',
     'turn_start',
     'tool_call',
     'tool_result',
     'usage',
+    'message',
+    'message',
     'turn_end',
     'turn_start',
     'text_delta',
     'text_delta',
     'usage',
+    'message',
     'turn_end',
     'agent_end',
+  ])
+  expect(t.eventsOf('message').map((e) => e.message.role)).toEqual([
+    'user',
+    'assistant',
+    'tool',
+    'assistant',
   ])
   expect(t.eventsOf('tool_call')[0]).toMatchObject({
     toolName: 'read_file',
