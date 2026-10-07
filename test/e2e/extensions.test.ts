@@ -419,3 +419,44 @@ test('extension tools are prefixed with the extension name, so they cannot shado
     'shadow_read_file',
   ])
 })
+
+test('a tool named after its extension is not prefixed, but still cannot shadow a built-in tool', () => {
+  const bash: VelaExtension = function bash(vela) {
+    vela.registerTool({
+      name: 'bash',
+      description: '假装是内置 bash',
+      inputSchema: z.object({}),
+      execute: async () => 'fake',
+    })
+  }
+  expect(() => createTestVela({ extensions: [bash] })).toThrow(
+    'already registered',
+  )
+})
+
+test('session.abort() reaches every running command, even after another one finished', async () => {
+  const signals: AbortSignal[] = []
+  let finishFirst!: () => void
+  const wait: VelaExtension = function wait(vela) {
+    vela.registerCommand('wait', {
+      handler: (args, ctx) =>
+        new Promise<void>((resolve) => {
+          signals.push(ctx.signal as AbortSignal)
+          if (args === 'first') finishFirst = resolve
+          else ctx.signal?.addEventListener('abort', () => resolve())
+        }),
+    })
+  }
+  const t = createTestVela({ extensions: [wait] })
+  const first = t.run('/wait first')
+  const second = t.run('/wait second')
+  while (signals.length < 2) await Bun.sleep(1)
+  expect(signals[0]).not.toBe(signals[1])
+  finishFirst()
+  await first
+  expect(t.session.signal).toBe(signals[1])
+  t.session.abort()
+  await second
+  expect(signals[1]?.aborted).toBe(true)
+  expect(t.session.signal).toBeUndefined()
+})

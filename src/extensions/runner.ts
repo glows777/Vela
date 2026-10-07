@@ -182,13 +182,13 @@ export class ExtensionRunner {
     }))
   }
 
-  context(session: VelaSession): ExtensionContext {
+  context(session: VelaSession, signal = session.signal): ExtensionContext {
     return {
       session,
       ui: session.ui,
       hasUI: session.hasUI,
       cwd: this.deps.cwd,
-      signal: session.signal,
+      signal,
     }
   }
 
@@ -331,13 +331,21 @@ export class ExtensionRunner {
    * `/name args` 是扩展命令时执行它并返回 true；不是命令时返回 false（当普通输入发给模型）。
    * 只有 owner 会话能执行命令：通道发送者发来的 `/xxx` 只是普通文本。
    */
-  async runCommand(session: VelaSession, text: string): Promise<boolean> {
+  /** 执行 `/name args` 命令；`signal` 是这次命令自己的中断信号（ctx.signal）。 */
+  async runCommand(
+    session: VelaSession,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     const match = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/)
     if (!match) return false
     await this.ready
     const entry = this.commandMap.get(match[1] ?? '')
     if (!entry || session.role !== 'owner') return false
-    await entry.command.handler((match[2] ?? '').trim(), this.context(session))
+    await entry.command.handler(
+      (match[2] ?? '').trim(),
+      this.context(session, signal),
+    )
     return true
   }
 }

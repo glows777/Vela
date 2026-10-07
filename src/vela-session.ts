@@ -44,7 +44,11 @@ export interface SessionExtensionHooks {
     session: VelaSession,
     prompt: string,
   ): Promise<Record<string, string>>
-  runCommand(session: VelaSession, text: string): Promise<boolean>
+  runCommand(
+    session: VelaSession,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<boolean>
 }
 
 /** 会话 id 会成为文件名：只允许字母、数字、`.`、`_`、`-`，且不能以 `.` 开头。 */
@@ -169,12 +173,15 @@ export class VelaSession {
     this.registry.setSelection(names)
   }
 
-  /** 正在执行的扩展命令（命令不占运行锁，命令里可以再调用 prompt()） */
-  private command: AbortController | undefined
+  /** 正在执行的扩展命令（命令不占运行锁，可以同时跑几个，命令里也可以再调用 prompt()） */
+  private readonly commands = new Set<AbortController>()
 
   /** @internal 正在跑（agent loop 或扩展命令）时的中断信号 */
   get signal(): AbortSignal | undefined {
-    return this.busy.controller?.signal ?? this.command?.signal
+    return (
+      this.busy.controller?.signal ??
+      this.commands.values().next().value?.signal
+    )
   }
 
   /** 订阅这个会话的事件；返回取消订阅的函数。 */
@@ -260,12 +267,15 @@ export class VelaSession {
     const forward = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', forward, { once: true })
     if (signal?.aborted) forward()
-    const previous = this.command
-    this.command = controller
+    this.commands.add(controller)
     try {
-      return await this.deps.extensions.runCommand(this, input)
+      return await this.deps.extensions.runCommand(
+        this,
+        input,
+        controller.signal,
+      )
     } finally {
-      this.command = previous
+      this.commands.delete(controller)
       signal?.removeEventListener('abort', forward)
     }
   }
@@ -328,7 +338,7 @@ export class VelaSession {
 
   /** 中断当前 agent loop 和扩展命令（如果有）。 */
   abort(reason: unknown = new DOMException('用户取消当前操作', 'AbortError')) {
-    for (const controller of [this.busy.controller, this.command])
+    for (const controller of [this.busy.controller, ...this.commands])
       if (controller && !controller.signal.aborted) controller.abort(reason)
   }
 

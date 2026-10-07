@@ -164,7 +164,7 @@ export function createVela(options: VelaOptions): Vela {
           sessionStart: (s) => runner.sessionStart(s),
           sessionShutdown: (s) => runner.sessionShutdown(s),
           beforeAgentStart: (s, prompt) => runner.beforeAgentStart(s, prompt),
-          runCommand: (s, text) => runner.runCommand(s, text),
+          runCommand: (s, text, signal) => runner.runCommand(s, text, signal),
         },
         forward: (event, sessionId) => {
           for (const listener of listeners) listener(event, sessionId)
