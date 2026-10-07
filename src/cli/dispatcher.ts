@@ -1,16 +1,16 @@
-import type { Vela } from '../app'
+import type { Vela } from '../vela'
 import {
   contextCommands,
   createDispatcher,
   debugCommands,
   memoryCommands,
-} from '../commands'
-import { createChannelCommands } from '../commands/channel'
-import { dreamCommands } from '../commands/dream'
-import { createPluginCommands } from '../commands/plugin'
-import { ragCommands } from '../commands/rag'
-import { createSecurityCommands } from '../commands/security'
-import { createSkillCommands } from '../commands/skill'
+} from './commands'
+import { createChannelCommands } from './commands/channel'
+import { dreamCommands } from './commands/dream'
+import { createPluginCommands } from './commands/plugin'
+import { ragCommands } from './commands/rag'
+import { createSecurityCommands } from './commands/security'
+import { createSkillCommands } from './commands/skill'
 import { feishuPlugin } from '../plugins/built-in-plugins/feishu-plugin'
 import { supabasePlugin } from '../plugins/built-in-plugins/supabase-plugin'
 import type { PluginDefinition } from '../plugins/types'
@@ -34,7 +34,7 @@ export function createCliDispatcher(
     ...memoryCommands,
     ...dreamCommands,
     ...ragCommands,
-    ...createSkillCommands(vela.skillLoader, vela.activeSkills),
+    ...createSkillCommands(vela.skillLoader),
     ...createPluginCommands(vela.pluginManager, plugins),
     ...createChannelCommands(vela.gateway),
     ...createSecurityCommands(vela.registry, vela.hooks),

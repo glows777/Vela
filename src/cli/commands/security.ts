@@ -1,7 +1,7 @@
-import type { CommandHandler } from './index.js'
-import type { ToolRegistry } from '../tools/registry.js'
-import type { HookPipeline } from '../security/hooks.js'
-import type { Role } from '../security/roles.js'
+import type { HookPipeline } from '../../security/hooks'
+import type { Role } from '../../security/roles'
+import type { ToolRegistry } from '../../tools/registry'
+import type { CommandHandler } from './index'
 
 export function createSecurityCommands(
   registry: ToolRegistry,

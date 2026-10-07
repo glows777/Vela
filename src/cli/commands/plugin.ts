@@ -1,5 +1,5 @@
-import type { PluginManager } from '../plugins/manager'
-import type { PluginDefinition } from '../plugins/types'
+import type { PluginManager } from '../../plugins/manager'
+import type { PluginDefinition } from '../../plugins/types'
 import type { CommandHandler } from './index'
 
 export function createPluginCommands(

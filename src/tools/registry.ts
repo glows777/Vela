@@ -3,6 +3,8 @@ import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema, type JSONSchema7, jsonSchema } from 'ai'
 import { classifyBashCommand } from '../security/bash-classifier'
+import type { VelaEventListener } from '../agent/events'
+import { silentLogger, type VelaLogger } from '../logger'
 import type { HookPipeline } from '../security/hooks'
 import { canUseTool, type Role } from '../security/roles'
 import type { ExecutionMetadata, ResultRecord } from '../session/tool-history'
@@ -31,6 +33,8 @@ export interface ToolDefinition {
       toolCallId?: string
       callId?: string
       signal?: AbortSignal
+      /** 正在执行这次调用的（会话级）registry */
+      registry?: ToolRegistry
     },
   ) => Promise<unknown>
 
@@ -44,8 +48,68 @@ export interface ToolDefinition {
 
 const DEFAULT_MAX_RESULT_CHARS = 3000 // 超出时保存原文，只返回预览
 
+/**
+ * 同一个 Vela 里所有会话共享的部分：工具定义、角色、hooks、执行锁、MCP 连接。
+ * 已发现的延迟工具、工具结果存储和持久化失败状态是每个会话自己的。
+ */
+interface SharedToolState {
+  tools: Map<string, ToolDefinition>
+  role: Role
+  hookPipeline?: HookPipeline
+  // 当前锁设计的已知缺陷：
+  // 1. 锁粒度是整个 ToolRegistry（以及它 fork 出的所有会话）；一个独占工具执行时，不相关的工具也会被阻塞。
+  // 2. 没有资源级 lock key，无法表达“同一文件串行、不同文件并行”这类更细的关系。
+  // 3. acquireConcurrent 只检查 exclusiveLock，不检查是否已有独占任务在等待，读任务可能插队写任务。
+  // 4. drainQueue 会一次性唤醒所有等待者，再由 while 重新竞争，不保证严格 FIFO 公平性。
+  exclusiveLock: boolean // 当前是否有独占锁持有者
+  concurrentCount: number // 当前共享锁持有数
+  waitQueue: Array<() => void> // 阻塞等待中的 resolve 函数
+  mcpClients: Client[]
+  logger: VelaLogger
+}
+
+export interface ToolRegistryForkOptions {
+  /** 这个会话的事件回调（例如中等风险 bash 的 security_warning） */
+  onEvent?: VelaEventListener
+  /** 传给 hooks 的会话 id */
+  sessionId?: string
+}
+
 export class ToolRegistry {
-  constructor(readonly results = new ToolResultStore()) {}
+  private readonly shared: SharedToolState
+  private onEvent?: VelaEventListener
+  private sessionId?: string
+
+  constructor(
+    readonly results = new ToolResultStore(),
+    shared?: SharedToolState,
+  ) {
+    this.shared = shared ?? {
+      tools: new Map(),
+      role: 'owner',
+      exclusiveLock: false,
+      concurrentCount: 0,
+      waitQueue: [],
+      mcpClients: [],
+      logger: silentLogger,
+    }
+  }
+
+  /**
+   * 给一个会话用的 registry：和本 registry 共享工具定义、角色、hooks、锁和 MCP，
+   * 但有自己的工具结果存储、已发现的延迟工具和持久化状态。
+   */
+  fork(results: ToolResultStore, options: ToolRegistryForkOptions = {}) {
+    const forked = new ToolRegistry(results, this.shared)
+    forked.onEvent = options.onEvent
+    forked.sessionId = options.sessionId
+    return forked
+  }
+
+  setLogger(logger: VelaLogger): void {
+    this.shared.logger = logger
+  }
+
   private persistenceFailure: Error | undefined
   private readonly active = new Set<Promise<unknown>>()
 
@@ -86,67 +150,65 @@ export class ToolRegistry {
       error: error instanceof Error ? error.message : String(error),
     })
   }
-  private tools: Map<string, ToolDefinition> = new Map()
-  private currentRole: Role = 'owner'
-  private hookPipeline?: HookPipeline
+
+  private get tools(): Map<string, ToolDefinition> {
+    return this.shared.tools
+  }
 
   setRole(role: Role): void {
-    this.currentRole = role
+    this.shared.role = role
   }
 
   getRole(): Role {
-    return this.currentRole
+    return this.shared.role
+  }
+
+  private get currentRole(): Role {
+    return this.shared.role
   }
 
   setHookPipeline(pipeline: HookPipeline): void {
-    this.hookPipeline = pipeline
+    this.shared.hookPipeline = pipeline
   }
-
-  // 当前锁设计的已知缺陷：
-  // 1. 锁粒度是整个 ToolRegistry；一个独占工具执行时，不相关的工具也会被阻塞。
-  // 2. 没有资源级 lock key，无法表达“同一文件串行、不同文件并行”这类更细的关系。
-  // 3. acquireConcurrent 只检查 exclusiveLock，不检查是否已有独占任务在等待，读任务可能插队写任务。
-  // 4. drainQueue 会一次性唤醒所有等待者，再由 while 重新竞争，不保证严格 FIFO 公平性。
-  private exclusiveLock = false // 当前是否有独占锁持有者
-  private concurrentCount = 0 // 当前共享锁持有数
-  private waitQueue: Array<() => void> = [] // 阻塞等待中的 resolve 函数
 
   private discoveredTools = new Set<string>()
 
   // * 获取共享锁
   private async acquireConcurrent() {
-    while (this.exclusiveLock) {
-      await new Promise<void>((resolve) => this.waitQueue.push(resolve))
+    const shared = this.shared
+    while (shared.exclusiveLock) {
+      await new Promise<void>((resolve) => shared.waitQueue.push(resolve))
     }
-    this.concurrentCount++
+    shared.concurrentCount++
   }
 
   // 获取独占锁
   // 等待所有共享锁释放且没有独占锁
   private async acquireExclusive() {
-    while (this.exclusiveLock || this.concurrentCount > 0) {
-      await new Promise<void>((reslove) => this.waitQueue.push(reslove))
+    const shared = this.shared
+    while (shared.exclusiveLock || shared.concurrentCount > 0) {
+      await new Promise<void>((resolve) => shared.waitQueue.push(resolve))
     }
-    this.exclusiveLock = true
+    shared.exclusiveLock = true
   }
 
   // * 释放 共享锁
   // * 如果当前已经释放了全部，则唤醒等待队列
   private releaseConcurrent() {
-    this.concurrentCount--
-    if (this.concurrentCount === 0) {
+    this.shared.concurrentCount--
+    if (this.shared.concurrentCount === 0) {
       this.drainQueue()
     }
   }
 
   // * 释放独占锁，唤醒等待队列
   private releaseExclusive() {
-    this.exclusiveLock = false
+    this.shared.exclusiveLock = false
     this.drainQueue()
   }
 
   private drainQueue() {
-    const waiting = this.waitQueue.splice(0)
+    const waiting = this.shared.waitQueue.splice(0)
     for (const resolve of waiting) {
       resolve()
     }
@@ -189,12 +251,10 @@ export class ToolRegistry {
           this.track(async () => {
             if (isSafe) {
               await this.acquireConcurrent()
-              console.log(`  [concurrentCount] ${name} get concurrent lock`)
+              this.shared.logger.debug(`[tools] ${name} 获得共享锁`)
             } else {
               await this.acquireExclusive()
-              console.log(
-                `  [parrcell] ${name} get exclusiveLock，waiting other tool called`,
-              )
+              this.shared.logger.debug(`[tools] ${name} 获得独占锁`)
             }
             try {
               this.assertHealthy()
@@ -212,9 +272,14 @@ export class ToolRegistry {
                   `[拒绝执行] 角色 ${this.currentRole} 无权使用 ${name}`,
                 )
               }
-              const pipeline = this.hookPipeline
+              const pipeline = this.shared.hookPipeline
+              const hookContext = {
+                sessionId: this.sessionId,
+                emit: (event: Parameters<VelaEventListener>[0]) =>
+                  this.onEvent?.(event),
+              }
               if (pipeline) {
-                const pre = await pipeline.runPre(name, input)
+                const pre = await pipeline.runPre(name, input, hookContext)
                 if (pre.action === 'block') {
                   return await reject(
                     `[Hook 拦截] ${pre.reason || '操作被阻止'}`,
@@ -256,7 +321,12 @@ export class ToolRegistry {
                   )
                 }
                 if (risk.level === 'moderate')
-                  console.log(`  [安全] ⚠ ${risk.reason}: ${command}`)
+                  this.onEvent?.({
+                    type: 'security_warning',
+                    toolName: name,
+                    reason: risk.reason ?? '中等风险命令',
+                    command,
+                  })
               }
               const history = this.results.history
               const call = await history.begin(
@@ -274,6 +344,7 @@ export class ToolRegistry {
                   toolCallId: options?.toolCallId,
                   callId: call.callId,
                   signal: options?.abortSignal,
+                  registry: this,
                 })
               } catch (error) {
                 await history.append<ResultRecord>({
@@ -362,7 +433,12 @@ export class ToolRegistry {
               }
               let output = stored ? stored.preview : text
               if (pipeline) {
-                const post = await pipeline.runPost(name, input, output)
+                const post = await pipeline.runPost(
+                  name,
+                  input,
+                  output,
+                  hookContext,
+                )
                 if (post.modifiedOutput !== undefined)
                   output = String(post.modifiedOutput)
               }
@@ -381,15 +457,13 @@ export class ToolRegistry {
     return result
   }
 
-  private mcpClients: Array<Client> = []
-
   async registerMCPServer(
     serverName: string,
     client: Client,
     transport: Transport,
   ): Promise<string[]> {
     await client.connect(transport)
-    this.mcpClients.push(client)
+    this.shared.mcpClients.push(client)
 
     const tools = await listAllMCPTools(client)
     const registered: string[] = []
@@ -433,10 +507,10 @@ export class ToolRegistry {
   }
 
   async closeAllMCP(): Promise<void> {
-    for (const client of this.mcpClients) {
+    for (const client of this.shared.mcpClients) {
       await client.close()
     }
-    this.mcpClients = []
+    this.shared.mcpClients = []
   }
 
   getActiveTools() {

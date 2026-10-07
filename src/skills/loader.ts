@@ -59,7 +59,7 @@ export class SkillLoader {
     return this.skills.get(name)
   }
 
-  buildPromptSection(activeSkills: Set<string>): string | null {
+  buildPromptSection(activeSkills: ReadonlySet<string>): string | null {
     if (this.skills.size === 0) return null
 
     // Codex 模式：system prompt 只放 skill 索引（name + description）。

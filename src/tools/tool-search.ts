@@ -16,8 +16,9 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
     inputSchema: toolSearchToolSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
-    execute: async ({ query }: { query: string }) => {
-      const results = registry.searchTools(query);
+    // 用执行这次调用的会话 registry：发现的延迟工具只对这个会话生效
+    execute: async ({ query }: { query: string }, context) => {
+      const results = (context?.registry ?? registry).searchTools(query);
       if (results.length === 0) return `没有找到匹配 "${query}" 的工具`;
       return results.map<Tool>((t) => ({
         name: t.name,

@@ -22,7 +22,7 @@ test('a resumed Vela continues the saved conversation', async () => {
     ],
   })
   try {
-    expect(await second.vela.resume()).toBe(true)
+    expect(await second.session.resume()).toBe(true)
     expect(second.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
     await second.run('你还记得吗？')
     expect(second.lastAssistantText()).toBe('记得')
@@ -34,7 +34,7 @@ test('a resumed Vela continues the saved conversation', async () => {
 
 test('resume on an empty data dir reports no session', async () => {
   const t = createTestVela()
-  expect(await t.vela.resume()).toBe(false)
+  expect(await t.session.resume()).toBe(false)
   expect(t.messages).toEqual([])
 })
 
@@ -58,7 +58,7 @@ test('sessions with different ids are stored separately', async () => {
     expect(await a.readData('.sessions/a.jsonl')).not.toContain('in b')
 
     const again = createTestVela({ cwd: dir.path, sessionId: 'a' })
-    await again.vela.resume()
+    await again.session.resume()
     expect(JSON.stringify(again.messages)).toContain('in a')
     expect(JSON.stringify(again.messages)).not.toContain('in b')
   } finally {

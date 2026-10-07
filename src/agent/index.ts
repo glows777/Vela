@@ -266,10 +266,12 @@ export const agentLoop = async ({
       const responseMessages: ModelMessage[] = finalStep.response.messages
       messages.push(...responseMessages)
       tokenTracker.addMessages(responseMessages)
+      for (const message of responseMessages) emit({ type: 'message', message })
       if (loopWarning) {
         const warning: ModelMessage = { role: 'user', content: loopWarning }
         messages.push(warning)
         tokenTracker.addMessage(warning)
+        emit({ type: 'message', message: warning })
       }
 
       if (tokenTracker.loopTokens > limits.tokenBudget * 0.9) {

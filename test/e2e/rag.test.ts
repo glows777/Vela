@@ -88,5 +88,5 @@ test('the knowledge base persists in the data dir across restarts', async () => 
 
   const again = createTestVela({ cwd: t.cwd, embedder: true })
   expect(again.vela.vectorStore.size()).toBe(size)
-  expect(again.vela.buildSystem()).toContain('[知识库] 已导入')
+  expect(again.session.buildSystem()).toContain('[知识库] 已导入')
 })

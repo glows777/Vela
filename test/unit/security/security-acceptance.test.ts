@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { jsonSchema } from 'ai'
-import { createDispatcher, type CommandContext } from '../../../src/commands'
-import { createSecurityCommands } from '../../../src/commands/security'
+import type { VelaEvent } from '../../../src/agent/events'
+import {
+  type CommandContext,
+  createDispatcher,
+} from '../../../src/cli/commands'
+import { createSecurityCommands } from '../../../src/cli/commands/security'
 import { ToolResultStore } from '../../../src/session/tool-results'
 import {
   ToolExecutionResult,
@@ -319,10 +323,12 @@ test('only final command is classified: hook can replace dangerous input with sa
   )
 })
 
-test('moderate bash warns and executes fake executor', async () => {
-  const log = quiet('log'),
-    warn = quiet('warn')
+test('moderate bash emits a security warning and executes fake executor', async () => {
   const { registry } = fixture()
+  const events: VelaEvent[] = []
+  const session = registry.fork(registry.results, {
+    onEvent: (event) => events.push(event),
+  })
   let calls = 0
   registry.register(
     fake('bash', {
@@ -332,11 +338,16 @@ test('moderate bash warns and executes fake executor', async () => {
       },
     }),
   )
-  expect(await invoke(registry, 'bash', { command: 'git push' })).toBe('ok')
+  expect(await invoke(session, 'bash', { command: 'git push' })).toBe('ok')
   expect(calls).toBe(1)
-  expect([...log.mock.calls, ...warn.mock.calls].flat().join(' ')).toMatch(
-    /moderate|风险|警告|推送/,
-  )
+  expect(events).toEqual([
+    {
+      type: 'security_warning',
+      toolName: 'bash',
+      reason: expect.stringMatching(/moderate|风险|警告|推送/),
+      command: 'git push',
+    },
+  ])
 })
 
 test('post changes model text while history preserves native small result', async () => {
@@ -438,7 +449,7 @@ test('/role and /hooks commands expose current state and registered hooks', () =
   pipeline.registerPre('acceptance-pre', () => ({ action: 'allow' }))
   pipeline.registerPost('acceptance-post', () => ({ action: 'allow' }))
   const dispatch = createDispatcher(createSecurityCommands(registry, pipeline))
-  const ctx = { registry } as CommandContext
+  const ctx = {} as CommandContext
   expect(dispatch('/role', ctx)).toBe(true)
   expect(log.mock.calls.flat().join(' ')).toContain('owner')
   for (const role of ['guest', 'collaborator', 'owner'] as const) {

@@ -36,7 +36,7 @@ test('a memory saved through the tool shows up in the next system prompt and sur
   expect(index).toContain('favorite-language')
 
   const restarted = createTestVela({ cwd: t.cwd })
-  expect(restarted.vela.buildSystem()).toContain('用户最喜欢的编程语言')
+  expect(restarted.session.buildSystem()).toContain('用户最喜欢的编程语言')
 })
 
 test('the model can search and read memories back', async () => {

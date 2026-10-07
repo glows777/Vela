@@ -7,18 +7,22 @@
 ```
 test/
   README.md              本文件
-  support/vela.ts        createTestVela() 等测试辅助（只给测试用）
+  support/vela.ts        vela/testing 的 createTestVela() 加上 CLI 斜杠命令分发器、captureConsole（只给测试用）
   fixtures/scenarios/    CLI 回放用的 faux 场景 JSON
   unit/<镜像 src 路径>/   单元测试，例如 src/agent/retry.ts → test/unit/agent/retry.test.ts
   e2e/                   整体流程：真实装配 + faux 模型
   live/                  真实模型冒烟测试，默认跳过
-src/testing/
+src/testing/             公开为 `vela/testing`（package.json exports）
+  index.ts               对外导出
   faux.ts                脚本化 faux 模型（LanguageModelV4），CLI 的 VELA_MODEL=faux: 也用它
   faux-embedder.ts       确定性的离线 embedder
+  test-vela.ts           createTestVela()：临时目录 + faux 模型装配一个真实 Vela
+  record.ts              recordModel()：把真实模型的响应录成 faux 场景（CLI 的 VELA_RECORD）
+  replay.ts              replayScenario()：按录下的输入把场景重跑一遍
   demo-model.ts          关键词 demo 模型（VELA_MODEL=mock，只用于手动体验，测试不用）
 ```
 
-faux 和 demo 模型在 `src/testing/` 而不在 `test/`，因为 CLI 运行时也要加载它们。
+faux、demo 模型和 createTestVela 在 `src/testing/` 而不在 `test/`：CLI 运行时要加载 faux，扩展作者也要能 `import { createTestVela } from 'vela/testing'` 离线测自己的扩展。测试里可以用相对路径 import，也可以按包名 import（`test/e2e/sdk.test.ts`）。
 
 ## 运行
 
@@ -40,7 +44,7 @@ CI（`.github/workflows/ci.yml`）在每个 PR 和 main 的 push 上依次跑 `b
 
 - **unit**：测单个模块的规则和边界（重试分类、循环检测、压缩切分、摘要校验、工具历史、安全规则……）。直接 new 出被测对象，模型用 faux。
 - **e2e**：用 `createTestVela()` 装配一个和 CLI 完全相同的 Vela（`createVela()` + CLI 的斜杠命令分发器），只把模型换成 faux、目录换成临时目录，断言事件序列、模型收到的请求、落盘的文件。
-- **e2e/cli.test.ts**：起真实的 `bun src/index.ts` 子进程，用 `VELA_MODEL=faux:<场景.json>` 回放，断言 stdout/stderr/退出码。
+- **e2e/cli.test.ts**：起真实的 `bun src/cli/main.ts` 子进程，用 `VELA_MODEL=faux:<场景.json>` 回放，断言 stdout/stderr/退出码。
 - **live**：真实模型，只验证“接得上”，不做细节断言。
 
 改了什么就跑对应那层；改到 agent loop、装配、事件、上下文管理或 CLI 入口时跑全套 `bun run test`。
@@ -88,11 +92,16 @@ const t = createTestVela({
   embedder: true,                        // 用 faux embedder 打开 RAG
   limits: { maxTurns: 3 },               // 覆盖上限；测试默认 retryBaseMs=0
   dataDir: '.vela-data', sessionId: 'a', cwd: existingDir, plugins: new Map(...),
+  logger, env,                           // 注入 logger / 插件配置用的环境变量
 })
 
-await t.run('读一下 a.txt')       // = vela.run()
-t.eventTypes()                    // ['turn_start', 'tool_call', ...]
+t.vela                            // createVela() 的返回值
+t.session                         // 默认会话（id 为 sessionId，默认 'default'）
+await t.run('读一下 a.txt')       // = t.session.prompt()
+t.vela.session('other')           // 同一个 Vela 再开一个会话
+t.eventTypes()                    // 所有会话的事件：['agent_start', 'message', 'turn_start', ...]
 t.eventsOf('tool_call')           // 某类事件，带类型
+t.eventsIn('other')               // 某个会话的事件
 t.streamedText(); t.lastAssistantText(); t.messages
 t.model.calls                     // 模型收到的请求
 t.dispatch('/memory')             // 斜杠命令，返回 true/false/'async'
@@ -101,9 +110,32 @@ t.readFile('a.txt'); t.readData('.sessions/default.jsonl'); t.exists('knowledge.
 await t.cleanup({ keepDir: true }) // 一般交给 cleanupTestVelas()
 ```
 
+斜杠命令（`t.dispatch` / `t.command`）作用在 `t.session` 上；它们来自 `test/support/vela.ts`，`vela/testing` 里的版本没有命令分发器。
+
 cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一步其实没有”。确实不需要用完时传 `allowPendingResponses: true`。
 
 斜杠命令会打印到终端，用 `captureConsole(() => ...)` 收集输出再断言，也让测试输出保持干净。
+
+### 事件
+
+`session.subscribe(listener)` 只收这个会话的事件，`vela.subscribe((event, sessionId) => …)` 收所有会话的。一次 `prompt()` 的顺序是：`agent_start{input}` → `message`（用户输入）→ 每轮 `turn_start` …（`text_delta`、`tool_call`、`tool_result` / `tool_error`、`retry`、`usage`）… `message`（这一轮新增的 assistant / tool 消息，以及循环检测提醒）→ `turn_end` → 最后 `agent_end{reason}`。另有 `context`（压缩）、`audit`、`security_warning`、`session_save_failed`，通道会话还有 `channel_message` / `channel_reply` / `channel_error`。
+
+core 不写终端（`test/unit/boundary.test.ts` 守着这条边界）：非事件的诊断输出走 `createVela({ logger })`，默认静默。
+
+### 录制和回放
+
+```ts
+import { recordModel, replayScenario } from 'vela/testing'
+
+const recorder = recordModel(realModel, { path: 'run.json' })   // CLI：VELA_RECORD=run.json
+vela.subscribe((e) => e.type === 'agent_start' && recorder.addInput(e.input))
+// …正常使用 recorder.model…
+await recorder.flush()
+
+const { t, errors } = await replayScenario('run.json', { files })  // 离线按 inputs 重跑
+```
+
+录下的场景就是普通 faux 场景（多了 `inputs`），请求失败记成 `error`、流中途断开记成 `streamError`、被中断记成 `hang`，`generateText`（摘要）进 `generate` 队列。CLI 也能直接回放：`VELA_MODEL=faux:run.json bun src/cli/main.ts -p "<第一条输入>"`。文件含对话原文，挑出来做测试的放进 `test/fixtures/scenarios/` 前先删掉敏感内容。
 
 ### 可调的上限（`src/limits.ts`）
 
@@ -121,8 +153,13 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 | e2e/memory | 通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename |
 | e2e/rag | 没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留 |
 | e2e/commands | `/context` `/usage` `status`；`/plugin load/unload` 后模型立即能用插件工具；通道消息走同一模型和工具并回发 |
-| e2e/cli | `-p` 单次模式回放场景；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出 |
-| unit/commands | skill 激活/去重/并发锁、dream、memory、rag 命令（走真实装配） |
+| e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存 |
+| e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
+| e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger |
+| e2e/cli | `-p` 单次模式回放场景；`VELA_RECORD` 录制后用 `faux:` 回放；工具在进程 cwd 执行；`--continue`；模型错误退出码 1；缺参数退出码 2；`VELA_MODEL=mock`；交互模式输入一轮 + 斜杠命令 + exit；管道输入逐行执行并在 EOF 退出 |
+| unit/cli/commands | skill 激活/去重/并发锁、dream、memory、rag 命令（走真实装配） |
+| unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
+| unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |
 | unit/… | 其余模块级规则，见各文件 |
 
 ## 验收一次改动
@@ -138,7 +175,7 @@ cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一
 
 - **新模块或新规则** → `test/unit/<与 src 相同的路径>.test.ts`。
 - **新功能的整体行为** → 在 `test/e2e/` 里找对应主题的文件加用例；主题不存在时新建一个文件，并把它加进上面的覆盖表。
-- **线上遇到的问题**：把模型当时的输出写成 faux 脚本复现。只需要 CLI 复现时，写一个 `test/fixtures/scenarios/<名字>.json`，用 `VELA_MODEL=faux:test/fixtures/scenarios/<名字>.json bun run src/index.ts -p "..."` 手动跑，再在 `e2e/cli.test.ts` 里加用例。
+- **线上遇到的问题**：用 `VELA_RECORD=<file>` 把那次运行录下来，`replayScenario(file)` 重跑并断言；或者手写 faux 脚本复现。只需要 CLI 复现时，写一个 `test/fixtures/scenarios/<名字>.json`，用 `VELA_MODEL=faux:test/fixtures/scenarios/<名字>.json bun run src/cli/main.ts -p "..."` 手动跑，再在 `e2e/cli.test.ts` 里加用例。
 - **新事件类型**：在 e2e 里断言它出现在正确的位置（`t.eventTypes()`）。
 - **需要等异步命令**：用 `t.command()`，不要写 `while (...) await Bun.sleep()` 轮询；必须轮询时以 1ms 为间隔并有明确的退出条件。
 

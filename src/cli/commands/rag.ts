@@ -1,10 +1,9 @@
 import type { CommandHandler } from './index'
 
 export const ragCommands: CommandHandler[] = [
-  (cmd, ctx) => {
+  (cmd, { vela }) => {
     if (cmd !== '/rag' && cmd !== 'rag') return false
-    const vs = ctx.vectorStore
-    if (!vs) return false
+    const vs = vela.vectorStore
     console.log(`\n[知识库] ${vs.size()} 个片段`)
     const sources = vs.sources()
     if (sources.length > 0) console.log(`  来源: ${sources.join(', ')}`)
@@ -12,12 +11,13 @@ export const ragCommands: CommandHandler[] = [
     return true
   },
 
-  (cmd, ctx) => {
+  (cmd, { session, ask }) => {
     if (!cmd.startsWith('ingest ')) return false
-    if (ctx.busy.locked) return true
+    const busy = session.busy
+    if (busy.locked) return true
     const path = cmd.slice('ingest '.length).trim()
     console.log(`\n[导入] 正在处理 ${path}...`)
-    const ragIngestTool = ctx.registry
+    const ragIngestTool = session.registry
       .getActiveTools()
       .find((t) => t.name === 'rag_ingest')
     if (!ragIngestTool) {
@@ -25,12 +25,16 @@ export const ragCommands: CommandHandler[] = [
       return true
     }
     const controller = new AbortController()
-    ctx.busy.controller = controller
-    ctx.busy.locked = true
+    busy.controller = controller
+    busy.locked = true
     void ragIngestTool
       .execute(
         { path },
-        { results: ctx.registry.results, signal: controller.signal },
+        {
+          results: session.registry.results,
+          signal: controller.signal,
+          registry: session.registry,
+        },
       )
       .then((result) => console.log(`  ${result}\n`))
       .catch((error) =>
@@ -40,9 +44,9 @@ export const ragCommands: CommandHandler[] = [
         ),
       )
       .finally(() => {
-        ctx.busy.locked = false
-        ctx.busy.controller = undefined
-        ctx.ask()
+        busy.locked = false
+        busy.controller = undefined
+        ask()
       })
     return 'async'
   },

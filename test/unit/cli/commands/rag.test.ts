@@ -4,7 +4,7 @@ import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
-} from '../../support/vela'
+} from '../../../support/vela'
 
 afterEach(cleanupTestVelas)
 
@@ -58,12 +58,12 @@ test('manual ingest exposes a cancellation controller and releases the busy stat
   })
   await captureConsole(async () => {
     const done = t.command('ingest fixture.txt')
-    expect(t.ctx.busy.locked).toBe(true)
-    t.ctx.busy.controller?.abort(new Error('cancel import'))
+    expect(t.session.busy.locked).toBe(true)
+    t.session.busy.controller?.abort(new Error('cancel import'))
     expect(await done).toBe('async')
   })
   expect(signal?.aborted).toBe(true)
-  expect(t.ctx.busy.locked).toBe(false)
-  expect(t.ctx.busy.controller).toBeUndefined()
+  expect(t.session.busy.locked).toBe(false)
+  expect(t.session.busy.controller).toBeUndefined()
   expect(t.askCount()).toBe(1)
 })

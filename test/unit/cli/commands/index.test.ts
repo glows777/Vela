@@ -3,7 +3,7 @@ import {
   createDispatcher,
   type CommandContext,
   type CommandHandler,
-} from '../../../src/commands/index'
+} from '../../../../src/cli/commands/index'
 
 const fakeCtx = {} as CommandContext
 

@@ -1,4 +1,4 @@
-import type { ChannelGateway } from '../channels/gateway'
+import type { ChannelGateway } from '../../channels/gateway'
 import type { CommandHandler } from './index'
 
 export function createChannelCommands(
