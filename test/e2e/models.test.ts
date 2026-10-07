@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { DEFAULT_LIMITS } from '../../src/limits'
 import type { VelaEvent } from '../../src/agent/events'
 import type { VelaLogger } from '../../src/logger'
 import { createVela } from '../../src/vela'
@@ -59,8 +60,6 @@ test('a model chosen by name uses its provider, metadata and pricing', async () 
     contextWindow: 32_768,
   })
   expect(t.session.limits.maxInputTokens).toBe(32_768 - 16_384)
-  // 一次 prompt 的累计预算不跟窗口走（小窗口模型走几步就会超）
-  expect(t.session.limits.tokenBudget).toBe(200_000)
   expect(t.session.tracker.contextWindow).toBe(32_768)
 
   await t.run('你好')
@@ -112,7 +111,7 @@ test('setModel switches the model for the next prompt and recomputes limits', as
   t.session.setThinkingLevel('off')
   expect(t.session.modelInfo.ref).toBe('fake/plain')
   // plain 没写窗口：回到默认上限
-  expect(t.session.limits.tokenBudget).toBe(200_000)
+  expect(t.session.limits.maxInputTokens).toBe(DEFAULT_LIMITS.maxInputTokens)
   expect(t.session.tracker.contextWindow).toBe(200_000)
   await t.run('二')
 

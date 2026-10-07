@@ -3,11 +3,9 @@ import { DEFAULT_LIMITS, resolveLimits } from '../../src/limits'
 
 test('defaults match the values the CLI has always used', () => {
   expect(DEFAULT_LIMITS).toEqual({
-    maxTurns: 15,
     maxRetries: 3,
     retryBaseMs: 500,
     retryMaxMs: 30_000,
-    tokenBudget: 200_000,
     microcompactThreshold: 120_000,
     summaryThreshold: 150_000,
     minMicroSavings: 20_000,
@@ -17,8 +15,12 @@ test('defaults match the values the CLI has always used', () => {
 })
 
 test('overrides apply field by field and undefined keeps the default', () => {
-  const limits = resolveLimits({ maxTurns: 3, retryBaseMs: undefined })
-  expect(limits.maxTurns).toBe(3)
+  const limits = resolveLimits({ maxRetries: 1, retryBaseMs: undefined })
+  expect(limits.maxRetries).toBe(1)
   expect(limits.retryBaseMs).toBe(500)
-  expect(DEFAULT_LIMITS.maxTurns).toBe(15)
+  expect(DEFAULT_LIMITS.maxRetries).toBe(3)
+})
+
+test('an unknown limit (e.g. the removed maxTurns) is an error, not silently ignored', () => {
+  expect(() => resolveLimits({ maxTurns: 3 } as never)).toThrow('limits 里没有 maxTurns')
 })

@@ -108,7 +108,10 @@ test('a dangerous bash command is refused before it runs and the model sees why'
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
     '[拒绝执行] 检测到危险操作',
   )
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
 })
 
 test('a tool that throws becomes a tool error the model can react to', async () => {
@@ -131,7 +134,10 @@ test('a tool that throws becomes a tool error the model can react to', async () 
   expect(result.raw).toMatchObject({ type: 'error-text' })
   expect(result.output).toContain('ENOENT')
   expect(t.lastAssistantText()).toBe('文件不存在')
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
 })
 
 test('an unknown tool and invalid arguments are rejected without crashing the loop', async () => {
@@ -154,7 +160,10 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
       .sort(),
   ).toEqual(['no_such_tool', 'read_file'])
   expect(t.model.calls[1]!.toolResults).toHaveLength(2)
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
   // 被拒绝的调用也写进了工具历史
   const history = await Bun.file(t.session.registry.results.indexPath).text()
   expect(history).toContain('no_such_tool')

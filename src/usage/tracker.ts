@@ -119,7 +119,6 @@ export class TokenTracker {
   /** 最近一次 API 校准后，尚未反映到 API 计数的消息字符增量。 */
   private pendingChars = 0;
   /** 当前一次 agentLoop 已消耗的输入加输出 token。 */
-  private currentLoopTokens = 0;
   /** 当前模型配置里写的价格（models.json 的 cost），优先于内置价目表；换模型时更新。 */
   private pricing?: ModelPricing;
   /** 没有 cache 时每步的"假想成本"之和，按请求当时的价格算（换模型后不重算旧请求）。 */
@@ -130,16 +129,6 @@ export class TokenTracker {
   constructor(logPath?: string) {
     this.logPath = logPath;
     if (logPath) mkdirSync(dirname(logPath), { recursive: true });
-  }
-
-  /** 开始新的 agentLoop，只清空 loop budget，不清空历史 usage。 */
-  beginLoop(): void {
-    this.currentLoopTokens = 0;
-  }
-
-  /** 当前 agentLoop 累计的完整输入 token 和输出 token。 */
-  get loopTokens(): number {
-    return this.currentLoopTokens;
   }
 
   /** 用 API 返回的完整 prompt token 校准当前上下文基线。 */
@@ -193,15 +182,9 @@ export class TokenTracker {
   }
 
   /**
-   * 记录一次模型请求，并把完整请求 token 加入当前 loop budget。
-   * StepUsage.inputTokens 只代表未命中输入，所以预算需要加上两类 cache token。
+   * 记录一次模型请求。
    */
   record(model: string, usage: StepUsage, details: Pick<StepRecord, 'kind' | 'usage' | 'durationMs'> = { kind: 'main' }): StepRecord {
-    const requestPromptTokens =
-      usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
-    const requestTotalTokens = requestPromptTokens + usage.outputTokens;
-    this.currentLoopTokens += requestTotalTokens;
-
     const price = (this.pricing ?? PRICE_TABLE[model] ?? PRICE_TABLE['mock-model'])!;
     const cost = computeCost(model, usage, price);
     const inputLike = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;

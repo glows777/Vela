@@ -31,9 +31,18 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
 }
 
 export interface CliArgs {
-  /** `-p "<prompt>"`：跑一轮就退出 */
-  print?: string
+  /** `-p, --print`：跑完给出的 prompt 就退出，stdout 只写最后的回答（同 pi） */
+  print: boolean
+  /** `--mode text | json | rpc`（同 pi）：json 每个事件一行，rpc 从 stdin 收命令 */
+  mode?: 'text' | 'json' | 'rpc'
+  /** 不以 `-` 开头的参数：依次发送的 prompt（同 pi） */
+  messages: string[]
+  /** `-c, --continue`：接着最近的会话 */
   continue: boolean
+  /** `-r, --resume`：选一个保存过的会话 */
+  resume: boolean
+  /** `--session <id>`：打开指定会话（不存在时新建） */
+  session?: string
   /** `-e, --extension <path>`（可重复），也可以是 `builtin:<名>` */
   extensions: string[]
   /** `--no-extensions`：不加载内置和发现的扩展（`-e` 仍加载），同 pi */
@@ -48,22 +57,35 @@ export interface CliArgs {
   thinking?: ThinkingLevel
 }
 
+export const USAGE =
+  '用法: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <扩展>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <级别>]'
+
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
+    print: false,
+    messages: [],
     continue: false,
+    resume: false,
     extensions: [],
     noExtensions: false,
     noSession: false,
   }
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
+    const arg = argv[i] as string
     const value = () => {
       const next = argv[++i]
       if (next === undefined) throw new Error(`${arg} 需要一个参数`)
       return next
     }
-    if (arg === '-p' || arg === '--print') args.print = value()
-    else if (arg === '--continue') args.continue = true
+    if (arg === '-p' || arg === '--print') args.print = true
+    else if (arg === '--mode') {
+      const mode = value()
+      if (mode !== 'text' && mode !== 'json' && mode !== 'rpc')
+        throw new Error('--mode 只能是 text / json / rpc')
+      args.mode = mode
+    } else if (arg === '-c' || arg === '--continue') args.continue = true
+    else if (arg === '-r' || arg === '--resume') args.resume = true
+    else if (arg === '--session') args.session = value()
     else if (arg === '-e' || arg === '--extension') args.extensions.push(value())
     else if (arg === '--no-extensions' || arg === '-ne') args.noExtensions = true
     else if (arg === '--no-session') args.noSession = true
@@ -75,9 +97,11 @@ export function parseArgs(argv: string[]): CliArgs {
       if (!THINKING_LEVELS.includes(level as ThinkingLevel))
         throw new Error(`--thinking 只能是 ${THINKING_LEVELS.join(' / ')}`)
       args.thinking = level as ThinkingLevel
-    }
-    else throw new Error(`未知参数 ${arg}`)
+    } else if (arg.startsWith('-') && arg !== '-') throw new Error(`未知参数 ${arg}`)
+    else args.messages.push(arg)
   }
+  if ([args.continue, args.resume, args.session !== undefined].filter(Boolean).length > 1)
+    throw new Error('-c、-r、--session 只能选一个')
   return args
 }
 

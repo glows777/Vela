@@ -13,13 +13,25 @@ import type { VelaSession } from '../vela-session'
  */
 export type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
 
-/** 扩展和用户交互。没有界面时（SDK、`-p`、通道会话）notify 变成 `notify` 事件，confirm 返回 false，select / input 返回 undefined。 */
+/**
+ * 扩展和用户交互（同 pi 的 ctx.ui，裁剪版）。没有界面时（SDK、`-p`、通道会话）notify 变成 `notify` 事件，
+ * confirm 返回 false，select / input 返回 undefined，setStatus / setWidget 什么都不做。
+ * RPC 模式下它们变成 `extension_ui_request`，由客户端回答。
+ */
 export interface ExtensionUI {
   notify(message: string, level?: 'info' | 'warning' | 'error'): void
   confirm(title: string, message: string): Promise<boolean>
   select(title: string, options: string[]): Promise<string | undefined>
   input(title: string, placeholder?: string): Promise<string | undefined>
+  /** 底栏的一条状态（按 key 区分，text 为空时清除） */
+  setStatus(key: string, text?: string): void
+  /** 输入框上方的几行文字（按 key 区分，lines 为空时清除） */
+  setWidget(key: string, lines?: string[]): void
 }
+
+/** 会话选项里给的界面：setStatus / setWidget 可以不实现（不实现时什么都不做）。 */
+export type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
+  Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
 
 /** handler 的第二个参数：触发事件的会话和它的界面。 */
 export interface ExtensionContext {

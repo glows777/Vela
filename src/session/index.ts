@@ -15,7 +15,7 @@ export interface SessionState {
 }
 
 /** checkpoint 里除了消息以外、会话自己要还原的设置。 */
-export type SessionSettings = Pick<SessionCheckpoint, 'model' | 'thinkingLevel'>;
+export type SessionSettings = Pick<SessionCheckpoint, 'model' | 'thinkingLevel' | 'name'>;
 
 const SESSION_DIR = "sessions";
 
@@ -103,6 +103,7 @@ export class SessionStore {
       summary: checkpoint.summary || "",
       model: checkpoint.model,
       thinkingLevel: checkpoint.thinkingLevel,
+      name: checkpoint.name,
     };
   }
 

@@ -1,4 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { projectDataDir } from '../../src/config'
 import { tempDir } from '../support/vela'
@@ -30,6 +31,8 @@ async function cli(
     files?: Record<string, string>
     env?: Record<string, string>
     stdin?: string
+    /** 在伪终端里运行（交互模式） */
+    terminal?: boolean
   },
 ) {
   let cwd = options.cwd
@@ -53,12 +56,19 @@ async function cli(
     VELA_MODEL: options.model,
     ...options.env,
   }
-  const proc = Bun.spawn(['bun', ENTRY, ...args], {
+  const command = ['bun', ENTRY, ...args]
+  const argv = options.terminal
+    ? ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null']
+    : command
+  const proc = Bun.spawn(argv, {
     cwd,
     env,
     stdout: 'pipe',
     stderr: 'pipe',
-    stdin: 'ignore',
+    stdin:
+      options.stdin === undefined
+        ? 'ignore'
+        : new TextEncoder().encode(options.stdin),
   })
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -75,16 +85,28 @@ async function cli(
   }
 }
 
-test.concurrent('-p runs one turn with a faux scenario, prints the answer and exits 0', async () => {
+/** 数据目录里保存的会话文件（每次启动一个新会话，id 是时间 + 随机数） */
+function sessionFiles(dataDir: string): string[] {
+  try {
+    return readdirSync(join(dataDir, 'sessions'))
+      .filter((name) => name.endsWith('.jsonl'))
+      .map((name) => join(dataDir, 'sessions', name))
+  } catch {
+    return []
+  }
+}
+
+test.concurrent('-p prints only the final answer to stdout and saves a new session', async () => {
   const { stdout, code, dataDir } = await cli(['-p', '你好'], {
     model: `faux:${scenario('hello')}`,
   })
   expect(code).toBe(0)
-  expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
-  expect(stdout).toContain('Agent has completed its response')
-  expect(await Bun.file(join(dataDir, 'sessions/default.jsonl')).text()).toContain(
-    'faux 回放',
-  )
+  // 同 pi：stdout 只有最后的回答，诊断信息在 stderr
+  expect(stdout).toBe('你好，我是 Vela（faux 回放）。\n')
+  const files = sessionFiles(dataDir)
+  expect(files).toHaveLength(1)
+  expect(files[0]).toMatch(/\/\d{8}-\d{6}-[0-9a-f]{4}\.jsonl$/)
+  expect(await Bun.file(files[0]!).text()).toContain('faux 回放')
 })
 
 test.concurrent('-p executes tools from the scenario in the process working directory', async () => {
@@ -93,28 +115,112 @@ test.concurrent('-p executes tools from the scenario in the process working dire
     files: { 'notes.txt': 'remember the milk' },
   })
   expect(code).toBe(0)
-  expect(stdout).toContain('[tool called: read_file->({"path":"notes.txt"})]')
-  expect(stdout).toContain('remember the milk')
+  expect(stdout).toBe('notes.txt 里写着 remember the milk\n')
+})
+
+test.concurrent('piped stdin is prepended to the prompt (print mode without -p)', async () => {
+  const { stdout, code, dataDir } = await cli(['总结一下'], {
+    model: `faux:${scenario('hello')}`,
+    stdin: '一些管道输入',
+  })
+  expect(code).toBe(0)
+  expect(stdout).toBe('你好，我是 Vela（faux 回放）。\n')
+  const saved = await Bun.file(sessionFiles(dataDir)[0]!).text()
+  expect(saved).toContain('一些管道输入\\n\\n总结一下')
+})
+
+test.concurrent('--mode json writes a session header and one JSON event per line', async () => {
+  const { stdout, code } = await cli(['--mode', 'json', '看看 notes.txt'], {
+    model: `faux:${scenario('read-file')}`,
+    files: { 'notes.txt': 'remember the milk' },
+  })
+  expect(code).toBe(0)
+  const records = stdout.trim().split('\n').map((line) => JSON.parse(line))
+  expect(records[0]).toMatchObject({ type: 'session', thinkingLevel: 'medium' })
+  const id = records[0].id
+  expect(records.slice(1).every((r) => r.sessionId === id)).toBe(true)
+  expect(records.find((r) => r.type === 'tool_call')).toMatchObject({
+    toolName: 'read_file',
+    input: { path: 'notes.txt' },
+  })
+  expect(records.at(-1)).toEqual({ type: 'agent_settled', sessionId: id })
+})
+
+test.concurrent('--mode json reports a model error in agent_end and exits 1', async () => {
+  const { stdout, code, stderr } = await cli(['--mode', 'json', 'hi'], {
+    model: `faux:${scenario('bad-request')}`,
+  })
+  expect(code).toBe(1)
+  const end = stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .find((r) => r.type === 'agent_end')
+  expect(end.reason).toBe('error')
+  expect(end.error.message).toContain('400 Bad Request')
+  expect(stderr).toContain('400 Bad Request')
 })
 
 // 两次冷启动 CLI；CI 上和其它并发用例一起，每次 2-3 秒，会超过默认 5 秒
-test.concurrent('--continue resumes the saved session before the next prompt', async () => {
+test.concurrent('each run starts a new session; -c continues the most recent one', async () => {
   const first = await cli(['-p', '第一句'], {
     model: `faux:${scenario('hello')}`,
   })
-  const second = await cli(['-p', '第二句', '--continue'], {
+  const second = await cli(['-p', '第二句'], {
+    model: `faux:${scenario('hello')}`,
+    cwd: first.cwd,
+    agentDir: first.agentDir,
+  })
+  const third = await cli(['-p', '第三句', '-c'], {
+    model: `faux:${scenario('hello')}`,
+    cwd: first.cwd,
+    agentDir: first.agentDir,
+  })
+  expect(third.code).toBe(0)
+  const files = sessionFiles(first.dataDir)
+  expect(files).toHaveLength(2)
+  const contents = await Promise.all(files.map((f) => Bun.file(f).text()))
+  expect(contents.some((c) => c.includes('第一句') && !c.includes('第二句'))).toBe(true)
+  expect(contents.some((c) => c.includes('第二句') && c.includes('第三句'))).toBe(true)
+  expect(second.code).toBe(0)
+  // 三次启动 CLI 子进程，和其它并发用例一起时默认 5 秒不够
+}, 20_000)
+
+test.concurrent('-c -p with a command prints nothing on stdout, not the previous answer', async () => {
+  const first = await cli(['-p', '你好'], { model: `faux:${scenario('hello')}` })
+  expect(first.code).toBe(0)
+  const dir = tempDir('vela-ext-')
+  dirs.push(dir)
+  const ping = join(dir.path, 'ping.ts')
+  await Bun.write(
+    ping,
+    `export default (vela) => vela.registerCommand('ping', { handler: async (_args, ctx) => ctx.ui.notify('pong') })`,
+  )
+  const second = await cli(['-c', '-p', '/ping', '-e', ping], {
     model: `faux:${scenario('hello')}`,
     cwd: first.cwd,
     agentDir: first.agentDir,
   })
   expect(second.code).toBe(0)
-  const session = await Bun.file(
-    join(first.dataDir, 'sessions/default.jsonl'),
-  ).text()
-  expect(session).toContain('第一句')
-  expect(session).toContain('第二句')
-  // 两次启动 CLI 子进程，和其它并发用例一起时默认 5 秒不够
+  expect(second.stderr).toContain('pong')
+  // 上一次的回答在恢复的历史里，但不是这次产生的
+  expect(second.stdout).toBe('')
 }, 20_000)
+
+test.concurrent('--session opens a named session id; -r needs interactive mode', async () => {
+  const first = await cli(['-p', '你好', '--session', 'work'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(first.code).toBe(0)
+  expect(sessionFiles(first.dataDir).map((f) => f.split('/').at(-1))).toEqual([
+    'work.jsonl',
+  ])
+  const resume = await cli(['-p', '你好', '-r'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(resume.code).toBe(2)
+  expect(resume.stderr).toContain('-r 只能在交互模式用')
+})
 
 test.concurrent('a model error makes -p exit 1 with the real cause on stderr', async () => {
   const { code, stderr } = await cli(['-p', 'hi'], {
@@ -129,6 +235,7 @@ test.concurrent('-p without a prompt prints usage and exits 2', async () => {
     model: `faux:${scenario('hello')}`,
   })
   expect(code).toBe(2)
+  expect(stderr).toContain('没有 prompt')
   expect(stderr).toContain('用法')
 })
 
@@ -143,13 +250,13 @@ test.concurrent('extensions are discovered in ~/.vela/extensions and configured 
     join(home.path, 'settings.json'),
     JSON.stringify({ extensionConfig: { greet: { token: '$GREET_TOKEN' } } }),
   )
-  const { stdout, code } = await cli(['-p', '你好'], {
+  const { stderr, code } = await cli(['-p', '你好'], {
     model: `faux:${scenario('hello')}`,
     agentDir: home.path,
     env: { GREET_TOKEN: 't0k' },
   })
   expect(code).toBe(0)
-  expect(stdout).toContain('[greet] loaded {"token":"t0k"}')
+  expect(stderr).toContain('[greet] loaded {"token":"t0k"}')
 })
 
 test.concurrent('project extensions load only when the project is trusted', async () => {
@@ -159,7 +266,7 @@ test.concurrent('project extensions load only when the project is trusted', asyn
     files,
   })
   expect(skipped.code).toBe(0)
-  expect(skipped.stdout).not.toContain('[local] loaded')
+  expect(skipped.stderr).not.toContain('[local] loaded')
   expect(skipped.stderr).toContain('[信任] 没有加载')
 
   const approved = await cli(['-p', '你好', '--approve'], {
@@ -167,7 +274,7 @@ test.concurrent('project extensions load only when the project is trusted', asyn
     files,
   })
   expect(approved.code).toBe(0)
-  expect(approved.stdout).toContain('[local] loaded')
+  expect(approved.stderr).toContain('[local] loaded')
   expect(approved.stderr).not.toContain('[信任]')
 
   // 保存过的决定
@@ -185,7 +292,7 @@ test.concurrent('project extensions load only when the project is trusted', asyn
     cwd: project.path,
     agentDir: home.path,
   })
-  expect(saved.stdout).toContain('[local] loaded')
+  expect(saved.stderr).toContain('[local] loaded')
 }, 20_000)
 
 test.concurrent('-e loads an extension file; --no-extensions drops built-in and discovered ones', async () => {
@@ -193,14 +300,14 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   dirs.push(dir)
   const extra = join(dir.path, 'extra.ts')
   await Bun.write(extra, GREET('extra'))
-  const { stdout, code } = await cli(
+  const { stderr, code } = await cli(
     ['-p', '你好', '--no-extensions', '-e', extra],
     { model: `faux:${scenario('hello')}` },
   )
   expect(code).toBe(0)
-  expect(stdout).toContain('[extra] loaded {}')
+  expect(stderr).toContain('[extra] loaded {}')
   // supabase 内置扩展没加载（它加载时会提示 Mock 模式）
-  expect(stdout).not.toContain('[supabase]')
+  expect(stderr).not.toContain('[supabase]')
 })
 
 test.concurrent('--no-session keeps the session in memory', async () => {
@@ -208,9 +315,7 @@ test.concurrent('--no-session keeps the session in memory', async () => {
     model: `faux:${scenario('hello')}`,
   })
   expect(code).toBe(0)
-  expect(await Bun.file(join(dataDir, 'sessions/default.jsonl')).exists()).toBe(
-    false,
-  )
+  expect(sessionFiles(dataDir)).toEqual([])
 })
 
 test.concurrent('a broken settings.json stops the CLI with the file name', async () => {
@@ -229,100 +334,54 @@ test.concurrent('a broken settings.json stops the CLI with the file name', async
 test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', async () => {
   const { code, stdout } = await cli(['-p', '你好'], { model: 'mock' })
   expect(code).toBe(0)
-  expect(stdout).toContain('Agent has completed its response')
+  expect(stdout.trim()).not.toBe('')
 }, 20_000)
 
-/** HOME 和 VELA_DIR 指向新的临时目录，不碰真实的 ~/.vela */
-function isolatedHome(): { HOME: string; VELA_DIR: string } {
-  const dir = tempDir('vela-home-')
-  dirs.push(dir)
-  return { HOME: dir.path, VELA_DIR: dir.path }
-}
+// 交互模式只在终端里出现（管道输入走单次模式，同 pi）：用 util-linux 的 script 给子进程一个伪终端
+const hasScript =
+  process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
 
-/** 交互模式：等到出现提示符再输入下一行，最后 exit */
-async function repl(lines: string[], model: string) {
-  const dir = tempDir('vela-repl-')
-  dirs.push(dir)
-  const home = isolatedHome()
-  const proc = Bun.spawn(['bun', ENTRY], {
-    cwd: dir.path,
-    env: {
-      PATH: process.env.PATH ?? '',
-      ...home,
-      VELA_MODEL: model,
-    },
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  let stdout = ''
-  const decoder = new TextDecoder()
-  const reader = proc.stdout.getReader()
-  const prompts = () => stdout.split('You: ').length - 1
-  const waitForPrompt = async (count: number) => {
-    while (prompts() < count) {
-      const { value, done } = await reader.read()
-      if (done) throw new Error(`CLI exited early:\n${stdout}`)
-      stdout += decoder.decode(value)
-    }
-  }
-  for (const [i, line] of [...lines, 'exit'].entries()) {
-    await waitForPrompt(i + 1)
-    proc.stdin.write(`${line}\n`)
-    proc.stdin.flush()
-  }
-  proc.stdin.end()
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    stdout += decoder.decode(value)
-  }
-  return {
-    stdout,
-    code: await proc.exited,
-    dataDir: projectDataDir(home.VELA_DIR, dir.path),
-  }
-}
+test.if(hasScript)(
+  'interactive mode in a terminal: a turn, a slash command, then exit',
+  async () => {
+    const { stdout, code, dataDir } = await cli([], {
+      model: `faux:${scenario('hello')}`,
+      stdin: '你好\n/memory\nexit\n',
+      terminal: true,
+    })
+    expect(code).toBe(0)
+    expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
+    expect(stdout).toContain('[记忆系统] 共 0 条记忆')
+    expect(stdout).toContain('Bye!')
+    const files = sessionFiles(dataDir)
+    expect(files).toHaveLength(1)
+    expect(await Bun.file(files[0]!).text()).toContain('你好')
+  },
+)
 
-test.concurrent('interactive mode: a turn, a slash command, then exit', async () => {
-  const { stdout, code, dataDir } = await repl(
-    ['你好', '/memory'],
-    `faux:${scenario('hello')}`,
-  )
-  expect(code).toBe(0)
-  expect(stdout).toContain('[Session] 新会话')
-  expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
-  expect(stdout).toContain('[Token]')
-  expect(stdout).toContain('[记忆系统] 共 0 条记忆')
-  expect(stdout).toContain('Bye!')
-  expect(await Bun.file(join(dataDir, 'sessions/default.jsonl')).text()).toContain(
-    '你好',
-  )
-})
-
-test.concurrent('interactive mode reads piped stdin line by line and exits at EOF', async () => {
-  const dir = tempDir('vela-pipe-')
-  dirs.push(dir)
-  const proc = Bun.spawn(['bun', ENTRY], {
-    cwd: dir.path,
-    env: {
-      PATH: process.env.PATH ?? '',
-      ...isolatedHome(),
-      VELA_MODEL: `faux:${scenario('hello')}`,
-    },
-    stdin: new TextEncoder().encode('你好\n/memory\n'),
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const [stdout, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    proc.exited,
-  ])
-  expect(code).toBe(0)
-  expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
-  expect(stdout).toContain('[记忆系统] 共 0 条记忆')
-  expect(stdout).toContain('Bye!')
-})
+test.if(hasScript)(
+  '-r lists saved sessions and resumes the chosen one',
+  async () => {
+    const first = await cli(['-p', '你好'], {
+      model: `faux:${scenario('hello')}`,
+    })
+    expect(first.code).toBe(0)
+    const picked = await cli(['-r'], {
+      model: `faux:${scenario('hello')}`,
+      cwd: first.cwd,
+      agentDir: first.agentDir,
+      stdin: '1\n/memory\nexit\n',
+      terminal: true,
+    })
+    expect(picked.code).toBe(0)
+    expect(picked.stdout).toContain('选择要恢复的会话')
+    expect(picked.stdout).toContain('1. 你好')
+    expect(picked.stdout).not.toContain('开新会话')
+    expect(picked.stdout).toContain('Bye!')
+    // 恢复的是同一个会话，没有另存一个新的
+    expect(sessionFiles(first.dataDir)).toHaveLength(1)
+  },
+)
 
 test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline', async () => {
   const dir = tempDir('vela-cli-')
@@ -364,9 +423,9 @@ export default (vela) => vela.registerProvider('local', {
     model: '',
     agentDir: home.path,
   })
-  expect(first.stderr).toBe('')
+  expect(first.stderr).not.toContain('[模型]')
   expect(first.code).toBe(0)
-  expect(first.stdout).toContain('来自 m high')
+  expect(first.stdout).toBe('来自 m high\n')
 
   // 没给 --model：恢复会话里保存的模型和 thinking，不需要 OPENAI_API_MODEL_NAME
   const second = await cli(['-p', '再来', '--continue'], {
@@ -374,7 +433,7 @@ export default (vela) => vela.registerProvider('local', {
     cwd: first.cwd,
     agentDir: home.path,
   })
-  expect(second.stderr).toBe('')
+  expect(second.stderr).not.toContain('[模型]')
   expect(second.code).toBe(0)
   expect(second.stdout).toContain('来自 m high')
 

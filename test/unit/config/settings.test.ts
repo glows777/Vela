@@ -37,20 +37,20 @@ const json = (value: unknown) => JSON.stringify(value)
 test('project settings override user settings: objects merge deeply, resource lists concatenate', () => {
   const { agentDir, cwd } = setup({
     'home/settings.json': json({
-      limits: { maxTurns: 5, bashTimeoutMs: 1000 },
+      limits: { maxRetries: 5, bashTimeoutMs: 1000 },
       extensions: ['ext/a.ts'],
       extensionConfig: { web: { tavilyKey: 'user', serperKey: 's' } },
     }),
     'home/ext/a.ts': 'export default () => {}',
     'project/.vela/settings.json': json({
-      limits: { maxTurns: 9 },
+      limits: { maxRetries: 9 },
       extensions: ['../b.ts'],
       extensionConfig: { web: { tavilyKey: 'project' } },
     }),
     'project/b.ts': 'export default () => {}',
   })
   const config = loadConfig({ cwd, agentDir, trusted: true })
-  expect(config.settings.limits).toEqual({ maxTurns: 9, bashTimeoutMs: 1000 })
+  expect(config.settings.limits).toEqual({ maxRetries: 9, bashTimeoutMs: 1000 })
   expect(config.extensionConfig.web).toEqual({
     tavilyKey: 'project',
     serperKey: 's',
@@ -69,7 +69,7 @@ test('project settings override user settings: objects merge deeply, resource li
 test('an untrusted project only gets the user settings and user extensions', () => {
   const { agentDir, cwd } = setup({
     'home/extensions/mine.ts': 'export default () => {}',
-    'project/.vela/settings.json': json({ limits: { maxTurns: 1 } }),
+    'project/.vela/settings.json': json({ limits: { maxRetries: 1 } }),
     'project/.vela/extensions/evil.ts': 'export default () => {}',
   })
   expect(projectTrustRequired(cwd)).toBe(true)
@@ -78,7 +78,7 @@ test('an untrusted project only gets the user settings and user extensions', () 
   expect(config.extensions.map((e) => e.name)).toEqual(['mine'])
   const trusted = loadConfig({ cwd, agentDir, trusted: true })
   expect(trusted.extensions.map((e) => e.name)).toEqual(['mine', 'evil'])
-  expect(trusted.settings.limits).toEqual({ maxTurns: 1 })
+  expect(trusted.settings.limits).toEqual({ maxRetries: 1 })
 })
 
 test('extension directories: files, folders with index.ts, and a folder that is itself an extension', () => {

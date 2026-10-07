@@ -51,11 +51,6 @@ export function printEvent(event: VelaEvent): void {
       )
       break
     }
-    case 'budget_warning':
-      console.log(
-        `  [Token] ${event.used}/${event.limit} (${Math.round((event.used / event.limit) * 100)}%)`,
-      )
-      break
     case 'turn_end':
       if (event.needsToolCall)
         console.log('agent needs to call tool, continue to next turn')
@@ -66,12 +61,6 @@ export function printEvent(event: VelaEvent): void {
       else if (event.reason === 'loop')
         console.log(
           '\nAgent is stuck in a loop and has reached the critical threshold. Ending loop.',
-        )
-      else if (event.reason === 'budget')
-        console.log('\n[Token has exceeded the budget limit. Ending loop.]')
-      else if (event.reason === 'max_turns')
-        console.log(
-          '\nReached maximum turn limit. Ending loop to prevent infinite execution.',
         )
       break
     case 'context':

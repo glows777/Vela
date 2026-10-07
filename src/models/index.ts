@@ -141,7 +141,7 @@ export function reasoningOption(
 export const RESERVE_TOKENS = 16_384
 
 /**
- * 按模型的上下文窗口算压缩阈值和输入上限（200k 窗口得到的就是默认值；tokenBudget 不跟窗口走）：
+ * 按模型的上下文窗口算压缩阈值和输入上限（200k 窗口得到的就是默认值）：
  * 输入上限 = 窗口 − 16384（同 pi），摘要阈值 75% 窗口、但至少比输入上限低 10% 窗口（摘要请求本身要放得下）。
  * 没写 contextWindow 时用默认值。`overrides`（createVela / settings 里显式写的 limits）优先。
  */

@@ -12,6 +12,8 @@ export type VelaEvent =
   | { type: 'message'; message: ModelMessage }
   | { type: 'turn_start'; turn: number }
   | { type: 'text_delta'; text: string }
+  /** 模型的 thinking / reasoning 文本（provider 返回时才有） */
+  | { type: 'thinking_delta'; text: string }
   | { type: 'tool_call'; toolCallId: string; toolName: string; input: unknown }
   | {
       type: 'tool_result'
@@ -46,16 +48,23 @@ export type VelaEvent =
       usage: StepUsage
       record?: StepRecord
     }
-  | { type: 'budget_warning'; used: number; limit: number }
   | { type: 'turn_end'; turn: number; needsToolCall: boolean }
   | {
       type: 'agent_end'
-      reason: 'done' | 'max_turns' | 'budget' | 'loop' | 'aborted' | 'error'
+      reason: 'done' | 'loop' | 'aborted' | 'error'
       error?: unknown
     }
+  /** 排队的消息变化（steer / followUp 入队、取出、清空），两个字段都是完整的当前队列 */
+  | { type: 'queue_update'; steering: string[]; followUp: string[] }
+  /**
+   * prompt() 的所有工作都结束了（包括它之后排队的 steer / followUp 各自跑的 loop），
+   * 会话回到空闲；同 pi 的 agent_settled。
+   */
+  | { type: 'agent_settled' }
   | {
       type: 'context'
-      action: 'micro' | 'summary' | 'summary-required'
+      /** compact = session.compact() 手动摘要 */
+      action: 'micro' | 'summary' | 'summary-required' | 'compact'
       before: number
       after?: number
       saved?: number

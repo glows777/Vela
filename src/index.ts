@@ -40,6 +40,7 @@ export type {
   ExtensionEvents,
   ExtensionHandler,
   ExtensionUI,
+  SessionUI,
   SessionShutdownEvent,
   SessionStartEvent,
   ToolCallEvent,
@@ -67,12 +68,14 @@ export {
   memorySessionStorage,
   type SessionCheckpoint,
   type SessionStorage,
+  type SessionSummary,
 } from './session/storage'
 export type { ToolContext, ToolDefinition } from './tools/registry'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker'
 export { createVela, type Vela, type VelaOptions } from './vela'
 export {
   type PromptOptions,
+  type QueueMode,
   type SessionOptions,
   VelaSession,
 } from './vela-session'

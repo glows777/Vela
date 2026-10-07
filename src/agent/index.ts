@@ -17,11 +17,6 @@ import type { VelaEvent, VelaEventListener } from './events'
 import { LoopDetector } from './loop-detection'
 import { calculateDelay, isRetryable, sleep } from './retry'
 
-export interface BudgetState {
-  used: number
-  limit: number
-}
-
 interface AgentLoopParameter {
   model: LanguageModel
   systemPrompt: string | (() => string)
@@ -32,10 +27,20 @@ interface AgentLoopParameter {
   abortSignal?: AbortSignal
   /** 运行事件回调；不传时 agentLoop 不产生任何终端输出。 */
   onEvent?: VelaEventListener
-  /** 轮数、重试、预算等上限；未给出的字段用默认值。 */
+  /** 重试、上下文等上限；未给出的字段用默认值。 */
   limits?: Partial<VelaLimits>
   /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时不发 */
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  /**
+   * 取出排队的 steer 消息（同 pi 的 getSteeringMessages）：每一步的工具跑完、下一次模型请求前取一次，
+   * 取到的作为用户消息接在后面；模型本来要结束时取到了也会接着跑。
+   */
+  takeSteering?: () => string[]
+  /**
+   * 取出排队的 followUp 消息（同 pi 的 getFollowUpMessages）：模型本来要结束（没有工具调用、也没有 steer）时取，
+   * 取到就作为用户消息接着在同一个 loop 里跑。
+   */
+  takeFollowUp?: () => string[]
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -71,10 +76,11 @@ export const agentLoop = async ({
   onEvent,
   limits: limitOverrides,
   reasoning,
+  takeSteering,
+  takeFollowUp,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
-  tokenTracker.beginLoop()
   // 每次 agent loop 使用独立的调用历史，并发会话互不影响
   const loopDetector = new LoopDetector()
   const emit = (event: VelaEvent) => onEvent?.(event)
@@ -83,7 +89,8 @@ export const agentLoop = async ({
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   try {
-    while (turn < limits.maxTurns) {
+    // 同 pi：不限轮数，一直跑到模型不再调用工具、也没有排队的消息（或被中断 / 循环检测停下）
+    for (;;) {
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
       turn++
@@ -136,6 +143,10 @@ export const agentLoop = async ({
               case 'text-delta': {
                 emit({ type: 'text_delta', text: part.text })
                 fullContent += part.text
+                break
+              }
+              case 'reasoning-delta': {
+                emit({ type: 'thinking_delta', text: part.text })
                 break
               }
               case 'tool-call': {
@@ -245,7 +256,7 @@ export const agentLoop = async ({
       const inputToken = finalStep.usage.inputTokens ?? 0
       if (inputToken > 0) tokenTracker.updateFromAPI(inputToken)
 
-      // 将 usage 归一化后记录到统一 tracker，并累计当前 loop 的完整 token 预算
+      // 将 usage 归一化后记录到统一 tracker
       const norm = normalizeUsage(finalStep.usage)
       const modelId = typeof model === 'string' ? model : model.modelId
       const stepRecord = tokenTracker.record(modelId || 'mock-model', norm, {
@@ -278,27 +289,24 @@ export const agentLoop = async ({
         emit({ type: 'message', message: warning })
       }
 
-      if (tokenTracker.loopTokens > limits.tokenBudget * 0.9) {
-        emit({
-          type: 'budget_warning',
-          used: tokenTracker.loopTokens,
-          limit: limits.tokenBudget,
-        })
-      }
       // 每个 turn_start 都有对应的 turn_end，结束原因由随后的 agent_end 说明
       emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
-      if (tokenTracker.loopTokens > limits.tokenBudget) {
-        endReason = 'budget'
-        break
+      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前；本来要结束时再看 followUp（同 pi）
+      let queued = takeSteering?.() ?? []
+      if (!needToolCall && queued.length === 0) queued = takeFollowUp?.() ?? []
+      for (const text of queued) {
+        const message: ModelMessage = { role: 'user', content: text }
+        messages.push(message)
+        tokenTracker.addMessage(message)
+        emit({ type: 'message', message })
       }
-      if (!needToolCall) {
+      if (!needToolCall && queued.length === 0) {
         endReason = 'done'
         break
       }
     }
 
-    // 没有任何 break 时说明 while 条件耗尽，即达到轮次上限
-    emit({ type: 'agent_end', reason: endReason ?? 'max_turns' })
+    emit({ type: 'agent_end', reason: endReason ?? 'done' })
   } catch (error) {
     emit({
       type: 'agent_end',

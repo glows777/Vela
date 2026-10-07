@@ -28,7 +28,10 @@ test('a 429 is retried and the turn then succeeds', async () => {
     [2, 3],
   ])
   expect(t.lastAssistantText()).toBe('终于好了')
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
   // 失败的请求不留下半截消息
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
 })
@@ -78,7 +81,10 @@ test('a 400 is not retried: the run fails and the user message stays in the save
   await expect(t.run('hi')).rejects.toThrow('400 Bad Request')
 
   expect(t.eventsOf('retry')).toHaveLength(0)
-  expect(t.events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'error' })
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
+    type: 'agent_end',
+    reason: 'error',
+  })
   expect(t.session.busy.locked).toBe(false)
   expect(await t.readData('sessions/default.jsonl')).toContain('"hi"')
 })
@@ -103,7 +109,7 @@ test('aborting while the model is streaming stops the run; the next run works', 
   t.session.abort()
 
   await expect(running).rejects.toThrow()
-  expect(t.events.at(-1)).toMatchObject({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'aborted',
   })
@@ -141,7 +147,7 @@ test('aborting while a tool runs cancels the tool and records it as cancelled', 
   t.session.abort()
 
   await expect(running).rejects.toThrow()
-  expect(t.events.at(-1)).toMatchObject({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'aborted',
   })
@@ -163,7 +169,6 @@ test('a second run while one is in flight is refused', async () => {
 test('repeating the same tool call trips the loop detector: warning, then critical stop', async () => {
   const same = () => fauxToolCall('list_directory', { path: '.' })
   const t = createTestVela({
-    limits: { maxTurns: 30 },
     // 检测发生在记录之前：第 11 次同参调用时已有 10 次 → warning，第 21 次 → critical
     responses: Array.from({ length: 21 }, same),
   })
@@ -176,7 +181,10 @@ test('repeating the same tool call trips the loop detector: warning, then critic
     detector: 'generic_repeat',
   })
   expect(detections.at(-1)).toMatchObject({ level: 'critical' })
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'loop' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'loop',
+  })
   // 警告以 system message 的形式提醒模型，并且排在触发它的那次调用和结果之后
   const firstWarning = t.messages.findIndex(
     (m) =>
@@ -193,54 +201,23 @@ test('repeating the same tool call trips the loop detector: warning, then critic
   expect(t.model.calls).toHaveLength(21)
 })
 
-test('the loop stops at maxTurns', async () => {
+test('there is no turn limit: the loop runs until the model stops calling tools (same as pi)', async () => {
   const t = createTestVela({
-    limits: { maxTurns: 3 },
     responses: [
-      fauxToolCall('list_directory', { path: '.' }),
-      fauxToolCall('glob', { pattern: '*' }),
-      fauxToolCall('list_directory', { path: '..' }),
+      ...Array.from({ length: 20 }, (_, i) =>
+        fauxToolCall('glob', { pattern: `*${i}` }),
+      ),
+      fauxText('做完了'),
     ],
   })
 
   await t.run('一直干活')
 
-  expect(t.eventsOf('turn_start')).toHaveLength(3)
-  expect(t.eventsOf('turn_end')).toHaveLength(3)
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'max_turns' })
-})
-
-test('the token budget warns near the limit and stops above it', async () => {
-  const t = createTestVela({
-    limits: { tokenBudget: 1000 },
-    responses: [
-      fauxToolCall(
-        'list_directory',
-        { path: '.' },
-        { usage: { input: 920, output: 0 } },
-      ),
-      fauxToolCall(
-        'list_directory',
-        { path: 'x' },
-        { usage: { input: 200, output: 0 } },
-      ),
-    ],
+  expect(t.eventsOf('turn_start')).toHaveLength(21)
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
   })
-
-  await t.run('干活')
-
-  const warnings = t.eventsOf('budget_warning')
-  expect(warnings[0]).toEqual({
-    type: 'budget_warning',
-    used: 920,
-    limit: 1000,
-  })
-  expect(t.eventTypes().slice(-3)).toEqual([
-    'budget_warning',
-    'turn_end',
-    'agent_end',
-  ])
-  expect(t.events.at(-1)).toEqual({ type: 'agent_end', reason: 'budget' })
 })
 
 test('a request over maxInputTokens is stopped before it is sent', async () => {

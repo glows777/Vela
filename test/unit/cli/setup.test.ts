@@ -21,15 +21,25 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   expect(
     parseArgs(['-p', 'hi', '-e', 'a.ts', '--extension', 'builtin:web', '--no-extensions', '--no-session', '--approve', '--continue']),
   ).toEqual({
-    print: 'hi',
+    print: true,
+    messages: ['hi'],
     continue: true,
+    resume: false,
     extensions: ['a.ts', 'builtin:web'],
     noExtensions: true,
     noSession: true,
     approve: true,
   })
   expect(parseArgs(['--no-approve']).approve).toBe(false)
-  expect(() => parseArgs(['-p'])).toThrow('-p 需要一个参数')
+  expect(parseArgs(['--mode', 'json', '一', '二'])).toMatchObject({
+    mode: 'json',
+    messages: ['一', '二'],
+  })
+  expect(parseArgs(['-r']).resume).toBe(true)
+  expect(parseArgs(['--session', 'abc']).session).toBe('abc')
+  expect(() => parseArgs(['--mode', 'xml'])).toThrow('--mode 只能是')
+  expect(() => parseArgs(['-c', '--session', 'x'])).toThrow('只能选一个')
+  expect(() => parseArgs(['--model'])).toThrow('--model 需要一个参数')
   expect(() => parseArgs(['--wat'])).toThrow('未知参数 --wat')
 })
 
