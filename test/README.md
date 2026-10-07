@@ -165,7 +165,7 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 | e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存；`vela.listSessions()`（最近的在前，名字随会话保存和恢复） |
 | e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
 | e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |
-| e2e/cli | `-p` 只把最后的回答写 stdout（诊断在 stderr）并保存一个新会话；`-c -p /命令` 不打印恢复历史里的旧回答；工具在进程 cwd 执行；管道 stdin 拼在 prompt 前；`--mode json` 会话头 + 每个事件一行、模型错误在 agent_end 里且退出码 1；每次启动新会话、`-c` 接最近的；`--session <id>`、`-r` 只能交互；`VELA_RECORD` 录制后用 `faux:` 回放；模型错误退出码 1；扩展注册的 provider 配 `--model` / `--thinking`，`--continue` 恢复保存的模型；未知 provider / 没选模型 / 缺 key 退出码 1，`--thinking` 不合法退出码 2；缺参数退出码 2；`VELA_MODEL=mock`；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
+| e2e/cli | 交互模式（伪终端）一轮对话 + 斜杠命令 + exit 并保存会话；`-p` 只把最后的回答写 stdout（诊断在 stderr）并保存一个新会话；`-c -p /命令` 不打印恢复历史里的旧回答；工具在进程 cwd 执行；管道 stdin 拼在 prompt 前；`--mode json` 会话头 + 每个事件一行、模型错误在 agent_end 里且退出码 1；每次启动新会话、`-c` 接最近的；`--session <id>`、`-r` 只能交互；`VELA_RECORD` 录制后用 `faux:` 回放；模型错误退出码 1；扩展注册的 provider 配 `--model` / `--thinking`，`--continue` 恢复保存的模型；未知 provider / 没选模型 / 缺 key 退出码 1，`--thinking` 不合法退出码 2；缺参数退出码 2；`VELA_MODEL=mock`；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
 | unit/cli/commands | skill 激活/去重/并发锁（走真实装配） |
 | unit/cli/setup | 命令行参数；settings 的扩展配置覆盖环境变量；旧数据搬家提示 |
 | unit/models | `provider/id` 解析与错误；thinking → reasoning；按上下文窗口算上限 |
@@ -204,4 +204,5 @@ const { t, errors } = await replayScenario('run.json', { files })  // 离线按 
 
 ## 已知问题
 
-- 交互模式（`src/cli/interactive.ts` 的 readline REPL）没有自动化测试：管道输入现在走单次模式（同 pi），REPL 只在终端里出现。第 2 步下半换成 TUI 时用假终端在进程内测。发现问题时先写一个能复现的 faux 场景，修不了的写在这里，并在测试里按现状断言。
+- 交互模式（`src/cli/interactive.ts` 的 readline REPL）只在终端里出现（管道输入走单次模式，同 pi），所以 `e2e/cli` 用 util-linux 的 `script` 给子进程一个伪终端来测；没有 `script` 的平台（macOS）跳过。第 2 步下半换成 TUI 时改用假终端在进程内测。
+- 发现问题时先写一个能复现的 faux 场景，修不了的写在这里，并在测试里按现状断言。

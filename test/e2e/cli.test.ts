@@ -31,6 +31,8 @@ async function cli(
     files?: Record<string, string>
     env?: Record<string, string>
     stdin?: string
+    /** 在伪终端里运行（交互模式） */
+    terminal?: boolean
   },
 ) {
   let cwd = options.cwd
@@ -54,7 +56,11 @@ async function cli(
     VELA_MODEL: options.model,
     ...options.env,
   }
-  const proc = Bun.spawn(['bun', ENTRY, ...args], {
+  const command = ['bun', ENTRY, ...args]
+  const argv = options.terminal
+    ? ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null']
+    : command
+  const proc = Bun.spawn(argv, {
     cwd,
     env,
     stdout: 'pipe',
@@ -330,6 +336,28 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
   expect(code).toBe(0)
   expect(stdout.trim()).not.toBe('')
 }, 20_000)
+
+// 交互模式只在终端里出现（管道输入走单次模式，同 pi）：用 util-linux 的 script 给子进程一个伪终端
+const hasScript =
+  process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
+
+test.if(hasScript)(
+  'interactive mode in a terminal: a turn, a slash command, then exit',
+  async () => {
+    const { stdout, code, dataDir } = await cli([], {
+      model: `faux:${scenario('hello')}`,
+      stdin: '你好\n/memory\nexit\n',
+      terminal: true,
+    })
+    expect(code).toBe(0)
+    expect(stdout).toContain('你好，我是 Vela（faux 回放）。')
+    expect(stdout).toContain('[记忆系统] 共 0 条记忆')
+    expect(stdout).toContain('Bye!')
+    const files = sessionFiles(dataDir)
+    expect(files).toHaveLength(1)
+    expect(await Bun.file(files[0]!).text()).toContain('你好')
+  },
+)
 
 test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline', async () => {
   const dir = tempDir('vela-cli-')
