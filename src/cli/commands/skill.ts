@@ -60,6 +60,11 @@ export function createSkillCommands(
         print(`\n[skills] 找不到 skill: ${name}\n`)
         return true
       }
+      // 运行中追加消息会排在这一轮的回答前面，打乱历史顺序
+      if (session.busy.locked) {
+        print(`\n[skills] 有任务正在执行中，请稍候再 /skill load ${name}\n`)
+        return true
+      }
       session.activeSkills.add(name)
       // Codex 模式：激活即注入一次正文（system prompt 只保留索引）；
       // 重复 load 不重复注入，避免消息历史线性堆积

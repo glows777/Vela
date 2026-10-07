@@ -123,6 +123,14 @@ test('P0-2: busy 锁拒绝并发触发', () => {
   expect(t.messages).toHaveLength(0)
 })
 
+test('/skill load 在运行中拒绝（不在这一轮回答前插入消息）', () => {
+  const t = fixture()
+  t.session.busy.locked = true
+  expect(t.dispatch('/skill load code-review')).toBe(true)
+  expect(t.session.activeSkills.has('code-review')).toBe(false)
+  expect(t.messages).toHaveLength(0)
+})
+
 test('P0-2: /skill load 重复执行不重复注入正文', async () => {
   const t = fixture()
   await captureConsole(() => {
