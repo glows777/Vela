@@ -14,25 +14,21 @@ export interface MemoryEntry {
   lastReadAt?: number
 }
 
-const MEMORY_DIR = '.memory'
 const INDEX_FILE = 'MEMORY.md'
 const MAX_INDEX_LINES = 200
 const MAX_FILE_CHARS = 4000
 const STALE_DAYS = 30
 
 export class MemoryStore {
-  private readonly baseDir: string
-
+  /**
+   * `memoryDir`：记忆文件和 MEMORY.md 所在的目录（memory 扩展用 `<dataDir>/memory`）；
+   * `projectDir`：lint 检查记忆里提到的路径是否还存在时，相对路径按它解析。
+   */
   constructor(
-    baseDir: string = '.',
+    private readonly memoryDir: string,
     private logger?: VelaLogger,
-  ) {
-    this.baseDir = baseDir
-  }
-
-  private get memoryDir(): string {
-    return path.join(this.baseDir, MEMORY_DIR)
-  }
+    private readonly projectDir = '.',
+  ) {}
 
   private get indexPath(): string {
     return path.join(this.memoryDir, INDEX_FILE)
@@ -170,7 +166,7 @@ export class MemoryStore {
   }
 
   lint(): ValidationReport[] {
-    return lintAll(this.list(), this.baseDir)
+    return lintAll(this.list(), this.projectDir)
   }
 
   buildPromptSection(): string {

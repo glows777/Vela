@@ -9,6 +9,14 @@ export type {
   VelaEventListener,
   VelaSessionEventListener,
 } from './agent/events'
+export {
+  type ExtensionEntry,
+  importExtension,
+  type LoadConfigOptions,
+  loadConfig,
+  type VelaConfig,
+  type VelaSettings,
+} from './config'
 export type {
   ChannelDefinition,
   IncomingMessage,
@@ -45,6 +53,12 @@ export type {
   PermissionRules,
   Role,
 } from './security/roles'
+export {
+  fileSessionStorage,
+  memorySessionStorage,
+  type SessionCheckpoint,
+  type SessionStorage,
+} from './session/storage'
 export type { ToolContext, ToolDefinition } from './tools/registry'
 export type { TokenStatus, UsageTotals } from './usage/tracker'
 export { createVela, type Vela, type VelaOptions } from './vela'

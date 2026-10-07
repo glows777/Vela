@@ -1,29 +1,12 @@
 import type { ModelMessage } from "ai";
 import { join } from 'node:path';
-import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { silentLogger, type VelaLogger } from '../logger';
+import {
+  fileSessionStorage,
+  type SessionCheckpoint,
+  type SessionStorage,
+} from './storage';
 import { ToolResultStore } from './tool-results';
-
-export interface MessageEntry {
-  type: "message";
-  timestamp: string;
-  message: ModelMessage;
-}
-
-interface StoredMessage {
-  timestamp: string;
-  message: ModelMessage;
-}
-
-interface CheckpointEntry {
-  type: "checkpoint";
-  timestamp: string;
-  summary: string;
-  messages: StoredMessage[];
-  toolHistoryId?: string;
-  toolHistorySeq?: number;
-  toolHistoryViewSeq?: number;
-}
 
 export interface SessionState {
   messages: ModelMessage[];
@@ -31,24 +14,23 @@ export interface SessionState {
   summary: string;
 }
 
-const SESSION_DIR = ".sessions";
+const SESSION_DIR = "sessions";
 
+/**
+ * 一个会话的保存和恢复：消息历史交给 SessionStorage（文件 / 内存 / 自定义），
+ * 工具长输出和工具调用历史总是写在 `<dir>/<id>/` 下（模型要用 read_file 读它们）。
+ */
 export class SessionStore {
   readonly results: ToolResultStore;
-  private dir: string;
-  private sessionId: string;
-
-  private get filePath(): string {
-    return `${this.dir}/${this.sessionId}.jsonl`;
-  }
+  private readonly storage: SessionStorage;
 
   constructor(
-    sessionId: string,
+    private readonly sessionId: string,
     dir: string = SESSION_DIR,
-    private logger: VelaLogger = silentLogger,
+    logger: VelaLogger = silentLogger,
+    storage?: SessionStorage,
   ) {
-    this.sessionId = sessionId;
-    this.dir = dir;
+    this.storage = storage ?? fileSessionStorage(dir, logger);
     this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'));
   }
 
@@ -58,9 +40,7 @@ export class SessionStore {
     summary: string,
     historyViewSequence = this.results.historyViewSequence,
   ): Promise<void> {
-    await mkdir(this.dir, { recursive: true, mode: 0o700 });
-
-    const entry: CheckpointEntry = {
+    const checkpoint: SessionCheckpoint = {
       type: "checkpoint",
       timestamp: new Date().toISOString(),
       summary,
@@ -72,83 +52,42 @@ export class SessionStore {
         message,
       })),
     };
-
-    const temporary = `${this.filePath}.${crypto.randomUUID()}.tmp`;
-    try {
-      const file = await open(temporary, 'wx', 0o600);
-      try { await file.writeFile(JSON.stringify(entry) + '\n'); await file.sync(); } finally { await file.close(); }
-      await rename(temporary, this.filePath);
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    await this.storage.save(this.sessionId, checkpoint);
   }
 
+  /** 读保存的会话；没有时返回空状态。 */
   async loadState(): Promise<SessionState> {
-    const file = Bun.file(this.filePath);
+    return (await this.loadSaved()) ?? { messages: [], timestamps: new Map(), summary: "" };
+  }
 
-    if (!(await file.exists())) {
-      return { messages: [], timestamps: new Map(), summary: "" };
-    }
-
-    const content = (await file.text()).trim();
-    if (!content) {
-      return { messages: [], timestamps: new Map(), summary: "" };
-    }
-
-    let messages: ModelMessage[] = [];
-    let timestamps = new Map<ModelMessage, number>();
-    let summary = "";
-    let historyId: string | undefined;
-    let historySequence = 0;
-    let historyViewSequence: number | undefined;
-
+  /** 读保存的会话；没有保存过返回 undefined。 */
+  async loadSaved(): Promise<SessionState | undefined> {
+    const checkpoint = await this.storage.load(this.sessionId);
+    if (!checkpoint) return;
     const parseTimestamp = (value: string): number => {
       const parsed = Date.parse(value);
       return Number.isFinite(parsed) ? parsed : Date.now();
     };
-
-    for (const line of content.split("\n")) {
-      if (!line.trim()) {
-        continue;
-      }
-
-      try {
-        const entry = JSON.parse(line) as MessageEntry | CheckpointEntry;
-        if (entry.type === "message") {
-          messages.push(entry.message);
-          timestamps.set(entry.message, parseTimestamp(entry.timestamp));
-        } else if (
-          entry.type === "checkpoint" &&
-          Array.isArray(entry.messages)
-        ) {
-          messages = [];
-          timestamps = new Map();
-          summary = entry.summary || "";
-          historyId = entry.toolHistoryId;
-          historySequence = entry.toolHistorySeq ?? 0;
-          historyViewSequence = entry.toolHistoryViewSeq;
-          for (const storedMessage of entry.messages) {
-            messages.push(storedMessage.message);
-            timestamps.set(
-              storedMessage.message,
-              parseTimestamp(storedMessage.timestamp),
-            );
-          }
-        }
-      } catch (error) {
-        this.logger.warn(`[session] ${this.filePath} 有一行无法解析，已跳过: ${error}`);
-      }
+    const messages: ModelMessage[] = [];
+    const timestamps = new Map<ModelMessage, number>();
+    for (const stored of checkpoint.messages) {
+      messages.push(stored.message);
+      timestamps.set(stored.message, parseTimestamp(stored.timestamp));
     }
-
-    if (historyId) await this.results.resumeHistory(historyId, historySequence, historyViewSequence);
-    return { messages, timestamps, summary };
+    if (checkpoint.toolHistoryId)
+      await this.results.resumeHistory(
+        checkpoint.toolHistoryId,
+        checkpoint.toolHistorySeq ?? 0,
+        checkpoint.toolHistoryViewSeq,
+      );
+    return { messages, timestamps, summary: checkpoint.summary || "" };
   }
 
   async load(): Promise<ModelMessage[]> {
     return (await this.loadState()).messages;
   }
 
-  exists() {
-    return Bun.file(this.filePath).exists();
+  async exists(): Promise<boolean> {
+    return (await this.storage.load(this.sessionId)) !== undefined;
   }
 }

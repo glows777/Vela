@@ -17,6 +17,7 @@
   type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
   interface ExtensionAPI
     on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    readonly config: Readonly<Record<string, unknown>>
     readonly cwd: string
     readonly dataDir: string
     readonly logger: VelaLogger
@@ -32,6 +33,8 @@
     session: VelaSession
     signal: AbortSignal | undefined
     ui: ExtensionUI
+  type ExtensionEntry = | { name: string; builtin: true }
+      | { name: string; path: string }
   type ExtensionEventName = keyof ExtensionEvents
   type ExtensionEvents = InterceptEvents & NotifyEvents
   type ExtensionHandler<K extends ExtensionEventName> = (
@@ -51,18 +54,28 @@
     appId?: string | undefined
     appSecret?: string | undefined
     owners?: string[] | undefined
+  function fileSessionStorage: (dir: string, logger?: VelaLogger) => SessionStorage
+  function importExtension: (path: string, name: string) => Promise<VelaExtension>
   interface IncomingMessage
     channelId: string
     raw?: unknown
     senderId: string
     senderName: string
     text: string
+  function loadConfig: (options?: LoadConfigOptions) => VelaConfig
+  interface LoadConfigOptions
+    agentDir?: string | undefined
+    builtins?: readonly string[] | undefined
+    cwd?: string | undefined
+    env?: Record<string, string | undefined> | undefined
+    trusted?: boolean | undefined
   interface LoadedExtension
     channels: string[]
     commands: string[]
     name: string
     tools: string[]
   function memory: () => VelaExtension
+  function memorySessionStorage: () => SessionStorage
   interface OutgoingMessage
     channelId: string
     recipientId: string
@@ -71,10 +84,15 @@
   type PermissionRules = Record<string, PermissionDecision>
   interface PromptOptions
     signal?: AbortSignal | undefined
-  function rag: (options: RagOptions) => VelaExtension
+  function rag: (options?: RagOptions) => VelaExtension
   interface RagOptions
-    embedder: EmbeddingFn
+    embedder?: EmbeddingFn | undefined
   type Role = 'owner' | 'collaborator' | 'guest'
+  interface SessionCheckpoint
+    messages: { timestamp: string; message: ModelMessage; }[]
+    summary: string
+    timestamp: string
+    type: "checkpoint"
   interface SessionOptions
     permissions?: PermissionRules | undefined
     role?: Role | undefined
@@ -84,6 +102,9 @@
     type: "session_shutdown"
   interface SessionStartEvent
     type: "session_start"
+  interface SessionStorage
+    load: (id: string) => Promise<SessionCheckpoint | undefined>
+    save: (id: string, checkpoint: SessionCheckpoint) => Promise<void>
   const silentLogger: VelaLogger
   function supabase: (options?: SupabaseOptions) => VelaExtension
   interface SupabaseOptions
@@ -146,6 +167,15 @@
     sessions: () => VelaSession[]
     startChannels: () => Promise<void>
     subscribe: (listener: VelaSessionEventListener) => () => void
+  interface VelaConfig
+    agentDir: string
+    cwd: string
+    dataDir: string
+    extensionConfig: Record<string, Record<string, unknown>>
+    extensions: ExtensionEntry[]
+    files: string[]
+    settings: VelaSettings
+    skillDirs: string[]
   type VelaEvent = | { type: 'agent_start'; input: string }
       | { type: 'message'; message: ModelMessage }
       | { type: 'turn_start'; turn: number }
@@ -240,10 +270,13 @@
   interface VelaOptions
     cwd?: string | undefined
     dataDir?: string | undefined
+    extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: VelaExtension[] | undefined
     limits?: Partial<VelaLimits> | undefined
     logger?: VelaLogger | undefined
     model: LanguageModel
+    sessionStorage?: SessionStorage | undefined
+    skillDirs?: string[] | undefined
   class VelaSession
     abort: (reason?: unknown) => void
     append: (message: ModelMessage) => void
@@ -263,6 +296,12 @@
       event: VelaEvent,
       sessionId: string,
       ) => void
+  interface VelaSettings
+    dataDir?: string | undefined
+    extensionConfig?: Record<string, Record<string, unknown>> | undefined
+    extensions?: string[] | undefined
+    limits?: Partial<VelaLimits> | undefined
+    skills?: string[] | undefined
   function web: (options?: WebOptions) => VelaExtension
   interface WebOptions
     serperKey?: string | undefined
@@ -362,6 +401,7 @@
     cwd?: string | undefined
     dataDir?: string | undefined
     embedder?: boolean | EmbeddingFn | undefined
+    extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: VelaExtension[] | undefined
     faux?: Omit<FauxModelOptions, "generate" | "responses"> | undefined
     files?: Record<string, string> | undefined

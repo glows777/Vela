@@ -1,5 +1,13 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import { createVela, type VelaEvent, type VelaLogger } from 'vela'
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  createVela,
+  type SessionCheckpoint,
+  type SessionStorage,
+  type VelaEvent,
+  type VelaLogger,
+} from 'vela'
 import {
   cleanupTestVelas,
   createFauxModel,
@@ -74,5 +82,67 @@ test('core writes nothing to the terminal; diagnostics go to the injected logger
     log.mockRestore()
     error.mockRestore()
     write.mockRestore()
+  }
+})
+
+test('without a dataDir nothing is persisted: sessions live in memory and scratch files are removed on dispose', async () => {
+  const dir = tempDir()
+  const vela = createVela({
+    model: createFauxModel({
+      responses: [
+        fauxToolCall('bash', { command: 'seq 1 5000' }),
+        fauxText('first'),
+        fauxText('second'),
+      ],
+    }),
+    cwd: dir.path,
+  })
+  try {
+    const session = vela.session('x')
+    await session.prompt('one')
+    // 工具长输出、工具历史写在临时数据目录里（模型能用 read_file 读），会话本身不写文件
+    expect(existsSync(join(vela.dataDir, 'sessions/x'))).toBe(true)
+    expect(existsSync(join(vela.dataDir, 'sessions/x.jsonl'))).toBe(false)
+    await session.close()
+
+    const reopened = vela.session('x')
+    expect(await reopened.resume()).toBe(true)
+    expect(reopened.messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+    ])
+    await reopened.prompt('two')
+  } finally {
+    await vela.dispose()
+  }
+  expect(existsSync(vela.dataDir)).toBe(false)
+  expect(readdirSync(dir.path)).toEqual([])
+  dir.cleanup()
+})
+
+test('a custom session storage receives every save and serves resume', async () => {
+  const saved = new Map<string, SessionCheckpoint>()
+  const storage: SessionStorage = {
+    load: async (id) => saved.get(id),
+    save: async (id, checkpoint) => {
+      saved.set(id, checkpoint)
+    },
+  }
+  const model = createFauxModel({ responses: [fauxText('a'), fauxText('b')] })
+  const first = createVela({ model, sessionStorage: storage })
+  await first.session('db').prompt('hello')
+  await first.dispose()
+  expect(saved.get('db')?.messages).toHaveLength(2)
+
+  const second = createVela({ model, sessionStorage: storage })
+  try {
+    const session = second.session('db')
+    expect(await session.resume()).toBe(true)
+    await session.prompt('again')
+    expect(saved.get('db')?.messages).toHaveLength(4)
+  } finally {
+    await second.dispose()
   }
 })

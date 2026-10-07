@@ -56,12 +56,12 @@ test('each sender gets its own persisted session', async () => {
     ['u2', '你好 u2'],
   ])
   expect(channelSessionId('fake', 'u1')).toBe('fake-u1')
-  expect(await t.readData('.sessions/fake-u1.jsonl')).toContain('我是 u1')
-  expect(await t.readData('.sessions/fake-u2.jsonl')).not.toContain('我是 u1')
+  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('我是 u1')
+  expect(await t.readData('sessions/fake-u2.jsonl')).not.toContain('我是 u1')
   expect(t.eventsIn('fake-u1').map((e) => e.type)).toContain('channel_reply')
   // CLI 的默认会话不受影响
   expect(t.session.messages).toEqual([])
-  expect(t.exists('.sessions/default.jsonl')).toBe(false)
+  expect(t.exists('sessions/default.jsonl')).toBe(false)
 })
 
 test('a sender continues the conversation after a restart', async () => {
@@ -158,5 +158,5 @@ test('a channel session closed while idle resumes its history when reopened', as
 
   await deliver('u1', '我喜欢什么颜色？')
   expect(sent.at(-1)?.text).toBe('蓝色')
-  expect(await t.readData('.sessions/fake-u1.jsonl')).toContain('我喜欢蓝色')
+  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('我喜欢蓝色')
 })

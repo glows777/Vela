@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 import type { VelaSessionEventListener } from './agent/events'
@@ -16,6 +18,11 @@ import {
 } from './prompt'
 import { PromptPipeline } from './prompt/pipelins'
 import { HookPipeline } from './security/hooks'
+import {
+  fileSessionStorage,
+  memorySessionStorage,
+  type SessionStorage,
+} from './session/storage'
 import { ToolResultStore } from './session/tool-results'
 import { SkillLoader } from './skills/loader'
 import { createCoreTools } from './tools'
@@ -28,8 +35,18 @@ export interface VelaOptions {
   model: LanguageModel
   /** 文件、搜索、bash 工具和 skill 的工作目录，默认 process.cwd()。 */
   cwd?: string
-  /** .sessions / .memory / .usage / knowledge.db 的根目录，默认等于 cwd。 */
+  /**
+   * 项目数据目录（sessions/、usage/、扩展数据如 memory/、rag/），相对路径按 cwd 解析。
+   * 不给时什么都不持久化：会话在内存里，工具长输出等写到临时目录，dispose() 时删掉。
+   * CLI 用 `~/.vela/projects/<编码后的 cwd>`（见 loadConfig）。
+   */
   dataDir?: string
+  /** 会话历史存哪；默认有 dataDir 时是 `<dataDir>/sessions/*.jsonl`，否则在内存里 */
+  sessionStorage?: SessionStorage
+  /** skill 目录（每个子目录一个 `SKILL.md`），后面的同名 skill 覆盖前面的；默认 `<cwd>/.skills`、`<cwd>/.vela/skills` */
+  skillDirs?: string[]
+  /** 每个扩展的配置段，扩展通过 `vela.config` 读到自己那一段（按扩展名） */
+  extensionConfig?: Record<string, Record<string, unknown>>
   /** 轮数、重试、预算、压缩阈值等上限；未给出的字段用默认值（见 src/limits.ts）。 */
   limits?: Partial<VelaLimits>
   /** 非事件类的诊断输出（扩展、hooks、会话文件坏行……），默认静默。 */
@@ -49,7 +66,7 @@ export interface Vela {
   readonly model: LanguageModel
   readonly limits: VelaLimits
   /**
-   * 打开（或取回已打开的）会话；id 会成为 `.sessions/<id>.jsonl` 的文件名。
+   * 打开（或取回已打开的）会话；文件存储时 id 是 `sessions/<id>.jsonl` 的文件名。
    * options 只在第一次打开时生效。需要恢复历史时再 `await session.resume()`。
    */
   session(id?: string, options?: SessionOptions): VelaSession
@@ -97,7 +114,16 @@ export function velaInternals(vela: Vela): VelaInternals {
  */
 export function createVela(options: VelaOptions): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())
-  const dataDir = resolve(cwd, options.dataDir ?? '.')
+  // 没给 dataDir 时用临时目录（工具长输出、工具历史、扩展数据），dispose 时删掉
+  const ephemeral = options.dataDir === undefined
+  const dataDir = ephemeral
+    ? mkdtempSync(join(tmpdir(), 'vela-'))
+    : resolve(cwd, options.dataDir as string)
+  const sessionStorage =
+    options.sessionStorage ??
+    (ephemeral
+      ? memorySessionStorage()
+      : fileSessionStorage(join(dataDir, 'sessions'), options.logger))
   const { model } = options
   const limits = resolveLimits(options.limits)
   const logger = options.logger ?? silentLogger
@@ -105,7 +131,7 @@ export function createVela(options: VelaOptions): Vela {
   // Vela 级 registry 只持有共享的工具定义；真正执行工具的是每个会话 fork 出来的 registry。
   // 它自己的结果目录以 . 开头，不会和任何会话 id 冲突。
   const registry = new ToolRegistry(
-    new ToolResultStore(join(dataDir, '.sessions', '.shared', 'tool-results')),
+    new ToolResultStore(join(dataDir, 'sessions', '.shared', 'tool-results')),
   )
   registry.setLogger(logger)
   registry.register(
@@ -125,7 +151,9 @@ export function createVela(options: VelaOptions): Vela {
   registry.setHookPipeline(hooks)
   registerToolSearchTool(registry)
 
-  const skillLoader = new SkillLoader(cwd)
+  const skillLoader = new SkillLoader(
+    options.skillDirs ?? [join(cwd, '.skills'), join(cwd, '.vela', 'skills')],
+  )
   skillLoader.load()
 
   const builder = new PromptPipeline()
@@ -157,6 +185,7 @@ export function createVela(options: VelaOptions): Vela {
         limits,
         logger,
         dataDir,
+        sessionStorage,
         registry,
         builder,
         extensions: {
@@ -186,6 +215,7 @@ export function createVela(options: VelaOptions): Vela {
     {
       cwd,
       dataDir,
+      extensionConfig: options.extensionConfig ?? {},
       logger,
       registry,
       hooks,
@@ -226,6 +256,7 @@ export function createVela(options: VelaOptions): Vela {
       await Promise.all([...sessions.values()].map((s) => s.close()))
       await registry.closeAllMCP()
       listeners.clear()
+      if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
     },
   }
   internals.set(vela, {
