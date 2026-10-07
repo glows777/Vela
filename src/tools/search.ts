@@ -1,4 +1,4 @@
-import { glob, readdir, readFile, stat } from "node:fs/promises";
+import { glob, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import z from "zod";
 import { resolveIn } from "./file.ts";
@@ -96,14 +96,22 @@ export const createGrepTool = (cwd?: string): ToolDefinition => ({
     if ((await stat(baseDir)).isFile()) {
       await searchFile(baseDir, relative(baseDir, baseDir));
     } else {
-      // 逐层读目录，跳过 SKIP 目录不进入，够 50 条就停（不一次读完整棵树）
+      // 逐层读目录，跳过 SKIP 目录不进入，够 50 条就停（不一次读完整棵树）。
+      // 跟随符号链接（同原来的 Bun.Glob followSymlinks），按真实路径去重防止目录循环
+      const visited = new Set<string>();
       async function walk(dir: string): Promise<void> {
+        const real = await realpath(dir);
+        if (visited.has(real)) return;
+        visited.add(real);
         for (const entry of await readdir(dir, { withFileTypes: true })) {
           if (matches.length >= 50) return;
           if (SKIP.has(entry.name)) continue;
           const full = join(dir, entry.name);
-          if (entry.isDirectory()) await walk(full);
-          else if (entry.isFile()) await searchFile(full, relative(baseDir, full));
+          const target = entry.isSymbolicLink()
+            ? await stat(full).catch(() => undefined)
+            : entry;
+          if (target?.isDirectory()) await walk(full);
+          else if (target?.isFile()) await searchFile(full, relative(baseDir, full));
         }
       }
       await walk(baseDir);

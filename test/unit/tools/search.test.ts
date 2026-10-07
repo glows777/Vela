@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGlobTool, createGrepTool } from '../../../src/tools/search.ts'
@@ -67,4 +73,25 @@ test('grep on a single file, and stops at 50 matches', async () => {
     50,
   )
   expect(many).toContain('50+')
+})
+
+test('grep follows symlinked files and directories without looping', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'vela-search-links-'))
+  try {
+    mkdirSync(join(root, 'real/sub'), { recursive: true })
+    writeFileSync(join(root, 'real/f.ts'), 'needle linked file')
+    writeFileSync(join(root, 'real/sub/g.ts'), 'needle linked dir')
+    mkdirSync(join(root, 'work'))
+    symlinkSync(join(root, 'real/f.ts'), join(root, 'work/f.ts'))
+    symlinkSync(join(root, 'real/sub'), join(root, 'work/sub'))
+    symlinkSync(join(root, 'work'), join(root, 'work/loop'))
+    const output = String(
+      await createGrepTool(join(root, 'work')).execute({ pattern: 'needle' }),
+    )
+    expect(output).toContain('f.ts:1: needle linked file')
+    expect(output).toContain('sub/g.ts:1: needle linked dir')
+    expect(output.split('\n')).toHaveLength(2)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

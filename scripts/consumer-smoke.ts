@@ -168,6 +168,8 @@ try {
   const files = await $`tar -tzf ${tarball}`.text()
   if (files.includes('package/src/') || files.includes('package/test/'))
     throw new Error('the package must ship dist/, not src/ or test/')
+  if (!files.includes('package/LICENSE'))
+    throw new Error('the package must ship the LICENSE file')
 
   // 不用本仓库的 lockfile：和真实消费者一样按 package.json 的范围解析依赖
   const node = await project(
