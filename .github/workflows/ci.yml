@@ -26,3 +26,6 @@ jobs:
         run: bun run typecheck
       - name: Lint
         run: bun run lint
+      # 打包后装进一个空项目，按消费者的方式 import / typecheck / 跑 CLI（要联网装依赖）
+      - name: Consumer smoke test
+        run: bun run smoke:consumer

@@ -1,9 +1,9 @@
 import { createInterface } from 'node:readline'
+import { Client } from '@modelcontextprotocol/client'
 import {
-  Client,
   getDefaultEnvironment,
   StdioClientTransport,
-} from '@modelcontextprotocol/client'
+} from '@modelcontextprotocol/client/stdio'
 import type { SessionUI } from '../extensions/types'
 import { type Vela, velaInternals } from '../vela'
 import type { VelaSession } from '../vela-session'
