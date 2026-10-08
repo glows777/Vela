@@ -3,10 +3,7 @@ import { embedMany } from 'ai'
 
 const DIMS = 128
 
-export type EmbeddingFn = (
-  texts: string[],
-  signal?: AbortSignal,
-) => Promise<number[][]>
+export type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
 
 export function createEmbedder({
   modelId,
