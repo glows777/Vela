@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import type { IncomingMessage, OutgoingMessage } from '../../src/channels/types.ts'
 import { supabase } from '../../src/extensions/supabase.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
@@ -26,6 +27,23 @@ test('/context and /usage report the conversation after a run', async () => {
   expect(output).toContain('1 step total')
   expect(output).toMatch(/Input\s+1\.2k tokens/)
   expect(output).toContain('[status] 2 messages')
+})
+
+test('/context counts the skills index and shows the real summary threshold as the autocompact buffer', async () => {
+  const t = createTestVela({
+    skills: [{ name: 'deploy', description: 'Ship the app to production'.repeat(20), body: 'steps' }],
+    limits: { summaryThreshold: 100_000 },
+  })
+  const window = t.session.modelInfo.contextWindow ?? t.session.tracker.contextWindow
+  const { output } = await captureConsole(() => t.command('/context'))
+  const plain = stripTerminalSequences(output)
+  // The skills index sits in the system prompt; it used to be reported as 0 (and the row hidden)
+  expect(plain).toMatch(/◉ Skills: \d+ tokens/)
+  // The buffer is the window above the summary threshold, not a fixed 5% of the window
+  const buffer = window - 100_000
+  expect(plain).toContain(
+    `Autocompact buffer: ${(buffer / 1000).toFixed(1)}k (${((buffer / window) * 100).toFixed(1)}%)`,
+  )
 })
 
 test('the supabase extension registers tools the model can call, listed by /extensions', async () => {

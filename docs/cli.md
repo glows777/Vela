@@ -21,7 +21,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--mode rpc` | Read JSON commands from stdin and write responses and events to stdout until stdin closes. Takes no prompt arguments. See [RPC mode](rpc.md). |
 | `-c`, `--continue` | Continue the most recent saved session of this project, or start a new one if there is none. |
 | `-r`, `--resume` | Pick a saved session at startup. Interactive mode only. |
-| `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters. |
+| `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
 | `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Memory, the knowledge base, usage records and long tool output are still written to the data directory. |
 | `--model <provider/id>` | Use this model. See [Models](models.md). |
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
@@ -52,7 +52,7 @@ vela --mode rpc                              # driven by another program
 
 ### Print mode
 
-Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes.
+Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes. If the reader closes the pipe early (`vela -p "..." | head -2`), Vela stops and exits quietly with code 0.
 
 If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1.
 
@@ -154,7 +154,7 @@ Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, 
 
 | Command | Description |
 |---|---|
-| `/context` | Context window usage by category (system prompt, tools, memory, messages). |
+| `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
 | `/skill`, `/skill list` | List skills. |
 | `/skill load <name>` | Activate a skill: its instructions are added to the conversation once. |

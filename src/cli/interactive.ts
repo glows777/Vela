@@ -52,6 +52,8 @@ export interface InteractiveOptions {
   terminal?: Terminal
   /** Attach the logger: warn / error show in the chat log */
   attachLogger?: (sink: (level: LogLevel, message: string) => void) => void
+  /** Rewrites an error for display (the CLI swaps the SDK's no-model hint for its own) */
+  describeError?: (error: unknown) => string
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
@@ -641,7 +643,7 @@ export class InteractiveMode {
     try {
       await this.session.prompt(text, { streamingBehavior: behavior })
     } catch (error) {
-      this.addNotice(errorMessage(error), 'error')
+      this.addNotice(this.describeError(error), 'error')
     }
     this.updatePending()
     this.tui.requestRender()
@@ -750,9 +752,13 @@ export class InteractiveMode {
     } catch (error) {
       // Loop errors were already shown at agent_end
       if (error !== this.shownError)
-        this.addNotice(`Error: ${errorMessage(error)}`, 'error')
+        this.addNotice(`Error: ${this.describeError(error)}`, 'error')
     }
     this.tui.requestRender()
+  }
+
+  private describeError(error: unknown): string {
+    return this.options.describeError?.(error) ?? errorMessage(error)
   }
 
   /** Commands print line by line: lines from one synchronous call merge into one notice so there's no blank line between them; the command's own colors are kept */

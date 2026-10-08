@@ -55,11 +55,14 @@ export class SqliteVectorStore {
     `)
   }
 
+  /** Adds a chunk; a chunk with the same id is replaced in all three tables. */
   add(chunk: Chunk, embedding: number[]): void {
     const now = Date.now()
+    // vec0 rejects INSERT OR REPLACE and chunks_fts has no primary key, so delete first
+    this.deleteId(chunk.id)
     // Write all three tables
     this.db
-      .prepare(`INSERT OR REPLACE INTO chunks
+      .prepare(`INSERT INTO chunks
       (id, text, source, chunk_index, embedding, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)`)
       .run(
@@ -72,21 +75,40 @@ export class SqliteVectorStore {
       )
 
     this.db
-      .prepare(`INSERT OR REPLACE INTO chunks_vec (id, embedding)
+      .prepare(`INSERT INTO chunks_vec (id, embedding)
       VALUES (?, ?)`)
       .run(chunk.id, new Uint8Array(new Float32Array(embedding).buffer))
 
     this.db
-      .prepare(`INSERT OR REPLACE INTO chunks_fts (id, text, source)
+      .prepare(`INSERT INTO chunks_fts (id, text, source)
       VALUES (?, ?, ?)`)
       .run(chunk.id, chunk.text, chunk.source)
   }
 
-  addBatch(items: Array<{ chunk: Chunk; embedding: number[] }>): void {
-    // One transaction for the batch; much faster than row by row
+  /** Replaces every chunk of `source` with `items` in one transaction (re-ingesting a document). */
+  replaceSource(
+    source: string,
+    items: Array<{ chunk: Chunk; embedding: number[] }>,
+  ): void {
     transaction(this.db, () => {
+      this.deleteSource(source)
       for (const { chunk, embedding } of items) this.add(chunk, embedding)
     })
+  }
+
+  /** Deletes all chunks of `source` from all three tables. */
+  private deleteSource(source: string): void {
+    const rows = this.db
+      .prepare('SELECT id FROM chunks WHERE source = ?')
+      .all(source) as { id: string }[]
+    for (const { id } of rows) this.deleteId(id)
+  }
+
+  /** Deletes one chunk id from all three tables. */
+  private deleteId(id: string): void {
+    this.db.prepare('DELETE FROM chunks WHERE id = ?').run(id)
+    this.db.prepare('DELETE FROM chunks_vec WHERE id = ?').run(id)
+    this.db.prepare('DELETE FROM chunks_fts WHERE id = ?').run(id)
   }
 
   vectorSearch(

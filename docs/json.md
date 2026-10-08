@@ -31,7 +31,7 @@ Each record is one JSON object terminated by LF (`\n`). Split records only on LF
 
 Stdout carries only JSON lines. Diagnostics, extension `console.log` output and warnings such as `[rag] embedding ... not configured` go to stderr.
 
-Vela waits for stdout to drain when the pipe is full, so a slow reader slows Vela down instead of growing its memory. Keep reading until the process exits.
+Vela waits for stdout to drain when the pipe is full, so a slow reader slows Vela down instead of growing its memory. Keep reading until the process exits. If the reader closes stdout early (`vela --mode json "..." | head -3`), Vela stops and exits quietly with code 0.
 
 `Error` values inside events (for example `agent_end.error`) are written as `{ "name": "...", "message": "..." }`. Bigints are written as strings.
 
@@ -41,7 +41,7 @@ Vela waits for stdout to drain when the pipe is full, so a slow reader slows Vel
 |---|---|
 | `0` | All prompts finished. |
 | `1` | A prompt failed or was aborted (the reason is in `agent_end` and on stderr), or no usable model was found at startup. |
-| `2` | Usage or configuration error: unknown flag, missing prompt, `-r` outside interactive mode, invalid `--thinking`, broken `settings.json`. |
+| `2` | Usage or configuration error: unknown flag, missing prompt, `-r` outside interactive mode, invalid `--thinking` or `--session` id, broken `settings.json`. |
 
 When a prompt fails, the remaining prompts are not run.
 

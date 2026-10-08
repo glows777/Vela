@@ -99,7 +99,7 @@ Vela writes conversations to disk, and they can contain anything the model saw: 
 |---|---|---|
 | Sessions | `<data dir>/sessions/` | Written with mode `0600` in `0700` directories. Includes tool inputs and outputs. See [Sessions](sessions.md) |
 | Full tool output and tool history | Inside each session's directory | Also `0600`. A `tool_result` handler that redacts output changes only what the model sees, not these files |
-| Memory | `<data dir>/memory/` | Plain Markdown files with default permissions |
+| Memory | `<data dir>/memory/` | Plain Markdown files, written with mode `0600` in a `0700` directory |
 | Recordings | The file named by `VELA_RECORD` | The raw conversation, including every model response and user input. Written with mode `0600`. Do not commit it without reviewing it |
 | Debug log | `~/.vela/debug.log` with `VELA_DEBUG=1` | Diagnostic messages |
 

@@ -20,7 +20,7 @@ export interface ContextSnapshot {
   windowTokens: number;
   usedTokens: number;
   slices: ContextSlice[];
-  // Reserved for autocompact; shrinks as the conversation grows
+  // Window above the summary threshold: a request that reaches it gets summarized
   autocompactBufferTokens: number;
 }
 
@@ -141,6 +141,7 @@ export interface BuildSnapshotInput {
   memoryChars: number;
   skillsChars: number;
   messages: ModelMessage[];
+  /** Window above the summary threshold (where autocompaction kicks in); 0 when not given */
   autocompactBufferTokens?: number;
 }
 
@@ -184,7 +185,7 @@ export function buildContextSnapshot(input: BuildSnapshotInput): ContextSnapshot
     windowTokens: input.windowTokens,
     usedTokens,
     slices,
-    autocompactBufferTokens: input.autocompactBufferTokens ?? Math.round(input.windowTokens * 0.05),
+    autocompactBufferTokens: input.autocompactBufferTokens ?? 0,
   };
 }
 

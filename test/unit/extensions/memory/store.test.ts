@@ -100,3 +100,22 @@ test('buildPromptSection outputs the memory index and usage guidance', () => {
   expect(section).toContain('kept-memory')
   expect(section).toContain('How to use memory:')
 })
+
+test('memory files and the index are private (0600), the directory 0700', () => {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vela-memory-')), 'memory')
+  tempDirs.push(path.dirname(dir))
+  const store = new MemoryStore(dir)
+  const filename = store.save({
+    name: 'private',
+    description: 'Permissions',
+    type: 'user',
+    content: 'Secret preference',
+  })
+  // A file created earlier with looser permissions is tightened on the next write
+  fs.chmodSync(path.join(dir, filename), 0o644)
+  store.loadFile(filename)
+  const mode = (file: string) => fs.statSync(path.join(dir, file)).mode & 0o777
+  expect(mode(filename)).toBe(0o600)
+  expect(mode('MEMORY.md')).toBe(0o600)
+  expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
+})

@@ -247,6 +247,12 @@ test.concurrent('--session opens a named session id; -r needs interactive mode',
   })
   expect(resume.code).toBe(2)
   expect(resume.stderr).toContain('-r works only in interactive mode')
+  const bad = await cli(['-p', 'hello', '--session', '.bad'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(bad.code).toBe(2)
+  expect(bad.stderr).toContain('Invalid session id ".bad"')
+  expect(bad.stderr).not.toMatch(/\n\s+at /)
 })
 
 test.concurrent('a model error makes -p exit 1 with the real cause on stderr', async () => {
@@ -495,4 +501,46 @@ test.concurrent('an unknown --model or no model at all stops with a clear messag
   })
   expect(badThinking.code).toBe(2)
   expect(badThinking.stderr).toContain('--thinking must be one of')
+})
+
+test.concurrent('a reader that closes stdout early makes the CLI exit quietly', async () => {
+  const dir = tempDir('vela-pipe-')
+  dirs.push(dir)
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  // An answer far larger than a pipe buffer, so the CLI is still writing when `head` exits
+  const long = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join('\n')
+  const file = join(dir.path, 'long.json')
+  await Bun.write(file, JSON.stringify({ responses: [{ text: long }] }))
+  const run = async (args: string, lines: number) => {
+    const proc = Bun.spawn(
+      // The CLI's pid and exit code go to files (the pipeline's code is head's); if the CLI hangs, the timer kills it
+      ['sh', '-c', `{ bun '${ENTRY}' ${args} < /dev/null & echo $! > pid; wait $!; echo $? > status; } | head -${lines}`],
+      {
+        cwd: dir.path,
+        env: { PATH: process.env.PATH ?? '', HOME: home.path, VELA_DIR: home.path, VELA_MODEL: `faux:${file}` },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    const timer = setTimeout(async () => {
+      process.kill(Number(await Bun.file(join(dir.path, 'pid')).text()), 'SIGKILL')
+    }, 15_000)
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    return { stdout, stderr, code: Number(await Bun.file(join(dir.path, 'status')).text()) }
+  }
+  const json = await run('--mode json hi', 3)
+  expect(json.code).toBe(0)
+  expect(json.stdout.split('\n').slice(0, 1).map((l) => JSON.parse(l).type)).toEqual(['session'])
+  expect(json.stderr).not.toContain('EPIPE')
+  const print = await run('-p hi', 2)
+  expect(print.code).toBe(0)
+  expect(print.stdout).toStartWith('line 0\nline 1\n')
+  expect(print.stderr).not.toContain('EPIPE')
 })

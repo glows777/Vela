@@ -47,7 +47,7 @@ Replaces the whole file and creates missing parent directories.
 |---|---|---|
 | `path` | string | File path |
 | `old_string` | string | Exact text to replace, including whitespace and newlines |
-| `new_string` | string | Replacement text |
+| `new_string` | string | Replacement text, written literally (`$&`, `$1` and `$$` are not special) |
 
 `old_string` must occur exactly once. When it occurs zero times or more than once, the file is left unchanged and the result says so, so the model can add context and retry. A missing file is reported the same way.
 

@@ -18,6 +18,7 @@ import { supabase } from '../extensions/supabase.ts'
 import type { VelaExtension } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
 import { web } from '../extensions/web/index.ts'
+import { assertSessionId } from '../vela-session.ts'
 
 type Env = Record<string, string | undefined>
 
@@ -85,7 +86,10 @@ export function parseArgs(argv: string[]): CliArgs {
       args.mode = mode
     } else if (arg === '-c' || arg === '--continue') args.continue = true
     else if (arg === '-r' || arg === '--resume') args.resume = true
-    else if (arg === '--session') args.session = value()
+    else if (arg === '--session') {
+      args.session = value()
+      assertSessionId(args.session)
+    }
     else if (arg === '-e' || arg === '--extension') args.extensions.push(value())
     else if (arg === '--no-extensions' || arg === '-ne') args.noExtensions = true
     else if (arg === '--no-session') args.noSession = true
@@ -123,11 +127,11 @@ export async function resolveTrust(options: {
   if (saved !== undefined)
     return saved
       ? { trusted: true }
-      : { trusted: false, warning: notTrusted(cwd, 'you chose not to trust it before') }
+      : { trusted: false, warning: notTrusted(cwd, agentDir, 'you chose not to trust it before') }
   if (!options.interactive)
     return {
       trusted: false,
-      warning: notTrusted(cwd, 'non-interactive mode does not ask; pass --approve to trust it'),
+      warning: notTrusted(cwd, agentDir, 'non-interactive mode does not ask; pass --approve to trust it'),
     }
   const answer = await question(
     `${resolve(cwd)} has project config (.vela/settings.json or .vela/extensions/).\nExtensions are code that runs on this machine. Trust this project and load it? (y/N) `,
@@ -136,11 +140,11 @@ export async function resolveTrust(options: {
   saveTrust(agentDir, cwd, trusted)
   return trusted
     ? { trusted }
-    : { trusted, warning: notTrusted(cwd, 'this choice was saved') }
+    : { trusted, warning: notTrusted(cwd, agentDir, 'this choice was saved') }
 }
 
-function notTrusted(cwd: string, reason: string): string {
-  return `[trust] Did not load config and extensions from ${join(resolve(cwd), '.vela')} (${reason}; edit ~/.vela/trust.json to change this)`
+function notTrusted(cwd: string, agentDir: string, reason: string): string {
+  return `[trust] Did not load config and extensions from ${join(resolve(cwd), '.vela')} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
 }
 
 async function question(prompt: string): Promise<string> {

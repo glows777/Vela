@@ -3,14 +3,13 @@ interface ToolHashedRecord {
   toolCallId: string;
   name: string;
   argsHash: string;
-  resultHash: string;
-  timestamp: number;
 }
 
+// Two detectors. A "no progress" circuit breaker on identical calls is not needed: such calls are
+// identical args too, so generic_repeat stops them at CRITICAL_THRESHOLD, long before the window could fill.
 type DetectorKind =
   | "generic_repeat" // same tool and args repeated too many times
-  | "ping_pong" // alternating between two sets of args
-  | "global_circuit_breaker"; // same tool, args and result with no progress
+  | "ping_pong"; // alternating between two sets of args
 
 export type DetectionResult =
   | { stuck: false }
@@ -25,7 +24,6 @@ export type DetectionResult =
 const HISTORY_SIZE = 30; // sliding window size
 const WARNING_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
-const BREAKER_THRESHOLD = 30; // circuit breaker
 
 function stringifyValue(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -42,97 +40,14 @@ export function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${hash(stringifyValue(params))}`;
 }
 
-export function hashResult(result: unknown): string {
-  return hash(stringifyValue(result));
-}
-
 function recordToolCallIn(
   callHistory: ToolHashedRecord[],
   toolCallId: string,
   name: string,
   args: unknown,
 ) {
-  callHistory.push({
-    toolCallId,
-    name,
-    argsHash: hashToolCall(name, args),
-    resultHash: "", // filled in when the call completes
-    timestamp: Date.now(),
-  });
+  callHistory.push({ toolCallId, name, argsHash: hashToolCall(name, args) });
   if (callHistory.length > HISTORY_SIZE) callHistory.shift();
-}
-
-function recordToolCallResultIn(
-  callHistory: ToolHashedRecord[],
-  toolCallId: string,
-  name: string,
-  args: unknown,
-  result: unknown,
-): boolean {
-  const argsHash = hashToolCall(name, args);
-  const resultHash = hashResult(result);
-
-  const currentRecord = callHistory.find(
-    (record) =>
-      record.toolCallId === toolCallId &&
-      record.name === name &&
-      record.argsHash === argsHash &&
-      record.resultHash === "",
-  );
-  if (!currentRecord) {
-    return false;
-  }
-
-  currentRecord.resultHash = resultHash;
-  return true;
-}
-
-
-/**
- * @description
- *    * Counts consecutive calls without progress. No progress means the result hash stays the same:
- *      the calls complete but produce nothing new.
- *    * Only calls with the same args hash and the same result hash count; a different args hash or
- *      result hash means progress and is not counted.
- * @param string name - tool name
- * @param string argsHash - args hash
- * @returns number - number of consecutive calls without progress
- */
-function getNoProgressStreak(
-  callHistory: ToolHashedRecord[],
-  name: string,
-  argsHash: string,
-): number {
-  let streak = 0;
-  let lastResultHash: string | null = null;
-
-  for (let i = callHistory.length - 1; i >= 0; i--) {
-    const currentRecord = callHistory[i];
-
-    // Different name or args: not the same call, keep looking back
-    if (name !== currentRecord?.name || argsHash !== currentRecord.argsHash) {
-      continue;
-    }
-
-    // No result hash yet: the call hasn't completed, keep looking back
-    if (!currentRecord.resultHash) {
-      continue;
-    }
-
-    // First completed call: remember its result hash and keep looking back
-    if (!lastResultHash) {
-      lastResultHash = currentRecord.resultHash;
-      streak = 1;
-      continue;
-    }
-
-    // Same result hash as before means no progress: increase the streak
-    if (currentRecord.resultHash === lastResultHash) {
-      streak++;
-    }
-  }
-
-  return streak;
 }
 
 /**
@@ -193,18 +108,6 @@ function detectLoopIn(
   args: unknown,
 ): DetectionResult {
   const argsHash = hashToolCall(name, args);
-  const noProgress = getNoProgressStreak(callHistory, name, argsHash);
-
-  if (noProgress >= BREAKER_THRESHOLD) {
-    return {
-      stuck: true,
-      level: "critical",
-      detector: "global_circuit_breaker",
-      count: noProgress,
-      message: `[critical]: detect there has been ${noProgress} consecutive calls without progress, force stop and suggest checking the tool implementation`,
-    };
-  }
-
   const pingPong = getPingPongCount(callHistory, argsHash);
   if (pingPong >= CRITICAL_THRESHOLD) {
     return {
@@ -261,15 +164,6 @@ export class LoopDetector {
     recordToolCallIn(this.history, toolCallId, name, args);
   }
 
-  recordResult(
-    toolCallId: string,
-    name: string,
-    args: unknown,
-    result: unknown,
-  ): boolean {
-    return recordToolCallResultIn(this.history, toolCallId, name, args, result);
-  }
-
   detect(name: string, args: unknown): DetectionResult {
     return detectLoopIn(this.history, name, args);
   }
@@ -278,20 +172,3 @@ export class LoopDetector {
     this.history.length = 0;
   }
 }
-
-// Legacy module-level API: shares one default instance.
-const defaultDetector = new LoopDetector();
-export const recordToolCall = (
-  toolCallId: string,
-  name: string,
-  args: unknown,
-) => defaultDetector.record(toolCallId, name, args);
-export const recordToolCallResult = (
-  toolCallId: string,
-  name: string,
-  args: unknown,
-  result: unknown,
-) => defaultDetector.recordResult(toolCallId, name, args, result);
-export const detectLoop = (name: string, args: unknown) =>
-  defaultDetector.detect(name, args);
-export const resetHistory = () => defaultDetector.reset();

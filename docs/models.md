@@ -126,7 +126,7 @@ The level is saved with the session and restored on resume; `--thinking` wins ov
 If a model entry says `"reasoning": false`, level `off` sends no reasoning option, and any other level makes the turn fail before a request is sent:
 
 ```text
-Model ollama/qwen3:8b does not support thinking (reasoning: false) but the thinking level is medium; use /thinking off or setThinkingLevel('off')
+Model ollama/qwen3:8b does not support thinking (reasoning: false) but the thinking level is medium; set the thinking level to off (/thinking off, --thinking off, or setThinkingLevel('off'))
 ```
 
 Because the default is `medium`, use `--thinking off` or `defaultThinkingLevel: "off"` for such models. Models without a `reasoning` field always receive the option; if the provider rejects it, its error is shown as is.

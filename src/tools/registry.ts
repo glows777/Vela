@@ -527,10 +527,12 @@ export class ToolRegistry {
 
     const lines = deferred.map((t) => {
       const hint = t.searchHint ? ` — ${t.searchHint}` : ''
-      return `  - ${t.name}${hint}`
+      return `- ${t.name}${hint}`
     })
-    return `\nThe tools below are available, but before calling one you must call tool_search to get its full schema
-    ${lines.join('\n')}`
+    return [
+      'The tools below are available, but before calling one you must call tool_search to get its full schema:',
+      ...lines,
+    ].join('\n')
   }
 
   searchTools(query: string): ToolDefinition[] {

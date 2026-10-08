@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
 import { agentLoop } from './agent/index.ts'
 import type { VelaEvent, VelaEventListener } from './agent/events.ts'
+import { canSummarize } from './context/compressor.ts'
 import { estimateMessageTokens } from './context/defense.ts'
 import type { ExtensionUI, SessionUI } from './extensions/types.ts'
 import { ContextManager } from './context/manager.ts'
@@ -622,6 +623,9 @@ export class VelaSession {
         this.messages,
         controller.signal,
       )
+      // Like pi: say so plainly when there is no earlier turn to summarize
+      if (!canSummarize(request.messages))
+        throw new Error('Nothing to compact (session too small)')
       await this.contextManager.compact(request, focus)
     })()
     const running = run.then(

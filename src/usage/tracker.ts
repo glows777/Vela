@@ -101,13 +101,12 @@ export interface TokenStatus {
 export const CONTEXT_WINDOW = 200_000;
 
 /**
- * Tracks token state at three different scopes:
+ * Tracks token state at two different scopes:
  *
  * 1. Current context estimate: used by defense / compaction;
- * 2. Usage and cost of each model request: used by /usage;
- * 3. Budget of the current agentLoop: used by the loop circuit breaker.
+ * 2. Usage and cost of each model request: used by /usage.
  *
- * One object manages all three, but they never share a number.
+ * One object manages both, but they never share a number.
  */
 export class TokenTracker {
   /** Usage details of each successful model request, accumulated across agentLoops. */

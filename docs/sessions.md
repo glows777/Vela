@@ -85,7 +85,7 @@ The summary request uses the same model, system prompt and tool definitions as t
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `action: 'compact'`. It can't run while the session is running.
+`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `action: 'compact'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session, where no user message sits before the six most recent messages), it fails with `Nothing to compact (session too small)`, as in pi.
 
 ### Thresholds and context window
 
@@ -123,7 +123,7 @@ Retryable errors are HTTP 408, 409, 429, 5xx and 529 (as reported by the provide
 Every model request records input, output, cache-read and cache-write tokens and a cost. The price comes from the model entry's `cost` in `models.json`, otherwise from a small built-in table of common models; other models are priced with placeholder values, so set `cost` if you rely on the numbers (see [Models](models.md#model-fields)).
 
 - `/usage` shows the session's totals, cache hit rate, the cost and what it would have cost without caching.
-- `/context` shows how the context window is filled: system prompt, tool definitions, memory and messages.
+- `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
 - Each request is appended to `<dataDir>/usage/today.jsonl`.

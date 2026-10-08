@@ -201,6 +201,32 @@ test('repeating the same tool call trips the loop detector: warning, then critic
   expect(t.model.calls).toHaveLength(21)
 })
 
+test('a critical loop stop keeps the stopping step in the history: the tool that ran has its call and result', async () => {
+  const same = () => fauxToolCall('list_directory', { path: '.' })
+  const t = createTestVela({ responses: Array.from({ length: 21 }, same) })
+
+  await t.run('Keep listing the directory')
+
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({ reason: 'loop' })
+  // The 21st call trips the critical stop, but its tool already ran
+  const ran = t.eventsOf('tool_result').map((e) => e.toolCallId)
+  expect(ran).toContain('faux-call-21-1')
+  // Every tool that ran has its assistant call and tool result in the session messages
+  const json = (role: string) =>
+    JSON.stringify(t.messages.filter((m) => m.role === role))
+  for (const id of ran) {
+    expect(json('assistant')).toContain(id)
+    expect(json('tool')).toContain(id)
+  }
+  expect(t.messages.at(-1)?.role).toBe('tool')
+  // The step's messages are emitted as message events before turn_end
+  const types = t.eventTypes()
+  expect(types.lastIndexOf('message')).toBeLessThan(types.lastIndexOf('turn_end'))
+  expect(types.lastIndexOf('turn_end')).toBeGreaterThan(
+    types.lastIndexOf('tool_result'),
+  )
+})
+
 test('there is no turn limit: the loop runs until the model stops calling tools (same as pi)', async () => {
   const t = createTestVela({
     responses: [

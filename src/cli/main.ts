@@ -108,6 +108,12 @@ if (legacyHint) console.error(legacyHint)
 const NO_MODEL =
   'No model selected. Use --model provider/id, set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json; built-in openai / anthropic read OPENAI_API_KEY / ANTHROPIC_API_KEY), or set OPENAI_API_KEY + OPENAI_API_MODEL_NAME. For an offline demo use VELA_MODEL=mock.'
 
+/** Error text for the user: the core's "No model selected" names SDK calls (createVela / setModel); the CLI says how to pick a model. */
+function cliErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.startsWith('No model selected') ? NO_MODEL : message
+}
+
 /** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports NO_MODEL) */
 async function chooseModel(): Promise<LanguageModel | string | undefined> {
   // VELA_MODEL=mock: offline demo with the built-in keyword demo model (simulates prompt cache behavior)
@@ -203,7 +209,7 @@ function applyModelArgs(target: VelaSession): boolean {
     return true
   } catch (error) {
     console.error(
-      `[model] ${chosenModel === undefined && !args.model ? NO_MODEL : error instanceof Error ? error.message : error}`,
+      `[model] ${chosenModel === undefined && !args.model ? NO_MODEL : cliErrorMessage(error)}`,
     )
     return false
   }
@@ -243,6 +249,7 @@ if (mode === 'print' || mode === 'json') {
     configure: (session) => void applyModelArgs(session),
     input: process.stdin,
     write: writeStdout,
+    describeError: cliErrorMessage,
   })
   await exit(0)
 } else {
@@ -253,6 +260,7 @@ if (mode === 'print' || mode === 'json') {
     pick: args.resume,
     newSessionId,
     configure: applyModelArgs,
+    describeError: cliErrorMessage,
     attachLogger: interactiveLogger?.attach,
     onExit: async () => {
       await vela.dispose()

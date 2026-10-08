@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import type { EmbeddingFn } from '../../src/index.ts'
 import { createFauxEmbedder } from '../../src/testing/faux-embedder.ts'
@@ -114,6 +116,20 @@ test('/rag shows an empty knowledge base; /rag ingest <path> imports without the
   expect(notes(t)).toContain('Processing docs/guide.md')
   expect(notes(t)).toContain('Ingested')
   expect(t.model.calls).toHaveLength(0)
+})
+
+test('re-ingesting a changed document replaces its old chunks', async () => {
+  const t = createTestVela({
+    embedder: true,
+    // Three paragraphs of ~900 characters: one chunk each
+    files: { 'docs/guide.md': ['a', 'b', 'c'].map((p) => `${p} `.repeat(450)).join('\n\n') },
+  })
+  await t.run('/rag ingest docs/guide.md')
+  expect(notes(t)).toContain('The knowledge base has 3 chunks')
+  writeFileSync(join(t.cwd, 'docs/guide.md'), 'Only one short paragraph now.')
+  await t.run('/rag ingest docs/guide.md')
+  expect(notes(t)).not.toContain('failed')
+  expect(notes(t)).toContain('The knowledge base has 1 chunks')
 })
 
 test('session.abort() stops a running /rag ingest', async () => {

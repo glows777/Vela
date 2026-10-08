@@ -32,12 +32,17 @@ export interface RpcModeOptions {
   configure?: (session: VelaSession) => void
   input: AsyncIterable<Uint8Array>
   write: (text: string) => Promise<void>
+  /** Message for a failed command's `error` (the CLI swaps the SDK's no-model hint for its own); defaults to the error's message */
+  describeError?: (error: unknown) => string
 }
 
 const QUEUE_MODES: QueueMode[] = ['one-at-a-time', 'all']
 
 export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   const { vela } = options
+  const describe =
+    options.describeError ??
+    ((error: unknown) => (error instanceof Error ? error.message : String(error)))
   let output = Promise.resolve()
   const send = (record: unknown) => {
     const line = toJsonLine(record)
@@ -121,7 +126,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         type: 'response',
         command: command.type,
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: describe(error),
       })
     })
 
@@ -297,7 +302,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         type: 'response',
         command: command.type,
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: describe(error),
       })
     }
   }

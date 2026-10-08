@@ -9,6 +9,7 @@ import {
   loadCliExtensions,
   legacyDataHint,
   parseArgs,
+  resolveTrust,
 } from '../../../src/cli/setup.ts'
 import { tempDir } from '../../support/vela.ts'
 
@@ -41,6 +42,20 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   expect(() => parseArgs(['-c', '--session', 'x'])).toThrow('Use only one of -c, -r and --session')
   expect(() => parseArgs(['--model'])).toThrow('--model requires a value')
   expect(() => parseArgs(['--wat'])).toThrow('Unknown option --wat')
+  // A bad session id is a usage error at parse time, not a stack trace from deep inside session startup
+  expect(() => parseArgs(['--session', '.bad'])).toThrow('Invalid session id ".bad"')
+})
+
+test('the untrusted-project notice names the real trust.json under VELA_DIR', async () => {
+  const home = tempDir()
+  const project = tempDir()
+  dirs.push(home, project)
+  mkdirSync(join(project.path, '.vela'), { recursive: true })
+  writeFileSync(join(project.path, '.vela', 'settings.json'), '{}')
+  const result = await resolveTrust({ cwd: project.path, agentDir: home.path, interactive: false })
+  expect(result.trusted).toBe(false)
+  expect(result.warning).toContain(`edit ${join(home.path, 'trust.json')} to change this`)
+  expect(result.warning).not.toContain('~/.vela')
 })
 
 test('settings.json extension config overrides the environment defaults key by key', () => {

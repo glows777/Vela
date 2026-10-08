@@ -1,28 +1,5 @@
 import { expect, test } from 'bun:test'
-import {
-  LoopDetector,
-  recordToolCall,
-  recordToolCallResult,
-  resetHistory,
-} from '../../../src/agent/loop-detection.ts'
-
-test('matches parallel tool results by toolCallId', () => {
-  resetHistory()
-  const input = { path: 'same' }
-  recordToolCall('call-a', 'read_file', input)
-  recordToolCall('call-b', 'read_file', input)
-
-  expect(recordToolCallResult('call-b', 'read_file', input, 'result-b')).toBe(
-    true,
-  )
-  expect(recordToolCallResult('call-a', 'read_file', input, 'result-a')).toBe(
-    true,
-  )
-  expect(recordToolCallResult('call-b', 'read_file', input, 'duplicate')).toBe(
-    false,
-  )
-  resetHistory()
-})
+import { LoopDetector } from '../../../src/agent/loop-detection.ts'
 
 test('generic repeat: warning at 10 identical calls, critical at 20', () => {
   const detector = new LoopDetector()
@@ -35,6 +12,22 @@ test('generic repeat: warning at 10 identical calls, critical at 20', () => {
   expect(levels.slice(0, 10).every((l) => l === 'ok')).toBe(true)
   expect(levels[10]).toBe('warning')
   expect(levels[20]).toBe('critical')
+})
+
+test('the first critical for any repetition is at most the 21st call, well inside the 30-call window', () => {
+  // Identical calls (whatever their results) and two-call ping-pong both stop at the 21st call,
+  // so no detector needs a full window of 30 identical calls
+  for (const argsAt of [() => ({ p: 'x' }), (i: number) => ({ p: i % 2 ? 'a' : 'b' })]) {
+    const detector = new LoopDetector()
+    let firstCritical = -1
+    for (let i = 0; i < 30 && firstCritical < 0; i++) {
+      const result = detector.detect('t', argsAt(i))
+      if (result.stuck && result.level === 'critical') firstCritical = i
+      detector.record(`c${i}`, 't', argsAt(i))
+    }
+    expect(firstCritical).toBeGreaterThanOrEqual(0)
+    expect(firstCritical).toBeLessThanOrEqual(20)
+  }
 })
 
 test('argument order does not matter; different arguments are different calls', () => {

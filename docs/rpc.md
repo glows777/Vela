@@ -88,7 +88,7 @@ A prompt can also fail after it was answered with `started`, before the agent lo
 
 ```json
 {"id":"req-2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
-{"id":"req-2","type":"response","command":"prompt","success":false,"error":"No model selected: pass model to createVela(), or call session.setModel()"}
+{"id":"req-2","type":"response","command":"prompt","success":false,"error":"No model selected. Use --model provider/id, set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json; built-in openai / anthropic read OPENAI_API_KEY / ANTHROPIC_API_KEY), or set OPENAI_API_KEY + OPENAI_API_MODEL_NAME. For an offline demo use VELA_MODEL=mock."}
 ```
 
 Failures inside the loop (provider errors, aborts) are reported in `agent_end` only.
@@ -260,7 +260,7 @@ Data: `{ "levels": ["off","minimal","low","medium","high","xhigh","max"] }`.
 {"id":"18","type":"compact","customInstructions":"Keep the API decisions"}
 ```
 
-Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the `context` event of the compaction, `{ "type": "context", "action": "compact", "before", "after", ... }`, or no data when nothing was compacted. Fails while a run is in progress, or when the history can't be split.
+Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the `context` event of the compaction, `{ "type": "context", "action": "compact", "before", "after", ... }`, or no data when nothing was compacted. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary keeps the last six messages and splits at a user message before them, so a new or short session has nothing to compact.
 
 ### Commands
 

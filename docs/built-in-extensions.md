@@ -75,7 +75,7 @@ Built-ins store their data in the project data directory: in the CLI, the [proje
 
 ## memory
 
-Long-term memory across sessions. Each memory is a Markdown file with front matter (`name`, `description`, `type`, `lastWriteAt`, `lastReadAt`), named `<type>_<slug>.md`. `MEMORY.md` is an index with one line per memory (at most 200 lines; the oldest line is dropped when it is full).
+Long-term memory across sessions. Each memory is a Markdown file with front matter (`name`, `description`, `type`, `lastWriteAt`, `lastReadAt`), named `<type>_<slug>.md`. `MEMORY.md` is an index with one line per memory (at most 200 lines; the oldest line is dropped when it is full). Memory files and the index are written with mode `0600` in a `0700` directory.
 
 **Tool.** `memory`, with an `action` parameter:
 
@@ -129,7 +129,7 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 **How it works.**
 
 - Chunking: the text is split on blank lines and paragraphs are packed into chunks of about 1,000 characters (256 estimated tokens). Longer paragraphs are split on sentence boundaries.
-- Storage: each chunk goes into a plain table, a [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0` table for vectors, and an FTS5 table for keywords.
+- Storage: each chunk goes into a plain table, a [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0` table for vectors, and an FTS5 table for keywords. Chunks are keyed by source path, so ingesting a file again replaces all of its earlier chunks in one transaction.
 - Search: vector search and BM25 keyword search each return up to `4 * top_k` candidates. Scores are min-max normalized and combined as `0.7 * vector + 0.3 * keyword`, then MMR picks `top_k` results that are relevant but not near-duplicates.
 
 **SQLite and sqlite-vec.** rag loads the sqlite-vec extension, so the SQLite library must allow loading extensions.
