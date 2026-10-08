@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import type { EmbeddingFn } from '../../src/index.ts'
+import { createFauxEmbedder } from '../../src/testing/faux-embedder.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -140,4 +141,19 @@ test('without an embedder there is no /rag command; the text goes to the model',
   const t = createTestVela({ responses: [fauxText('没有知识库')] })
   await t.run('/rag')
   expect(t.model.calls).toHaveLength(1)
+})
+
+test('the embedding cache is shared by every session of one Vela', async () => {
+  const calls: string[][] = []
+  const t = createTestVela({
+    embedder: createFauxEmbedder({ onCall: (texts) => calls.push(texts) }),
+    files: { 'docs/guide.md': GUIDE },
+  })
+  await t.run('/rag ingest docs/guide.md')
+  expect(calls).toHaveLength(1)
+
+  // The rag extension builds its embedder once per Vela, so another session
+  // re-ingesting the same text must hit the cache instead of calling it again
+  await t.vela.session('other').prompt('/rag ingest docs/guide.md')
+  expect(calls).toHaveLength(1)
 })

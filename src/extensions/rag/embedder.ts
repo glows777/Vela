@@ -58,10 +58,7 @@ export async function embed(
   }
 
   if (uncached.length > 0) {
-    const vectors = await fn(
-      uncached.map((u) => u.text),
-      signal,
-    )
+    const vectors = await fn(uncached.map((u) => u.text), signal)
     signal?.throwIfAborted()
     for (let i = 0; i < uncached.length; i++) {
       results[uncached[i]!.idx] = vectors[i]!
