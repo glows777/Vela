@@ -119,3 +119,17 @@ test('memory files and the index are private (0600), the directory 0700', () => 
   expect(mode('MEMORY.md')).toBe(0o600)
   expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
 })
+
+test('an existing store with default permissions is tightened when it opens', () => {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vela-memory-')), 'memory')
+  tempDirs.push(path.dirname(dir))
+  fs.mkdirSync(dir, { mode: 0o755 })
+  fs.chmodSync(dir, 0o755)
+  fs.writeFileSync(path.join(dir, 'MEMORY.md'), '# Memory Index\n', { mode: 0o644 })
+  fs.writeFileSync(path.join(dir, 'old.md'), 'old memory', { mode: 0o644 })
+  new MemoryStore(dir).init()
+  const mode = (file: string) => fs.statSync(path.join(dir, file)).mode & 0o777
+  expect(mode('old.md')).toBe(0o600)
+  expect(mode('MEMORY.md')).toBe(0o600)
+  expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
+})

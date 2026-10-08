@@ -43,6 +43,12 @@ export class MemoryStore {
   init(): void {
     if (!fs.existsSync(this.memoryDir)) {
       fs.mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 })
+    } else {
+      // A store written by an older version has default permissions: tighten the directory and its files
+      fs.chmodSync(this.memoryDir, 0o700)
+      for (const entry of fs.readdirSync(this.memoryDir, { withFileTypes: true }))
+        if (entry.isFile() && entry.name.endsWith('.md'))
+          fs.chmodSync(path.join(this.memoryDir, entry.name), 0o600)
     }
     if (!fs.existsSync(this.indexPath)) {
       writePrivate(this.indexPath, '# Memory Index\n')

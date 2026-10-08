@@ -74,7 +74,7 @@ Built-ins store their data in the project data directory: in the CLI, the [proje
 
 ## memory
 
-Long-term memory across sessions. Each memory is a Markdown file with front matter (`name`, `description`, `type`, `lastWriteAt`, `lastReadAt`), named `<type>_<slug>.md`. `MEMORY.md` is an index with one line per memory (at most 200 lines; the oldest line is dropped when it is full). Memory files and the index are written with mode `0600` in a `0700` directory.
+Long-term memory across sessions. Each memory is a Markdown file with front matter (`name`, `description`, `type`, `lastWriteAt`, `lastReadAt`), named `<type>_<slug>.md`. `MEMORY.md` is an index with one line per memory (at most 200 lines; the oldest line is dropped when it is full). Memory files and the index are written with mode `0600` in a `0700` directory; a store written by an older version is tightened when it opens.
 
 **Tool.** `memory`, with an `action` parameter:
 
