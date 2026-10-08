@@ -254,8 +254,6 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   }
   if (
     text.includes('notion') ||
-    text.includes('notes') ||
-    text.includes('docs') ||
     text.includes('笔记') ||
     text.includes('文档')
   ) {
