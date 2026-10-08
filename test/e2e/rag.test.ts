@@ -124,8 +124,7 @@ test('session.abort() stops a running /rag ingest', async () => {
     })
   const t = createTestVela({
     embedder: hanging,
-    // embed() 按文本缓存向量：用没出现过的文本，确保真的调用到 embedder
-    files: { 'docs/guide.md': `取消导入 ${crypto.randomUUID()}` },
+    files: { 'docs/guide.md': '取消导入' },
   })
   const done = t.run('/rag ingest docs/guide.md')
   while (!signal) await Bun.sleep(1)
