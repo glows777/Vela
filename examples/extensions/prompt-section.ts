@@ -1,12 +1,13 @@
 /**
- * before_agent_start：往这一轮的 system prompt 里加一段（同 pi 的 systemPromptOptions.sections）。
- * 每次 prompt() 算一次，这一轮里的每次模型请求都用同一段，缓存前缀稳定。
+ * before_agent_start: add a section to this turn's system prompt (like pi's systemPromptOptions.sections).
+ * It is computed once per prompt() call, and every model request in the turn uses the same section,
+ * so the cache prefix stays stable.
  */
 import type { VelaExtension } from '@glows777/vela'
 
 const today: VelaExtension = (vela) => {
   vela.on('before_agent_start', (event) => {
-    event.sections.today = `今天是 ${new Date().toISOString().slice(0, 10)}。`
+    event.sections.today = `Today is ${new Date().toISOString().slice(0, 10)}.`
   })
 }
 

@@ -89,7 +89,7 @@ test('micro protects five completed calls even when results share one message', 
   expect(parts.slice(3)).toEqual(results.slice(3))
 })
 
-/** 摘要模型：默认生成一份合法的引用式摘要；传 '' 时返回空文本。 */
+/** Summary model: by default produces a valid quote-based summary; with '' it returns empty text. */
 function summaryModel(text?: string) {
   return createFauxModel({
     responses: [text === undefined ? fauxSummary() : fauxText(text)],
@@ -237,7 +237,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
         messages,
       ),
     ),
-  ).rejects.toThrow('工具调用')
+  ).rejects.toThrow('tool calls')
   expect(executions).toBe(0)
   expect(JSON.stringify(messages)).toBe(before)
   expect(manager.state.summary).toBe('unchanged')
@@ -257,7 +257,7 @@ test('debug never generates a paid summary; oversized input and missing boundary
   const request = await createRequestSnapshot(m, 'stable', {}, messages)
   await manager.prepare(request, { allowSummary: false })
   expect(m.calls).toHaveLength(0)
-  await expect(manager.prepare(request)).rejects.toThrow('切分位置')
+  await expect(manager.prepare(request)).rejects.toThrow('split point')
   messages[0] = { role: 'user', content: 'x'.repeat(650000) }
   messages.push(
     ...Array.from(
@@ -267,7 +267,7 @@ test('debug never generates a paid summary; oversized input and missing boundary
   )
   await expect(
     manager.prepare(await createRequestSnapshot(m, 'stable', {}, messages)),
-  ).rejects.toThrow('安全容量')
+  ).rejects.toThrow('safe input size')
   expect(m.calls).toHaveLength(0)
 })
 
@@ -317,7 +317,7 @@ test('empty summary is rejected without changing the live summary or messages', 
   const before = JSON.stringify(messages)
   await expect(
     manager.prepare(await createRequestSnapshot(m, 'stable', {}, messages)),
-  ).rejects.toThrow('摘要未完整生成')
+  ).rejects.toThrow('Summary was not fully generated')
   expect(JSON.stringify(messages)).toBe(before)
   expect(manager.state.summary).toBe('keep this')
 })

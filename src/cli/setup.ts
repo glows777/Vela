@@ -21,7 +21,7 @@ import { web } from '../extensions/web/index.ts'
 
 type Env = Record<string, string | undefined>
 
-/** CLI 自带的内置扩展（`builtin:<名>`），默认全部加载；配置从 `extensionConfig.<名>` 取。 */
+/** Built-in extensions shipped with the CLI (`builtin:<name>`), all loaded by default; config comes from `extensionConfig.<name>`. */
 export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   memory: () => memory(),
   rag: () => rag(),
@@ -31,34 +31,34 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
 }
 
 export interface CliArgs {
-  /** `-p, --print`：跑完给出的 prompt 就退出，stdout 只写最后的回答（同 pi） */
+  /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
   print: boolean
-  /** `--mode text | json | rpc`（同 pi）：json 每个事件一行，rpc 从 stdin 收命令 */
+  /** `--mode text | json | rpc` (like pi): json writes one line per event, rpc reads commands from stdin */
   mode?: 'text' | 'json' | 'rpc'
-  /** 不以 `-` 开头的参数：依次发送的 prompt（同 pi） */
+  /** Arguments not starting with `-`: prompts sent in order (like pi) */
   messages: string[]
-  /** `-c, --continue`：接着最近的会话 */
+  /** `-c, --continue`: continue the most recent session */
   continue: boolean
-  /** `-r, --resume`：选一个保存过的会话 */
+  /** `-r, --resume`: pick a saved session */
   resume: boolean
-  /** `--session <id>`：打开指定会话（不存在时新建） */
+  /** `--session <id>`: open this session (created if missing) */
   session?: string
-  /** `-e, --extension <path>`（可重复），也可以是 `builtin:<名>` */
+  /** `-e, --extension <path>` (repeatable), or `builtin:<name>` */
   extensions: string[]
-  /** `--no-extensions`：不加载内置和发现的扩展（`-e` 仍加载），同 pi */
+  /** `--no-extensions`: skip built-in and discovered extensions (`-e` still loads), like pi */
   noExtensions: boolean
-  /** `--no-session`：会话只在内存里，不落盘（记忆、知识库照常） */
+  /** `--no-session`: keep the session in memory only, not on disk (memory and knowledge base work as usual) */
   noSession: boolean
-  /** `--approve` / `--no-approve`：这次运行信任 / 不信任项目配置，不保存 */
+  /** `--approve` / `--no-approve`: trust / don't trust project config for this run, without saving */
   approve?: boolean
   /** `--model provider/id` */
   model?: string
-  /** `--thinking <级别>` */
+  /** `--thinking <level>` */
   thinking?: ThinkingLevel
 }
 
 export const USAGE =
-  '用法: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <扩展>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <级别>]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>]'
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
@@ -74,14 +74,14 @@ export function parseArgs(argv: string[]): CliArgs {
     const arg = argv[i] as string
     const value = () => {
       const next = argv[++i]
-      if (next === undefined) throw new Error(`${arg} 需要一个参数`)
+      if (next === undefined) throw new Error(`${arg} requires a value`)
       return next
     }
     if (arg === '-p' || arg === '--print') args.print = true
     else if (arg === '--mode') {
       const mode = value()
       if (mode !== 'text' && mode !== 'json' && mode !== 'rpc')
-        throw new Error('--mode 只能是 text / json / rpc')
+        throw new Error('--mode must be text, json or rpc')
       args.mode = mode
     } else if (arg === '-c' || arg === '--continue') args.continue = true
     else if (arg === '-r' || arg === '--resume') args.resume = true
@@ -95,20 +95,20 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--thinking') {
       const level = value()
       if (!THINKING_LEVELS.includes(level as ThinkingLevel))
-        throw new Error(`--thinking 只能是 ${THINKING_LEVELS.join(' / ')}`)
+        throw new Error(`--thinking must be one of ${THINKING_LEVELS.join(' / ')}`)
       args.thinking = level as ThinkingLevel
-    } else if (arg.startsWith('-') && arg !== '-') throw new Error(`未知参数 ${arg}`)
+    } else if (arg.startsWith('-') && arg !== '-') throw new Error(`Unknown option ${arg}`)
     else args.messages.push(arg)
   }
   if ([args.continue, args.resume, args.session !== undefined].filter(Boolean).length > 1)
-    throw new Error('-c、-r、--session 只能选一个')
+    throw new Error('Use only one of -c, -r and --session')
   return args
 }
 
 /**
- * 项目里有 `.vela/settings.json` 或 `.vela/extensions/` 时决定是否加载（同 pi 的项目信任）：
- * `--approve / --no-approve` → 已保存的决定 → 交互模式问一次并保存；不能问时不信任。
- * 返回值的 `warning` 是不信任时给用户看的提示。
+ * Decide whether to load a project's `.vela/settings.json` or `.vela/extensions/` (like pi's project trust):
+ * `--approve / --no-approve` → saved decision → ask once in interactive mode and save; untrusted when we can't ask.
+ * `warning` in the result is the notice shown to the user when untrusted.
  */
 export async function resolveTrust(options: {
   cwd: string
@@ -123,24 +123,24 @@ export async function resolveTrust(options: {
   if (saved !== undefined)
     return saved
       ? { trusted: true }
-      : { trusted: false, warning: notTrusted(cwd, '你之前选择了不信任') }
+      : { trusted: false, warning: notTrusted(cwd, 'you chose not to trust it before') }
   if (!options.interactive)
     return {
       trusted: false,
-      warning: notTrusted(cwd, '非交互模式下不会询问，加 --approve 信任'),
+      warning: notTrusted(cwd, 'non-interactive mode does not ask; pass --approve to trust it'),
     }
   const answer = await question(
-    `${resolve(cwd)} 有项目配置（.vela/settings.json 或 .vela/extensions/）。\n扩展是会在本机执行的代码，信任这个项目并加载吗？(y/N) `,
+    `${resolve(cwd)} has project config (.vela/settings.json or .vela/extensions/).\nExtensions are code that runs on this machine. Trust this project and load it? (y/N) `,
   )
   const trusted = answer === 'y' || answer === 'yes'
   saveTrust(agentDir, cwd, trusted)
   return trusted
     ? { trusted }
-    : { trusted, warning: notTrusted(cwd, '已记住这个选择') }
+    : { trusted, warning: notTrusted(cwd, 'this choice was saved') }
 }
 
 function notTrusted(cwd: string, reason: string): string {
-  return `[信任] 没有加载 ${join(resolve(cwd), '.vela')} 的配置和扩展（${reason}；改主意可以编辑 ~/.vela/trust.json）`
+  return `[trust] Did not load config and extensions from ${join(resolve(cwd), '.vela')} (${reason}; edit ~/.vela/trust.json to change this)`
 }
 
 async function question(prompt: string): Promise<string> {
@@ -155,8 +155,8 @@ async function question(prompt: string): Promise<string> {
 }
 
 /**
- * 内置扩展的配置默认值来自环境变量（`.env.example` 里那些），settings.json 的
- * `extensionConfig` 覆盖它们。
+ * Built-in extension config defaults come from environment variables (those in `.env.example`);
+ * `extensionConfig` in settings.json overrides them.
  */
 export function extensionConfigFromEnv(
   env: Env,
@@ -185,8 +185,8 @@ export function extensionConfigFromEnv(
 }
 
 /**
- * 按 loadConfig 的结果和命令行参数加载扩展：内置 → 发现的 → `-e`。
- * 加载失败的扩展跳过，错误交给 onError（同 pi：报错但不退出）。
+ * Load extensions from the loadConfig result and command-line args: built-in → discovered → `-e`.
+ * Extensions that fail to load are skipped and the error goes to onError (like pi: report, don't exit).
  */
 export async function loadCliExtensions(
   config: VelaConfig,
@@ -210,13 +210,13 @@ export async function loadCliExtensions(
     seen.add(key)
     const report = (error: unknown) =>
       onError(
-        `[扩展] ${key} 加载失败: ${error instanceof Error ? error.message : error}`,
+        `[extensions] Failed to load ${key}: ${error instanceof Error ? error.message : error}`,
       )
     try {
       let extension: VelaExtension
       if ('builtin' in entry) {
         const factory = BUILTIN_EXTENSIONS[entry.name]
-        if (!factory) throw new Error(`未知的内置扩展 builtin:${entry.name}`)
+        if (!factory) throw new Error(`Unknown built-in extension builtin:${entry.name}`)
         extension = factory()
       } else extension = await importExtension(entry.path, entry.name)
       loaded.push(reportFailures(extension, report))
@@ -228,15 +228,15 @@ export async function loadCliExtensions(
 }
 
 /**
- * 扩展函数本身在 createVela() 里才执行：同步抛错或 async 失败也只报告，不让 CLI 启动失败
- * （SDK 的 createVela 仍然直接报错）。失败前已经注册的工具、命令保留。
+ * The extension function itself runs inside createVela(): a sync throw or async failure is only reported, so the CLI
+ * still starts (the SDK's createVela still throws). Tools and commands registered before the failure are kept.
  */
 function reportFailures(
   extension: VelaExtension,
   report: (error: unknown) => void,
 ): VelaExtension {
   const { name } = extension
-  // 用计算属性名保留函数名：runner 用 extension.name 作扩展名
+  // A computed property name keeps the function name: the runner uses extension.name as the extension name
   return {
     [name]: (vela: Parameters<VelaExtension>[0]) => {
       try {
@@ -250,8 +250,8 @@ function reportFailures(
 }
 
 /**
- * 旧版本把数据写在 cwd 里（`.sessions` 等）；发现时提示怎么搬到新的数据目录（不自动搬）。
- * 命令可以重复执行：旧数据不在了 cp / mv 就失败，不会删任何东西；复制失败也不删旧数据。
+ * Older versions wrote data into cwd (`.sessions` etc.); if found, explain how to move it to the new data dir (no automatic move).
+ * The commands are safe to rerun: once the old data is gone cp / mv fail without deleting anything, and a failed copy keeps the old data.
  */
 export function legacyDataHint(cwd: string, dataDir: string): string | undefined {
   const moves = (
@@ -266,20 +266,20 @@ export function legacyDataHint(cwd: string, dataDir: string): string | undefined
   const lines = moves.map(([old, next]) => {
     const from = shellQuote(join(resolve(cwd), old))
     const target = shellQuote(join(resolve(dataDir), next))
-    // knowledge.db* 连同可能存在的 -journal / -wal / -shm 一起搬
+    // knowledge.db* moves together with any -journal / -wal / -shm files
     if (old === 'knowledge.db')
       return `  mkdir -p ${target} && mv ${from}* ${target}/`
-    // 新目录里可能已有这次启动建的文件（例如空的 MEMORY.md）：合并进去，同名文件以旧数据为准
+    // The new dir may already hold files created by this launch (e.g. an empty MEMORY.md): merge, old data wins on name clashes
     return `  mkdir -p ${target} && cp -R ${from}/. ${target}/ && rm -r ${from}`
   })
   return [
-    `[数据] 发现旧位置的数据（${moves.map(([old]) => old).join('、')}），现在的数据目录是 ${dataDir}。`,
-    '要继续使用，退出后执行下面的命令（同名文件以旧数据为准，最好在新目录里产生新会话 / 记忆之前执行）：',
+    `[data] Found data in the old location (${moves.map(([old]) => old).join(', ')}); the data dir is now ${dataDir}.`,
+    'To keep using it, exit and run the commands below (old data wins on name clashes; best run before new sessions / memories are created in the new dir):',
     ...lines,
   ].join('\n')
 }
 
-/** 单引号包起来给 sh 用（路径里可能有空格、$、引号）。 */
+/** Single-quote for sh (paths may contain spaces, $ or quotes). */
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }

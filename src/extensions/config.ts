@@ -1,4 +1,4 @@
-/** 内置扩展读配置段（`vela.config`）的小工具：类型不对或空串当作没配置。 */
+/** Helpers for built-in extensions to read their config section (`vela.config`). A wrong type or an empty string counts as unset. */
 
 export function configString(
   config: Readonly<Record<string, unknown>>,
@@ -8,7 +8,7 @@ export function configString(
   return typeof value === 'string' && value ? value : undefined
 }
 
-/** 字符串数组；也接受逗号分隔的字符串（例如 `"$FEISHU_OWNERS"`）。 */
+/** A string array; a comma-separated string (e.g. `"$FEISHU_OWNERS"`) is also accepted. */
 export function configStrings(
   config: Readonly<Record<string, unknown>>,
   key: string,

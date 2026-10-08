@@ -68,14 +68,14 @@ test('core writes nothing to the terminal; diagnostics go to the injected logger
         },
       ],
     })
-    await t.run('看看状态')
+    await t.run('Check the status')
     await t.cleanup()
 
     expect(log).not.toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
     expect(write).not.toHaveBeenCalled()
     expect(lines).toContain(
-      'error [extension:noisy] tool_result handler 出错: handler bug',
+      'error [extension:noisy] tool_result handler failed: handler bug',
     )
     expect(lines).toContain('info [noisy] activated')
     expect(lines.some((l) => l.startsWith('debug [tools] bash'))).toBe(true)
@@ -101,7 +101,7 @@ test('without a dataDir nothing is persisted: sessions live in memory and scratc
   try {
     const session = vela.session('x')
     await session.prompt('one')
-    // 工具长输出、工具历史写在临时数据目录里（模型能用 read_file 读），会话本身不写文件
+    // Long tool output and tool history go to a temp data dir (the model can read them with read_file); the session itself writes no files
     expect(existsSync(join(vela.dataDir, 'sessions/x'))).toBe(true)
     expect(existsSync(join(vela.dataDir, 'sessions/x.jsonl'))).toBe(false)
     await session.close()
@@ -131,7 +131,7 @@ test('a custom session storage receives every save and serves resume', async () 
       saved.set(id, checkpoint)
     },
   }
-  // 第一个实例调过工具：工具历史在它的临时目录里，dispose 后就没了，恢复仍要成功
+  // The first instance called a tool: its tool history lived in its temp dir and is gone after dispose, yet resume must still succeed
   const model = createFauxModel({
     responses: [
       fauxToolCall('bash', { command: 'echo hi' }),

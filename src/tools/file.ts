@@ -4,25 +4,25 @@ import { dirname, resolve } from "node:path";
 import z from "zod";
 import type { ToolDefinition } from "./registry.ts";
 
-/** 写文本文件，父目录不存在时先建（同 Bun.write）。 */
+/** Writes a text file, creating missing parent directories (like Bun.write). */
 async function writeText(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content);
 }
 
-/** 相对路径按 cwd 解析；未指定 cwd 时沿用进程工作目录。 */
+/** Resolves relative paths against cwd, or the process working directory when cwd is unset. */
 export const resolveIn = (cwd: string | undefined, path: string) =>
   cwd ? resolve(cwd, path) : resolve(path);
 
 export const readFileParamSchema = z.object({
-  path: z.string().describe("文件路径"),
-  offset: z.number().int().positive().optional().describe('起始行，1-based，默认 1'),
-  limit: z.number().int().positive().optional().describe('最多读取行数，默认 200'),
-  column: z.number().int().nonnegative().optional().describe('起始行内的 UTF-16 偏移，默认 0；超长单行按返回的 column 续读'),
+  path: z.string().describe("File path, absolute or relative to the working directory"),
+  offset: z.number().int().positive().optional().describe('Line to start from, 1-based. Default 1'),
+  limit: z.number().int().positive().optional().describe('Maximum number of lines to read. Default 200'),
+  column: z.number().int().nonnegative().optional().describe('UTF-16 offset within the start line. Default 0. To continue a very long line, pass the column from the previous result'),
 });
 export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   name: "read_file",
-  description: "分页读取文本文件或工具结果文件。返回展示范围和下一页 offset/column；只有读到 EOF 才表示读取完毕。",
+  description: "Reads a text file or a saved tool result file, one page at a time. Returns the range shown and the offset/column for the next page. The file is fully read only when the result says EOF.",
   inputSchema: readFileParamSchema,
   isConcurrencySafe: true,
   isReadOnly: true,
@@ -39,7 +39,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     let lastLine = offset;
     const consume = (text: string): boolean => {
       for (const char of text) {
-        if (line === offset && col < column && col + char.length > column) throw new Error('column 位于 Unicode 字符中间，请使用上次返回的 column');
+        if (line === offset && col < column && col + char.length > column) throw new Error('column falls inside a Unicode character; use the column from the previous result');
         if (line >= offset && (line > offset || col >= column)) {
           reachedStart = true;
           if (body.length + char.length > 8000 || line >= offset + limit) {
@@ -50,7 +50,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
           lastLine = line;
         }
         if (char === '\n') {
-          if (line === offset && col < column) throw new Error('column 超过起始行长度');
+          if (line === offset && col < column) throw new Error('column is past the end of the start line');
           line++;
           col = 0;
         } else {
@@ -63,7 +63,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       if (!consume(decoder.decode(chunk, { stream: true }))) break;
     }
     if (!more) consume(decoder.decode());
-    if (!reachedStart && !(line === offset && col === column)) throw new Error('offset/column 超过文件范围');
+    if (!reachedStart && !(line === offset && col === column)) throw new Error('offset/column is past the end of the file');
     const next = more
       ? `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
       : 'EOF: no more content.';
@@ -72,28 +72,28 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
 });
 
 const writeFileToolParamSchema = z.object({
-  path: z.string().describe("文件路径"),
-  content: z.string().describe("要写入的内容"),
+  path: z.string().describe("File path, absolute or relative to the working directory"),
+  content: z.string().describe("Full content to write"),
 });
 export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
   name: "write_file",
-  description: "写入内容到指定文件",
+  description: "Writes content to a file, replacing the whole file. Creates the file and missing parent directories.",
   inputSchema: writeFileToolParamSchema,
 
-  isConcurrencySafe: false, // 写操作不能并行
+  isConcurrencySafe: false, // writes must not run in parallel
   isReadOnly: false,
   execute: async ({ path, content }: { path: string; content: string }) => {
     await writeText(resolveIn(cwd, path), content);
-    return `已写入 ${content.length} 字符到 ${path}`;
+    return `Wrote ${content.length} characters to ${path}`;
   },
 });
 
 const listDirectoryToolParamSchema = z.object({
-  path: z.string().optional().describe("目录路径，默认为当前目录"),
+  path: z.string().optional().describe("Directory path. Defaults to the working directory"),
 });
 export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   name: "list_directory",
-  description: "列出指定目录下的文件和子目录",
+  description: "Lists the files and subdirectories in a directory.",
   inputSchema: listDirectoryToolParamSchema,
   isConcurrencySafe: true,
   isReadOnly: true,
@@ -106,14 +106,14 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
 });
 
 const editFileToolParamSchema = z.object({
-  path: z.string().describe("文件路径"),
-  old_string: z.string().describe("要被替换的原始文本（必须精确匹配）"),
-  new_string: z.string().describe("替换后的新文本"),
+  path: z.string().describe("File path, absolute or relative to the working directory"),
+  old_string: z.string().describe("Exact text to replace; must match the file exactly, including whitespace and newlines"),
+  new_string: z.string().describe("Replacement text"),
 });
 export const createEditFileTool = (cwd?: string): ToolDefinition => ({
   name: "edit_file",
   description:
-    "精确替换文件中的指定内容。用 old_string 定位要替换的文本，用 new_string 替换它。不是全量覆写——只改你指定的部分",
+    "Replaces exact text in a file: old_string locates the text, new_string replaces it. Not a full rewrite; only the matched part changes. old_string must occur exactly once.",
   inputSchema: editFileToolParamSchema,
   isConcurrencySafe: false,
   isReadOnly: false,
@@ -131,21 +131,21 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
     try {
       content = await readFile(resolved, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return `文件不存在: ${path}`;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return `File not found: ${path}`;
       throw error;
     }
     const count = content.split(old_string).length - 1;
 
     if (count === 0) {
-      return `未找到匹配内容。请检查 old_string 是否与文件中的文本完全一致（包括空格和换行）`;
+      return `No match found. Check that old_string matches the file text exactly, including whitespace and newlines`;
     }
     if (count > 1) {
-      return `找到 ${count} 处匹配，请提供更多上下文让 old_string 唯一`;
+      return `Found ${count} matches. Add more context so old_string is unique`;
     }
 
     const updated = content.replace(old_string, new_string);
     await writeText(resolved, updated);
-    return `已替换 ${path} 中的内容（${old_string.length} → ${new_string.length} 字符）`;
+    return `Replaced text in ${path} (${old_string.length} → ${new_string.length} characters)`;
   },
 });
 

@@ -22,5 +22,5 @@ test('overrides apply field by field and undefined keeps the default', () => {
 })
 
 test('an unknown limit (e.g. the removed maxTurns) is an error, not silently ignored', () => {
-  expect(() => resolveLimits({ maxTurns: 3 } as never)).toThrow('limits 里没有 maxTurns')
+  expect(() => resolveLimits({ maxTurns: 3 } as never)).toThrow('Unknown key maxTurns in limits')
 })

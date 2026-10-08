@@ -23,12 +23,12 @@ export function extractPaths(content: string): string[] {
   return Array.from(paths)
 }
 
-// 不同类型的记忆有不同的"保质期"
+// Shelf life in days per memory type
 const TTL_BY_TYPE: Record<string, number> = {
-  user: 365, // 用户偏好几乎不过期
-  feedback: 90, // 纠正反馈保留 3 个月
-  project: 30, // 项目决策变化快，1 个月
-  reference: 14, // 外部资源引用需要频繁刷新
+  user: 365, // user preferences barely expire
+  feedback: 90, // corrections: 3 months
+  project: 30, // project decisions change fast: 1 month
+  reference: 14, // external references need frequent refreshing
 }
 
 export function validateEntry(
@@ -43,7 +43,7 @@ export function validateEntry(
     if (!fs.existsSync(abs)) {
       issues.push({
         kind: 'stale_path',
-        message: `引用的路径不存在：${p}`,
+        message: `Referenced path does not exist: ${p}`,
       })
     }
   }
@@ -54,7 +54,7 @@ export function validateEntry(
     if (days > staleDays) {
       issues.push({
         kind: 'never_used',
-        message: `已 ${Math.floor(days)} 天没被读过，超过 ${entry.type} 类型的 ${staleDays} 天保质期`,
+        message: `Not read for ${Math.floor(days)} days, past the ${staleDays}-day shelf life for type ${entry.type}`,
       })
     }
   }
@@ -78,7 +78,7 @@ export function lintAll(
     if ((nameCount.get(entry.name) || 0) > 1) {
       issues.push({
         kind: 'duplicate_name',
-        message: `存在 ${nameCount.get(entry.name)} 条同名记忆，可能需要合并`,
+        message: `${nameCount.get(entry.name)} memories share this name; consider merging`,
       })
     }
     if (issues.length > 0) reports.push({ entry, issues })

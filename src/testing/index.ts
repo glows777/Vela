@@ -1,7 +1,8 @@
 /**
- * `vela/testing`：离线测试 Vela 和扩展用的工具。
- * faux 模型按脚本回放响应，faux embedder 给出确定性的向量，
- * createTestVela() 在临时目录里装配一个真实的 Vela，recordModel / replayScenario 录制和重跑真实会话。
+ * `vela/testing`: tools for testing Vela and extensions offline.
+ * The faux model plays back scripted responses, the faux embedder returns deterministic vectors,
+ * createTestVela() assembles a real Vela in a temp directory, and recordModel / replayScenario
+ * record and replay real sessions.
  */
 
 export {

@@ -6,7 +6,7 @@ const cosine = (a: number[], b: number[]) =>
 
 test('same text, same unit vector of the configured size', async () => {
   const embed = createFauxEmbedder()
-  const [a, b] = await embed(['部署回滚', '部署回滚'])
+  const [a, b] = await embed(['deploy rollback', 'deploy rollback'])
   expect(a).toHaveLength(128)
   expect(a).toEqual(b!)
   expect(Math.hypot(...a!)).toBeCloseTo(1)

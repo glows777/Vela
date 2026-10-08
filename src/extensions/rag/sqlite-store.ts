@@ -14,7 +14,7 @@ export interface StoredChunk extends Chunk {
   addedAt: number
 }
 
-/** chunks 表连查出来的一行（embedding 以 JSON 字符串存储） */
+/** A row joined from the chunks table (embedding stored as a JSON string) */
 interface ChunkRow {
   id: string
   text: string
@@ -28,7 +28,7 @@ export class SqliteVectorStore {
 
   constructor(dbPath: string = 'knowledge.db') {
     this.db = openSqlite(dbPath)
-    sqliteVec.load(this.db) // 加载向量搜索扩展
+    sqliteVec.load(this.db) // vector search extension
     this.createTables()
   }
 
@@ -57,7 +57,7 @@ export class SqliteVectorStore {
 
   add(chunk: Chunk, embedding: number[]): void {
     const now = Date.now()
-    // 三表联动写入
+    // Write all three tables
     this.db
       .prepare(`INSERT OR REPLACE INTO chunks
       (id, text, source, chunk_index, embedding, updated_at)
@@ -83,7 +83,7 @@ export class SqliteVectorStore {
   }
 
   addBatch(items: Array<{ chunk: Chunk; embedding: number[] }>): void {
-    // 事务批量写入，比逐条快很多
+    // One transaction for the batch; much faster than row by row
     transaction(this.db, () => {
       for (const { chunk, embedding } of items) this.add(chunk, embedding)
     })
@@ -170,7 +170,7 @@ export class SqliteVectorStore {
     ).map((r) => r.source)
   }
 
-  // 混合搜索：直接在 SQLite 层完成向量 + 关键词双路检索
+  // Hybrid search: vector and keyword retrieval, both done in SQLite
   async hybridSearch(
     embedFn: EmbeddingFn,
     query: string,
@@ -182,16 +182,16 @@ export class SqliteVectorStore {
     const [queryVec] = await embed(embedFn, [query])
 
     if (!queryVec) {
-      throw new Error('query embed 失败')
+      throw new Error('Failed to embed the query')
     }
 
-    // 路径 1: sqlite-vec 向量搜索
+    // Path 1: sqlite-vec vector search
     const vectorResults = this.vectorSearch(queryVec, candidateCount)
 
-    // 路径 2: FTS5 关键词搜索
+    // Path 2: FTS5 keyword search
     const keywordResults = this.keywordSearch(query, candidateCount)
 
-    // 归一化 + 加权合并
+    // Normalize, then merge with weights
     const vecScores = normalizeMinMax(vectorResults.map((r) => r.score))
     const kwScores = normalizeMinMax(keywordResults.map((r) => r.score))
 

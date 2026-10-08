@@ -15,19 +15,19 @@ export interface SessionState {
   summary: string;
 }
 
-/** checkpoint 里除了消息以外、会话自己要还原的设置。 */
+/** Session settings stored in the checkpoint besides messages, restored on resume. */
 export type SessionSettings = Pick<SessionCheckpoint, 'model' | 'thinkingLevel' | 'name'>;
 
 const SESSION_DIR = "sessions";
 
 /**
- * 一个会话的保存和恢复：消息历史交给 SessionStorage（文件 / 内存 / 自定义），
- * 工具长输出和工具调用历史总是写在 `<dir>/<id>/` 下（模型要用 read_file 读它们）。
+ * Saving and restoring one session. Message history goes to SessionStorage (file / memory / custom);
+ * long tool output and tool call history are always written under `<dir>/<id>/` (the model reads them with read_file).
  */
 export class SessionStore {
   readonly results: ToolResultStore;
   private readonly storage: SessionStorage;
-  /** 每次保存时写进 checkpoint 的会话设置（模型、thinking） */
+  /** Session settings written into the checkpoint on every save (model, thinking) */
   settings: () => SessionSettings = () => ({});
 
   constructor(
@@ -35,7 +35,7 @@ export class SessionStore {
     dir: string = SESSION_DIR,
     private readonly logger: VelaLogger = silentLogger,
     storage?: SessionStorage,
-    /** 工具历史在临时目录里（自定义存储 + 没给 dataDir）：恢复时找不到就重新开始，不报错 */
+    /** Tool history lives in a temp dir (custom storage without dataDir): if it is gone on resume, start over instead of failing */
     private readonly temporaryResults = false,
   ) {
     this.storage = storage ?? fileSessionStorage(dir, logger);
@@ -65,19 +65,19 @@ export class SessionStore {
     await this.storage.save(this.sessionId, checkpoint);
   }
 
-  /** 读保存的会话；没有时返回空状态。 */
+  /** Loads the saved session; returns an empty state if there is none. */
   async loadState(): Promise<SessionState> {
     return (await this.loadSaved()) ?? { messages: [], timestamps: new Map(), summary: "" };
   }
 
-  /** 读保存的会话；没有保存过返回 undefined。 */
+  /** Loads the saved session; returns undefined if it was never saved. */
   async loadSaved(): Promise<(SessionState & SessionSettings) | undefined> {
     const checkpoint = await this.storage.load(this.sessionId);
     if (!checkpoint) return;
     const version = checkpoint.version ?? 1;
     if (version > SESSION_FORMAT_VERSION)
       throw new Error(
-        `会话 ${this.sessionId} 的文件格式版本是 ${version}，这个 Vela 只认识到 ${SESSION_FORMAT_VERSION}：请升级 Vela`,
+        `Session ${this.sessionId} uses file format version ${version}, but this Vela only supports up to ${SESSION_FORMAT_VERSION}; upgrade Vela`,
       );
     const parseTimestamp = (value: string): number => {
       const parsed = Date.parse(value);
@@ -97,10 +97,10 @@ export class SessionStore {
           checkpoint.toolHistoryViewSeq,
         );
       } catch (error) {
-        // 上一个 Vela 实例的临时目录已经删了：消息照常恢复，工具调用历史从头记
+        // The previous Vela instance's temp dir is gone: restore messages as usual, start tool call history over
         if (!this.temporaryResults) throw error;
         this.logger.warn(
-          `[session] ${this.sessionId} 的工具调用历史在上次的临时目录里，已不存在；要保留请传 dataDir`,
+          `[session] Tool call history for ${this.sessionId} was in the previous temp dir and no longer exists; pass dataDir to keep it`,
         );
       }
     }

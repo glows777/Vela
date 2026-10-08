@@ -8,8 +8,8 @@ import {
   type TestVelaOptions,
 } from '../../../support/vela.ts'
 
-const BODY = '## 审查清单\n- 运行 diff\n- 确认没有回归'
-const SKILL = { name: 'code-review', description: '审查代码变更', body: BODY }
+const BODY = '## Review checklist\n- Run the diff\n- Confirm there are no regressions'
+const SKILL = { name: 'code-review', description: 'Review code changes', body: BODY }
 
 afterEach(cleanupTestVelas)
 
@@ -28,18 +28,18 @@ function allPromptText(t: TestVela): string {
   return `${system}\n${messages}`
 }
 
-test('/skill list 打印可用列表', async () => {
+test('/skill list prints the available skills', async () => {
   const t = fixture()
   const { output } = await captureConsole(() => {
     expect(t.dispatch('/skill')).toBe(true)
     expect(t.dispatch('/skill list')).toBe(true)
   })
   expect(output).toContain('/code-review')
-  expect(output).toContain('审查代码变更')
-  expect(output).not.toContain('已激活')
+  expect(output).toContain('Review code changes')
+  expect(output).not.toContain('✓ active')
 })
 
-test('/skill load 激活并注入正文一次（system prompt 无正文）', async () => {
+test('/skill load activates the skill and injects its body once (not in the system prompt)', async () => {
   const t = fixture()
   await captureConsole(() =>
     expect(t.dispatch('/skill load code-review')).toBe(true),
@@ -50,7 +50,7 @@ test('/skill load 激活并注入正文一次（system prompt 无正文）', asy
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
 })
 
-test('/skill unload 移除激活状态', async () => {
+test('/skill unload deactivates the skill', async () => {
   const t = fixture()
   await captureConsole(() => {
     t.dispatch('/skill load code-review')
@@ -59,63 +59,63 @@ test('/skill unload 移除激活状态', async () => {
   expect(t.session.activeSkills.has('code-review')).toBe(false)
 })
 
-test('/<skill> 触发：activeSkills 更新、正文以消息注入一次、system prompt 仍只含索引', async () => {
-  const t = fixture({ responses: [fauxText('审查完成')] })
+test('/<skill> trigger: activeSkills updates, the body is injected once as a message, the system prompt keeps only the index', async () => {
+  const t = fixture({ responses: [fauxText('Review done')] })
   const { result } = await captureConsole(() => t.command('/code-review extra'))
   expect(result).toBe(true)
   expect(t.session.activeSkills.has('code-review')).toBe(true)
-  expect(String(t.messages[0]!.content)).toBe(`${BODY}\n\n用户指令: extra`)
+  expect(String(t.messages[0]!.content)).toBe(`${BODY}\n\nUser instruction: extra`)
 
   const system = t.session.buildSystem()
   expect(system).not.toContain(BODY)
-  expect(system).toContain('/code-review — 审查代码变更 ✓ 已激活')
+  expect(system).toContain('/code-review — Review code changes ✓ active')
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
 
-  // 模型收到的是 skill 正文 + 用户指令，回复写回会话并落盘
-  expect(t.model.calls[0]!.lastUserText).toBe(`${BODY}\n\n用户指令: extra`)
-  expect(t.lastAssistantText()).toBe('审查完成')
-  expect(await t.readData('sessions/default.jsonl')).toContain('审查完成')
+  // The model receives the skill body + the user instruction; the reply goes back into the session and is saved
+  expect(t.model.calls[0]!.lastUserText).toBe(`${BODY}\n\nUser instruction: extra`)
+  expect(t.lastAssistantText()).toBe('Review done')
+  expect(await t.readData('sessions/default.jsonl')).toContain('Review done')
 })
 
-test('/<skill> 不带参数：正文即为消息内容', async () => {
+test('/<skill> without arguments: the body is the whole message', async () => {
   const t = fixture({ responses: [fauxText('ok')] })
   await captureConsole(() => t.command('/code-review'))
   expect(t.messages[0]!.content).toBe(BODY)
 })
 
-test('未知 /<skill> 放行给普通对话', () => {
+test('an unknown /<skill> falls through to normal chat', () => {
   const t = fixture()
   expect(t.dispatch('/not-a-skill')).toBe(false)
 })
 
-test('/skill load 不存在的名字返回 true 且提示', async () => {
+test('/skill load with an unknown name returns true and says so', async () => {
   const t = fixture()
   const { result, output } = await captureConsole(() =>
     t.dispatch('/skill load nope'),
   )
   expect(result).toBe(true)
-  expect(output).toContain('找不到 skill: nope')
+  expect(output).toContain('Skill not found: nope')
 })
 
-test('无 skill 目录时 system prompt 不含可用的 Skills 索引', () => {
+test('without a skills directory the system prompt has no skills index', () => {
   const t = createTestVela()
-  expect(t.session.buildSystem()).not.toContain('可用的 Skills')
+  expect(t.session.buildSystem()).not.toContain('Available skills')
 })
 
-test('P0-3: 残缺子命令被拦截，不穿透为 skill 触发', async () => {
+test('P0-3: incomplete subcommands are caught and do not fall through as a skill trigger', async () => {
   const t = fixture()
   const { output } = await captureConsole(() => {
     expect(t.dispatch('/skill load')).toBe(true)
     expect(t.dispatch('/skill unload')).toBe(true)
     expect(t.dispatch('/skill bogus-command')).toBe(true)
   })
-  expect(output).toContain('用法: /skill load <name>')
-  expect(output).toContain('未知子命令')
+  expect(output).toContain('Usage: /skill load <name>')
+  expect(output).toContain('Unknown subcommand')
   expect(t.session.activeSkills.size).toBe(0)
   expect(t.messages).toHaveLength(0)
 })
 
-test('P0-2: busy 锁拒绝并发触发', () => {
+test('P0-2: the busy lock refuses a concurrent trigger', () => {
   const t = fixture()
   t.session.busy.locked = true
   expect(t.dispatch('/code-review extra')).toBe(true)
@@ -123,7 +123,7 @@ test('P0-2: busy 锁拒绝并发触发', () => {
   expect(t.messages).toHaveLength(0)
 })
 
-test('/skill load 在运行中拒绝（不在这一轮回答前插入消息）', () => {
+test('/skill load is refused while running (no message inserted before this turn answers)', () => {
   const t = fixture()
   t.session.busy.locked = true
   expect(t.dispatch('/skill load code-review')).toBe(true)
@@ -131,7 +131,7 @@ test('/skill load 在运行中拒绝（不在这一轮回答前插入消息）',
   expect(t.messages).toHaveLength(0)
 })
 
-test('P0-2: /skill load 重复执行不重复注入正文', async () => {
+test('P0-2: repeating /skill load does not inject the body twice', async () => {
   const t = fixture()
   await captureConsole(() => {
     expect(t.dispatch('/skill load code-review')).toBe(true)
@@ -141,7 +141,7 @@ test('P0-2: /skill load 重复执行不重复注入正文', async () => {
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
 })
 
-test('P0-2: load 之后再触发不注入第二份正文', async () => {
+test('P0-2: triggering after load does not inject a second copy of the body', async () => {
   const t = fixture({ responses: [fauxText('ok')] })
   await captureConsole(async () => {
     expect(t.dispatch('/skill load code-review')).toBe(true)
@@ -151,14 +151,14 @@ test('P0-2: load 之后再触发不注入第二份正文', async () => {
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
 })
 
-test('P0-2: 正文已注入时二次触发只追加注记，不重复正文', async () => {
+test('P0-2: a second trigger after the body is injected adds only a note, not the body again', async () => {
   const t = fixture({ responses: [fauxText('first'), fauxText('second')] })
   await captureConsole(async () => {
     expect(await t.command('/code-review extra')).toBe(true)
     expect(await t.command('/code-review extra')).toBe(true)
   })
   const lastUser = t.messages.filter((m) => m.role === 'user').at(-1)!
-  expect(String(lastUser.content)).toContain('[skill 已加载]')
+  expect(String(lastUser.content)).toContain('[skill loaded]')
   expect(String(lastUser.content)).not.toContain(BODY)
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
 })

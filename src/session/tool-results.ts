@@ -31,7 +31,7 @@ export function getStoredResult(
     Array.isArray(output.value)
   )
     return
-  // Array.isArray 不收窄 readonly 数组，这里已经排除了数组
+  // Array.isArray doesn't narrow readonly arrays; arrays are already excluded here
   const value = output.value as Readonly<Record<string, unknown>>
   if (
     value.kind === 'vela-tool-result' &&
@@ -69,7 +69,7 @@ export class ToolResultStore {
 
   private makeHistory(id: string): ToolHistoryStore {
     if (!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(id))
-      throw new Error('无效的工具历史标识')
+      throw new Error('Invalid tool history id')
     return new ToolHistoryStore(
       join(dirname(this.dir), id, 'tool-history.jsonl'),
     )
@@ -83,7 +83,7 @@ export class ToolResultStore {
     const history = this.makeHistory(id)
     await history.load()
     if (history.throughSequence < minimumSequence)
-      throw new Error('工具历史缺失，无法安全恢复；未覆盖原 checkpoint')
+      throw new Error('Tool history is missing, so the session cannot be safely restored; the original checkpoint was not overwritten')
     if (viewSequence !== undefined)
       await history.snapshot(undefined, viewSequence)
     this.historyId = id
@@ -100,7 +100,7 @@ export class ToolResultStore {
     )
     return (
       guide +
-      `\n只有查询摘要之后的新调用时才使用实时日志：${this.history.path}（seq > ${this.historyViewSequence}）。查询摘要前的操作一律使用上面的固定快照。`
+      `\nUse the live log only to query new calls made after the summary: ${this.history.path} (seq > ${this.historyViewSequence}). For anything before the summary, always use the fixed snapshot above.`
     )
   }
 
@@ -108,7 +108,7 @@ export class ToolResultStore {
     if (
       !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(callId)
     )
-      throw new Error('无效的工具调用标识')
+      throw new Error('Invalid tool call id')
     return join(this.dir, `${callId}.txt`)
   }
 
@@ -119,7 +119,7 @@ export class ToolResultStore {
       const file = await open(path, 'wx', 0o600)
       return { path, file }
     } catch (error) {
-      throw new Error(`保存工具结果失败，未生成可读取引用: ${error}`)
+      throw new Error(`Failed to save tool result; no readable reference was created: ${error}`)
     }
   }
 
@@ -185,7 +185,7 @@ export class ToolResultStore {
         await file.close()
       }
     } catch (error) {
-      throw new Error(`保存工具结果失败，未生成可读取引用: ${error}`)
+      throw new Error(`Failed to save tool result; no readable reference was created: ${error}`)
     }
     const recorded = toolCallId
       ? await this.history.completed(toolCallId)
@@ -201,7 +201,7 @@ export class ToolResultStore {
         toolName,
         outputPath: result.path,
         bytes: result.bytes,
-        note: '旧上下文归档；原始调用参数/执行时间未在调用时记录，不据此重放。',
+        note: 'Archived from old context; the original call arguments/execution time were not recorded at call time, so do not replay from this.',
       })
     }
     return this.reference(
@@ -245,7 +245,7 @@ export async function archiveToolResults(
             toolName: part.toolName,
             outputPath: stored.path,
             bytes: stored.bytes,
-            note: '旧结果引用；调用参数/执行时间未在调用时记录，不据此重放。',
+            note: 'Old result reference; the call arguments/execution time were not recorded at call time, so do not replay from this.',
           })
         }
       } else if (await store.history.completed(part.toolCallId)) {

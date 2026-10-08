@@ -31,16 +31,16 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     approve: true,
   })
   expect(parseArgs(['--no-approve']).approve).toBe(false)
-  expect(parseArgs(['--mode', 'json', '一', '二'])).toMatchObject({
+  expect(parseArgs(['--mode', 'json', 'one', 'two'])).toMatchObject({
     mode: 'json',
-    messages: ['一', '二'],
+    messages: ['one', 'two'],
   })
   expect(parseArgs(['-r']).resume).toBe(true)
   expect(parseArgs(['--session', 'abc']).session).toBe('abc')
-  expect(() => parseArgs(['--mode', 'xml'])).toThrow('--mode 只能是')
-  expect(() => parseArgs(['-c', '--session', 'x'])).toThrow('只能选一个')
-  expect(() => parseArgs(['--model'])).toThrow('--model 需要一个参数')
-  expect(() => parseArgs(['--wat'])).toThrow('未知参数 --wat')
+  expect(() => parseArgs(['--mode', 'xml'])).toThrow('--mode must be text, json or rpc')
+  expect(() => parseArgs(['-c', '--session', 'x'])).toThrow('Use only one of -c, -r and --session')
+  expect(() => parseArgs(['--model'])).toThrow('--model requires a value')
+  expect(() => parseArgs(['--wat'])).toThrow('Unknown option --wat')
 })
 
 test('settings.json extension config overrides the environment defaults key by key', () => {
@@ -63,7 +63,7 @@ test('legacy data in the working directory gets a copy-and-remove hint', () => {
   mkdirSync(join(dir.path, '.sessions'))
   writeFileSync(join(dir.path, 'knowledge.db'), '')
   const hint = legacyDataHint(dir.path, dataDir) ?? ''
-  expect(hint).toContain('.sessions、knowledge.db')
+  expect(hint).toContain('.sessions, knowledge.db')
   const sessions = `'${join(dataDir, 'sessions')}'`
   expect(hint).toContain(
     `mkdir -p ${sessions} && cp -R '${join(dir.path, '.sessions')}'/. ${sessions}/ && rm -r '${join(dir.path, '.sessions')}'`,
@@ -71,14 +71,14 @@ test('legacy data in the working directory gets a copy-and-remove hint', () => {
   expect(hint).toContain(
     `mv '${join(dir.path, 'knowledge.db')}'* '${join(dataDir, 'rag')}'/`,
   )
-  // dataDir 就是项目目录时也要搬（新布局的子目录不带点）
+  // Still move when dataDir is the project directory (the new layout's subdirectories have no leading dot)
   expect(legacyDataHint(dir.path, dir.path)).toContain('.sessions')
 })
 
 test('the migration commands keep old data, win over startup files and can run twice', () => {
   const dir = tempDir()
   dirs.push(dir)
-  // 路径里有空格和单引号也要能用
+  // Must work with spaces and single quotes in the path
   const cwd = join(dir.path, "my 'proj'")
   const dataDir = join(dir.path, 'home/projects/x')
   mkdirSync(join(cwd, '.sessions/default/tool-results'), { recursive: true })
@@ -88,7 +88,7 @@ test('the migration commands keep old data, win over startup files and can run t
   writeFileSync(join(cwd, '.memory/MEMORY.md'), '# Memory Index\n- old')
   writeFileSync(join(cwd, 'knowledge.db'), 'db')
   writeFileSync(join(cwd, 'knowledge.db-journal'), 'journal')
-  // 这次启动已经在新目录建了空的记忆索引和知识库
+  // This startup already created an empty memory index and knowledge base in the new directory
   mkdirSync(join(dataDir, 'memory'), { recursive: true })
   writeFileSync(join(dataDir, 'memory/MEMORY.md'), '# Memory Index\n')
   mkdirSync(join(dataDir, 'rag'))
@@ -110,7 +110,7 @@ test('the migration commands keep old data, win over startup files and can run t
   expect(read('rag/knowledge.db')).toBe('db')
   expect(read('rag/knowledge.db-journal')).toBe('journal')
   expect(legacyDataHint(cwd, dataDir)).toBeUndefined()
-  // 再执行一次：旧数据已经不在，命令失败，新目录不变
+  // Run again: the old data is gone, the commands fail and the new directory is unchanged
   expect(run().every((code) => code !== 0)).toBe(true)
   expect(read('sessions/default.jsonl')).toBe('old session')
   expect(read('rag/knowledge.db')).toBe('db')
@@ -146,8 +146,8 @@ test('an extension that throws or rejects while loading is reported and skipped,
     await vela.ready()
     await vela.session().prompt('hello')
     expect(errors).toEqual([
-      `[扩展] ${sync} 加载失败: sync boom`,
-      `[扩展] ${async} 加载失败: async boom`,
+      `[extensions] Failed to load ${sync}: sync boom`,
+      `[extensions] Failed to load ${async}: async boom`,
     ])
   } finally {
     await vela.dispose()

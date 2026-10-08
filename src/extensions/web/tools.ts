@@ -3,17 +3,17 @@ import z from 'zod'
 import type { ToolDefinition } from '../../index.ts'
 
 const searchInputSchema = z.object({
-  query: z.string().describe('搜索关键词'),
-  max_results: z.number().describe('返回结果数量，默认 5').default(5),
+  query: z.string().describe('Search keywords'),
+  max_results: z.number().describe('Number of results to return, default 5').default(5),
 })
 
 type SearchInput = z.infer<typeof searchInputSchema>
 
-/** Tavily：返回整理过的网页内容和 AI 摘要 */
+/** Tavily: returns cleaned-up page content and an AI summary */
 export function tavilySearchTool(apiKey: string): ToolDefinition {
   return {
     name: 'search',
-    description: '搜索互联网获取最新信息。返回相关网页的标题、链接和内容摘要',
+    description: 'Search the web for up-to-date information. Returns titles, links and content summaries of relevant pages',
     inputSchema: searchInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
@@ -30,7 +30,7 @@ export function tavilySearchTool(apiKey: string): ToolDefinition {
           include_answer: true,
         }),
       })
-      if (!res.ok) return `[web_search] 请求失败: HTTP ${res.status}`
+      if (!res.ok) return `[web_search] Request failed: HTTP ${res.status}`
 
       const data = (await res.json()) as {
         answer?: string
@@ -42,24 +42,24 @@ export function tavilySearchTool(apiKey: string): ToolDefinition {
         }[]
       }
       const lines: string[] = []
-      if (data.answer) lines.push(`## AI 摘要\n${data.answer}\n`)
+      if (data.answer) lines.push(`## AI summary\n${data.answer}\n`)
       for (const r of data.results || []) {
         lines.push(`### ${r.title}`)
         lines.push(r.url)
         lines.push(r.content || r.snippet || '')
         lines.push('')
       }
-      return lines.join('\n') || '没有找到相关结果'
+      return lines.join('\n') || 'No results found'
     },
   }
 }
 
-/** Serper：只返回 Google 搜索结果的摘要，需要正文时配合 web_fetch */
+/** Serper: returns only Google result snippets; use web_fetch for the full text */
 export function serperSearchTool(apiKey: string): ToolDefinition {
   return {
     name: 'search',
     description:
-      '搜索互联网获取最新信息。返回 Google 搜索结果的标题、链接和摘要',
+      'Search the web for up-to-date information. Returns titles, links and snippets of Google search results',
     inputSchema: searchInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
@@ -71,7 +71,7 @@ export function serperSearchTool(apiKey: string): ToolDefinition {
         headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: query, num: max_results }),
       })
-      if (!res.ok) return `[web_search] 请求失败: HTTP ${res.status}`
+      if (!res.ok) return `[web_search] Request failed: HTTP ${res.status}`
 
       const data = (await res.json()) as {
         knowledgeGraph?: { title: string; description?: string }
@@ -90,7 +90,7 @@ export function serperSearchTool(apiKey: string): ToolDefinition {
         lines.push(r.snippet || '')
         lines.push('')
       }
-      return lines.join('\n') || '没有找到相关结果'
+      return lines.join('\n') || 'No results found'
     },
   }
 }
@@ -102,12 +102,12 @@ const turndown = new TurndownService({
 turndown.remove(['script', 'style', 'nav', 'footer', 'header', 'iframe'])
 
 const fetchInputSchema = z.object({
-  url: z.string().describe('完整 URL'),
+  url: z.string().describe('Full URL'),
 })
 
 export const webFetchTool: ToolDefinition = {
   name: 'fetch',
-  description: '抓取指定 URL 的网页内容，转换为 Markdown 格式',
+  description: 'Fetch the web page at a URL and convert it to Markdown',
   inputSchema: fetchInputSchema,
   isConcurrencySafe: true,
   isReadOnly: true,
@@ -121,10 +121,10 @@ export const webFetchTool: ToolDefinition = {
           ...(context?.signal ? [context.signal] : []),
         ]),
       })
-      if (!res.ok) return `抓取失败: HTTP ${res.status}`
+      if (!res.ok) return `Fetch failed: HTTP ${res.status}`
       return turndown.turndown(await res.text())
     } catch (err) {
-      return `抓取失败: ${err instanceof Error ? err.message : String(err)}`
+      return `Fetch failed: ${err instanceof Error ? err.message : String(err)}`
     }
   },
 }

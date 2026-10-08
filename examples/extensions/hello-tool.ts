@@ -1,6 +1,6 @@
 /**
- * registerTool：给模型加一个工具。所有会话共享，模型直接能调用。
- * 模型看到的工具名带扩展名前缀：这里是 `hello_greet`。
+ * registerTool: give the model a new tool. It is shared by all sessions and the model can call it directly.
+ * The tool name the model sees is prefixed with the extension name: here, `hello_greet`.
  */
 import type { VelaExtension } from '@glows777/vela'
 import { z } from 'zod'
@@ -8,11 +8,11 @@ import { z } from 'zod'
 const hello: VelaExtension = (vela) => {
   vela.registerTool({
     name: 'greet',
-    description: '向某人问好',
-    inputSchema: z.object({ name: z.string().describe('名字') }),
+    description: 'Say hello to someone',
+    inputSchema: z.object({ name: z.string().describe('Name') }),
     isConcurrencySafe: true,
     isReadOnly: true,
-    execute: async ({ name }: { name: string }) => `你好，${name}！`,
+    execute: async ({ name }: { name: string }) => `Hello, ${name}!`,
   })
 }
 

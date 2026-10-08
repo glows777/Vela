@@ -6,17 +6,17 @@ import type { LanguageModel } from 'ai'
 import { getStoredResult } from '../session/tool-results.ts'
 
 /**
- * Mock Model v0.10 — 模拟 prompt cache 行为
+ * Vela demo model (VELA_MODEL=mock): an offline, keyword-driven model that also simulates prompt caching.
  *
- * 拿 system + tools 的指纹做"前缀稳定性"判断：
- * - 第一次见的 prefix → 全部记 cacheWrite
- * - 跟上一次一模一样 → 全部记 cacheRead
- * - prefix 变了（system 改了、工具增减、注入了时间戳）→ 又一次 cacheWrite
+ * It fingerprints system + tools to judge prefix stability:
+ * - a prefix seen for the first time → all of it counts as cacheWrite
+ * - identical to the previous call → all of it counts as cacheRead
+ * - prefix changed (system edited, tools added/removed, timestamp injected) → cacheWrite again
  *
- * 这样在 /context、/usage 视图里能直观看到 cache 命中率随对话推进上涨。
+ * So /context and /usage show the cache hit rate rising as the conversation goes on.
  */
 
-/** 每个 demo 模型实例自己的状态（重试演示计数、cache 前缀指纹、cache 开关）。 */
+/** Per-instance state: retry demo counter, cache prefix fingerprint, cache switch. */
 interface DemoState {
   retryTestCount: number
   lastPrefixHash: string | null
@@ -24,7 +24,7 @@ interface DemoState {
 }
 
 export type DemoModel = LanguageModel & {
-  /** `/cache on|off`：开关 prompt cache 模拟 */
+  /** `/cache on|off`: toggle the prompt cache simulation */
   setCacheEnabled(enabled: boolean): void
 }
 
@@ -43,7 +43,7 @@ function approxTokensFromChars(chars: number): number {
 type Prompt = LanguageModelV3Prompt
 type Message = Prompt[number]
 
-/** 消息里所有 text part 拼起来（system 的 content 是字符串）。 */
+/** All text parts of a message joined (system content is a string). */
 function messageText(m: Message): string {
   if (typeof m.content === 'string') return m.content
   return m.content.map((c) => ('text' in c ? c.text : '')).join('')
@@ -73,7 +73,7 @@ function approxMessageTokens(prompt: Prompt): number {
   return approxTokensFromChars(chars)
 }
 
-/** 根据 prompt 算这次调用的 v3 usage，并模拟 cache 命中。 */
+/** Computes v3 usage for this call from the prompt, simulating cache hits. */
 function makeUsage(state: DemoState, prompt: Prompt, outputChars = 80) {
   const system = extractSystemContent(prompt)
   const prefixContent = system
@@ -81,8 +81,8 @@ function makeUsage(state: DemoState, prompt: Prompt, outputChars = 80) {
   const messageTokens = approxMessageTokens(prompt)
   const outputTokens = approxTokensFromChars(outputChars)
 
-  // 真实模型最小阈值各家不一（Qwen implicit 256、OpenAI 1024、Sonnet 4.7 2048、Opus 4.7 4096）。
-  // 课程里用 512 让普通 SYSTEM 也能演示 cache 行为，等到讲生产配置时再讲各家阈值差异。
+  // Real providers' minimums differ (Qwen implicit 256, OpenAI 1024, Sonnet 4.7 2048, Opus 4.7 4096).
+  // 512 lets an ordinary system prompt demonstrate caching.
   const MIN_CACHE = 512
   const cacheable = state.cacheEnabled && prefixTokens >= MIN_CACHE
 
@@ -103,8 +103,8 @@ function makeUsage(state: DemoState, prompt: Prompt, outputChars = 80) {
     state.lastPrefixHash = null
   }
 
-  // AI SDK provider v3 usage：inputTokens.total 包含三类输入，
-  // 细分字段用于区分普通输入、cache read 和 cache write。
+  // AI SDK provider v3 usage: inputTokens.total covers all three kinds of input;
+  // the breakdown separates uncached input, cache reads and cache writes.
   return {
     inputTokens: {
       total: input + cacheRead + cacheWrite,
@@ -122,9 +122,9 @@ function makeUsage(state: DemoState, prompt: Prompt, outputChars = 80) {
 
 const TEXT_RESPONSES = {
   default:
-    '你好！我是 Super Agent v0.10。试试 /context 看上下文占用，/usage 看 token 用量和缓存命中率，/cache off 关掉缓存对比成本差异。',
+    "Hi! I'm the Vela demo model. Try /context for context usage, /usage for token usage and cache hit rate, and /cache off to compare cost without caching.",
   greeting:
-    '你好！我是 Super Agent v0.10，已经接上 prompt cache 和成本追踪 :) 多聊几轮，输入 /usage 看节省了多少。',
+    "Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved.",
 } satisfies Record<string, string>
 
 interface ToolCallIntent {
@@ -181,11 +181,12 @@ function wasToolSearchCalled(prompt: Prompt): boolean {
   return false
 }
 
+// Input matching accepts English keywords; the Chinese ones are kept so existing demo inputs still work.
 function detectParallelIntent(text: string): ToolCallIntent[] | null {
   if (text.includes('测试并发') || text.includes('test parallel')) {
     return [
-      { toolName: 'get_weather', args: { city: '北京' } },
-      { toolName: 'get_weather', args: { city: '上海' } },
+      { toolName: 'get_weather', args: { city: 'Beijing' } },
+      { toolName: 'get_weather', args: { city: 'Shanghai' } },
       { toolName: 'list_directory', args: { path: '.' } },
     ]
   }
@@ -196,11 +197,11 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   const text = extractUserText(prompt)
   const toolResults = getToolResultContent(prompt)
 
-  if (text.includes('测试死循环')) {
-    return { toolName: 'get_weather', args: { city: '北京' } }
+  if (text.includes('测试死循环') || text.includes('test loop')) {
+    return { toolName: 'get_weather', args: { city: 'Beijing' } }
   }
 
-  // 如果刚刚 tool_search 返回了结果，现在要调用发现的工具
+  // tool_search just returned: call the tool it found
   if (hasToolResults(prompt) && wasToolSearchCalled(prompt)) {
     if (
       toolResults.includes('list_issues') ||
@@ -240,7 +241,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
 
   if (hasToolResults(prompt)) return null
 
-  // 延迟工具场景：先 tool_search，传精确的工具名
+  // Deferred tools: tool_search first, with the exact tool name
   if (
     text.includes('issue') ||
     text.includes('issues') ||
@@ -264,6 +265,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   if (
     text.includes('浏览器') ||
     text.includes('browser') ||
+    text.includes('webpage') ||
     text.includes('网页')
   ) {
     return {
@@ -283,7 +285,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
     }
   }
 
-  // 内置工具（非延迟，直接调用）
+  // Built-in tools (not deferred, called directly)
   if (text.includes('测试截断') || text.includes('test truncation')) {
     return { toolName: 'read_file', args: { path: 'sample-data.txt' } }
   }
@@ -292,12 +294,16 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
       toolName: 'edit_file',
       args: {
         path: 'sample-data.txt',
-        old_string: '一、工具注册机制',
-        new_string: '一、工具注册机制（已更新）',
+        old_string: '1. Tool registration',
+        new_string: '1. Tool registration (updated)',
       },
     }
   }
-  if (text.includes('测试搜索') || text.includes('test grep')) {
+  if (
+    text.includes('测试搜索') ||
+    text.includes('test grep') ||
+    text.includes('test search')
+  ) {
     return { toolName: 'grep', args: { pattern: 'export', path: 'src' } }
   }
   if (text.includes('测试glob') || text.includes('test glob')) {
@@ -312,6 +318,8 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   if (
     text.includes('目录') ||
     text.includes('文件列表') ||
+    text.includes('directory') ||
+    text.includes('list files') ||
     text.includes('ls')
   ) {
     return { toolName: 'list_directory', args: { path: '.' } }
@@ -325,23 +333,53 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
       text.includes('看看') ||
       text.includes('查看') ||
       text.includes('打开') ||
+      text.includes('open') ||
+      text.includes('view') ||
       text.includes('文件') ||
       text.includes('file'))
   ) {
     return { toolName: 'read_file', args: { path: fileMatch[1] } }
   }
 
-  const weatherKeywords = ['天气', 'weather', '温度', '热', '冷', '气温']
+  const weatherKeywords = [
+    'weather',
+    'temperature',
+    'hot',
+    'cold',
+    '天气',
+    '温度',
+    '热',
+    '冷',
+    '气温',
+  ]
   const hasWeatherIntent = weatherKeywords.some((kw) => text.includes(kw))
-  const cities = text.match(/(北京|上海|深圳|广州|杭州|成都)/g)
+  const cities = text.match(
+    /(北京|上海|深圳|广州|杭州|成都|beijing|shanghai|shenzhen|guangzhou|hangzhou|chengdu)/g,
+  )
   if (hasWeatherIntent && cities && cities.length > 0) {
-    return { toolName: 'get_weather', args: { city: cities[0] } }
+    const city = cities[0] as string
+    return {
+      toolName: 'get_weather',
+      args: { city: city.charAt(0).toUpperCase() + city.slice(1) },
+    }
   }
 
-  const calcMatch = text.match(/(\d+)\s*[+\-*/加减乘除]\s*(\d+)/)
+  const calcMatch = text.match(
+    /(\d+)\s*(?:[+\-*/加减乘除]|plus|minus|times|divided by)\s*(\d+)/,
+  )
   if (calcMatch) {
-    const op = text.match(/[+*/]|加|减|乘|除|-/)?.[0] || '+'
-    const opMap: Record<string, string> = { 加: '+', 减: '-', 乘: '*', 除: '/' }
+    const op =
+      text.match(/[+*/]|加|减|乘|除|plus|minus|times|divided by|-/)?.[0] || '+'
+    const opMap: Record<string, string> = {
+      加: '+',
+      减: '-',
+      乘: '*',
+      除: '/',
+      plus: '+',
+      minus: '-',
+      times: '*',
+      'divided by': '/',
+    }
     const expression = `${calcMatch[1]} ${opMap[op] || op} ${calcMatch[2]}`
     return { toolName: 'calculator', args: { expression } }
   }
@@ -354,33 +392,84 @@ function pickTextResponse(prompt: Prompt): string {
     const combined = getToolResultContent(prompt)
 
     if (combined.includes('[DIR]') || combined.includes('[FILE]')) {
-      return `当前目录的文件列表：\n${combined}`
-    }
-    if (combined.includes('°C') || combined.includes('天气')) {
-      return `根据查询结果：${combined}`
+      return `Files in the current directory:\n${combined}`
     }
     if (
+      combined.includes('°C') ||
+      combined.includes('weather') ||
+      combined.includes('天气')
+    ) {
+      return `According to the lookup: ${combined}`
+    }
+    if (
+      combined.includes('Sent') ||
+      combined.includes('Navigated') ||
+      combined.includes('Clicked') ||
+      combined.includes('Filled') ||
       combined.includes('已发送') ||
       combined.includes('已导航') ||
       combined.includes('已点击') ||
       combined.includes('已填写')
     ) {
-      return `操作完成：${combined}`
+      return `Done: ${combined}`
     }
     if (
       combined.includes('number') ||
       combined.includes('title') ||
       combined.includes('state')
     ) {
-      return `查询结果：\n${combined}`
+      return `Results:\n${combined}`
     }
-    return `工具返回了以下信息：\n${combined}`
+    return `The tool returned:\n${combined}`
   }
 
   const text = extractUserText(prompt)
   if (text.includes('你好') || text.includes('hello') || text.includes('hi'))
     return TEXT_RESPONSES.greeting
   return TEXT_RESPONSES.default
+}
+
+/**
+ * The compactor sends a `context_compaction` JSON request (see src/context/compressor.ts) and accepts
+ * only verbatim quotes of the removed messages. Quote each message's anchor: the first user message
+ * as the goal, the rest as details.
+ */
+function groundedSummary(prompt: Prompt): string | undefined {
+  const last = prompt.at(-1)
+  if (last?.role !== 'user') return undefined
+  let control: {
+    type?: string
+    sourceMessageCount: number
+    sourceCatalog: { index: number; role: string; anchor: string }[]
+  }
+  try {
+    control = JSON.parse(messageText(last))
+  } catch {
+    return undefined
+  }
+  if (control?.type !== 'context_compaction') return undefined
+  const facts = control.sourceCatalog
+    .filter((s) => s.anchor.trim())
+    .map((s) => ({
+      sourceMessageIndex: s.index,
+      quote: s.anchor.trim(),
+      role: s.role,
+    }))
+  const goal = facts.find((f) => f.role === 'user') ?? facts[0]
+  if (!goal) return undefined
+  const fact = ({ sourceMessageIndex, quote }: (typeof facts)[number]) => ({
+    sourceMessageIndex,
+    quote,
+  })
+  const rest = facts.filter((f) => f !== goal).map(fact)
+  return JSON.stringify({
+    sourceMessageCount: control.sourceMessageCount,
+    goal: fact(goal),
+    completed: [],
+    pending: [],
+    constraints: [],
+    details: rest.length ? rest : [fact(goal)],
+  })
 }
 
 function createDelayedStream(
@@ -453,16 +542,11 @@ export function createMockModel(): DemoModel {
     },
 
     async doGenerate({ prompt }: { prompt: Prompt }) {
-      // Detect compression request (called via generateText with compress system prompt)
-      const allText = (prompt || []).map(messageText).join(' ')
-
-      if (
-        allText.includes('对话压缩系统') ||
-        allText.includes('压缩成一份结构化摘要')
-      ) {
-        const mockSummary = `## 用户意图\n用户在探索项目结构和代码，了解工具系统的设计。\n\n## 已完成的操作\n- 列出了当前目录文件（.env, package.json, sample-data.txt, src/）\n- 读取了 package.json（项目名 super-agent-08-compaction, 版本 0.8.0）\n- 读取了 sample-data.txt（工具系统设计文档）\n- 搜索了 src/ 目录中的 export（找到 ToolRegistry, agentLoop, SessionStore 等导出）\n\n## 关键发现\n- 项目使用 ai@7 和 @ai-sdk/openai@4\n- 工具系统包含 ToolRegistry、truncateResult、并发控制（读写锁）\n- 已实现 SessionStore（JSONL 持久化）和 PromptBuilder（模块化 Prompt）\n\n## 当前状态\n用户刚完成项目结构探索，尚未开始修改代码。\n\n## 需要保留的细节\n- 项目路径：当前工作目录\n- 关键文件：src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`
+      // Summary compaction: answer with a grounded summary that quotes the removed messages
+      const summary = groundedSummary(prompt)
+      if (summary) {
         return {
-          content: [{ type: 'text' as const, text: mockSummary }],
+          content: [{ type: 'text' as const, text: summary }],
           finishReason: { unified: 'stop' as const, raw: undefined },
           usage: makeUsage(state, prompt),
           warnings: [],
@@ -478,7 +562,7 @@ export function createMockModel(): DemoModel {
         }
         state.retryTestCount = 0
         return {
-          content: [{ type: 'text' as const, text: '重试成功！' }],
+          content: [{ type: 'text' as const, text: 'Retry succeeded!' }],
           finishReason: { unified: 'stop' as const, raw: undefined },
           usage: makeUsage(state, prompt),
           warnings: [],
@@ -534,7 +618,7 @@ export function createMockModel(): DemoModel {
           throw new Error('429 Too Many Requests - Rate limit exceeded')
         }
         state.retryTestCount = 0
-        const reply = '重试成功！'
+        const reply = 'Retry succeeded!'
         const id = 'text-1'
         const chunks: LanguageModelV3StreamPart[] = [
           { type: 'text-start', id },

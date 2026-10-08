@@ -20,61 +20,61 @@ function writeSkill(base: string, name: string, content: string): void {
   fs.writeFileSync(path.join(dir, 'SKILL.md'), content, 'utf-8')
 }
 
-test('load 解析 frontmatter 的 description 与 when_to_use', () => {
+test('load parses description and when_to_use from the frontmatter', () => {
   const dir = makeTempDir()
   writeSkill(
     dir,
     'demo',
-    '---\ndescription: 一个演示 skill\nwhen_to_use: 用户想要演示时\n---\n\n正文内容\n',
+    '---\ndescription: A demo skill\nwhen_to_use: When the user wants a demo\n---\n\nBody text\n',
   )
   const loader = new SkillLoader([path.join(dir, '.skills')])
   loader.load()
   const skill = loader.get('demo')
   expect(skill?.name).toBe('demo')
-  expect(skill?.description).toBe('一个演示 skill')
-  expect(skill?.whenToUse).toBe('用户想要演示时')
-  expect(skill?.content).toBe('正文内容')
+  expect(skill?.description).toBe('A demo skill')
+  expect(skill?.whenToUse).toBe('When the user wants a demo')
+  expect(skill?.content).toBe('Body text')
 })
 
-test('无 frontmatter 的 SKILL.md 兜底为空描述', () => {
+test('a SKILL.md without frontmatter falls back to an empty description', () => {
   const dir = makeTempDir()
-  writeSkill(dir, 'bare', '没有 frontmatter 内容\n')
+  writeSkill(dir, 'bare', 'Content without frontmatter\n')
   const loader = new SkillLoader([path.join(dir, '.skills')])
   loader.load()
   expect(loader.get('bare')?.description).toBe('')
-  expect(loader.get('bare')?.content).toBe('没有 frontmatter 内容\n')
+  expect(loader.get('bare')?.content).toBe('Content without frontmatter\n')
 })
 
-test('load 跳过没有 SKILL.md 的目录', () => {
+test('load skips directories without a SKILL.md', () => {
   const dir = makeTempDir()
-  writeSkill(dir, 'valid', '---\ndescription: ok\n---\n\n内容\n')
+  writeSkill(dir, 'valid', '---\ndescription: ok\n---\n\nContent\n')
   fs.mkdirSync(path.join(dir, '.skills', 'no-skill-file'), { recursive: true })
   const loader = new SkillLoader([path.join(dir, '.skills')])
   loader.load()
   expect(loader.list().map((s) => s.name)).toEqual(['valid'])
 })
 
-test('buildPromptSection 只输出索引，永不输出正文', () => {
+test('buildPromptSection outputs only the index, never the body', () => {
   const dir = makeTempDir()
   writeSkill(
     dir,
     'demo',
-    '---\ndescription: 演示\nwhen_to_use: 演示场景\n---\n\nSECRET_SKILL_BODY\n',
+    '---\ndescription: Demo\nwhen_to_use: Demo scenarios\n---\n\nSECRET_SKILL_BODY\n',
   )
   const loader = new SkillLoader([path.join(dir, '.skills')])
   loader.load()
 
   const inactive = loader.buildPromptSection(new Set())
-  expect(inactive).toContain('/demo — 演示 (适用场景: 演示场景)')
+  expect(inactive).toContain('/demo — Demo (when to use: Demo scenarios)')
   expect(inactive).not.toContain('SECRET_SKILL_BODY')
-  expect(inactive).not.toContain('已激活')
+  expect(inactive).not.toContain('✓ active')
 
   const active = loader.buildPromptSection(new Set(['demo']))
-  expect(active).toContain('/demo — 演示 (适用场景: 演示场景) ✓ 已激活')
+  expect(active).toContain('/demo — Demo (when to use: Demo scenarios) ✓ active')
   expect(active).not.toContain('SECRET_SKILL_BODY')
 })
 
-test('没有 skill 时 buildPromptSection 返回 null', () => {
+test('buildPromptSection returns null when there are no skills', () => {
   const dir = makeTempDir()
   expect(new SkillLoader([path.join(dir, '.skills')]).buildPromptSection(new Set())).toBeNull()
 })

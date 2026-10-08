@@ -21,11 +21,11 @@ test('several tool calls in one response all run and all results go back togethe
         fauxToolCall('grep', { pattern: 'export const', path: 'src' }),
         fauxToolCall('read_file', { path: 'src/b.ts' }),
       ],
-      fauxText('找到 a 和 b'),
+      fauxText('Found a and b'),
     ],
   })
 
-  await t.run('看看 src 里有什么')
+  await t.run('What is in src?')
 
   expect(t.eventsOf('tool_call').map((e) => e.toolName)).toEqual([
     'glob',
@@ -62,11 +62,11 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
         old_string: 'world',
         new_string: 'vela',
       }),
-      fauxText('写好了'),
+      fauxText('Done writing'),
     ],
   })
 
-  await t.run('写个文件')
+  await t.run('Write a file')
 
   expect(await t.readFile('out/hello.txt')).toBe('hello vela\n')
   expect(t.eventsOf('audit').map((e) => [e.toolName, e.path])).toEqual([
@@ -85,7 +85,7 @@ test('bash runs in cwd and its output carries the timestamp post-hook', async ()
     ],
   })
 
-  await t.run('跑个命令')
+  await t.run('Run a command')
 
   const output = t.model.calls[1]!.toolResults[0]!.output
   expect(output).toContain('marker.txt')
@@ -98,15 +98,15 @@ test('a dangerous bash command is refused before it runs and the model sees why'
     files: { 'keep.txt': 'important' },
     responses: [
       fauxToolCall('bash', { command: 'rm -rf /' }),
-      fauxText('好的，不删'),
+      fauxText('OK, not deleting'),
     ],
   })
 
-  await t.run('清理一下')
+  await t.run('Clean up')
 
   expect(await t.readFile('keep.txt')).toBe('important')
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
-    '[拒绝执行] 检测到危险操作',
+    '[Rejected] Dangerous operation detected',
   )
   expect(t.eventsOf('agent_end').at(-1)).toEqual({
     type: 'agent_end',
@@ -118,11 +118,11 @@ test('a tool that throws becomes a tool error the model can react to', async () 
   const t = createTestVela({
     responses: [
       fauxToolCall('read_file', { path: 'missing.txt' }),
-      fauxText('文件不存在'),
+      fauxText('The file does not exist'),
     ],
   })
 
-  await t.run('读 missing.txt')
+  await t.run('Read missing.txt')
 
   expect(t.eventTypes().slice(2, 5)).toEqual([
     'turn_start',
@@ -133,7 +133,7 @@ test('a tool that throws becomes a tool error the model can react to', async () 
   expect(result.toolName).toBe('read_file')
   expect(result.raw).toMatchObject({ type: 'error-text' })
   expect(result.output).toContain('ENOENT')
-  expect(t.lastAssistantText()).toBe('文件不存在')
+  expect(t.lastAssistantText()).toBe('The file does not exist')
   expect(t.eventsOf('agent_end').at(-1)).toEqual({
     type: 'agent_end',
     reason: 'done',
@@ -147,11 +147,11 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
         fauxToolCall('no_such_tool', { x: 1 }),
         fauxToolCall('read_file', { wrong: 'shape' }),
       ],
-      fauxText('换个方式'),
+      fauxText('Trying another way'),
     ],
   })
 
-  await t.run('试试')
+  await t.run('Try it')
 
   expect(
     t
@@ -164,7 +164,7 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
     type: 'agent_end',
     reason: 'done',
   })
-  // 被拒绝的调用也写进了工具历史
+  // Rejected calls are also written to the tool history
   const history = await Bun.file(t.session.registry.results.indexPath).text()
   expect(history).toContain('no_such_tool')
   expect(history).toContain('"status":"rejected"')
@@ -182,7 +182,7 @@ test('a deferred tool only reaches the model after tool_search discovers it', as
         expect(req.tools).toContain('mcp__fake__lookup')
         return fauxToolCall('mcp__fake__lookup', { id: '42' })
       },
-      (req) => fauxText(`查到：${req.toolResults[0]!.output}`),
+      (req) => fauxText(`Found: ${req.toolResults[0]!.output}`),
     ],
   })
   t.internals.registry.register({
@@ -193,27 +193,27 @@ test('a deferred tool only reaches the model after tool_search discovers it', as
     execute: async ({ id }: { id: string }) => `record ${id}`,
   })
 
-  await t.run('查一下 42')
+  await t.run('Look up 42')
 
-  expect(t.lastAssistantText()).toBe('查到：record 42')
+  expect(t.lastAssistantText()).toBe('Found: record 42')
 })
 
 test('a guest cannot use bash: the call is refused and recorded', async () => {
   const t = createTestVela({
     responses: [
       (req) => {
-        // guest 拿不到 bash，但模型仍可能凭历史调用它
+        // A guest does not get bash, but the model may still call it from history
         expect(req.tools).not.toContain('bash')
         return fauxToolCall('bash', { command: 'echo hi' })
       },
-      fauxText('没有权限'),
+      fauxText('No permission'),
     ],
   })
   await captureConsole(() => t.dispatch('/role guest'))
 
-  await t.run('跑 echo')
+  await t.run('Run echo')
 
   expect(t.eventsOf('tool_result')).toHaveLength(0)
   expect(t.eventsOf('tool_error')).toHaveLength(1)
-  expect(t.lastAssistantText()).toBe('没有权限')
+  expect(t.lastAssistantText()).toBe('No permission')
 })

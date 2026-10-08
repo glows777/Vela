@@ -1,5 +1,5 @@
 {
-  // 发布用：src → dist（JS + .d.ts），只用 Node 的类型，保证 dist 不依赖 Bun 全局。
+  // Publishing build: src → dist (JS + .d.ts). Node types only, so dist never relies on Bun globals.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["node"],

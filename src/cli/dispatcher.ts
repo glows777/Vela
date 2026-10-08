@@ -8,9 +8,9 @@ import { createSkillCommands } from './commands/skill.ts'
 import { velaInternals } from '../vela.ts'
 
 /**
- * CLI 自己的斜杠命令；测试用同一份分发器，保证命令行为和真实入口一致。
- * 扩展注册的命令（/memory、/dream、/rag…）不在这里：没被这些命令认领的 `/xxx`
- * 交给 session.prompt()，由它执行扩展命令。
+ * The CLI's own slash commands. Tests use the same dispatcher so commands behave as in the real entry point.
+ * Extension commands (/memory, /dream, /rag, ...) are not here: any `/xxx` these don't claim
+ * goes to session.prompt(), which runs extension commands.
  */
 export function createCliDispatcher(vela: Vela) {
   return createDispatcher([

@@ -1,7 +1,7 @@
 import { THINKING_LEVELS, type ThinkingLevel } from '../../models/index.ts'
 import type { CommandHandler } from './index.ts'
 
-/** `/model [provider/id]`、`/thinking [级别]`：查看或切换当前会话的模型和 thinking（选择器 UI 留给 TUI）。 */
+/** `/model [provider/id]`, `/thinking [level]`: show or switch the session's model and thinking level (the picker UI lives in the TUI). */
 export const modelCommands: CommandHandler[] = [
   (cmd, { print, vela, session }) => {
     if (cmd !== '/model' && !cmd.startsWith('/model ')) return false
@@ -9,10 +9,10 @@ export const modelCommands: CommandHandler[] = [
     if (ref) {
       try {
         session.setModel(ref)
-        print(`\n[模型] 当前会话改用 ${session.modelInfo.ref}`)
+        print(`\n[model] Session now uses ${session.modelInfo.ref}`)
       } catch (error) {
         print(
-          `\n[模型] ${error instanceof Error ? error.message : String(error)}`,
+          `\n[model] ${error instanceof Error ? error.message : String(error)}`,
         )
       }
       return true
@@ -21,23 +21,23 @@ export const modelCommands: CommandHandler[] = [
     try {
       current = session.modelInfo.ref
     } catch (error) {
-      current = `（不可用: ${error instanceof Error ? error.message : error}）`
+      current = `(unavailable: ${error instanceof Error ? error.message : error})`
     }
-    const lines = [`\n[模型] 当前: ${current}`]
+    const lines = [`\n[model] Current: ${current}`]
     const models = vela.models()
     if (models.length) {
-      lines.push('  已配置的模型（/model <provider/id> 切换，没列出的 id 也可以直接写）:')
+      lines.push('  Configured models (switch with /model <provider/id>; unlisted ids work too):')
       for (const m of models) {
         const meta = [
           m.contextWindow && `${Math.round(m.contextWindow / 1000)}k`,
-          m.reasoning === false && '无 thinking',
+          m.reasoning === false && 'no thinking',
         ].filter(Boolean)
         lines.push(
           `    ${m.ref === current ? '*' : ' '} ${m.ref}${m.name ? ` — ${m.name}` : ''}${meta.length ? ` (${meta.join(', ')})` : ''}`,
         )
       }
     } else
-      lines.push('  /model <provider/id> 切换，例如 /model anthropic/<模型 id>')
+      lines.push('  Switch with /model <provider/id>, e.g. /model anthropic/<model id>')
     print(lines.join('\n'))
     return true
   },
@@ -46,16 +46,16 @@ export const modelCommands: CommandHandler[] = [
     const level = cmd.slice('/thinking'.length).trim()
     if (!level) {
       print(
-        `\n[thinking] 当前: ${session.thinkingLevel}；可选 ${THINKING_LEVELS.join(' / ')}`,
+        `\n[thinking] Current: ${session.thinkingLevel}; options: ${THINKING_LEVELS.join(' / ')}`,
       )
       return true
     }
     if (!THINKING_LEVELS.includes(level as ThinkingLevel)) {
-      print(`\n[thinking] 只能是 ${THINKING_LEVELS.join(' / ')}`)
+      print(`\n[thinking] Must be one of ${THINKING_LEVELS.join(' / ')}`)
       return true
     }
     session.setThinkingLevel(level as ThinkingLevel)
-    print(`\n[thinking] 当前会话: ${session.thinkingLevel}`)
+    print(`\n[thinking] Session now uses: ${session.thinkingLevel}`)
     return true
   },
 ]

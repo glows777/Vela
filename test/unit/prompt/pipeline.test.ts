@@ -11,7 +11,7 @@ const ctx: PromptContext = {
   sessionId: 'test',
 }
 
-test('build 跳过 null 片段，其余按注册顺序用空行连接', () => {
+test('build skips null sections and joins the rest with blank lines in registration order', () => {
   const pipeline = new PromptPipeline()
     .pipe('a', () => null)
     .pipe('b', () => 'BBB')
@@ -20,12 +20,12 @@ test('build 跳过 null 片段，其余按注册顺序用空行连接', () => {
   expect(pipeline.build(ctx)).toBe('BBB\n\nCCC')
 })
 
-test('build 全部为 null 时输出空字符串', () => {
+test('build outputs an empty string when every section is null', () => {
   const pipeline = new PromptPipeline().pipe('a', () => null)
   expect(pipeline.build(ctx)).toBe('')
 })
 
-test('status 报告每个模块是否启用和字符数', () => {
+test('status reports whether each module is enabled and its character count', () => {
   const pipeline = new PromptPipeline()
     .pipe('on', () => 'x')
     .pipe('off', () => null)
@@ -35,7 +35,7 @@ test('status 报告每个模块是否启用和字符数', () => {
   ])
 })
 
-test('pipe 管道提供上下文给每个函数', () => {
+test('pipe passes the context to every function', () => {
   const pipeline = new PromptPipeline().pipe(
     'ctx-aware',
     (c) => `count=${c.toolCount}`,

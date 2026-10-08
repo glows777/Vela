@@ -8,9 +8,9 @@ interface ToolHashedRecord {
 }
 
 type DetectorKind =
-  | "generic_repeat" // 同工具同参数重复太多次
-  | "ping_pong" // 两组参数来回切换
-  | "global_circuit_breaker"; // 同工具同参数同结果持续无进展
+  | "generic_repeat" // same tool and args repeated too many times
+  | "ping_pong" // alternating between two sets of args
+  | "global_circuit_breaker"; // same tool, args and result with no progress
 
 export type DetectionResult =
   | { stuck: false }
@@ -22,10 +22,10 @@ export type DetectionResult =
       message: string;
     };
 
-const HISTORY_SIZE = 30; // 滑动窗口大小
-const WARNING_THRESHOLD = 10; // 警告阈值
-const CRITICAL_THRESHOLD = 20; // 严重阈值
-const BREAKER_THRESHOLD = 30; // 熔断阈值
+const HISTORY_SIZE = 30; // sliding window size
+const WARNING_THRESHOLD = 10;
+const CRITICAL_THRESHOLD = 20;
+const BREAKER_THRESHOLD = 30; // circuit breaker
 
 function stringifyValue(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -56,7 +56,7 @@ function recordToolCallIn(
     toolCallId,
     name,
     argsHash: hashToolCall(name, args),
-    resultHash: "", // 结果哈希将在调用完成后更新
+    resultHash: "", // filled in when the call completes
     timestamp: Date.now(),
   });
   if (callHistory.length > HISTORY_SIZE) callHistory.shift();
@@ -90,11 +90,13 @@ function recordToolCallResultIn(
 
 /**
  * @description
- *    * 计算没有进展的连续调用次数。没有进展指的是在一段时间内结果哈希保持不变，说明调用虽然完成了，但没有产生新的结果。
- *    * 只有当参数哈希相同且结果哈希相同的连续调用才算作没有进展；如果参数哈希不同或者结果哈希不同，说明有进展，不计入连续调用次数。
- * @param string name - 工具名称
- * @param string argsHash - 参数哈希
- * @returns number - 没有进展的连续调用次数
+ *    * Counts consecutive calls without progress. No progress means the result hash stays the same:
+ *      the calls complete but produce nothing new.
+ *    * Only calls with the same args hash and the same result hash count; a different args hash or
+ *      result hash means progress and is not counted.
+ * @param string name - tool name
+ * @param string argsHash - args hash
+ * @returns number - number of consecutive calls without progress
  */
 function getNoProgressStreak(
   callHistory: ToolHashedRecord[],
@@ -107,25 +109,24 @@ function getNoProgressStreak(
   for (let i = callHistory.length - 1; i >= 0; i--) {
     const currentRecord = callHistory[i];
 
-    // 如果名字不一样或者参数不一样，说明不是同一个调用，继续往前找
+    // Different name or args: not the same call, keep looking back
     if (name !== currentRecord?.name || argsHash !== currentRecord.argsHash) {
       continue;
     }
 
-    // 如果结果哈希还没有记录，说明调用还没有完成，继续往前找
+    // No result hash yet: the call hasn't completed, keep looking back
     if (!currentRecord.resultHash) {
       continue;
     }
 
-    // 如果没有上一个 hash 结果，说明这是第一次完成调用，记录结果哈希并继续往前找
+    // First completed call: remember its result hash and keep looking back
     if (!lastResultHash) {
       lastResultHash = currentRecord.resultHash;
       streak = 1;
       continue;
     }
 
-    // 如果结果哈希和上一个结果哈希一样，说明没有进展，增加 streak 计数；
-    // 否则说明有进展，停止计数
+    // Same result hash as before means no progress: increase the streak
     if (currentRecord.resultHash === lastResultHash) {
       streak++;
     }
@@ -136,11 +137,12 @@ function getNoProgressStreak(
 
 /**
  * @description
- *    * 计算来回切换的次数。来回切换指的是在一段时间内参数哈希在两个不同的值之间交替出现。比如： 两个操作来回交替，A → B → A → B，每一步看起来都在"做事"，
- *    * 如果没有来回切换或者来回切换的次数小于 2，返回 0；
- *    * 否则返回来回切换的次数。
- * @param string currentHash 当前调用的参数哈希，用于判断最后一次切换是否回到了当前参数哈希
- * @returns number - 来回切换的次数，如果没有来回切换或者来回切换的次数小于 2，返回 0；否则返回来回切换的次数
+ *    * Counts ping-pong alternations: the args hash alternates between two values, e.g. two
+ *      operations A → B → A → B, where every step looks like it is "doing something".
+ *    * Returns 0 if there is no alternation or fewer than 2 alternations;
+ *    * otherwise returns the alternation count.
+ * @param string currentHash args hash of the current call, used to check whether it switches back to the other hash
+ * @returns number - the alternation count, or 0 if there is none or fewer than 2
  */
 function getPingPongCount(
   callHistory: ToolHashedRecord[],
@@ -153,7 +155,7 @@ function getPingPongCount(
   const lastRecord = callHistory[callHistory.length - 1];
   let otherHash: string | undefined;
 
-  // 从倒数第二条记录开始往前找，找到第一个参数哈希不同的记录，记下它的参数哈希
+  // From the second-to-last record backwards, find the first record with a different args hash
   for (let i = callHistory.length - 2; i >= 0; i--) {
     if (callHistory[i]?.argsHash !== lastRecord?.argsHash) {
       otherHash = callHistory[i]!.argsHash;
@@ -161,14 +163,14 @@ function getPingPongCount(
     }
   }
 
-  // 如果没有找到参数哈希不同的记录，说明没有来回切换，直接返回 0
+  // None found: no alternation
   if (!otherHash) {
     return 0;
   }
 
   let count = 0;
   for (let i = callHistory.length - 1; i >= 0; i--) {
-    // 交替出现 lastRecord.argsHash 和 otherHash，才说明在来回切换；一旦出现不交替的情况，就停止计数
+    // Count only while lastRecord.argsHash and otherHash strictly alternate; stop at the first break
     const expectedHash = count % 2 === 0 ? lastRecord?.argsHash : otherHash;
     if (callHistory[i]?.argsHash === expectedHash) {
       count++;
@@ -177,7 +179,7 @@ function getPingPongCount(
     }
   }
 
-  // 如果来回切换的次数小于 2，说明来回切换不频繁，不算真正的来回切换，返回 0；否则返回来回切换的次数
+  // Fewer than 2 alternations is not a real ping-pong
   if (currentHash === otherHash && count >= 2) {
     return count + 1;
   }
@@ -249,8 +251,8 @@ function detectLoopIn(
 }
 
 /**
- * 工具调用循环检测器。每个 agent loop 持有自己的实例，
- * 并发会话（例如通道网关里的多个对话）不会共享调用历史。
+ * Tool call loop detector. Each agent loop owns its own instance, so concurrent sessions
+ * (e.g. multiple conversations in the channel gateway) don't share call history.
  */
 export class LoopDetector {
   private readonly history: ToolHashedRecord[] = [];
@@ -277,7 +279,7 @@ export class LoopDetector {
   }
 }
 
-// 兼容旧的模块级 API：共享一个默认实例。
+// Legacy module-level API: shares one default instance.
 const defaultDetector = new LoopDetector();
 export const recordToolCall = (
   toolCallId: string,

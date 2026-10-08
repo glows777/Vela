@@ -3,7 +3,7 @@ import type { Vela } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
 
-/** 最后一条助手消息的文本（-p 的输出）。 */
+/** Text of the last assistant message (the output of -p). */
 export function lastAssistantText(messages: ModelMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i] as ModelMessage
@@ -17,9 +17,9 @@ export function lastAssistantText(messages: ModelMessage[]): string {
 }
 
 /**
- * 单次模式（同 pi 的 print mode）：依次发送 messages，然后退出，返回退出码。
- * - `text`（`-p`）：stdout 只写最后一条助手回答；失败或中断时原因写 stderr，退出码 1。
- * - `json`（`--mode json`）：先写一行会话头，再每个事件一行 JSON。
+ * Print mode (like pi's): send messages in order, then exit; returns the exit code.
+ * - `text` (`-p`): stdout gets only the last assistant answer; on failure or abort the reason goes to stderr, exit code 1.
+ * - `json` (`--mode json`): a session header line, then one JSON line per event.
  */
 export async function runPrintMode(options: {
   vela: Vela
@@ -29,7 +29,7 @@ export async function runPrintMode(options: {
 }): Promise<number> {
   const { vela, session, messages, mode } = options
   let writing = Promise.resolve()
-  // -p 只输出这次调用产生的回答：恢复的会话里旧的回答不算（例如 `vela -c -p /memory` 不该打印上次的回答）
+  // -p prints only answers from this run, not old ones in a resumed session (e.g. `vela -c -p /memory` must not print the previous answer)
   let answer: ModelMessage | undefined
   const offAnswer = session.subscribe((event) => {
     if (event.type === 'message' && event.message.role === 'assistant')
@@ -42,7 +42,7 @@ export async function runPrintMode(options: {
           const line = jsonEvent(event, sessionId)
           writing = writing.then(() => writeStdout(line))
         })
-      : // -p 没有界面：扩展的 notify（例如 `vela -p /memory`）写到 stderr，stdout 只放回答
+      : // -p has no UI: extension notify (e.g. `vela -p /memory`) goes to stderr, stdout carries only the answer
         session.subscribe((event) => {
           if (event.type === 'notify')
             console.error(
@@ -75,7 +75,7 @@ export async function runPrintMode(options: {
     }
   } catch (error) {
     console.error(
-      '[Agent] 本轮停止:',
+      '[Agent] Turn stopped:',
       error instanceof Error ? error.message : error,
     )
     exitCode = 1

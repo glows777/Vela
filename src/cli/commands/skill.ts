@@ -3,9 +3,9 @@ import type { SkillLoader } from '../../skills/loader.ts'
 import type { CommandHandler } from './index.ts'
 
 /**
- * 判定 skill 正文是否已作为 user 消息注入过会话。
- * 用 includes 而非 startsWith：/skill load 注入的消息带「已加载 skill」包裹前缀，
- * 触发路径是无包裹拼接，两种形态都能命中。
+ * Whether the skill body was already injected into the session as a user message.
+ * Uses includes, not startsWith: /skill load wraps the body in a "Loaded skill" prefix while
+ * the trigger path concatenates it unwrapped, and both forms must match.
  */
 function contentAlreadyInjected(
   messages: ModelMessage[],
@@ -18,7 +18,7 @@ function contentAlreadyInjected(
   })
 }
 
-/** skill 的激活状态属于会话：`session.activeSkills`。 */
+/** Skill activation state belongs to the session: `session.activeSkills`. */
 export function createSkillCommands(
   skillLoader: SkillLoader,
 ): CommandHandler[] {
@@ -31,15 +31,15 @@ export function createSkillCommands(
       const skills = skillLoader.list()
       if (skills.length === 0) {
         print(
-          '\n[skills] 没有找到任何 skill。在 .skills/ 目录下创建 skill-name/SKILL.md 即可。\n',
+          '\n[skills] No skills found. Create .skills/skill-name/SKILL.md to add one.\n',
         )
         return true
       }
-      print(`\n[skills] 共 ${skills.length} 个可用：`)
+      print(`\n[skills] ${skills.length} available:`)
       for (const s of skills) {
-        const active = activeSkills.has(s.name) ? ' ✓ 已激活' : ''
+        const active = activeSkills.has(s.name) ? ' ✓ active' : ''
         print(`  /${s.name} — ${s.description}${active}`)
-        if (s.whenToUse) print(`    适用场景: ${s.whenToUse}`)
+        if (s.whenToUse) print(`    When to use: ${s.whenToUse}`)
       }
       print('')
       return true
@@ -48,7 +48,7 @@ export function createSkillCommands(
     // /skill load <name>
     (cmd, { print, session }) => {
       if (cmd === '/skill load') {
-        print('\n[skills] 用法: /skill load <name>\n')
+        print('\n[skills] Usage: /skill load <name>\n')
         return true
       }
       const match = cmd.match(/^\/skill\s+load\s+(\S+)$/)
@@ -57,26 +57,26 @@ export function createSkillCommands(
       if (!name) return false
       const skill = skillLoader.get(name)
       if (!skill) {
-        print(`\n[skills] 找不到 skill: ${name}\n`)
+        print(`\n[skills] Skill not found: ${name}\n`)
         return true
       }
-      // 运行中追加消息会排在这一轮的回答前面，打乱历史顺序
+      // A message appended mid-run would land before this turn's answer and break history order
       if (session.busy.locked) {
-        print(`\n[skills] 有任务正在执行中，请稍候再 /skill load ${name}\n`)
+        print(`\n[skills] A task is running; try /skill load ${name} again when it finishes\n`)
         return true
       }
       session.activeSkills.add(name)
-      // Codex 模式：激活即注入一次正文（system prompt 只保留索引）；
-      // 重复 load 不重复注入，避免消息历史线性堆积
+      // Codex style: activating injects the body once (the system prompt keeps only the index);
+      // loading again does not re-inject, so history doesn't grow linearly
       if (contentAlreadyInjected(session.messages, skill.content)) {
-        print(`\n[skills] ${name} 内容已在会话中，跳过重复注入\n`)
+        print(`\n[skills] ${name} is already in the session; not injecting again\n`)
         return true
       }
       session.append({
         role: 'user',
-        content: `[已加载 skill「${name}」，以下是指导内容]\n\n${skill.content}`,
+        content: `[Loaded skill "${name}". Instructions follow]\n\n${skill.content}`,
       })
-      print(`\n[skills] 已激活: ${name} — ${skill.description}\n`)
+      print(`\n[skills] Activated: ${name} — ${skill.description}\n`)
       return true
     },
 
@@ -84,7 +84,7 @@ export function createSkillCommands(
     (cmd, { print, session }) => {
       const activeSkills = session.activeSkills
       if (cmd === '/skill unload') {
-        print('\n[skills] 用法: /skill unload <name>\n')
+        print('\n[skills] Usage: /skill unload <name>\n')
         return true
       }
       const match = cmd.match(/^\/skill\s+unload\s+(\S+)$/)
@@ -92,24 +92,24 @@ export function createSkillCommands(
       const name = match[1]
       if (!name) return false
       if (!activeSkills.has(name)) {
-        print(`\n[skills] ${name} 未激活\n`)
+        print(`\n[skills] ${name} is not active\n`)
         return true
       }
       activeSkills.delete(name)
-      print(`\n[skills] 已卸载: ${name}\n`)
+      print(`\n[skills] Unloaded: ${name}\n`)
       return true
     },
 
-    // /<skill-name> — 直接用 /code-review 激活并触发
+    // /<skill-name>: e.g. /code-review activates and runs the skill directly
     (cmd, { print, session }) => {
       if (!cmd.startsWith('/')) return false
       const parts = cmd.slice(1).split(/\s+/)
       const name = parts[0]
       if (!name) return false
-      // P0-3 闸：/skill 前缀穿透到此的一律拦截（残缺子命令在各自 handler 已处理）
+      // P0-3 gate: anything with the /skill prefix that falls through to here is blocked (incomplete subcommands are handled by their own handlers)
       if (name === 'skill') {
         print(
-          '\n[skills] 未知子命令。可用: /skill list、/skill load <name>、/skill unload <name>\n',
+          '\n[skills] Unknown subcommand. Available: /skill list, /skill load <name>, /skill unload <name>\n',
         )
         return true
       }
@@ -117,32 +117,32 @@ export function createSkillCommands(
       if (!skill) return false
 
       if (session.busy.locked) {
-        print(`\n[skills] 有任务正在执行中，请稍候再尝试 /${name}\n`)
+        print(`\n[skills] A task is running; try /${name} again when it finishes\n`)
         return true
       }
 
       session.activeSkills.add(name)
-      print(`\n[skills] 激活 ${name}，开始执行...`)
+      print(`\n[skills] Activating ${name} and running...`)
 
       const args = parts.slice(1).join(' ')
-      // P0-2 去重：正文已在会话中出现过则只追加注记，不再注入一遍正文
+      // P0-2 dedup: if the body is already in the session, append only a note instead of the body again
       const alreadyLoaded = contentAlreadyInjected(
         session.messages,
         skill.content,
       )
       const content = alreadyLoaded
-        ? `[skill 已加载] /${name} 的注入内容已在会话中，直接执行。${
-            args ? `用户指令: ${args}` : ''
+        ? `[skill loaded] The content for /${name} is already in the session; run it now.${
+            args ? ` User instruction: ${args}` : ''
           }`
         : args
-          ? `${skill.content}\n\n用户指令: ${args}`
+          ? `${skill.content}\n\nUser instruction: ${args}`
           : skill.content
 
       return session
         .prompt(content)
         .catch((error: unknown) =>
           print(
-            `\n[skills] 执行失败: ${error instanceof Error ? error.message : error}\n`,
+            `\n[skills] Run failed: ${error instanceof Error ? error.message : error}\n`,
           ),
         )
     },

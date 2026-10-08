@@ -10,14 +10,14 @@ import type {
 export interface FeishuChannelConfig {
   appId: string
   appSecret: string
-  /** 这些发送者（open_id）是 owner；其余发送者是 guest */
+  /** These senders (open_id) are owners; all other senders are guests */
   owners: readonly string[]
   logger: VelaLogger
 }
 
 export class FeishuChannel implements ChannelDefinition {
   name = 'feishu'
-  description = '飞书 Bot 消息通道（长连接模式）'
+  description = 'Feishu bot message channel (long-connection mode)'
 
   private config: FeishuChannelConfig
   private messageHandler?: (msg: IncomingMessage) => void
@@ -39,7 +39,7 @@ export class FeishuChannel implements ChannelDefinition {
   async start(): Promise<void> {
     if (!this.config.appId || !this.config.appSecret) {
       this.config.logger.warn(
-        '[feishu] 未配置 appId / appSecret，通道不连接飞书',
+        '[feishu] appId / appSecret not configured; channel will not connect to Feishu',
       )
       return
     }
@@ -57,7 +57,7 @@ export class FeishuChannel implements ChannelDefinition {
 
         const content = JSON.parse(data.message.content)
         let text = content.text || ''
-        // 去掉 @Bot 的 mention 标记
+        // Strip @Bot mention markers
         if (data.message.mentions) {
           for (const m of data.message.mentions) {
             text = text.replace(m.key, '').trim()
@@ -83,7 +83,7 @@ export class FeishuChannel implements ChannelDefinition {
     })
 
     await this.wsClient.start({ eventDispatcher: dispatcher })
-    this.config.logger.info('[feishu] 长连接已建立')
+    this.config.logger.info('[feishu] Long connection established')
   }
 
   async stop(): Promise<void> {
@@ -93,7 +93,7 @@ export class FeishuChannel implements ChannelDefinition {
   async send(message: OutgoingMessage): Promise<void> {
     if (!this.larkClient) {
       this.config.logger.warn(
-        `[feishu] 未配置飞书，跳过发送: ${message.text.slice(0, 50)}`,
+        `[feishu] Feishu not configured, skipping send: ${message.text.slice(0, 50)}`,
       )
       return
     }
@@ -109,7 +109,7 @@ export class FeishuChannel implements ChannelDefinition {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      this.config.logger.error(`[feishu] 发送失败: ${msg}`)
+      this.config.logger.error(`[feishu] Send failed: ${msg}`)
     }
   }
 }

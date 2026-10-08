@@ -10,7 +10,7 @@ import {
 } from '@earendil-works/pi-tui'
 import type { ThinkingLevel } from '../../models/index.ts'
 
-/** 配色照 pi 的默认深色主题（okhsl），只取 Vela 用到的几种。 */
+/** Colors from pi's default dark theme (okhsl), only the ones Vela uses. */
 const c = (h: number, s: number, l: number) => okhslColor(h, s / 100, l / 100)
 const COLORS = {
   text: c(234, 3, 89),
@@ -31,7 +31,7 @@ const COLORS = {
   selectedBg: c(233, 41, 24),
 } satisfies Record<string, Color>
 
-/** 输入框边框按 thinking 级别变色（同 pi） */
+/** Editor border color follows the thinking level (like pi) */
 const THINKING_COLORS: Record<ThinkingLevel, Color> = {
   off: c(229, 8, 49),
   minimal: c(232, 20, 52),

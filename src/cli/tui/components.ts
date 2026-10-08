@@ -10,14 +10,14 @@ import {
 } from '@earendil-works/pi-tui'
 import { markdownTheme, theme } from './theme.ts'
 
-/** 用户消息：深色底的 Markdown（同 pi）；很长的（skill 正文）只显示前几行。 */
+/** User message: Markdown on a dark background (like pi); very long ones (skill bodies) show only the first lines. */
 export class UserMessage extends Container {
   constructor(text: string, maxLines = 12) {
     super()
     const lines = sanitize(text).split('\n')
     const shown =
       lines.length > maxLines
-        ? `${lines.slice(0, maxLines).join('\n')}\n…（还有 ${lines.length - maxLines} 行）`
+        ? `${lines.slice(0, maxLines).join('\n')}\n… (${lines.length - maxLines} more lines)`
         : lines.join('\n')
     this.addChild(new Spacer(1))
     this.addChild(
@@ -29,7 +29,7 @@ export class UserMessage extends Container {
   }
 }
 
-/** 助手的一段回答：thinking（可隐藏）+ Markdown 正文，流式追加。 */
+/** One assistant answer: thinking (hideable) + Markdown body, appended as it streams. */
 export class AssistantMessage extends Container {
   private thinking = ''
   private text = ''
@@ -80,7 +80,7 @@ export class AssistantMessage extends Container {
   }
 }
 
-/** 工具调用：名字 + 关键参数，结果默认只显示前几行（Ctrl+O 展开，同 pi）。 */
+/** Tool call: name + key argument; the result shows only the first lines by default (Ctrl+O expands, like pi). */
 export class ToolBlock implements Component {
   private status: 'pending' | 'success' | 'error' = 'pending'
   private output = ''
@@ -123,7 +123,7 @@ export class ToolBlock implements Component {
         lines.push(theme.fg(this.status === 'error' ? 'red' : 'muted', line))
       if (all.length > limit)
         lines.push(
-          theme.fg('dim', `… 还有 ${all.length - limit} 行（Ctrl+O 展开）`),
+          theme.fg('dim', `… ${all.length - limit} more lines (Ctrl+O to expand)`),
         )
     }
     const pad = (line: string) => {
@@ -138,8 +138,8 @@ export class ToolBlock implements Component {
 }
 
 /**
- * 对话区里的一行提示（错误、重试、压缩、扩展通知、命令输出…）。
- * `raw`：CLI 命令自己的输出（如 /context 的配色），不去掉颜色序列。
+ * A notice line in the chat log (errors, retries, compaction, extension notifications, command output, ...).
+ * `raw`: the CLI command's own output (e.g. /context colors); color sequences are kept.
  */
 export function notice(
   text: string,
@@ -160,7 +160,7 @@ export function notice(
   return container
 }
 
-/** 工具的关键参数：bash 命令、文件路径、搜索模式；其它工具显示压缩后的 JSON。 */
+/** A tool's key argument: bash command, file path, search pattern; other tools show compact JSON. */
 export function summarizeInput(name: string, input: unknown): string {
   if (input && typeof input === 'object') {
     const record = input as Record<string, unknown>
@@ -184,7 +184,7 @@ function formatOutput(output: unknown): string {
 function rawOutput(output: unknown): string {
   if (typeof output === 'string') return output.trimEnd()
   if (output instanceof Error) return output.message
-  // AI SDK 的工具结果：{ type: 'text', value } / { type: 'json', value } / { type: 'error-text', value }
+  // AI SDK tool results: { type: 'text', value } / { type: 'json', value } / { type: 'error-text', value }
   if (output && typeof output === 'object' && 'value' in output) {
     const value = (output as { value: unknown }).value
     if (typeof value === 'string') return value.trimEnd()
@@ -193,13 +193,14 @@ function rawOutput(output: unknown): string {
 }
 
 /**
- * 工具输出、模型回答、通道消息这些外部文本直接写进终端前，去掉终端控制序列和控制字符
- * （同 pi 的 stripAnsi + sanitizeBinaryOutput）：否则文件内容或通道里的人能改终端标题、
- * 写剪贴板（OSC 52）或打乱画面。保留换行和 Tab。
+ * Strip terminal escape sequences and control characters from external text (tool output, model answers,
+ * channel messages) before it reaches the terminal (like pi's stripAnsi + sanitizeBinaryOutput); otherwise file
+ * contents or people in a channel could change the terminal title, write the clipboard (OSC 52) or garble the
+ * screen. Newlines and tabs are kept.
  */
 export function sanitize(text: string): string {
   return stripTerminalSequences(text)
     .replace(/\r\n?/g, '\n')
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: 就是要去掉控制字符
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
     .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\uFFF9-\uFFFB]/g, '')
 }

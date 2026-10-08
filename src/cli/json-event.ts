@@ -1,6 +1,6 @@
 import type { VelaEvent } from '../agent/events.ts'
 
-/** JSON.stringify，Error（含 DOMException）写成 `{ name, message }`，bigint 写成字符串。 */
+/** JSON.stringify that writes Errors (including DOMException) as `{ name, message }` and bigints as strings. */
 export function toJsonLine(value: unknown): string {
   return `${JSON.stringify(value, (_key, v: unknown) => {
     if (v instanceof Error) return { name: v.name, message: v.message }
@@ -9,21 +9,21 @@ export function toJsonLine(value: unknown): string {
   })}\n`
 }
 
-/** json / rpc 模式的事件行：VelaEvent 原样（Error 序列化），多带一个 `sessionId`。 */
+/** An event line in json / rpc mode: the VelaEvent as is (Errors serialized), plus `sessionId`. */
 export function jsonEvent(event: VelaEvent, sessionId: string): string {
   return toJsonLine({ ...event, sessionId })
 }
 
 /**
- * 写 stdout 并在缓冲满时等它排空（同 pi 的 output-guard：读端慢时不无限堆内存）。
- * json / rpc 模式的协议输出都走这里，console 已经改写到 stderr。
+ * Write to stdout and wait for it to drain when the buffer is full (like pi's output-guard: a slow
+ * reader must not grow memory unbounded). All json / rpc protocol output goes through here; console is redirected to stderr.
  */
 export function writeStdout(text: string): Promise<void> {
   if (process.stdout.write(text)) return Promise.resolve()
   return new Promise((resolve) => process.stdout.once('drain', resolve))
 }
 
-/** json / rpc / print 模式：stdout 只放结果和协议，扩展、SDK 的 console 输出改到 stderr。 */
+/** json / rpc / print modes: stdout carries only results and protocol; console output from extensions and the SDK goes to stderr. */
 export function redirectConsoleToStderr(): void {
   const toStderr = (...args: unknown[]) => console.error(...args)
   console.log = toStderr

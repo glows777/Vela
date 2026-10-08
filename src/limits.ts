@@ -1,23 +1,24 @@
 /**
- * 运行时上限与阈值。默认值就是 CLI 一直使用的值；createVela({ limits }) 可以部分覆盖，
- * 测试用它把重试退避降到 0、把压缩阈值调小，而不必构造十几万 token 的输入。
+ * Runtime limits and thresholds. The defaults are what the CLI has always used; createVela({ limits })
+ * can override some of them. Tests use this to drop retry backoff to 0 and shrink compaction
+ * thresholds instead of building inputs of over 100k tokens.
  */
 export interface VelaLimits {
-  /** 可重试错误的最大重试次数 */
+  /** Max retries for retryable errors */
   maxRetries: number
-  /** 重试退避基数（指数退避 + 抖动）；0 表示不等待 */
+  /** Retry backoff base (exponential backoff + jitter); 0 means no wait */
   retryBaseMs: number
-  /** 重试退避上限 */
+  /** Retry backoff cap */
   retryMaxMs: number
-  /** 估算输入达到该值时尝试微压缩（折叠旧工具结果） */
+  /** Try microcompaction (fold old tool results) when the estimated input reaches this */
   microcompactThreshold: number
-  /** 估算输入达到该值时生成历史摘要 */
+  /** Summarize history when the estimated input reaches this */
   summaryThreshold: number
-  /** 微压缩至少要省下这么多 token 才采用 */
+  /** Microcompaction is only applied if it saves at least this many tokens */
   minMicroSavings: number
-  /** 单次请求的安全输入上限，超过直接停止本轮 */
+  /** Safe input cap for a single request; the turn stops if exceeded */
   maxInputTokens: number
-  /** bash 工具的执行超时 */
+  /** Timeout for the bash tool */
   bashTimeoutMs: number
 }
 
@@ -32,12 +33,12 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   bashTimeoutMs: 10_000,
 })
 
-/** 没有的上限名（拼错的、或已经去掉的 maxTurns / tokenBudget）直接报错，不悄悄忽略。 */
+/** Unknown limit names (typos, or the removed maxTurns / tokenBudget) throw instead of being silently ignored. */
 export function assertLimitKeys(limits: object, where = 'limits'): void {
   for (const key of Object.keys(limits))
     if (!Object.hasOwn(DEFAULT_LIMITS, key))
       throw new Error(
-        `${where} 里没有 ${key}；可用：${Object.keys(DEFAULT_LIMITS).join(', ')}`,
+        `Unknown key ${key} in ${where}; valid keys: ${Object.keys(DEFAULT_LIMITS).join(', ')}`,
       )
 }
 

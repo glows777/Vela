@@ -1,22 +1,25 @@
 /**
- * 会话角色和工具权限。角色属于会话：CLI 主人默认 owner，通道发送者默认 guest。
+ * Session roles and tool permissions. Roles belong to sessions: the CLI owner defaults to
+ * owner, channel senders default to guest.
  *
- * - owner：全部工具
- * - collaborator：除 bash 外全部
- * - guest：不碰本机的工具（知识库检索、网页搜索、延迟工具查询）；不能读写文件、跑命令、用记忆，
- *   system prompt 里也不注入主人的记忆
+ * - owner: all tools
+ * - collaborator: all except bash
+ * - guest: only tools that don't touch the machine (knowledge base search, web search,
+ *   deferred tool lookup); no file access, commands or memory, and the owner's memory is
+ *   not injected into the system prompt
  *
- * rag_search / web_search 来自内置的 rag、web 扩展。扩展工具名都带 `<扩展名>_` 前缀，
- * 所以只有名叫 rag / web 的扩展能注册出这两个名字（重名会抛错），别的扩展拿不到 guest 权限。
+ * rag_search / web_search come from the built-in rag and web extensions. Extension tool names
+ * carry an `<extension name>_` prefix, so only extensions named rag / web can register these
+ * names (duplicates throw); no other extension can get guest access.
  */
 export type Role = 'owner' | 'collaborator' | 'guest'
 
 export const ROLES: readonly Role[] = ['owner', 'collaborator', 'guest']
 
-/** allow：直接执行；deny：拒绝（模型也看不到这个工具）；ask：执行前用会话的 ui.confirm 询问，没有界面时拒绝 */
+/** allow: run; deny: refuse (the model never sees the tool); ask: confirm via the session's ui.confirm first, refuse when there is no UI */
 export type PermissionDecision = 'allow' | 'deny' | 'ask'
 
-/** 工具名（或 `*` 表示其余工具）→ 决定 */
+/** Tool name (or `*` for all other tools) → decision */
 export type PermissionRules = Record<string, PermissionDecision>
 
 const ROLE_RULES: Record<Role, PermissionRules> = {
@@ -31,8 +34,9 @@ const ROLE_RULES: Record<Role, PermissionRules> = {
 }
 
 /**
- * 某个角色对某个工具的决定。`overrides` 是会话自己的规则（`vela.session(id, { permissions })`）：
- * 精确工具名优先于 `*`，同一层里会话规则优先于角色规则。
+ * A role's decision for a tool. `overrides` are the session's own rules
+ * (`vela.session(id, { permissions })`): an exact tool name beats `*`, and at the same
+ * level session rules beat role rules.
  */
 export function decidePermission(
   role: Role,

@@ -3,15 +3,15 @@ import type { ToolResultStore } from '../session/tool-results.ts'
 
 export * from './pipeline.ts'
 
-/** 不传 results 时用 PromptContext 里当前会话的工具结果存储。 */
+/** Without results, uses the current session's tool result store from PromptContext. */
 export function toolHistoryGuide(results?: ToolResultStore): PipeFn {
   // No counters/timestamps in the system prefix; only the session's stable path/schema.
   return (ctx) => (results ?? ctx.toolResults)?.readingGuide() ?? null
 }
 
 /**
- * 核心 system prompt（结构同 pi：开场一段 + <rules> + <cwd>）。guest（通道外部用户）没有文件 / shell
- * 工具，不给文件相关规则，也不暴露工作目录。
+ * Core system prompt (same structure as pi: an intro paragraph + <rules> + <cwd>). Guests (external
+ * channel users) have no file / shell tools, so they get no file rules and no working directory.
  */
 export function coreRules(cwd?: string): PipeFn {
   return (ctx) => {
@@ -44,7 +44,7 @@ export function deferredTools(): PipeFn {
   }
 }
 
-/** 扩展在 before_agent_start 里写的段落，按写入顺序拼接 */
+/** Sections written by extensions in before_agent_start, joined in write order */
 export function extensionSections(): PipeFn {
   return (ctx) => {
     const sections = Object.values(ctx.extensionSections ?? {}).filter(Boolean)

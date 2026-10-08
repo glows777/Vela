@@ -2,7 +2,7 @@ import { stripTerminalSequences, type Terminal } from '@earendil-works/pi-tui'
 import { InteractiveMode } from '../../src/cli/interactive.ts'
 import type { Vela } from '../../src/vela.ts'
 
-/** pi-tui 的 Terminal 接口的假实现：不输出，按键直接送给 TUI。 */
+/** Fake implementation of pi-tui's Terminal interface: writes nothing and sends keys straight to the TUI. */
 export class FakeTerminal implements Terminal {
   private onInput?: (data: string) => void
   columns = 100
@@ -26,11 +26,11 @@ export class FakeTerminal implements Terminal {
   setTitle(): void {}
   setProgress(): void {}
 
-  /** 逐个字符输入（同真实终端） */
+  /** Type one character at a time (like a real terminal) */
   type(text: string): void {
     for (const char of text) this.onInput?.(char)
   }
-  /** 按键：'\r' Enter、'\x1b' Esc、'\x1b\r' Alt+Enter、'\x1b[1;3A' Alt+Up、'\x04' Ctrl+D… */
+  /** Press a key: '\r' Enter, '\x1b' Esc, '\x1b\r' Alt+Enter, '\x1b[1;3A' Alt+Up, '\x04' Ctrl+D… */
   press(key: string): void {
     this.onInput?.(key)
   }
@@ -51,13 +51,13 @@ export const KEYS = {
 
 const started: InteractiveMode[] = []
 
-/** afterEach 里调用：退出所有起过的 TUI（停掉转圈的定时器、还原 console） */
+/** Call in afterEach: shuts down every started TUI (stops spinner timers, restores console) */
 export async function stopTuis(): Promise<void> {
   await Promise.all(started.splice(0).map((mode) => mode.shutdown()))
 }
 
 /**
- * 在假终端里起交互模式。`screen()` 是当前整屏的文字（去掉颜色），`until()` 等某段文字出现。
+ * Starts interactive mode in a fake terminal. `screen()` is the current screen text (colors stripped); `until()` waits for some text to appear.
  */
 export async function startTui(
   vela: Vela,
@@ -90,7 +90,7 @@ export async function startTui(
       .render(terminal.columns)
       .map((line) => stripTerminalSequences(line).trimEnd())
       .join('\n')
-  /** 等条件成立（1ms 轮询，超时报错并带上当前屏幕） */
+  /** Wait until a condition holds (polls every 1 ms; on timeout, throws with the current screen) */
   const until = async (
     condition: string | (() => boolean),
     timeoutMs = 2000,
@@ -103,7 +103,7 @@ export async function startTui(
     while (!check()) {
       if (Date.now() > deadline)
         throw new Error(
-          `等待超时: ${typeof condition === 'string' ? condition : '条件'}\n${screen()}`,
+          `Timed out waiting for: ${typeof condition === 'string' ? condition : 'condition'}\n${screen()}`,
         )
       await Bun.sleep(1)
     }
@@ -115,7 +115,7 @@ export async function startTui(
     screen,
     until,
     exited: () => exited,
-    /** 输入一行并回车 */
+    /** Type a line and press Enter */
     submit: (text: string) => {
       terminal.type(text)
       terminal.press(KEYS.enter)

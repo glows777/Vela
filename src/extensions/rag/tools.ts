@@ -7,20 +7,20 @@ import { type EmbeddingFn, embed } from './embedder.ts'
 import type { SqliteVectorStore } from './sqlite-store.ts'
 
 export const createRagToolsInputSchema = z.object({
-  path: z.string().describe('文档路径'),
+  path: z.string().describe('Document path'),
 })
 
 export const ragSearchToolInputSchema = z.object({
-  query: z.string().describe('搜索查询'),
+  query: z.string().describe('Search query'),
   top_k: z.coerce
     .number()
     .int()
     .positive()
     .optional()
-    .describe('返回结果数量（默认 5）'),
+    .describe('Number of results to return (default 5)'),
 })
 
-/** 把一个文档分块、向量化后存进知识库；相对路径按 cwd 解析（和文件工具一致）。返回给人看的结果。 */
+/** Chunks and embeds a document and stores it in the knowledge base. Relative paths resolve against cwd (like the file tools). Returns a human-readable result. */
 export async function ingestDocument(
   vectorStore: SqliteVectorStore,
   embedFn: EmbeddingFn,
@@ -38,10 +38,10 @@ export async function ingestDocument(
   vectorStore.addBatch(
     chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i]! })),
   )
-  return `已导入 ${chunks.length} 个文档片段（来源: ${path}）。知识库共 ${vectorStore.size()} 个片段。`
+  return `Ingested ${chunks.length} document chunks (source: ${path}). The knowledge base has ${vectorStore.size()} chunks.`
 }
 
-/** rag 扩展的工具：模型看到的名字是 rag_ingest / rag_search。 */
+/** Tools of the rag extension; the model sees them as rag_ingest / rag_search. */
 export function createRagTools(
   vectorStore: SqliteVectorStore,
   embedFn: EmbeddingFn,
@@ -50,7 +50,7 @@ export function createRagTools(
   const ragIngestTool: ToolDefinition = {
     name: 'ingest',
     description:
-      '将文档导入知识库。path 为文件路径，内容会被分块、向量化后存储。',
+      'Ingest a document into the knowledge base. path is the file path; the content is chunked, embedded and stored.',
     inputSchema: createRagToolsInputSchema,
     isConcurrencySafe: false,
     isReadOnly: false,
@@ -64,14 +64,14 @@ export function createRagTools(
           context?.signal,
         )
       } catch (e) {
-        return `导入失败: ${e instanceof Error ? e.message : String(e)}`
+        return `Ingest failed: ${e instanceof Error ? e.message : String(e)}`
       }
     },
   }
 
   const ragSearchTool: ToolDefinition = {
     name: 'search',
-    description: '从知识库中搜索相关信息。返回最相关的文档片段。',
+    description: 'Search the knowledge base for relevant information. Returns the most relevant document chunks.',
     inputSchema: ragSearchToolInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
@@ -80,17 +80,17 @@ export function createRagTools(
       context,
     ) => {
       if (vectorStore.size() === 0)
-        return '知识库为空，请先使用 rag_ingest 导入文档。'
+        return 'The knowledge base is empty. Ingest documents with rag_ingest first.'
       const results = await vectorStore.hybridSearch(
         (texts) => embedFn(texts, context?.signal),
         query,
         top_k || 5,
       )
-      if (results.length === 0) return `没有找到与 "${query}" 相关的内容。`
+      if (results.length === 0) return `No content found for "${query}".`
       return results
         .map(
           (r, i) =>
-            `[${i + 1}] 来源: ${r.chunk.source} | 综合分: ${r.score.toFixed(3)} (向量: ${r.vectorScore.toFixed(2)}, 关键词: ${r.keywordScore.toFixed(2)})\n${r.chunk.text.slice(0, 500)}`,
+            `[${i + 1}] Source: ${r.chunk.source} | Score: ${r.score.toFixed(3)} (vector: ${r.vectorScore.toFixed(2)}, keyword: ${r.keywordScore.toFixed(2)})\n${r.chunk.text.slice(0, 500)}`,
         )
         .join('\n\n---\n\n')
     },

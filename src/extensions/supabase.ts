@@ -5,15 +5,15 @@ import { configString } from './config.ts'
 const listTablesInputSchema = z.object({})
 
 const queryInputSchema = z.object({
-  table: z.string().describe('表名'),
-  select: z.string().optional().describe('查询字段，默认 *'),
-  where: z.string().optional().describe('过滤条件，如 status=active'),
-  limit: z.number().optional().describe('返回条数限制，默认 10'),
+  table: z.string().describe('Table name'),
+  select: z.string().optional().describe('Columns to select, default *'),
+  where: z.string().optional().describe('Filter, e.g. status=active'),
+  limit: z.number().optional().describe('Maximum rows to return, default 10'),
 })
 
 const insertInputSchema = z.object({
-  table: z.string().describe('表名'),
-  data: z.record(z.string(), z.unknown()).describe('要插入的数据'),
+  table: z.string().describe('Table name'),
+  data: z.record(z.string(), z.unknown()).describe('Data to insert'),
 })
 
 export interface SupabaseOptions {
@@ -22,20 +22,20 @@ export interface SupabaseOptions {
 }
 
 /**
- * Supabase 数据库工具（supabase_list_tables / supabase_query / supabase_insert）。没有 url / key 时用内置的 mock 数据。
- * 没传的选项从配置段（`extensionConfig.supabase`）取。
+ * Supabase database tools (supabase_list_tables / supabase_query / supabase_insert). Without url / key they use built-in mock data.
+ * Options not passed are read from the config section (`extensionConfig.supabase`).
  */
 export function supabase(options: SupabaseOptions = {}): VelaExtension {
   return function supabase(vela) {
     const url = options.url ?? configString(vela.config, 'url')
     const key = options.key ?? configString(vela.config, 'key')
     if (!url || !key)
-      vela.logger.info('[supabase] 未配置 url / key，使用 Mock 模式')
+      vela.logger.info('[supabase] url / key not configured; using mock mode')
 
     const tools: ToolDefinition[] = [
       {
         name: 'list_tables',
-        description: '列出数据库中所有表',
+        description: 'List all tables in the database',
         inputSchema: listTablesInputSchema,
         isConcurrencySafe: true,
         isReadOnly: true,
@@ -43,15 +43,15 @@ export function supabase(options: SupabaseOptions = {}): VelaExtension {
           if (!url) {
             return JSON.stringify({
               tables: ['users', 'posts', 'comments', 'sessions'],
-              note: 'Mock 模式 — 配置 SUPABASE_URL 和 SUPABASE_KEY 连接真实数据库',
+              note: 'Mock mode — configure SUPABASE_URL and SUPABASE_KEY to connect to a real database',
             })
           }
-          return `连接 ${url} 查询表列表...（真实实现会调用 Supabase API）`
+          return `Connecting to ${url} to list tables... (a real implementation would call the Supabase API)`
         },
       },
       {
         name: 'query',
-        description: '查询指定表的数据，支持 select / where / limit',
+        description: 'Query rows from a table; supports select / where / limit',
         inputSchema: queryInputSchema,
         isConcurrencySafe: true,
         isReadOnly: true,
@@ -67,14 +67,14 @@ export function supabase(options: SupabaseOptions = {}): VelaExtension {
               users: [
                 {
                   id: 1,
-                  name: '张三',
+                  name: 'Alice Zhang',
                   email: 'zhang@example.com',
                   role: 'admin',
                 },
-                { id: 2, name: '李四', email: 'li@example.com', role: 'user' },
+                { id: 2, name: 'Bob Li', email: 'li@example.com', role: 'user' },
                 {
                   id: 3,
-                  name: '王五',
+                  name: 'Carol Wang',
                   email: 'wang@example.com',
                   role: 'user',
                 },
@@ -82,19 +82,19 @@ export function supabase(options: SupabaseOptions = {}): VelaExtension {
               posts: [
                 {
                   id: 1,
-                  title: 'Agent 开发入门',
+                  title: 'Getting started with agents',
                   author_id: 1,
                   status: 'published',
                 },
                 {
                   id: 2,
-                  title: 'Plugin 架构设计',
+                  title: 'Plugin architecture design',
                   author_id: 1,
                   status: 'draft',
                 },
               ],
               comments: [
-                { id: 1, post_id: 1, user_id: 2, content: '写得不错！' },
+                { id: 1, post_id: 1, user_id: 2, content: 'Nicely written!' },
               ],
               sessions: [
                 {
@@ -121,7 +121,7 @@ export function supabase(options: SupabaseOptions = {}): VelaExtension {
       },
       {
         name: 'insert',
-        description: '向指定表插入一条记录',
+        description: 'Insert a row into a table',
         inputSchema: insertInputSchema,
         isConcurrencySafe: false,
         isReadOnly: false,
@@ -135,7 +135,7 @@ export function supabase(options: SupabaseOptions = {}): VelaExtension {
               success: true,
               table,
               inserted: { id: Math.floor(Math.random() * 1000), ...data },
-              note: 'Mock 模式',
+              note: 'Mock mode',
             })
           }
           return `INSERT INTO ${table} — ${JSON.stringify(data)}`

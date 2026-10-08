@@ -7,14 +7,15 @@ import {
 
 export interface ReplayResult {
   t: TestVela
-  /** 每条输入 prompt() 抛出的错误（没出错的是 undefined），顺序同 inputs */
+  /** Error thrown by prompt() for each input (undefined if none), in `inputs` order */
   errors: unknown[]
 }
 
 /**
- * 把录制的场景（`VELA_RECORD=<file>` 录下的 JSON）离线重跑一遍：
- * 用场景里的响应建 faux 模型，按 `inputs` 顺序在默认会话里逐条 prompt。
- * 返回的 `t` 和 createTestVela() 的一样，可以继续断言事件、消息和落盘文件。
+ * Replays a recorded scenario (the JSON written by `VELA_RECORD=<file>`) offline:
+ * builds a faux model from the scenario's responses and prompts each of `inputs` in order
+ * in the default session. The returned `t` is the same as createTestVela()'s, so you can
+ * keep asserting on events, messages and files on disk.
  */
 export async function replayScenario(
   path: string,
@@ -22,7 +23,7 @@ export async function replayScenario(
 ): Promise<ReplayResult> {
   const scenario = await readFauxScenario(path)
   if (!scenario.inputs?.length)
-    throw new Error(`replayScenario: ${path} 没有 inputs，无法重跑`)
+    throw new Error(`replayScenario: ${path} has no inputs to replay`)
   const { inputs, responses, generate, ...fauxOptions } = scenario
   const t = createTestVela({
     ...options,

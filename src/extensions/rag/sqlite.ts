@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
-/** 同步 SQLite 的最小公共面：Bun 下是 bun:sqlite，Node 下是 node:sqlite。 */
+/** Minimal common surface of synchronous SQLite: bun:sqlite on Bun, node:sqlite on Node. */
 export interface SqliteStatement {
   run(...params: unknown[]): unknown
   all(...params: unknown[]): unknown[]
@@ -18,8 +18,8 @@ export interface SqliteDatabase {
 const require = createRequire(import.meta.url)
 const isBun = typeof process.versions.bun === 'string'
 
-// bun:sqlite 默认用系统 SQLite；sqlite-vec 需要一个支持扩展加载的动态库
-// （macOS 的系统 SQLite 不支持，要用 Homebrew 的）。node:sqlite 自带的 SQLite 支持扩展加载。
+// bun:sqlite uses the system SQLite by default; sqlite-vec needs a library that supports loading
+// extensions (the macOS system SQLite does not; use Homebrew's). node:sqlite's bundled SQLite supports it.
 const CUSTOM_SQLITE_CANDIDATES = [
   '/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib', // Apple Silicon Mac
   '/usr/local/opt/sqlite/lib/libsqlite3.dylib', // Intel Mac
@@ -34,14 +34,14 @@ function loadCustomSqlite(Database: { setCustomSQLite(path: string): void }): vo
   const path = CUSTOM_SQLITE_CANDIDATES.find((p) => existsSync(p))
   if (!path) {
     throw new Error(
-      '未找到支持 sqlite-vec 扩展加载的 SQLite 动态库：macOS 请安装 Homebrew SQLite（brew install sqlite），Linux 请确认系统 libsqlite3 路径',
+      'No SQLite library that can load the sqlite-vec extension was found. On macOS, install Homebrew SQLite (brew install sqlite); on Linux, check the system libsqlite3 path',
     )
   }
   Database.setCustomSQLite(path)
   customSqliteLoaded = true
 }
 
-/** 打开一个允许加载扩展的数据库。 */
+/** Opens a database that allows loading extensions. */
 export function openSqlite(path: string): SqliteDatabase {
   if (isBun) {
     const { Database } = require('bun:sqlite')
@@ -52,7 +52,7 @@ export function openSqlite(path: string): SqliteDatabase {
   return new DatabaseSync(path, { allowExtension: true })
 }
 
-/** 在一个事务里执行 fn（两个运行时的 transaction API 不同，统一用 BEGIN / COMMIT）。 */
+/** Runs fn in a transaction (the two runtimes' transaction APIs differ, so use BEGIN / COMMIT). */
 export function transaction(db: SqliteDatabase, fn: () => void): void {
   db.exec('BEGIN')
   try {

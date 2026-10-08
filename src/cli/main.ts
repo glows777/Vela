@@ -47,8 +47,8 @@ const env = process.env
 const cwd = process.cwd()
 
 /**
- * 运行方式（同 pi）：`--mode rpc` / `--mode json` 显式选；`-p`、`--mode text` 或 stdin / stdout 被重定向时是单次模式；
- * 否则（终端里）是交互模式。
+ * Run mode (like pi): `--mode rpc` / `--mode json` pick explicitly; `-p`, `--mode text` or redirected stdin / stdout
+ * mean print mode; otherwise (in a terminal) interactive mode.
  */
 const mode: 'interactive' | 'print' | 'json' | 'rpc' =
   args.mode === 'rpc'
@@ -61,21 +61,21 @@ const mode: 'interactive' | 'print' | 'json' | 'rpc' =
           !process.stdout.isTTY
         ? 'print'
         : 'interactive'
-// 非交互模式 stdout 只放结果 / 协议：扩展、SDK 的 console 输出都改到 stderr
+// Non-interactive modes keep stdout for results / protocol: console output from extensions and the SDK goes to stderr
 if (mode !== 'interactive') redirectConsoleToStderr()
 if (mode === 'rpc' && args.messages.length)
-  usageError('--mode rpc 从 stdin 读命令，不接受命令行里的 prompt')
+  usageError('--mode rpc reads commands from stdin and takes no prompt on the command line')
 if (mode !== 'interactive' && args.resume)
-  usageError('-r 只能在交互模式用；单次 / json / rpc 模式用 --session <id> 或 -c')
+  usageError('-r works only in interactive mode; in print / json / rpc mode use --session <id> or -c')
 
-// 单次模式：管道进来的 stdin 拼在第一个 prompt 前面（同 pi：`git diff | vela -p "review"`）
+// Print mode: piped stdin is prepended to the first prompt (like pi: `git diff | vela -p "review"`)
 const messages = [...args.messages]
 if (mode === 'print' || mode === 'json') {
   const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
-  if (!messages.length) usageError('没有 prompt：在命令行给出，或从 stdin 输入')
+  if (!messages.length) usageError('No prompt: pass one on the command line or via stdin')
 }
-// 配置：~/.vela/settings.json + 信任后的 <cwd>/.vela/settings.json（第 4 步，见 04-plan.md）
+// Config: ~/.vela/settings.json + <cwd>/.vela/settings.json once trusted (step 4, see 04-plan.md)
 const agentDir = defaultAgentDir(env)
 const trust = await resolveTrust({
   cwd,
@@ -94,25 +94,25 @@ try {
     builtins: Object.keys(BUILTIN_EXTENSIONS),
   })
 } catch (error) {
-  console.error(`[配置] ${error instanceof Error ? error.message : error}`)
+  console.error(`[config] ${error instanceof Error ? error.message : error}`)
   process.exit(2)
 }
-// -p 模式也提示（--continue 找不到旧会话时用户要知道为什么）；走 stderr，stdout 留给结果
+// Hint in -p mode too (if --continue can't find the old session, the user should know why); goes to stderr, stdout is for results
 const legacyHint = legacyDataHint(cwd, config.dataDir)
 if (legacyHint) console.error(legacyHint)
 
 /**
- * 默认模型：VELA_MODEL=mock / faux:<场景> 优先（离线体验、回放），否则 `--model` → settings 的
- * defaultModel → `openai/$OPENAI_API_MODEL_NAME`（旧的环境变量写法）。
+ * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → settings
+ * defaultModel → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
  */
 const NO_MODEL =
-  '没有选模型：用 --model provider/id，或在 ~/.vela/settings.json 写 defaultModel（provider 见 ~/.vela/models.json，内置 openai / anthropic 读 OPENAI_API_KEY / ANTHROPIC_API_KEY），或设置 OPENAI_API_KEY + OPENAI_API_MODEL_NAME；离线体验用 VELA_MODEL=mock。'
+  'No model selected. Use --model provider/id, set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json; built-in openai / anthropic read OPENAI_API_KEY / ANTHROPIC_API_KEY), or set OPENAI_API_KEY + OPENAI_API_MODEL_NAME. For an offline demo use VELA_MODEL=mock.'
 
-/** 默认模型；都没配置时是 undefined（--continue 恢复的会话可能保存了模型，否则启动时提示 NO_MODEL） */
+/** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports NO_MODEL) */
 async function chooseModel(): Promise<LanguageModel | string | undefined> {
-  // VELA_MODEL=mock：用内置关键词 demo 模型离线体验（模拟 prompt cache 行为）
+  // VELA_MODEL=mock: offline demo with the built-in keyword demo model (simulates prompt cache behavior)
   if (env.VELA_MODEL === 'mock') return createMockModel()
-  // VELA_MODEL=faux:<scenario.json>：按 JSON 场景脚本回放模型响应（复现问题、CLI e2e）
+  // VELA_MODEL=faux:<scenario.json>: replay model responses from a JSON scenario script (bug repros, CLI e2e)
   if (env.VELA_MODEL?.startsWith('faux:'))
     return loadFauxScenario(env.VELA_MODEL.slice('faux:'.length))
   return (
@@ -123,8 +123,8 @@ async function chooseModel(): Promise<LanguageModel | string | undefined> {
 }
 const chosenModel = await chooseModel()
 
-// VELA_RECORD=<file.json>：把这次运行的模型响应和用户输入录成 faux 场景，之后用 VELA_MODEL=faux:<file> 回放
-// （只录默认模型；按名字选的模型这里先用 models.json / 内置 provider 解析，扩展注册的 provider 不支持录制）
+// VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
+// (records the default model only; a model chosen by name is resolved here via models.json / built-in providers, so extension providers can't be recorded)
 let recorder: ReturnType<typeof recordModel> | undefined
 if (env.VELA_RECORD) {
   try {
@@ -135,12 +135,12 @@ if (env.VELA_RECORD) {
         : chosenModel
     recorder = recordModel(model, { path: env.VELA_RECORD })
   } catch (error) {
-    console.error(`[录制] ${error instanceof Error ? error.message : error}`)
+    console.error(`[record] ${error instanceof Error ? error.message : error}`)
     process.exit(1)
   }
 }
 
-// 交互模式的日志进 TUI 的对话区，debug 写 ~/.vela/debug.log；其它模式写 stderr
+// Interactive mode logs to the TUI chat log and debug to ~/.vela/debug.log; other modes log to stderr
 const interactiveLogger =
   mode === 'interactive'
     ? createInteractiveLogger({
@@ -162,22 +162,22 @@ const vela = createVela({
   limits: config.settings.limits,
   logger,
   extensionConfig: extensionConfigFromEnv(env, config.extensionConfig),
-  // 内置扩展（memory / rag / web / supabase / feishu）+ ~/.vela/extensions + .vela/extensions + settings + -e
+  // Built-in extensions (memory / rag / web / supabase / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
   extensions: await loadCliExtensions(config, args, (message) =>
     console.error(message),
   ),
 })
 
 /**
- * 用哪个会话（同 pi）：`--session <id>`；`-c` 接最近保存的（没有就开新的）；`-r` 交互模式里选；
- * 否则每次启动一个新会话。
+ * Which session to use (like pi): `--session <id>`; `-c` continues the most recent saved one (or starts a new one);
+ * `-r` picks one in interactive mode; otherwise each launch starts a new session.
  */
 const sessionId =
   args.session ??
   (args.continue ? (await vela.listSessions())[0]?.id : undefined) ??
   newSessionId()
 const resume = args.session !== undefined || args.continue
-// 录制主会话的输入（-r 选中的会话 id 在 configure 时才知道），不录通道会话
+// Record input of the main session only, not channel sessions (the id picked with -r is known only at configure time)
 let recordedSession = sessionId
 if (recorder)
   vela.subscribe((event, id) => {
@@ -186,9 +186,9 @@ if (recorder)
   })
 
 /**
- * 恢复的会话带着保存的模型和 thinking；命令行显式给的优先，VELA_MODEL=mock / faux 和
- * VELA_RECORD 包装过的模型也优先（不然 --continue 会绕过回放 / 录制，改用保存的真实模型）。
- * 返回模型是否可用。
+ * A resumed session carries its saved model and thinking level. Explicit command-line values win, and so do
+ * VELA_MODEL=mock / faux and VELA_RECORD-wrapped models (otherwise --continue would bypass replay / recording
+ * and use the saved real model). Returns whether the model is usable.
  */
 function applyModelArgs(target: VelaSession): boolean {
   recordedSession = target.id
@@ -203,7 +203,7 @@ function applyModelArgs(target: VelaSession): boolean {
     return true
   } catch (error) {
     console.error(
-      `[模型] ${chosenModel === undefined && !args.model ? NO_MODEL : error instanceof Error ? error.message : error}`,
+      `[model] ${chosenModel === undefined && !args.model ? NO_MODEL : error instanceof Error ? error.message : error}`,
     )
     return false
   }
@@ -216,10 +216,10 @@ const exit = async (code: number): Promise<never> => {
 }
 
 if (mode === 'print' || mode === 'json') {
-  // 单次模式没有界面：扩展的 confirm 一律按“否”处理（同 pi 的 print 模式）
+  // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
   const session = vela.session(sessionId)
   if (resume) await session.resume()
-  // 扩展注册的 provider 要等扩展加载完才能解析（加载失败的话 prompt 会报）
+  // Extension providers resolve only after extensions load (if loading fails, prompt reports it)
   await vela.ready().catch(() => {})
   if (!applyModelArgs(session)) await exit(1)
   await exit(
@@ -239,7 +239,7 @@ if (mode === 'print' || mode === 'json') {
     sessionId,
     resume,
     newSessionId,
-    // 没有模型时照样启动，客户端可以 set_model（错误打到 stderr）
+    // Start even without a model; the client can set_model (the error goes to stderr)
     configure: (session) => void applyModelArgs(session),
     input: process.stdin,
     write: writeStdout,

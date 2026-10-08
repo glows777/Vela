@@ -40,76 +40,77 @@ import { type SessionOptions, VelaSession } from './vela-session.ts'
 
 export interface VelaOptions {
   /**
-   * 默认模型：AI SDK 的 LanguageModel（测试传 faux），或 `provider/id`（在 `providers` 和扩展注册的
-   * provider 里找）。core 不读环境变量：CLI 用 loadConfig() 的 providers。
-   * 不给时会话要先 setModel()（或恢复一个保存了模型的会话）才能 prompt。
+   * Default model: an AI SDK LanguageModel (tests pass faux), or `provider/id` (looked up in `providers`
+   * and providers registered by extensions). Core never reads environment variables: the CLI uses the
+   * providers from loadConfig(). Without it, a session must call setModel() (or resume a session with a
+   * saved model) before it can prompt.
    */
   model?: LanguageModel | string
-  /** 模型 provider（loadConfig() 给的内置 openai / anthropic + models.json，或自己写的） */
+  /** Model providers (built-in openai / anthropic + models.json from loadConfig(), or your own) */
   providers?: Record<string, ProviderDefinition>
-  /** 新会话的 thinking 级别，默认 medium（同 pi） */
+  /** Thinking level for new sessions, default medium (like pi) */
   thinkingLevel?: ThinkingLevel
-  /** 文件、搜索、bash 工具和 skill 的工作目录，默认 process.cwd()。 */
+  /** Working directory for file, search and bash tools and skills; default process.cwd(). */
   cwd?: string
   /**
-   * 项目数据目录（sessions/、usage/、扩展数据如 memory/、rag/），相对路径按 cwd 解析。
-   * 不给时什么都不持久化：会话在内存里，工具长输出等写到临时目录，dispose() 时删掉。
-   * CLI 用 `~/.vela/projects/<编码后的 cwd>`（见 loadConfig）。
+   * Project data directory (sessions/, usage/, extension data such as memory/, rag/); relative paths resolve against cwd.
+   * Without it nothing persists: sessions stay in memory, long tool output etc. goes to a temp dir deleted by dispose().
+   * The CLI uses `~/.vela/projects/<encoded cwd>` (see loadConfig).
    */
   dataDir?: string
-  /** 会话历史存哪；默认有 dataDir 时是 `<dataDir>/sessions/*.jsonl`，否则在内存里 */
+  /** Where session history is stored; defaults to `<dataDir>/sessions/*.jsonl` with dataDir, otherwise memory */
   sessionStorage?: SessionStorage
-  /** skill 目录（每个子目录一个 `SKILL.md`），后面的同名 skill 覆盖前面的；默认 `<cwd>/.skills`、`<cwd>/.vela/skills` */
+  /** Skill directories (one `SKILL.md` per subdirectory); later skills override earlier ones with the same name. Default `<cwd>/.skills`, `<cwd>/.vela/skills` */
   skillDirs?: string[]
-  /** 每个扩展的配置段，扩展通过 `vela.config` 读到自己那一段（按扩展名） */
+  /** Config section per extension; each extension reads its own section from `vela.config` (by extension name) */
   extensionConfig?: Record<string, Record<string, unknown>>
-  /** 轮数、重试、预算、压缩阈值等上限；未给出的字段用默认值（见 src/limits.ts）。 */
+  /** Retry, compaction threshold and other limits; missing fields use defaults (see src/limits.ts). */
   limits?: Partial<VelaLimits>
-  /** 非事件类的诊断输出（扩展、hooks、会话文件坏行……），默认静默。 */
+  /** Diagnostic output that is not an event (extensions, hooks, bad session file lines, ...); silent by default. */
   logger?: VelaLogger
   /**
-   * 要加载的扩展，按顺序运行（同 pi，SDK 默认不带内置扩展）。
-   * 记忆、知识库、网页工具也是扩展：`[memory(), rag({ embedder }), web({ tavilyKey })]`。
-   * 扩展的配置通过工厂参数传入，例如 `feishu({ appId, appSecret })`。
+   * Extensions to load, run in order (like pi; the SDK includes no built-in extensions by default).
+   * Memory, knowledge base and web tools are extensions too: `[memory(), rag({ embedder }), web({ tavilyKey })]`.
+   * Extension config is passed as factory arguments, e.g. `feishu({ appId, appSecret })`.
    */
   extensions?: VelaExtension[]
 }
 
-/** createVela() 的返回值。 */
+/** Return value of createVela(). */
 export interface Vela {
   readonly cwd: string
   readonly dataDir: string
-  /** 默认模型（按名字给的在第一次访问时解析；没给或解析不了时抛错） */
+  /** Default model (a name is resolved on first access; throws if none is given or it cannot be resolved) */
   readonly model: LanguageModel
   readonly limits: VelaLimits
-  /** provider 列出的模型（`provider/id`、上下文窗口、价格…），`/model` 用 */
+  /** Models listed by providers (`provider/id`, context window, price, ...), used by `/model` */
   models(): ModelInfo[]
   /**
-   * 打开（或取回已打开的）会话；文件存储时 id 是 `sessions/<id>.jsonl` 的文件名。
-   * options 只在第一次打开时生效。需要恢复历史时再 `await session.resume()`。
+   * Opens a session (or returns it if already open); with file storage the id is the file name in `sessions/<id>.jsonl`.
+   * options only apply on first open. Call `await session.resume()` to restore history.
    */
   session(id?: string, options?: SessionOptions): VelaSession
-  /** 当前打开的会话 */
+  /** Currently open sessions */
   sessions(): VelaSession[]
-  /** 保存过的会话（最近的在前），来自 SessionStorage.list()；存储没实现 list 时为空 */
+  /** Saved sessions (newest first) from SessionStorage.list(); empty if the storage doesn't implement list */
   listSessions(): Promise<SessionSummary[]>
-  /** 订阅所有会话的事件；返回取消订阅的函数 */
+  /** Subscribes to events from all sessions; returns an unsubscribe function */
   subscribe(listener: VelaSessionEventListener): () => void
-  /** 等所有扩展（包括异步工厂）加载完；加载失败时 reject */
+  /** Waits for all extensions (including async factories) to load; rejects if loading fails */
   ready(): Promise<void>
-  /** 已加载的扩展和它们注册的工具、命令、通道 */
+  /** Loaded extensions and the tools, commands and channels they registered */
   extensions(): LoadedExtension[]
-  /** 扩展注册的命令 */
+  /** Commands registered by extensions */
   commands(): { name: string; description?: string; extension: string }[]
-  /** 扩展注册的通道 */
+  /** Channels registered by extensions */
   channels(): { name: string; description: string }[]
-  /** 启动所有通道（开始接收消息） */
+  /** Starts all channels (begins receiving messages) */
   startChannels(): Promise<void>
-  /** 停止通道、关闭所有会话（中断正在跑的任务并保存） */
+  /** Stops channels and closes all sessions (aborting running tasks and saving) */
   dispose(): Promise<void>
 }
 
-/** CLI 和测试用的内部对象，不属于公开 API。 */
+/** Internals used by the CLI and tests; not part of the public API. */
 export interface VelaInternals {
   logger: VelaLogger
   registry: ToolRegistry
@@ -121,21 +122,21 @@ export interface VelaInternals {
 
 const internals = new WeakMap<Vela, VelaInternals>()
 
-/** @internal 取 Vela 的内部对象（CLI 命令、测试用）。 */
+/** @internal Gets Vela's internals (for CLI commands and tests). */
 export function velaInternals(vela: Vela): VelaInternals {
   const found = internals.get(vela)
-  if (!found) throw new Error('不是 createVela() 创建的 Vela')
+  if (!found) throw new Error('Not a Vela created by createVela()')
   return found
 }
 
 /**
- * 装配一个 Vela：核心工具（文件、搜索、bash）、hooks、prompt、skills、扩展和通道。
- * 对话通过 `vela.session(id)` 打开；同一个 Vela 可以同时开多个会话，
- * 它们共享工具和扩展，各自有消息历史、上下文压缩、用量、角色和运行锁。
+ * Assembles a Vela: core tools (files, search, bash), hooks, prompt, skills, extensions and channels.
+ * Conversations are opened with `vela.session(id)`; one Vela can have several sessions open at once.
+ * They share tools and extensions, and each has its own message history, compaction, usage, role and run lock.
  */
 export function createVela(options: VelaOptions = {}): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())
-  // 没给 dataDir 时用临时目录（工具长输出、工具历史、扩展数据），dispose 时删掉
+  // Without dataDir, use a temp dir (long tool output, tool history, extension data) deleted on dispose
   const ephemeral = options.dataDir === undefined
   const dataDir = ephemeral
     ? mkdtempSync(join(tmpdir(), 'vela-'))
@@ -151,7 +152,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     choice: string | LanguageModel | undefined,
   ): ResolvedModel => {
     if (choice === undefined)
-      throw new Error('没有选模型：给 createVela() 传 model，或调用 session.setModel()')
+      throw new Error('No model selected: pass model to createVela(), or call session.setModel()')
     return typeof choice === 'string'
       ? models.resolve(choice)
       : { model: choice, info: describeModel(choice) }
@@ -159,8 +160,8 @@ export function createVela(options: VelaOptions = {}): Vela {
   const limits = resolveLimits(options.limits)
   const logger = options.logger ?? silentLogger
 
-  // Vela 级 registry 只持有共享的工具定义；真正执行工具的是每个会话 fork 出来的 registry。
-  // 它自己的结果目录以 . 开头，不会和任何会话 id 冲突。
+  // The Vela-level registry only holds shared tool definitions; tools run in each session's forked registry.
+  // Its own results dir starts with `.`, so it never collides with a session id.
   const registry = new ToolRegistry(
     new ToolResultStore(join(dataDir, 'sessions', '.shared', 'tool-results')),
   )
@@ -204,7 +205,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     id = 'default',
     sessionOptions?: SessionOptions,
   ): VelaSession => {
-    if (disposed) throw new Error('Vela 已 dispose')
+    if (disposed) throw new Error('Vela has been disposed')
     const existing = sessions.get(id)
     if (existing) return existing
     const created: VelaSession = new VelaSession(
@@ -257,7 +258,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     },
     options.extensions ?? [],
   )
-  // 审计放在扩展的 tool_call 之后：记录的是扩展改过之后真正要写的路径
+  // Audit runs after extensions' tool_call, so it records the path actually written after extensions modify it
   hooks.registerPre('audit-log', (toolName, input, context) => {
     if (toolName === 'write_file' || toolName === 'edit_file') {
       const path = (input as { path?: string } | null)?.path || 'unknown'

@@ -4,62 +4,62 @@ import type { ModelMessage } from 'ai'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 
-/** 现在写的会话文件格式版本；格式不兼容地变化时加一，并在加载时迁移旧版本（同 pi）。 */
+/** Session file format version written now. Bump it on incompatible changes and migrate older versions on load (like pi). */
 export const SESSION_FORMAT_VERSION = 1
 
-/** 一次保存的会话内容（压缩后的完整历史）。 */
+/** Content of one session save (the full history after compaction). */
 export interface SessionCheckpoint {
   type: 'checkpoint'
-  /** 格式版本；Vela 写的总是有，没有的旧文件按 1 读 */
+  /** Format version; always written by Vela, older files without it are read as 1 */
   version?: number
   timestamp: string
-  /** 上下文摘要（没压缩过时为空串） */
+  /** Context summary (empty string if never compacted) */
   summary: string
   messages: { timestamp: string; message: ModelMessage }[]
-  /** @internal 工具调用历史的标识和进度（恢复时校验工具历史文件） */
+  /** @internal Tool call history id and progress (used to verify the tool history file on resume) */
   toolHistoryId?: string
   /** @internal */
   toolHistorySeq?: number
   /** @internal */
   toolHistoryViewSeq?: number
-  /** 会话用的模型 `provider/id`（用 setModel 选过、能按名字找回时才有），恢复时还原 */
+  /** Session model `provider/id` (only when chosen with setModel and resolvable by name); restored on resume */
   model?: string
-  /** 会话的 thinking 级别，恢复时还原 */
+  /** Session thinking level; restored on resume */
   thinkingLevel?: ThinkingLevel
-  /** 会话的显示名（`session.setName()`、CLI 的 /name） */
+  /** Session display name (`session.setName()`, the CLI's /name) */
   name?: string
 }
 
-/** `SessionStorage.list()` 的一项：会话选择器、`vela.listSessions()` 用。 */
+/** One `SessionStorage.list()` entry, used by the session picker and `vela.listSessions()`. */
 export interface SessionSummary {
   id: string
   name?: string
-  /** 最近一次保存的时间（ISO） */
+  /** Time of the last save (ISO) */
   updatedAt: string
   messageCount: number
-  /** 第一条用户消息的开头（没有时为空串） */
+  /** Start of the first user message (empty string if none) */
   firstMessage: string
 }
 
 /**
- * 会话存储（同 pi 的 SessionManager 可注入）：内置文件和内存两种，也可以接数据库。
- * 每次保存都是完整的 checkpoint，load 返回最近一次保存的内容。
+ * Session storage (injectable, like pi's SessionManager): file and memory are built in, or plug in a database.
+ * Every save is a full checkpoint; load returns the most recent save.
  */
 export interface SessionStorage {
   load(id: string): Promise<SessionCheckpoint | undefined>
   save(id: string, checkpoint: SessionCheckpoint): Promise<void>
-  /** 列出保存过的会话，最近的在前（同 pi 的 SessionManager.list）。自定义存储可以不实现，列表就是空的。 */
+  /** Lists saved sessions, newest first (like pi's SessionManager.list). Custom storage may skip it; the list is then empty. */
   list?(): Promise<SessionSummary[]>
 }
 
-/** 按最近保存时间排序（新的在前）；没有消息的会话不列（没东西可接着聊，同 pi 不写空会话文件）。 */
+/** Sorts by last save, newest first. Sessions without messages are left out (nothing to continue; like pi not writing empty session files). */
 function newestFirst(summaries: SessionSummary[]): SessionSummary[] {
   return summaries
     .filter((s) => s.messageCount > 0)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-/** checkpoint → 列表项 */
+/** checkpoint → list entry */
 export function summarizeCheckpoint(
   id: string,
   checkpoint: SessionCheckpoint,
@@ -83,7 +83,7 @@ export function summarizeCheckpoint(
   }
 }
 
-/** 内存存储：进程结束就没了（CLI 的 --no-session，SDK 不给 dataDir 时的默认）。 */
+/** Memory storage: gone when the process exits (the CLI's --no-session; the SDK default without dataDir). */
 export function memorySessionStorage(): SessionStorage {
   const checkpoints = new Map<string, SessionCheckpoint>()
   return {
@@ -103,7 +103,7 @@ export function memorySessionStorage(): SessionStorage {
   }
 }
 
-/** 文件存储：`<dir>/<id>.jsonl`，原子替换写入，权限 0600。 */
+/** File storage: `<dir>/<id>.jsonl`, written by atomic replace, mode 0600. */
 export function fileSessionStorage(
   dir: string,
   logger: VelaLogger = silentLogger,
@@ -156,7 +156,7 @@ export function fileSessionStorage(
           path,
           logger,
         )
-        // 旧格式（一行一条消息）没有 checkpoint 时间：用文件修改时间
+        // The old format (one message per line) has no checkpoint time: use the file mtime
         const summary = summarizeCheckpoint(id, checkpoint)
         if (!checkpoint.saved)
           summary.updatedAt = (await stat(path)).mtime.toISOString()
@@ -174,8 +174,8 @@ interface MessageEntry {
 }
 
 /**
- * 解析会话文件：最后一个 checkpoint 之后的 message 行接在它后面（旧格式是一行一条消息）。
- * 坏行跳过并记日志。
+ * Parses a session file: message lines after the last checkpoint are appended to it (the old format is one message per line).
+ * Bad lines are skipped and logged.
  */
 function parseSessionFile(
   content: string,
@@ -200,7 +200,7 @@ function parseSessionFile(
       else if (entry.type === 'checkpoint' && Array.isArray(entry.messages))
         checkpoint = { ...entry, summary: entry.summary || '', saved: true }
     } catch (error) {
-      logger.warn(`[session] ${path} 有一行无法解析，已跳过: ${error}`)
+      logger.warn(`[session] Skipped an unparsable line in ${path}: ${error}`)
     }
   }
   return checkpoint

@@ -16,9 +16,9 @@ export class ContextManager {
       timestamps: new Map(),
       summary: '',
     },
-    /** 压缩动作通过事件报告；不传时静默。 */
+    /** Compaction is reported through events; silent when omitted. */
     public onEvent?: VelaEventListener,
-    /** 压缩阈值与输入上限；未给出的字段用默认值。 */
+    /** Compaction thresholds and input cap; missing fields use defaults. */
     limits: Partial<VelaLimits> = {},
   ) {
     this.limits = resolveLimits(limits)
@@ -56,7 +56,7 @@ export class ContextManager {
     await this.commit(this.state.messages.slice())
   }
 
-  /** 手动摘要（session.compact()）：不看阈值，把较早的历史换成摘要并保存。 */
+  /** Manual summary (session.compact()): ignores thresholds, replaces earlier history with a summary and saves it. */
   async compact(request: RequestSnapshot, focus?: string): Promise<void> {
     const before = estimateRequestTokens(request)
     const compacted = await summarize(
@@ -135,7 +135,7 @@ export class ContextManager {
       )
       const after = estimateRequestTokens(request, compacted.messages)
       if (after > this.limits.maxInputTokens)
-        throw new Error('摘要后上下文仍超过安全容量，本轮已停止，原历史保留。')
+        throw new Error('Context still exceeds the safe input size after summarizing; this turn was stopped and the original history kept.')
       request.abortSignal?.throwIfAborted()
       await this.commit(
         compacted.messages,
@@ -153,7 +153,7 @@ export class ContextManager {
       return
     }
     if (before > this.limits.maxInputTokens)
-      throw new Error('上下文超过安全容量，本轮已停止，原历史保留。')
+      throw new Error('Context exceeds the safe input size; this turn was stopped and the original history kept.')
     this.tracker.setEstimatedTokens(before)
   }
 }

@@ -6,13 +6,13 @@ export interface FeishuOptions {
   appId?: string
   appSecret?: string
   /**
-   * 拿到 owner 角色的发送者 open_id。其余发送者是 guest：不能读写文件、跑命令，
-   * 也看不到主人的记忆。
+   * open_ids of senders who get the owner role. All other senders are guests: no file reads or
+   * writes, no commands, and no access to the owner's memory.
    */
   owners?: string[]
 }
 
-/** 飞书 Bot 通道（长连接模式）：每个发送者一个会话。没传的选项从配置段（`extensionConfig.feishu`）取。 */
+/** Feishu bot channel (long-connection mode), one session per sender. Options not passed are read from the config section (`extensionConfig.feishu`). */
 export function feishu(options: FeishuOptions = {}): VelaExtension {
   return function feishu(vela) {
     vela.registerChannel(

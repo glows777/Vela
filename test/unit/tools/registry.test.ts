@@ -27,16 +27,16 @@ function tool(
   }
 }
 
-test('重复注册同名工具抛错', () => {
+test('registering a tool name twice throws', () => {
   const registry = makeRegistry()
   registry.register(tool('dup'))
   expect(() => registry.register(tool('dup'))).toThrow(/already registered/)
 })
 
-test('延迟工具在 searchTools 发现前不可见', () => {
+test('deferred tools stay hidden until searchTools finds them', () => {
   const registry = makeRegistry()
   registry.register(
-    tool('deferred', { exposure: 'deferred', searchHint: 'xxx 工具 hint' }),
+    tool('deferred', { exposure: 'deferred', searchHint: 'xxx tool hint' }),
   )
   expect(registry.getActiveTools().map((t) => t.name)).toEqual([])
 
@@ -45,7 +45,7 @@ test('延迟工具在 searchTools 发现前不可见', () => {
   expect(registry.getDeferredToolSummary()).toBe('')
 })
 
-test('searchTools 精确匹配并跳过 tool_search 自身', () => {
+test('searchTools matches exactly and skips tool_search itself', () => {
   const registry = makeRegistry()
   registry.register(tool('tool_search'))
   registry.register(tool('present'))
@@ -54,14 +54,14 @@ test('searchTools 精确匹配并跳过 tool_search 自身', () => {
   expect(registry.searchTools('tool_search')).toHaveLength(0)
 })
 
-test('toAISDKFormat 只包含可用工具', () => {
+test('toAISDKFormat includes only available tools', () => {
   const registry = makeRegistry()
   registry.register(tool('active-a'))
   registry.register(tool('lazy-b', { exposure: 'deferred' }))
   expect(Object.keys(registry.toAISDKFormat())).toEqual(['active-a'])
 })
 
-test('非并发安全的工具由互斥锁串行执行', async () => {
+test('tools that are not concurrency-safe run serially under a mutex', async () => {
   const registry = makeRegistry()
   const order: string[] = []
   let release!: () => void

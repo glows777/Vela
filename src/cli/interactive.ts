@@ -36,61 +36,61 @@ import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
 
 export interface InteractiveOptions {
   vela: Vela
-  /** 启动时的会话 */
+  /** Session at startup */
   sessionId: string
-  /** 启动时恢复这个会话的历史（`-c` / `--session`） */
+  /** Restore this session's history at startup (`-c` / `--session`) */
   resume: boolean
-  /** `-r`：启动时先从保存过的会话里选 */
+  /** `-r`: pick from saved sessions at startup */
   pick: boolean
-  /** 新会话的 id（`/new`） */
+  /** Id for a new session (`/new`) */
   newSessionId: () => string
-  /** 会话打开（恢复）之后调用：命令行的 --model / --thinking 覆盖保存的设置；返回模型是否可用 */
+  /** Called after a session opens (and resumes): command-line --model / --thinking override saved settings; returns whether the model is usable */
   configure: (session: VelaSession) => boolean
-  /** 退出前调用（dispose、写录制文件） */
+  /** Called before exit (dispose, write the recording file) */
   onExit: () => Promise<void>
-  /** 测试用假终端；默认是真实终端 */
+  /** Fake terminal for tests; defaults to the real terminal */
   terminal?: Terminal
-  /** 接上 logger：warn / error 显示在对话区 */
+  /** Attach the logger: warn / error show in the chat log */
   attachLogger?: (sink: (level: LogLevel, message: string) => void) => void
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
 
-/** CLI 自己处理的命令（扩展命令和 CLI 斜杠命令之外），给补全用 */
+/** Commands the TUI handles itself (besides extension and CLI slash commands), for autocomplete */
 const TUI_COMMANDS = [
-  { name: 'new', description: '开一个新会话' },
-  { name: 'resume', description: '选一个保存过的会话继续' },
-  { name: 'name', description: '给当前会话起名字' },
-  { name: 'model', description: '选模型（/model provider/id 直接切换）' },
-  { name: 'thinking', description: '选 thinking 级别' },
-  { name: 'compact', description: '手动压缩上下文（可加关注点）' },
-  { name: 'hotkeys', description: '快捷键' },
-  { name: 'quit', description: '退出' },
+  { name: 'new', description: 'Start a new session' },
+  { name: 'resume', description: 'Resume a saved session' },
+  { name: 'name', description: 'Set the session name' },
+  { name: 'model', description: 'Select model (/model provider/id switches directly)' },
+  { name: 'thinking', description: 'Select thinking level' },
+  { name: 'compact', description: 'Manually compact the session context (optional focus)' },
+  { name: 'hotkeys', description: 'Show keyboard shortcuts' },
+  { name: 'quit', description: 'Quit Vela' },
 ]
 const CLI_COMMANDS = [
-  { name: 'context', description: '上下文占用' },
-  { name: 'usage', description: '用量和费用' },
-  { name: 'skill', description: 'skill 列表 / load / unload' },
-  { name: 'extensions', description: '已加载的扩展' },
-  { name: 'channel', description: '通道' },
-  { name: 'role', description: '查看 / 切换角色' },
-  { name: 'hooks', description: '已注册的 hook' },
+  { name: 'context', description: 'Context usage' },
+  { name: 'usage', description: 'Token usage and cost' },
+  { name: 'skill', description: 'List / load / unload skills' },
+  { name: 'extensions', description: 'Loaded extensions' },
+  { name: 'channel', description: 'Channels' },
+  { name: 'role', description: 'Show / switch role' },
+  { name: 'hooks', description: 'Registered hooks' },
 ]
 
 const HOTKEYS = [
-  'Enter 发送；运行中 Enter = steer（这一步之后插进去）',
-  'Alt+Enter 运行中排到任务最后（followUp）',
-  'Alt+Up 把排队的消息拿回输入框',
-  'Esc 中断（排队的消息放回输入框）',
-  'Shift+Tab 切 thinking 级别 · Ctrl+L 选模型',
-  'Ctrl+O 展开 / 收起工具输出 · Ctrl+T 显示 / 隐藏 thinking',
-  'Ctrl+C 清空输入，连按两次退出 · Ctrl+D 空输入时退出',
+  'Enter send; while running, Enter = steer (inserted after the current step)',
+  'Alt+Enter while running, queue a follow-up (after the task finishes)',
+  'Alt+Up move queued messages back to the editor',
+  'Esc interrupt (queued messages go back to the editor)',
+  'Shift+Tab cycle thinking level · Ctrl+L select model',
+  'Ctrl+O expand / collapse tool output · Ctrl+T show / hide thinking',
+  'Ctrl+C clear editor, twice to exit · Ctrl+D exit when editor is empty',
 ]
 
 /**
- * 交互模式（TUI，同 pi 的 interactive mode）：pi-tui 做组件和渲染。
- * 布局：头部 → 对话区 → 排队消息 → 状态行 → 扩展 widget → 输入框 → 底栏。
- * 返回的 Promise 在退出时 resolve。
+ * Interactive mode (TUI, like pi's interactive mode): pi-tui provides components and rendering.
+ * Layout: header → chat log → queued messages → status line → extension widgets → editor → footer.
+ * The returned Promise resolves on exit.
  */
 export async function runInteractive(
   options: InteractiveOptions,
@@ -139,8 +139,8 @@ export class InteractiveMode {
     notify: (message, level = 'info') => this.addNotice(message, level),
     confirm: async (title, message) =>
       (await this.select(`${title}\n${message}`, [
-        { value: 'yes', label: '是' },
-        { value: 'no', label: '否' },
+        { value: 'yes', label: 'Yes' },
+        { value: 'no', label: 'No' },
       ])) === 'yes',
     select: (title, choices) =>
       this.select(
@@ -214,7 +214,7 @@ export class InteractiveMode {
             .map((s) => ({ name: s.name, description: s.description })),
           ...vela.commands().map((c) => ({
             name: c.name,
-            description: c.description ?? `扩展 ${c.extension}`,
+            description: c.description ?? `Extension ${c.extension}`,
           })),
         ],
         vela.cwd,
@@ -223,12 +223,12 @@ export class InteractiveMode {
     await vela
       .startChannels()
       .catch((error) =>
-        this.addNotice(`通道启动失败: ${errorMessage(error)}`, 'error'),
+        this.addNotice(`Failed to start channels: ${errorMessage(error)}`, 'error'),
       )
     this.tui.requestRender()
   }
 
-  // ---------------------------------------------------------------- 会话
+  // ---------------------------------------------------------------- Sessions
 
   private async openSession(id: string, resume: boolean): Promise<void> {
     const session = this.vela.session(id, { ui: this.ui })
@@ -239,7 +239,7 @@ export class InteractiveMode {
       try {
         resumed = await session.resume()
       } catch (error) {
-        this.addNotice(`恢复会话失败: ${errorMessage(error)}`, 'error')
+        this.addNotice(`Failed to resume session: ${errorMessage(error)}`, 'error')
       }
     }
     const modelOk = this.options.configure(session)
@@ -247,7 +247,7 @@ export class InteractiveMode {
     if (resumed) {
       this.renderHistory(session.messages)
       this.addNotice(
-        `恢复会话 ${session.name ?? session.id}，${session.messages.length} 条消息`,
+        `Resumed session ${session.name ?? session.id}, ${session.messages.length} messages`,
         'dim',
       )
     }
@@ -270,7 +270,7 @@ export class InteractiveMode {
 
   private async switchSession(id: string, resume: boolean): Promise<void> {
     if (this.session.isRunning) {
-      this.addNotice('有任务正在执行中，先 Esc 中断或等它结束', 'warning')
+      this.addNotice('A task is running; press Esc to interrupt or wait for it to finish', 'warning')
       return
     }
     const previous = this.session
@@ -282,15 +282,15 @@ export class InteractiveMode {
   private async pickSession(): Promise<string | undefined> {
     const saved = await this.vela.listSessions()
     if (!saved.length) {
-      this.addNotice('没有保存过的会话', 'dim')
+      this.addNotice('No saved sessions', 'dim')
       return undefined
     }
     return this.select(
-      '选择要恢复的会话',
+      'Resume Session',
       saved.map((s) => ({
         value: s.id,
         label: oneLine(sanitize(s.name ?? s.firstMessage)).slice(0, 60),
-        description: `${sanitize(s.id)} · ${s.messageCount} 条 · ${s.updatedAt}`,
+        description: `${sanitize(s.id)} · ${s.messageCount} messages · ${s.updatedAt}`,
       })),
     )
   }
@@ -308,32 +308,32 @@ export class InteractiveMode {
     this.header.clear()
     const extensions = this.vela.extensions().map((e) => e.name)
     const lines = [
-      `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', `会话 ${this.session.id}`)}`,
+      `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', `session ${this.session.id}`)}`,
       theme.fg(
         'dim',
-        `Esc 中断 · Ctrl+C 清空 · Ctrl+D 退出 · / 命令 · Alt+Enter 排到最后 · /hotkeys 更多`,
+        `Esc interrupt · Ctrl+C clear · Ctrl+D exit · / commands · Alt+Enter follow-up · /hotkeys for more`,
       ),
     ]
     if (extensions.length)
-      lines.push(theme.fg('dim', `扩展: ${extensions.join(', ')}`))
+      lines.push(theme.fg('dim', `Extensions: ${extensions.join(', ')}`))
     if (!modelOk)
       lines.push(
-        theme.fg('yellow', '没有可用的模型：用 /model provider/id 选一个'),
+        theme.fg('yellow', 'No model available: pick one with /model provider/id'),
       )
     this.header.addChild(new Spacer(1))
     this.header.addChild(new Text(lines.join('\n'), 1, 0))
   }
 
-  /** 恢复会话时把历史画出来 */
+  /** Render history when resuming a session */
   private renderHistory(messages: ModelMessage[]): void {
     for (const message of messages) this.renderMessage(message, true)
     this.current = undefined
   }
 
-  // ---------------------------------------------------------------- 事件
+  // ---------------------------------------------------------------- Events
 
   private onEvent(event: VelaEvent, sessionId: string): void {
-    // 通道活动（飞书等）各一行，不流式显示通道会话的内容
+    // Channel activity (Feishu etc.) gets one line each; channel session content is not streamed
     switch (event.type) {
       case 'channel_message':
         this.addNotice(
@@ -350,8 +350,8 @@ export class InteractiveMode {
       case 'channel_error':
         this.addNotice(
           event.aborted
-            ? `[${event.channel}] 本轮已中断`
-            : `[${event.channel}] 本轮停止: ${errorMessage(event.error)}`,
+            ? `[${event.channel}] Turn aborted`
+            : `[${event.channel}] Turn stopped: ${errorMessage(event.error)}`,
           event.aborted ? 'dim' : 'error',
         )
         return
@@ -360,26 +360,26 @@ export class InteractiveMode {
     switch (event.type) {
       case 'agent_start':
         this.shownError = undefined
-        this.startLoader('思考中…')
+        this.startLoader('Thinking…')
         break
       case 'message':
         if (event.message.role === 'user') this.renderMessage(event.message)
         break
       case 'turn_start':
         this.current = undefined
-        this.startLoader('思考中…')
+        this.startLoader('Thinking…')
         break
       case 'thinking_delta':
         this.assistant().appendThinking(event.text)
         break
       case 'text_delta':
         this.assistant().appendText(event.text)
-        this.setLoader('回答中…')
+        this.setLoader('Answering…')
         break
       case 'tool_call': {
         this.current = undefined
         this.addTool(event.toolCallId, event.toolName, event.input)
-        this.setLoader(`运行 ${event.toolName}…`)
+        this.setLoader(`Running ${event.toolName}…`)
         break
       }
       case 'tool_result':
@@ -390,7 +390,7 @@ export class InteractiveMode {
         break
       case 'retry':
         this.addNotice(
-          `请求失败，${Math.round(event.delayMs / 1000)} 秒后重试（${event.attempt}/${event.maxRetries}）: ${errorMessage(event.error)}`,
+          `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxRetries}): ${errorMessage(event.error)}`,
           'warning',
         )
         break
@@ -402,12 +402,12 @@ export class InteractiveMode {
         break
       case 'agent_end':
         this.current = undefined
-        if (event.reason === 'aborted') this.addNotice('已中断', 'dim')
+        if (event.reason === 'aborted') this.addNotice('Interrupted', 'dim')
         else if (event.reason === 'loop')
-          this.addNotice('检测到重复的工具调用，已停止', 'error')
+          this.addNotice('Repeated tool calls detected, stopped', 'error')
         else if (event.reason === 'error') {
           this.shownError = event.error
-          this.addNotice(`出错: ${errorMessage(event.error)}`, 'error')
+          this.addNotice(`Error: ${errorMessage(event.error)}`, 'error')
         }
         break
       case 'agent_settled':
@@ -418,10 +418,10 @@ export class InteractiveMode {
         break
       case 'context':
         this.addNotice(contextLine(event), 'dim')
-        if (event.action === 'summary-required') this.setLoader('压缩上下文…')
+        if (event.action === 'summary-required') this.setLoader('Compacting context…')
         break
       case 'session_save_failed':
-        this.addNotice(`会话保存失败: ${errorMessage(event.error)}`, 'error')
+        this.addNotice(`Failed to save session: ${errorMessage(event.error)}`, 'error')
         break
       case 'audit':
         this.addNotice(`[audit] ${event.toolName} → ${event.path}`, 'dim')
@@ -516,7 +516,7 @@ export class InteractiveMode {
   }
 
   private setLoader(message: string): void {
-    this.loader?.setMessage(`${message} ${theme.fg('dim', '(Esc 中断)')}`)
+    this.loader?.setMessage(`${message} ${theme.fg('dim', '(Esc to interrupt)')}`)
   }
 
   private stopLoader(): void {
@@ -540,7 +540,7 @@ export class InteractiveMode {
       )
     this.pending.addChild(
       new TruncatedText(
-        theme.fg('dim', '↳ Alt+Up 把排队的消息拿回输入框'),
+        theme.fg('dim', '↳ Alt+Up to edit queued messages'),
         1,
         0,
       ),
@@ -559,7 +559,7 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  // ---------------------------------------------------------------- 输入
+  // ---------------------------------------------------------------- Input
 
   private setupKeys(): void {
     const { editor } = this
@@ -569,7 +569,7 @@ export class InteractiveMode {
       if (this.session.isRunning) this.restoreQueue({ abort: true })
     })
     actions.set('dequeue', () => {
-      if (!this.restoreQueue()) this.addNotice('没有排队的消息', 'dim')
+      if (!this.restoreQueue()) this.addNotice('No queued messages', 'dim')
     })
     actions.set('followUp', () => {
       const text = editor.getExpandedText().trim()
@@ -615,7 +615,7 @@ export class InteractiveMode {
     })
   }
 
-  /** 把排队的消息放回输入框（同 pi）；abort 时随后中断当前任务。返回放回了几条。 */
+  /** Move queued messages back to the editor (like pi); with abort, also interrupt the current task. Returns how many were moved. */
   private restoreQueue(options: { abort?: boolean } = {}): number {
     const { steering, followUp } = this.session.clearQueue()
     const queued = [...steering, ...followUp]
@@ -668,7 +668,7 @@ export class InteractiveMode {
         return
       case '/resume': {
         if (this.session.isRunning) {
-          this.addNotice('有任务正在执行中，先 Esc 中断或等它结束', 'warning')
+          this.addNotice('A task is running; press Esc to interrupt or wait for it to finish', 'warning')
           return
         }
         const id = await this.pickSession()
@@ -677,13 +677,13 @@ export class InteractiveMode {
       }
       case '/name':
         if (!args) {
-          this.addNotice(`会话名: ${this.session.name ?? '（未命名）'}`)
+          this.addNotice(`Session name: ${this.session.name ?? '(unnamed)'}`)
           return
         }
         this.session.setName(args)
-        // 运行中保存不安全（会和这一轮的保存交错），这一轮结束时会一起保存
+        // Saving mid-run is unsafe (it would interleave with this turn's save); the turn saves when it ends
         if (!this.session.isRunning) await this.session.save()
-        this.addNotice(`会话名: ${args}`, 'dim')
+        this.addNotice(`Session name: ${args}`, 'dim')
         this.tui.requestRender()
         return
       case '/model':
@@ -695,7 +695,7 @@ export class InteractiveMode {
       case '/thinking':
         if (!args) {
           const level = await this.select(
-            'thinking 级别',
+            'Thinking level',
             THINKING_LEVELS.map((l) => ({
               value: l,
               label: l === this.session.thinkingLevel ? `${l} ✓` : l,
@@ -708,21 +708,21 @@ export class InteractiveMode {
         break
       case '/compact':
         if (this.session.isRunning) {
-          this.addNotice('有任务正在执行中，先 Esc 中断或等它结束', 'warning')
+          this.addNotice('A task is running; press Esc to interrupt or wait for it to finish', 'warning')
           return
         }
-        this.startLoader('压缩上下文…')
+        this.startLoader('Compacting context…')
         try {
           await this.session.compact(args || undefined)
         } catch (error) {
-          this.addNotice(`压缩失败: ${errorMessage(error)}`, 'error')
+          this.addNotice(`Compaction failed: ${errorMessage(error)}`, 'error')
         } finally {
           this.stopLoader()
           this.tui.requestRender()
         }
         return
     }
-    // 斜杠命令照常执行（运行中也是）；运行中其它输入 steer（同 pi）
+    // Slash commands run as usual (also while running); other input while running steers (like pi)
     const running = this.session.isRunning
     if (!running || text.startsWith('/')) {
       const handled = this.dispatch(text, {
@@ -740,7 +740,7 @@ export class InteractiveMode {
         return
       }
     }
-    // 扩展命令运行中也立即执行
+    // Extension commands run immediately, even while running
     if (running && !this.isExtensionCommand(text)) {
       await this.queue(text, 'steer')
       return
@@ -748,14 +748,14 @@ export class InteractiveMode {
     try {
       await this.session.prompt(text)
     } catch (error) {
-      // loop 里的错误已经在 agent_end 显示过
+      // Loop errors were already shown at agent_end
       if (error !== this.shownError)
-        this.addNotice(`出错: ${errorMessage(error)}`, 'error')
+        this.addNotice(`Error: ${errorMessage(error)}`, 'error')
     }
     this.tui.requestRender()
   }
 
-  /** 命令逐行 print：同一次同步调用里的几行合成一条提示，免得每行之间空一行；保留命令自己的配色 */
+  /** Commands print line by line: lines from one synchronous call merge into one notice so there's no blank line between them; the command's own colors are kept */
   private commandOutput(): (text: string) => void {
     const lines: string[] = []
     return (text) => {
@@ -785,20 +785,20 @@ export class InteractiveMode {
     const models = this.vela.models()
     if (!models.length) {
       this.addNotice(
-        '没有已配置的模型列表：用 /model provider/id 直接切换',
+        'No configured models to list: switch directly with /model provider/id',
         'dim',
       )
       return
     }
     const ref = await this.select(
-      '选择模型',
+      'Select Model',
       models.map((m) => ({
         value: m.ref,
         label: m.ref === current ? `${m.ref} ✓` : m.ref,
         description: [
           m.name,
           m.contextWindow && `${Math.round(m.contextWindow / 1000)}k`,
-          m.reasoning === false && '无 thinking',
+          m.reasoning === false && 'no thinking',
         ]
           .filter(Boolean)
           .join(' · '),
@@ -808,7 +808,7 @@ export class InteractiveMode {
     if (!ref) return
     try {
       this.session.setModel(ref)
-      this.addNotice(`模型: ${this.session.modelInfo.ref}`, 'dim')
+      this.addNotice(`Model: ${this.session.modelInfo.ref}`, 'dim')
       this.renderHeader(true)
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
@@ -816,9 +816,9 @@ export class InteractiveMode {
     this.updateBorder()
   }
 
-  // ---------------------------------------------------------------- 对话框
+  // ---------------------------------------------------------------- Dialogs
 
-  /** 在输入框的位置弹一个对话框（同 pi 的 ExtensionSelector）；同时只弹一个，其余排队。 */
+  /** Show a dialog in place of the editor (like pi's ExtensionSelector); one at a time, the rest queue. */
   private dialog<T>(
     build: (done: (value: T) => void) => {
       component: Component
@@ -859,7 +859,7 @@ export class InteractiveMode {
       list.onSelect = (item) => done(item.value)
       list.onCancel = () => done(undefined)
       return {
-        component: dialogBox(title, list, '↑↓ 选择 · Enter 确定 · Esc 取消'),
+        component: dialogBox(title, list, '↑↓ navigate · Enter select · Esc cancel'),
         focus: list,
       }
     })
@@ -871,15 +871,15 @@ export class InteractiveMode {
       input.onSubmit = (value) => done(value.trim() || undefined)
       input.onEscape = () => done(undefined)
       const hint = placeholder
-        ? `${placeholder} · Enter 确定 · Esc 取消`
-        : 'Enter 确定 · Esc 取消'
+        ? `${placeholder} · Enter confirm · Esc cancel`
+        : 'Enter confirm · Esc cancel'
       return { component: dialogBox(title, input, hint), focus: input }
     })
   }
 
-  // ---------------------------------------------------------------- 退出
+  // ---------------------------------------------------------------- Exit
 
-  /** TUI 运行时 console 输出会打乱画面：改成对话区的提示行 */
+  /** console output would garble the screen while the TUI runs: turn it into notice lines in the chat log */
   private captureConsole(): void {
     const original = {
       log: console.log,
@@ -899,8 +899,8 @@ export class InteractiveMode {
   }
 
   /**
-   * 同 pi：SIGTERM / SIGHUP 正常退出（会话收尾、扩展 session_shutdown）；
-   * 真实终端上未捕获的异常先还原终端再退出，免得终端停在 raw 模式、光标隐藏。
+   * Like pi: SIGTERM / SIGHUP exit cleanly (session wrap-up, extension session_shutdown);
+   * on a real terminal, an uncaught exception restores the terminal before exiting so it isn't left in raw mode with the cursor hidden.
    */
   private registerSignalHandlers(): void {
     const signals: NodeJS.Signals[] =
@@ -916,7 +916,7 @@ export class InteractiveMode {
         this.tui.stop()
       } catch {}
       this.restoreConsole?.()
-      console.error('vela 因未捕获的异常退出:', error)
+      console.error('vela exited due to an uncaught exception:', error)
       process.exit(1)
     }
     process.prependListener('uncaughtException', crash)
@@ -938,7 +938,7 @@ export class InteractiveMode {
   }
 }
 
-/** 底栏（同 pi）：目录和会话名；用量、上下文占比、模型和 thinking；扩展的状态。 */
+/** Footer (like pi): directory and session name; usage, context percentage, model and thinking; extension statuses. */
 class Footer implements Component {
   private readonly statuses = new Map<string, string>()
 
@@ -963,7 +963,7 @@ class Footer implements Component {
       : this.cwd
     const usage = session.usage
     const totals = usage.totals
-    let model = '（无模型）'
+    let model = '(no model)'
     try {
       model = session.modelInfo.ref
     } catch {}
@@ -1010,13 +1010,13 @@ function dialogBox(title: string, body: Component, hint: string): Component {
 function contextLine(event: Extract<VelaEvent, { type: 'context' }>): string {
   switch (event.action) {
     case 'micro':
-      return `[上下文] 折叠旧工具结果 ${event.before} → ${event.after} tokens`
+      return `[context] Folded old tool results ${event.before} → ${event.after} tokens`
     case 'summary-required':
-      return `[上下文] ${event.before} tokens，下次请求前生成摘要`
+      return `[context] ${event.before} tokens, summarizing before the next request`
     case 'summary':
-      return `[上下文] 生成摘要 ${event.before} → ${event.after} tokens`
+      return `[context] Summarized ${event.before} → ${event.after} tokens`
     case 'compact':
-      return `[上下文] 手动压缩 ${event.before} → ${event.after} tokens`
+      return `[context] Manually compacted ${event.before} → ${event.after} tokens`
   }
 }
 

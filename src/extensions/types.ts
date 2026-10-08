@@ -6,51 +6,54 @@ import type { ToolDefinition } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 
 /**
- * 一个扩展：拿到 ExtensionAPI，注册工具、命令、通道和事件 handler（仿 pi 的 `(pi) => {}`）。
- * 和 pi 不同：每个 Vela 只运行一次，注册的东西由所有并发会话共享；
- * handler 通过 `ctx.session` 知道是哪个会话触发的。
- * 工厂里只做注册，不要起进程 / socket / 定时器：长期资源放到 `session_start` 或通道的 start() 里。
+ * An extension: receives the ExtensionAPI and registers tools, commands, channels and event handlers
+ * (modeled on pi's `(pi) => {}`).
+ * Unlike pi, it runs once per Vela, and what it registers is shared by all concurrent sessions;
+ * handlers learn which session fired the event from `ctx.session`.
+ * Only register things in the factory; do not start processes, sockets or timers there. Put long-lived
+ * resources in `session_start` or a channel's start().
  */
 export type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
 
 /**
- * 扩展和用户交互（同 pi 的 ctx.ui，裁剪版）。没有界面时（SDK、`-p`、通道会话）notify 变成 `notify` 事件，
- * confirm 返回 false，select / input 返回 undefined，setStatus / setWidget 什么都不做。
- * RPC 模式下它们变成 `extension_ui_request`，由客户端回答。
+ * How extensions interact with the user (a trimmed-down version of pi's ctx.ui). With no UI (SDK, `-p`,
+ * channel sessions), notify becomes a `notify` event, confirm returns false, select / input return
+ * undefined, and setStatus / setWidget do nothing.
+ * In RPC mode they become `extension_ui_request` events that the client answers.
  */
 export interface ExtensionUI {
   notify(message: string, level?: 'info' | 'warning' | 'error'): void
   confirm(title: string, message: string): Promise<boolean>
   select(title: string, options: string[]): Promise<string | undefined>
   input(title: string, placeholder?: string): Promise<string | undefined>
-  /** 底栏的一条状态（按 key 区分，text 为空时清除） */
+  /** A status entry in the footer (keyed by key; empty text clears it) */
   setStatus(key: string, text?: string): void
-  /** 输入框上方的几行文字（按 key 区分，lines 为空时清除） */
+  /** Lines of text above the input box (keyed by key; empty lines clears them) */
   setWidget(key: string, lines?: string[]): void
 }
 
-/** 会话选项里给的界面：setStatus / setWidget 可以不实现（不实现时什么都不做）。 */
+/** The UI passed in session options: setStatus / setWidget are optional (no-ops when missing). */
 export type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
   Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
 
-/** handler 的第二个参数：触发事件的会话和它的界面。 */
+/** A handler's second argument: the session that fired the event and its UI. */
 export interface ExtensionContext {
   session: VelaSession
   ui: ExtensionUI
-  /** 是否有能真正弹出 confirm / select 的界面 */
+  /** Whether there is a UI that can actually show confirm / select */
   hasUI: boolean
   cwd: string
-  /** 会话正在跑时的中断信号；空闲时为 undefined */
+  /** Abort signal while the session is running; undefined when idle */
   signal: AbortSignal | undefined
 }
 
 export interface ExtensionCommand {
   description?: string
-  /** args 是命令名后面的文本（已去掉首尾空白） */
+  /** args is the text after the command name, trimmed */
   handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
 }
 
-/** 工具执行前。handler 可以原地改 `input`，或返回 `{ block: true, reason }` 拦截；handler 抛错也按拦截处理。 */
+/** Before a tool runs. A handler can mutate `input` in place or return `{ block: true, reason }` to block; a throwing handler also blocks. */
 export interface ToolCallEvent {
   type: 'tool_call'
   toolCallId: string | undefined
@@ -63,13 +66,13 @@ export interface ToolCallEventResult {
   reason?: string
 }
 
-/** 工具执行后、结果交给模型前。返回 `{ output }` 替换模型看到的文本；多个 handler 依次叠加。 */
+/** After a tool runs, before the model sees the result. Return `{ output }` to replace the text the model sees; handlers chain. */
 export interface ToolResultEvent {
   type: 'tool_result'
   toolCallId: string | undefined
   toolName: string
   input: unknown
-  /** 模型将看到的文本（超长结果是预览） */
+  /** The text the model will see (a preview for oversized results) */
   output: string
 }
 
@@ -78,8 +81,8 @@ export interface ToolResultEventResult {
 }
 
 /**
- * 每次 prompt() 开始、发第一次模型请求前。handler 往 `sections` 里写 system prompt 段落
- * （键是段落名），这一轮里不再变化。
+ * At the start of each prompt(), before the first model request. Handlers write system prompt sections
+ * into `sections` (keyed by section name); they stay fixed for the rest of the turn.
  */
 export interface BeforeAgentStartEvent {
   type: 'before_agent_start'
@@ -87,12 +90,12 @@ export interface BeforeAgentStartEvent {
   sections: Record<string, string>
 }
 
-/** 会话第一次 prompt() 之前（恢复历史之后）。 */
+/** Before the session's first prompt() (after history is restored). */
 export interface SessionStartEvent {
   type: 'session_start'
 }
 
-/** 会话关闭（session.close() 或 vela.dispose()）。 */
+/** The session closes (session.close() or vela.dispose()). */
 export interface SessionShutdownEvent {
   type: 'session_shutdown'
 }
@@ -105,7 +108,7 @@ type InterceptEvents = {
   session_shutdown: [SessionShutdownEvent, void]
 }
 
-/** 只读通知：所有 VelaEvent（tool_call / tool_result 用上面能改东西的版本）。 */
+/** Read-only notifications: every VelaEvent (tool_call / tool_result use the intercepting versions above). */
 type NotifyEvents = {
   [K in Exclude<VelaEvent['type'], keyof InterceptEvents>]: [
     Extract<VelaEvent, { type: K }>,
@@ -125,33 +128,35 @@ export type ExtensionHandler<K extends ExtensionEventName> = (
   | Promise<ExtensionEvents[K][1] | undefined>
 
 export interface ExtensionAPI {
-  /** 工具的工作目录 */
+  /** Working directory for tools */
   readonly cwd: string
-  /** Vela 的数据目录；扩展自己的数据放在 `<dataDir>/<扩展名>/` */
+  /** Vela's data directory; an extension keeps its own data in `<dataDir>/<extension name>/` */
   readonly dataDir: string
   /**
-   * 这个扩展的配置段：`createVela({ extensionConfig })` 里按扩展名取（CLI 来自 settings.json 的
-   * `extensionConfig.<扩展名>`，字符串已做 `$VAR` 插值）。没有配置时是 `{}`。
+   * This extension's config section, looked up by extension name in `createVela({ extensionConfig })`
+   * (in the CLI, from `extensionConfig.<extension name>` in settings.json, with `$VAR` already
+   * interpolated in strings). `{}` when there is no config.
    */
   readonly config: Readonly<Record<string, unknown>>
   readonly logger: VelaLogger
   /**
-   * 注册一个所有会话共享的工具。模型看到的名字是 `<扩展名>_<name>`（例如 supabase 扩展的
-   * `query` 是 `supabase_query`），不会和内置工具重名；重名会抛错。工具名和扩展名相同时不重复前缀
-   * （memory 扩展的 `memory` 工具就叫 `memory`）。
+   * Registers a tool shared by all sessions. The model sees it as `<extension name>_<name>` (e.g. the
+   * supabase extension's `query` is `supabase_query`), so it cannot clash with built-in tools; a
+   * duplicate name throws. When the tool name equals the extension name the prefix is not repeated
+   * (the memory extension's `memory` tool is just `memory`).
    */
   registerTool(tool: ToolDefinition): void
   /**
-   * 注册一个模型 provider（同 pi 的 registerProvider，只支持“给出 AI SDK 模型”这一种形式）：
-   * 之后 `provider/id` 可以用在 createVela 的 model、`session.setModel()`、CLI 的 `--model` / `/model`。
-   * provider 名不加扩展名前缀；和已有的重名会抛错。
+   * Registers a model provider (like pi's registerProvider, but only the "return an AI SDK model" form).
+   * Afterwards `provider/id` works in createVela's model, `session.setModel()`, and the CLI's
+   * `--model` / `/model`. Provider names are not prefixed; a name that already exists throws.
    */
   registerProvider(name: string, provider: ProviderDefinition): void
-  /** 注册 `/name` 命令：owner 会话里 `session.prompt('/name args')` 会执行它而不是发给模型。 */
+  /** Registers a `/name` command: in owner sessions, `session.prompt('/name args')` runs it instead of sending it to the model. */
   registerCommand(name: string, command: ExtensionCommand): void
-  /** 注册一个消息通道（Vela 特有）：每个发送者一个会话，默认 guest 角色。 */
+  /** Registers a message channel (Vela-specific): one session per sender, guest role by default. */
   registerChannel(channel: ChannelDefinition): void
-  /** 订阅事件，按扩展加载和注册顺序执行；返回取消订阅的函数。 */
+  /** Subscribes to an event; handlers run in extension load and registration order. Returns an unsubscribe function. */
   on<K extends ExtensionEventName>(
     event: K,
     handler: ExtensionHandler<K>,

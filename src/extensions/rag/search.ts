@@ -34,7 +34,6 @@ export function normalizeMinMax(scores: number[]): number[] {
 }
 
 // ── MMR deduplication ──────────────────────
-// 用于去重
 export function mmrSelect(
   results: SearchResult[],
   topK: number,

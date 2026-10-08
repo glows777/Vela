@@ -45,7 +45,7 @@ test('a missing API key fails when the model is created, naming the variable', (
 test('models.json adds providers and merges into built-in ones', () => {
   const dir = agentDir({
     providers: {
-      // 只写 models：补上元数据，api / key 仍用内置的
+      // Only models given: adds metadata; api / key still come from the built-in provider
       openai: { models: [{ id: 'gpt-x', contextWindow: 400_000 }] },
       local: {
         api: 'openai-responses',
@@ -70,18 +70,18 @@ test('models.json adds providers and merges into built-in ones', () => {
 test('mistakes in models.json are reported with the file name', () => {
   const notJson = agentDir()
   writeFileSync(join(notJson, 'models.json'), '{')
-  expect(() => loadModels({ agentDir: notJson })).toThrow('不是合法的 JSON')
+  expect(() => loadModels({ agentDir: notJson })).toThrow('is not valid JSON')
   expect(() =>
     loadModels({ agentDir: agentDir({ providers: { x: { api: 'grpc' } } }) }),
-  ).toThrow('providers.x.api 只支持')
+  ).toThrow('providers.x.api must be one of')
   expect(() =>
     loadModels({
       agentDir: agentDir({ providers: { x: { models: [{ name: 'no id' }] } } }),
     }),
-  ).toThrow('providers.x.models 应该是带 id 的对象数组')
-  // 新 provider 没写 api：用到时才报错
+  ).toThrow('providers.x.models must be an array of objects with an id')
+  // A new provider without api: fails only when used
   const noApi = loadModels({
     agentDir: agentDir({ providers: { x: { apiKey: 'k' } } }),
   })
-  expect(() => modelOf(noApi, 'x/m')).toThrow('providers.x 没有写 api')
+  expect(() => modelOf(noApi, 'x/m')).toThrow('providers.x is missing api')
 })

@@ -6,7 +6,7 @@ export const channelCommands: CommandHandler[] = [
 
     const channels = vela.channels()
     if (channels.length === 0) {
-      print('\n[channels] 没有注册的通道。\n')
+      print('\n[channels] No channels registered.\n')
       return true
     }
 

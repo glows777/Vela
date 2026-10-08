@@ -8,7 +8,7 @@ import type { ToolDefinition } from './registry.ts'
 import type { ExecutionMetadata } from '../session/tool-history.ts'
 
 const bashToolParamSchema = z.object({
-  command: z.string().describe('要执行的 shell 命令'),
+  command: z.string().describe('Shell command to run'),
 })
 
 export const createBashTool = (
@@ -17,7 +17,7 @@ export const createBashTool = (
 ): ToolDefinition => ({
   name: 'bash',
   description:
-    `执行 shell 命令（${Math.round(timeoutMs / 1000)} 秒超时），保存完整 stdout/stderr，返回退出状态和日志尾部预览。可用 read_file 分页读取完整结果。`,
+    `Runs a shell command (${Math.round(timeoutMs / 1000)}s timeout). Saves the full stdout/stderr and returns the exit status with a preview of the end of the output. Read the full output page by page with read_file.`,
   inputSchema: bashToolParamSchema,
   isConcurrencySafe: false,
   isReadOnly: false,
@@ -68,7 +68,7 @@ export const createBashTool = (
       try {
         const result = await exited
         signal = result.signal
-        // 被信号结束时同 shell 的约定：128 + 信号编号
+        // Killed by a signal: 128 + signal number, as shells report it
         exitCode =
           result.code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0)
       } finally {
@@ -82,7 +82,7 @@ export const createBashTool = (
     } catch (error) {
       execution.isError = true
       execution.error = error instanceof Error ? error.message : String(error)
-      status = `命令执行失败: ${error}`
+      status = `Command failed: ${error}`
     } finally {
       try {
         await file.sync()
@@ -105,7 +105,7 @@ export const createBashTool = (
         offset++
       tail = tail.slice(offset)
     }
-    const preview = `${status}; stdout/stderr combined, ${size} bytes total; showing last ${tail.length} UTF-16 code units.\n${tail || '(无输出)'}`
+    const preview = `${status}; stdout/stderr combined, ${size} bytes total; showing last ${tail.length} UTF-16 code units.\n${tail || '(no output)'}`
     return results.reference(
       path,
       'bash',

@@ -15,7 +15,7 @@ import {
 
 afterEach(cleanupTestVelas)
 
-/** 注册一个假的通道，返回投递消息的函数和已发送的回复 */
+/** Register a fake channel; returns a function that delivers messages and the replies sent */
 function fakeChannel(t: TestVela, name = 'fake') {
   const sent: OutgoingMessage[] = []
   const channel: ChannelDefinition = {
@@ -39,34 +39,34 @@ function fakeChannel(t: TestVela, name = 'fake') {
 }
 
 test('each sender gets its own persisted session', async () => {
-  // 两个会话并发，请求先后不确定：按请求里的用户消息回答
+  // Two sessions run concurrently in no fixed order: answer based on the user message in each request
   const answer = (req: { lastUserText: string }) =>
-    fauxText(`你好 ${req.lastUserText.slice(-2)}`)
+    fauxText(`Hello ${req.lastUserText.slice(-2)}`)
   const t = createTestVela({ responses: [answer, answer] })
   const { sent, deliver } = fakeChannel(t)
 
-  await Promise.all([deliver('u1', '我是 u1'), deliver('u2', '我是 u2')])
+  await Promise.all([deliver('u1', 'I am u1'), deliver('u2', 'I am u2')])
 
   expect(
     sent
       .map((m) => [m.recipientId, m.text])
       .sort((a, b) => a[0]!.localeCompare(b[0]!)),
   ).toEqual([
-    ['u1', '你好 u1'],
-    ['u2', '你好 u2'],
+    ['u1', 'Hello u1'],
+    ['u2', 'Hello u2'],
   ])
   expect(channelSessionId('fake', 'u1')).toBe('fake-u1')
-  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('我是 u1')
-  expect(await t.readData('sessions/fake-u2.jsonl')).not.toContain('我是 u1')
+  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('I am u1')
+  expect(await t.readData('sessions/fake-u2.jsonl')).not.toContain('I am u1')
   expect(t.eventsIn('fake-u1').map((e) => e.type)).toContain('channel_reply')
-  // CLI 的默认会话不受影响
+  // The CLI's default session is unaffected
   expect(t.session.messages).toEqual([])
   expect(t.exists('sessions/default.jsonl')).toBe(false)
 })
 
 test('a sender continues the conversation after a restart', async () => {
-  const first = createTestVela({ responses: [fauxText('记住了：蓝色')] })
-  await fakeChannel(first).deliver('u1', '我喜欢蓝色')
+  const first = createTestVela({ responses: [fauxText('Got it: blue')] })
+  await fakeChannel(first).deliver('u1', 'I like blue')
   await first.cleanup({ keepDir: true })
 
   const second = createTestVela({
@@ -74,14 +74,14 @@ test('a sender continues the conversation after a restart', async () => {
     responses: [
       (req) =>
         fauxText(
-          JSON.stringify(req.prompt).includes('我喜欢蓝色') ? '蓝色' : '不知道',
+          JSON.stringify(req.prompt).includes('I like blue') ? 'blue' : "I don't know",
         ),
     ],
   })
   try {
     const { sent, deliver } = fakeChannel(second)
-    await deliver('u1', '我喜欢什么颜色？')
-    expect(sent.at(-1)?.text).toBe('蓝色')
+    await deliver('u1', 'What color do I like?')
+    expect(sent.at(-1)?.text).toBe('blue')
   } finally {
     await second.cleanup()
     rmSync(first.cwd, { recursive: true, force: true })
@@ -90,15 +90,15 @@ test('a sender continues the conversation after a restart', async () => {
 
 test('messages from the same sender are handled one after another', async () => {
   const t = createTestVela({
-    responses: [fauxText('第一条的回复'), fauxText('第二条的回复')],
+    responses: [fauxText('reply to the first'), fauxText('reply to the second')],
   })
   const { sent, deliver } = fakeChannel(t)
 
-  await Promise.all([deliver('u1', '第一条'), deliver('u1', '第二条')])
+  await Promise.all([deliver('u1', 'first'), deliver('u1', 'second')])
 
-  expect(sent.map((m) => m.text)).toEqual(['第一条的回复', '第二条的回复'])
-  // 第二次请求看到了第一轮的完整历史
-  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('第一条的回复')
+  expect(sent.map((m) => m.text)).toEqual(['reply to the first', 'reply to the second'])
+  // The second request sees the full history of the first round
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('reply to the first')
   expect(
     t.eventsIn('fake-u1').filter((e) => e.type === 'channel_error'),
   ).toEqual([])
@@ -108,7 +108,7 @@ test('stopping the gateway aborts a running channel session and reports it', asy
   const t = createTestVela({ responses: [fauxHang()] })
   const { sent, deliver } = fakeChannel(t)
 
-  const handled = deliver('u1', '一直想')
+  const handled = deliver('u1', 'keep thinking')
   while (t.model.calls.length === 0) await Bun.sleep(1)
   await t.internals.gateway.stopAll()
   await handled
@@ -120,7 +120,7 @@ test('stopping the gateway aborts a running channel session and reports it', asy
 })
 
 test('senders whose ids sanitize to the same string get separate sessions', async () => {
-  // 只替换非法字符会让 a@b 和 a_b、或 (fake, x-y) 和 (fake-x, y) 落到同一个会话文件，互相看到历史
+  // Only replacing illegal characters would put a@b and a_b, or (fake, x-y) and (fake-x, y), in the same session file, where they see each other's history
   expect(channelSessionId('fake', 'a@b')).not.toBe(
     channelSessionId('fake', 'a_b'),
   )
@@ -131,32 +131,32 @@ test('senders whose ids sanitize to the same string get separate sessions', asyn
   expect(channelSessionId('fake', `${long}1`)).not.toBe(
     channelSessionId('fake', `${long}2`),
   )
-  // 普通 id 保持可读
+  // Ordinary ids stay readable
   expect(channelSessionId('feishu', 'ou_123')).toBe('feishu-ou_123')
 
-  const t = createTestVela({ responses: [fauxText('好'), fauxText('不知道')] })
+  const t = createTestVela({ responses: [fauxText('OK'), fauxText("I don't know")] })
   const { deliver } = fakeChannel(t)
-  await deliver('a@b', '我的密码是 hunter2')
-  await deliver('a_b', '你知道什么？')
+  await deliver('a@b', 'My password is hunter2')
+  await deliver('a_b', 'What do you know?')
   expect(JSON.stringify(t.model.calls[1]?.prompt)).not.toContain('hunter2')
 })
 
 test('a channel session closed while idle resumes its history when reopened', async () => {
   const t = createTestVela({
     responses: [
-      fauxText('记住了：蓝色'),
+      fauxText('Got it: blue'),
       (req) =>
         fauxText(
-          JSON.stringify(req.prompt).includes('我喜欢蓝色') ? '蓝色' : '不知道',
+          JSON.stringify(req.prompt).includes('I like blue') ? 'blue' : "I don't know",
         ),
     ],
   })
   const { sent, deliver } = fakeChannel(t)
-  await deliver('u1', '我喜欢蓝色')
-  // 长期运行的机器人可能关掉空闲会话释放内存
+  await deliver('u1', 'I like blue')
+  // A long-running bot may close idle sessions to free memory
   await t.vela.session(channelSessionId('fake', 'u1')).close()
 
-  await deliver('u1', '我喜欢什么颜色？')
-  expect(sent.at(-1)?.text).toBe('蓝色')
-  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('我喜欢蓝色')
+  await deliver('u1', 'What color do I like?')
+  expect(sent.at(-1)?.text).toBe('blue')
+  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('I like blue')
 })

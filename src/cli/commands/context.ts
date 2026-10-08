@@ -11,11 +11,11 @@ export const contextCommands: CommandHandler[] = [
     if (cmd !== '/context' && cmd !== 'context') return false
     return (async () => {
       try {
-        // 段落每次 prompt 才算：预览下一次 prompt 的段落，没 prompt 过时也能看到记忆占用
+        // Sections are built per prompt: preview the next prompt's sections so memory usage shows even before the first prompt
         const sections = await session.previewSections()
         print(renderContextView(contextSnapshot(session, sections)))
       } catch (error) {
-        print(`[context] 失败: ${error instanceof Error ? error.message : error}`)
+        print(`[context] Failed: ${error instanceof Error ? error.message : error}`)
       }
     })()
   },

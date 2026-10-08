@@ -1,8 +1,9 @@
 /**
- * 生成公开 API 报告：`@glows777/vela` 和 `@glows777/vela/testing` 导出的每个名字和它的类型。
- * test/unit/public-api.test.ts 把它和 api/public-api.txt 比对；改公开面后运行
- * `bun run api:update` 更新快照，并在 PR 里能看到 API 的变化。
- * 带 `@internal` 的成员、private / protected 成员不算公开面。
+ * Generates the public API report: every name exported from `@glows777/vela` and
+ * `@glows777/vela/testing`, with its type. test/unit/public-api.test.ts compares it
+ * with api/public-api.txt; after changing the public surface, run `bun run api:update`
+ * to refresh the snapshot so the API change shows up in the PR.
+ * `@internal`, private and protected members are not part of the public surface.
  */
 import { join, resolve } from 'node:path'
 import ts from 'typescript'
@@ -27,7 +28,7 @@ export function apiReport(): string {
   const typeText = (type: ts.Type, at?: ts.Node) =>
     checker
       .typeToString(type, at, FLAGS)
-      // 完整路径因机器而异，只保留模块里的名字
+      // Full paths differ per machine; keep only the name inside the module
       .replace(/import\("[^"]*"\)\./g, '')
 
   const isInternal = (symbol: ts.Symbol) =>
@@ -54,7 +55,7 @@ export function apiReport(): string {
             ts.ModifierFlags.Readonly
             ? 'readonly '
             : ''
-        // 只读的 getter 标成 get；有 setter 的和普通属性一样
+        // Read-only getters are marked `get`; ones with a setter print like plain properties
         const accessor =
           p.flags & ts.SymbolFlags.GetAccessor &&
           !(p.flags & ts.SymbolFlags.SetAccessor)
@@ -81,7 +82,7 @@ export function apiReport(): string {
       return [`  interface ${name}`, ...members(type, decl)]
     }
     if (ts.isTypeAliasDeclaration(decl)) {
-      // 类型别名按源码写法输出（checker 只会给出别名本身的名字）
+      // Print type aliases as written in source (the checker would only give the alias name)
       const params = decl.typeParameters
         ? `<${decl.typeParameters.map((p) => p.getText()).join(', ')}>`
         : ''
@@ -103,9 +104,9 @@ export function apiReport(): string {
   const out: string[] = []
   for (const [entry, file] of ENTRIES) {
     const source = program.getSourceFile(join(ROOT, file))
-    if (!source) throw new Error(`找不到 ${file}`)
+    if (!source) throw new Error(`Cannot find ${file}`)
     const module = checker.getSymbolAtLocation(source)
-    if (!module) throw new Error(`${file} 不是模块`)
+    if (!module) throw new Error(`${file} is not a module`)
     out.push(`# ${entry}`, '')
     for (const symbol of checker
       .getExportsOfModule(module)
@@ -119,5 +120,5 @@ export function apiReport(): string {
 if (import.meta.main) {
   const path = join(ROOT, 'api/public-api.txt')
   await Bun.write(path, apiReport())
-  console.log(`已写入 ${path}`)
+  console.log(`Wrote ${path}`)
 }

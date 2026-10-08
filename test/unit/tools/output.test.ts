@@ -90,7 +90,7 @@ test('storage failure rejects the result instead of returning an unreadable refe
       {},
       { toolCallId: 'fail', messages: [], context: {} },
     ),
-  ).rejects.toThrow('保存工具结果失败')
+  ).rejects.toThrow('Failed to save tool result')
 })
 
 test('real Bash captures large stdout and stderr with exit status and a bounded tail', async () => {
@@ -143,10 +143,10 @@ test('small results stay inline and invalid read cursors fail clearly', async ()
   await Bun.write(path, 'hello')
   await expect(readFileTool.execute({ path, offset: 0 })).rejects.toThrow()
   await expect(readFileTool.execute({ path, offset: 3 })).rejects.toThrow(
-    '超过文件范围',
+    'past the end of the file',
   )
   await expect(readFileTool.execute({ path, column: 100 })).rejects.toThrow(
-    '超过文件范围',
+    'past the end of the file',
   )
 })
 
@@ -249,7 +249,7 @@ test('Bash storage failure prevents command execution', async () => {
   const marker = join(dir, 'must-not-exist')
   await expect(
     bashTool.execute({ command: `touch '${marker}'` }, { results }),
-  ).rejects.toThrow('保存工具结果失败')
+  ).rejects.toThrow('Failed to save tool result')
   expect(await Bun.file(marker).exists()).toBe(false)
 })
 

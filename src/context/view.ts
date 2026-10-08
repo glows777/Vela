@@ -1,8 +1,8 @@
 /**
- * /context 终端可视化——参考 Claude Code 的 /context 视图。
+ * Terminal view for /context, modeled on Claude Code's /context view.
  *
- * 把 context 占用按"类别"切片画成方块矩阵，每格 ≈ window 的 1/256（16x16）。
- * 不同类别用不同颜色（ANSI 256 色），让"谁在吃 context"一眼看清楚。
+ * Splits context usage by category and draws it as a grid where each cell ≈ 1/256 of the window (16x16).
+ * Each category gets its own color (ANSI 256) so you can see at a glance what is eating the context.
  */
 import type { ModelMessage } from 'ai';
 import type { TokenTracker } from '../usage/tracker.ts';
@@ -20,20 +20,20 @@ export interface ContextSnapshot {
   windowTokens: number;
   usedTokens: number;
   slices: ContextSlice[];
-  // 预留给 autocompact，用户聊得越深这个越小
+  // Reserved for autocompact; shrinks as the conversation grows
   autocompactBufferTokens: number;
 }
 
 const COLORS = {
-  system:    63,   // 紫
-  tools:     99,   // 紫粉
-  memory:   220,   // 黄
-  skills:    36,   // 青
-  messages:111,   // 蓝
-  free:     240,   // 灰（空格子）
-  buffer:  244,   // 灰（autocompact buffer）
-  text:    255,   // 白文字
-  dim:     244,   // 暗灰
+  system:    63,   // purple
+  tools:     99,   // pinkish purple
+  memory:   220,   // yellow
+  skills:    36,   // cyan
+  messages:111,   // blue
+  free:     240,   // gray (empty cells)
+  buffer:  244,   // gray (autocompact buffer)
+  text:    255,   // white text
+  dim:     244,   // dark gray
 };
 
 function fg(code: number, s: string): string {
@@ -52,15 +52,15 @@ function fmtTokens(n: number): string {
 }
 
 /**
- * 画一个 16×16 = 256 格的矩阵，每格代表 window/256 个 tokens。
- * 已用部分按 slices 顺序填彩色 ●，free 用 ○，autocompact buffer 用 ▢。
+ * Draws a 16×16 = 256 cell grid; each cell stands for window/256 tokens.
+ * Used cells are filled with colored ● in slice order, free with ○, autocompact buffer with ▢.
  */
 export function renderContextMatrix(snapshot: ContextSnapshot): string {
   const { windowTokens, slices, autocompactBufferTokens } = snapshot;
   const TOTAL_CELLS = 256;
   const tokensPerCell = windowTokens / TOTAL_CELLS;
 
-  // 把每个 slice 的 token 数转成"格子数"（向上取整避免 0 格丢失）
+  // Convert each slice's tokens to a cell count (round up so small slices don't vanish)
   const cells: number[] = [];  // ANSI color for each cell, or -1 for free, -2 for buffer
   let used = 0;
   for (const s of slices) {
@@ -115,7 +115,7 @@ export function renderContextLegend(snapshot: ContextSnapshot): string {
 }
 
 /**
- * 并排显示矩阵 + 图例。简单按行拼接，矩阵在左、图例在右。
+ * Shows the grid and legend side by side, joined line by line: grid on the left, legend on the right.
  */
 export function renderContextView(snapshot: ContextSnapshot): string {
   const matrix = renderContextMatrix(snapshot).split('\n');
@@ -130,12 +130,12 @@ export function renderContextView(snapshot: ContextSnapshot): string {
   return '\n' + out.join('\n') + '\n';
 }
 
-// ── Snapshot 构造：从消息列表 + 各种已知尺寸算 token 切片 ─────────
+// ── Snapshot: token slices from the message list plus known sizes ─────────
 
 export interface BuildSnapshotInput {
-  modelName: string;        // "Mock Model" / "Qwen Plus" 等
+  modelName: string;        // e.g. "Mock Model" / "Qwen Plus"
   modelId: string;
-  windowTokens: number;     // 比如 1_000_000
+  windowTokens: number;     // e.g. 1_000_000
   systemPromptChars: number;
   toolDescriptionChars: number;
   memoryChars: number;
@@ -188,7 +188,7 @@ export function buildContextSnapshot(input: BuildSnapshotInput): ContextSnapshot
   };
 }
 
-// ── /usage 视图：累计成本 + cache 命中率 ─────────────────────────
+// ── /usage view: cumulative cost + cache hit rate ─────────────────────────
 
 export function renderUsageView(tracker: TokenTracker): string {
   const t = tracker.totals();
@@ -199,7 +199,7 @@ export function renderUsageView(tracker: TokenTracker): string {
   const totalCacheable = t.cacheReadTokens + t.cacheWriteTokens + t.inputTokens;
 
   lines.push(bold(C(255, '  Usage Summary')));
-  lines.push(C(244, `  ${t.steps} 步累计 · ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`));
+  lines.push(C(244, `  ${t.steps} ${t.steps === 1 ? 'step' : 'steps'} total · ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`));
   lines.push('');
   lines.push(`  ${C(111, '◎')} Input          ${fmtTokens(t.inputTokens).padStart(8)} tokens`);
   lines.push(`  ${C(220, '◈')} Cache write    ${fmtTokens(t.cacheWriteTokens).padStart(8)} tokens`);
@@ -207,7 +207,7 @@ export function renderUsageView(tracker: TokenTracker): string {
   lines.push(`  ${C(99, '◇')} Output         ${fmtTokens(t.outputTokens).padStart(8)} tokens`);
   lines.push('');
 
-  // Cache 命中率条
+  // Cache hit rate bar
   const barWidth = 30;
   const filled = Math.round(t.hitRate * barWidth);
   const bar = C(36, '█'.repeat(filled)) + C(240, '░'.repeat(barWidth - filled));
@@ -221,7 +221,7 @@ export function renderUsageView(tracker: TokenTracker): string {
     lines.push(`  ${bold(C(36, 'Saved'))}           ${C(36, '$' + t.savedCost.toFixed(4))} (${savedPct.toFixed(1)}% off)`);
   }
   if (totalCacheable === 0) {
-    lines.push('  ' + C(244, '尚无可缓存的 input，多聊几轮再看 :)'));
+    lines.push('  ' + C(244, 'No cacheable input yet; check again after a few more turns :)'));
   }
 
   return '\n' + lines.join('\n') + '\n';

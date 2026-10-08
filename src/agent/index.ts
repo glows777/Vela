@@ -25,20 +25,21 @@ interface AgentLoopParameter {
   tokenTracker: TokenTracker
   prepareContext?: (request: RequestSnapshot) => Promise<void>
   abortSignal?: AbortSignal
-  /** 运行事件回调；不传时 agentLoop 不产生任何终端输出。 */
+  /** Event callback; without it agentLoop produces no terminal output. */
   onEvent?: VelaEventListener
-  /** 重试、上下文等上限；未给出的字段用默认值。 */
+  /** Retry, context and other limits; missing fields use defaults. */
   limits?: Partial<VelaLimits>
-  /** AI SDK 的 reasoning 调用参数（thinking 级别映射后）；不传时不发 */
+  /** AI SDK reasoning option (mapped from the thinking level); not sent when omitted */
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   /**
-   * 取出排队的 steer 消息（同 pi 的 getSteeringMessages）：每一步的工具跑完、下一次模型请求前取一次，
-   * 取到的作为用户消息接在后面；模型本来要结束时取到了也会接着跑。
+   * Takes queued steer messages (like pi's getSteeringMessages): called once after each step's tools
+   * finish and before the next model request; results are appended as user messages. If the model
+   * was about to stop and steer messages arrive, the loop keeps going.
    */
   takeSteering?: () => string[]
   /**
-   * 取出排队的 followUp 消息（同 pi 的 getFollowUpMessages）：模型本来要结束（没有工具调用、也没有 steer）时取，
-   * 取到就作为用户消息接着在同一个 loop 里跑。
+   * Takes queued followUp messages (like pi's getFollowUpMessages): called when the model is about to
+   * stop (no tool calls, no steer); results run as user messages in the same loop.
    */
   takeFollowUp?: () => string[]
 }
@@ -81,7 +82,7 @@ export const agentLoop = async ({
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
-  // 每次 agent loop 使用独立的调用历史，并发会话互不影响
+  // Each agent loop has its own call history, so concurrent sessions don't interfere
   const loopDetector = new LoopDetector()
   const emit = (event: VelaEvent) => onEvent?.(event)
   let endReason: Extract<VelaEvent, { type: 'agent_end' }>['reason'] | undefined
@@ -89,7 +90,8 @@ export const agentLoop = async ({
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   try {
-    // 同 pi：不限轮数，一直跑到模型不再调用工具、也没有排队的消息（或被中断 / 循环检测停下）
+    // Like pi: no turn limit. Run until the model stops calling tools and nothing is queued
+    // (or until aborted / stopped by loop detection)
     for (;;) {
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
@@ -113,7 +115,7 @@ export const agentLoop = async ({
           messages,
         ) > limits.maxInputTokens
       )
-        throw new Error('当前请求超过安全容量，本轮已停止。')
+        throw new Error('Request exceeds the safe input size; this turn was stopped.')
 
       let needToolCall = false
       let fullContent = ''
@@ -131,10 +133,10 @@ export const agentLoop = async ({
             instructions: inferenceSystem,
             tools: request.tools,
             messages,
-            maxRetries: 0, // 禁止 streamText 内部重试，交由外层控制重试逻辑
+            maxRetries: 0, // No retries inside streamText; the outer loop handles retries
             ...(reasoning ? { reasoning } : {}),
             abortSignal,
-            // 错误在下面的 'error' 分支里抛出并通过 retry/agent_end 事件报告，不再由 SDK 打印
+            // Errors are thrown in the 'error' branch below and reported via retry/agent_end events, not printed by the SDK
             onError: () => {},
           })
 
@@ -172,7 +174,7 @@ export const agentLoop = async ({
                   if (detectResult.level === 'critical') {
                     shouldBreak = true
                   } else if (detectResult.level === 'warning') {
-                    // 等本步的 assistant/tool 消息写入后再追加，保证提醒在触发它的调用之后
+                    // Append after this step's assistant/tool messages so the reminder follows the call that triggered it
                     loopWarning = `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`
                   }
                 }
@@ -197,9 +199,10 @@ export const agentLoop = async ({
                 break
               }
               case 'error': {
-                // 模型请求或流中途的错误：抛出原始错误，交给下面按真实原因判断是否重试。
-                // 不处理的话 AI SDK 会在 finalStep 统一报 NoOutputGeneratedError（400 也会被重试），
-                // 或者把中途断开前的半截文本当成完整回答。
+                // Errors from the model request or mid-stream: rethrow the original error so the retry
+                // decision below uses the real cause. Otherwise the AI SDK reports NoOutputGeneratedError
+                // at finalStep (so even a 400 would be retried), or treats the partial text before the
+                // disconnect as a complete answer.
                 throw part.error
               }
               case 'tool-result': {
@@ -256,7 +259,7 @@ export const agentLoop = async ({
       const inputToken = finalStep.usage.inputTokens ?? 0
       if (inputToken > 0) tokenTracker.updateFromAPI(inputToken)
 
-      // 将 usage 归一化后记录到统一 tracker
+      // Normalize usage and record it in the shared tracker
       const norm = normalizeUsage(finalStep.usage)
       const modelId = typeof model === 'string' ? model : model.modelId
       const stepRecord = tokenTracker.record(modelId || 'mock-model', norm, {
@@ -289,9 +292,10 @@ export const agentLoop = async ({
         emit({ type: 'message', message: warning })
       }
 
-      // 每个 turn_start 都有对应的 turn_end，结束原因由随后的 agent_end 说明
+      // Every turn_start has a matching turn_end; the following agent_end gives the stop reason
       emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
-      // 运行中排队的 steer 消息插在这一步之后、下一次请求之前；本来要结束时再看 followUp（同 pi）
+      // Steer messages queued during the run go after this step and before the next request;
+      // followUp is checked only when the loop would otherwise end (like pi)
       let queued = takeSteering?.() ?? []
       if (!needToolCall && queued.length === 0) queued = takeFollowUp?.() ?? []
       for (const text of queued) {

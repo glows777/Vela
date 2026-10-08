@@ -3,8 +3,8 @@ import { dirname } from 'node:path'
 import type { VelaLogger } from '../logger.ts'
 
 /**
- * CLI 的 logger：打到终端，debug 只在 VELA_DEBUG=1 时输出。
- * `stderr`：单次 / json / rpc 模式全部写 stderr，stdout 只放结果和协议（同 pi）。
+ * CLI logger: prints to the terminal; debug only when VELA_DEBUG=1.
+ * `stderr`: print / json / rpc modes write everything to stderr, keeping stdout for results and protocol (like pi).
  */
 export function createConsoleLogger(
   options: { debug?: boolean; stderr?: boolean } = {},
@@ -21,8 +21,8 @@ export function createConsoleLogger(
 }
 
 /**
- * 交互模式的 logger：TUI 启动前打到终端；`attach()` 之后 info / warn / error 显示在对话区。
- * debug（VELA_DEBUG=1）写进 `debugLog` 文件，不打乱画面。
+ * Interactive-mode logger: prints to the terminal until the TUI starts; after `attach()`, info / warn / error
+ * show in the chat log. debug (VELA_DEBUG=1) goes to the `debugLog` file so it doesn't garble the screen.
  */
 export function createInteractiveLogger(options: {
   debugLog?: string

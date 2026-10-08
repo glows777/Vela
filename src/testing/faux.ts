@@ -11,14 +11,16 @@ import type {
 } from '@ai-sdk/provider'
 
 /**
- * 脚本化的 faux 模型（对应 pi 的 faux provider）。
+ * Scripted faux model (the counterpart of pi's faux provider).
  *
- * 实现 AI SDK 的 LanguageModelV4，按顺序回放预设的响应，所以 streamText / generateText、
- * 工具执行、重试和上下文压缩全部走真实代码。每次请求都会记进 `calls`，测试可以断言模型
- * “看到了什么”。脚本用完后的请求会直接报错，不会静默挂住。
+ * Implements the AI SDK's LanguageModelV4 and plays back preset responses in order, so
+ * streamText / generateText, tool execution, retries and context compaction all run real code.
+ * Every request is recorded in `calls`, so tests can assert on what the model "saw".
+ * A request after the script runs out fails right away instead of hanging silently.
  *
- * 响应是可 JSON 序列化的 `FauxResponse`（CLI 用 `VELA_MODEL=faux:<file.json>` 回放），
- * 也可以是 `(req) => FauxResponse` 动态生成，或者一个数组（合并成一次响应，用于并行工具调用）。
+ * A response is a JSON-serializable `FauxResponse` (the CLI replays them with
+ * `VELA_MODEL=faux:<file.json>`), a `(req) => FauxResponse` function, or an array
+ * (merged into one response, for parallel tool calls).
  */
 
 export type FauxFinishReason = LanguageModelV4FinishReason['unified']
@@ -26,7 +28,7 @@ export type FauxFinishReason = LanguageModelV4FinishReason['unified']
 export interface FauxToolCall {
   name: string
   input: unknown
-  /** 默认 `faux-call-<请求序号>-<序号>` */
+  /** Default `faux-call-<request index>-<index>` */
   id?: string
 }
 
@@ -41,40 +43,40 @@ export interface FauxResponse {
   text?: string
   reasoning?: string
   toolCalls?: FauxToolCall[]
-  /** 默认：有工具调用时 'tool-calls'，否则 'stop' */
+  /** Default: 'tool-calls' when there are tool calls, otherwise 'stop' */
   finishReason?: FauxFinishReason
-  /** 覆盖默认的确定性 usage 估算 */
+  /** Overrides the default deterministic usage estimate */
   usage?: FauxUsage
-  /** 请求直接失败（例如 '429 Too Many Requests'，或真实 provider 抛的 APICallError），不产生任何输出 */
+  /** Fails the request outright (e.g. '429 Too Many Requests', or an APICallError from a real provider) with no output */
   error?: string | Error
-  /** 先流出 text，再在流中途报这个错误 */
+  /** Streams text first, then fails mid-stream with this error */
   streamError?: string
-  /** 一直不结束，直到请求被 abort（测试中断用） */
+  /** Never finishes until the request is aborted (for interruption tests) */
   hang?: boolean
 }
 
 export interface FauxRequest {
-  /** 从 1 开始的请求序号（stream 和 generate 共用计数） */
+  /** 1-based request index (shared by stream and generate) */
   index: number
   kind: 'stream' | 'generate'
   system: string
   prompt: LanguageModelV4Prompt
-  /** 本次请求可用的工具名 */
+  /** Tool names available to this request */
   tools: string[]
-  /** 最后一条 user 消息的文本 */
+  /** Text of the last user message */
   lastUserText: string
-  /** 最近一组工具结果（上一步工具执行后发回模型的内容） */
+  /** The latest tool results (what the previous tool step sent back to the model) */
   toolResults: {
     toolCallId: string
     toolName: string
-    /** 工具结果的文本形式 */
+    /** Tool result as text */
     output: string
-    /** 原始的 tool-result output（{ type, value }） */
+    /** Raw tool-result output ({ type, value }) */
     raw: unknown
   }[]
-  /** 请求要求的 JSON 输出（例如压缩摘要的 Output.json()） */
+  /** JSON output the request asks for (e.g. Output.json() for the compaction summary) */
   responseFormat?: LanguageModelV4CallOptions['responseFormat']
-  /** 请求带的 reasoning（thinking 级别映射后的值） */
+  /** The request's reasoning setting (mapped from the thinking level) */
   reasoning?: LanguageModelV4CallOptions['reasoning']
   abortSignal?: AbortSignal
 }
@@ -85,31 +87,31 @@ export type FauxStep =
   | ((req: FauxRequest) => FauxResponse | FauxResponse[])
 
 export interface FauxModelOptions {
-  /** 主队列：streamText（以及没有 generate 队列时的 generateText）按顺序消费 */
+  /** Main queue, consumed in order by streamText (and by generateText when there is no generate queue) */
   responses?: FauxStep[]
-  /** generateText（目前是上下文压缩摘要）单独的队列；不传则共用主队列 */
+  /** Separate queue for generateText (currently the compaction summary); shares the main queue if omitted */
   generate?: FauxStep[]
-  /** 文本每块的字符数，默认 8；<=0 表示整段一次输出 */
+  /** Characters per text chunk, default 8; <=0 emits the whole text at once */
   chunkSize?: number
-  /** 每块之间的延迟毫秒数，默认 0 */
+  /** Delay between chunks in ms, default 0 */
   chunkDelayMs?: number
-  /** 模拟 prompt cache：system 前缀不变时记 cacheRead，变化时记 cacheWrite */
+  /** Simulates prompt caching: cacheRead while the system prefix is unchanged, cacheWrite when it changes */
   cache?: boolean
   modelId?: string
 }
 
 export interface FauxModel extends LanguageModelV4 {
-  /** 每次请求的记录，按顺序 */
+  /** Record of every request, in order */
   readonly calls: FauxRequest[]
-  /** 追加主队列响应 */
+  /** Appends responses to the main queue */
   push(...steps: FauxStep[]): void
-  /** 追加 generate 队列响应 */
+  /** Appends responses to the generate queue */
   pushGenerate(...steps: FauxStep[]): void
-  /** 还没用掉的响应数（主队列 + generate 队列） */
+  /** Number of unused responses (main + generate queues) */
   pending(): number
 }
 
-// --- 构造响应的小工具 ---
+// --- Response helpers ---
 
 export const fauxText = (
   text: string,
@@ -141,8 +143,9 @@ export const fauxHang = (partialText = ''): FauxResponse => ({
 })
 
 /**
- * 根据压缩请求生成一份合法的历史摘要 JSON：引用的都是被移除消息里的原文，
- * 能通过 compressor 的结构与引用校验。用在 `generate` 队列里。
+ * Builds a valid history summary JSON from a compaction request, quoting only text from the
+ * removed messages, so it passes the compressor's structure and quote checks.
+ * Use it in the `generate` queue.
  */
 export const fauxSummary =
   (pick: { goal?: number } = {}) =>
@@ -173,7 +176,7 @@ export const fauxSummary =
     }
   }
 
-// --- 实现 ---
+// --- Implementation ---
 
 export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
   const main: FauxStep[] = [...(options.responses ?? [])]
@@ -365,7 +368,7 @@ function streamParts(
     parts.push({ type: 'text-start', id: 't' })
     for (const delta of chunk(response.text, chunkSize))
       parts.push({ type: 'text-delta', id: 't', delta })
-    // 流中途出错时不发 text-end，模拟连接断开
+    // No text-end on a mid-stream error, simulating a dropped connection
     if (!response.streamError && !response.hang)
       parts.push({ type: 'text-end', id: 't' })
   }
@@ -378,7 +381,7 @@ function streamParts(
 function chunk(text: string, size: number): string[] {
   if (size <= 0 || text.length <= size) return [text]
   const out: string[] = []
-  // 按码点切，避免把中文/emoji 的代理对切断
+  // Split by code point so CJK/emoji surrogate pairs stay intact
   const chars = Array.from(text)
   for (let i = 0; i < chars.length; i += size)
     out.push(chars.slice(i, i + size).join(''))
@@ -468,9 +471,9 @@ function findCompactionControl(prompt: LanguageModelV4Prompt):
   }
 }
 
-/** JSON 场景文件的格式（CLI 的 `VELA_MODEL=faux:<file>` 读取它）。 */
+/** Format of a JSON scenario file (read by the CLI's `VELA_MODEL=faux:<file>`). */
 export interface FauxScenario {
-  /** 用户输入（按顺序）；`replayScenario()` 用它把整段会话重跑一遍，CLI 回放时忽略 */
+  /** User inputs, in order; `replayScenario()` uses them to replay the whole session, CLI replay ignores them */
   inputs?: string[]
   responses: FauxResponse[]
   generate?: FauxResponse[]

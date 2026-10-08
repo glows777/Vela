@@ -2,17 +2,17 @@ import type { ModelMessage } from 'ai'
 import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 
 /**
- * Agent 运行过程中对外报告的事件。核心代码只发事件，不直接写终端；
- * CLI、通道和测试各自决定怎么展示或断言。
+ * Events the agent reports while it runs. Core code only emits events and never
+ * writes to the terminal; the CLI, channels and tests decide how to show or assert them.
  */
 export type VelaEvent =
-  /** session.prompt() 开始处理一条用户输入（斜杠命令触发的 skill / dream 也算） */
+  /** session.prompt() starts handling a user input (including skills / dream triggered by slash commands) */
   | { type: 'agent_start'; input: string }
-  /** 一条消息进入会话历史：用户输入、模型回复、工具结果、循环检测提醒 */
+  /** A message entered the session history: user input, model reply, tool result, loop-detection reminder */
   | { type: 'message'; message: ModelMessage }
   | { type: 'turn_start'; turn: number }
   | { type: 'text_delta'; text: string }
-  /** 模型的 thinking / reasoning 文本（provider 返回时才有） */
+  /** Model thinking / reasoning text (only when the provider returns it) */
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_call'; toolCallId: string; toolName: string; input: unknown }
   | {
@@ -54,16 +54,16 @@ export type VelaEvent =
       reason: 'done' | 'loop' | 'aborted' | 'error'
       error?: unknown
     }
-  /** 排队的消息变化（steer / followUp 入队、取出、清空），两个字段都是完整的当前队列 */
+  /** Queued messages changed (steer / followUp enqueued, dequeued, cleared); both fields hold the full current queue */
   | { type: 'queue_update'; steering: string[]; followUp: string[] }
   /**
-   * prompt() 的所有工作都结束了（包括它之后排队的 steer / followUp 各自跑的 loop），
-   * 会话回到空闲；同 pi 的 agent_settled。
+   * All work from prompt() is done (including the loops run for steer / followUp queued after it)
+   * and the session is idle again. Same as pi's agent_settled.
    */
   | { type: 'agent_settled' }
   | {
       type: 'context'
-      /** compact = session.compact() 手动摘要 */
+      /** compact = manual summary via session.compact() */
       action: 'micro' | 'summary' | 'summary-required' | 'compact'
       before: number
       after?: number
@@ -72,13 +72,13 @@ export type VelaEvent =
       messages?: number
     }
   | { type: 'session_save_failed'; error: unknown }
-  /** 文件写入类工具调用前的审计记录（pre hook 发出） */
+  /** Audit record before a file-writing tool call (emitted by a pre hook) */
   | { type: 'audit'; toolName: string; path: string }
-  /** bash 命令被判为中等风险，照常执行但提示一下 */
+  /** A bash command was rated medium risk; it still runs, with a warning */
   | { type: 'security_warning'; toolName: string; reason: string; command: string }
-  /** 扩展在没有界面的会话里调用了 ui.notify() */
+  /** An extension called ui.notify() in a session without a UI */
   | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
-  /** 通道收到一条消息（channel 会话） */
+  /** A channel received a message (channel session) */
   | {
       type: 'channel_message'
       channel: string
@@ -86,9 +86,9 @@ export type VelaEvent =
       senderName: string
       text: string
     }
-  /** 通道回发了一条回复 */
+  /** A channel sent a reply */
   | { type: 'channel_reply'; channel: string; recipientId: string; text: string }
-  /** 通道这一轮处理失败（含中断） */
+  /** A channel turn failed (including aborts) */
   | {
       type: 'channel_error'
       channel: string
@@ -99,7 +99,7 @@ export type VelaEvent =
 
 export type VelaEventListener = (event: VelaEvent) => void
 
-/** vela.subscribe() 的回调：所有会话的事件，第二个参数是事件所属的会话 id。 */
+/** Callback for vela.subscribe(): events from all sessions; the second argument is the event's session id. */
 export type VelaSessionEventListener = (
   event: VelaEvent,
   sessionId: string,

@@ -15,33 +15,33 @@ afterAll(() => {
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
 })
 
-test('replace → loadState 往返保留消息、时间戳与摘要', async () => {
+test('replace → loadState round-trip keeps messages, timestamps and summary', async () => {
   const store = new SessionStore(
     'default',
     path.join(makeTempDir(), '.sessions'),
   )
   const messages: ModelMessage[] = [
-    { role: 'user', content: '你好' },
-    { role: 'assistant', content: [{ type: 'text' as const, text: '你好！' }] },
+    { role: 'user', content: 'Hello' },
+    { role: 'assistant', content: [{ type: 'text' as const, text: 'Hello!' }] },
   ]
   const timestamps = new Map([
     [messages[0]!, 1000],
     [messages[1]!, 2000],
   ])
 
-  await store.replace(messages, timestamps, '摘要')
+  await store.replace(messages, timestamps, 'Summary')
   const state = await store.loadState()
 
   expect(state.messages).toEqual(messages)
-  expect(state.summary).toBe('摘要')
-  // 时间戳按解析后的消息对象为键（JSON 往返后引用不同，只验证数量与取值）
+  expect(state.summary).toBe('Summary')
+  // Timestamps are keyed by the parsed message objects (references differ after the JSON round-trip, so only check count and values)
   expect(state.timestamps.size).toBe(2)
   for (const ts of state.timestamps.values()) {
     expect(ts).toBeGreaterThan(0)
   }
 })
 
-test('文件不存在时返回空会话', async () => {
+test('returns an empty session when the file does not exist', async () => {
   const store = new SessionStore(
     'default',
     path.join(makeTempDir(), '.sessions'),
@@ -51,7 +51,7 @@ test('文件不存在时返回空会话', async () => {
   expect(state.summary).toBe('')
 })
 
-test('损坏的行被忽略，继续解析后面的行', async () => {
+test('corrupt lines are skipped and later lines still parse', async () => {
   const dir = path.join(makeTempDir(), '.sessions')
   fs.mkdirSync(dir, { recursive: true })
   const file = path.join(dir, 'default.jsonl')
@@ -73,7 +73,7 @@ test('损坏的行被忽略，继续解析后面的行', async () => {
   expect(state.messages).toEqual([])
 })
 
-test('exists 反映文件是否存在', async () => {
+test('exists reflects whether the file exists', async () => {
   const store = new SessionStore(
     'default',
     path.join(makeTempDir(), '.sessions'),
@@ -83,7 +83,7 @@ test('exists 反映文件是否存在', async () => {
   expect(await store.exists()).toBe(true)
 })
 
-test('checkpoint 带格式版本；更新版本写的文件明确报错，不当成空会话', async () => {
+test('checkpoints carry a format version; a file written by a newer version fails clearly instead of loading as empty', async () => {
   const dir = path.join(makeTempDir(), '.sessions')
   await new SessionStore('default', dir).replace([], new Map(), '')
   const saved = JSON.parse(
@@ -96,6 +96,6 @@ test('checkpoint 带格式版本；更新版本写的文件明确报错，不当
     JSON.stringify({ ...saved, version: 2 }),
   )
   await expect(new SessionStore('newer', dir).loadState()).rejects.toThrow(
-    '文件格式版本是 2',
+    'uses file format version 2',
   )
 })

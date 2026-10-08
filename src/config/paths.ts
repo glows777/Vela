@@ -2,16 +2,17 @@ import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-/** 用户级目录：`VELA_DIR`，默认 `~/.vela`（同 pi 的 `~/.pi/agent` / `PI_CODING_AGENT_DIR`）。 */
+/** User-level directory: `VELA_DIR`, default `~/.vela` (like pi's `~/.pi/agent` / `PI_CODING_AGENT_DIR`). */
 export function defaultAgentDir(env: Record<string, string | undefined> = {}): string {
   return env.VELA_DIR ? expandHome(env.VELA_DIR) : join(homedir(), '.vela')
 }
 
 /**
- * 一个项目的数据目录：`<agentDir>/projects/--home-liam-code-x--1a2b3c4d`。
- * 前半同 pi 的会话目录编码（去掉开头的分隔符，`/ \ :` 换成 `-`，两边加 `--`），方便认；
- * 和 pi 不同，后面加完整路径的短哈希：`/a-b/c` 和 `/a/b-c` 编码相同，而 Vela 的记忆、知识库
- * 按项目存，不能让两个项目共用。
+ * A project's data directory: `<agentDir>/projects/--home-liam-code-x--1a2b3c4d`.
+ * The first part uses pi's session directory encoding (leading separator dropped,
+ * `/ \ :` replaced with `-`, wrapped in `--`) so it stays readable. Unlike pi, a short hash
+ * of the full path follows: `/a-b/c` and `/a/b-c` encode the same, and Vela stores memory
+ * and the knowledge base per project, so two projects must never share a directory.
  */
 export function projectDataDir(agentDir: string, cwd: string): string {
   const path = resolve(cwd)
@@ -20,7 +21,7 @@ export function projectDataDir(agentDir: string, cwd: string): string {
   return join(agentDir, 'projects', `--${readable}--${hash}`)
 }
 
-/** `~` / `~/x` 展开成家目录 */
+/** Expands `~` / `~/x` to the home directory */
 export function expandHome(path: string): string {
   if (path === '~') return homedir()
   if (path.startsWith('~/') || path.startsWith('~\\'))
@@ -28,7 +29,7 @@ export function expandHome(path: string): string {
   return path
 }
 
-/** 配置里的路径：支持 `~`，相对路径按 `base`（所在配置文件的目录）解析。 */
+/** A path from config: supports `~`; relative paths resolve against `base` (the config file's directory). */
 export function resolveConfigPath(base: string, path: string): string {
   const expanded = expandHome(path)
   return isAbsolute(expanded) ? expanded : resolve(base, expanded)

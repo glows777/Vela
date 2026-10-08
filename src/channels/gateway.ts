@@ -9,7 +9,7 @@ import type {
 } from './types.ts'
 
 interface GatewayOptions {
-  /** 按 id 打开（或取回）会话；每个通道发送者一个会话 */
+  /** Opens (or returns) a session by id; one session per channel sender */
   session: (id: string) => VelaSession
   logger?: VelaLogger
 }
@@ -17,10 +17,11 @@ interface GatewayOptions {
 const PLAIN = /^[A-Za-z0-9_]+$/
 
 /**
- * 通道发送者对应的会话 id，例如 `feishu-ou_123`。
- * 不同发送者必须落到不同会话（否则会看到彼此的历史）：通道名和发送者 id 都只含
- * 字母、数字、`_` 时直接拼接；否则清洗后加 `.` 和原文的哈希。直接拼接的 id 不含 `.`，
- * 两种形式互不重叠。
+ * Session id for a channel sender, e.g. `feishu-ou_123`.
+ * Different senders must map to different sessions (or they would see each other's history).
+ * If the channel name and sender id contain only letters, digits and `_`, they are joined directly;
+ * otherwise they are sanitized and suffixed with `.` plus a hash of the original. Directly joined
+ * ids never contain `.`, so the two forms never collide.
  */
 export const channelSessionId = (channel: string, senderId: string) => {
   const plain = `${channel}-${senderId}`
@@ -36,9 +37,9 @@ export const channelSessionId = (channel: string, senderId: string) => {
 
 export class ChannelGateway {
   private channels = new Map<string, ChannelDefinition>()
-  /** 每个会话串行处理消息：同一发送者连发两条时，第二条等第一条跑完 */
+  /** Messages are processed serially per session: a sender's second message waits for the first */
   private queues = new Map<string, Promise<void>>()
-  /** 已从磁盘恢复过的会话对象；会话被关闭后重新打开是新对象，要再恢复一次 */
+  /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
   private active = new Set<VelaSession>()
   private stopped = false
@@ -61,16 +62,16 @@ export class ChannelGateway {
     for (const [name, ch] of this.channels) {
       try {
         await ch.start()
-        this.logger.info(`[gateway] ✓ ${name} 已启动`)
+        this.logger.info(`[gateway] ✓ ${name} started`)
       } catch (err) {
-        this.logger.error(`[gateway] ✗ ${name} 启动失败: ${errorMessage(err)}`)
+        this.logger.error(`[gateway] ✗ ${name} failed to start: ${errorMessage(err)}`)
       }
     }
   }
 
   async stopAll(): Promise<void> {
     this.stopped = true
-    // 先中断所有仍在跑的通道会话，再关停通道
+    // Abort channel sessions that are still running before stopping the channels
     for (const session of this.active) session.abort()
     await Promise.all(this.queues.values())
 
@@ -79,7 +80,7 @@ export class ChannelGateway {
     }
   }
 
-  /** 处理一条通道消息；返回的 Promise 在回复发出（或失败）后结束。 */
+  /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
     const id = channelSessionId(channelName, msg.senderId)
     const previous = this.queues.get(id) ?? Promise.resolve()
@@ -87,7 +88,7 @@ export class ChannelGateway {
       .then(() => this.process(id, channelName, msg))
       .catch((error) =>
         this.logger.error(
-          `[${channelName}] 处理消息失败: ${errorMessage(error)}`,
+          `[${channelName}] Failed to handle message: ${errorMessage(error)}`,
         ),
       )
     this.queues.set(id, next)
@@ -104,7 +105,7 @@ export class ChannelGateway {
   ): Promise<void> {
     if (this.stopped) return
     const session = this.options.session(id)
-    // 每条消息都按通道的判断重新设置角色（名单可能变化）；默认 guest
+    // Re-evaluate the role on every message (the allowlist may change); defaults to guest
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
     if (!this.resumed.has(session)) {
       this.resumed.add(session)
@@ -174,7 +175,7 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError'
 }
 
-/** 最后一条 assistant 消息的文本（这一轮的回复）。 */
+/** Text of the last assistant message (this turn's reply). */
 function lastAssistantText(messages: ModelMessage[]): string {
   const last = messages[messages.length - 1]
   if (last?.role !== 'assistant') return ''

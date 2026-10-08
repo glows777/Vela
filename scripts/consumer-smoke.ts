@@ -1,10 +1,13 @@
 /**
- * 消费者冒烟测试：像外部项目一样用 Vela。
- * 先 `bun run build`，再把本仓库打包成 tarball，分别装进两个全新的空项目（不是 workspace 链接）：
- * - Node 项目（npm 安装）：严格的 NodeNext tsconfig（exactOptionalPropertyTypes 等，不装 @types/bun）
- *   检查 `@glows777/vela` / `@glows777/vela/testing` 的类型，用 Node 跑 SDK 会话和 CLI `vela -p`；
- * - Bun 项目（bun 安装）：bun init 的默认 tsconfig，用 Bun 跑同样的 SDK 会话和 CLI。
- * 需要联网装依赖，所以不在 `bun run test` 里，CI 单独跑：`bun run smoke:consumer`。
+ * Consumer smoke test: use Vela the way an external project would.
+ * Runs `bun run build`, packs this repo into a tarball, and installs it into two fresh,
+ * empty projects (not workspace links):
+ * - Node project (npm install): strict NodeNext tsconfig (exactOptionalPropertyTypes etc.,
+ *   no @types/bun) type-checks `@glows777/vela` / `@glows777/vela/testing`, then runs an
+ *   SDK session and the CLI `vela -p` under Node;
+ * - Bun project (bun install): default `bun init` tsconfig, runs the same SDK session and CLI under Bun.
+ * Installing dependencies needs the network, so this is not part of `bun run test`;
+ * CI runs it separately: `bun run smoke:consumer`.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -39,13 +42,13 @@ const session = vela.session('default')
 const types: string[] = []
 session.subscribe((e: VelaEvent) => { types.push(e.type) })
 await session.prompt('say hi')
-// 类型真的从 .d.ts 解析出来了（不是 any）：否则下面的 @ts-expect-error 会报“未使用”
+// Types really resolve from the .d.ts (not any); otherwise the @ts-expect-error below reports "unused"
 const typeChecks = () => {
-  // @ts-expect-error prompt 只收字符串
+  // @ts-expect-error prompt only accepts strings
   void session.prompt(42)
 }
 void typeChecks
-// @ts-expect-error 没有这个事件类型
+// @ts-expect-error no such event type
 const bogus: VelaEvent = { type: 'no_such_event' }
 void bogus
 await vela.dispose()
@@ -58,7 +61,7 @@ const t = createTestVela({ responses: [fauxText('ok')] })
 await t.run('hello')
 if (t.lastAssistantText() !== 'ok') throw new Error('createTestVela failed')
 
-// rag 扩展：sqlite-vec 经 Bun 的 bun:sqlite / Node 的 node:sqlite 加载（src/extensions/rag/sqlite.ts）
+// rag extension: sqlite-vec loads via bun:sqlite on Bun / node:sqlite on Node (src/extensions/rag/sqlite.ts)
 const r = createTestVela({
   embedder: true,
   files: { 'guide.md': 'Vela runs on Node and Bun.' },
@@ -75,8 +78,9 @@ await cleanupTestVelas()
 console.log('sdk ok')
 `
 
-// Node 项目：NodeNext + 能开的严格选项全开。skipLibCheck 照常开着（ai 等依赖自己的 .d.ts
-// 在 exactOptionalPropertyTypes / 无 DOM lib 下过不了），smoke.ts 里的 @ts-expect-error 保证类型不是 any
+// Node project: NodeNext with every strict option that can be enabled. skipLibCheck stays on
+// (the .d.ts of dependencies like ai fail under exactOptionalPropertyTypes / no DOM lib);
+// the @ts-expect-error lines in smoke.ts make sure the types are not any
 const NODE_TSCONFIG = {
   compilerOptions: {
     target: 'ES2023',
@@ -97,7 +101,7 @@ const NODE_TSCONFIG = {
   include: ['smoke.ts'],
 }
 
-// bun init 生成的 tsconfig（Bun 项目的默认值）；TypeScript 6 默认 types 为空，要显式写 bun
+// The tsconfig `bun init` generates (the Bun project default); TypeScript 6 defaults types to empty, so list bun explicitly
 const BUN_TSCONFIG = {
   compilerOptions: {
     lib: ['ESNext'],
@@ -171,7 +175,7 @@ try {
   if (!files.includes('package/LICENSE'))
     throw new Error('the package must ship the LICENSE file')
 
-  // 不用本仓库的 lockfile：和真实消费者一样按 package.json 的范围解析依赖
+  // Skip this repo's lockfile: resolve dependencies from package.json ranges like a real consumer
   const node = await project(
     'node',
     tarball,

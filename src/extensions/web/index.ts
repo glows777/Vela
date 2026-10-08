@@ -3,16 +3,16 @@ import { configString } from '../config.ts'
 import { serperSearchTool, tavilySearchTool, webFetchTool } from './tools.ts'
 
 export interface WebOptions {
-  /** Tavily API key；同时给了两个 key 时优先用 Tavily */
+  /** Tavily API key; if both keys are given, Tavily wins */
   tavilyKey?: string
-  /** Serper（Google 搜索）API key */
+  /** Serper (Google search) API key */
   serperKey?: string
 }
 
 /**
- * 网页工具：`web_fetch` 抓取网页转成 Markdown；给了搜索 key 时再加 `web_search`。
- * 没传的选项从配置段（`extensionConfig.web`）取。
- * guest 会话能用 web_search，不能用 web_fetch（避免外部发送者让 Vela 访问内网地址）。
+ * Web tools: `web_fetch` fetches a page as Markdown; `web_search` is added when a search key is given.
+ * Options not passed are read from the config section (`extensionConfig.web`).
+ * Guest sessions can use web_search but not web_fetch (so outside senders cannot make Vela reach internal addresses).
  */
 export function web(options: WebOptions = {}): VelaExtension {
   return function web(vela) {

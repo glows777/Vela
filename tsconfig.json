@@ -27,7 +27,7 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
 
-    // 仓库里按包名 import（示例扩展）时指向源码，不需要先 build
+    // Package-name imports inside the repo (examples) resolve to src/, no build needed
     "paths": {
       "@glows777/vela": ["./src/index.ts"],
       "@glows777/vela/testing": ["./src/testing/index.ts"]
