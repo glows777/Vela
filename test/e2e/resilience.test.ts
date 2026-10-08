@@ -205,7 +205,7 @@ test('there is no turn limit: the loop runs until the model stops calling tools 
   const t = createTestVela({
     responses: [
       ...Array.from({ length: 20 }, (_, i) =>
-        fauxToolCall('glob', { pattern: `*${i}` }),
+        fauxToolCall('find', { pattern: `*${i}` }),
       ),
       fauxText('All done'),
     ],

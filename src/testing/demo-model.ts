@@ -306,8 +306,8 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   ) {
     return { toolName: 'grep', args: { pattern: 'export', path: 'src' } }
   }
-  if (text.includes('测试glob') || text.includes('test glob')) {
-    return { toolName: 'glob', args: { pattern: '**/*.ts' } }
+  if (text.includes('测试find') || text.includes('test find')) {
+    return { toolName: 'find', args: { pattern: '**/*.ts' } }
   }
   if (text.includes('测试bash') || text.includes('test bash')) {
     return {

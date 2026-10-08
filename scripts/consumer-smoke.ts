@@ -74,6 +74,21 @@ const r = createTestVela({
 await r.run('ingest and search')
 if (!JSON.stringify(r.model.calls[2]?.prompt).includes('Vela runs on Node and Bun.'))
   throw new Error('rag_search did not return the ingested text')
+
+// grep / find run ripgrep / fd as child processes (src/tools/search.ts)
+const s = createTestVela({
+  files: { 'src/a.ts': 'export const answer = 42' },
+  responses: [
+    [fauxToolCall('find', { pattern: '*.ts' }), fauxToolCall('grep', { pattern: 'answer' })],
+    fauxText('ok'),
+  ],
+})
+await s.run('search')
+const searched = Object.fromEntries(
+  (s.model.calls[1]?.toolResults ?? []).map((r) => [r.toolName, JSON.stringify(r.output)]),
+)
+if (!searched['find']?.includes('src/a.ts') || !searched['grep']?.includes('src/a.ts:1: export const answer = 42'))
+  throw new Error(\`grep / find results missing: \${JSON.stringify(searched)}\`)
 await cleanupTestVelas()
 console.log('sdk ok')
 `

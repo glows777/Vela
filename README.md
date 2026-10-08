@@ -153,7 +153,7 @@ const session = vela.session('default', { ui })   // 有界面才会真正询问
 | 工具 / Tool | 说明 / Description |
 |---|---|
 | `read_file` / `write_file` / `edit_file` | 文件读写与精确编辑 / file read, write, precise edit |
-| `list_directory` / `grep` / `glob` | 目录列举、正则搜索、模式匹配 / listing, regex search, glob |
+| `list_directory` / `grep` / `find` | 目录列举、正则搜索（ripgrep）、按 glob 找文件（fd）/ listing, regex search (ripgrep), find files by glob (fd) |
 | `bash` | 执行 shell 命令 / run shell commands |
 | `web_fetch` | 抓取网页并转 Markdown（web 扩展）/ fetch web page to Markdown |
 | `web_search` | 互联网搜索（web 扩展，配了 Tavily / Serper key 时）/ web search |

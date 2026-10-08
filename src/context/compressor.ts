@@ -34,7 +34,7 @@ const CLEARABLE_TOOLS = new Set([
   'read_file',
   'bash',
   'grep',
-  'glob',
+  'find',
   'list_directory',
   'edit_file',
   'write_file',

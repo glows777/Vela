@@ -161,6 +161,9 @@ const vela = createVela({
   skillDirs: config.skillDirs,
   limits: config.settings.limits,
   logger,
+  // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
+  binDir: join(agentDir, 'bin'),
+  offline: ['1', 'true', 'yes'].includes((env.VELA_OFFLINE ?? '').toLowerCase()),
   extensionConfig: extensionConfigFromEnv(env, config.extensionConfig),
   // Built-in extensions (memory / rag / web / supabase / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
   extensions: await loadCliExtensions(config, args, (message) =>

@@ -1,15 +1,10 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createGlobTool, createGrepTool } from '../../../src/tools/search.ts'
+import { createFindTool, createGrepTool } from '../../../src/tools/search.ts'
 
+// grep / find run the real ripgrep and fd from PATH (CI installs them; see test/README.md)
 const dir = mkdtempSync(join(tmpdir(), 'vela-search-'))
 const file = (path: string, content = '') => {
   mkdirSync(join(dir, path, '..'), { recursive: true })
@@ -17,81 +12,125 @@ const file = (path: string, content = '') => {
 }
 
 beforeAll(() => {
+  // A git repo, so .gitignore applies to both tools
+  mkdirSync(join(dir, '.git'))
+  file('.git/HEAD', 'needle in git')
+  file('.gitignore', 'ignored/\nnode_modules/\n')
   file('top.ts', 'needle top')
-  file('src/a.ts', 'needle a\nplain')
-  file('src/.hidden/b.ts', 'needle hidden')
-  file('.dot.ts', 'needle dot')
-  file('node_modules/pkg/c.ts', 'needle dep')
-  file('.git/d.ts', 'needle git')
-  file('dist/e.ts', 'needle dist')
+  file('src/a.ts', 'needle a\nplain\nNEEDLE upper')
+  file('src/b.test.ts', 'needle b')
+  file('src/.hidden/c.ts', 'needle hidden')
+  file('ignored/d.ts', 'needle ignored')
+  file('node_modules/pkg/e.ts', 'needle dep')
+  file('long.txt', `needle ${'x'.repeat(600)}`)
+  file('regex.txt', 'a.b\naxb')
 })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-const lines = (output: unknown) => String(output).split('\n').sort()
+const run = async (tool: ReturnType<typeof createGrepTool>, input: object) =>
+  String(await tool.execute(input))
+const sorted = (output: string) => output.split('\n').sort()
 
-test('glob matches files relative to the search dir, skipping dotfiles, node_modules and .git', async () => {
-  const glob = createGlobTool(dir)
-  // glob 只跳过 node_modules / .git（dist 照常列出）
-  expect(lines(await glob.execute({ pattern: '**/*.ts' }))).toEqual([
-    'dist/e.ts',
-    'src/a.ts',
-    'top.ts',
-  ])
-  expect(lines(await glob.execute({ pattern: '*.ts', path: 'src' }))).toEqual([
-    'a.ts',
-  ])
+test('grep: matches with paths relative to the search dir, respecting .gitignore and including hidden files', async () => {
+  const output = await run(createGrepTool(dir), { pattern: 'needle' })
+  expect(sorted(output)).toEqual(
+    [
+      'long.txt:1: needle ' + 'x'.repeat(493) + '... [truncated]',
+      'src/.hidden/c.ts:1: needle hidden',
+      'src/a.ts:1: needle a',
+      'src/b.test.ts:1: needle b',
+      'top.ts:1: needle top',
+      '',
+      '[Some lines truncated to 500 chars. Use read_file to see full lines]',
+    ].sort(),
+  )
 })
 
-test('grep searches dotfiles but skips node_modules, .git and dist', async () => {
+test('grep: case, literal, glob and a single file', async () => {
   const grep = createGrepTool(dir)
-  const output = String(await grep.execute({ pattern: 'needle', path: '.' }))
-  expect(output).toContain('top.ts:1: needle top')
-  expect(output).toContain('src/a.ts:1: needle a')
-  expect(output).toContain('src/.hidden/b.ts:1: needle hidden')
-  expect(output).toContain('.dot.ts:1: needle dot')
-  expect(output).not.toContain('needle dep')
-  expect(output).not.toContain('needle git')
-  expect(output).not.toContain('needle dist')
+  expect(await run(grep, { pattern: 'needle', path: 'src/a.ts' })).toBe(
+    'a.ts:1: needle a',
+  )
+  expect(
+    sorted(
+      await run(grep, {
+        pattern: 'needle',
+        path: 'src/a.ts',
+        ignoreCase: true,
+      }),
+    ),
+  ).toEqual(['a.ts:1: needle a', 'a.ts:3: NEEDLE upper'])
+  expect(
+    sorted(await run(grep, { pattern: 'a.b', path: 'regex.txt' })),
+  ).toEqual(['regex.txt:1: a.b', 'regex.txt:2: axb'])
+  expect(
+    await run(grep, { pattern: 'a.b', path: 'regex.txt', literal: true }),
+  ).toBe('regex.txt:1: a.b')
+  expect(
+    await run(grep, { pattern: 'needle', path: 'src', glob: '*.test.ts' }),
+  ).toBe('b.test.ts:1: needle b')
+  expect(await run(grep, { pattern: 'nothing-here' })).toBe('No matches found')
 })
 
-test('grep on a single file, and stops at 50 matches', async () => {
+test('grep: context lines and the match limit', async () => {
   const grep = createGrepTool(dir)
   expect(
-    String(await grep.execute({ pattern: 'needle', path: 'src/a.ts' })),
-  ).toBe(':1: needle a')
-  // 单独的目录：50 条上限不影响上面那条用例
-  const manyDir = mkdtempSync(join(tmpdir(), 'vela-search-many-'))
-  writeFileSync(
-    join(manyDir, 'm.txt'),
-    Array.from({ length: 60 }, () => 'needle').join('\n'),
+    await run(grep, { pattern: 'plain', path: 'src/a.ts', context: 1 }),
+  ).toBe('a.ts-1- needle a\na.ts:2: plain\na.ts-3- NEEDLE upper')
+  const limited = await run(grep, { pattern: 'needle', limit: 2 })
+  expect(limited.split('\n\n')[0]!.split('\n')).toHaveLength(2)
+  expect(limited).toContain(
+    '[2 matches limit reached. Use limit=4 for more, or refine pattern',
   )
-  const many = String(
-    await createGrepTool(manyDir).execute({ pattern: 'needle' }),
-  )
-  rmSync(manyDir, { recursive: true, force: true })
-  expect(many.split('\n').filter((l) => l.startsWith('m.txt:'))).toHaveLength(
-    50,
-  )
-  expect(many).toContain('50+')
 })
 
-test('grep follows symlinked files and directories without looping', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'vela-search-links-'))
+test('grep: a bad regex or a missing path is an error', async () => {
+  const grep = createGrepTool(dir)
+  await expect(grep.execute({ pattern: '(' })).rejects.toThrow('regex')
+  await expect(grep.execute({ pattern: 'x', path: 'nope' })).rejects.toThrow(
+    'Path not found',
+  )
+})
+
+test('find: glob patterns, with and without a slash, respecting .gitignore', async () => {
+  const find = createFindTool(dir)
+  expect(sorted(await run(find, { pattern: '*.ts' }))).toEqual([
+    'src/.hidden/c.ts',
+    'src/a.ts',
+    'src/b.test.ts',
+    'top.ts',
+  ])
+  expect(sorted(await run(find, { pattern: 'src/*.ts' }))).toEqual([
+    'src/a.ts',
+    'src/b.test.ts',
+  ])
+  expect(await run(find, { pattern: '*.ts', path: 'src/.hidden' })).toBe('c.ts')
+  expect(await run(find, { pattern: '*.nothing' })).toBe(
+    'No files found matching pattern',
+  )
+  expect(await run(find, { pattern: '*.ts', limit: 1 })).toContain(
+    '[1 results limit reached. Use limit=2 for more, or refine pattern]',
+  )
+})
+
+test('find: .gitignore applies outside a git repo too (same as pi)', async () => {
+  const plain = mkdtempSync(join(tmpdir(), 'vela-find-'))
   try {
-    mkdirSync(join(root, 'real/sub'), { recursive: true })
-    writeFileSync(join(root, 'real/f.ts'), 'needle linked file')
-    writeFileSync(join(root, 'real/sub/g.ts'), 'needle linked dir')
-    mkdirSync(join(root, 'work'))
-    symlinkSync(join(root, 'real/f.ts'), join(root, 'work/f.ts'))
-    symlinkSync(join(root, 'real/sub'), join(root, 'work/sub'))
-    symlinkSync(join(root, 'work'), join(root, 'work/loop'))
-    const output = String(
-      await createGrepTool(join(root, 'work')).execute({ pattern: 'needle' }),
+    writeFileSync(join(plain, '.gitignore'), 'skip.ts\n')
+    writeFileSync(join(plain, 'skip.ts'), '')
+    writeFileSync(join(plain, 'keep.ts'), '')
+    expect(await run(createFindTool(plain), { pattern: '*.ts' })).toBe(
+      'keep.ts',
     )
-    expect(output).toContain('f.ts:1: needle linked file')
-    expect(output).toContain('sub/g.ts:1: needle linked dir')
-    expect(output.split('\n')).toHaveLength(2)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmSync(plain, { recursive: true, force: true })
   }
+})
+
+test('a missing program is reported, not worked around', async () => {
+  const missing = () =>
+    Promise.reject(new Error('ripgrep (rg) is not installed'))
+  await expect(
+    createGrepTool(dir, missing).execute({ pattern: 'x' }),
+  ).rejects.toThrow('ripgrep (rg) is not installed')
 })
