@@ -37,7 +37,7 @@ The faux model, the demo model and createTestVela live in `src/testing/` rather 
 | `bun run smoke:consumer` | runs `bun run build`, packs a tarball and installs it into an empty Node project (strict NodeNext tsconfig, no @types/bun) and an empty Bun project; in each, type-checks like a consumer, runs a faux session and `vela -p`. Needs network; CI runs it as its own step (on Node 22.18) | ~30 s |
 | `bun run lint` | `biome lint`; must report 0 errors (warnings don't block) | |
 
-The suite never touches the network and needs no environment variables. Every test runs in its own temp directory, isolated from the others and removed afterwards.
+The suite never touches the network and needs no environment variables, but it needs ripgrep and fd installed: the `grep` / `find` tools run the real `rg` / `fd` (macOS `brew install ripgrep fd`, Ubuntu `apt install ripgrep fd-find`). The test Vela passes no `binDir`, so it only looks on PATH and never downloads. Every test runs in its own temp directory, isolated from the others and removed afterwards.
 
 CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint` and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. `test/live/` does not run in CI.
 
@@ -59,7 +59,7 @@ import { createFauxModel, fauxText, fauxToolCall, fauxError, fauxStreamError, fa
 const model = createFauxModel({
   responses: [                                        // main queue, consumed in order by streamText
     fauxToolCall('read_file', { path: 'a.txt' }),     // one tool call
-    [fauxToolCall('glob', {...}), fauxToolCall('grep', {...})], // an array = several tool calls in one response
+    [fauxToolCall('find', {...}), fauxToolCall('grep', {...})], // an array = several tool calls in one response
     (req) => fauxText(`You said: ${req.lastUserText}`), // generated from the request
     fauxError('429 Too Many Requests'),               // the request fails (an Error works too, e.g. a provider APICallError)
     fauxStreamError('ECONNRESET', 'partial text'),    // the stream breaks midway

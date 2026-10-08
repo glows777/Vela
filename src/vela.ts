@@ -24,6 +24,7 @@ import {
 } from './session/storage.ts'
 import { ToolResultStore } from './session/tool-results.ts'
 import { SkillLoader } from './skills/loader.ts'
+import { createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import {
@@ -66,6 +67,13 @@ export interface VelaOptions {
   extensionConfig?: Record<string, Record<string, unknown>>
   /** Retry, compaction threshold and other limits; missing fields use defaults (see src/limits.ts). */
   limits?: Partial<VelaLimits>
+  /**
+   * Where the grep / find tools keep ripgrep and fd (the CLI uses `~/.vela/bin`). Checked before
+   * PATH; a missing program is downloaded here (same as pi). Without it only PATH is searched.
+   */
+  binDir?: string
+  /** Don't download ripgrep / fd into `binDir` (the CLI sets this from `VELA_OFFLINE=1`). */
+  offline?: boolean
   /** Diagnostic output that is not an event (extensions, hooks, bad session file lines, ...); silent by default. */
   logger?: VelaLogger
   /**
@@ -167,7 +175,15 @@ export function createVela(options: VelaOptions = {}): Vela {
   )
   registry.setLogger(logger)
   registry.register(
-    ...createCoreTools({ cwd, bashTimeoutMs: limits.bashTimeoutMs }),
+    ...createCoreTools({
+      cwd,
+      bashTimeoutMs: limits.bashTimeoutMs,
+      resolveBinary: createBinaryResolver({
+        binDir: options.binDir,
+        offline: options.offline,
+        logger,
+      }),
+    }),
   )
 
   const hooks = new HookPipeline(logger)
