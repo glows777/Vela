@@ -19,6 +19,12 @@ const MAX_INDEX_LINES = 200
 const MAX_FILE_CHARS = 4000
 const STALE_DAYS = 30
 
+/** Writes a memory file readable only by the owner (0600, like session files); also tightens an existing file. */
+function writePrivate(filePath: string, content: string): void {
+  fs.writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 })
+  fs.chmodSync(filePath, 0o600)
+}
+
 export class MemoryStore {
   /**
    * `memoryDir`: directory holding the memory files and MEMORY.md (the memory extension uses `<dataDir>/memory`).
@@ -36,10 +42,16 @@ export class MemoryStore {
 
   init(): void {
     if (!fs.existsSync(this.memoryDir)) {
-      fs.mkdirSync(this.memoryDir, { recursive: true })
+      fs.mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 })
+    } else {
+      // A store written by an older version has default permissions: tighten the directory and its files
+      fs.chmodSync(this.memoryDir, 0o700)
+      for (const entry of fs.readdirSync(this.memoryDir, { withFileTypes: true }))
+        if (entry.isFile() && entry.name.endsWith('.md'))
+          fs.chmodSync(path.join(this.memoryDir, entry.name), 0o600)
     }
     if (!fs.existsSync(this.indexPath)) {
-      fs.writeFileSync(this.indexPath, '# Memory Index\n', 'utf-8')
+      writePrivate(this.indexPath, '# Memory Index\n')
     }
   }
 
@@ -67,7 +79,7 @@ export class MemoryStore {
       entry.content,
     ].join('\n')
 
-    fs.writeFileSync(filePath, fileContent, 'utf-8')
+    writePrivate(filePath, fileContent)
     this.updateIndex(entry.name, filename, entry.description)
     return filename
   }
@@ -96,7 +108,7 @@ export class MemoryStore {
       lines.push(newLine)
     }
 
-    fs.writeFileSync(this.indexPath, lines.join('\n'), 'utf-8')
+    writePrivate(this.indexPath, lines.join('\n'))
   }
 
   list(): MemoryEntry[] {
@@ -149,7 +161,7 @@ export class MemoryStore {
     } else {
       updated = raw.replace(/^---\n/, `---\nlastReadAt: ${now}\n`)
     }
-    fs.writeFileSync(filePath, updated, 'utf-8')
+    writePrivate(filePath, updated)
   }
 
   delete(filename: string): boolean {
@@ -161,7 +173,7 @@ export class MemoryStore {
     const lines = indexContent
       .split('\n')
       .filter((l) => !l.includes(`(${filename})`))
-    fs.writeFileSync(this.indexPath, lines.join('\n'), 'utf-8')
+    writePrivate(this.indexPath, lines.join('\n'))
     return true
   }
 

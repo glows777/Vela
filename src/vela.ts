@@ -24,7 +24,7 @@ import {
 } from './session/storage.ts'
 import { ToolResultStore } from './session/tool-results.ts'
 import { SkillLoader } from './skills/loader.ts'
-import { createBinaryResolver } from './tools/binaries.ts'
+import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import {
@@ -126,6 +126,8 @@ export interface VelaInternals {
   builder: PromptPipeline
   skillLoader: SkillLoader
   gateway: ChannelGateway
+  /** Finds (or downloads) rg / fd, shared with the grep and find tools */
+  resolveBinary: BinaryResolver
 }
 
 const internals = new WeakMap<Vela, VelaInternals>()
@@ -160,7 +162,9 @@ export function createVela(options: VelaOptions = {}): Vela {
     choice: string | LanguageModel | undefined,
   ): ResolvedModel => {
     if (choice === undefined)
-      throw new Error('No model selected: pass model to createVela(), or call session.setModel()')
+      throw new Error(
+        'No model selected: pass model to createVela(), or call session.setModel()',
+      )
     return typeof choice === 'string'
       ? models.resolve(choice)
       : { model: choice, info: describeModel(choice) }
@@ -174,15 +178,16 @@ export function createVela(options: VelaOptions = {}): Vela {
     new ToolResultStore(join(dataDir, 'sessions', '.shared', 'tool-results')),
   )
   registry.setLogger(logger)
+  const resolveBinary = createBinaryResolver({
+    binDir: options.binDir,
+    offline: options.offline,
+    logger,
+  })
   registry.register(
     ...createCoreTools({
       cwd,
       bashTimeoutMs: limits.bashTimeoutMs,
-      resolveBinary: createBinaryResolver({
-        binDir: options.binDir,
-        offline: options.offline,
-        logger,
-      }),
+      resolveBinary,
     }),
   )
 
@@ -321,6 +326,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     builder,
     skillLoader,
     gateway,
+    resolveBinary,
   })
   return vela
 }

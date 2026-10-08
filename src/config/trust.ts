@@ -9,12 +9,18 @@ function trustFile(agentDir: string): string {
 function readDecisions(agentDir: string): Record<string, boolean> {
   const file = trustFile(agentDir)
   if (!existsSync(file)) return {}
+  // Fail loudly: treating a broken file as empty would ask again and then overwrite every saved decision
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf-8'))
-    return typeof parsed === 'object' && parsed !== null ? parsed : {}
-  } catch {
-    return {}
+    parsed = JSON.parse(readFileSync(file, 'utf-8'))
+  } catch (error) {
+    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new Error(
+      `${file} must be an object mapping directories to true or false`,
+    )
+  return parsed as Record<string, boolean>
 }
 
 /** The saved decision closest to cwd, or undefined. */
@@ -30,11 +36,19 @@ export function savedTrust(agentDir: string, cwd: string): boolean | undefined {
   }
 }
 
-export function saveTrust(agentDir: string, cwd: string, trusted: boolean): void {
+export function saveTrust(
+  agentDir: string,
+  cwd: string,
+  trusted: boolean,
+): void {
   const decisions = readDecisions(agentDir)
   decisions[resolve(cwd)] = trusted
   mkdirSync(agentDir, { recursive: true })
-  writeFileSync(trustFile(agentDir), `${JSON.stringify(decisions, null, 2)}\n`, {
-    mode: 0o600,
-  })
+  writeFileSync(
+    trustFile(agentDir),
+    `${JSON.stringify(decisions, null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  )
 }

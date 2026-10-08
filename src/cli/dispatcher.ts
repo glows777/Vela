@@ -1,5 +1,10 @@
 import type { Vela } from '../vela.ts'
-import { contextCommands, createDispatcher, debugCommands } from './commands/index.ts'
+import {
+  type CommandHandler,
+  contextCommands,
+  createDispatcher,
+  debugCommands,
+} from './commands/index.ts'
 import { channelCommands } from './commands/channel.ts'
 import { extensionCommands } from './commands/extensions.ts'
 import { modelCommands } from './commands/model.ts'
@@ -10,10 +15,11 @@ import { velaInternals } from '../vela.ts'
 /**
  * The CLI's own slash commands. Tests use the same dispatcher so commands behave as in the real entry point.
  * Extension commands (/memory, /dream, /rag, ...) are not here: any `/xxx` these don't claim
- * goes to session.prompt(), which runs extension commands.
+ * goes to session.prompt(), which runs extension commands. Text without a leading `/` is never
+ * a command (like pi): it goes to the model.
  */
-export function createCliDispatcher(vela: Vela) {
-  return createDispatcher([
+export function createCliDispatcher(vela: Vela): CommandHandler {
+  const dispatch = createDispatcher([
     ...debugCommands,
     ...contextCommands,
     ...modelCommands,
@@ -22,4 +28,5 @@ export function createCliDispatcher(vela: Vela) {
     ...channelCommands,
     ...securityCommands,
   ])
+  return (cmd, ctx) => (cmd.startsWith('/') ? dispatch(cmd, ctx) : false)
 }

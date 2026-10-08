@@ -247,6 +247,12 @@ test.concurrent('--session opens a named session id; -r needs interactive mode',
   })
   expect(resume.code).toBe(2)
   expect(resume.stderr).toContain('-r works only in interactive mode')
+  const bad = await cli(['-p', 'hello', '--session', '.bad'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(bad.code).toBe(2)
+  expect(bad.stderr).toContain('Invalid session id ".bad"')
+  expect(bad.stderr).not.toMatch(/\n\s+at /)
 })
 
 test.concurrent('a model error makes -p exit 1 with the real cause on stderr', async () => {
@@ -264,6 +270,26 @@ test.concurrent('-p without a prompt prints usage and exits 2', async () => {
   expect(code).toBe(2)
   expect(stderr).toContain('No prompt')
   expect(stderr).toContain('Usage')
+})
+
+test.concurrent('--help and --version print to stdout and exit 0 before any setup', async () => {
+  // A broken settings.json and no model must not matter: these exit before config and model are read
+  const files = { '.vela/settings.json': '{ broken' }
+  for (const flag of ['--help', '-h']) {
+    const { stdout, stderr, code } = await cli([flag], { model: '', files })
+    expect(code).toBe(0)
+    expect(stderr).toBe('')
+    expect(stdout).toContain('Usage:')
+    expect(stdout).toContain('--version')
+    expect(stdout).toContain('Examples:')
+  }
+  const { version } = await Bun.file(join(ROOT, 'package.json')).json()
+  for (const flag of ['--version', '-v']) {
+    const { stdout, stderr, code } = await cli([flag], { model: '', files })
+    expect(code).toBe(0)
+    expect(stderr).toBe('')
+    expect(stdout).toBe(`${version}\n`)
+  }
 })
 
 const GREET = (label: string) =>
@@ -333,8 +359,8 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   )
   expect(code).toBe(0)
   expect(stderr).toContain('[extra] loaded {}')
-  // The built-in supabase extension did not load (it announces mock mode when it does)
-  expect(stderr).not.toContain('[supabase]')
+  // The built-in rag extension did not load (it announces that embedding is not configured when it does)
+  expect(stderr).not.toContain('[rag]')
 })
 
 test.concurrent('--no-session keeps the session in memory', async () => {
@@ -355,6 +381,19 @@ test.concurrent('a broken settings.json stops the CLI with the file name', async
   })
   expect(code).toBe(2)
   expect(stderr).toContain(`[config] ${join(home.path, 'settings.json')} is not valid JSON`)
+})
+
+test.concurrent('a broken trust.json stops the CLI instead of being ignored', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(join(home.path, 'trust.json'), '{ nope')
+  const { code, stderr } = await cli(['-p', 'hello'], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+    files: { '.vela/settings.json': '{}' },
+  })
+  expect(code).toBe(2)
+  expect(stderr).toContain(`[config] ${join(home.path, 'trust.json')} is not valid JSON`)
 })
 
 // The demo model streams one character every 30 ms (about 2 s); with other concurrent tests on slow CI machines that exceeds the default 5 s
@@ -495,4 +534,46 @@ test.concurrent('an unknown --model or no model at all stops with a clear messag
   })
   expect(badThinking.code).toBe(2)
   expect(badThinking.stderr).toContain('--thinking must be one of')
+})
+
+test.concurrent('a reader that closes stdout early makes the CLI exit quietly', async () => {
+  const dir = tempDir('vela-pipe-')
+  dirs.push(dir)
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  // An answer far larger than a pipe buffer, so the CLI is still writing when `head` exits
+  const long = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join('\n')
+  const file = join(dir.path, 'long.json')
+  await Bun.write(file, JSON.stringify({ responses: [{ text: long }] }))
+  const run = async (args: string, lines: number) => {
+    const proc = Bun.spawn(
+      // The CLI's pid and exit code go to files (the pipeline's code is head's); if the CLI hangs, the timer kills it
+      ['sh', '-c', `{ bun '${ENTRY}' ${args} < /dev/null & echo $! > pid; wait $!; echo $? > status; } | head -${lines}`],
+      {
+        cwd: dir.path,
+        env: { PATH: process.env.PATH ?? '', HOME: home.path, VELA_DIR: home.path, VELA_MODEL: `faux:${file}` },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    const timer = setTimeout(async () => {
+      process.kill(Number(await Bun.file(join(dir.path, 'pid')).text()), 'SIGKILL')
+    }, 15_000)
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    return { stdout, stderr, code: Number(await Bun.file(join(dir.path, 'status')).text()) }
+  }
+  const json = await run('--mode json hi', 3)
+  expect(json.code).toBe(0)
+  expect(json.stdout.split('\n').slice(0, 1).map((l) => JSON.parse(l).type)).toEqual(['session'])
+  expect(json.stderr).not.toContain('EPIPE')
+  const print = await run('-p hi', 2)
+  expect(print.code).toBe(0)
+  expect(print.stdout).toStartWith('line 0\nline 1\n')
+  expect(print.stderr).not.toContain('EPIPE')
 })

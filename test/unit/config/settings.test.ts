@@ -187,12 +187,28 @@ test('skill directories: legacy .skills, user, settings, then project', () => {
   const { agentDir, cwd } = setup({
     'home/settings.json': json({ skills: ['shared'] }),
   })
-  expect(loadConfig({ cwd, agentDir }).skillDirs).toEqual([
+  expect(loadConfig({ cwd, agentDir, trusted: true }).skillDirs).toEqual([
     join(cwd, '.skills'),
     join(agentDir, 'skills'),
     join(agentDir, 'shared'),
     join(cwd, '.vela/skills'),
   ])
+})
+
+test('project skills (.skills, .vela/skills) need trust, like project settings and extensions', () => {
+  for (const dir of ['project/.skills/deploy/SKILL.md', 'project/.vela/skills/deploy/SKILL.md']) {
+    const { agentDir, cwd } = setup({
+      'home/settings.json': json({ skills: ['shared'] }),
+      [dir]: 'Run the deploy',
+    })
+    expect(projectTrustRequired(cwd, agentDir)).toBe(true)
+    expect(loadConfig({ cwd, agentDir }).skillDirs).toEqual([
+      join(agentDir, 'skills'),
+      join(agentDir, 'shared'),
+    ])
+  }
+  const { agentDir, cwd } = setup()
+  expect(projectTrustRequired(cwd, agentDir)).toBe(false)
 })
 
 test('trust decisions are saved per directory and apply to subdirectories', () => {
@@ -204,6 +220,16 @@ test('trust decisions are saved per directory and apply to subdirectories', () =
   saveTrust(agentDir, join(project, 'sub'), false)
   expect(savedTrust(agentDir, join(project, 'sub', 'deeper'))).toBe(false)
   expect(savedTrust(agentDir, project)).toBe(true)
+})
+
+test('a broken trust.json fails loudly instead of being overwritten', () => {
+  const { agentDir, root } = setup()
+  const file = join(agentDir, 'trust.json')
+  writeFileSync(file, '{ "/a": true,')
+  expect(() => savedTrust(agentDir, root)).toThrow(`${file} is not valid JSON`)
+  expect(() => saveTrust(agentDir, root, true)).toThrow(`${file} is not valid JSON`)
+  writeFileSync(file, '[]')
+  expect(() => savedTrust(agentDir, root)).toThrow('must be an object')
 })
 
 test('running in the home directory reads ~/.vela once, as user settings, without asking for trust', () => {

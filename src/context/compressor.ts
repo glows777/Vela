@@ -150,7 +150,8 @@ export async function persistMicrocompact(
   }
 }
 
-function summaryBoundary(messages: ModelMessage[]): number {
+/** Index of the user message a summary splits at, or -1 when no split keeps the recent messages and tool call pairs intact */
+function findSummaryBoundary(messages: ModelMessage[]): number {
   for (let index = messages.length - KEEP_RECENT_MESSAGES; index > 0; index--) {
     if (messages[index]?.role !== 'user') continue
     const pending = new Set<string>()
@@ -163,6 +164,17 @@ function summaryBoundary(messages: ModelMessage[]): number {
     }
     if (pending.size === 0) return index
   }
+  return -1
+}
+
+/** Whether the history has an earlier turn a summary could replace */
+export function canSummarize(messages: ModelMessage[]): boolean {
+  return findSummaryBoundary(messages) > 0
+}
+
+function summaryBoundary(messages: ModelMessage[]): number {
+  const index = findSummaryBoundary(messages)
+  if (index > 0) return index
   throw new Error(
     'Context needs a summary, but no split point keeps recent messages and tool call pairs intact; this turn was stopped and the original history kept.',
   )

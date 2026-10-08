@@ -63,8 +63,8 @@ export interface StepRecord extends StepUsage {
   ts: number;
   /** Model id used for this request. */
   model: string;
-  /** Cost of this request in USD, from the price table. */
-  cost: number;
+  /** Cost of this request in USD; undefined when the model has no known price. */
+  cost?: number;
 }
 
 export interface UsageTotals {
@@ -76,14 +76,14 @@ export interface UsageTotals {
   cacheReadTokens: number;
   /** Total cache write tokens. */
   cacheWriteTokens: number;
-  /** Total actual cost. */
-  cost: number;
+  /** Total actual cost of the priced requests; undefined when no request had a known price. */
+  cost?: number;
   /** cache read / all input-like tokens. */
   hitRate: number;
-  /** Cost if every input-like token had missed the cache. */
-  baselineCost: number;
-  /** Cost saved compared with no cache. */
-  savedCost: number;
+  /** Cost if every input-like token had missed the cache; undefined like `cost`. */
+  baselineCost?: number;
+  /** Cost saved compared with no cache; undefined like `cost`. */
+  savedCost?: number;
   /** Number of recorded model requests. */
   steps: number;
 }
@@ -101,13 +101,12 @@ export interface TokenStatus {
 export const CONTEXT_WINDOW = 200_000;
 
 /**
- * Tracks token state at three different scopes:
+ * Tracks token state at two different scopes:
  *
  * 1. Current context estimate: used by defense / compaction;
- * 2. Usage and cost of each model request: used by /usage;
- * 3. Budget of the current agentLoop: used by the loop circuit breaker.
+ * 2. Usage and cost of each model request: used by /usage.
  *
- * One object manages all three, but they never share a number.
+ * One object manages both, but they never share a number.
  */
 export class TokenTracker {
   /** Usage details of each successful model request, accumulated across agentLoops. */
@@ -122,6 +121,8 @@ export class TokenTracker {
   private pricing?: ModelPricing;
   /** Sum of each step's hypothetical no-cache cost, at the price in effect at request time (old requests are not repriced after a model switch). */
   private baselineCost = 0;
+  /** Whether any recorded request had a known price. */
+  private priced = false;
   /** Current model's context window, used for the status percentage. */
   contextWindow = CONTEXT_WINDOW;
 
@@ -164,7 +165,7 @@ export class TokenTracker {
     return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4));
   }
 
-  /** Current model's price (overrides the built-in table); undefined uses the built-in table. Only affects later requests. */
+  /** Current model's price (overrides the built-in table); undefined uses the built-in table, and a model in neither has no cost. Only affects later requests. */
   setPricing(pricing: ModelPricing | undefined): void {
     this.pricing = pricing;
   }
@@ -184,11 +185,15 @@ export class TokenTracker {
    * Records one model request.
    */
   record(model: string, usage: StepUsage, details: Pick<StepRecord, 'kind' | 'usage' | 'durationMs'> = { kind: 'main' }): StepRecord {
-    const price = (this.pricing ?? PRICE_TABLE[model] ?? PRICE_TABLE['mock-model'])!;
-    const cost = computeCost(model, usage, price);
-    const inputLike = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
-    this.baselineCost += (inputLike * price.input + usage.outputTokens * price.output) / 1_000_000;
-    const record: StepRecord = { ts: Date.now(), model, cost, ...usage, ...details };
+    const price = this.pricing ?? PRICE_TABLE[model];
+    let cost: number | undefined;
+    if (price) {
+      cost = computeCost(usage, price);
+      const inputLike = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+      this.baselineCost += (inputLike * price.input + usage.outputTokens * price.output) / 1_000_000;
+      this.priced = true;
+    }
+    const record: StepRecord = { ts: Date.now(), model, ...(cost === undefined ? {} : { cost }), ...usage, ...details };
     this.steps.push(record);
 
     if (this.logPath) {
@@ -205,15 +210,17 @@ export class TokenTracker {
         outputTokens: a.outputTokens + s.outputTokens,
         cacheReadTokens: a.cacheReadTokens + s.cacheReadTokens,
         cacheWriteTokens: a.cacheWriteTokens + s.cacheWriteTokens,
-        cost: a.cost + s.cost,
+        cost: a.cost + (s.cost ?? 0),
       }),
       { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0 },
     );
     const totalInputLike = t.inputTokens + t.cacheReadTokens + t.cacheWriteTokens;
     const hitRate = totalInputLike > 0 ? t.cacheReadTokens / totalInputLike : 0;
     // Hypothetical no-cache cost: pay full price for every input-like token as a miss
+    const { cost, ...tokens } = t;
+    if (!this.priced) return { ...tokens, hitRate, steps: this.steps.length };
     const baselineCost = this.baselineCost;
-    return { ...t, hitRate, baselineCost, savedCost: baselineCost - t.cost, steps: this.steps.length };
+    return { ...tokens, cost, hitRate, baselineCost, savedCost: baselineCost - cost, steps: this.steps.length };
   }
 
   /** Returns recent model request records without changing totals. */
@@ -258,11 +265,7 @@ export function estimateMessageTokens(messages: ModelMessage[]): number {
   return Math.ceil((chars / 4) * 1.2);
 }
 
-export function computeCost(
-  model: string,
-  usage: StepUsage,
-  p: ModelPricing = (PRICE_TABLE[model] || PRICE_TABLE['mock-model'])!,
-): number {
+export function computeCost(usage: StepUsage, p: ModelPricing): number {
   return (
     (usage.inputTokens * p.input
       + usage.outputTokens * p.output

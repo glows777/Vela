@@ -10,7 +10,6 @@ import {
   fauxToolCall,
 } from '../../src/testing/faux.ts'
 import {
-  captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
@@ -140,26 +139,6 @@ test('a summary that fails validation stops the turn and leaves history untouche
 
   expect(JSON.stringify(t.messages.slice(0, 8))).toBe(before)
   expect(t.session.contextManager.state.summary).toBe('')
-})
-
-test('/defend applies microcompact only and never pays for a summary', async () => {
-  const t = createTestVela({
-    limits: {
-      microcompactThreshold: 1,
-      minMicroSavings: 1,
-      summaryThreshold: 1,
-    },
-  })
-  const { output } = await captureConsole(async () => {
-    t.dispatch('sim')
-    await t.command('defend')
-  })
-  expect(output).toContain('[sim done]')
-  // Over the summary threshold, but /defend does not allow a summary: it only reports that one is needed and sends no request
-  expect(t.eventsOf('context').map((e) => e.action)).toContain(
-    'summary-required',
-  )
-  expect(t.model.calls).toHaveLength(0)
 })
 
 test('session.compact() summarizes old history on demand, with an optional focus', async () => {

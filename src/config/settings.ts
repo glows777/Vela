@@ -46,7 +46,7 @@ export interface LoadConfigOptions {
   agentDir?: string
   /** Environment for `$VAR` interpolation and `VELA_DIR`; empty by default (core never reads process.env) */
   env?: Record<string, string | undefined>
-  /** Whether to load the project's `.vela/settings.json` and `.vela/extensions/` (see projectTrustRequired) */
+  /** Whether to load the project's `.vela/settings.json`, `.vela/extensions/` and skills in `.skills/` and `.vela/skills/` (see projectTrustRequired) */
   trusted?: boolean
   /** Built-in extension names; all load by default, `-builtin:<name>` in settings disables one */
   builtins?: readonly string[]
@@ -121,12 +121,14 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     ...[...new Set(paths)].map((path) => ({ name: extensionName(path), path })),
   ]
 
+  // Project skills need trust like project extensions (pi skips .pi/skills and .agents/skills when untrusted).
+  // Run from the home directory, `.skills` next to ~/.vela counts as user-level and always loads.
   const skillDirs = [
     ...new Set([
-      join(cwd, '.skills'),
+      ...(trusted || projectDir === agentDir ? [join(cwd, '.skills')] : []),
       join(agentDir, 'skills'),
       ...(settings.skills ?? []),
-      ...(projectDir === agentDir ? [] : [join(projectDir, 'skills')]),
+      ...(trusted ? [join(projectDir, 'skills')] : []),
     ]),
   ]
 
@@ -147,7 +149,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
 
 /**
  * The project has executable or behavior-changing config (`.vela/settings.json`,
- * `.vela/extensions/`) that needs the user's trust before loading. Not counted when the
+ * `.vela/extensions/`, skills in `.vela/skills/` or `.skills/`) that needs the user's trust
+ * before loading (like pi's trust-requiring project resources). Not counted when the
  * project dir is the user-level dir (running from the home directory).
  */
 export function projectTrustRequired(cwd: string, agentDir?: string): boolean {
@@ -155,7 +158,9 @@ export function projectTrustRequired(cwd: string, agentDir?: string): boolean {
   if (agentDir && resolve(agentDir) === projectDir) return false
   return (
     existsSync(join(projectDir, 'settings.json')) ||
-    existsSync(join(projectDir, 'extensions'))
+    existsSync(join(projectDir, 'extensions')) ||
+    existsSync(join(projectDir, 'skills')) ||
+    existsSync(join(resolve(cwd), '.skills'))
   )
 }
 

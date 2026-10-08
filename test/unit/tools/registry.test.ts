@@ -45,6 +45,19 @@ test('deferred tools stay hidden until searchTools finds them', () => {
   expect(registry.getDeferredToolSummary()).toBe('')
 })
 
+test('the deferred tool summary is a heading plus one evenly indented line per tool', () => {
+  const registry = makeRegistry()
+  registry.register(tool('a', { exposure: 'deferred', searchHint: 'hint a' }))
+  registry.register(tool('b', { exposure: 'deferred' }))
+  expect(registry.getDeferredToolSummary()).toBe(
+    [
+      'The tools below are available, but before calling one you must call tool_search to get its full schema:',
+      '- a — hint a',
+      '- b',
+    ].join('\n'),
+  )
+})
+
 test('searchTools matches exactly and skips tool_search itself', () => {
   const registry = makeRegistry()
   registry.register(tool('tool_search'))

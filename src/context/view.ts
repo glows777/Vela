@@ -20,7 +20,7 @@ export interface ContextSnapshot {
   windowTokens: number;
   usedTokens: number;
   slices: ContextSlice[];
-  // Reserved for autocompact; shrinks as the conversation grows
+  // Window above the summary threshold: a request that reaches it gets summarized
   autocompactBufferTokens: number;
 }
 
@@ -141,6 +141,7 @@ export interface BuildSnapshotInput {
   memoryChars: number;
   skillsChars: number;
   messages: ModelMessage[];
+  /** Window above the summary threshold (where autocompaction kicks in); 0 when not given */
   autocompactBufferTokens?: number;
 }
 
@@ -184,7 +185,7 @@ export function buildContextSnapshot(input: BuildSnapshotInput): ContextSnapshot
     windowTokens: input.windowTokens,
     usedTokens,
     slices,
-    autocompactBufferTokens: input.autocompactBufferTokens ?? Math.round(input.windowTokens * 0.05),
+    autocompactBufferTokens: input.autocompactBufferTokens ?? 0,
   };
 }
 
@@ -214,11 +215,14 @@ export function renderUsageView(tracker: TokenTracker): string {
   lines.push(`  Cache hit rate  ${bar}  ${(t.hitRate * 100).toFixed(1)}%`);
   lines.push('');
 
-  lines.push(`  ${bold('Cost')}            ${C(220, '$' + t.cost.toFixed(4))}`);
-  lines.push(`  ${C(244, 'Without cache')}   ${C(244, '$' + t.baselineCost.toFixed(4))}`);
-  const savedPct = t.baselineCost > 0 ? (t.savedCost / t.baselineCost) * 100 : 0;
-  if (t.savedCost > 0) {
-    lines.push(`  ${bold(C(36, 'Saved'))}           ${C(36, '$' + t.savedCost.toFixed(4))} (${savedPct.toFixed(1)}% off)`);
+  // No cost lines when no request had a known price: tokens only, no made-up dollar amount
+  if (t.cost !== undefined && t.baselineCost !== undefined && t.savedCost !== undefined) {
+    lines.push(`  ${bold('Cost')}            ${C(220, '$' + t.cost.toFixed(4))}`);
+    lines.push(`  ${C(244, 'Without cache')}   ${C(244, '$' + t.baselineCost.toFixed(4))}`);
+    const savedPct = t.baselineCost > 0 ? (t.savedCost / t.baselineCost) * 100 : 0;
+    if (t.savedCost > 0) {
+      lines.push(`  ${bold(C(36, 'Saved'))}           ${C(36, '$' + t.savedCost.toFixed(4))} (${savedPct.toFixed(1)}% off)`);
+    }
   }
   if (totalCacheable === 0) {
     lines.push('  ' + C(244, 'No cacheable input yet; check again after a few more turns :)'));

@@ -224,10 +224,26 @@ test.concurrent('rpc: a prompt that fails before the loop starts gets a failed r
   ).toMatchObject({ data: { disposition: 'started' } })
   const failed = await rpc.waitFor((r) => r.id === 'p1' && r.success === false)
   expect(failed).toMatchObject({ type: 'response', command: 'prompt' })
-  expect(String(failed.error)).not.toBe('')
+  // The CLI's hint on how to pick a model, not the SDK's createVela() / setModel() hint
+  expect(String(failed.error)).toContain('No model selected. Use --model provider/id')
+  expect(String(failed.error)).not.toContain('createVela')
+  const compact = await rpc.call({ type: 'compact' })
+  expect(compact).toMatchObject({ success: false })
+  expect(String(compact.error)).toContain('Use --model provider/id')
   // Errors inside the loop are reported once in agent_end, not repeated as a response
   expect(rpc.records.some((r) => r.type === 'agent_start')).toBe(false)
 
+  expect(await rpc.close()).toBe(0)
+})
+
+test.concurrent('rpc: compacting an empty session says there is nothing to compact', async () => {
+  const rpc = startRpc(`faux:${scenario('hello')}`)
+  const compact = await rpc.call({ type: 'compact' })
+  // Like pi: a clear error instead of the automatic compaction's "no split point" message
+  expect(compact).toMatchObject({
+    success: false,
+    error: 'Nothing to compact (session too small)',
+  })
   expect(await rpc.close()).toBe(0)
 })
 

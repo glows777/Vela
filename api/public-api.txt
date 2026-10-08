@@ -159,10 +159,6 @@
   type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
       Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
   const silentLogger: VelaLogger
-  function supabase: (options?: SupabaseOptions) => VelaExtension
-  interface SupabaseOptions
-    key?: string | undefined
-    url?: string | undefined
   type ThinkingLevel = | 'off'
       | 'minimal'
       | 'low'
@@ -204,14 +200,14 @@
   interface ToolResultEventResult
     output?: string | undefined
   interface UsageTotals
-    baselineCost: number
+    baselineCost?: number | undefined
     cacheReadTokens: number
     cacheWriteTokens: number
-    cost: number
+    cost?: number | undefined
     hitRate: number
     inputTokens: number
     outputTokens: number
-    savedCost: number
+    savedCost?: number | undefined
     steps: number
   interface Vela
     channels: () => { name: string; description: string; }[]

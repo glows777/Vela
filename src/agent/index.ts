@@ -206,12 +206,6 @@ export const agentLoop = async ({
                 throw part.error
               }
               case 'tool-result': {
-                loopDetector.recordResult(
-                  part.toolCallId,
-                  part.toolName,
-                  part.input,
-                  part.output,
-                )
                 emit({
                   type: 'tool_result',
                   toolCallId: part.toolCallId,
@@ -275,16 +269,19 @@ export const agentLoop = async ({
         record: stepRecord ?? undefined,
       })
 
+      // Push this step's assistant and tool messages even on a critical stop: its tools already ran,
+      // so the history must keep each call paired with its result
+      const responseMessages: ModelMessage[] = finalStep.response.messages
+      messages.push(...responseMessages)
+      tokenTracker.addMessages(responseMessages)
+      for (const message of responseMessages) emit({ type: 'message', message })
+
       if (shouldBreak) {
         emit({ type: 'turn_end', turn, needsToolCall: needToolCall })
         endReason = 'loop'
         break
       }
 
-      const responseMessages: ModelMessage[] = finalStep.response.messages
-      messages.push(...responseMessages)
-      tokenTracker.addMessages(responseMessages)
-      for (const message of responseMessages) emit({ type: 'message', message })
       if (loopWarning) {
         const warning: ModelMessage = { role: 'user', content: loopWarning }
         messages.push(warning)

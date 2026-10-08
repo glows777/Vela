@@ -35,7 +35,8 @@ export async function ingestDocument(
     chunks.map((c) => c.text),
     signal,
   )
-  vectorStore.addBatch(
+  vectorStore.replaceSource(
+    path,
     chunks.map((c, i) => ({ chunk: c, embedding: embeddings[i]! })),
   )
   return `Ingested ${chunks.length} document chunks (source: ${path}). The knowledge base has ${vectorStore.size()} chunks.`

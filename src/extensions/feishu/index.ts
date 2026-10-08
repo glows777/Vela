@@ -12,7 +12,7 @@ export interface FeishuOptions {
   owners?: string[]
 }
 
-/** Feishu bot channel (long-connection mode), one session per sender. Options not passed are read from the config section (`extensionConfig.feishu`). */
+/** Feishu bot channel (long-connection mode), one session per chat and sender. Options not passed are read from the config section (`extensionConfig.feishu`). */
 export function feishu(options: FeishuOptions = {}): VelaExtension {
   return function feishu(vela) {
     vela.registerChannel(

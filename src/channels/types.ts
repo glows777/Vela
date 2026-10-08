@@ -1,7 +1,9 @@
 import type { Role } from '../security/roles.ts'
 
 export interface IncomingMessage {
+  /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and `senderId` it selects the session. */
   channelId: string
+  /** Who sent the message */
   senderId: string
   senderName: string
   text: string

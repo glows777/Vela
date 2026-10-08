@@ -25,8 +25,7 @@ export function createSkillCommands(
   return [
     // /skill list
     (cmd, { print, session }) => {
-      if (cmd !== '/skill' && cmd !== '/skill list' && cmd !== 'skill list')
-        return false
+      if (cmd !== '/skill' && cmd !== '/skill list') return false
       const activeSkills = session.activeSkills
       const skills = skillLoader.list()
       if (skills.length === 0) {

@@ -42,6 +42,10 @@ test('thinking levels map to the AI SDK reasoning option', () => {
   expect(() => reasoningOption('medium', { ...m, reasoning: false })).toThrow(
     'Model p/m does not support thinking',
   )
+  // Core doesn't know the mode: the hint names the interactive, command-line and SDK ways to turn thinking off
+  expect(() => reasoningOption('medium', { ...m, reasoning: false })).toThrow(
+    "set the thinking level to off (/thinking off, --thinking off, or setThinkingLevel('off'))",
+  )
 })
 
 test('context limits follow the model window; explicit limits win', () => {

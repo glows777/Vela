@@ -174,6 +174,10 @@ async function cli(app: string, runtime: string): Promise<void> {
     .text()
   if (!out.trim()) throw new Error(`vela -p (${runtime}) printed nothing`)
   console.log(out.trim())
+  // --version reads package.json relative to dist/cli/: check that path holds in the installed package
+  const version = (await $`${runtime} ./node_modules/.bin/vela --version`.cwd(app).text()).trim()
+  if (version !== pkg.version)
+    throw new Error(`vela --version (${runtime}) printed ${JSON.stringify(version)}, expected ${pkg.version}`)
 }
 
 try {
@@ -189,6 +193,9 @@ try {
     throw new Error('the package must ship dist/, not src/ or test/')
   if (!files.includes('package/LICENSE'))
     throw new Error('the package must ship the LICENSE file')
+  for (const doc of ['package/docs/index.md', 'package/CHANGELOG.md'])
+    if (!files.includes(doc))
+      throw new Error(`the package must ship ${doc.slice('package/'.length)}`)
 
   // Skip this repo's lockfile: resolve dependencies from package.json ranges like a real consumer
   const node = await project(

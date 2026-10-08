@@ -124,16 +124,30 @@ test('roles: owner all, collaborator excludes bash, guest only tools that do not
   }
 })
 
-test('session rules layer over the role: exact names first, then *', () => {
+test('session rules can only tighten the role: exact names first, then *', () => {
+  // The role is the upper bound: allow / ask on a tool the role forbids stays deny
+  expect(decidePermission('guest', 'bash', { bash: 'allow' })).toBe('deny')
   expect(decidePermission('guest', 'read_file', { read_file: 'ask' })).toBe(
-    'ask',
+    'deny',
   )
-  expect(decidePermission('owner', 'bash', { '*': 'ask' })).toBe('ask')
-  // A tool named in the role takes precedence over the session's *
-  expect(decidePermission('guest', 'rag_search', { '*': 'deny' })).toBe('allow')
+  expect(decidePermission('guest', 'read_file', { '*': 'allow' })).toBe('deny')
   expect(decidePermission('collaborator', 'bash', { '*': 'allow' })).toBe(
     'deny',
   )
+  expect(decidePermission('collaborator', 'bash', { bash: 'allow' })).toBe(
+    'deny',
+  )
+  // ask and deny still apply to tools the role allows
+  expect(decidePermission('owner', 'bash', { '*': 'ask' })).toBe('ask')
+  expect(decidePermission('guest', 'rag_search', { rag_search: 'ask' })).toBe(
+    'ask',
+  )
+  expect(decidePermission('guest', 'rag_search', { '*': 'deny' })).toBe('deny')
+  // An exact session rule beats the session's *
+  expect(
+    decidePermission('owner', 'read_file', { '*': 'deny', read_file: 'allow' }),
+  ).toBe('allow')
+  expect(decidePermission('owner', 'bash', { '*': 'allow' })).toBe('allow')
 })
 
 test('ask runs the confirm callback with the final input; no callback means deny', async () => {

@@ -130,7 +130,7 @@ export function reasoningOption(
   if (info.reasoning === false) {
     if (level === 'off') return
     throw new Error(
-      `Model ${info.ref} does not support thinking (reasoning: false) but the thinking level is ${level}; use /thinking off or setThinkingLevel('off')`,
+      `Model ${info.ref} does not support thinking (reasoning: false) but the thinking level is ${level}; set the thinking level to off (/thinking off, --thinking off, or setThinkingLevel('off'))`,
     )
   }
   if (level === 'off') return 'none'

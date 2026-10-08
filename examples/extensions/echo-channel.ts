@@ -1,6 +1,6 @@
 /**
- * registerChannel (Vela-specific): bring outside messages into Vela, one session per sender,
- * and send the replies back.
+ * registerChannel (Vela-specific): bring outside messages into Vela, one session per
+ * conversation and sender, and send the replies back.
  * roleFor decides each sender's role. Without it every sender is a guest (no file reads or
  * writes, no commands, no access to the owner's memory).
  * This example sends and receives in memory instead of over a real IM connection;

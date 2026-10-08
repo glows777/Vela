@@ -143,7 +143,9 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
       return `Found ${count} matches. Add more context so old_string is unique`;
     }
 
-    const updated = content.replace(old_string, new_string);
+    // Slice instead of String.replace: replace would interpret $&, $$, $1 ... in new_string
+    const at = content.indexOf(old_string);
+    const updated = content.slice(0, at) + new_string + content.slice(at + old_string.length);
     await writeText(resolved, updated);
     return `Replaced text in ${path} (${old_string.length} → ${new_string.length} characters)`;
   },
