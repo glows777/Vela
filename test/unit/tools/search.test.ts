@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type z from 'zod'
 import { createFindTool, createGrepTool } from '../../../src/tools/search.ts'
 
 // grep / find run the real ripgrep and fd from PATH (CI installs them; see test/README.md)
@@ -113,17 +114,50 @@ test('find: glob patterns, with and without a slash, respecting .gitignore', asy
   )
 })
 
-test('find: .gitignore applies outside a git repo too (same as pi)', async () => {
+test('grep and find: .gitignore applies outside a git repo too', async () => {
   const plain = mkdtempSync(join(tmpdir(), 'vela-find-'))
   try {
     writeFileSync(join(plain, '.gitignore'), 'skip.ts\n')
-    writeFileSync(join(plain, 'skip.ts'), '')
-    writeFileSync(join(plain, 'keep.ts'), '')
+    writeFileSync(join(plain, 'skip.ts'), 'needle')
+    writeFileSync(join(plain, 'keep.ts'), 'needle')
     expect(await run(createFindTool(plain), { pattern: '*.ts' })).toBe(
       'keep.ts',
     )
+    expect(await run(createGrepTool(plain), { pattern: 'needle' })).toBe(
+      'keep.ts:1: needle',
+    )
   } finally {
     rmSync(plain, { recursive: true, force: true })
+  }
+})
+
+test('context and limit must be whole numbers', () => {
+  const grep = createGrepTool(dir).inputSchema as z.ZodType
+  expect(grep.safeParse({ pattern: 'x', context: 0.5 }).success).toBe(false)
+  expect(grep.safeParse({ pattern: 'x', limit: 1.5 }).success).toBe(false)
+  expect(grep.safeParse({ pattern: 'x', context: 2, limit: 10 }).success).toBe(
+    true,
+  )
+  expect(
+    (createFindTool(dir).inputSchema as z.ZodType).safeParse({
+      pattern: '*',
+      limit: 0.5,
+    }).success,
+  ).toBe(false)
+})
+
+test('aborting stops waiting for a program that is still downloading', async () => {
+  const downloading = () => new Promise<string>(() => {})
+  for (const tool of [
+    createGrepTool(dir, downloading),
+    createFindTool(dir, downloading),
+  ]) {
+    const controller = new AbortController()
+    const result = tool.execute({ pattern: 'x' }, {
+      signal: controller.signal,
+    } as never)
+    controller.abort(new Error('cancelled'))
+    await expect(result).rejects.toThrow('cancelled')
   }
 })
 

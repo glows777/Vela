@@ -81,6 +81,23 @@ function runLines(
   })
 }
 
+/** Wait for rg / fd, but stop waiting when the tool call is aborted (a first download can take a while). */
+function binary(
+  resolveBinary: BinaryResolver,
+  tool: 'rg' | 'fd',
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!signal) return resolveBinary(tool)
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    resolveBinary(tool)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory()
@@ -111,12 +128,14 @@ const grepToolParamSchema = z.object({
     ),
   context: z
     .number()
+    .int()
     .optional()
     .describe(
       'Number of lines to show before and after each match (default: 0)',
     ),
   limit: z
     .number()
+    .int()
     .optional()
     .describe(
       `Maximum number of matches to return (default: ${GREP_DEFAULT_LIMIT})`,
@@ -135,7 +154,7 @@ export const createGrepTool = (
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof grepToolParamSchema>, context) => {
     const { pattern, path = '.', glob, ignoreCase, literal } = input
-    const rg = await resolveBinary('rg')
+    const rg = await binary(resolveBinary, 'rg', context?.signal)
     const searchPath = resolveIn(cwd, path)
     const directory = await isDirectory(searchPath)
     const contextLines = input.context && input.context > 0 ? input.context : 0
@@ -152,6 +171,9 @@ export const createGrepTool = (
     if (ignoreCase) args.push('--ignore-case')
     if (literal) args.push('--fixed-strings')
     if (glob) args.push('--glob', glob)
+    // Like find: outside a git repo rg ignores .gitignore unless told otherwise (pi's grep misses this)
+    if (!(await insideGitRepo(directory ? searchPath : dirname(searchPath))))
+      args.push('--no-require-git')
     // --hidden would also search git's own files (logs, config); pi doesn't exclude them, Vela does
     args.push('--glob', '!.git', '--', pattern, searchPath)
 
@@ -261,6 +283,7 @@ const findToolParamSchema = z.object({
     .describe('Directory to search in (default: current directory)'),
   limit: z
     .number()
+    .int()
     .optional()
     .describe(`Maximum number of results (default: ${FIND_DEFAULT_LIMIT})`),
 })
@@ -290,7 +313,7 @@ export const createFindTool = (
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof findToolParamSchema>, context) => {
     const { pattern, path = '.' } = input
-    const fd = await resolveBinary('fd')
+    const fd = await binary(resolveBinary, 'fd', context?.signal)
     const searchPath = resolveIn(cwd, path)
     if (!(await isDirectory(searchPath)))
       throw new Error(`Not a directory: ${searchPath}`)
