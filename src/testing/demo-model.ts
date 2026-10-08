@@ -431,6 +431,49 @@ function pickTextResponse(prompt: Prompt): string {
   return TEXT_RESPONSES.default
 }
 
+/**
+ * The compactor sends a `context_compaction` JSON request (see src/context/compressor.ts) and accepts
+ * only verbatim quotes of the removed messages. Quote each message's anchor: the first user message
+ * as the goal, the rest as details.
+ */
+function groundedSummary(prompt: Prompt): string | undefined {
+  const last = prompt.at(-1)
+  if (last?.role !== 'user') return undefined
+  let control: {
+    type?: string
+    sourceMessageCount: number
+    sourceCatalog: { index: number; role: string; anchor: string }[]
+  }
+  try {
+    control = JSON.parse(messageText(last))
+  } catch {
+    return undefined
+  }
+  if (control?.type !== 'context_compaction') return undefined
+  const facts = control.sourceCatalog
+    .filter((s) => s.anchor.trim())
+    .map((s) => ({
+      sourceMessageIndex: s.index,
+      quote: s.anchor.trim(),
+      role: s.role,
+    }))
+  const goal = facts.find((f) => f.role === 'user') ?? facts[0]
+  if (!goal) return undefined
+  const fact = ({ sourceMessageIndex, quote }: (typeof facts)[number]) => ({
+    sourceMessageIndex,
+    quote,
+  })
+  const rest = facts.filter((f) => f !== goal).map(fact)
+  return JSON.stringify({
+    sourceMessageCount: control.sourceMessageCount,
+    goal: fact(goal),
+    completed: [],
+    pending: [],
+    constraints: [],
+    details: rest.length ? rest : [fact(goal)],
+  })
+}
+
 function createDelayedStream(
   chunks: LanguageModelV3StreamPart[],
   delayMs = 30,
@@ -501,19 +544,11 @@ export function createMockModel(): DemoModel {
     },
 
     async doGenerate({ prompt }: { prompt: Prompt }) {
-      // Detect compression request (called via generateText with compress system prompt)
-      const allText = (prompt || []).map(messageText).join(' ')
-
-      // The Chinese markers match compression prompts written by older Vela versions
-      if (
-        allText.includes('conversation compression system') ||
-        allText.includes('into a structured summary') ||
-        allText.includes('对话压缩系统') ||
-        allText.includes('压缩成一份结构化摘要')
-      ) {
-        const mockSummary = `## User intent\nThe user is exploring the project structure and code to understand how the tool system is designed.\n\n## Completed actions\n- Listed the current directory (.env, package.json, sample-data.txt, src/)\n- Read package.json (name super-agent-08-compaction, version 0.8.0)\n- Read sample-data.txt (tool system design doc)\n- Searched src/ for exports (found ToolRegistry, agentLoop, SessionStore and others)\n\n## Key findings\n- The project uses ai@7 and @ai-sdk/openai@4\n- The tool system includes ToolRegistry, truncateResult and concurrency control (read/write lock)\n- SessionStore (JSONL persistence) and PromptBuilder (modular prompt) are implemented\n\n## Current state\nThe user has finished exploring the project structure and has not started changing code.\n\n## Details to keep\n- Project path: the current working directory\n- Key files: src/tool-registry.ts, src/agent-loop.ts, src/context-compressor.ts`
+      // Summary compaction: answer with a grounded summary that quotes the removed messages
+      const summary = groundedSummary(prompt)
+      if (summary) {
         return {
-          content: [{ type: 'text' as const, text: mockSummary }],
+          content: [{ type: 'text' as const, text: summary }],
           finishReason: { unified: 'stop' as const, raw: undefined },
           usage: makeUsage(state, prompt),
           warnings: [],
