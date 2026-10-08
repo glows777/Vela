@@ -145,20 +145,11 @@ async function download(
   const target = releaseTarget()
   if (!target)
     throw new Error(`no ${spec.name} release for ${platform()}/${arch()}`)
-  // The release page redirect names the latest tag without using the rate-limited GitHub API (same as pi)
-  const latest = await fetch(`${baseUrl}/${spec.repo}/releases/latest`, {
-    redirect: 'manual',
-    signal: AbortSignal.timeout(10_000),
-  })
-  const location = latest.headers.get('location')
-  if (!location?.includes('/releases/tag/'))
-    throw new Error(
-      `could not resolve the latest ${spec.repo} release (HTTP ${latest.status})`,
-    )
-  const tag = decodeURIComponent(
-    new URL(location, baseUrl).pathname.split('/').pop() ?? '',
-  )
-  const version = tag.replace(/^v/, '')
+  const version =
+    spec.binaryName === 'fd' && platform() === 'darwin' && arch() === 'x64'
+      ? // fd 10.3.0 is the last release with an Intel macOS binary (pi pins it too)
+        '10.3.0'
+      : await latestVersion(spec, baseUrl)
   const asset = spec.asset(version, target.target)
 
   await mkdir(binDir, { recursive: true })
@@ -193,6 +184,27 @@ async function download(
   } finally {
     await rm(work, { recursive: true, force: true })
   }
+}
+
+// The release page redirect names the latest tag without using the rate-limited GitHub API (same as pi)
+async function latestVersion(
+  spec: BinarySpec,
+  baseUrl: string,
+): Promise<string> {
+  const latest = await fetch(`${baseUrl}/${spec.repo}/releases/latest`, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(10_000),
+  })
+  await latest.body?.cancel()
+  const location = latest.headers.get('location')
+  if (!location?.includes('/releases/tag/'))
+    throw new Error(
+      `could not resolve the latest ${spec.repo} release (HTTP ${latest.status})`,
+    )
+  const tag = decodeURIComponent(
+    new URL(location, baseUrl).pathname.split('/').pop() ?? '',
+  )
+  return tag.replace(/^v/, '')
 }
 
 function extract(archive: string, dir: string): void {
