@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto'
 import type { ModelMessage } from 'ai'
-import { errorMessage, silentLogger, type VelaLogger } from '../logger'
-import type { VelaSession } from '../vela-session'
+import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
+import type { VelaSession } from '../vela-session.ts'
 import type {
   ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-} from './types'
+} from './types.ts'
 
 interface GatewayOptions {
   /** 按 id 打开（或取回）会话；每个通道发送者一个会话 */

@@ -1,11 +1,11 @@
 import type { ModelMessage } from 'ai'
-import type { VelaEventListener } from '../agent/events'
-import type { SessionState, SessionStore } from '../session'
-import type { TokenTracker } from '../usage/tracker'
-import { resolveLimits, type VelaLimits } from '../limits'
-import { persistMicrocompact, planMicrocompact, summarize } from './compressor'
-import { estimateRequestTokens, type RequestSnapshot } from './request'
-export { createRequestSnapshot } from './request'
+import type { VelaEventListener } from '../agent/events.ts'
+import type { SessionState, SessionStore } from '../session/index.ts'
+import type { TokenTracker } from '../usage/tracker.ts'
+import { resolveLimits, type VelaLimits } from '../limits.ts'
+import { persistMicrocompact, planMicrocompact, summarize } from './compressor.ts'
+import { estimateRequestTokens, type RequestSnapshot } from './request.ts'
+export { createRequestSnapshot } from './request.ts'
 
 export class ContextManager {
   constructor(

@@ -1,4 +1,4 @@
-import type { Role } from '../security/roles'
+import type { Role } from '../security/roles.ts'
 
 export interface IncomingMessage {
   channelId: string

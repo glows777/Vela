@@ -1,10 +1,10 @@
-import type { VelaEvent } from '../agent/events'
-import type { ChannelGateway } from '../channels/gateway'
-import { errorMessage, type VelaLogger } from '../logger'
-import type { HookPipeline } from '../security/hooks'
-import type { ModelRegistry } from '../models'
-import type { ToolRegistry } from '../tools/registry'
-import type { VelaSession } from '../vela-session'
+import type { VelaEvent } from '../agent/events.ts'
+import type { ChannelGateway } from '../channels/gateway.ts'
+import { errorMessage, type VelaLogger } from '../logger.ts'
+import type { HookPipeline } from '../security/hooks.ts'
+import type { ModelRegistry } from '../models/index.ts'
+import type { ToolRegistry } from '../tools/registry.ts'
+import type { VelaSession } from '../vela-session.ts'
 import type {
   ExtensionAPI,
   ExtensionCommand,
@@ -14,7 +14,7 @@ import type {
   ToolCallEventResult,
   ToolResultEventResult,
   VelaExtension,
-} from './types'
+} from './types.ts'
 
 interface RunnerDeps {
   cwd: string

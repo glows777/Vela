@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
-import { fauxText } from '../../../../src/testing/faux'
+import { fauxText } from '../../../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
   type TestVelaOptions,
-} from '../../../support/vela'
+} from '../../../support/vela.ts'
 
 const BODY = '## 审查清单\n- 运行 diff\n- 确认没有回归'
 const SKILL = { name: 'code-review', description: '审查代码变更', body: BODY }

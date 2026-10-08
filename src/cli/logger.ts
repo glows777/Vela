@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { VelaLogger } from '../logger'
+import type { VelaLogger } from '../logger.ts'
 
 /**
  * CLI 的 logger：打到终端，debug 只在 VELA_DEBUG=1 时输出。

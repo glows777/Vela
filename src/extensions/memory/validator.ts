@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { MemoryEntry } from './store'
+import type { MemoryEntry } from './store.ts'
 
 export interface ValidationIssue {
   kind: 'stale_path' | 'never_used' | 'duplicate_name'

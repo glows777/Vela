@@ -9,15 +9,15 @@ import {
   savedTrust,
   saveTrust,
   type VelaConfig,
-} from '../config'
-import { deepMerge } from '../config/interpolate'
-import { feishu } from '../extensions/feishu'
-import { memory } from '../extensions/memory'
-import { rag } from '../extensions/rag'
-import { supabase } from '../extensions/supabase'
-import type { VelaExtension } from '../extensions/types'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models'
-import { web } from '../extensions/web'
+} from '../config/index.ts'
+import { deepMerge } from '../config/interpolate.ts'
+import { feishu } from '../extensions/feishu/index.ts'
+import { memory } from '../extensions/memory/index.ts'
+import { rag } from '../extensions/rag/index.ts'
+import { supabase } from '../extensions/supabase.ts'
+import type { VelaExtension } from '../extensions/types.ts'
+import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import { web } from '../extensions/web/index.ts'
 
 type Env = Record<string, string | undefined>
 

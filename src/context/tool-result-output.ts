@@ -1,5 +1,5 @@
 import type { ToolResultPart } from 'ai';
-import { getStoredResult } from '../session/tool-results';
+import { getStoredResult } from '../session/tool-results.ts';
 
 export type ToolResultOutput = ToolResultPart['output'];
 

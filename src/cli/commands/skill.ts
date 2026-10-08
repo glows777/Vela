@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
-import type { SkillLoader } from '../../skills/loader'
-import type { CommandHandler } from './index'
+import type { SkillLoader } from '../../skills/loader.ts'
+import type { CommandHandler } from './index.ts'
 
 /**
  * 判定 skill 正文是否已作为 user 消息注入过会话。

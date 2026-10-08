@@ -1,0 +1,20 @@
+{
+  // 发布用：src → dist（JS + .d.ts），只用 Node 的类型，保证 dist 不依赖 Bun 全局。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": false,
+    "jsx": "preserve"
+  },
+  "include": ["src"]
+}

@@ -22,7 +22,7 @@ src/testing/             公开为 `vela/testing`（package.json exports）
   demo-model.ts          关键词 demo 模型（VELA_MODEL=mock，只用于手动体验，测试不用）
 ```
 
-faux、demo 模型和 createTestVela 在 `src/testing/` 而不在 `test/`：CLI 运行时要加载 faux，扩展作者也要能 `import { createTestVela } from 'vela/testing'` 离线测自己的扩展。测试里可以用相对路径 import，也可以按包名 import（`test/e2e/sdk.test.ts`）。
+faux、demo 模型和 createTestVela 在 `src/testing/` 而不在 `test/`：CLI 运行时要加载 faux，扩展作者也要能 `import { createTestVela } from '@glows777/vela/testing'` 离线测自己的扩展。测试里可以用相对路径 import，也可以按包名 import（`test/e2e/sdk.test.ts`）。
 
 ## 运行
 
@@ -34,8 +34,8 @@ faux、demo 模型和 createTestVela 在 `src/testing/` 而不在 `test/`：CLI 
 | `bun run test:live` | 真实模型，需要 `OPENAI_API_KEY`、`OPENAI_API_MODEL_NAME` | 取决于模型 |
 | `bun test <文件或目录>` | 定向跑一部分 | |
 | `bun run typecheck` | `tsc --noEmit`，必须 0 错误 | |
-| `bun run smoke:consumer` | 把包 `bun pm pack` 后装进一个空项目，按消费者方式 tsc 检查、用 faux 跑会话、跑 `vela -p`；要联网，CI 单独跑 | 约 10 秒 |
-| `bun run lint` | `biome lint`，必须 0 error（warning 不挡；`app/`、`calculator/`、`sample/` 是演示文件，不参与 lint） | |
+| `bun run smoke:consumer` | 先 `bun run build`，把包打成 tarball 后分别装进空的 Node 项目（严格 NodeNext tsconfig、不装 @types/bun）和 Bun 项目，按消费者方式 tsc 检查、用 faux 跑会话、跑 `vela -p`；要联网，CI 单独跑（CI 用 Node 22.18） | 约 30 秒 |
+| `bun run lint` | `biome lint`，必须 0 error（warning 不挡） | |
 
 整套测试不访问网络、不需要任何环境变量。每个用例都在自己的临时目录里跑，互不影响，跑完自动删掉。
 
@@ -54,7 +54,7 @@ CI（`.github/workflows/ci.yml`）在每个 PR 和 main 的 push 上依次跑 `b
 ## faux 模型
 
 ```ts
-import { createFauxModel, fauxText, fauxToolCall, fauxError, fauxStreamError, fauxHang, fauxSummary } from '../../src/testing/faux'
+import { createFauxModel, fauxText, fauxToolCall, fauxError, fauxStreamError, fauxHang, fauxSummary } from '../../src/testing/faux.ts'
 
 const model = createFauxModel({
   responses: [                                        // 主队列：streamText 按顺序消费
@@ -83,7 +83,7 @@ model.push(...)  // 追加响应
 ## createTestVela()
 
 ```ts
-import { cleanupTestVelas, createTestVela, captureConsole } from '../support/vela'
+import { cleanupTestVelas, createTestVela, captureConsole } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)   // 每个用到 createTestVela 的文件都要有
 
@@ -132,7 +132,7 @@ core 不写终端（`test/unit/boundary.test.ts` 守着这条边界）：非事�
 ### 录制和回放
 
 ```ts
-import { recordModel, replayScenario } from 'vela/testing'
+import { recordModel, replayScenario } from '@glows777/vela/testing'
 
 const recorder = recordModel(realModel, { path: 'run.json' })   // CLI：VELA_RECORD=run.json
 vela.subscribe((e) => e.type === 'agent_start' && recorder.addInput(e.input))

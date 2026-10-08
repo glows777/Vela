@@ -1,9 +1,9 @@
-import { readFauxScenario } from './faux'
+import { readFauxScenario } from './faux.ts'
 import {
   createTestVela,
   type TestVela,
   type TestVelaOptions,
-} from './test-vela'
+} from './test-vela.ts'
 
 export interface ReplayResult {
   t: TestVela

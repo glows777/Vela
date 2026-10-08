@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { VelaLogger } from '../../index'
-import { bm25Search, type SearchHit } from './search'
-import { lintAll, type ValidationReport } from './validator'
+import type { VelaLogger } from '../../index.ts'
+import { bm25Search, type SearchHit } from './search.ts'
+import { lintAll, type ValidationReport } from './validator.ts'
 
 export interface MemoryEntry {
   name: string

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { LanguageModelUsage } from 'ai'
-import { normalizeUsage, TokenTracker } from '../../../src/usage/tracker'
+import { normalizeUsage, TokenTracker } from '../../../src/usage/tracker.ts'
 
 test('normalizes AI SDK usage detail fields', () => {
   const usage: LanguageModelUsage = {

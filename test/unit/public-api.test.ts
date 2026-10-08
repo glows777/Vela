@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { apiReport } from '../../scripts/api-report'
+import { apiReport } from '../../scripts/api-report.ts'
 
 /**
  * 公开 API 快照（G）：`vela` 和 `vela/testing` 导出的名字和类型。

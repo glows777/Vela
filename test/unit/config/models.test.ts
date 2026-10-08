@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadModels } from '../../../src/config'
-import { ModelRegistry } from '../../../src/models'
-import { tempDir } from '../../support/vela'
+import { loadModels } from '../../../src/config/index.ts'
+import { ModelRegistry } from '../../../src/models/index.ts'
+import { tempDir } from '../../support/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {

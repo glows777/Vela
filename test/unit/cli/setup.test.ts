@@ -1,16 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadConfig } from '../../../src/config'
-import { createVela } from '../../../src/vela'
-import { createFauxModel, fauxText } from '../../../src/testing/faux'
+import { loadConfig } from '../../../src/config/index.ts'
+import { createVela } from '../../../src/vela.ts'
+import { createFauxModel, fauxText } from '../../../src/testing/faux.ts'
 import {
   extensionConfigFromEnv,
   loadCliExtensions,
   legacyDataHint,
   parseArgs,
-} from '../../../src/cli/setup'
-import { tempDir } from '../../support/vela'
+} from '../../../src/cli/setup.ts'
+import { tempDir } from '../../support/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
 afterEach(() => {

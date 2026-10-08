@@ -2,32 +2,30 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
-import type { VelaSessionEventListener } from './agent/events'
-import { ChannelGateway } from './channels/gateway'
-import { ExtensionRunner, type LoadedExtension } from './extensions/runner'
-import type { VelaExtension } from './extensions/types'
-import { resolveLimits, type VelaLimits } from './limits'
-import { silentLogger, type VelaLogger } from './logger'
+import type { VelaSessionEventListener } from './agent/events.ts'
+import { ChannelGateway } from './channels/gateway.ts'
+import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
+import type { VelaExtension } from './extensions/types.ts'
+import { resolveLimits, type VelaLimits } from './limits.ts'
+import { silentLogger, type VelaLogger } from './logger.ts'
 import {
   coreRules,
   deferredTools,
   extensionSections,
-  sessionContext,
-  toolGuide,
   toolHistoryGuide,
-} from './prompt'
-import { PromptPipeline } from './prompt/pipelins'
-import { HookPipeline } from './security/hooks'
+} from './prompt/index.ts'
+import { PromptPipeline } from './prompt/pipeline.ts'
+import { HookPipeline } from './security/hooks.ts'
 import {
   fileSessionStorage,
   memorySessionStorage,
   type SessionStorage,
   type SessionSummary,
-} from './session/storage'
-import { ToolResultStore } from './session/tool-results'
-import { SkillLoader } from './skills/loader'
-import { createCoreTools } from './tools'
-import { ToolRegistry } from './tools/registry'
+} from './session/storage.ts'
+import { ToolResultStore } from './session/tool-results.ts'
+import { SkillLoader } from './skills/loader.ts'
+import { createCoreTools } from './tools/index.ts'
+import { ToolRegistry } from './tools/registry.ts'
 import {
   DEFAULT_THINKING_LEVEL,
   describeModel,
@@ -36,9 +34,9 @@ import {
   type ProviderDefinition,
   type ResolvedModel,
   type ThinkingLevel,
-} from './models'
-import { registerToolSearchTool } from './tools/tool-search'
-import { type SessionOptions, VelaSession } from './vela-session'
+} from './models/index.ts'
+import { registerToolSearchTool } from './tools/tool-search.ts'
+import { type SessionOptions, VelaSession } from './vela-session.ts'
 
 export interface VelaOptions {
   /**
@@ -107,7 +105,7 @@ export interface Vela {
   channels(): { name: string; description: string }[]
   /** 启动所有通道（开始接收消息） */
   startChannels(): Promise<void>
-  /** 停止通道、关闭所有会话（中断正在跑的任务并保存）、断开 MCP */
+  /** 停止通道、关闭所有会话（中断正在跑的任务并保存） */
   dispose(): Promise<void>
 }
 
@@ -190,15 +188,13 @@ export function createVela(options: VelaOptions = {}): Vela {
   skillLoader.load()
 
   const builder = new PromptPipeline()
-    .pipe('coreRules', coreRules())
-    .pipe('toolGuide', toolGuide())
+    .pipe('coreRules', coreRules(cwd))
     .pipe('toolHistoryGuide', toolHistoryGuide())
     .pipe('deferredTools', deferredTools())
     .pipe('extensions', extensionSections())
     .pipe('skillContext', (ctx) =>
       skillLoader.buildPromptSection(ctx.activeSkills ?? new Set()),
     )
-    .pipe('sessionContext', sessionContext())
 
   const listeners = new Set<VelaSessionEventListener>()
   const sessions = new Map<string, VelaSession>()
@@ -297,7 +293,6 @@ export function createVela(options: VelaOptions = {}): Vela {
       disposed = true
       await gateway.stopAll()
       await Promise.all([...sessions.values()].map((s) => s.close()))
-      await registry.closeAllMCP()
       listeners.clear()
       if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
     },

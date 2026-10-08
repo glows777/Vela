@@ -1,17 +1,17 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import { channelSessionId } from '../../src/channels/gateway'
+import { channelSessionId } from '../../src/channels/gateway.ts'
 import type {
   ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-} from '../../src/channels/types'
-import { fauxHang, fauxText } from '../../src/testing/faux'
+} from '../../src/channels/types.ts'
+import { fauxHang, fauxText } from '../../src/testing/faux.ts'
 import {
   cleanupTestVelas,
   createTestVela,
   type TestVela,
-} from '../support/vela'
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 

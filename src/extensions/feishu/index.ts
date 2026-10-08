@@ -1,6 +1,6 @@
-import type { VelaExtension } from '../../index'
-import { configString, configStrings } from '../config'
-import { FeishuChannel } from './channel'
+import type { VelaExtension } from '../../index.ts'
+import { configString, configStrings } from '../config.ts'
+import { FeishuChannel } from './channel.ts'
 
 export interface FeishuOptions {
   appId?: string

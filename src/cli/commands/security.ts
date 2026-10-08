@@ -1,5 +1,5 @@
-import { ROLES, type Role } from '../../security/roles'
-import type { CommandHandler } from './index'
+import { ROLES, type Role } from '../../security/roles.ts'
+import type { CommandHandler } from './index.ts'
 
 export const securityCommands: CommandHandler[] = [
   // /role [owner|collaborator|guest]：只改当前会话

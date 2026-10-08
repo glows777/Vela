@@ -18,21 +18,21 @@ import {
   visibleWidth,
 } from '@earendil-works/pi-tui'
 import type { ModelMessage } from 'ai'
-import type { VelaEvent } from '../agent/events'
-import type { SessionUI } from '../extensions/types'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models'
-import { type Vela, velaInternals } from '../vela'
-import type { VelaSession } from '../vela-session'
-import { createCliDispatcher } from './dispatcher'
+import type { VelaEvent } from '../agent/events.ts'
+import type { SessionUI } from '../extensions/types.ts'
+import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import { type Vela, velaInternals } from '../vela.ts'
+import type { VelaSession } from '../vela-session.ts'
+import { createCliDispatcher } from './dispatcher.ts'
 import {
   AssistantMessage,
   notice,
   sanitize,
   ToolBlock,
   UserMessage,
-} from './tui/components'
-import { VelaEditor } from './tui/editor'
-import { editorTheme, selectListTheme, theme } from './tui/theme'
+} from './tui/components.ts'
+import { VelaEditor } from './tui/editor.ts'
+import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
 
 export interface InteractiveOptions {
   vela: Vela

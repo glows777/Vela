@@ -7,7 +7,7 @@ import {
   type SessionStorage,
   type VelaEvent,
   type VelaLogger,
-} from 'vela'
+} from '../../src/index.ts'
 import {
   cleanupTestVelas,
   createFauxModel,
@@ -15,7 +15,7 @@ import {
   fauxText,
   fauxToolCall,
   tempDir,
-} from 'vela/testing'
+} from '../../src/testing/index.ts'
 
 afterEach(cleanupTestVelas)
 

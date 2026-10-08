@@ -1,8 +1,8 @@
 # Vela — 终端 AI Agent / Terminal AI Agent
 
-> **Vela** 是一个基于 **Bun + TypeScript + AI SDK v7** 构建的终端交互式 AI Agent：多轮工具调用、MCP 扩展、跨会话记忆、RAG 知识库、上下文防御与压缩、Token 成本追踪，开箱即用。
+> **Vela** 是一个基于 **Bun + TypeScript + AI SDK v7** 构建的终端交互式 AI Agent：多轮工具调用、跨会话记忆、RAG 知识库、上下文防御与压缩、Token 成本追踪，开箱即用。
 >
-> **Vela** is a terminal-interactive AI agent built with **Bun + TypeScript + AI SDK v7** — featuring multi-turn tool calling, MCP extension, cross-session memory, a RAG knowledge base, context defense & compaction, and token cost tracking.
+> **Vela** is a terminal-interactive AI agent built with **Bun + TypeScript + AI SDK v7** — featuring multi-turn tool calling, cross-session memory, a RAG knowledge base, context defense & compaction, and token cost tracking.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -36,7 +36,7 @@
 
 | 特性 / Feature | 说明 / Description |
 |---|---|
-| 🤖 多轮工具调用 Agent | 7 个核心工具 + 网页/RAG/记忆扩展 + MCP 扩展 + 延迟工具搜索（`tool_search`）<br>7 core tools + web/RAG/memory extensions + MCP + deferred tool search (`tool_search`) |
+| 🤖 多轮工具调用 Agent | 7 个核心工具 + 网页/RAG/记忆扩展 + 延迟工具搜索（`tool_search`）<br>7 core tools + web/RAG/memory extensions + deferred tool search (`tool_search`) |
 | 📚 **RAG 知识库** | `rag_ingest` 导入文档自动分块，`rag_search` 向量+关键词混合检索（sqlite-vec + FTS5）<br>Chunk documents via `rag_ingest`; hybrid vector+keyword retrieval via `rag_search` |
 | 🧠 跨会话记忆 | Markdown 存储 + 索引 + 搜索，四类记忆（user / feedback / project / reference）<br>Markdown-backed memory with index & search (4 types) |
 | 🛡️ 上下文防御 | 工具结果自动截断（Head/Tail 60/40）、过期结果 TTL 清理、Token 估算<br>Dynamic tool-result truncation, TTL pruning, token estimation |
@@ -78,7 +78,7 @@ bun run src/cli/main.ts   # 直接运行（package.json 的 bin.vela）
 ### 作为 SDK 使用 / Use as an SDK
 
 ```ts
-import { createVela } from 'vela'
+import { createVela } from '@glows777/vela'
 
 const vela = createVela({ model, cwd: process.cwd() })  // model: AI SDK 的 LanguageModel 或 'provider/id'；不给 dataDir 时什么都不落盘
 const session = vela.session('default')                  // 同一个 Vela 可以同时开多个会话
@@ -97,7 +97,7 @@ core 不写终端、不读环境变量，也不隐式读 `~/.vela`；诊断输�
 仿 pi 的扩展：一个 `(vela) => {}` 函数，注册工具、命令、通道和事件 handler。扩展注册的工具名自动带上 `<扩展名>_` 前缀（工具名等于扩展名时不重复），不会和内置工具重名。SDK 默认不带内置扩展，`createVela({ extensions: [...] })` 显式传入；CLI 默认加载 `memory`、`rag`（配了 embedding 时）、`web`、`supabase` 和 `feishu`。每个 API 的可运行示例在 [`examples/extensions/`](examples/extensions/)。
 
 ```ts
-import { createEmbedder, createVela, memory, rag, web } from 'vela'
+import { createEmbedder, createVela, memory, rag, web } from '@glows777/vela'
 
 const vela = createVela({
   model,
@@ -106,7 +106,7 @@ const vela = createVela({
 ```
 
 ```ts
-import { createVela, type VelaExtension } from 'vela'
+import { createVela, type VelaExtension } from '@glows777/vela'
 
 const guard: VelaExtension = (vela) => {
   vela.registerCommand('hi', { handler: (args, ctx) => ctx.ui.notify(`hi ${args}`) })
@@ -160,15 +160,7 @@ const session = vela.session('default', { ui })   // 有界面才会真正询问
 | `rag_ingest` | 导入文档到知识库（rag 扩展）/ ingest docs into KB |
 | `rag_search` | 从知识库混合检索相关片段（rag 扩展）/ hybrid search over KB |
 | `memory` | 跨会话记忆管理（memory 扩展；save / list / search / read / delete）|
-| `tool_search` | 搜索延迟加载的工具（如 MCP 工具）/ search deferred tools |
-
-### MCP 扩展 / MCP Extension
-
-通过官方 `@modelcontextprotocol/client` 接入 MCP Server（stdio 传输），例如 GitHub MCP Server。MCP 工具自动注册，也可通过 `tool_search` 延迟发现。连接使用指数退避重连（30s → 最大 5min）。
-
-MCP servers (stdio) via the official `@modelcontextprotocol/client` — e.g. GitHub. Tools auto-register, discoverable via `tool_search`; exponential-backoff reconnect.
-
----
+| `tool_search` | 搜索延迟加载的工具 / search deferred tools |
 
 ## 🏗️ 架构 / Architecture
 
@@ -201,7 +193,7 @@ src/
 │   └── loop-detection.ts   # 重复 / ping-pong / 熔断检测 / loop detection
 ├── tools/
 │   ├── index.ts            # 核心工具（文件、搜索、bash）/ core tools
-│   ├── registry.ts         # 工具注册表 + MCP 集成 / registry & MCP integration
+│   ├── registry.ts         # 工具注册表 / tool registry
 │   ├── file.ts / search.ts / shell.ts
 │   └── tool-search.ts      # 延迟工具搜索 / deferred tool search
 ├── context/
@@ -300,7 +292,6 @@ rag_search: 查询 → embedding → 向量检索(0.7) + FTS5 关键词(0.3) →
 | `ANTHROPIC_API_KEY` | ❌ | 内置 `anthropic` provider 的 Key |
 | `OPENAI_API_BASE_URL` | ❌ | 自定义 Base URL（代理 / 兼容服务）|
 | `TAVILY_API_KEY` / `SERPER_API_KEY` | ❌ | Web 搜索（二选一，自动检测）|
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | GitHub MCP Server（stdio）|
 | `EMBEDDING_MODEL_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_MODEL_BASE_URL` | ❌ | RAG embedding 模型配置 |
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_OWNERS` | ❌ | 飞书通道 |
 | `SUPABASE_URL` / `SUPABASE_KEY` | ❌ | Supabase 工具（不配用 mock 数据）|
@@ -338,9 +329,6 @@ bun test          # 运行测试（Bun 内置）/ run tests
 **Q: RAG 提示"未找到支持 sqlite-vec 的 SQLite 动态库"？**
 macOS 执行 `brew install sqlite`，Linux 确认系统 `libsqlite3` 存在。Vela 会自动探测常见路径。
 
-**Q: MCP Server 连不上？**
-Vela 使用指数退避自动重连（30s → 最大 5min）。检查 token 与 stdio 命令配置，GitHub MCP 需要 `GITHUB_PERSONAL_ACCESS_TOKEN`。
-
 **Q: 上下文爆了 / 对话太长？**
 系统会自动 microcompact 清理旧工具结果并用 LLM 摘要压缩；也可用 `/context` 查看 Token 分布。
 
@@ -354,7 +342,6 @@ Vela 使用指数退避自动重连（30s → 最大 5min）。检查 token 与 
 - **Bun** — 运行时 / 包管理 / 测试（替代 Node.js + npm + vitest）
 - **TypeScript** — 语言（strict 模式）
 - **AI SDK v7**（`ai` + `@ai-sdk/openai`）— 模型调用与工具编排
-- **MCP Client**（`@modelcontextprotocol/client`）— MCP 工具接入
 - **sqlite-vec + FTS5** — RAG 向量存储与关键词检索
 - **zod** — 工具参数校验
 - **turndown** — HTML → Markdown 转换（web_fetch）

@@ -2,7 +2,7 @@
  * registerTool：给模型加一个工具。所有会话共享，模型直接能调用。
  * 模型看到的工具名带扩展名前缀：这里是 `hello_greet`。
  */
-import type { VelaExtension } from 'vela'
+import type { VelaExtension } from '@glows777/vela'
 import { z } from 'zod'
 
 const hello: VelaExtension = (vela) => {

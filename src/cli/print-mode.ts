@@ -1,7 +1,7 @@
 import type { ModelMessage } from 'ai'
-import type { Vela } from '../vela'
-import type { VelaSession } from '../vela-session'
-import { jsonEvent, toJsonLine, writeStdout } from './json-event'
+import type { Vela } from '../vela.ts'
+import type { VelaSession } from '../vela-session.ts'
+import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
 
 /** 最后一条助手消息的文本（-p 的输出）。 */
 export function lastAssistantText(messages: ModelMessage[]): string {

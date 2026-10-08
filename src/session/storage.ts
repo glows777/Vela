@@ -1,12 +1,17 @@
-import { mkdir, open, readdir, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
-import { silentLogger, type VelaLogger } from '../logger'
-import type { ThinkingLevel } from '../models'
+import { silentLogger, type VelaLogger } from '../logger.ts'
+import type { ThinkingLevel } from '../models/index.ts'
+
+/** 现在写的会话文件格式版本；格式不兼容地变化时加一，并在加载时迁移旧版本（同 pi）。 */
+export const SESSION_FORMAT_VERSION = 1
 
 /** 一次保存的会话内容（压缩后的完整历史）。 */
 export interface SessionCheckpoint {
   type: 'checkpoint'
+  /** 格式版本；Vela 写的总是有，没有的旧文件按 1 读 */
+  version?: number
   timestamp: string
   /** 上下文摘要（没压缩过时为空串） */
   summary: string
@@ -107,9 +112,14 @@ export function fileSessionStorage(
   return {
     async load(id) {
       const path = pathOf(id)
-      const file = Bun.file(path)
-      if (!(await file.exists())) return
-      return parseSessionFile(await file.text(), path, logger)
+      let text: string
+      try {
+        text = await readFile(path, 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+      return parseSessionFile(text, path, logger)
     },
     async save(id, checkpoint) {
       await mkdir(dir, { recursive: true, mode: 0o700 })
@@ -141,12 +151,15 @@ export function fileSessionStorage(
         if (!name.endsWith('.jsonl')) continue
         const id = name.slice(0, -'.jsonl'.length)
         const path = pathOf(id)
-        const file = Bun.file(path)
-        const checkpoint = parseSessionFile(await file.text(), path, logger)
+        const checkpoint = parseSessionFile(
+          await readFile(path, 'utf8'),
+          path,
+          logger,
+        )
         // 旧格式（一行一条消息）没有 checkpoint 时间：用文件修改时间
         const summary = summarizeCheckpoint(id, checkpoint)
         if (!checkpoint.saved)
-          summary.updatedAt = new Date(file.lastModified).toISOString()
+          summary.updatedAt = (await stat(path)).mtime.toISOString()
         summaries.push(summary)
       }
       return newestFirst(summaries)

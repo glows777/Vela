@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, expect, test } from 'bun:test'
 import type { ModelMessage } from 'ai'
-import { SessionStore } from '../../../src/session/index'
+import { SessionStore } from '../../../src/session/index.ts'
 
 const tempDirs: string[] = []
 function makeTempDir(): string {
@@ -81,4 +81,21 @@ test('exists 反映文件是否存在', async () => {
   expect(await store.exists()).toBe(false)
   await store.replace([], new Map(), '')
   expect(await store.exists()).toBe(true)
+})
+
+test('checkpoint 带格式版本；更新版本写的文件明确报错，不当成空会话', async () => {
+  const dir = path.join(makeTempDir(), '.sessions')
+  await new SessionStore('default', dir).replace([], new Map(), '')
+  const saved = JSON.parse(
+    fs.readFileSync(path.join(dir, 'default.jsonl'), 'utf-8'),
+  )
+  expect(saved.version).toBe(1)
+
+  fs.writeFileSync(
+    path.join(dir, 'newer.jsonl'),
+    JSON.stringify({ ...saved, version: 2 }),
+  )
+  await expect(new SessionStore('newer', dir).loadState()).rejects.toThrow(
+    '文件格式版本是 2',
+  )
 })

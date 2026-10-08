@@ -1,15 +1,15 @@
 import { afterEach, expect, test } from 'bun:test'
-import confirmDangerous from '../../examples/extensions/confirm-dangerous'
-import todo from '../../examples/extensions/todo-command'
-import type { ProviderDefinition } from '../../src/models'
+import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
+import todo from '../../examples/extensions/todo-command.ts'
+import type { ProviderDefinition } from '../../src/models/index.ts'
 import {
   createFauxModel,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux'
-import { KEYS, startTui, stopTuis } from '../support/terminal'
-import { cleanupTestVelas, createTestVela } from '../support/vela'
+} from '../../src/testing/faux.ts'
+import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
+import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(async () => {
   await stopTuis()

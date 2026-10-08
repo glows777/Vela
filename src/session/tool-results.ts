@@ -1,11 +1,11 @@
-import { mkdir, open } from 'node:fs/promises'
+import { mkdir, open, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { ModelMessage, ToolResultPart } from 'ai'
 import {
   type ExecutionMetadata,
   type LegacyResultRecord,
   ToolHistoryStore,
-} from './tool-history'
+} from './tool-history.ts'
 
 export class StoredToolResult {
   readonly kind = 'vela-tool-result' as const
@@ -131,11 +131,11 @@ export class ToolResultStore {
     execution?: ExecutionMetadata,
     callId?: string,
   ): Promise<StoredToolResult> {
-    await Bun.file(path).slice(0, 1).arrayBuffer()
+    const { size } = await stat(path)
     const reference = new StoredToolResult(
       path,
       this.indexPath,
-      Bun.file(path).size,
+      size,
       preview,
     )
     reference.execution = execution
@@ -234,7 +234,7 @@ export async function archiveToolResults(
       if (part.type !== 'tool-result') continue
       const stored = getStoredResult(part.output)
       if (stored) {
-        await Bun.file(stored.path).slice(0, 1).arrayBuffer()
+        await stat(stored.path)
         if (
           !(await store.history.completed(part.toolCallId)) &&
           !store.history.hasLegacy(part.toolCallId, stored.path)

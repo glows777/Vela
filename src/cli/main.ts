@@ -1,24 +1,24 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
   loadConfig,
   type VelaConfig,
-} from '../config'
-import { memorySessionStorage } from '../session/storage'
-import { createMockModel } from '../testing/demo-model'
-import { loadFauxScenario } from '../testing/faux'
-import { recordModel } from '../testing/record'
-import { ModelRegistry } from '../models'
-import { createVela } from '../vela'
-import type { VelaSession } from '../vela-session'
-import { runInteractive } from './interactive'
-import { redirectConsoleToStderr, writeStdout } from './json-event'
+} from '../config/index.ts'
+import { memorySessionStorage } from '../session/storage.ts'
+import { createMockModel } from '../testing/demo-model.ts'
+import { loadFauxScenario } from '../testing/faux.ts'
+import { recordModel } from '../testing/record.ts'
+import { ModelRegistry } from '../models/index.ts'
+import { createVela } from '../vela.ts'
+import type { VelaSession } from '../vela-session.ts'
+import { runInteractive } from './interactive.ts'
+import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
 import { join } from 'node:path'
-import { createConsoleLogger, createInteractiveLogger } from './logger'
-import { runPrintMode } from './print-mode'
-import { runRpcMode } from './rpc-mode'
-import { newSessionId } from './sessions'
+import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
+import { runPrintMode } from './print-mode.ts'
+import { runRpcMode } from './rpc-mode.ts'
+import { newSessionId } from './sessions.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -28,7 +28,7 @@ import {
   parseArgs,
   resolveTrust,
   USAGE,
-} from './setup'
+} from './setup.ts'
 
 const usageError = (message: string): never => {
   console.error(message)
@@ -71,7 +71,7 @@ if (mode !== 'interactive' && args.resume)
 // 单次模式：管道进来的 stdin 拼在第一个 prompt 前面（同 pi：`git diff | vela -p "review"`）
 const messages = [...args.messages]
 if (mode === 'print' || mode === 'json') {
-  const piped = process.stdin.isTTY ? '' : (await Bun.stdin.text()).trim()
+  const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
   if (!messages.length) usageError('没有 prompt：在命令行给出，或从 stdin 输入')
 }
@@ -241,7 +241,7 @@ if (mode === 'print' || mode === 'json') {
     newSessionId,
     // 没有模型时照样启动，客户端可以 set_model（错误打到 stderr）
     configure: (session) => void applyModelArgs(session),
-    input: Bun.stdin.stream(),
+    input: process.stdin,
     write: writeStdout,
   })
   await exit(0)
@@ -260,4 +260,10 @@ if (mode === 'print' || mode === 'json') {
     },
   })
   process.exit(0)
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString('utf8')
 }

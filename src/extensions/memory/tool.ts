@@ -1,6 +1,6 @@
 import z from 'zod'
-import type { ToolDefinition } from '../../index'
-import type { MemoryStore } from './store'
+import type { ToolDefinition } from '../../index.ts'
+import type { MemoryStore } from './store.ts'
 
 const memoryToolParamSchema = z
   .object({

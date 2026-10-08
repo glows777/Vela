@@ -1,7 +1,7 @@
-import type { PipeFn, PromptContext } from './pipelins'
-import type { ToolResultStore } from '../session/tool-results'
+import type { PipeFn, PromptContext } from './pipeline.ts'
+import type { ToolResultStore } from '../session/tool-results.ts'
 
-export * from './pipelins'
+export * from './pipeline.ts'
 
 /** 不传 results 时用 PromptContext 里当前会话的工具结果存储。 */
 export function toolHistoryGuide(results?: ToolResultStore): PipeFn {
@@ -9,23 +9,33 @@ export function toolHistoryGuide(results?: ToolResultStore): PipeFn {
   return (ctx) => (results ?? ctx.toolResults)?.readingGuide() ?? null
 }
 
-export function coreRules(): PipeFn {
-  return () => `You are Vela, a helpful agent that can call tool.
-    You have serval built-in tools and mcp tools to use.
-    When the tools you need don't list in your tool call list, you can use tool_search tool to search it.
-    Answer should be clean and direct.`
-}
-
-export function toolGuide(): PipeFn {
+/**
+ * 核心 system prompt（结构同 pi：开场一段 + <rules> + <cwd>）。guest（通道外部用户）没有文件 / shell
+ * 工具，不给文件相关规则，也不暴露工作目录。
+ */
+export function coreRules(cwd?: string): PipeFn {
   return (ctx) => {
-    if (ctx.toolCount === 0) return null
-    return null
+    const guest = ctx.role === 'guest'
+    const rules = [
+      'Use tools to check facts about files, code, data and the environment instead of guessing.',
+      'When a tool you need is not in your tool list, call tool_search to find and load it.',
+      ...(guest
+        ? []
+        : [
+            'Read a file before you change it. Use edit_file for targeted changes and write_file for new files or full rewrites.',
+            'Show file paths clearly when working with files.',
+          ]),
+      'Be concise and direct in your responses.',
+    ]
+    const sections = [
+      guest
+        ? 'You are Vela, an AI assistant that answers questions and uses the tools available to it.'
+        : 'You are Vela, an AI agent that helps users by calling the tools this session provides: reading, searching and editing files, running commands, and any extra tools from extensions.',
+      `<rules>\n${rules.map((rule) => `- ${rule}`).join('\n')}\n</rules>`,
+    ]
+    if (cwd && !guest) sections.push(`<cwd>\n${cwd.replace(/\\/g, '/')}\n</cwd>`)
+    return sections.join('\n\n')
   }
-}
-
-export function sessionContext(): PipeFn {
-  // Message counts belong in status output, not the cached system prefix.
-  return () => null
 }
 
 export function deferredTools(): PipeFn {

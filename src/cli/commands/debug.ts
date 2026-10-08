@@ -1,8 +1,8 @@
-import { estimateMessageTokens } from '../../context/defense'
-import { createRequestSnapshot } from '../../context/request'
-import { textToolResultOutput } from '../../context/tool-result-output'
-import type { DemoModel } from '../../testing/demo-model'
-import type { CommandHandler } from './index'
+import { estimateMessageTokens } from '../../context/defense.ts'
+import { createRequestSnapshot } from '../../context/request.ts'
+import { textToolResultOutput } from '../../context/tool-result-output.ts'
+import type { DemoModel } from '../../testing/demo-model.ts'
+import type { CommandHandler } from './index.ts'
 
 export const debugCommands: CommandHandler[] = [
   (cmd, { print, session }) => {

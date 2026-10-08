@@ -1,4 +1,4 @@
-import type { StoredChunk } from './sqllite-store'
+import type { StoredChunk } from './sqlite-store.ts'
 
 export interface SearchResult {
   chunk: StoredChunk

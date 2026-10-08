@@ -4,22 +4,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { jsonSchema } from 'ai'
-import type { VelaEvent } from '../../../src/agent/events'
-import { cleanupTestVelas, createTestVela } from '../../support/vela'
-import { ToolResultStore } from '../../../src/session/tool-results'
+import type { VelaEvent } from '../../../src/agent/events.ts'
+import { cleanupTestVelas, createTestVela } from '../../support/vela.ts'
+import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
   ToolExecutionResult,
   ToolRegistry,
   type ToolDefinition,
-} from '../../../src/tools/registry'
-import { classifyBashCommand } from '../../../src/security/bash-classifier'
-import { HookPipeline } from '../../../src/security/hooks'
+} from '../../../src/tools/registry.ts'
+import { classifyBashCommand } from '../../../src/security/bash-classifier.ts'
+import { HookPipeline } from '../../../src/security/hooks.ts'
 import {
   canUseTool,
   decidePermission,
   filterToolsForRole,
   type Role,
-} from '../../../src/security/roles'
+} from '../../../src/security/roles.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-security-acceptance-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

@@ -1,7 +1,8 @@
+import { glob, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import z from "zod";
-import { resolveIn } from "./file";
-import type { ToolDefinition } from "./registry";
+import { resolveIn } from "./file.ts";
+import type { ToolDefinition } from "./registry.ts";
 
 const globToolParamSchema = z.object({
   pattern: z.string().describe('搜索模式，如 "**/*.ts"、"src/*.json"'),
@@ -22,19 +23,16 @@ export const createGlobTool = (cwd?: string): ToolDefinition => ({
     path?: string;
   }) => {
     const ignored = new Set(["node_modules", ".git"]);
-    const glob = new Bun.Glob(pattern);
+    const base = resolveIn(cwd, path);
     const results: string[] = [];
 
-    for await (const result of glob.scan({
-      cwd: resolveIn(cwd, path),
-      dot: false,
-      onlyFiles: true,
-      followSymlinks: false,
+    for await (const entry of glob(pattern, {
+      cwd: base,
+      withFileTypes: true,
+      exclude: (entry) => ignored.has(entry.name),
     })) {
-      if (result.split(/[\\/]/).some((segment) => ignored.has(segment))) {
-        continue;
-      }
-      results.push(result);
+      if (!entry.isFile()) continue;
+      results.push(relative(base, join(entry.parentPath, entry.name)));
     }
 
     if (results.length === 0) return `没有找到匹配 "${pattern}" 的文件`;
@@ -81,7 +79,7 @@ export const createGrepTool = (cwd?: string): ToolDefinition => ({
 
       let content: string;
       try {
-        content = await Bun.file(filePath).text();
+        content = await readFile(filePath, "utf8");
       } catch {
         return;
       }
@@ -95,21 +93,28 @@ export const createGrepTool = (cwd?: string): ToolDefinition => ({
       }
     }
 
-    if (await Bun.file(baseDir).exists()) {
+    if ((await stat(baseDir)).isFile()) {
       await searchFile(baseDir, relative(baseDir, baseDir));
     } else {
-      const glob = new Bun.Glob("**/*");
-
-      for await (const rel of glob.scan({
-        cwd: baseDir,
-        dot: true,
-        onlyFiles: true,
-        followSymlinks: true,
-      })) {
-        if (matches.length >= 50) break;
-        if (rel.split(/[\\/]/).some((segment) => SKIP.has(segment))) continue;
-        await searchFile(join(baseDir, rel), rel);
+      // 逐层读目录，跳过 SKIP 目录不进入，够 50 条就停（不一次读完整棵树）。
+      // 跟随符号链接（同原来的 Bun.Glob followSymlinks），按真实路径去重防止目录循环
+      const visited = new Set<string>();
+      async function walk(dir: string): Promise<void> {
+        const real = await realpath(dir);
+        if (visited.has(real)) return;
+        visited.add(real);
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          if (matches.length >= 50) return;
+          if (SKIP.has(entry.name)) continue;
+          const full = join(dir, entry.name);
+          const target = entry.isSymbolicLink()
+            ? await stat(full).catch(() => undefined)
+            : entry;
+          if (target?.isDirectory()) await walk(full);
+          else if (target?.isFile()) await searchFile(full, relative(baseDir, full));
+        }
       }
+      await walk(baseDir);
     }
 
     if (matches.length === 0) return `没有找到匹配 "${pattern}" 的内容`;

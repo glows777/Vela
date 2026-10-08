@@ -1,4 +1,4 @@
-import type { VelaEvent } from '../agent/events'
+import type { VelaEvent } from '../agent/events.ts'
 
 /** JSON.stringify，Error（含 DOMException）写成 `{ name, message }`，bigint 写成字符串。 */
 export function toJsonLine(value: unknown): string {

@@ -1,6 +1,6 @@
 import z from 'zod'
-import type { ToolDefinition, VelaExtension } from '../index'
-import { configString } from './config'
+import type { ToolDefinition, VelaExtension } from '../index.ts'
+import { configString } from './config.ts'
 
 const listTablesInputSchema = z.object({})
 

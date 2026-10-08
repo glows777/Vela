@@ -3,7 +3,7 @@
  * roleFor 决定发送者的角色；不实现时一律 guest（不能读写文件、跑命令、看主人的记忆）。
  * 这里用内存里的收发代替真实的 IM 连接，`receive()` 模拟收到一条消息。
  */
-import type { IncomingMessage, OutgoingMessage, VelaExtension } from 'vela'
+import type { IncomingMessage, OutgoingMessage, VelaExtension } from '@glows777/vela'
 
 export function echoChannel(options: { owners?: string[] } = {}) {
   let handler: ((msg: IncomingMessage) => void) | undefined

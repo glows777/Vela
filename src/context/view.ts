@@ -5,7 +5,7 @@
  * 不同类别用不同颜色（ANSI 256 色），让"谁在吃 context"一眼看清楚。
  */
 import type { ModelMessage } from 'ai';
-import type { TokenTracker } from '../usage/tracker.js';
+import type { TokenTracker } from '../usage/tracker.ts';
 
 export interface ContextSlice {
   name: string;

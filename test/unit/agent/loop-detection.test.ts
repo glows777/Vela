@@ -4,7 +4,7 @@ import {
   recordToolCall,
   recordToolCallResult,
   resetHistory,
-} from '../../../src/agent/loop-detection'
+} from '../../../src/agent/loop-detection.ts'
 
 test('matches parallel tool results by toolCallId', () => {
   resetHistory()
