@@ -16,13 +16,13 @@ afterAll(() => {
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
 })
 
-test('save 后 list 能读回完整条目', () => {
+test('list reads back the full entry after save', () => {
   const store = makeTempStore()
   store.save({
     name: 'feedback-test',
-    description: '用户反馈测试',
+    description: 'User feedback test',
     type: 'feedback',
-    content: '正文',
+    content: 'Body',
   })
   const entries = store.list()
   expect(entries).toHaveLength(1)
@@ -30,42 +30,42 @@ test('save 后 list 能读回完整条目', () => {
   expect(entries[0]!.filePath).toContain('feedback_feedback-test.md')
 })
 
-test('search 用 BM25 召回相关记忆', () => {
+test('search recalls relevant memories with BM25', () => {
   const store = makeTempStore()
   store.save({
     name: 'bm25-demo',
-    description: '搜索引擎使用 BM25 算法',
+    description: 'The search engine uses the BM25 algorithm',
     type: 'reference',
-    content: 'BM25 常用来做全文检索排序',
+    content: 'BM25 is commonly used to rank full-text retrieval',
   })
   store.save({
     name: 'deploy-flow',
-    description: '发布流程',
+    description: 'Release process',
     type: 'project',
-    content: '先跑测试再发布',
+    content: 'Run the tests before releasing',
   })
 
-  const hits = store.search('BM25 搜索')
+  const hits = store.search('BM25 search')
   expect(hits.length).toBeGreaterThan(0)
   expect(hits[0]!.entry.name).toBe('bm25-demo')
   expect(hits[0]!.score).toBeGreaterThan(0)
 
-  expect(store.search('不存在的关键词xyz')).toHaveLength(0)
+  expect(store.search('nonexistentkeyword xyz')).toHaveLength(0)
 })
 
-test('lint 报告过期路径条目', () => {
+test('lint reports entries with stale paths', () => {
   const store = makeTempStore()
   store.save({
     name: 'good-entry',
-    description: '正常条目',
+    description: 'Normal entry',
     type: 'project',
-    content: '内容',
+    content: 'Content',
   })
   store.save({
     name: 'stale-entry',
-    description: '引用过期路径',
+    description: 'References a stale path',
     type: 'project',
-    content: '注意 src/ghost-helper.ts 这个文件',
+    content: 'Watch out for the file src/ghost-helper.ts',
   })
 
   const reports = store.lint()
@@ -74,29 +74,29 @@ test('lint 报告过期路径条目', () => {
   expect(reports.find((r) => r.entry.name === 'good-entry')).toBeUndefined()
 })
 
-test('delete 删除文件并清理索引行', () => {
+test('delete removes the file and cleans up the index line', () => {
   const store = makeTempStore()
   const file = store.save({
     name: 'to-delete',
-    description: '将被删除',
+    description: 'Will be deleted',
     type: 'reference',
-    content: '内容',
+    content: 'Content',
   })
   expect(store.delete(file)).toBe(true)
   expect(store.list()).toHaveLength(0)
   expect(store.loadIndex()).not.toContain('to-delete')
 })
 
-test('buildPromptSection 输出记忆索引与使用说明', () => {
+test('buildPromptSection outputs the memory index and usage guidance', () => {
   const store = makeTempStore()
   store.save({
     name: 'kept-memory',
-    description: '重要记忆',
+    description: 'Important memory',
     type: 'project',
-    content: '内容',
+    content: 'Content',
   })
   const section = store.buildPromptSection()
-  expect(section).toContain('[记忆系统] 共 1 条记忆')
+  expect(section).toContain('[memory] 1 memories')
   expect(section).toContain('kept-memory')
-  expect(section).toContain('记忆使用原则')
+  expect(section).toContain('How to use memory:')
 })

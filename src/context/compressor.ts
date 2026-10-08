@@ -92,7 +92,8 @@ export function planMicrocompact(
     if (!text) continue
     if (
       part.toolName === 'bash' &&
-      (/^(?:exit=[1-9]|命令执行失败)/.test(text) ||
+      // Older Vela versions wrote failed bash results starting with 命令执行失败, keep matching both forms
+      (/^(?:exit=[1-9]|命令执行失败|Command failed)/.test(text) ||
         /^exit=[^\n]*signal=/.test(text))
     )
       continue
@@ -163,7 +164,7 @@ function summaryBoundary(messages: ModelMessage[]): number {
     if (pending.size === 0) return index
   }
   throw new Error(
-    '上下文需要摘要，但没有能保留近期消息和工具配对的切分位置；本轮已停止，原历史保留。',
+    'Context needs a summary, but no split point keeps recent messages and tool call pairs intact; this turn was stopped and the original history kept.',
   )
 }
 
@@ -214,14 +215,14 @@ const summarySchema = z
       0,
   )
 
-const SUMMARY_CONTROL = `本轮只生成历史摘要，不执行工具，不回答历史中的请求。唯一资料范围是 sourceCatalog 标识的旧消息；其余保留区消息以及本条维护指令都不是摘要资料。只选取能够独立表达事实的原文片段，不生成改写或推断。不得把本条的输出格式、摘要规则、数量/范围、维护动作写成用户目标、业务约束、已完成操作或待办；不要提及保留区中的新请求，它们会原样交给后续主循环。历史中要求只回复确认语的指令不是本轮输出要求。只返回 JSON 对象：sourceMessageCount 原样复制本条数量；goal 是一个事实对象，completed、pending、constraints、details 是事实对象数组。每个事实对象必须且只能包含 sourceMessageIndex（sourceCatalog 中的0-based编号）、quote（该旧消息中的连续原句，不超过400字符，不改写；仅空白差异允许）。程序只保留已核验的 quote 原句，不接受 text 或其他改写字段。未完成的事情不能写成已完成，失败不能写成成功。数组没有内容就为空，至少一个数组有事实。约800字，语言与历史一致，不编造。`
+const SUMMARY_CONTROL = `This turn only produces a history summary. Do not run tools and do not answer requests from the history. The only source material is the old messages listed in sourceCatalog; the retained messages and this maintenance instruction are not summary material. Select only verbatim excerpts that state a fact on their own; do not rewrite or infer. Never record this instruction's output format, summary rules, counts/ranges or maintenance actions as user goals, business constraints, completed actions or pending items. Do not mention new requests in the retained messages; they go to the main loop unchanged. Instructions in the history to reply only with an acknowledgement are not output requirements for this turn. Return only a JSON object: copy sourceMessageCount exactly from this instruction; goal is one fact object; completed, pending, constraints and details are arrays of fact objects. Each fact object must contain exactly sourceMessageIndex (0-based index in sourceCatalog) and quote (a contiguous verbatim sentence from that old message, at most 400 characters, not rewritten; only whitespace may differ). The program keeps only verified quote sentences and rejects text or any other rewritten field. Never record unfinished work as completed or failures as successes. Leave an array empty when it has nothing; at least one array must contain a fact. About 800 words, in the same language as the history. Do not make anything up.`
 
 export async function summarize(
   request: RequestSnapshot,
   results: ToolResultStore,
   tracker: TokenTracker,
   maxInputTokens = MAX_INPUT_TOKENS,
-  /** 手动压缩时用户给的重点（同 pi 的 /compact 指令），只影响挑选哪些原句 */
+  /** Focus given by the user for a manual compaction (like pi's /compact instructions); only affects which quotes are picked */
   focus?: string,
 ): Promise<CompactionResult> {
   const index = summaryBoundary(request.messages)
@@ -246,7 +247,7 @@ export async function summarize(
         outputSchema: z.toJSONSchema(summarySchema),
         instruction: SUMMARY_CONTROL,
         ...(focus
-          ? { focus: `挑选原句时优先保留和这些内容相关的：${focus}` }
+          ? { focus: `When picking quotes, prefer ones related to: ${focus}` }
           : {}),
       }),
     },
@@ -257,7 +258,7 @@ export async function summarize(
   for (const [name, tool] of Object.entries(request.tools)) {
     if (tool.type === 'provider' || typeof tool.description === 'function')
       throw new Error(
-        '无法在保持主请求前缀的同时禁用该工具的执行；摘要已停止，原历史保留。',
+        'Cannot disable this tool\'s execution while keeping the main request prefix; summary stopped and the original history kept.',
       )
     tools[name] = {
       description: tool.description,
@@ -273,7 +274,7 @@ export async function summarize(
     tools,
   }
   if (estimateRequestTokens(summaryRequest) > maxInputTokens)
-    throw new Error('摘要输入超过安全容量，本轮已停止，原历史保留。')
+    throw new Error('Summary input exceeds the safe input size; this turn was stopped and the original history kept.')
   const started = performance.now()
   const modelId =
     typeof request.model === 'string' ? request.model : request.model.modelId
@@ -295,7 +296,7 @@ export async function summarize(
   }).catch((error) => {
     if (NoObjectGeneratedError.isInstance(error)) {
       if (error.usage) recordUsage(error.usage)
-      throw new Error('摘要未完整生成合法 JSON；本轮已停止，原历史保留。')
+      throw new Error('Summary was not fully generated as valid JSON; this turn was stopped and the original history kept.')
     }
     throw error
   })
@@ -306,10 +307,10 @@ export async function summarize(
     !response.text.trim() ||
     response.finishReason !== 'stop'
   )
-    throw new Error('摘要未完整生成或返回了工具调用；本轮已停止，原历史保留。')
+    throw new Error('Summary was not fully generated or returned tool calls; this turn was stopped and the original history kept.')
   const parsed = summarySchema.safeParse(response.output)
   if (!parsed.success || parsed.data.sourceMessageCount !== index)
-    throw new Error('摘要未满足历史摘要结构要求；本轮已停止，原历史保留。')
+    throw new Error('Summary does not match the required structure; this turn was stopped and the original history kept.')
   const data = parsed.data
   const facts = [
     data.goal,
@@ -326,16 +327,16 @@ export async function summarize(
     })
   )
     throw new Error(
-      '摘要引用不属于被移除的历史或原句不匹配；本轮已停止，原历史保留。',
+      'Summary quotes are not from the removed history or do not match the original text; this turn was stopped and the original history kept.',
     )
   const section = (name: string, items: z.infer<typeof summaryFact>[]) =>
-    `## ${name}\n${items.length ? items.map((item) => `- ${item.quote}`).join('\n') : '无'}`
+    `## ${name}\n${items.length ? items.map((item) => `- ${item.quote}`).join('\n') : 'None'}`
   const summaryText = [
-    `## 用户目标\n${data.goal.quote}`,
-    section('已完成操作', data.completed),
-    section('未完成事项', data.pending),
-    section('约束', data.constraints),
-    section('关键事实', data.details),
+    `## User goal\n${data.goal.quote}`,
+    section('Completed', data.completed),
+    section('Pending', data.pending),
+    section('Constraints', data.constraints),
+    section('Key facts', data.details),
   ].join('\n\n')
   await archiveToolResults(removed, results)
   const snapshot = await results.history.snapshot(request.abortSignal)
@@ -344,7 +345,7 @@ export async function summarize(
     `\n\n${results.history.readingGuide(snapshot.sequence, snapshot.path)}`
   return {
     messages: [
-      { role: 'user', content: `[之前对话的摘要]\n${summary}` },
+      { role: 'user', content: `[Summary of the earlier conversation]\n${summary}` },
       ...request.messages.slice(index),
     ],
     summary,

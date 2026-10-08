@@ -14,37 +14,37 @@ afterEach(cleanupTestVelas)
 const save = {
   action: 'save',
   name: 'favorite-language',
-  description: '用户最喜欢的编程语言',
+  description: "The user's favorite programming language",
   type: 'user',
-  content: '用户最喜欢 TypeScript',
+  content: 'The user likes TypeScript best',
 }
 
 test('a memory saved through the tool shows up in the next system prompt and survives a restart', async () => {
   const t = createTestVela({
     responses: [
       (req) => {
-        expect(req.system).toContain('当前没有存储任何记忆')
+        expect(req.system).toContain('No memories stored yet')
         return fauxToolCall('memory', save)
       },
-      fauxText('记住了'),
+      fauxText('Got it'),
       (req) => {
-        expect(req.system).toContain('用户最喜欢的编程语言')
-        return fauxText('你喜欢 TypeScript')
+        expect(req.system).toContain("The user's favorite programming language")
+        return fauxText('You like TypeScript')
       },
     ],
   })
 
-  await t.run('记住：我最喜欢 TypeScript')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('已保存到记忆')
-  await t.run('我最喜欢什么语言？')
-  expect(t.lastAssistantText()).toBe('你喜欢 TypeScript')
+  await t.run('Remember: TypeScript is my favorite')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('Saved to memory')
+  await t.run('What is my favorite language?')
+  expect(t.lastAssistantText()).toBe('You like TypeScript')
 
   const index = await t.readData('memory/MEMORY.md')
   expect(index).toContain('favorite-language')
 
   const restarted = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
-  await restarted.run('你好')
-  expect(restarted.model.calls[0]!.system).toContain('用户最喜欢的编程语言')
+  await restarted.run('Hello')
+  expect(restarted.model.calls[0]!.system).toContain("The user's favorite programming language")
 })
 
 test('the model can search and read memories back', async () => {
@@ -58,12 +58,12 @@ test('the model can search and read memories back', async () => {
       }),
       (req) => {
         expect(req.toolResults[0]!.output).toContain('favorite-language')
-        return fauxText('找到了')
+        return fauxText('Found it')
       },
     ],
   })
-  await t.run('存一下再找出来')
-  expect(t.lastAssistantText()).toBe('找到了')
+  await t.run('Save it, then find it again')
+  expect(t.lastAssistantText()).toBe('Found it')
 })
 
 test('the memory tool rejects a save without content', async () => {
@@ -75,11 +75,11 @@ test('the memory tool rejects a save without content', async () => {
         type: 'user',
         filename: '',
       }),
-      fauxText('好'),
+      fauxText('OK'),
     ],
   })
-  await t.run('存个空的')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('保存失败')
+  await t.run('Save an empty one')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('Save failed')
   expect(new MemoryStore(join(t.dataDir, 'memory')).list()).toHaveLength(0)
 })
 
@@ -98,26 +98,26 @@ test('read and delete need a filename; with one they work', async () => {
           'user_favorite-language.md'
         return fauxToolCall('memory', { action: 'delete', filename })
       },
-      fauxText('删掉了'),
+      fauxText('Deleted it'),
     ],
   })
-  await t.run('读、删、存、列、删')
+  await t.run('Read, delete, save, list, delete')
   const outputs = t.model.calls[1]!.toolResults.map((r) => r.output).join('\n')
-  expect(outputs).toContain('读取失败：需要 filename')
-  expect(outputs).toContain('删除失败：需要 filename')
-  expect(t.model.calls[4]!.toolResults[0]!.output).toContain('已删除')
+  expect(outputs).toContain('Read failed: filename is required')
+  expect(outputs).toContain('Delete failed: filename is required')
+  expect(t.model.calls[4]!.toolResults[0]!.output).toContain('Deleted')
   expect(new MemoryStore(join(t.dataDir, 'memory')).list()).toHaveLength(0)
 })
 
-// ---------- 命令（memory 扩展注册，输出走 ui.notify） ----------
+// ---------- Commands (registered by the memory extension; output goes through ui.notify) ----------
 
 function withMemory(options: Parameters<typeof createTestVela>[0] = {}) {
   const t = createTestVela(options)
   new MemoryStore(join(t.dataDir, 'memory')).save({
     name: 'openai-null-chars',
-    description: 'openai 接口返回 null 字符问题',
+    description: 'openai API returns null characters',
     type: 'feedback',
-    content: '正文',
+    content: 'Body',
   })
   return t
 }
@@ -131,37 +131,37 @@ const notes = (t: TestVela) =>
 test('/memory lists memories, /memory search uses BM25, /memory lint reports health', async () => {
   const t = withMemory()
   await t.run('/memory')
-  expect(notes(t)).toContain('共 1 条记忆')
+  expect(notes(t)).toContain('1 memories')
   expect(notes(t)).toContain('openai-null-chars')
-  await t.run('/memory search null 字符')
-  expect(notes(t)).toContain('BM25 搜索')
+  await t.run('/memory search null characters')
+  expect(notes(t)).toContain('BM25 search')
   await t.run('/memory lint')
-  expect(notes(t)).toContain('记忆库健康')
-  // 命令不发给模型
+  expect(notes(t)).toContain('Memory store is healthy')
+  // Commands are not sent to the model
   expect(t.model.calls).toHaveLength(0)
 })
 
 test('/dream hands the memory clean-up prompt to the model', async () => {
-  const t = withMemory({ responses: [fauxText('记忆已整理')] })
+  const t = withMemory({ responses: [fauxText('Memories cleaned up')] })
   await t.run('/dream')
   expect(t.model.calls).toHaveLength(1)
   expect(t.model.calls[0]!.lastUserText).toContain('memory lint')
-  expect(t.lastAssistantText()).toBe('记忆已整理')
-  expect(notes(t)).toContain('[dream] 完成')
+  expect(t.lastAssistantText()).toBe('Memories cleaned up')
+  expect(notes(t)).toContain('[dream] Done')
   expect(t.session.busy.locked).toBe(false)
 })
 
 test('/context previews the memory section before the first prompt', async () => {
   const t = withMemory()
-  // 段落每次 prompt 才算，还没 prompt 过时这一轮是空的
+  // Sections are computed per prompt; before the first prompt this round is empty
   expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
   const sections = await t.session.previewSections()
   expect(sections.memory).toContain('openai-null-chars')
   expect(t.session.buildSystem(sections)).toContain('openai-null-chars')
-  // 预览不替换这一轮的段落
+  // The preview does not replace this round's sections
   expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
   const { output } = await captureConsole(() => t.command('/context'))
-  // 以前没 prompt 过时这里是 0 tokens
+  // This used to show 0 tokens before the first prompt
   const memoryRow = output.split('\n').find((line) => line.includes('Memory'))
   expect(memoryRow).toBeDefined()
   expect(memoryRow).not.toMatch(/\b0 tokens/)
@@ -181,7 +181,7 @@ test('aborting the prompt signal of /dream stops the model run it started', asyn
 
 test('guest sessions cannot run memory commands; the text goes to the model', async () => {
   const t = withMemory({
-    responses: [fauxText('普通回答')],
+    responses: [fauxText('Plain answer')],
     session: { role: 'guest' },
   })
   await t.run('/memory')

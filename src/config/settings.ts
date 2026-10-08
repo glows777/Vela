@@ -16,72 +16,73 @@ import {
 
 type Env = Record<string, string | undefined>
 
-/** settings.json 的内容（用户级 `~/.vela/settings.json`，项目级 `<cwd>/.vela/settings.json`）。 */
+/** Contents of settings.json (user: `~/.vela/settings.json`, project: `<cwd>/.vela/settings.json`). */
 export interface VelaSettings {
-  /** 默认模型 `provider/id`（pi 分成 defaultProvider + defaultModel） */
+  /** Default model `provider/id` (pi splits this into defaultProvider + defaultModel) */
   defaultModel?: string
-  /** 默认 thinking 级别；不写时 medium（同 pi） */
+  /** Default thinking level; medium when unset (like pi) */
   defaultThinkingLevel?: ThinkingLevel
-  /** 项目数据目录，相对路径按 cwd 解析；默认 `<agentDir>/projects/<编码后的 cwd>` */
+  /** Project data directory, relative to cwd; default `<agentDir>/projects/<encoded cwd>` */
   dataDir?: string
-  /** 覆盖 VelaLimits 的任意子集 */
+  /** Overrides any subset of VelaLimits */
   limits?: Partial<VelaLimits>
-  /** 扩展文件或目录（相对所在 settings 文件），以及 `builtin:<名>` / `+builtin:<名>` / `-builtin:<名>` */
+  /** Extension files or directories (relative to this settings file), plus `builtin:<name>` / `+builtin:<name>` / `-builtin:<name>` */
   extensions?: string[]
-  /** 额外的 skill 目录（相对所在 settings 文件） */
+  /** Extra skill directories (relative to this settings file) */
   skills?: string[]
-  /** 每个扩展的配置段：`extensionConfig.<扩展名>`，字符串支持 `$VAR` / `${VAR}` */
+  /** Per-extension config section `extensionConfig.<extension name>`; strings support `$VAR` / `${VAR}` */
   extensionConfig?: Record<string, Record<string, unknown>>
 }
 
-/** 一个要加载的扩展：内置的按名字，其余按文件路径。 */
+/** An extension to load: built-ins by name, others by file path. */
 export type ExtensionEntry =
   | { name: string; builtin: true }
   | { name: string; path: string }
 
 export interface LoadConfigOptions {
-  /** 项目目录，默认 process.cwd() */
+  /** Project directory, default process.cwd() */
   cwd?: string
-  /** 用户级目录，默认 `env.VELA_DIR` 或 `~/.vela` */
+  /** User-level directory, default `env.VELA_DIR` or `~/.vela` */
   agentDir?: string
-  /** `$VAR` 插值和 `VELA_DIR` 用的环境变量；默认空（core 不读 process.env） */
+  /** Environment for `$VAR` interpolation and `VELA_DIR`; empty by default (core never reads process.env) */
   env?: Record<string, string | undefined>
-  /** 是否加载项目的 `.vela/settings.json` 和 `.vela/extensions/`（见 projectTrustRequired） */
+  /** Whether to load the project's `.vela/settings.json` and `.vela/extensions/` (see projectTrustRequired) */
   trusted?: boolean
-  /** 内置扩展的名字；默认全部加载，settings 里 `-builtin:<名>` 关掉 */
+  /** Built-in extension names; all load by default, `-builtin:<name>` in settings disables one */
   builtins?: readonly string[]
 }
 
-/** loadConfig() 的结果：可以直接用来装配 createVela() 的各项。 */
+/** Result of loadConfig(), ready to wire into createVela(). */
 export interface VelaConfig {
   cwd: string
   agentDir: string
   dataDir: string
-  /** 合并后的设置（项目覆盖用户） */
+  /** Merged settings (project overrides user) */
   settings: VelaSettings
-  /** 读到的 settings 文件 */
+  /** Settings files that were read */
   files: string[]
-  /** 要加载的扩展，按顺序：内置 → ~/.vela/extensions → .vela/extensions → settings 里列的 */
+  /** Extensions to load, in order: built-in → ~/.vela/extensions → .vela/extensions → listed in settings */
   extensions: ExtensionEntry[]
-  /** skill 目录，按优先级从低到高（同名 skill 后面的覆盖前面的） */
+  /** Skill directories, lowest priority first (a later skill overrides an earlier one with the same name) */
   skillDirs: string[]
-  /** 内置 provider（openai / anthropic）和 `<agentDir>/models.json` 里的，交给 createVela 的 `providers` */
+  /** Built-in providers (openai / anthropic) plus those in `<agentDir>/models.json`, for createVela's `providers` */
   providers: Record<string, ProviderDefinition>
-  /** 每个扩展的配置段（已做 `$VAR` 插值） */
+  /** Per-extension config sections (`$VAR` already interpolated) */
   extensionConfig: Record<string, Record<string, unknown>>
 }
 
 const RESOURCE_KEYS = ['extensions', 'skills'] as const
 
 /**
- * 读用户级和项目级 settings.json、发现扩展和 skill 目录（同 pi：项目覆盖用户，对象深合并，
- * extensions / skills 合并）。只读文件，不加载扩展代码；不信任的项目只用用户级配置。
+ * Reads user and project settings.json and discovers extensions and skill directories
+ * (like pi: project overrides user, objects deep-merge, extensions / skills concatenate).
+ * Only reads files; never loads extension code. Untrusted projects use user config only.
  */
 export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const env = options.env ?? {}
   const cwd = resolve(options.cwd ?? process.cwd())
   const agentDir = resolve(options.agentDir ?? defaultAgentDir(env))
-  // 在家目录里运行时项目目录就是 ~/.vela：只当用户级配置读一次
+  // Run from the home directory, the project dir is ~/.vela: read it once, as user config
   const projectDir = join(cwd, '.vela')
   const trusted = options.trusted === true && projectDir !== agentDir
 
@@ -97,7 +98,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   }
   const settings = layers.reduce<VelaSettings>(mergeSettings, {})
 
-  // 内置扩展：默认全部；按 user → project 的顺序处理 ±builtin:
+  // Built-ins: all by default; apply ±builtin: in user → project order
   const builtins = new Set(options.builtins ?? [])
   const disabled = new Set<string>()
   const paths: string[] = [
@@ -108,7 +109,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     const builtin = /^([+-]?)builtin:(.+)$/.exec(entry)
     if (builtin) {
       const [, sign, name] = builtin as unknown as [string, string, string]
-      if (!builtins.has(name)) throw new Error(`未知的内置扩展 builtin:${name}`)
+      if (!builtins.has(name)) throw new Error(`Unknown built-in extension builtin:${name}`)
       if (sign === '-') disabled.add(name)
       else disabled.delete(name)
     } else paths.push(...discoverExtensions(entry, true))
@@ -145,8 +146,9 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
 }
 
 /**
- * 项目里有可执行或会改变行为的配置（`.vela/settings.json`、`.vela/extensions/`），加载前要用户信任。
- * 项目目录就是用户级目录（在家目录里运行）时不算。
+ * The project has executable or behavior-changing config (`.vela/settings.json`,
+ * `.vela/extensions/`) that needs the user's trust before loading. Not counted when the
+ * project dir is the user-level dir (running from the home directory).
  */
 export function projectTrustRequired(cwd: string, agentDir?: string): boolean {
   const projectDir = join(resolve(cwd), '.vela')
@@ -157,51 +159,51 @@ export function projectTrustRequired(cwd: string, agentDir?: string): boolean {
   )
 }
 
-/** 读一个 settings 文件；不存在返回 undefined，格式错误抛错。资源路径解析成绝对路径。 */
+/** Reads one settings file: undefined if missing, throws if malformed. Resource paths become absolute. */
 function readSettings(file: string): VelaSettings | undefined {
   if (!existsSync(file)) return
   let raw: unknown
   try {
     raw = JSON.parse(readFileSync(file, 'utf-8'))
   } catch (error) {
-    throw new Error(`${file} 不是合法的 JSON: ${(error as Error).message}`)
+    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
   }
-  if (!isPlainObject(raw)) throw new Error(`${file} 应该是一个 JSON 对象`)
+  if (!isPlainObject(raw)) throw new Error(`${file} must be a JSON object`)
   const base = dirname(file)
   const settings = { ...raw } as VelaSettings & Record<string, unknown>
   for (const key of RESOURCE_KEYS) {
     const list = settings[key]
     if (list === undefined) continue
     if (!Array.isArray(list) || list.some((item) => typeof item !== 'string'))
-      throw new Error(`${file}: ${key} 应该是字符串数组`)
+      throw new Error(`${file}: ${key} must be an array of strings`)
     settings[key] = list.map((item) =>
       /^[+-]?builtin:/.test(item) ? item : resolveConfigPath(base, item),
     )
   }
   for (const key of ['limits', 'extensionConfig'] as const)
     if (settings[key] !== undefined && !isPlainObject(settings[key]))
-      throw new Error(`${file}: ${key} 应该是对象`)
+      throw new Error(`${file}: ${key} must be an object`)
   if (settings.limits !== undefined)
     assertLimitKeys(settings.limits, `${file}: limits`)
   if (settings.dataDir !== undefined && typeof settings.dataDir !== 'string')
-    throw new Error(`${file}: dataDir 应该是字符串`)
+    throw new Error(`${file}: dataDir must be a string`)
   if (
     settings.defaultModel !== undefined &&
     (typeof settings.defaultModel !== 'string' ||
       !settings.defaultModel.includes('/'))
   )
-    throw new Error(`${file}: defaultModel 要写成 "provider/id"`)
+    throw new Error(`${file}: defaultModel must be "provider/id"`)
   if (
     settings.defaultThinkingLevel !== undefined &&
     !THINKING_LEVELS.includes(settings.defaultThinkingLevel)
   )
     throw new Error(
-      `${file}: defaultThinkingLevel 只能是 ${THINKING_LEVELS.join(' / ')}`,
+      `${file}: defaultThinkingLevel must be one of ${THINKING_LEVELS.join(' / ')}`,
     )
   return settings
 }
 
-/** 项目覆盖用户：对象深合并，extensions / skills 拼接，其它值直接覆盖。 */
+/** Project overrides user: objects deep-merge, extensions / skills concatenate, other values are replaced. */
 function mergeSettings(base: VelaSettings, override: VelaSettings): VelaSettings {
   const merged = deepMerge(base, override) as VelaSettings
   for (const key of RESOURCE_KEYS) {
@@ -214,12 +216,13 @@ function mergeSettings(base: VelaSettings, override: VelaSettings): VelaSettings
 const EXTENSION_FILE = /\.(ts|js|mjs)$/
 
 /**
- * 一个扩展路径展开成扩展入口文件：文件本身；有 index.ts / index.js 的目录是一个扩展；
- * 其它目录里的 `*.ts` 和带 index 的子目录各是一个扩展。`explicit` 为 true 时路径不存在要报错。
+ * Expands an extension path into entry files: a file is itself; a directory with
+ * index.ts / index.js is one extension; in any other directory, each `*.ts` and each
+ * subdirectory with an index is one extension. With `explicit`, a missing path throws.
  */
 function discoverExtensions(path: string, explicit = false): string[] {
   if (!existsSync(path)) {
-    if (explicit) throw new Error(`扩展路径不存在: ${path}`)
+    if (explicit) throw new Error(`Extension path does not exist: ${path}`)
     return []
   }
   if (!statSync(path).isDirectory()) return [path]
@@ -247,7 +250,7 @@ function indexFile(dir: string): string | undefined {
   }
 }
 
-/** 扩展名：文件名（去掉扩展名），index 文件取目录名。决定工具前缀和配置段。 */
+/** Extension name: the file name without extension, or the directory name for index files. Sets the tool prefix and config section. */
 export function extensionName(path: string): string {
   const file = basename(path, extname(path))
   return file === 'index' ? basename(dirname(path)) : file

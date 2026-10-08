@@ -1,6 +1,6 @@
 /**
- * 非事件类的诊断输出（插件加载、hook 出错、会话文件坏行……）。
- * core 不直接写终端：默认静默，CLI 传一个打到终端的实现。
+ * Diagnostic output that is not an event (plugin loading, hook errors, bad session file lines, ...).
+ * Core never writes to the terminal: silent by default; the CLI passes one that prints.
  */
 export interface VelaLogger {
   debug(message: string): void

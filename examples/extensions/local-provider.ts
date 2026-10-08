@@ -1,7 +1,7 @@
 /**
- * registerProvider：加一个模型 provider，之后 `local/<模型>` 可以用在 `--model`、`/model`、
- * `session.setModel()`。这里把本机的 Ollama（OpenAI 兼容接口）接进来；
- * 只是换地址和 key 的话也可以直接写 ~/.vela/models.json，不用扩展。
+ * registerProvider: add a model provider. Afterwards `local/<model>` works with `--model`, `/model`
+ * and `session.setModel()`. This example connects a local Ollama (OpenAI-compatible API).
+ * If you only need a different URL and key, edit ~/.vela/models.json instead; no extension needed.
  */
 import { createOpenAI } from '@ai-sdk/openai'
 import type { VelaExtension } from '@glows777/vela'
@@ -13,7 +13,7 @@ const localProvider: VelaExtension = (vela) => {
       : 'http://localhost:11434/v1'
   const ollama = createOpenAI({ baseURL, apiKey: 'ollama', name: 'local' })
   vela.registerProvider('local', {
-    // 列出的模型带元数据（上下文窗口决定压缩阈值）；没列出的 id 也能用
+    // Listed models carry metadata (the context window sets the compaction threshold); unlisted ids still work
     models: [{ id: 'qwen3:8b', contextWindow: 40_960 }],
     createModel: (id) => ollama.chat(id),
   })

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { tempDir } from '../support/vela.ts'
 
-// `vela --mode rpc` 子进程：stdin 写 JSONL 命令，stdout 读 response / 事件 / extension_ui_request
+// `vela --mode rpc` child process: write JSONL commands to stdin, read responses / events / extension_ui_request from stdout
 
 const ROOT = resolve(import.meta.dir, '../..')
 const ENTRY = join(ROOT, 'src/cli/main.ts')
@@ -81,7 +81,7 @@ function startRpc(
       proc.stdin.write(`${JSON.stringify(command)}\n`)
       proc.stdin.flush()
     },
-    /** 发一条命令并等它的 response */
+    /** Send a command and wait for its response */
     async call(command: Record<string, unknown>) {
       const id = `req-${++next}`
       this.send({ id, ...command })
@@ -98,7 +98,7 @@ function startRpc(
 test.concurrent('rpc: prompt is accepted, events stream with the session id, state and messages are queryable', async () => {
   const rpc = startRpc(`faux:${scenario('hello')}`)
 
-  expect(await rpc.call({ type: 'prompt', message: '你好' })).toMatchObject({
+  expect(await rpc.call({ type: 'prompt', message: 'Hello' })).toMatchObject({
     command: 'prompt',
     success: true,
     data: { disposition: 'started' },
@@ -119,29 +119,29 @@ test.concurrent('rpc: prompt is accepted, events stream with the session id, sta
     steeringMode: 'one-at-a-time',
   })
   expect(
-    await rpc.call({ type: 'set_session_name', name: '测试' }),
+    await rpc.call({ type: 'set_session_name', name: 'Test' }),
   ).toMatchObject({ success: true })
   const list = await rpc.call({ type: 'list_sessions' })
   expect((list.data as { sessions: unknown[] }).sessions).toEqual([
-    expect.objectContaining({ id: sessionId, name: '测试', messageCount: 2 }),
+    expect.objectContaining({ id: sessionId, name: 'Test', messageCount: 2 }),
   ])
   const messages = await rpc.call({ type: 'get_messages' })
   expect((messages.data as { messages: unknown[] }).messages).toHaveLength(2)
 
-  // 解析失败、未知命令、参数错误：success false，进程继续
+  // Parse errors, unknown commands, bad arguments: success false, the process keeps going
   rpc.send({ nope: true } as Record<string, unknown>)
   expect(await rpc.waitFor((r) => r.command === 'parse')).toMatchObject({
     success: false,
   })
   expect(await rpc.call({ type: 'wat' })).toMatchObject({
     success: false,
-    error: '未知命令: wat',
+    error: 'Unknown command: wat',
   })
   expect(
     await rpc.call({ type: 'set_steering_mode', mode: 'some' }),
   ).toMatchObject({ success: false })
 
-  // 新会话：后续事件带新的 id
+  // New session: later events carry the new id
   const created = await rpc.call({ type: 'new_session' })
   expect((created.data as { sessionId: string }).sessionId).not.toBe(sessionId)
   expect(await rpc.call({ type: 'switch_session', sessionId })).toMatchObject({
@@ -150,7 +150,7 @@ test.concurrent('rpc: prompt is accepted, events stream with the session id, sta
   expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
     sessionId,
     messageCount: 2,
-    sessionName: '测试',
+    sessionName: 'Test',
   })
 
   expect(await rpc.close()).toBe(0)
@@ -159,22 +159,22 @@ test.concurrent('rpc: prompt is accepted, events stream with the session id, sta
 test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued messages can be cleared and abort waits', async () => {
   const rpc = startRpc(`faux:${scenario('hang')}`)
 
-  await rpc.call({ type: 'prompt', message: '慢慢想' })
+  await rpc.call({ type: 'prompt', message: 'Think slowly' })
   await rpc.waitFor((r) => r.type === 'text_delta')
 
-  expect(await rpc.call({ type: 'prompt', message: '插一句' })).toMatchObject({
+  expect(await rpc.call({ type: 'prompt', message: 'Interject' })).toMatchObject({
     success: false,
   })
   expect(
     await rpc.call({
       type: 'prompt',
-      message: '之后',
+      message: 'Later',
       streamingBehavior: 'followUp',
     }),
   ).toMatchObject({
     data: { disposition: 'queued' },
   })
-  expect(await rpc.call({ type: 'steer', message: '改方向' })).toMatchObject({
+  expect(await rpc.call({ type: 'steer', message: 'Change course' })).toMatchObject({
     data: { disposition: 'queued' },
   })
   expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
@@ -184,21 +184,21 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   expect(
     rpc.records.filter((r) => r.type === 'queue_update').at(-1),
   ).toMatchObject({
-    steering: ['改方向'],
-    followUp: ['之后'],
+    steering: ['Change course'],
+    followUp: ['Later'],
   })
 
-  // 运行中改名：不另外保存（会和 loop 的写入交错），这次 run 结束时一起存
+  // Renaming while running: not saved separately (it would interleave with the loop's writes); saved when this run ends
   expect(
-    await rpc.call({ type: 'set_session_name', name: '跑着改名' }),
+    await rpc.call({ type: 'set_session_name', name: 'Renamed while running' }),
   ).toMatchObject({ success: true })
 
   expect((await rpc.call({ type: 'clear_queue' })).data).toEqual({
-    steering: ['改方向'],
-    followUp: ['之后'],
+    steering: ['Change course'],
+    followUp: ['Later'],
   })
   expect(await rpc.call({ type: 'abort' })).toMatchObject({ success: true })
-  // abort 的 response 在会话真正停下之后
+  // The abort response comes after the session has really stopped
   const abortIndex = rpc.records.findIndex((r) => r.command === 'abort')
   const settledIndex = rpc.records.findIndex((r) => r.type === 'agent_settled')
   expect(settledIndex).toBeGreaterThan(-1)
@@ -208,24 +208,24 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   })
   const list = await rpc.call({ type: 'list_sessions' })
   expect((list.data as { sessions: unknown[] }).sessions).toEqual([
-    expect.objectContaining({ name: '跑着改名', firstMessage: '慢慢想' }),
+    expect.objectContaining({ name: 'Renamed while running', firstMessage: 'Think slowly' }),
   ])
 
   expect(await rpc.close()).toBe(0)
 })
 
 test.concurrent('rpc: a prompt that fails before the loop starts gets a failed response', async () => {
-  // 没有配置任何模型：prompt 先回 started，解析模型失败后再回一条 success:false（同 pi）
+  // No model configured: prompt first answers started, then success:false once resolving the model fails (as in pi)
   const rpc = startRpc('')
 
-  rpc.send({ id: 'p1', type: 'prompt', message: '你好' })
+  rpc.send({ id: 'p1', type: 'prompt', message: 'Hello' })
   expect(
     await rpc.waitFor((r) => r.id === 'p1' && r.success === true),
   ).toMatchObject({ data: { disposition: 'started' } })
   const failed = await rpc.waitFor((r) => r.id === 'p1' && r.success === false)
   expect(failed).toMatchObject({ type: 'response', command: 'prompt' })
   expect(String(failed.error)).not.toBe('')
-  // loop 里的错误只在 agent_end 里报一次，不再重复回响应
+  // Errors inside the loop are reported once in agent_end, not repeated as a response
   expect(rpc.records.some((r) => r.type === 'agent_start')).toBe(false)
 
   expect(await rpc.close()).toBe(0)
@@ -235,9 +235,9 @@ test.concurrent('rpc: extension ui dialogs round-trip through extension_ui_reque
   const rpc = startRpc(`faux:${scenario('hello')}`, [], {
     'extensions/ask.ts': `export default (vela) => vela.registerCommand('ask', {
   handler: async (_args, ctx) => {
-    ctx.ui.setStatus('ask', '问一下')
-    const ok = await ctx.ui.confirm('继续吗？', '要继续')
-    const pick = await ctx.ui.select('选一个', ['甲', '乙'])
+    ctx.ui.setStatus('ask', 'Asking')
+    const ok = await ctx.ui.confirm('Continue?', 'Keep going')
+    const pick = await ctx.ui.select('Pick one', ['A', 'B'])
     ctx.ui.notify(\`ok=\${ok} pick=\${pick}\`)
   },
 })`,
@@ -245,16 +245,16 @@ test.concurrent('rpc: extension ui dialogs round-trip through extension_ui_reque
 
   rpc.send({ id: 'cmd', type: 'prompt', message: '/ask' })
   const status = await rpc.waitFor((r) => r.method === 'setStatus')
-  expect(status).toMatchObject({ statusKey: 'ask', statusText: '问一下' })
+  expect(status).toMatchObject({ statusKey: 'ask', statusText: 'Asking' })
   const confirm = await rpc.waitFor((r) => r.method === 'confirm')
   expect(confirm).toMatchObject({
     type: 'extension_ui_request',
-    title: '继续吗？',
-    message: '要继续',
+    title: 'Continue?',
+    message: 'Keep going',
   })
   rpc.send({ type: 'extension_ui_response', id: confirm.id, confirmed: true })
   const select = await rpc.waitFor((r) => r.method === 'select')
-  expect(select.options).toEqual(['甲', '乙'])
+  expect(select.options).toEqual(['A', 'B'])
   rpc.send({ type: 'extension_ui_response', id: select.id, cancelled: true })
   expect(await rpc.waitFor((r) => r.method === 'notify')).toMatchObject({
     message: 'ok=true pick=undefined',

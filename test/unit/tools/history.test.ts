@@ -126,7 +126,7 @@ test('result storage failure leaves an unfinished call and prevents further exec
   })
   await expect(
     registry.toAISDKFormat().large!.execute!({}, options('one')),
-  ).rejects.toThrow('已执行')
+  ).rejects.toThrow('ran, but saving its result failed')
   expect((await read(store)).map((record) => record.type)).toEqual([
     'tool_call',
   ])
@@ -211,8 +211,8 @@ test('the reading recipe executes with existing Bun and uses a frozen historical
   )
   const script = guide
     .slice(guide.indexOf("bun -e '"))
-    .replaceAll('目标工具', 'inspect')
-    .replaceAll('目标参数', 'west')
+    .replaceAll('TARGET_TOOL', 'inspect')
+    .replaceAll('TARGET_ARG', 'west')
   const process = Bun.spawn(['bash', '-lc', script], {
     cwd: root,
     stdout: 'pipe',
@@ -415,7 +415,7 @@ for (const kind of ['bash', 'generic'] as const) {
     expect(calls[0].plannedOutputPath).toBe(outputPath)
     expect(String(failure)).toContain(outputPath)
     expect(String(failure)).toContain(calls[0].callId)
-    expect(String(failure)).toContain('不要自动重跑')
+    expect(String(failure)).toContain('do not rerun it automatically')
     if (kind === 'bash') expect(String(failure)).toContain('exitCode=0')
     await expect(
       registry.toAISDKFormat()[kind]!.execute!({}, options('next')),

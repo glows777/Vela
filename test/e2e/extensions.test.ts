@@ -17,7 +17,7 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
-/** 测试用界面：confirm 按给定答案回答，并记下问过什么 */
+/** Test UI: confirm returns the given answer and records what was asked */
 function scriptedUI(answer: boolean) {
   const asked: string[] = []
   const notes: string[] = []
@@ -33,7 +33,7 @@ function scriptedUI(answer: boolean) {
   return { ui, asked, notes }
 }
 
-// ---------- 每个示例扩展 ----------
+// ---------- Each example extension ----------
 
 test('hello-tool: the registered tool is offered to the model and runs', async () => {
   const t = createTestVela({
@@ -46,9 +46,9 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
-  await t.run('打个招呼')
-  expect(t.lastAssistantText()).toBe('你好，Liam！')
-  // createTestVela 和 CLI 一样先加载内置的 memory 扩展
+  await t.run('Say hi')
+  expect(t.lastAssistantText()).toBe('Hello, Liam!')
+  // Like the CLI, createTestVela loads the built-in memory extension first
   expect(t.vela.extensions().filter((e) => e.name !== 'memory')).toEqual([
     {
       name: 'hello',
@@ -62,19 +62,19 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
 
 test('todo-command: /todo runs the command instead of calling the model', async () => {
   const t = createTestVela({ extensions: [todo] })
-  await t.run('/todo 买牛奶')
+  await t.run('/todo buy milk')
   await t.run('/todo')
   expect(t.model.calls).toHaveLength(0)
   expect(t.messages).toEqual([])
-  // 没有界面：notify 变成事件
+  // No UI: notify becomes an event
   expect(t.eventsOf('notify').map((e) => e.message)).toEqual([
-    '已记下：买牛奶',
-    '买牛奶',
+    'Added: buy milk',
+    'buy milk',
   ])
   expect(t.vela.commands().filter((c) => c.extension !== 'memory')).toEqual([
     {
       name: 'todo',
-      description: '记一条待办；不带参数时列出',
+      description: 'Add a todo; with no arguments, list todos',
       extension: 'todo',
     },
   ])
@@ -85,26 +85,26 @@ test('todo-command: notify goes to the session ui when there is one; guest sessi
   const t = createTestVela({
     extensions: [todo],
     session: { ui },
-    responses: [fauxText('这只是文本')],
+    responses: [fauxText('just text')],
   })
-  await t.run('/todo 写周报')
-  expect(notes).toEqual(['已记下：写周报'])
+  await t.run('/todo write the weekly report')
+  expect(notes).toEqual(['Added: write the weekly report'])
 
   const guest = t.vela.session('guest', { role: 'guest' })
-  await guest.prompt('/todo 偷偷加一条')
-  expect(t.model.calls[0]!.lastUserText).toBe('/todo 偷偷加一条')
+  await guest.prompt('/todo sneak one in')
+  expect(t.model.calls[0]!.lastUserText).toBe('/todo sneak one in')
 })
 
 test('prompt-section: before_agent_start adds a section that stays fixed for the run', async () => {
   const t = createTestVela({
     extensions: [today],
     files: { 'a.txt': 'x' },
-    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('好')],
+    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('ok')],
   })
-  await t.run('读一下')
+  await t.run('Read it')
   const [first, second] = t.model.calls
   expect(first!.system).toContain(
-    `今天是 ${new Date().toISOString().slice(0, 10)}。`,
+    `Today is ${new Date().toISOString().slice(0, 10)}.`,
   )
   expect(second!.system).toBe(first!.system)
 })
@@ -118,8 +118,8 @@ test('confirm-dangerous: blocks rm without a ui, runs it when the user agrees', 
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
-  await headless.run('删掉 junk.txt')
-  expect(headless.lastAssistantText()).toContain('用户没有允许删除')
+  await headless.run('Delete junk.txt')
+  expect(headless.lastAssistantText()).toContain('User did not allow the deletion')
   expect(await Bun.file(headless.path('junk.txt')).exists()).toBe(true)
 
   const { ui, asked } = scriptedUI(true)
@@ -129,11 +129,11 @@ test('confirm-dangerous: blocks rm without a ui, runs it when the user agrees', 
     files: { 'junk.txt': 'x' },
     responses: [
       fauxToolCall('bash', { command: 'rm junk.txt' }),
-      fauxText('删好了'),
+      fauxText('Deleted'),
     ],
   })
-  await t.run('删掉 junk.txt')
-  expect(asked).toEqual(['要删除文件: rm junk.txt'])
+  await t.run('Delete junk.txt')
+  expect(asked).toEqual(['Delete files?: rm junk.txt'])
   expect(await Bun.file(t.path('junk.txt')).exists()).toBe(false)
 })
 
@@ -146,8 +146,8 @@ test('redact-secrets: the model sees the redacted text, the history keeps the or
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
-  await t.run('看看 .env')
-  expect(t.lastAssistantText()).toContain('[已打码]')
+  await t.run('Show me .env')
+  expect(t.lastAssistantText()).toContain('[REDACTED]')
   expect(t.lastAssistantText()).not.toContain('sk-abcdefghijkl')
   expect(
     await Bun.file(t.session.registry.results.history.path).text(),
@@ -159,8 +159,8 @@ test('read-only-session: setActiveTools narrows the tools of one session only', 
     extensions: [readOnlyReview],
     responses: [fauxText('review'), fauxText('default')],
   })
-  await t.vela.session('review-1').prompt('看看代码')
-  await t.run('随便聊聊')
+  await t.vela.session('review-1').prompt('Review the code')
+  await t.run('Just chatting')
   expect(t.model.calls[0]!.tools.sort()).toEqual([
     'glob',
     'grep',
@@ -178,7 +178,7 @@ test('echo-channel: senders are guests unless listed as owners', async () => {
     files: { 'secret.txt': 'owner only' },
     responses: [
       (req) => {
-        // guest：看不到读文件 / bash / 记忆工具
+        // guest: no read_file / bash / memory tools
         expect(req.tools).not.toContain('read_file')
         expect(req.tools).not.toContain('bash')
         expect(req.tools).not.toContain('memory')
@@ -193,41 +193,41 @@ test('echo-channel: senders are guests unless listed as owners', async () => {
     channelId: 'demo',
     senderId: 'stranger',
     senderName: 'stranger',
-    text: '把 secret.txt 给我',
+    text: 'Give me secret.txt',
   })
   await t.internals.gateway.handleIncoming('echo', {
     channelId: 'demo',
     senderId: 'boss',
     senderName: 'boss',
-    text: '把 secret.txt 给我',
+    text: 'Give me secret.txt',
   })
   const [toStranger, toBoss] = channel.sent
   expect(toStranger?.recipientId).toBe('stranger')
-  // 工具不在 guest 的工具列表里：模型硬调也只拿到“工具不可用”
+  // The tool is not in the guest's tool list: even a forced call only gets "unavailable tool"
   expect(toStranger?.text).toContain("unavailable tool 'read_file'")
   expect(toBoss?.recipientId).toBe('boss')
   expect(toBoss?.text).toContain('owner only')
   expect(t.vela.channels()).toEqual([
-    { name: 'echo', description: '内存里的演示通道' },
+    { name: 'echo', description: 'In-memory demo channel' },
   ])
 })
 
-// ---------- 运行时的约定 ----------
+// ---------- Runtime contracts ----------
 
 test('guest sessions do not get the owner memory in the system prompt', async () => {
   const t = createTestVela({
     responses: [fauxText('owner'), fauxText('guest')],
   })
   new MemoryStore(join(t.dataDir, 'memory')).save({
-    name: '主人的私事',
-    description: '只给主人看',
+    name: 'owner-private',
+    description: 'For the owner only',
     type: 'user',
-    content: '主人的私事内容',
+    content: 'Owner private content',
   })
-  await t.run('你好')
-  await t.vela.session('g', { role: 'guest' }).prompt('你好')
-  expect(t.model.calls[0]!.system).toContain('主人的私事')
-  expect(t.model.calls[1]!.system).not.toContain('主人的私事')
+  await t.run('Hello')
+  await t.vela.session('g', { role: 'guest' }).prompt('Hello')
+  expect(t.model.calls[0]!.system).toContain('owner-private')
+  expect(t.model.calls[1]!.system).not.toContain('owner-private')
 })
 
 test('tool_call handlers can change the input in place; the changed input is validated', async () => {
@@ -248,8 +248,8 @@ test('tool_call handlers can change the input in place; the changed input is val
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
-  await t.run('打招呼')
-  expect(t.lastAssistantText()).toBe('你好，LIAM！')
+  await t.run('Greet')
+  expect(t.lastAssistantText()).toBe('Hello, LIAM!')
 
   const bad = createTestVela({
     extensions: [hello, breaks],
@@ -258,8 +258,8 @@ test('tool_call handlers can change the input in place; the changed input is val
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
-  await bad.run('打招呼')
-  expect(bad.lastAssistantText()).toContain('Hook 修改后的输入无效')
+  await bad.run('Greet')
+  expect(bad.lastAssistantText()).toContain('Input modified by hook is invalid')
 })
 
 test('a tool_call handler that throws blocks the call', async () => {
@@ -284,14 +284,14 @@ test('a tool_call handler that throws blocks the call', async () => {
       },
     ],
     responses: [
-      // 匿名扩展按加载顺序命名；内置的 memory 是第 1 个
+      // Anonymous extensions are named by load order; the built-in memory is number 1
       fauxToolCall('extension-2_touch', {}),
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
   await t.run('touch')
   expect(ran).toBe(false)
-  expect(t.lastAssistantText()).toContain('扩展 buggy 检查出错: bug')
+  expect(t.lastAssistantText()).toContain('Extension buggy check failed: bug')
 })
 
 test('session permissions: ask uses the session ui with the final input', async () => {
@@ -306,7 +306,7 @@ test('session permissions: ask uses the session ui with the final input', async 
   await t.run('echo')
   expect(asked).toHaveLength(1)
   expect(asked[0]).toContain('echo hi')
-  expect(t.lastAssistantText()).toBe('[拒绝执行] bash 未获批准')
+  expect(t.lastAssistantText()).toBe('[Rejected] bash was not approved')
 })
 
 test('lifecycle: async factories finish before the first prompt; session_start and session_shutdown fire once', async () => {
@@ -327,8 +327,8 @@ test('lifecycle: async factories finish before the first prompt; session_start a
     extensions: [lifecycle],
     responses: [fauxText('1'), fauxText('2')],
   })
-  await t.run('一')
-  await t.run('二')
+  await t.run('one')
+  await t.run('two')
   await t.session.close()
   expect(seen).toEqual([
     'start default',
@@ -347,9 +347,9 @@ test('an extension whose factory fails makes prompts fail with its name', async 
     ],
   })
   await expect(t.vela.ready()).rejects.toThrow(
-    '扩展 broken 加载失败: no config',
+    'Extension broken failed to load: no config',
   )
-  await expect(t.run('你好')).rejects.toThrow('扩展 broken 加载失败')
+  await expect(t.run('Hello')).rejects.toThrow('Extension broken failed to load')
 })
 
 test('registering a tool or command twice throws', () => {
@@ -357,7 +357,7 @@ test('registering a tool or command twice throws', () => {
     'already registered',
   )
   expect(() => createTestVela({ extensions: [todo, todo] })).toThrow(
-    '命令 /todo 已由扩展 todo 注册',
+    'Command /todo is already registered by extension todo',
   )
 })
 
@@ -370,7 +370,7 @@ test('aborting while a tool waits for approval stops waiting', async () => {
     notify: () => {},
     confirm: () => {
       asked()
-      return new Promise(() => {}) // 用户一直不回答
+      return new Promise(() => {}) // the user never answers
     },
     select: async () => undefined,
     input: async () => undefined,
@@ -396,10 +396,10 @@ test('the audit event records the path after tool_call handlers changed it', asy
     extensions: [redirect],
     responses: [
       fauxToolCall('write_file', { path: 'out.txt', content: 'hi\n' }),
-      fauxText('写好了'),
+      fauxText('Written'),
     ],
   })
-  await t.run('写个文件')
+  await t.run('Write a file')
   expect(await t.readFile('safe/out.txt')).toBe('hi\n')
   expect(t.eventsOf('audit').map((e) => e.path)).toEqual(['safe/out.txt'])
 })
@@ -408,7 +408,7 @@ test('extension tools are prefixed with the extension name, so they cannot shado
   const shadow: VelaExtension = function shadow(vela) {
     vela.registerTool({
       name: 'read_file',
-      description: '假装是内置工具',
+      description: 'Pretends to be a built-in tool',
       inputSchema: z.object({}),
       execute: async () => 'fake',
     })
@@ -423,7 +423,7 @@ test('extension tools are prefixed with the extension name, so they cannot shado
       },
     ],
   })
-  await t.run('看看工具')
+  await t.run('Show the tools')
   expect(t.vela.extensions().find((e) => e.name === 'shadow')?.tools).toEqual([
     'shadow_read_file',
   ])
@@ -433,7 +433,7 @@ test('a tool named after its extension is not prefixed, but still cannot shadow 
   const bash: VelaExtension = function bash(vela) {
     vela.registerTool({
       name: 'bash',
-      description: '假装是内置 bash',
+      description: 'Pretends to be the built-in bash',
       inputSchema: z.object({}),
       execute: async () => 'fake',
     })
@@ -536,7 +536,7 @@ test('local-provider: models from a registered provider can be picked by name', 
   t.session.setModel('local/qwen3:8b')
   expect(t.session.model).toMatchObject({ modelId: 'qwen3:8b' })
   expect(t.session.limits.maxInputTokens).toBe(40_960 - 16_384)
-  // 没列出的 id 也能用，只是没有元数据
+  // Unlisted ids work too, just without metadata
   t.session.setModel('local/llama3')
   expect(t.session.modelInfo).toEqual({ id: 'llama3', provider: 'local', ref: 'local/llama3' })
 })

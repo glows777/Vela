@@ -21,8 +21,8 @@ const STALE_DAYS = 30
 
 export class MemoryStore {
   /**
-   * `memoryDir`：记忆文件和 MEMORY.md 所在的目录（memory 扩展用 `<dataDir>/memory`）；
-   * `projectDir`：lint 检查记忆里提到的路径是否还存在时，相对路径按它解析。
+   * `memoryDir`: directory holding the memory files and MEMORY.md (the memory extension uses `<dataDir>/memory`).
+   * `projectDir`: base for relative paths when lint checks whether paths mentioned in memories still exist.
    */
   constructor(
     private readonly memoryDir: string,
@@ -88,7 +88,7 @@ export class MemoryStore {
     } else {
       if (lines.length >= MAX_INDEX_LINES) {
         this.logger?.info(
-          `[memory] 索引已达 ${MAX_INDEX_LINES} 行上限，移除最早的条目`,
+          `[memory] Index reached the ${MAX_INDEX_LINES}-line limit; removing the oldest entry`,
         )
         const firstEntry = lines.findIndex((l) => l.startsWith('- '))
         if (firstEntry >= 0) lines.splice(firstEntry, 1)
@@ -125,7 +125,7 @@ export class MemoryStore {
     this.init()
     const raw = fs.readFileSync(this.indexPath, 'utf-8')
     return raw.length > MAX_FILE_CHARS
-      ? raw.slice(0, MAX_FILE_CHARS) + '\n...(已截断)'
+      ? raw.slice(0, MAX_FILE_CHARS) + '\n...(truncated)'
       : raw
   }
 
@@ -135,7 +135,7 @@ export class MemoryStore {
     this.touchReadAt(filename)
     const raw = fs.readFileSync(filePath, 'utf-8')
     return raw.length > MAX_FILE_CHARS
-      ? raw.slice(0, MAX_FILE_CHARS) + '\n...(已截断)'
+      ? raw.slice(0, MAX_FILE_CHARS) + '\n...(truncated)'
       : raw
   }
 
@@ -175,21 +175,21 @@ export class MemoryStore {
     const entries = this.list()
 
     if (entries.length === 0) {
-      return '[记忆系统] 当前没有存储任何记忆。你可以使用 memory 工具来保存重要信息。'
+      return '[memory] No memories stored yet. Use the memory tool to save important information.'
     }
 
     const lines = [
-      `[记忆系统] 共 ${entries.length} 条记忆`,
+      `[memory] ${entries.length} memories`,
       '',
-      '记忆索引：',
+      'Memory index:',
       index,
       '',
-      '使用 memory 工具的 read 操作来读取具体记忆内容；用 search 做 BM25 搜索；用 lint 检查记忆库健康度。',
+      'Use the memory tool\'s read action to read a memory; search for BM25 search; lint to check the store\'s health.',
       '',
-      '记忆使用原则：',
-      '- 记忆是线索，不是事实——使用前先用工具验证（read_file、grep 确认路径和内容是否还存在）',
-      '- 不存代码能推导的（技术栈、目录结构）、git 能查的（谁改了什么）、文档已经写了的',
-      '- 只存对话中出现的、其他地方推导不出来的信息（用户偏好、纠正反馈、项目决策、外部资源）',
+      'How to use memory:',
+      '- Memories are leads, not facts: verify with tools before relying on them (read_file, grep to confirm paths and content still exist)',
+      '- Do not store what the code shows (tech stack, directory layout), what git can tell (who changed what), or what docs already say',
+      '- Store only information from the conversation that cannot be derived elsewhere (user preferences, corrections, project decisions, external resources)',
     ]
     return lines.join('\n')
   }

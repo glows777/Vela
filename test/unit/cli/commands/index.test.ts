@@ -7,7 +7,7 @@ import {
 
 const fakeCtx = {} as CommandContext
 
-test('第一个返回 true 的 handler 获胜', () => {
+test('the first handler that returns true wins', () => {
   const history: string[] = []
   const handlers: CommandHandler[] = [
     (cmd) => {
@@ -28,7 +28,7 @@ test('第一个返回 true 的 handler 获胜', () => {
   expect(history).toEqual(['a', 'b', 'c'])
 })
 
-test('handler 返回 Promise（异步命令）时立即短路', async () => {
+test('a handler returning a Promise (async command) short-circuits immediately', async () => {
   const history: string[] = []
   const handlers: CommandHandler[] = [
     () => {
@@ -46,7 +46,7 @@ test('handler 返回 Promise（异步命令）时立即短路', async () => {
   expect(history).toEqual(['a'])
 })
 
-test('全部未匹配时返回 false', () => {
+test('returns false when nothing matches', () => {
   const dispatch = createDispatcher([() => false, () => false])
   expect(dispatch('anything', fakeCtx)).toBe(false)
 })

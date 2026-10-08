@@ -25,8 +25,8 @@ export interface ChannelDefinition {
   onMessage?: (handler: (msg: IncomingMessage) => void) => void
 
   /**
-   * 这条消息的发送者在 Vela 里是什么角色。不实现时一律 guest：
-   * 外部发送者默认不能读写文件、跑命令、看到主人的记忆。
+   * The Vela role of this message's sender. Defaults to guest when not implemented:
+   * external senders cannot read or write files, run commands, or see the owner's memory.
    */
   roleFor?: (msg: IncomingMessage) => Role
 }

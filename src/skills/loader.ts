@@ -14,7 +14,7 @@ const SKILL_FILE = 'SKILL.md'
 export class SkillLoader {
   private skills = new Map<string, SkillDefinition>()
 
-  /** `dirs`：skill 目录（每个子目录一个 SKILL.md），后面目录里的同名 skill 覆盖前面的 */
+  /** `dirs`: skill directories (one SKILL.md per subdirectory); a later directory's skill overrides an earlier one with the same name */
   constructor(private readonly dirs: readonly string[] = ['.skills']) {}
 
   load(): SkillDefinition[] {
@@ -58,14 +58,14 @@ export class SkillLoader {
   buildPromptSection(activeSkills: ReadonlySet<string>): string | null {
     if (this.skills.size === 0) return null
 
-    // Codex 模式：system prompt 只放 skill 索引（name + description）。
-    // 正文永不进 system prompt —— 触发时由 /<skill-name> 以消息注入一次，
-    // 避免正文在 system prompt 与对话消息中各出现一次。
-    const lines = ['可用的 Skills（输入 /skill load <name> 或直接 /<name> 激活）：']
+    // Codex style: the system prompt holds only the skill index (name + description).
+    // The body never goes into the system prompt; /<skill-name> injects it once as a
+    // message, so it never appears in both the system prompt and the conversation.
+    const lines = ['Available skills (activate with /skill load <name> or just /<name>):']
 
     for (const skill of this.list()) {
-      const hint = skill.whenToUse ? ` (适用场景: ${skill.whenToUse})` : ''
-      const active = activeSkills.has(skill.name) ? ' ✓ 已激活' : ''
+      const hint = skill.whenToUse ? ` (when to use: ${skill.whenToUse})` : ''
+      const active = activeSkills.has(skill.name) ? ' ✓ active' : ''
       lines.push(`  /${skill.name} — ${skill.description}${hint}${active}`)
     }
 

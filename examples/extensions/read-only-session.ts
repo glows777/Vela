@@ -1,6 +1,7 @@
 /**
- * session_start + setActiveTools：id 以 `review-` 开头的会话只启用只读工具（同 pi 的 setActiveTools）。
- * 工具选择是按会话的，不影响同一个 Vela 里的其它会话。
+ * session_start + setActiveTools: sessions whose id starts with `review-` get read-only tools only
+ * (like pi's setActiveTools).
+ * The tool selection is per session; other sessions in the same Vela are not affected.
  */
 import type { VelaExtension } from '@glows777/vela'
 

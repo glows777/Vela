@@ -6,10 +6,10 @@ afterEach(cleanupTestVelas)
 
 test('plain text reply streams, ends the loop and saves the session', async () => {
   const t = createTestVela({
-    responses: [fauxText('你好，我是 Vela。有什么可以帮你？')],
+    responses: [fauxText('Hi, this is Vela.')],
   })
 
-  await t.run('你好')
+  await t.run('hello')
 
   expect(t.eventTypes()).toEqual([
     'agent_start',
@@ -24,27 +24,27 @@ test('plain text reply streams, ends the loop and saves the session', async () =
     'agent_end',
     'agent_settled',
   ])
-  expect(t.events[0]).toEqual({ type: 'agent_start', input: '你好' })
+  expect(t.events[0]).toEqual({ type: 'agent_start', input: 'hello' })
   expect(
     t.eventsOf('message').map((e) => e.message.role),
   ).toEqual(['user', 'assistant'])
-  expect(t.streamedText()).toBe('你好，我是 Vela。有什么可以帮你？')
+  expect(t.streamedText()).toBe('Hi, this is Vela.')
   expect(t.eventsOf('agent_end').at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
-  expect(t.lastAssistantText()).toBe('你好，我是 Vela。有什么可以帮你？')
+  expect(t.lastAssistantText()).toBe('Hi, this is Vela.')
 
   const session = await t.readData('sessions/default.jsonl')
-  expect(session).toContain('你好，我是 Vela')
+  expect(session).toContain('Hi, this is Vela')
   expect(t.exists('usage/today.jsonl')).toBe(true)
 })
 
 test('the model receives the system prompt, the tool list and the user message', async () => {
   const t = createTestVela({ responses: [fauxText('ok')] })
-  await t.run('看看有哪些工具')
+  await t.run('What tools are there?')
 
   const [req] = t.model.calls
   expect(req!.kind).toBe('stream')
-  expect(req!.lastUserText).toBe('看看有哪些工具')
+  expect(req!.lastUserText).toBe('What tools are there?')
   expect(req!.system.length).toBeGreaterThan(0)
   expect(req!.tools).toEqual(
     expect.arrayContaining(['read_file', 'bash', 'memory']),
@@ -54,20 +54,20 @@ test('the model receives the system prompt, the tool list and the user message',
 test('multi-turn: the second request carries the first exchange', async () => {
   const t = createTestVela({
     responses: [
-      fauxText('记住了，你叫小明。'),
+      fauxText('Got it, your name is Sam.'),
       (req) => {
         const history = JSON.stringify(req.prompt)
         return fauxText(
-          history.includes('我叫小明') ? '你叫小明。' : '我不知道。',
+          history.includes('My name is Sam') ? 'Your name is Sam.' : "I don't know.",
         )
       },
     ],
   })
 
-  await t.run('我叫小明')
-  await t.run('我叫什么？')
+  await t.run('My name is Sam')
+  await t.run('What is my name?')
 
-  expect(t.lastAssistantText()).toBe('你叫小明。')
+  expect(t.lastAssistantText()).toBe('Your name is Sam.')
   expect(t.messages.map((m) => m.role)).toEqual([
     'user',
     'assistant',
@@ -84,12 +84,12 @@ test('a tool call is executed relative to cwd and its result goes back to the mo
       fauxToolCall('read_file', { path: 'notes/a.txt' }),
       (req) =>
         fauxText(
-          `文件内容：${req.toolResults[0]?.output.includes('hello from a.txt') ? 'hello' : '??'}`,
+          `Got: ${req.toolResults[0]?.output.includes('hello from a.txt') ? 'hello' : '??'}`,
         ),
     ],
   })
 
-  await t.run('读一下 notes/a.txt')
+  await t.run('Read notes/a.txt')
 
   expect(t.eventTypes()).toEqual([
     'agent_start',
@@ -124,7 +124,7 @@ test('a tool call is executed relative to cwd and its result goes back to the mo
     true,
     false,
   ])
-  expect(t.lastAssistantText()).toBe('文件内容：hello')
+  expect(t.lastAssistantText()).toBe('Got: hello')
   expect(t.messages.map((m) => m.role)).toEqual([
     'user',
     'assistant',

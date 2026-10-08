@@ -16,59 +16,59 @@ afterEach(async () => {
   await cleanupTestVelas()
 })
 
-// 交互模式（pi-tui）在假终端里跑：按键直接送给 TUI，断言渲染出来的整屏文字。
+// Interactive mode (pi-tui) runs in a fake terminal: keys go straight to the TUI, and assertions check the rendered screen text.
 
 test('a prompt shows the user message, tool calls with results and the streamed answer', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'hello from a' },
     responses: [
       fauxToolCall('read_file', { path: 'a.txt' }),
-      fauxText('**文件**里是 hello'),
+      fauxText('**The file** says hello'),
     ],
   })
   const tui = await startTui(t.vela)
   await tui.started
 
-  tui.submit('读 a.txt')
-  await tui.until('文件里是 hello')
+  tui.submit('read a.txt')
+  await tui.until('The file says hello')
 
   const screen = tui.screen()
-  expect(screen).toContain('读 a.txt')
+  expect(screen).toContain('read a.txt')
   expect(screen).toContain('read_file a.txt')
   expect(screen).toContain('hello from a')
-  // 底栏：会话、模型、thinking
+  // Footer: session, model, thinking
   expect(screen).toContain('tui')
   expect(screen).toMatch(/faux.* · medium/)
   await tui.until(() => !t.vela.session('tui').isRunning)
-  expect(tui.screen()).not.toContain('Esc 中断)')
+  expect(tui.screen()).not.toContain('Esc to interrupt)')
 })
 
 test('Enter while running steers, Alt+Enter queues a follow-up, Esc puts the queue back and aborts', async () => {
-  const t = createTestVela({ responses: [fauxHang('想')] })
+  const t = createTestVela({ responses: [fauxHang('Let me see')] })
   const tui = await startTui(t.vela)
   await tui.started
-  tui.submit('慢慢想')
-  await tui.until('想')
+  tui.submit('Take your time')
+  await tui.until('Let me see')
   const session = t.vela.session('tui')
   expect(session.isRunning).toBe(true)
 
-  tui.submit('插一句')
-  tui.terminal.type('之后再做')
+  tui.submit('one more thing')
+  tui.terminal.type('do this later')
   tui.terminal.press(KEYS.altEnter)
-  await tui.until('Follow-up: 之后再做')
+  await tui.until('Follow-up: do this later')
   expect(session.queue).toEqual({
-    steering: ['插一句'],
-    followUp: ['之后再做'],
+    steering: ['one more thing'],
+    followUp: ['do this later'],
   })
-  expect(tui.screen()).toContain('Steering: 插一句')
+  expect(tui.screen()).toContain('Steering: one more thing')
 
   tui.terminal.press(KEYS.escape)
-  await tui.until('已中断')
+  await tui.until('Interrupted')
   await tui.until(() => !session.isRunning)
   expect(session.queue).toEqual({ steering: [], followUp: [] })
-  // 排队的消息放回了输入框
-  expect(tui.screen()).toContain('插一句')
-  expect(tui.screen()).toContain('之后再做')
+  // The queued messages are back in the editor
+  expect(tui.screen()).toContain('one more thing')
+  expect(tui.screen()).toContain('do this later')
   expect(tui.screen()).not.toContain('Follow-up:')
 })
 
@@ -77,19 +77,19 @@ test('a steer typed while the model streams is answered in the same run', async 
   const t = createTestVela({
     responses: [
       () => {
-        tui.submit('再补一句')
-        return fauxText('第一句')
+        tui.submit('also this')
+        return fauxText('first reply')
       },
-      fauxText('第二句'),
+      fauxText('second reply'),
     ],
   })
   tui = await startTui(t.vela)
   await tui.started
-  tui.submit('说点什么')
-  await tui.until('第二句')
+  tui.submit('say something')
+  await tui.until('second reply')
   expect(t.model.calls.map((c) => c.lastUserText)).toEqual([
-    '说点什么',
-    '再补一句',
+    'say something',
+    'also this',
   ])
 })
 
@@ -98,19 +98,19 @@ test('an extension confirm opens a dialog in place of the editor', async () => {
     extensions: [confirmDangerous],
     responses: [
       fauxToolCall('bash', { command: 'rm -rf build' }),
-      fauxText('好的'),
+      fauxText('Okay, skipped'),
     ],
   })
   const tui = await startTui(t.vela)
   await tui.started
-  tui.submit('清理')
-  await tui.until('要删除文件')
+  tui.submit('clean up')
+  await tui.until('Delete files?')
   expect(tui.screen()).toContain('rm -rf build')
-  // 选“否”：↓ 再 Enter
+  // Choose "No": Down, then Enter
   tui.terminal.press(KEYS.down)
   tui.terminal.press(KEYS.enter)
-  await tui.until('好的')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('用户没有允许删除')
+  await tui.until('Okay, skipped')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('User did not allow the deletion')
 })
 
 test('slash commands: CLI command output, extension commands and /hotkeys go to the chat', async () => {
@@ -119,12 +119,12 @@ test('slash commands: CLI command output, extension commands and /hotkeys go to 
   await tui.started
 
   tui.submit('/extensions')
-  // 命令逐行 print 的输出合成一段，行之间不空行
-  await tui.until('[extensions]\n   memory\n     工具: memory')
-  tui.submit('/todo 买牛奶')
-  await tui.until('买牛奶')
+  // Output a command prints line by line is joined into one block without blank lines
+  await tui.until('[extensions]\n   memory\n     Tools: memory')
+  tui.submit('/todo buy milk')
+  await tui.until('buy milk')
   tui.submit('/hotkeys')
-  await tui.until('Alt+Up 把排队的消息拿回输入框')
+  await tui.until('Alt+Up move queued messages back to the editor')
 })
 
 test('terminal control sequences in tool output and channel messages are not written to the terminal', async () => {
@@ -133,7 +133,7 @@ test('terminal control sequences in tool output and channel messages are not wri
     responses: [
       fauxToolCall('read_file', { path: 'a.txt' }),
       fauxText('done'),
-      fauxText('回复'),
+      fauxText('reply'),
     ],
   })
   t.internals.gateway.register({
@@ -145,10 +145,10 @@ test('terminal control sequences in tool output and channel messages are not wri
   })
   const tui = await startTui(t.vela)
   await tui.started
-  tui.submit('读 a.txt')
+  tui.submit('read a.txt')
   await tui.until('done')
   await tui.until(() => !t.vela.session('tui').isRunning)
-  // 通道里的人（不受信任）发来的消息
+  // A message from someone in a channel (untrusted)
   await t.internals.gateway.handleIncoming('fake', {
     channelId: 'c1',
     senderId: 'guest',
@@ -173,11 +173,11 @@ test('SIGTERM shuts the TUI down like Ctrl+D', async () => {
 })
 
 test('slash commands still run while the agent is busy instead of being steered', async () => {
-  const t = createTestVela({ responses: [fauxHang('想')] })
+  const t = createTestVela({ responses: [fauxHang('Let me see')] })
   const tui = await startTui(t.vela)
   await tui.started
-  tui.submit('慢慢想')
-  await tui.until('想')
+  tui.submit('Take your time')
+  await tui.until('Let me see')
   tui.submit('/usage')
   await tui.until('Usage Summary')
   expect(t.vela.session('tui').queue.steering).toEqual([])
@@ -196,16 +196,16 @@ test('model and thinking selectors; Shift+Tab cycles thinking', async () => {
   const session = t.vela.session('tui')
 
   tui.terminal.press(KEYS.ctrlL)
-  await tui.until('选择模型')
+  await tui.until('Select Model')
   expect(tui.screen()).toContain('fake/big ✓')
-  // 光标从当前模型开始
+  // The cursor starts on the current model
   tui.terminal.press(KEYS.down)
   tui.terminal.press(KEYS.enter)
-  await tui.until('模型: fake/plain')
+  await tui.until('Model: fake/plain')
   expect(session.modelInfo.ref).toBe('fake/plain')
 
   tui.submit('/thinking')
-  await tui.until('thinking 级别')
+  await tui.until('Thinking level')
   tui.terminal.press(KEYS.down)
   tui.terminal.press(KEYS.enter)
   await tui.until(() => session.thinkingLevel === 'high')
@@ -215,48 +215,48 @@ test('model and thinking selectors; Shift+Tab cycles thinking', async () => {
 })
 
 test('/name, /new and /resume switch between saved sessions', async () => {
-  const t = createTestVela({ responses: [fauxText('第一个会话的回答')] })
+  const t = createTestVela({ responses: [fauxText('answer in the first session')] })
   const tui = await startTui(t.vela, { sessionId: 'first' })
   await tui.started
-  tui.submit('你好')
-  await tui.until('第一个会话的回答')
+  tui.submit('Hi there')
+  await tui.until('answer in the first session')
   await tui.until(() => !t.vela.session('first').isRunning)
-  tui.submit('/name 打招呼')
-  await tui.until('会话名: 打招呼')
+  tui.submit('/name greeting')
+  await tui.until('Session name: greeting')
 
   tui.submit('/new')
-  await tui.until('会话 tui-new-1')
-  expect(tui.screen()).not.toContain('第一个会话的回答')
+  await tui.until('session tui-new-1')
+  expect(tui.screen()).not.toContain('answer in the first session')
 
   tui.submit('/resume')
-  await tui.until('选择要恢复的会话')
-  expect(tui.screen()).toContain('打招呼')
+  await tui.until('Resume Session')
+  expect(tui.screen()).toContain('greeting')
   tui.terminal.press(KEYS.enter)
-  await tui.until('恢复会话 打招呼')
-  // 历史重新画出来
-  expect(tui.screen()).toContain('第一个会话的回答')
-  expect(tui.screen()).toContain('你好')
+  await tui.until('Resumed session greeting')
+  // The history is drawn again
+  expect(tui.screen()).toContain('answer in the first session')
+  expect(tui.screen()).toContain('Hi there')
 })
 
 test('-r picks a saved session before the chat starts', async () => {
-  const t = createTestVela({ responses: [fauxText('旧回答')] })
-  await t.vela.session('old').prompt('旧问题')
+  const t = createTestVela({ responses: [fauxText('old answer')] })
+  await t.vela.session('old').prompt('old question')
   const tui = await startTui(t.vela, { pick: true })
-  await tui.until('选择要恢复的会话')
+  await tui.until('Resume Session')
   tui.terminal.press(KEYS.enter)
   await tui.started
-  await tui.until('旧回答')
-  expect(tui.screen()).toContain('会话 old')
+  await tui.until('old answer')
+  expect(tui.screen()).toContain('session old')
 })
 
 test('Ctrl+C clears the editor, twice exits; Ctrl+D on an empty editor exits', async () => {
   const t = createTestVela()
   const tui = await startTui(t.vela)
   await tui.started
-  tui.terminal.type('草稿')
-  await tui.until('草稿')
+  tui.terminal.type('draft')
+  await tui.until('draft')
   tui.terminal.press(KEYS.ctrlC)
-  await tui.until(() => !tui.screen().includes('草稿'))
+  await tui.until(() => !tui.screen().includes('draft'))
   expect(tui.exited()).toBe(false)
 
   tui.terminal.press(KEYS.ctrlD)

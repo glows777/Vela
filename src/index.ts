@@ -1,7 +1,7 @@
 /**
- * Vela SDK 的公开入口（`import { createVela } from '@glows777/vela'`）。
- * 只从这里 export；CLI 在 src/cli/main.ts，测试工具在 'vela/testing'。
- * 公开面由 test/unit/public-api.test.ts 的快照守着：改这里要同时更新快照。
+ * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).
+ * Export only from here; the CLI lives in src/cli/main.ts and test helpers in 'vela/testing'.
+ * test/unit/public-api.test.ts snapshots the public surface: update the snapshot when changing this file.
  */
 
 export type {

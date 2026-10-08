@@ -1,8 +1,10 @@
 import type { EmbeddingFn } from '../extensions/rag/embedder.ts'
 
 /**
- * 确定性的离线 embedder：把文本切成词（中文按相邻两字）后哈希到固定维度，再做 L2 归一化。
- * 相同文本得到相同向量，词重叠越多余弦相似度越高，足够让 RAG 的 ingest/search 在测试里跑出有意义的排序。
+ * Deterministic offline embedder: splits text into words (CJK as adjacent character pairs),
+ * hashes them into a fixed number of dimensions, then L2-normalizes.
+ * Equal text gives equal vectors and more word overlap gives higher cosine similarity,
+ * enough for RAG ingest/search to produce meaningful rankings in tests.
  */
 export function createFauxEmbedder(
   options: { dims?: number; onCall?: (texts: string[]) => void } = {},
@@ -19,7 +21,7 @@ function embedText(text: string, dims: number): number[] {
   const vector = new Array<number>(dims).fill(0)
   for (const token of tokenize(text)) vector[hash(token) % dims]! += 1
   const norm = Math.hypot(...vector)
-  // 空文本也返回一个合法的单位向量
+  // Empty text still yields a valid unit vector
   if (norm === 0) {
     vector[0] = 1
     return vector

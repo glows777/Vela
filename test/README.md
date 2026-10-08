@@ -1,211 +1,211 @@
-# Vela 测试参考
+# Vela test reference
 
-这份文档说明 Vela 怎么测试、怎么验收一次改动、怎么新增测试。所有测试和测试辅助都放在 `test/` 下，接手的人（或 agent）从这里开始读。
+How Vela is tested, how to verify a change and how to add tests. All tests and test helpers live under `test/`; anyone (or any agent) picking up the code starts here.
 
-## 目录
+## Layout
 
 ```
 test/
-  README.md              本文件
-  support/vela.ts        vela/testing 的 createTestVela() 加上 CLI 斜杠命令分发器、captureConsole（只给测试用）
-  fixtures/scenarios/    CLI 回放用的 faux 场景 JSON
-  unit/<镜像 src 路径>/   单元测试，例如 src/agent/retry.ts → test/unit/agent/retry.test.ts
-  e2e/                   整体流程：真实装配 + faux 模型
-  live/                  真实模型冒烟测试，默认跳过
-src/testing/             公开为 `vela/testing`（package.json exports）
-  index.ts               对外导出
-  faux.ts                脚本化 faux 模型（LanguageModelV4），CLI 的 VELA_MODEL=faux: 也用它
-  faux-embedder.ts       确定性的离线 embedder
-  test-vela.ts           createTestVela()：临时目录 + faux 模型装配一个真实 Vela
-  record.ts              recordModel()：把真实模型的响应录成 faux 场景（CLI 的 VELA_RECORD）
-  replay.ts              replayScenario()：按录下的输入把场景重跑一遍
-  demo-model.ts          关键词 demo 模型（VELA_MODEL=mock，只用于手动体验，测试不用）
+  README.md              this file
+  support/vela.ts        createTestVela() from @glows777/vela/testing plus the CLI slash-command dispatcher and captureConsole (tests only)
+  fixtures/scenarios/    faux scenario JSON files for CLI replay
+  unit/<mirrors src>/    unit tests, e.g. src/agent/retry.ts → test/unit/agent/retry.test.ts
+  e2e/                   end-to-end flows: real assembly + faux model
+  live/                  real-model smoke tests, skipped by default
+src/testing/             published as `@glows777/vela/testing` (package.json exports)
+  index.ts               public exports
+  faux.ts                scripted faux model (LanguageModelV4); the CLI's VELA_MODEL=faux: uses it too
+  faux-embedder.ts       deterministic offline embedder
+  test-vela.ts           createTestVela(): a real Vela assembled in a temp dir with a faux model
+  record.ts              recordModel(): records a real model's responses as a faux scenario (the CLI's VELA_RECORD)
+  replay.ts              replayScenario(): reruns a scenario from its recorded inputs
+  demo-model.ts          keyword-driven demo model (VELA_MODEL=mock, for trying the CLI by hand; tests don't use it)
 ```
 
-faux、demo 模型和 createTestVela 在 `src/testing/` 而不在 `test/`：CLI 运行时要加载 faux，扩展作者也要能 `import { createTestVela } from '@glows777/vela/testing'` 离线测自己的扩展。测试里可以用相对路径 import，也可以按包名 import（`test/e2e/sdk.test.ts`）。
+The faux model, the demo model and createTestVela live in `src/testing/` rather than `test/` because the CLI loads faux at runtime, and extension authors need `import { createTestVela } from '@glows777/vela/testing'` to test their extensions offline. Tests import from `src/` by relative path; importing by package name is covered by `bun run smoke:consumer`.
 
-## 运行
+## Running
 
-| 命令 | 内容 | 耗时 |
+| Command | What it runs | Time |
 |---|---|---|
-| `bun run test` | unit + e2e，提交前跑这个 | 约 5 秒 |
-| `bun run test:unit` | 只跑单元测试 | 约 1.5 秒 |
-| `bun run test:e2e` | 只跑整体流程（含 CLI 子进程） | 约 4.5 秒 |
-| `bun run test:live` | 真实模型，需要 `OPENAI_API_KEY`、`OPENAI_API_MODEL_NAME` | 取决于模型 |
-| `bun test <文件或目录>` | 定向跑一部分 | |
-| `bun run typecheck` | `tsc --noEmit`，必须 0 错误 | |
-| `bun run smoke:consumer` | 先 `bun run build`，把包打成 tarball 后分别装进空的 Node 项目（严格 NodeNext tsconfig、不装 @types/bun）和 Bun 项目，按消费者方式 tsc 检查、用 faux 跑会话、跑 `vela -p`；要联网，CI 单独跑（CI 用 Node 22.18） | 约 30 秒 |
-| `bun run lint` | `biome lint`，必须 0 error（warning 不挡） | |
+| `bun run test` | unit + e2e; run this before committing | a few seconds |
+| `bun run test:unit` | unit tests only | ~1.5 s |
+| `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | a few seconds |
+| `bun run test:live` | real model; needs `OPENAI_API_KEY` and `OPENAI_API_MODEL_NAME` | depends on the model |
+| `bun test <file or dir>` | a targeted subset | |
+| `bun run typecheck` | `tsc --noEmit`; must report 0 errors | |
+| `bun run smoke:consumer` | runs `bun run build`, packs a tarball and installs it into an empty Node project (strict NodeNext tsconfig, no @types/bun) and an empty Bun project; in each, type-checks like a consumer, runs a faux session and `vela -p`. Needs network; CI runs it as its own step (on Node 22.18) | ~30 s |
+| `bun run lint` | `biome lint`; must report 0 errors (warnings don't block) | |
 
-整套测试不访问网络、不需要任何环境变量。每个用例都在自己的临时目录里跑，互不影响，跑完自动删掉。
+The suite never touches the network and needs no environment variables. Every test runs in its own temp directory, isolated from the others and removed afterwards.
 
-CI（`.github/workflows/ci.yml`）在每个 PR 和 main 的 push 上依次跑 `bun run test`、`bun run typecheck`、`bun run lint`，任何一步失败都会挡住 PR。`test/live/` 不在 CI 里跑。
+CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint` and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. `test/live/` does not run in CI.
 
-## 分层
+## Layers
 
-- **unit**：测单个模块的规则和边界（重试分类、循环检测、压缩切分、摘要校验、工具历史、安全规则……）。直接 new 出被测对象，模型用 faux。
-- **e2e**：用 `createTestVela()` 装配一个和 CLI 完全相同的 Vela（`createVela()` + CLI 的斜杠命令分发器），只把模型换成 faux、目录换成临时目录，断言事件序列、模型收到的请求、落盘的文件。
-- **e2e/cli.test.ts**：起真实的 `bun src/cli/main.ts` 子进程，用 `VELA_MODEL=faux:<场景.json>` 回放，断言 stdout/stderr/退出码。
-- **e2e/tui.test.ts**：交互模式（TUI）在进程内跑：`test/support/terminal.ts` 的 `startTui(vela)` 用实现 pi-tui `Terminal` 接口的假终端起 `InteractiveMode`，`terminal.type()` / `press(KEYS.xxx)` 送按键，`screen()` 取整屏文字（去掉颜色），`until('文字')` 等它出现。
-- **live**：真实模型，只验证“接得上”，不做细节断言。
+- **unit**: rules and edge cases of a single module (retry classification, loop detection, compaction cut points, summary validation, tool history, security rules, …). Construct the object under test directly; use faux for models.
+- **e2e**: `createTestVela()` assembles the same Vela the CLI does (`createVela()` + the CLI's slash-command dispatcher), with only the model swapped for faux and the directories for temp dirs. Assert on the event sequence, the requests the model received and the files written.
+- **e2e/cli.test.ts**: spawns a real `bun src/cli/main.ts` subprocess replaying `VELA_MODEL=faux:<scenario.json>`, and asserts on stdout, stderr and the exit code.
+- **e2e/tui.test.ts**: runs interactive mode (the TUI) in-process. `startTui(vela)` from `test/support/terminal.ts` starts `InteractiveMode` on a fake terminal that implements pi-tui's `Terminal` interface; `terminal.type()` / `press(KEYS.xxx)` send keys, `screen()` returns the whole screen as plain text, and `until('text')` waits for text to appear.
+- **live**: a real model; only checks that things connect, no detailed assertions.
 
-改了什么就跑对应那层；改到 agent loop、装配、事件、上下文管理或 CLI 入口时跑全套 `bun run test`。
+Run the layer that matches what you changed; run the full `bun run test` when you touch the agent loop, assembly, events, context management or the CLI entry point.
 
-## faux 模型
+## Faux model
 
 ```ts
 import { createFauxModel, fauxText, fauxToolCall, fauxError, fauxStreamError, fauxHang, fauxSummary } from '../../src/testing/faux.ts'
 
 const model = createFauxModel({
-  responses: [                                        // 主队列：streamText 按顺序消费
-    fauxToolCall('read_file', { path: 'a.txt' }),     // 调一个工具
-    [fauxToolCall('glob', {...}), fauxToolCall('grep', {...})], // 数组 = 同一次响应里多个工具调用
-    (req) => fauxText(`你说：${req.lastUserText}`),    // 按请求动态生成
-    fauxError('429 Too Many Requests'),               // 请求直接失败（也可传 Error，例如 provider 的 APICallError）
-    fauxStreamError('ECONNRESET', '半截文本'),         // 流到一半出错
-    fauxHang('思考中'),                                // 不结束，直到被 abort
+  responses: [                                        // main queue, consumed in order by streamText
+    fauxToolCall('read_file', { path: 'a.txt' }),     // one tool call
+    [fauxToolCall('glob', {...}), fauxToolCall('grep', {...})], // an array = several tool calls in one response
+    (req) => fauxText(`You said: ${req.lastUserText}`), // generated from the request
+    fauxError('429 Too Many Requests'),               // the request fails (an Error works too, e.g. a provider APICallError)
+    fauxStreamError('ECONNRESET', 'partial text'),    // the stream breaks midway
+    fauxHang('thinking'),                             // never finishes until aborted
     fauxText('x', { usage: { input: 900, output: 10 }, finishReason: 'length' }),
   ],
-  generate: [fauxSummary()],  // generateText（上下文摘要）单独的队列；fauxSummary 生成能通过校验的摘要
-  chunkSize: 8,               // 文本按 8 个字符一块流出
-  cache: true,                // 模拟 prompt cache：system 不变时记 cacheRead
+  generate: [fauxSummary()],  // separate queue for generateText (context summaries); fauxSummary produces a summary that passes validation
+  chunkSize: 8,               // stream text in 8-character chunks
+  cache: true,                // simulate prompt caching: an unchanged system prompt counts as cacheRead
 })
 
-model.calls      // 每次请求：{ index, kind, system, prompt, tools, lastUserText, toolResults, responseFormat }
-model.pending()  // 还没用掉的响应数
-model.push(...)  // 追加响应
+model.calls      // every request: { index, kind, system, prompt, tools, lastUserText, toolResults, responseFormat }
+model.pending()  // responses not used yet
+model.push(...)  // append responses
 ```
 
-- 脚本用完还有请求时直接抛错：`faux: no scripted response for request #3 (stream)`，不会挂住。
-- usage 默认按字符数估算，结果确定；需要精确数字时用 `usage` 覆盖。
-- 响应本身是可 JSON 序列化的 `FauxResponse`（`text`、`reasoning`、`toolCalls`、`finishReason`、`usage`、`error`、`streamError`、`hang`），所以同一套写法可以存成场景文件给 CLI 回放。
+- A request after the script runs out throws right away (`faux: no scripted response for request #3 (stream)`) instead of hanging.
+- Usage is estimated from character counts by default, so it is deterministic; override `usage` when a test needs exact numbers.
+- Responses are JSON-serializable `FauxResponse` objects (`text`, `reasoning`, `toolCalls`, `finishReason`, `usage`, `error`, `streamError`, `hang`), so the same script can be saved as a scenario file for CLI replay.
 
 ## createTestVela()
 
 ```ts
 import { cleanupTestVelas, createTestVela, captureConsole } from '../support/vela.ts'
 
-afterEach(cleanupTestVelas)   // 每个用到 createTestVela 的文件都要有
+afterEach(cleanupTestVelas)   // every file that uses createTestVela needs this
 
 const t = createTestVela({
   responses: [...], generate: [...], faux: { cache: true },
-  files: { 'src/a.ts': '...' },          // 预置到临时 cwd
-  skills: [{ name, description, body }], // 写到 .skills/<name>/SKILL.md
-  embedder: true,                        // 加载 rag 扩展，用 faux embedder（memory 扩展总是加载，同 CLI）
-  limits: { maxRetries: 1 },             // 覆盖上限；测试默认 retryBaseMs=0
-  dataDir: 'data', sessionId: 'a', cwd: existingDir,   // dataDir 默认 '.vela-data'（相对 cwd，持久化）
-  extensionConfig: { web: { tavilyKey: 'x' } },        // 扩展的配置段（vela.config）
-  logger,                                // 注入 logger
-  extensions: [myExtension],             // 被测的扩展
-  session: { role: 'guest', ui, permissions: { bash: 'ask' }, tools: [...] }, // 默认会话的选项
+  files: { 'src/a.ts': '...' },          // pre-seeded into the temp cwd
+  skills: [{ name, description, body }], // written to .skills/<name>/SKILL.md
+  embedder: true,                        // load the rag extension with the faux embedder (the memory extension always loads, like the CLI)
+  limits: { maxRetries: 1 },             // override limits; tests default to retryBaseMs=0
+  dataDir: 'data', sessionId: 'a', cwd: existingDir,   // dataDir defaults to '.vela-data' (relative to cwd, persisted)
+  extensionConfig: { web: { tavilyKey: 'x' } },        // extension config sections (vela.config)
+  logger,                                // inject a logger
+  extensions: [myExtension],             // extensions under test
+  session: { role: 'guest', ui, permissions: { bash: 'ask' }, tools: [...] }, // options for the default session
 })
 
-t.vela                            // createVela() 的返回值（公开 API）
-t.internals                       // 内部对象：registry、hooks、builder、gateway…（只有 test/support 版本有）
-t.session                         // 默认会话（id 为 sessionId，默认 'default'）
-await t.run('读一下 a.txt')       // = t.session.prompt()
-t.vela.session('other')           // 同一个 Vela 再开一个会话
-t.eventTypes()                    // 所有会话的事件：['agent_start', 'message', 'turn_start', ...]
-t.eventsOf('tool_call')           // 某类事件，带类型
-t.eventsIn('other')               // 某个会话的事件
+t.vela                            // what createVela() returned (public API)
+t.internals                       // internals: registry, hooks, builder, gateway… (test/support version only)
+t.session                         // the default session (id = sessionId, 'default' by default)
+await t.run('read a.txt')         // = t.session.prompt()
+t.vela.session('other')           // another session on the same Vela
+t.eventTypes()                    // events from all sessions: ['agent_start', 'message', 'turn_start', ...]
+t.eventsOf('tool_call')           // events of one type, typed
+t.eventsIn('other')               // events of one session
 t.streamedText(); t.lastAssistantText(); t.messages
-t.model.calls                     // 模型收到的请求
-t.dispatch('/context')            // CLI 自己的斜杠命令，返回 false / true / Promise（异步命令）；输出走 console.log，用 captureConsole() 捕获
-await t.command('/skill x')       // 异步命令，等它结束
-await t.run('/memory')            // 扩展命令走 session.prompt()；输出是 notify 事件：t.eventsOf('notify')
-t.readFile('a.txt'); t.readData('sessions/default.jsonl'); t.exists('rag/knowledge.db')  // 数据目录里：sessions/ usage/ memory/ rag/
-await t.cleanup({ keepDir: true }) // 一般交给 cleanupTestVelas()
+t.model.calls                     // requests the model received
+t.dispatch('/context')            // the CLI's own slash commands; returns false / true / a Promise (async commands); output goes to console.log, capture it with captureConsole()
+await t.command('/skill x')       // async command, waits for it to finish
+await t.run('/memory')            // extension commands go through session.prompt(); their output is notify events: t.eventsOf('notify')
+t.readFile('a.txt'); t.readData('sessions/default.jsonl'); t.exists('rag/knowledge.db')  // inside the data dir: sessions/ usage/ memory/ rag/
+await t.cleanup({ keepDir: true }) // usually left to cleanupTestVelas()
 ```
 
-CLI 斜杠命令（`t.dispatch` / `t.command`）作用在 `t.session` 上；它们来自 `test/support/vela.ts`，`vela/testing` 里的版本没有命令分发器。扩展注册的命令（`/memory`、`/dream`、`/rag`…）不经过分发器，用 `t.run('/name args')`。
+CLI slash commands (`t.dispatch` / `t.command`) act on `t.session`; they come from `test/support/vela.ts`, and the `@glows777/vela/testing` version has no command dispatcher. Commands registered by extensions (`/memory`, `/dream`, `/rag`, …) bypass the dispatcher; use `t.run('/name args')`.
 
-cleanup 时如果 faux 脚本没用完会报错，防止“以为走到了某一步其实没有”。确实不需要用完时传 `allowPendingResponses: true`。
+Cleanup fails if the faux script still has unused responses, so a test can't silently stop short of the step it meant to reach. Pass `allowPendingResponses: true` when leftovers are expected.
 
-斜杠命令会打印到终端，用 `captureConsole(() => ...)` 收集输出再断言，也让测试输出保持干净。
+Slash commands print to the terminal; collect their output with `captureConsole(() => ...)` before asserting, which also keeps test output clean.
 
-### 事件
+### Events
 
-`session.subscribe(listener)` 只收这个会话的事件，`vela.subscribe((event, sessionId) => …)` 收所有会话的。一次 `prompt()` 的顺序是：`agent_start{input}` → `message`（用户输入）→ 每轮 `turn_start` …（`thinking_delta`、`text_delta`、`tool_call`、`tool_result` / `tool_error`、`retry`、`usage`）… `message`（这一轮新增的 assistant / tool 消息，以及循环检测提醒）→ `turn_end` →（运行中 steer 的消息：`message`，再下一轮；模型本来要结束时取 followUp，同样 `message` 后在同一个 loop 里接着跑，同 pi）→ `agent_end{reason}` →（loop 出错 / 中断后还排着的消息开新 loop）→ 最后 `agent_settled`。队列变化发 `queue_update{steering, followUp}`。另有 `context`（压缩）、`audit`、`security_warning`、`session_save_failed`、`notify`（没有界面时扩展的 `ui.notify`），通道会话还有 `channel_message` / `channel_reply` / `channel_error`。
+`session.subscribe(listener)` receives only that session's events; `vela.subscribe((event, sessionId) => …)` receives every session's. One `prompt()` emits, in order: `agent_start{input}` → `message` (the user input) → per turn `turn_start` … (`thinking_delta`, `text_delta`, `tool_call`, `tool_result` / `tool_error`, `retry`, `usage`) … `message` (the assistant / tool messages added this turn, and loop-detection reminders) → `turn_end` → (messages steered in while running: `message`, then another turn; follow-ups are taken when the model would otherwise stop and, again after a `message`, continue in the same loop, like pi) → `agent_end{reason}` → (messages still queued after a loop error or abort start a new loop) → finally `agent_settled`. Queue changes emit `queue_update{steering, followUp}`. There are also `context` (compaction), `audit`, `security_warning`, `session_save_failed` and `notify` (an extension's `ui.notify` when there is no UI); channel sessions also emit `channel_message` / `channel_reply` / `channel_error`.
 
-core 不写终端（`test/unit/boundary.test.ts` 守着这条边界）：非事件的诊断输出走 `createVela({ logger })`，默认静默。
+Core never writes to the terminal (`test/unit/boundary.test.ts` guards this): diagnostics that aren't events go to `createVela({ logger })`, which is silent by default.
 
-### 录制和回放
+### Record and replay
 
 ```ts
 import { recordModel, replayScenario } from '@glows777/vela/testing'
 
-const recorder = recordModel(realModel, { path: 'run.json' })   // CLI：VELA_RECORD=run.json
+const recorder = recordModel(realModel, { path: 'run.json' })   // CLI: VELA_RECORD=run.json
 vela.subscribe((e) => e.type === 'agent_start' && recorder.addInput(e.input))
-// …正常使用 recorder.model…
+// …use recorder.model as usual…
 await recorder.flush()
 
-const { t, errors } = await replayScenario('run.json', { files })  // 离线按 inputs 重跑
+const { t, errors } = await replayScenario('run.json', { files })  // rerun the inputs offline
 ```
 
-录下的场景就是普通 faux 场景（多了 `inputs`），请求失败记成 `error`、流中途断开记成 `streamError`、被中断记成 `hang`，`generateText`（摘要）进 `generate` 队列。CLI 也能直接回放：`VELA_MODEL=faux:run.json bun src/cli/main.ts -p "<第一条输入>"`。文件含对话原文，挑出来做测试的放进 `test/fixtures/scenarios/` 前先删掉敏感内容。
+A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed request is recorded as `error`, a stream cut midway as `streamError`, an aborted one as `hang`, and `generateText` calls (summaries) go to the `generate` queue. The CLI can replay one directly: `VELA_MODEL=faux:run.json bun src/cli/main.ts -p "<first input>"`. The file contains the conversation verbatim; strip anything sensitive before adding one to `test/fixtures/scenarios/`.
 
-### 可调的上限（`src/limits.ts`）
+### Tunable limits (`src/limits.ts`)
 
-`createVela({ limits })` 可以覆盖：`maxRetries`、`retryBaseMs`、`retryMaxMs`、`microcompactThreshold`、`summaryThreshold`、`minMicroSavings`、`maxInputTokens`、`bashTimeoutMs`。默认值就是 CLI 一直用的值；不认识的键（比如已去掉的 `maxTurns` / `tokenBudget`）直接报错。测试用它把阈值调小，而不是构造巨大的输入；例如 `test/e2e/context.test.ts` 先量出空会话的请求大小，再把摘要阈值设在它上面一点。
+`createVela({ limits })` can override `maxRetries`, `retryBaseMs`, `retryMaxMs`, `microcompactThreshold`, `summaryThreshold`, `minMicroSavings`, `maxInputTokens` and `bashTimeoutMs`. The defaults are what the CLI has always used; unknown keys (such as the removed `maxTurns` / `tokenBudget`) throw. Tests lower thresholds instead of building huge inputs; for example `test/e2e/context.test.ts` measures an empty session's request size first and sets the summary threshold just above it.
 
-## 当前覆盖的场景
+## Coverage
 
-| 文件 | 场景 |
+| File | Scenarios |
 |---|---|
-| e2e/basic | 纯文本回复的事件序列与落盘；模型收到的 system/工具/用户消息；多轮对话带历史；工具调用后回答 |
-| e2e/tools | 一次多个工具调用；write/edit 写入 cwd 并发 audit 事件；bash 在 cwd 运行并带时间戳 hook；危险 bash 被拒绝；工具报错回给模型；未知工具/参数不合法被拒绝并记录；deferred 工具经 tool_search 后才可用；guest 角色不能用 bash |
-| e2e/resilience | 429/503 重试后成功；provider 的 APICallError 按 statusCode 判断是否重试；流中途断开后重试且不留半截回答；400 不重试并报真实原因；重试次数用尽；模型流式中 abort 后可继续；工具执行中 abort 记为 cancelled；并发 run 被拒绝；循环检测 warning（排在触发它的调用之后）→ critical；不限轮数（同 pi）；超过 maxInputTokens 不发请求 |
-| e2e/context | `session.compact(focus)` 手动摘要、运行中拒绝；微压缩折叠旧工具结果；摘要压缩替换旧历史、保留近期消息、写盘并在恢复后生效；摘要不合格时停止且历史不变；`defend` 只做微压缩不付费摘要 |
-| e2e/session | `--continue` 式恢复；空目录无会话；不同 sessionId 分开存；dataDir 与 cwd 分离；usage 日志；prompt cache 模拟 |
-| e2e/memory | memory 扩展：通过工具保存记忆后下一轮 prompt 可见、重启后仍在；搜索记忆；缺字段时保存失败；read/delete 需要 filename；`/memory`（search / lint）、`/dream`；guest 不能执行命令 |
-| e2e/rag | rag 扩展：没有 embedder 时不注册 RAG 工具；相对 cwd 导入文档后搜索（离线）；空库提示；知识库跨重启保留；`/rag`、`/rag ingest` 及中断 |
-| e2e/commands | `/context` `/usage` `status`；supabase 扩展的工具模型能直接用、`/extensions` 列出；通道消息走同一模型和工具并回发 |
-| e2e/extensions | `examples/extensions/` 里每个示例（工具、命令 + notify、registerProvider、before_agent_start 段落、tool_call + confirm、tool_result 打码、setActiveTools、通道 + roleFor）；guest 看不到记忆；tool_call 原地改参数并重新校验；handler 抛错即拦截；会话权限 ask；异步工厂和 session_start / shutdown；工厂失败；重复注册 |
-| e2e/models | 按名字选模型（provider、元数据、models.json 价格）；`setModel` 从下一轮起换模型并重算上限；会话各自选模型；thinking 级别映射到 `reasoning`（默认 medium、max→xhigh；`reasoning: false` 的模型 off 不发、其它级别 prompt 报错且不发请求）；Vela 级默认 thinking；恢复会话带回模型和 thinking、保存的模型不可用时告警并保留当前；对象模型不落盘；没有默认模型时要先 setModel；`/model` `/thinking` |
-| e2e/queue | steer 在这一步之后、下一次请求前插入；最后一步收到的 steer 让 loop 继续；followUp 等模型要结束时在同一个 loop 里接着跑；one-at-a-time / all；运行中 prompt 要 streamingBehavior；clearQueue + `await abort()`；abort 后队列保留；任务失败后排队消息仍跑、prompt 再 reject；空闲时 steer / followUp 等于 prompt；thinking_delta；扩展命令里 abort 不卡住；compact 占着会话时不能排队 |
-| e2e/rpc | `--mode rpc` 子进程：prompt 的 disposition、事件带 sessionId、get_state / get_messages / set_session_name / list_sessions、解析失败和未知命令、new_session / switch_session；运行中 prompt 要 streamingBehavior、steer / follow_up 排队、clear_queue、abort 在停下后才回复；运行中改名在 run 结束时一起保存；loop 开始前就失败的 prompt（没有模型）再回一条 success:false；扩展界面 confirm / select / notify / setStatus 走 extension_ui_request / response |
-| e2e/sessions | 两个会话同时跑（历史、文件、锁、用量互不影响）；会话 id 校验；subscribe 范围；tool_search 发现的工具只对本会话生效；skill 激活属于会话；close / dispose 中断并保存；`vela.listSessions()`（最近的在前，名字随会话保存和恢复） |
-| e2e/channels | 每个发送者一个持久化会话；重启后接着聊；同一发送者的消息串行处理；停止网关时中断并报告 |
-| e2e/sdk | 按包名 import `vela` / `vela/testing`；core 不写终端，诊断进注入的 logger；不给 dataDir 时会话在内存、临时目录 dispose 时删掉；自定义 SessionStorage |
-| e2e/tui | 提交 prompt 后显示用户消息、工具块（参数和结果）、流式回答，底栏有会话 / 模型 / thinking；运行中 Enter = steer、Alt+Enter = followUp（排队区显示）、斜杠命令照常执行，Esc 把排队的消息放回输入框并中断；流式中输入的 steer 在同一次运行里回答；扩展 confirm 在输入框位置弹对话框；CLI 命令输出、扩展命令、/hotkeys 进对话区；Ctrl+L 选模型、/thinking 选级别（光标从当前项开始）、Shift+Tab 切 thinking；/name、/new、/resume 切会话并重画历史；`-r` 启动前选会话；Ctrl+C 清空 / Ctrl+D 退出 |
-| e2e/cli | 真实终端（伪终端）里的 TUI：一轮对话后 Ctrl+D 退出并保存会话、`-r` 选中保存的会话并画出历史；`-p` 只把最后的回答写 stdout（诊断在 stderr）并保存一个新会话；`-c -p /命令` 不打印恢复历史里的旧回答；工具在进程 cwd 执行；管道 stdin 拼在 prompt 前；`--mode json` 会话头 + 每个事件一行、模型错误在 agent_end 里且退出码 1；每次启动新会话、`-c` 接最近的；`--session <id>`、`-r` 只能交互；`VELA_RECORD` 录制后用 `faux:` 回放；模型错误退出码 1；扩展注册的 provider 配 `--model` / `--thinking`，`--continue` 恢复保存的模型；未知 provider / 没选模型 / 缺 key 退出码 1，`--thinking` 不合法退出码 2；缺参数退出码 2；`VELA_MODEL=mock`；`~/.vela/extensions` 发现 + settings 的 `extensionConfig`（`$VAR`）；项目扩展要信任（`-p` 跳过、`--approve`、已保存的决定）；`-e` / `--no-extensions`；`--no-session`；settings.json 坏了退出码 2。CLI 子进程的 HOME / VELA_DIR 都是临时目录，不碰真实的 `~/.vela` |
-| unit/cli/commands | skill 激活/去重/并发锁（走真实装配） |
-| unit/cli/setup | 命令行参数；settings 的扩展配置覆盖环境变量；旧数据搬家提示 |
-| unit/models | `provider/id` 解析与错误；thinking → reasoning；按上下文窗口算上限 |
-| unit/config | models.json（内置 openai / anthropic、合并、`$VAR`、缺 key、错误带文件名）；settings 的 defaultModel / defaultThinkingLevel 校验；settings 合并（项目覆盖用户、资源列表合并、路径相对所在文件）；不信任时只读用户级；扩展目录发现；±builtin；错误带文件名；`$VAR` 插值；数据目录编码；skill 目录顺序；trust.json；在家目录里运行 |
-| unit/session/storage | 内存存储按 id 保存并返回副本；文件存储读写、兼容旧的一行一条消息；两种存储的 list()（最近的在前、跳过没有消息的、名字、第一条消息） |
-| unit/testing/record | 录制再回放得到相同事件；错误、流中断、重试、中断（hang）、generate 队列的录制 |
-| unit/boundary | core 模块不出现 console、process.stdout/stderr/exit/env、readline |
-| unit/public-api | `vela`、`vela/testing` 的公开 API 和 `api/public-api.txt` 一致；改了公开面运行 `bun run api:update` |
-| unit/security | 角色（owner / collaborator / guest）、会话权限规则、ask 走 confirm、hooks 链、bash 分类、`/role` 只改当前会话 |
-| unit/… | 其余模块级规则，见各文件 |
+| e2e/basic | event sequence and persistence for a plain text reply; the system prompt, tools and user message the model receives; multi-turn history; answering after a tool call |
+| e2e/tools | several tool calls in one response; write/edit write into cwd and emit audit events; bash runs in cwd with the timestamp hook; dangerous bash is refused; tool errors go back to the model; unknown tools and invalid arguments are rejected and recorded; deferred tools become usable only after tool_search; the guest role can't use bash |
+| e2e/resilience | 429/503 retried until success; provider APICallError retried by statusCode; a stream cut midway is retried without leaving a partial answer; 400 not retried and the real cause reported; retries exhausted; abort during streaming and continuing afterwards; abort during a tool recorded as cancelled; concurrent runs rejected; loop-detection warning (after the call that triggered it) → critical; no turn limit (like pi); requests over maxInputTokens are not sent |
+| e2e/context | manual summary with `session.compact(focus)`, refused while running; microcompaction folds old tool results; summarization replaces old history, keeps recent messages, is persisted and applies after resume; an invalid summary stops and leaves history unchanged; `defend` only microcompacts and never pays for a summary |
+| e2e/session | `--continue`-style resume; no session in an empty dir; different sessionIds stored separately; dataDir separate from cwd; usage log; prompt-cache simulation |
+| e2e/memory | memory extension: a memory saved through the tool shows up in the next prompt and survives a restart; searching memories; saving fails when fields are missing; read/delete need filename; `/memory` (search / lint), `/dream`; guests can't run the commands |
+| e2e/rag | rag extension: no RAG tools without an embedder; ingest relative to cwd then search (offline); empty-store hint; the knowledge base survives restarts; `/rag`, `/rag ingest` and aborting it |
+| e2e/commands | `/context` `/usage` `status`; the supabase extension's tools are usable by the model and listed by `/extensions`; channel messages use the same model and tools and get replies |
+| e2e/extensions | every example in `examples/extensions/` (tool, command + notify, registerProvider, before_agent_start section, tool_call + confirm, tool_result redaction, setActiveTools, channel + roleFor); guests don't see memories; tool_call edits arguments in place and they are revalidated; a throwing handler blocks the call; session permission ask; async factories and session_start / shutdown; factory failures; duplicate registration |
+| e2e/models | choosing models by name (provider, metadata, models.json pricing); `setModel` switches from the next turn and recomputes limits; per-session models; thinking levels map to `reasoning` (default medium, max→xhigh; models with `reasoning: false` send nothing for off and reject other levels before sending); Vela-wide default thinking; resumed sessions restore model and thinking, warning and keeping the current model when the saved one is unavailable; model objects are not persisted; without a default model, setModel is required first; `/model` `/thinking` |
+| e2e/queue | steer is inserted after the current step, before the next request; a steer received on the last step keeps the loop going; followUp runs in the same loop when the model would stop; one-at-a-time / all; prompting while running requires streamingBehavior; clearQueue + `await abort()`; the queue survives abort; queued messages still run after a failure and prompt then rejects; steer / followUp while idle equal prompt; thinking_delta; abort inside an extension command doesn't hang; no queueing while compact holds the session |
+| e2e/rpc | `--mode rpc` subprocess: prompt dispositions, events carry sessionId, get_state / get_messages / set_session_name / list_sessions, parse errors and unknown commands, new_session / switch_session; prompting while running requires streamingBehavior, steer / follow_up queue, clear_queue, abort replies only after stopping; renaming while running is saved when the run ends; a prompt that fails before the loop starts (no model) gets an extra success:false response; extension UI confirm / select / notify / setStatus go through extension_ui_request / response |
+| e2e/sessions | two sessions running at once (history, files, locks and usage stay separate); session id validation; subscribe scope; tools found by tool_search apply only to that session; skill activation belongs to the session; close / dispose abort and save; `vela.listSessions()` (newest first, names saved and restored with the session) |
+| e2e/channels | one persisted session per sender; conversations continue after a restart; one sender's messages are handled in order; stopping the gateway aborts and reports |
+| e2e/sdk | the SDK and testing helpers; core doesn't write to the terminal, diagnostics go to the injected logger; without dataDir sessions stay in memory and the temp dir is removed on dispose; custom SessionStorage |
+| e2e/tui | submitting a prompt shows the user message, tool blocks (arguments and results) and the streamed answer, with session / model / thinking in the footer; while running, Enter = steer, Alt+Enter = followUp (shown in the queue area), slash commands still run, Esc puts queued messages back in the editor and aborts; a steer typed during streaming is answered in the same run; an extension confirm opens a dialog where the editor is; CLI command output, extension commands and /hotkeys go into the transcript; Ctrl+L picks a model, /thinking picks a level (cursor starts on the current one), Shift+Tab cycles thinking; /name, /new, /resume switch sessions and redraw history; `-r` picks a session before starting; Ctrl+C clears / Ctrl+D quits |
+| e2e/cli | the TUI in a real (pseudo) terminal: one turn, then Ctrl+D quits and saves the session; `-r` picks the saved session and draws its history; `-p` writes only the final answer to stdout (diagnostics to stderr) and saves a new session; `-c -p /command` doesn't print old answers from the resumed history; tools run in the process cwd; piped stdin is prepended to the prompt; `--mode json` prints a session header plus one line per event, a model error lands in agent_end with exit code 1; every start creates a new session, `-c` continues the latest; `--session <id>`, `-r` interactive only; record with `VELA_RECORD` and replay with `faux:`; model errors exit 1; a provider registered by an extension works with `--model` / `--thinking`, `--continue` restores the saved model; unknown provider / no model chosen / missing key exit 1, invalid `--thinking` exits 2; missing arguments exit 2; `VELA_MODEL=mock`; discovery in `~/.vela/extensions` + `extensionConfig` from settings (`$VAR`); project extensions need trust (`-p` skips them, `--approve`, a saved decision); `-e` / `--no-extensions`; `--no-session`; a broken settings.json exits 2. CLI subprocesses use temp dirs for HOME and VELA_DIR and never touch the real `~/.vela` |
+| unit/cli/commands | skill activation, dedup and the concurrency lock (real assembly) |
+| unit/cli/setup | command-line arguments; settings' extension config overrides environment variables; the old-data move hint |
+| unit/models | `provider/id` parsing and errors; thinking → reasoning; limits from the context window |
+| unit/config | models.json (built-in openai / anthropic, merging, `$VAR`, missing keys, errors name the file); defaultModel / defaultThinkingLevel validation in settings; settings merging (project over user, resource lists concatenated, paths relative to their file); untrusted projects read only user settings; extension directory discovery; ±builtin; errors name the file; `$VAR` interpolation; data dir encoding; skill directory order; trust.json; running in the home directory |
+| unit/session/storage | memory storage saves by id and returns copies; file storage reads and writes, and still reads the old one-message-per-line format; list() for both (newest first, skips sessions without messages, names, first message) |
+| unit/testing/record | record then replay yields the same events; recording errors, broken streams, retries, aborts (hang) and the generate queue |
+| unit/boundary | core modules contain no console, process.stdout/stderr/exit/env or readline |
+| unit/public-api | the public API of `@glows777/vela` and `@glows777/vela/testing` matches `api/public-api.txt`; after changing the public surface run `bun run api:update` |
+| unit/security | roles (owner / collaborator / guest), session permission rules, ask goes through confirm, the hook chain, bash classification, `/role` changes only the current session |
+| unit/… | other module-level rules; see each file |
 
-## 验收一次改动
+## Verifying a change
 
-1. 先写或改测试，让它表达期望的行为（修 bug 时先让它失败）。
-2. 定向跑相关文件：`bun test test/unit/<模块> test/e2e/<场景>`。
-3. 改到跨模块的东西（agent loop、`createVela`、事件、上下文、CLI）时跑 `bun run test`。
-4. `bun run typecheck` 和 `bun run lint` 都要通过（CI 也会跑）。
-5. 涉及真实模型行为（provider、usage 字段、工具调用格式）时，有条件就跑一次 `bun run test:live`。
-6. 改了事件、faux 接口或测试约定时，同步更新本文件；改了公开 API 时运行 `bun run api:update` 并提交 `api/public-api.txt`。
+1. Write or update a test that states the expected behavior first (when fixing a bug, make it fail first).
+2. Run the relevant files: `bun test test/unit/<module> test/e2e/<scenario>`.
+3. When the change crosses modules (agent loop, `createVela`, events, context, CLI), run `bun run test`.
+4. `bun run typecheck` and `bun run lint` must pass (CI runs them too).
+5. When real model behavior is involved (providers, usage fields, tool-call format), run `bun run test:live` once if you can.
+6. When you change events, the faux interface or test conventions, update this file; when you change the public API, run `bun run api:update` and commit `api/public-api.txt`.
 
-## 怎么新增测试
+## Adding tests
 
-- **新模块或新规则** → `test/unit/<与 src 相同的路径>.test.ts`。
-- **新功能的整体行为** → 在 `test/e2e/` 里找对应主题的文件加用例；主题不存在时新建一个文件，并把它加进上面的覆盖表。
-- **线上遇到的问题**：用 `VELA_RECORD=<file>` 把那次运行录下来，`replayScenario(file)` 重跑并断言；或者手写 faux 脚本复现。只需要 CLI 复现时，写一个 `test/fixtures/scenarios/<名字>.json`，用 `VELA_MODEL=faux:test/fixtures/scenarios/<名字>.json bun run src/cli/main.ts -p "..."` 手动跑，再在 `e2e/cli.test.ts` 里加用例。
-- **新事件类型**：在 e2e 里断言它出现在正确的位置（`t.eventTypes()`）。
-- **需要等异步命令**：用 `t.command()`，不要写 `while (...) await Bun.sleep()` 轮询；必须轮询时以 1ms 为间隔并有明确的退出条件。
+- **A new module or rule** → `test/unit/<same path as in src>.test.ts`.
+- **End-to-end behavior of a new feature** → add a case to the matching file in `test/e2e/`; if no file covers the topic, create one and add it to the coverage table above.
+- **A problem seen in real use**: record the run with `VELA_RECORD=<file>`, rerun it with `replayScenario(file)` and assert; or reproduce it with a hand-written faux script. If only the CLI is involved, write `test/fixtures/scenarios/<name>.json`, run it by hand with `VELA_MODEL=faux:test/fixtures/scenarios/<name>.json bun run src/cli/main.ts -p "..."`, then add a case to `e2e/cli.test.ts`.
+- **A new event type**: assert in e2e that it appears in the right place (`t.eventTypes()`).
+- **Waiting for an async command**: use `t.command()` rather than polling with `while (...) await Bun.sleep()`; when polling is unavoidable, poll every 1 ms with a clear exit condition.
 
-约定：
+Conventions:
 
-- 不访问网络，不依赖环境变量；需要 embedding 用 `embedder: true`。
-- 不用 `process.chdir`，路径都相对 `t.cwd`。
-- 断言事件和数据，而不是终端输出；只有测试命令本身的输出时才用 `captureConsole`。
-- 不写固定的 sleep 等待；需要“进行中”状态时用 `fauxHang()` 或在工具里用 Promise 控制时机。
-- 一个用例只验证一件事，名字写清楚期望的行为。
+- No network and no environment variables; use `embedder: true` when you need embeddings.
+- No `process.chdir`; paths are relative to `t.cwd`.
+- Assert on events and data, not terminal output; use `captureConsole` only for the output of the command under test.
+- No fixed sleeps; for an "in progress" state use `fauxHang()` or control timing with a Promise inside a tool.
+- One test checks one thing, and its name states the expected behavior.
 
-## 已知问题
+## Known issues
 
-- 真实终端里的 TUI 只有 `e2e/cli` 的两个冒烟测试（用 util-linux 的 `script` 给子进程一个伪终端，没有 `script` 的平台如 macOS 跳过）；按键和渲染的细节在 `e2e/tui` 里用假终端测。
-- 发现问题时先写一个能复现的 faux 场景，修不了的写在这里，并在测试里按现状断言。
+- The TUI in a real terminal has only the two smoke tests in `e2e/cli` (util-linux `script` gives the subprocess a pseudo-terminal; platforms without `script`, such as macOS, skip them). Keys and rendering are tested in detail in `e2e/tui` with the fake terminal.
+- When you find a problem, first write a faux scenario that reproduces it; anything that can't be fixed yet goes here, with tests asserting the current behavior.

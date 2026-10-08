@@ -23,23 +23,23 @@ export class ToolExecutionResult {
   ) {}
 }
 
-/** 工具执行时拿到的上下文。 */
+/** Context passed to a tool's execute. */
 export interface ToolContext {
   toolCallId?: string
-  /** 会话中断（abort、关闭）时触发；长时间运行的工具应该响应它 */
+  /** Fires when the session is interrupted (abort, close); long-running tools should honor it */
   signal?: AbortSignal
-  /** @internal 会话的工具结果存储（bash 把大输出写成文件） */
+  /** @internal The session's tool result store (bash writes large output to files) */
   results: ToolResultStore
-  /** @internal 这次调用在工具历史里的 id */
+  /** @internal This call's id in the tool history */
   callId?: string
-  /** @internal 正在执行这次调用的（会话级）registry（tool_search 用） */
+  /** @internal The (session-level) registry running this call (used by tool_search) */
   registry?: ToolRegistry
 }
 
 export interface ToolDefinition {
   name: string
   description: string
-  // 每个工具的入参类型各不相同，注册表只能统一按 any 存放
+  // Input types differ per tool, so the registry stores them as any
   // biome-ignore lint/suspicious/noExplicitAny: heterogeneous tool inputs
   inputSchema: FlexibleSchema<any>
   execute: (
@@ -53,39 +53,41 @@ export interface ToolDefinition {
   maxResultChars?: number
 
   /**
-   * 模型怎么拿到这个工具（同 pi）：direct（默认）直接出现在工具列表里；
-   * deferred 只在 system prompt 里列名字，模型先用 tool_search 取到定义后才能调用
+   * How the model gets this tool (like pi): direct (default) appears in the tool list;
+   * deferred is only named in the system prompt, and the model must fetch its definition
+   * with tool_search before calling it
    */
   exposure?: 'direct' | 'deferred'
-  searchHint?: string // 搜索提示词，帮助 ToolSearch 匹配
+  searchHint?: string // Hint shown next to the name in the deferred tool list
 }
 
-const DEFAULT_MAX_RESULT_CHARS = 3000 // 超出时保存原文，只返回预览
+const DEFAULT_MAX_RESULT_CHARS = 3000 // Beyond this, the full result is saved and only a preview returned
 
 /**
- * 同一个 Vela 里所有会话共享的部分：工具定义、hooks、执行锁。
- * 角色和权限、工具选择、已发现的延迟工具、工具结果存储和持久化失败状态是每个会话自己的。
+ * State shared by all sessions of one Vela: tool definitions, hooks, execution lock.
+ * Role and permissions, tool selection, discovered deferred tools, the tool result store and
+ * persistence failure state are per session.
  */
 interface SharedToolState {
   tools: Map<string, ToolDefinition>
   hookPipeline?: HookPipeline
-  // 当前锁设计的已知缺陷：
-  // 1. 锁粒度是整个 ToolRegistry（以及它 fork 出的所有会话）；一个独占工具执行时，不相关的工具也会被阻塞。
-  // 2. 没有资源级 lock key，无法表达“同一文件串行、不同文件并行”这类更细的关系。
-  // 3. acquireConcurrent 只检查 exclusiveLock，不检查是否已有独占任务在等待，读任务可能插队写任务。
-  // 4. drainQueue 会一次性唤醒所有等待者，再由 while 重新竞争，不保证严格 FIFO 公平性。
-  exclusiveLock: boolean // 当前是否有独占锁持有者
-  concurrentCount: number // 当前共享锁持有数
-  waitQueue: Array<() => void> // 阻塞等待中的 resolve 函数
+  // Known limits of the current lock design:
+  // 1. The lock covers the whole ToolRegistry (and every session forked from it); while one exclusive tool runs, unrelated tools block too.
+  // 2. No per-resource lock key, so "serialize per file, parallel across files" can't be expressed.
+  // 3. acquireConcurrent only checks exclusiveLock, not whether an exclusive task is waiting, so reads can jump ahead of writes.
+  // 4. drainQueue wakes every waiter at once and they race again in the while loop; no strict FIFO fairness.
+  exclusiveLock: boolean // whether an exclusive holder exists
+  concurrentCount: number // number of shared holders
+  waitQueue: Array<() => void> // resolvers of blocked waiters
   logger: VelaLogger
 }
 
 export interface ToolRegistryForkOptions {
-  /** 这个会话的事件回调（例如中等风险 bash 的 security_warning） */
+  /** This session's event callback (e.g. security_warning for moderate-risk bash) */
   onEvent?: VelaEventListener
-  /** 传给 hooks 的会话 id */
+  /** Session id passed to hooks */
   sessionId?: string
-  /** 权限为 ask 时询问用户；不传时 ask 按拒绝处理 */
+  /** Asks the user when the decision is ask; without it, ask means deny */
   confirm?: (toolName: string, input: unknown) => Promise<boolean>
 }
 
@@ -108,8 +110,8 @@ export class ToolRegistry {
   }
 
   /**
-   * 给一个会话用的 registry：和本 registry 共享工具定义、角色、hooks 和锁，
-   * 但有自己的工具结果存储、已发现的延迟工具和持久化状态。
+   * A registry for one session: shares tool definitions, roles, hooks and the lock with this
+   * registry, but has its own tool result store, discovered deferred tools and persistence state.
    */
   fork(results: ToolResultStore, options: ToolRegistryForkOptions = {}) {
     const forked = new ToolRegistry(results, this.shared)
@@ -170,7 +172,7 @@ export class ToolRegistry {
 
   private role: Role = 'owner'
   private permissions?: PermissionRules
-  /** 会话选定的工具；undefined 表示不限制（仍受角色约束） */
+  /** Tools selected for the session; undefined means no limit (the role still applies) */
   private selection?: ReadonlySet<string>
   private confirm?: (toolName: string, input: unknown) => Promise<boolean>
 
@@ -182,17 +184,17 @@ export class ToolRegistry {
     return this.role
   }
 
-  /** 会话自己的权限规则，叠加在角色规则上 */
+  /** The session's own permission rules, layered over the role's */
   setPermissions(rules: PermissionRules | undefined): void {
     this.permissions = rules
   }
 
-  /** 只让模型看到 / 调用这些工具；undefined 取消限制 */
+  /** Only these tools are visible / callable by the model; undefined removes the limit */
   setSelection(names: Iterable<string> | undefined): void {
     this.selection = names ? new Set(names) : undefined
   }
 
-  /** 这个会话对工具的权限决定：没被选中的工具一律 deny */
+  /** This session's permission decision for a tool; unselected tools are always deny */
   decide(toolName: string): PermissionDecision {
     if (this.selection && !this.selection.has(toolName)) return 'deny'
     return decidePermission(this.role, toolName, this.permissions)
@@ -204,7 +206,7 @@ export class ToolRegistry {
 
   private discoveredTools = new Set<string>()
 
-  // * 获取共享锁
+  // Acquire the shared lock
   private async acquireConcurrent() {
     const shared = this.shared
     while (shared.exclusiveLock) {
@@ -213,8 +215,7 @@ export class ToolRegistry {
     shared.concurrentCount++
   }
 
-  // 获取独占锁
-  // 等待所有共享锁释放且没有独占锁
+  // Acquire the exclusive lock: wait until no shared or exclusive holder remains
   private async acquireExclusive() {
     const shared = this.shared
     while (shared.exclusiveLock || shared.concurrentCount > 0) {
@@ -223,8 +224,7 @@ export class ToolRegistry {
     shared.exclusiveLock = true
   }
 
-  // * 释放 共享锁
-  // * 如果当前已经释放了全部，则唤醒等待队列
+  // Release the shared lock; wake waiters once no shared holder remains
   private releaseConcurrent() {
     this.shared.concurrentCount--
     if (this.shared.concurrentCount === 0) {
@@ -232,7 +232,7 @@ export class ToolRegistry {
     }
   }
 
-  // * 释放独占锁，唤醒等待队列
+  // Release the exclusive lock and wake waiters
   private releaseExclusive() {
     this.shared.exclusiveLock = false
     this.drainQueue()
@@ -280,7 +280,7 @@ export class ToolRegistry {
         inputSchema: tool.inputSchema,
         execute: (input: unknown, options) =>
           this.track(async () => {
-            // 权限、hooks 和询问在拿锁之前做：等用户确认时不挡住其它会话的工具
+            // Permissions, hooks and ask run before taking the lock, so waiting on the user doesn't block other sessions' tools
             this.assertHealthy()
             const reject = async (reason: string) => {
               await this.recordRejection(
@@ -295,8 +295,8 @@ export class ToolRegistry {
             if (decision === 'deny') {
               return await reject(
                 this.selection && !this.selection.has(name)
-                  ? `[拒绝执行] 本会话没有启用 ${name}`
-                  : `[拒绝执行] 角色 ${this.role} 无权使用 ${name}`,
+                  ? `[Rejected] ${name} is not enabled in this session`
+                  : `[Rejected] Role ${this.role} may not use ${name}`,
               )
             }
             const pipeline = this.shared.hookPipeline
@@ -309,7 +309,7 @@ export class ToolRegistry {
             if (pipeline) {
               const pre = await pipeline.runPre(name, input, hookContext)
               if (pre.action === 'block') {
-                return await reject(`[Hook 拦截] ${pre.reason || '操作被阻止'}`)
+                return await reject(`[Blocked by hook] ${pre.reason || 'Operation blocked'}`)
               }
               if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
                 input = pre.modifiedInput
@@ -328,7 +328,7 @@ export class ToolRegistry {
                   }
                 } catch (error) {
                   return await reject(
-                    `[拒绝执行] Hook 修改后的输入无效: ${error instanceof Error ? error.message : String(error)}`,
+                    `[Rejected] Input modified by hook is invalid: ${error instanceof Error ? error.message : String(error)}`,
                   )
                 }
               }
@@ -336,22 +336,22 @@ export class ToolRegistry {
             if (name === 'bash') {
               const command = (input as { command?: unknown } | null)?.command
               if (typeof command !== 'string')
-                return await reject('[拒绝执行] bash command 必须是字符串')
+                return await reject('[Rejected] bash command must be a string')
               const risk = classifyBashCommand(command)
               if (risk.level === 'dangerous') {
                 return await reject(
-                  `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${command}`,
+                  `[Rejected] Dangerous operation detected: ${risk.reason}\nCommand: ${command}`,
                 )
               }
               if (risk.level === 'moderate')
                 this.onEvent?.({
                   type: 'security_warning',
                   toolName: name,
-                  reason: risk.reason ?? '中等风险命令',
+                  reason: risk.reason ?? 'Moderate-risk command',
                   command,
                 })
             }
-            // ask 在 hooks 之后、按最终参数询问：扩展改过的参数也要经过批准
+            // ask runs after hooks, on the final input, so input changed by extensions still needs approval
             if (decision === 'ask') {
               const approved = this.confirm
                 ? await untilAborted(
@@ -360,14 +360,14 @@ export class ToolRegistry {
                   )
                 : false
               options?.abortSignal?.throwIfAborted()
-              if (!approved) return await reject(`[拒绝执行] ${name} 未获批准`)
+              if (!approved) return await reject(`[Rejected] ${name} was not approved`)
             }
             if (isSafe) {
               await this.acquireConcurrent()
-              this.shared.logger.debug(`[tools] ${name} 获得共享锁`)
+              this.shared.logger.debug(`[tools] ${name} acquired shared lock`)
             } else {
               await this.acquireExclusive()
-              this.shared.logger.debug(`[tools] ${name} 获得独占锁`)
+              this.shared.logger.debug(`[tools] ${name} acquired exclusive lock`)
             }
             try {
               this.assertHealthy()
@@ -463,14 +463,14 @@ export class ToolRegistry {
               } catch (error) {
                 // Do not invent a terminal result when the result could not be recorded.
                 const location = stored
-                  ? `已保存原文路径：${stored.path}`
-                  : `预留输出路径：${call.plannedOutputPath}（可能不存在或不完整）`
+                  ? `full output saved at: ${stored.path}`
+                  : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
                 const status =
                   execution.exitCode === undefined
                     ? ''
                     : ` exitCode=${execution.exitCode}`
                 this.persistenceFailure = new Error(
-                  `工具 ${name} 已执行，但保存工具调用结果失败；结果未确认，不要自动重跑。callId=${call.callId}${status}；${location}。原文位置也记录在 tool_call.plannedOutputPath，需核实完整性，不能据此认定调用成功。${error}`,
+                  `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. The output location is also recorded in tool_call.plannedOutputPath; verify it is complete, and do not treat the call as successful because of it. ${error}`,
                 )
                 throw this.persistenceFailure
               }
@@ -487,7 +487,6 @@ export class ToolRegistry {
               }
               return stored ? { ...stored, preview: output } : output
             } finally {
-              // 释放锁
               if (isSafe) {
                 this.releaseConcurrent()
               } else {
@@ -530,8 +529,7 @@ export class ToolRegistry {
       const hint = t.searchHint ? ` — ${t.searchHint}` : ''
       return `  - ${t.name}${hint}`
     })
-    // 以下工具可用，但需要先通过 tool_search 搜索获取完整定义
-    return `\nBelow tools can be call, but before you call these tools, you should call too_search tool to get the competed tool schema
+    return `\nThe tools below are available, but before calling one you must call tool_search to get its full schema
     ${lines.join('\n')}`
   }
 
@@ -591,7 +589,7 @@ export class ToolRegistry {
   }
 }
 
-/** 等 promise；signal 中断时提前以 false 结束（不再等用户回答）。 */
+/** Awaits the promise; resolves false early if signal aborts (stop waiting for the user). */
 function untilAborted(
   promise: Promise<boolean>,
   signal: AbortSignal | undefined,

@@ -4,12 +4,12 @@ globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
 alwaysApply: false
 ---
 
-## Agent 执行边界
+## Agent boundaries
 
-- 用户当前指令优先于本文件、Skill 和历史上下文。只读取与当前任务相关的源码、配置、测试和文档；小改动不要求先遍历整个仓库。
-- 先确定可观察的完成条件。已授权的可逆实现、检查和修复应持续做到完成，不在首版补丁后提前交回；只有会改变范围/结果的未知信息或不可逆/外部写入才需要暂停。
-- 按变更风险选择验证：对受影响的 Bun 测试做定向回归；跨模块、运行时或协议改动再扩大到完整 `bun test`、类型检查或构建。不要为低风险改动机械运行无关的全套检查。
-- `.skills/<name>/SKILL.md` 是按需加载的工作流入口。新增或维护 Skill 时保持触发描述短而精确；多流程内容使用入口加引用/脚本的渐进式披露，不预加载无关正文，也不把一次任务的临时步骤写进共享规则。
+- The user's current instructions take precedence over this file, skills and earlier context. Read only the source, config, tests and docs relevant to the task; small changes don't require walking the whole repo.
+- Define an observable done condition first. Authorized, reversible implementation, checks and fixes are carried through to completion, not handed back after the first patch; pause only for unknowns that change scope or outcome, or for irreversible or external writes.
+- Pick verification by risk: run the affected Bun tests for targeted regressions; widen to the full `bun test`, typecheck or build for cross-module, runtime or protocol changes. Don't run unrelated full suites for low-risk changes.
+- `.skills/<name>/SKILL.md` is an on-demand workflow entry point. Keep a skill's trigger description short and precise; put multi-flow content behind references or scripts (progressive disclosure), don't preload unrelated text, and don't write one task's temporary steps into shared rules.
 
 Default to using Bun instead of Node.js.
 
@@ -23,7 +23,9 @@ Default to using Bun instead of Node.js.
 
 ## APIs
 
-`src/` 是发布到 npm 的包（编译成 `dist/`），要在 Node ≥ 22.18 和 Bun 上都能跑：只用 `node:` 模块和 Web 标准 API，不用 `Bun.*` 全局和 `bun:` 模块（RAG 的 SQLite 经 `src/extensions/rag/sqlite.ts` 适配两边）；相对 import 写 `.ts` 扩展名。`bun run build` 出 `dist/`，`bun run smoke:consumer` 在 Node 和 Bun 的空项目里各验一遍。下面的 Bun API 建议只适用于 `scripts/` 和 `test/`。
+`src/` is the npm package (compiled to `dist/`) and must run on Node ≥ 22.18 and Bun: use only `node:` modules and web-standard APIs, never `Bun.*` globals or `bun:` modules (RAG's SQLite goes through `src/extensions/rag/sqlite.ts`, which adapts both). Relative imports carry the `.ts` extension. `bun run build` emits `dist/`; `bun run smoke:consumer` checks the package in empty Node and Bun projects. The Bun API advice below applies only to `scripts/` and `test/`.
+
+All code, comments, messages and docs in the repo are in English.
 
 - `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
 - `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
@@ -35,11 +37,11 @@ Default to using Bun instead of Node.js.
 
 ## Testing
 
-测试怎么组织、怎么验收一次改动、怎么新增测试，见 [test/README.md](test/README.md)（改测试或改到 agent loop、装配、事件、上下文、CLI 前先读）。要点：
+How tests are organized, how to verify a change and how to add tests: see [test/README.md](test/README.md) (read it before changing tests or the agent loop, assembly, events, context or CLI). In short:
 
-- `bun run test` 跑 unit + e2e（约 5 秒，不联网、不需要环境变量）；定向时 `bun test test/unit/<模块>` 或 `bun test test/e2e/<场景>`。
-- 单元测试放 `test/unit/`，路径镜像 `src/`；整体流程放 `test/e2e/`，用 `test/support/vela.ts` 的 `createTestVela()` 和 `src/testing/faux.ts` 的脚本化 faux 模型。
-- 修 bug 先写一个能复现的 faux 场景；改了事件、faux 接口或测试约定时同步更新 test/README.md。
+- `bun run test` runs unit + e2e (a few seconds, no network, no environment variables); target with `bun test test/unit/<module>` or `bun test test/e2e/<scenario>`.
+- Unit tests live in `test/unit/`, mirroring `src/`; end-to-end flows live in `test/e2e/` and use `createTestVela()` from `test/support/vela.ts` and the scripted faux model from `src/testing/faux.ts`.
+- Fix a bug by first writing a faux scenario that reproduces it; when you change events, the faux interface or test conventions, update test/README.md.
 
 ## Frontend
 

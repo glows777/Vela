@@ -5,9 +5,9 @@ import type { QueueMode, VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
 
 /**
- * RPC 模式（同 pi 的 `--mode rpc`）：stdin 每行一个 JSON 命令，stdout 每行一个 `response` 或事件。
- * 命令名、`id` / `response` / `disposition`、扩展界面子协议都照 pi（见 docs/rpc.md）；
- * 事件是 VelaEvent（多带 `sessionId`），只发当前活跃会话的。stdin 关闭时 dispose 并退出。
+ * RPC mode (like pi's `--mode rpc`): one JSON command per stdin line, one `response` or event per stdout line.
+ * Command names, `id` / `response` / `disposition` and the extension UI sub-protocol follow pi (see docs/rpc.md).
+ * Events are VelaEvents (plus `sessionId`), only for the active session. Disposes and exits when stdin closes.
  */
 
 type RpcCommand = { id?: string; type: string; [key: string]: unknown }
@@ -22,13 +22,13 @@ type UiResponse = {
 
 export interface RpcModeOptions {
   vela: Vela
-  /** 启动时打开的会话 */
+  /** Session opened at startup */
   sessionId: string
-  /** 启动时恢复这个会话的历史（`-c` / `--session`） */
+  /** Restore this session's history at startup (`-c` / `--session`) */
   resume: boolean
-  /** 新会话的 id（`new_session`） */
+  /** Id for a new session (`new_session`) */
   newSessionId: () => string
-  /** 启动会话打开之后（恢复之后）调用：命令行的 --model / --thinking 覆盖保存的设置 */
+  /** Called after the startup session opens (and resumes): command-line --model / --thinking override saved settings */
   configure?: (session: VelaSession) => void
   input: AsyncIterable<Uint8Array>
   write: (text: string) => Promise<void>
@@ -45,7 +45,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     return output
   }
 
-  // 扩展界面：需要回答的发 extension_ui_request 等 extension_ui_response，其它只发
+  // Extension UI: requests that need an answer send extension_ui_request and wait for extension_ui_response; the rest are just sent
   const pending = new Map<string, (response: UiResponse) => void>()
   const request = (method: string, fields: Record<string, unknown>) =>
     new Promise<UiResponse>((resolve) => {
@@ -85,7 +85,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   if (options.resume) await session.resume()
   options.configure?.(session)
 
-  // agent loop 里的失败已经在 agent_end 里报告过；prompt 的 Promise reject 时据此判断要不要再报
+  // Failures inside the agent loop are already reported in agent_end; when the prompt Promise rejects, this decides whether to report again
   let reportedError: unknown
   vela.subscribe((event, sessionId) => {
     if (sessionId !== session.id) return
@@ -97,7 +97,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
 
   const idle = () => {
     if (session.isRunning)
-      throw new Error('有任务正在执行中，先 abort 或等它结束')
+      throw new Error('A task is running; abort it or wait for it to finish')
   }
   const switchTo = async (next: VelaSession) => {
     const previous = session
@@ -109,8 +109,9 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     message.startsWith('/') &&
     vela.commands().some((c) => c.name === commandName(message))
   /**
-   * 已经回了 started 的 prompt：loop 开始前的失败（没有模型、模型不支持当前 thinking 级别、扩展钩子出错）
-   * 不会有 agent_end，同 pi 再回一条这个命令的 success:false 响应，客户端才知道出了什么错。
+   * A prompt already answered with started: failures before the loop starts (no model, model doesn't support the
+   * thinking level, extension hook error) produce no agent_end, so like pi we send another success:false response
+   * for this command to tell the client what went wrong.
    */
   const start = (run: Promise<void>, command: RpcCommand) =>
     void run.catch((error) => {
@@ -139,7 +140,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         behavior !== 'steer' &&
         behavior !== 'followUp'
       )
-        throw new Error('streamingBehavior 只能是 steer / followUp')
+        throw new Error('streamingBehavior must be steer or followUp')
       if (isExtensionCommand(message)) {
         await session.prompt(message)
         return { disposition: 'handled' }
@@ -167,7 +168,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       idle()
       const id = String(command.sessionId ?? '')
       if (!(await vela.listSessions()).some((s) => s.id === id))
-        throw new Error(`没有会话 ${id}`)
+        throw new Error(`No session ${id}`)
       const next = vela.session(id, { ui })
       if (next !== session) await next.resume()
       await switchTo(next)
@@ -233,7 +234,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       session.setName(
         typeof command.name === 'string' ? command.name : undefined,
       )
-      // 运行中不能另外保存（会和 loop 的写入交错、丢掉这期间新增的消息）：这次 run 结束时会一起存
+      // Can't save separately mid-run (it would interleave with the loop's writes and drop new messages); the run saves when it ends
       if (!session.isRunning) await session.save()
     },
     get_commands: () => ({ commands: vela.commands() }),
@@ -242,7 +243,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   async function enqueue(command: RpcCommand, behavior: 'steer' | 'followUp') {
     const message = String(command.message ?? '')
     if (message.startsWith('/') && isExtensionCommand(message))
-      throw new Error('扩展命令用 prompt 执行')
+      throw new Error('Run extension commands with prompt')
     if (!session.isRunning) {
       start(session.prompt(message), command)
       return { disposition: 'started' }
@@ -262,13 +263,13 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         typeof command !== 'object' ||
         typeof command.type !== 'string'
       )
-        throw new Error('缺少 type')
+        throw new Error('Missing type')
     } catch (error) {
       await send({
         type: 'response',
         command: 'parse',
         success: false,
-        error: `命令解析失败: ${error instanceof Error ? error.message : error}`,
+        error: `Failed to parse command: ${error instanceof Error ? error.message : error}`,
       })
       return
     }
@@ -281,7 +282,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     const id = command.id === undefined ? {} : { id: command.id }
     const handler = handlers[command.type]
     try {
-      if (!handler) throw new Error(`未知命令: ${command.type}`)
+      if (!handler) throw new Error(`Unknown command: ${command.type}`)
       const data = await handler(command)
       await send({
         ...id,
@@ -301,7 +302,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     }
   }
 
-  // 只按 \n 分帧（不用 readline：它会在 U+2028 / U+2029 处断行，同 pi 的提醒），容忍 \r\n
+  // Split frames on \n only (not readline: it also breaks on U+2028 / U+2029, as pi warns); tolerates \r\n
   const decoder = new TextDecoder()
   let buffer = ''
   const inFlight = new Set<Promise<void>>()
@@ -324,7 +325,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   buffer += decoder.decode()
   if (buffer) dispatch(buffer)
 
-  // stdin 关闭：没回答的界面请求按取消处理，中断正在跑的任务，dispose 后退出（同 pi）
+  // stdin closed: treat unanswered UI requests as cancelled, abort the running task, dispose and exit (like pi)
   for (const [id, resolve] of pending)
     resolve({ type: 'extension_ui_response', id, cancelled: true })
   pending.clear()
@@ -335,6 +336,6 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
 
 function queueMode(mode: unknown): QueueMode {
   if (!QUEUE_MODES.includes(mode as QueueMode))
-    throw new Error(`mode 只能是 ${QUEUE_MODES.join(' / ')}`)
+    throw new Error(`mode must be one of ${QUEUE_MODES.join(' / ')}`)
   return mode as QueueMode
 }

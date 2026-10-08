@@ -14,7 +14,7 @@ import {
 
 afterEach(cleanupTestVelas)
 
-/** 一个 provider "fake"：big 有 32k 窗口和价格，plain 不支持 thinking；每个模型一个 faux */
+/** A provider "fake": big has a 32k window and pricing, plain has no thinking; one faux per model */
 function fakeProvider() {
   const big = createFauxModel({ modelId: 'big' })
   const plain = createFauxModel({ modelId: 'plain' })
@@ -49,7 +49,7 @@ function warnings() {
 
 test('a model chosen by name uses its provider, metadata and pricing', async () => {
   const { big, providers } = fakeProvider()
-  big.push(fauxText('来自 big', { usage: { input: 3, output: 1 } }))
+  big.push(fauxText('from big', { usage: { input: 3, output: 1 } }))
   const t = createTestVela({ model: 'fake/big', providers })
 
   expect(t.vela.models().map((m) => m.ref)).toEqual(['fake/big', 'fake/plain'])
@@ -62,9 +62,9 @@ test('a model chosen by name uses its provider, metadata and pricing', async () 
   expect(t.session.limits.maxInputTokens).toBe(32_768 - 16_384)
   expect(t.session.tracker.contextWindow).toBe(32_768)
 
-  await t.run('你好')
-  expect(t.lastAssistantText()).toBe('来自 big')
-  // models.json 里的价格优先于内置价目表：3 个输入 token × $1/token
+  await t.run('Hello')
+  expect(t.lastAssistantText()).toBe('from big')
+  // Pricing from models.json beats the built-in price table: 3 input tokens × $1/token
   expect(t.session.usage.totals.cost).toBeCloseTo(3)
 })
 
@@ -84,19 +84,19 @@ test('pricing follows the provider, not a shared model id', async () => {
         models: [{ id: 'big', cost: { input: 2_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }],
         createModel: () => priced,
       },
-      // 同名模型但没写价格：按内置价目表，不沿用 fake/big 的价格
+      // Same model id but no pricing: uses the built-in price table, not fake/big's pricing
       free: { createModel: () => free },
     },
   })
 
-  await t.run('一')
+  await t.run('one')
   t.session.setModel('priced/big')
-  await t.run('二')
-  // 旧请求按当时的价格：3×1 + 3×2；没有 cache，假想成本相同
+  await t.run('two')
+  // Earlier requests keep their price at the time: 3×1 + 3×2; no cache, so the baseline cost is the same
   expect(t.session.usage.totals.cost).toBeCloseTo(9)
   expect(t.session.usage.totals.baselineCost).toBeCloseTo(9)
   t.session.setModel('free/big')
-  await t.run('三')
+  await t.run('three')
   expect(t.session.usage.totals.cost).toBeLessThan(9.01)
 })
 
@@ -106,21 +106,21 @@ test('setModel switches the model for the next prompt and recomputes limits', as
   plain.push(fauxText('plain'))
   const t = createTestVela({ model: 'fake/big', providers })
 
-  await t.run('一')
+  await t.run('one')
   t.session.setModel('fake/plain')
   t.session.setThinkingLevel('off')
   expect(t.session.modelInfo.ref).toBe('fake/plain')
-  // plain 没写窗口：回到默认上限
+  // plain has no window: back to the default limits
   expect(t.session.limits.maxInputTokens).toBe(DEFAULT_LIMITS.maxInputTokens)
   expect(t.session.tracker.contextWindow).toBe(200_000)
-  await t.run('二')
+  await t.run('two')
 
-  expect(big.calls.map((c) => c.lastUserText)).toEqual(['一'])
-  expect(plain.calls.map((c) => c.lastUserText)).toEqual(['二'])
-  // 第二个模型看到完整历史
-  expect(JSON.stringify(plain.calls[0]!.prompt)).toContain('一')
+  expect(big.calls.map((c) => c.lastUserText)).toEqual(['one'])
+  expect(plain.calls.map((c) => c.lastUserText)).toEqual(['two'])
+  // The second model sees the full history
+  expect(JSON.stringify(plain.calls[0]!.prompt)).toContain('one')
 
-  expect(() => t.session.setModel('nope/x')).toThrow('没有名为 nope 的 provider')
+  expect(() => t.session.setModel('nope/x')).toThrow('No provider named nope')
   expect(() => t.session.setModel('fake')).toThrow('provider/id')
   expect(t.session.modelInfo.ref).toBe('fake/plain')
 })
@@ -135,8 +135,8 @@ test('sessions pick models independently', async () => {
     thinkingLevel: 'off',
   })
 
-  await t.run('问 a')
-  await other.prompt('问 b')
+  await t.run('ask a')
+  await other.prompt('ask b')
   expect(big.calls).toHaveLength(1)
   expect(plain.calls).toHaveLength(1)
   expect(t.vela.model).toBe(big)
@@ -148,14 +148,14 @@ test('thinking levels map to the reasoning call option', async () => {
   plain.push(fauxText('5'))
   const t = createTestVela({ model: 'fake/big', providers })
 
-  await t.run('默认')
+  await t.run('default')
   t.session.setThinkingLevel('high')
   await t.run('high')
   t.session.setThinkingLevel('max')
   await t.run('max')
   t.session.setThinkingLevel('off')
   await t.run('off')
-  // 声明不支持 thinking 的模型：off 不发 reasoning
+  // A model declared without thinking: off sends no reasoning
   t.session.setModel('fake/plain')
   await t.run('plain')
 
@@ -195,7 +195,7 @@ test('a resumed session restores its model and thinking level', async () => {
     a.session.setModel('fake/plain')
     a.session.setThinkingLevel('off')
     first.plain.push(fauxText('saved'))
-    await a.run('保存')
+    await a.run('save')
     await a.cleanup()
 
     const second = fakeProvider()
@@ -208,7 +208,7 @@ test('a resumed session restores its model and thinking level', async () => {
     expect(await b.session.resume()).toBe(true)
     expect(b.session.modelInfo.ref).toBe('fake/plain')
     expect(b.session.thinkingLevel).toBe('off')
-    await b.run('继续')
+    await b.run('continue')
     expect(second.plain.calls).toHaveLength(1)
     expect(second.big.calls).toHaveLength(0)
     await b.cleanup()
@@ -225,10 +225,10 @@ test('a thinking level the model does not support fails the prompt with a clear 
   t.vela.subscribe((event) => {
     if (event.type === 'agent_start') started.push(event)
   })
-  await expect(t.session.prompt('你好')).rejects.toThrow(
-    '模型 fake/plain 不支持 thinking',
+  await expect(t.session.prompt('Hello')).rejects.toThrow(
+    'Model fake/plain does not support thinking',
   )
-  // 没发请求，也没把这句话记进历史
+  // No request was sent and the prompt was not added to history
   expect(plain.calls).toHaveLength(0)
   expect(started).toHaveLength(0)
   expect(t.session.messages).toHaveLength(0)
@@ -245,10 +245,10 @@ test('a saved model that no longer resolves warns and keeps the current one', as
       thinkingLevel: 'off',
       providers: first.providers,
     })
-    await a.run('保存')
+    await a.run('save')
     await a.cleanup()
 
-    // 新的 Vela 没有 fake provider，只有直接传入的 faux 模型
+    // The new Vela has no fake provider, only the faux model passed in directly
     const { lines, logger } = warnings()
     const b = createTestVela({ cwd: dir.path, logger })
     expect(await b.session.resume()).toBe(true)
@@ -280,7 +280,7 @@ test('without a default model a session must pick one before prompting', async (
   const vela = createVela({ providers, extensions: [] })
   try {
     const session = vela.session()
-    await expect(session.prompt('hi')).rejects.toThrow('没有选模型')
+    await expect(session.prompt('hi')).rejects.toThrow('No model selected')
     session.setModel('fake/big')
     await session.prompt('hi')
     expect(big.calls).toHaveLength(1)
@@ -294,19 +294,19 @@ test('/model lists and switches models; /thinking sets the level for the session
   const t = createTestVela({ model: 'fake/big', providers })
 
   const list = await captureConsole(() => t.command('/model'))
-  expect(list.output).toContain('当前: fake/big')
+  expect(list.output).toContain('Current: fake/big')
   expect(list.output).toContain('* fake/big (33k)')
-  expect(list.output).toContain('fake/plain (无 thinking)')
+  expect(list.output).toContain('fake/plain (no thinking)')
 
   const bad = await captureConsole(() => t.command('/model nope/x'))
-  expect(bad.output).toContain('没有名为 nope 的 provider')
+  expect(bad.output).toContain('No provider named nope')
   await captureConsole(() => t.command('/model fake/plain'))
   expect(t.session.modelInfo.ref).toBe('fake/plain')
 
   await captureConsole(() => t.command('/thinking high'))
   expect(t.session.thinkingLevel).toBe('high')
   const wrong = await captureConsole(() => t.command('/thinking huge'))
-  expect(wrong.output).toContain('只能是')
+  expect(wrong.output).toContain('Must be one of')
   expect(t.session.thinkingLevel).toBe('high')
   expect(wrong.output).not.toContain('default')
 })

@@ -16,8 +16,8 @@ export {
 export type TestVelaOptions = CoreTestVelaOptions
 
 /**
- * vela/testing 的 createTestVela()，再加上 CLI 的斜杠命令分发器：
- * 测试用和 CLI 完全相同的命令处理，命令作用在默认会话（`t.session`）上。
+ * createTestVela() from vela/testing plus the CLI's slash command dispatcher:
+ * tests use exactly the same command handling as the CLI, applied to the default session (`t.session`).
  */
 export function createTestVela(options: TestVelaOptions = {}) {
   const t = createCoreTestVela(options)
@@ -27,18 +27,18 @@ export function createTestVela(options: TestVelaOptions = {}) {
     vela: t.vela,
     internals,
     session: t.session,
-    // 命令输出照旧走 console.log，用 captureConsole() 捕获
+    // Command output still goes to console.log; capture it with captureConsole()
     print: (text) => console.log(text),
   }
   const dispatch = createCliDispatcher(t.vela)
 
   return Object.assign(t, {
-    /** createVela() 的内部对象（registry、记忆、知识库、通道网关…），只给测试用 */
+    /** createVela()'s internals (registry, memory, knowledge base, channel gateway…), for tests only */
     internals,
     ctx,
-    /** 执行斜杠命令；返回值同 CLI 分发器：false / true / Promise（异步命令） */
+    /** Run a slash command; returns what the CLI dispatcher does: false / true / Promise (async command) */
     dispatch: (command: string) => dispatch(command, ctx),
-    /** 执行斜杠命令并等它结束；返回是否认领了这个命令 */
+    /** Run a slash command and wait for it; returns whether a handler claimed the command */
     command: async (command: string) => {
       const result = dispatch(command, ctx)
       if (result instanceof Promise) await result
@@ -49,7 +49,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
 
 export type TestVela = ReturnType<typeof createTestVela>
 
-/** 捕获 console.log / console.error 的输出，返回拼好的文本 */
+/** Capture console.log / console.error output and return the joined text */
 export async function captureConsole<T>(
   fn: () => T,
 ): Promise<{ result: Awaited<T>; output: string }> {

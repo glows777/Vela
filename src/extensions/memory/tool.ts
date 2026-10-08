@@ -42,20 +42,20 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
       switch (args.action) {
         case 'save': {
           if (!args.name || !args.type || !args.content)
-            return '保存失败：需要 name、type、content'
+            return 'Save failed: name, type and content are required'
           const filename = memoryStore.save({
             name: args.name,
             description: args.description || args.name,
             type: args.type,
             content: args.content,
           })
-          return `已保存到记忆: ${filename}`
+          return `Saved to memory: ${filename}`
         }
         case 'list': {
           const entries = memoryStore.list()
-          if (entries.length === 0) return '当前没有存储任何记忆。'
+          if (entries.length === 0) return 'No memories stored.'
           return (
-            `记忆列表（共 ${entries.length} 条）：\n` +
+            `Memories (${entries.length}):\n` +
             entries
               .map((e) => `  [${e.type}] ${e.name} — ${e.description}`)
               .join('\n')
@@ -64,9 +64,9 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
         case 'search': {
           const results = memoryStore.search(args.query || '', 5)
           if (results.length === 0)
-            return `没有找到与 "${args.query}" 相关的记忆。`
+            return `No memories found for "${args.query}".`
           return (
-            `BM25 搜索结果（${results.length} 条）：\n` +
+            `BM25 search results (${results.length}):\n` +
             results
               .map(
                 (h) =>
@@ -76,38 +76,38 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
           )
         }
         case 'read':
-          if (!args.filename) return '读取失败：需要 filename'
+          if (!args.filename) return 'Read failed: filename is required'
           return (
             memoryStore.loadFile(args.filename) ??
-            `文件不存在: ${args.filename}`
+            `File not found: ${args.filename}`
           )
         case 'delete':
-          if (!args.filename) return '删除失败：需要 filename'
+          if (!args.filename) return 'Delete failed: filename is required'
           return memoryStore.delete(args.filename)
-            ? `已删除: ${args.filename}`
-            : `文件不存在: ${args.filename}`
+            ? `Deleted: ${args.filename}`
+            : `File not found: ${args.filename}`
         case 'lint': {
           const reports = memoryStore.lint()
-          if (reports.length === 0) return '记忆库健康，没有发现问题。'
-          const lines = [`记忆库 lint 报告（${reports.length} 条有问题）：`, '']
+          if (reports.length === 0) return 'Memory store is healthy; no issues found.'
+          const lines = [`Memory lint report (${reports.length} with issues):`, '']
           for (const r of reports) {
             const fname = r.entry.filePath.split('/').pop()
             const preview = r.entry.content.slice(0, 100).replace(/\n/g, ' ')
             lines.push(`📁 ${fname}  [${r.entry.type}] ${r.entry.name}`)
             lines.push(
-              `   内容预览: ${preview}${r.entry.content.length > 100 ? '...' : ''}`,
+              `   Preview: ${preview}${r.entry.content.length > 100 ? '...' : ''}`,
             )
             for (const issue of r.issues)
               lines.push(`   • ${issue.kind}: ${issue.message}`)
             lines.push('')
           }
           lines.push(
-            '提示: 基于以上报告直接操作即可（delete 删除、save 覆盖更新），不需要逐条 read。',
+            'Tip: act directly on this report (delete to remove, save to overwrite); no need to read entries one by one.',
           )
           return lines.join('\n')
         }
         default:
-          return `未知操作: ${args.action}`
+          return `Unknown action: ${args.action}`
       }
     },
   }

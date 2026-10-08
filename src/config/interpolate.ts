@@ -1,8 +1,8 @@
 type Env = Record<string, string | undefined>
 
 /**
- * 字符串里的 `$NAME` / `${NAME}` 换成环境变量（没设置时为空串），`$$` 是字面的 `$`。
- * 同 pi 的 models.json 写法；不支持 pi 的 `!command`。
+ * Replaces `$NAME` / `${NAME}` with environment variables (empty string when unset);
+ * `$$` is a literal `$`. Same syntax as pi's models.json; pi's `!command` is not supported.
  */
 export function interpolate(value: string, env: Env): string {
   return value.replace(
@@ -14,7 +14,7 @@ export function interpolate(value: string, env: Env): string {
   )
 }
 
-/** 对 JSON 值里所有字符串做 interpolate（对象、数组递归）。 */
+/** Interpolates every string in a JSON value, recursing into objects and arrays. */
 export function interpolateDeep<T>(value: T, env: Env): T {
   if (typeof value === 'string') return interpolate(value, env) as T
   if (Array.isArray(value))
@@ -30,7 +30,7 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** 对象深合并：两边都是对象时递归，否则 override 覆盖（数组也直接覆盖）。 */
+/** Deep merge: recurses when both sides are objects; otherwise `override` wins (arrays too). */
 export function deepMerge(base: unknown, override: unknown): unknown {
   if (!isPlainObject(base) || !isPlainObject(override)) return override
   const result: Record<string, unknown> = { ...base }

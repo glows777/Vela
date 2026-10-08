@@ -18,7 +18,7 @@ import {
 
 afterEach(cleanupTestVelas)
 
-/** 估算 t 当前状态下发给模型的请求有多少 token（与 ContextManager 用的是同一个估算） */
+/** Estimate how many tokens the request t sends to the model in its current state (the same estimate ContextManager uses) */
 async function requestTokens(t: TestVela): Promise<number> {
   return estimateRequestTokens(
     await createRequestSnapshot(
@@ -39,7 +39,7 @@ test('microcompact folds old tool results once more than five calls have complet
   )
   const t = createTestVela({
     files,
-    // 每次请求前都尝试微压缩；摘要永远不会触发
+    // Try microcompact before every request; summary never triggers
     limits: {
       microcompactThreshold: 1,
       minMicroSavings: 1,
@@ -49,59 +49,59 @@ test('microcompact folds old tool results once more than five calls have complet
       ...Array.from({ length: 8 }, (_, i) =>
         fauxToolCall('read_file', { path: `f${i}.ts` }),
       ),
-      fauxText('都读完了'),
+      fauxText('Read them all'),
     ],
   })
 
-  await t.run('把 f0 到 f7 都读一遍')
+  await t.run('Read f0 through f7')
 
   const micro = t.eventsOf('context').filter((e) => e.action === 'micro')
   expect(micro.length).toBeGreaterThan(0)
   expect(micro[0]!.after).toBeLessThan(micro[0]!.before)
 
-  // 最后一次请求里，最早的工具结果已被折叠成引用，最近 5 个保持原样
+  // In the last request the earliest tool results are folded into references; the latest 5 stay as is
   const last = JSON.stringify(t.model.calls.at(-1)!.prompt)
   expect(last).toContain('tool result preview omitted')
   expect(last).toContain('// file 7')
-  // 折叠后的结果可以通过路径找回原文
+  // Folded results can be recovered from their path
   const saved = await t.readData('sessions/default.jsonl')
   expect(saved).toContain('tool result preview omitted')
-  expect(t.lastAssistantText()).toBe('都读完了')
+  expect(t.lastAssistantText()).toBe('Read them all')
 })
 
 test('summary compaction replaces old history with a grounded summary and keeps recent messages', async () => {
   const filler = (i: number) =>
-    `第 ${i} 个问题：${'很长的背景说明。'.repeat(150)}`
+    `Question ${i}: ${'Background. '.repeat(100)}`
   const probe = createTestVela()
   const base = await requestTokens(probe)
   await probe.cleanup()
 
   const t = createTestVela({
-    // 4 轮问答之后（8 条消息）再发第 5 个问题时触发摘要
+    // Summary triggers on the 5th question, after 4 rounds (8 messages)
     limits: { microcompactThreshold: 1e9, summaryThreshold: base + 4 * 400 },
-    responses: [...Array.from({ length: 5 }, (_, i) => fauxText(`回答 ${i}`))],
+    responses: [...Array.from({ length: 5 }, (_, i) => fauxText(`Answer ${i}`))],
     generate: [fauxSummary()],
   })
   for (let i = 0; i < 5; i++) await t.run(filler(i))
 
   const summary = t.eventsOf('context').find((e) => e.action === 'summary')
   expect(summary).toBeDefined()
-  // 至少保留最近 6 条且切在完整的一轮问答处：第一轮（2 条）被摘要替换
+  // Keeps at least the latest 6 and cuts at a full round: the first round (2 messages) is replaced by the summary
   expect(summary!.messages).toBe(2)
 
-  // 摘要请求走 generateText，看到的是压缩控制指令
+  // The summary request goes through generateText and sees the compaction control instruction
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
   expect(generate.lastUserText).toContain('context_compaction')
   expect(generate.responseFormat?.type).toBe('json')
 
-  // 摘要后的主请求：第一条是摘要，最近的消息原样保留
+  // The main request after the summary: the first message is the summary, recent messages are kept as is
   const after = t.model.calls.at(-1)!
   expect(after.kind).toBe('stream')
   const firstUser = after.prompt.find((m) => m.role === 'user')!
-  expect(JSON.stringify(firstUser.content)).toContain('[之前对话的摘要]')
-  expect(JSON.stringify(firstUser.content)).toContain('第 0 个问题')
-  expect(after.lastUserText).toContain('第 4 个问题')
-  expect(t.session.contextManager.state.summary).toContain('## 用户目标')
+  expect(JSON.stringify(firstUser.content)).toContain('[Summary of the earlier conversation]')
+  expect(JSON.stringify(firstUser.content)).toContain('Question 0')
+  expect(after.lastUserText).toContain('Question 4')
+  expect(t.session.contextManager.state.summary).toContain('## User goal')
   expect(
     t
       .tracker()
@@ -109,15 +109,15 @@ test('summary compaction replaces old history with a grounded summary and keeps 
       .some((r) => r.kind === 'summary'),
   ).toBe(true)
 
-  // 摘要落盘，新的 Vela 恢复后带着它
+  // The summary is saved; a new Vela restores it on resume
   const resumed = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
   expect(await resumed.session.resume()).toBe(true)
   expect(resumed.session.contextManager.state.summary).toBe(
     t.session.contextManager.state.summary,
   )
-  await resumed.run('继续')
+  await resumed.run('continue')
   expect(JSON.stringify(resumed.model.calls[0]!.prompt)).toContain(
-    '[之前对话的摘要]',
+    '[Summary of the earlier conversation]',
   )
 })
 
@@ -127,16 +127,16 @@ test('a summary that fails validation stops the turn and leaves history untouche
   await probe.cleanup()
   const t = createTestVela({
     limits: { microcompactThreshold: 1e9, summaryThreshold: base + 4 * 400 },
-    responses: Array.from({ length: 4 }, (_, i) => fauxText(`回答 ${i}`)),
-    generate: [fauxText('好的，摘要准备完成。')],
+    responses: Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
+    generate: [fauxText('OK, the summary is ready.')],
   })
   for (let i = 0; i < 4; i++)
-    await t.run(`问题 ${i}：${'很长的背景说明。'.repeat(150)}`)
+    await t.run(`Question ${i}: ${'Background. '.repeat(100)}`)
   const before = JSON.stringify(t.messages)
 
   await expect(
-    t.run(`问题 4：${'很长的背景说明。'.repeat(150)}`),
-  ).rejects.toThrow('原历史保留')
+    t.run(`Question 4: ${'Background. '.repeat(100)}`),
+  ).rejects.toThrow('original history kept')
 
   expect(JSON.stringify(t.messages.slice(0, 8))).toBe(before)
   expect(t.session.contextManager.state.summary).toBe('')
@@ -154,8 +154,8 @@ test('/defend applies microcompact only and never pays for a summary', async () 
     t.dispatch('sim')
     await t.command('defend')
   })
-  expect(output).toContain('[模拟完成]')
-  // 超过摘要阈值但 /defend 不允许摘要：只报告需要摘要，不发请求
+  expect(output).toContain('[sim done]')
+  // Over the summary threshold, but /defend does not allow a summary: it only reports that one is needed and sends no request
   expect(t.eventsOf('context').map((e) => e.action)).toContain(
     'summary-required',
   )
@@ -164,28 +164,28 @@ test('/defend applies microcompact only and never pays for a summary', async () 
 
 test('session.compact() summarizes old history on demand, with an optional focus', async () => {
   const t = createTestVela({
-    responses: Array.from({ length: 4 }, (_, i) => fauxText(`回答 ${i}`)),
+    responses: Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
     generate: [fauxSummary()],
   })
-  for (let i = 0; i < 4; i++) await t.run(`第 ${i} 个问题`)
+  for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
 
-  await t.session.compact('保留第 0 个问题')
+  await t.session.compact('Keep question 0')
 
   const compact = t.eventsOf('context').find((e) => e.action === 'compact')
   expect(compact?.messages).toBe(2)
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
-  expect(generate.lastUserText).toContain('保留第 0 个问题')
-  expect(t.session.contextManager.state.summary).toContain('## 用户目标')
-  expect(await t.readData('sessions/default.jsonl')).toContain('第 0 个问题')
+  expect(generate.lastUserText).toContain('Keep question 0')
+  expect(t.session.contextManager.state.summary).toContain('## User goal')
+  expect(await t.readData('sessions/default.jsonl')).toContain('Question 0')
   expect(t.session.isRunning).toBe(false)
 })
 
 test('session.compact() refuses while a task is running', async () => {
-  const t = createTestVela({ responses: [fauxHang('想')] })
-  const running = t.run('慢慢想')
+  const t = createTestVela({ responses: [fauxHang('thinking')] })
+  const running = t.run('Think it over slowly')
   while (!t.streamedText()) await Bun.sleep(1)
 
-  await expect(t.session.compact()).rejects.toThrow('有任务正在执行中')
+  await expect(t.session.compact()).rejects.toThrow('A task is already running')
   await t.session.abort()
   await expect(running).rejects.toThrow()
 })

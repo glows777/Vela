@@ -16,7 +16,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
-/** 一个临时的用户级目录和项目目录 */
+/** A temporary user-level directory and project directory */
 function setup(files: Record<string, string> = {}) {
   const root = tempDir('vela-config-')
   dirs.push(root)
@@ -55,7 +55,7 @@ test('project settings override user settings: objects merge deeply, resource li
     tavilyKey: 'project',
     serperKey: 's',
   })
-  // 路径相对所在的 settings 文件
+  // Paths are relative to the settings file they appear in
   expect(config.extensions).toEqual([
     { name: 'a', path: join(agentDir, 'ext/a.ts') },
     { name: 'b', path: join(cwd, 'b.ts') },
@@ -119,28 +119,28 @@ test('built-in extensions load by default; -builtin: turns one off and a project
 test('mistakes in settings are reported with the file name', () => {
   const broken = setup({ 'home/settings.json': '{ nope' })
   expect(() => loadConfig(broken)).toThrow(
-    `${join(broken.agentDir, 'settings.json')} 不是合法的 JSON`,
+    `${join(broken.agentDir, 'settings.json')} is not valid JSON`,
   )
   const badList = setup({ 'home/settings.json': json({ extensions: 'a.ts' }) })
-  expect(() => loadConfig(badList)).toThrow('extensions 应该是字符串数组')
+  expect(() => loadConfig(badList)).toThrow('extensions must be an array of strings')
   const missing = setup({ 'home/settings.json': json({ extensions: ['nope.ts'] }) })
-  expect(() => loadConfig(missing)).toThrow('扩展路径不存在')
+  expect(() => loadConfig(missing)).toThrow('Extension path does not exist')
   const unknown = setup({
     'home/settings.json': json({ extensions: ['-builtin:nope'] }),
   })
   expect(() => loadConfig({ ...unknown, builtins: ['memory'] })).toThrow(
-    '未知的内置扩展 builtin:nope',
+    'Unknown built-in extension builtin:nope',
   )
   const badModel = setup({ 'home/settings.json': json({ defaultModel: 'gpt' }) })
-  expect(() => loadConfig(badModel)).toThrow('defaultModel 要写成 "provider/id"')
+  expect(() => loadConfig(badModel)).toThrow('defaultModel must be "provider/id"')
   const badThinking = setup({
     'home/settings.json': json({ defaultThinkingLevel: 'huge' }),
   })
-  expect(() => loadConfig(badThinking)).toThrow('defaultThinkingLevel 只能是')
+  expect(() => loadConfig(badThinking)).toThrow('defaultThinkingLevel must be one of')
   const badModels = setup({
     'home/models.json': json({ providers: { x: { api: 'grpc' } } }),
   })
-  expect(() => loadConfig(badModels)).toThrow('providers.x.api 只支持')
+  expect(() => loadConfig(badModels)).toThrow('providers.x.api must be one of')
 })
 
 test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal dollar', () => {
@@ -173,7 +173,7 @@ test('the data directory defaults to <agentDir>/projects/<encoded cwd>; settings
   expect(projectDataDir('/h/.vela', '/home/liam/code/x')).toMatch(
     /^\/h\/\.vela\/projects\/--home-liam-code-x--[0-9a-f]{8}$/,
   )
-  // 连字符和分隔符编码相同的两个路径不能共用数据目录
+  // Two paths whose hyphens and separators encode the same must not share a data directory
   expect(projectDataDir('/h', '/work/a-b/c')).not.toBe(
     projectDataDir('/h', '/work/a/b-c'),
   )

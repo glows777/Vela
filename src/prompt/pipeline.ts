@@ -6,13 +6,13 @@ export interface PromptContext {
   deferredToolSummary: string;
   sessionMessageCount: number;
   sessionId: string;
-  /** 当前会话的工具结果存储（toolHistoryGuide 用） */
+  /** Current session's tool result store (used by toolHistoryGuide) */
   toolResults?: ToolResultStore;
-  /** 当前会话已激活的 skill */
+  /** Skills activated in the current session */
   activeSkills?: ReadonlySet<string>;
-  /** 当前会话的角色；不传按 owner */
+  /** Current session's role; defaults to owner */
   role?: Role;
-  /** 扩展在 before_agent_start 里写的段落（段落名 → 内容），一轮内不变 */
+  /** Sections written by extensions in before_agent_start (name → content); fixed within a turn */
   extensionSections?: Readonly<Record<string, string>>;
 }
 
@@ -39,7 +39,7 @@ export class PromptPipeline {
     return prompts.join("\n\n");
   }
 
-  /** 每个段落当前是否启用、多少字符（null 表示这一段关闭）。 */
+  /** Whether each section is enabled and its length in chars (null means the section is off). */
   status(ctx: PromptContext): Array<{ name: string; chars: number | null }> {
     return this.pipeLines.map(({ name, fn }) => {
       const result = fn(ctx);

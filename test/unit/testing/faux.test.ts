@@ -173,6 +173,6 @@ test('loads a JSON scenario file', async () => {
     `${import.meta.dir}/../../fixtures/scenarios/hello.json`,
   )
   expect((await generateText({ model, prompt: 'hi' })).text).toContain(
-    'faux 回放',
+    'faux replay',
   )
 })

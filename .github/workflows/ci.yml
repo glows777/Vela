@@ -18,18 +18,18 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      # 包要能在 Node 上用：消费者冒烟用最低支持的 Node 版本跑 SDK 和 CLI
+      # The package must work on Node: the consumer smoke test runs the SDK and CLI on the oldest supported Node
       - uses: actions/setup-node@v5
         with:
           node-version: 22.18.0
       - run: bun install --frozen-lockfile
-      # test/live 需要真实模型，不在 CI 里跑（bun run test 只含 unit + e2e）
+      # test/live needs a real model and doesn't run in CI (bun run test covers unit + e2e only)
       - name: Test
         run: bun run test
       - name: Typecheck
         run: bun run typecheck
       - name: Lint
         run: bun run lint
-      # build + 打包后装进空的 Node 项目和 Bun 项目，按消费者的方式 import / typecheck / 跑 CLI（要联网装依赖）
+      # Build, pack and install into empty Node and Bun projects; import, type-check and run the CLI like a consumer (needs network)
       - name: Consumer smoke test
         run: bun run smoke:consumer

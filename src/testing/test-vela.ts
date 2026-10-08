@@ -39,49 +39,50 @@ export interface FixtureSkill {
 }
 
 export interface TestVelaOptions {
-  /** faux 主队列（streamText） */
+  /** Main faux queue (streamText) */
   responses?: FauxStep[]
-  /** faux generate 队列（摘要压缩的 generateText） */
+  /** Faux generate queue (generateText for summary compaction) */
   generate?: FauxStep[]
-  /** faux 的其他选项（chunkSize、cache…） */
+  /** Other faux options (chunkSize, cache, ...) */
   faux?: Omit<FauxModelOptions, 'responses' | 'generate'>
-  /** 直接指定模型（不用 faux），或 `provider/id`（配合 `providers`）；此时 `t.model` 不可用 */
+  /** Use this model instead of faux, or a `provider/id` (with `providers`); `t.model` is then unavailable */
   model?: LanguageModel | string
-  /** 模型 provider，同 createVela 的 `providers` */
+  /** Model providers, same as createVela's `providers` */
   providers?: Record<string, ProviderDefinition>
-  /** 新会话默认的 thinking 级别（默认 medium） */
+  /** Default thinking level for new sessions (default medium) */
   thinkingLevel?: ThinkingLevel
-  /** 复用已有目录（例如测试会话恢复）；不传则新建临时目录 */
+  /** Reuse an existing directory (e.g. to test session resume); a new temp directory if omitted */
   cwd?: string
-  /** 相对 cwd 的数据目录，默认 `.vela-data`（持久化，同一 cwd 再建 TestVela 能恢复会话） */
+  /** Data directory relative to cwd, default `.vela-data` (persistent: a new TestVela on the same cwd resumes sessions) */
   dataDir?: string
-  /** 默认会话（`t.session`）的 id，默认 'default' */
+  /** Id of the default session (`t.session`), default 'default' */
   sessionId?: string
-  /** 预置到 cwd 的文件：相对路径 → 内容 */
+  /** Files to create in cwd: relative path → content */
   files?: Record<string, string>
-  /** 预置到 cwd/.skills 的 skill */
+  /** Skills to create in cwd/.skills */
   skills?: FixtureSkill[]
-  /** 加载 rag 扩展：true 用确定性的 faux embedder，也可以直接传 embedder */
+  /** Load the rag extension: true uses the deterministic faux embedder, or pass an embedder */
   embedder?: boolean | EmbeddingFn
-  /** 覆盖上限；测试默认 retryBaseMs=0，重试不等待 */
+  /** Limit overrides; tests default to retryBaseMs=0 so retries don't wait */
   limits?: Partial<VelaLimits>
   logger?: VelaLogger
-  /** 每个扩展的配置段（`vela.config`），按扩展名 */
+  /** Per-extension config sections (`vela.config`), keyed by extension name */
   extensionConfig?: Record<string, Record<string, unknown>>
-  /** 要加载的扩展（被测的扩展），排在内置的 memory（以及 embedder 对应的 rag）之后 */
+  /** Extensions to load (the ones under test), after the built-in memory (and rag, with embedder) */
   extensions?: VelaExtension[]
-  /** 默认会话的选项（角色、权限、工具选择、ui） */
+  /** Options for the default session (role, permissions, tool selection, ui) */
   session?: SessionOptions
-  /** cleanup 时不检查 faux 脚本是否用完 */
+  /** Skip checking on cleanup that the faux script was fully used */
   allowPendingResponses?: boolean
 }
 
 const live = new Set<{ cleanup(): Promise<void> }>()
 
 /**
- * 用真实的 createVela() 装配一个 Vela：模型换成 faux，cwd/数据目录换成临时目录，
- * 收集所有会话的事件。`t.session` 是默认会话，`t.run()` 等于 `t.session.prompt()`。
- * 扩展作者也可以用它离线测试自己的工具和 hooks。
+ * Assembles a Vela with the real createVela(), swapping in the faux model and a temp
+ * cwd/data directory, and collects events from all sessions. `t.session` is the default
+ * session; `t.run()` is `t.session.prompt()`. Extension authors can use it to test their
+ * tools and hooks offline.
  */
 export function createTestVela(options: TestVelaOptions = {}) {
   const ownsDir = !options.cwd
@@ -111,7 +112,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
     limits: { retryBaseMs: 0, ...options.limits },
     logger: options.logger,
     extensionConfig: options.extensionConfig,
-    // 和 CLI 一样带上内置的记忆和知识库扩展（网页工具要联网，测试里不带）
+    // Include the built-in memory and knowledge-base extensions like the CLI (web tools need the network, so not here)
     extensions: [
       memory(),
       ...(embedder ? [rag({ embedder })] : []),
@@ -134,7 +135,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
     session,
     cwd,
     dataDir: vela.dataDir,
-    /** 所有会话的事件，按发生顺序 */
+    /** Events from all sessions, in order */
     events,
     get model(): FauxModel {
       if (!faux) throw new Error('createTestVela: a custom model was passed')
@@ -144,31 +145,31 @@ export function createTestVela(options: TestVelaOptions = {}) {
       return session.messages
     },
 
-    /** 默认会话跑一轮 */
+    /** Runs one turn in the default session */
     run: (input: string, runOptions?: PromptOptions) =>
       session.prompt(input, runOptions),
     tracker: () => session.tracker,
 
-    /** 事件类型序列，断言流程用 */
+    /** Sequence of event types, for asserting on flow */
     eventTypes: (): VelaEvent['type'][] => events.map((e) => e.type),
     eventsOf: <T extends VelaEvent['type']>(type: T) =>
       events.filter(
         (e): e is Extract<VelaEvent, { type: T }> => e.type === type,
       ),
-    /** 某个会话的事件 */
+    /** Events of one session */
     eventsIn: (sessionId: string): VelaEvent[] =>
       events.filter((_, i) => sessionIds[i] === sessionId),
     clearEvents: () => {
       events.length = 0
       sessionIds.length = 0
     },
-    /** 所有 text_delta 拼起来的文本 */
+    /** All text_delta text joined */
     streamedText: () =>
       events
         .filter((e) => e.type === 'text_delta')
         .map((e) => (e as { text: string }).text)
         .join(''),
-    /** 默认会话最后一条 assistant 消息的文本 */
+    /** Text of the default session's last assistant message */
     lastAssistantText: () => lastAssistantText(session.messages),
 
     path: (relative: string) => join(cwd, relative),
@@ -180,7 +181,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
     writeFile: (relative: string, content: string) =>
       writeFile(join(cwd, relative), content),
 
-    /** dispose，删除自己建的临时目录；默认检查 faux 脚本是否全部用完 */
+    /** Disposes and removes the temp directory it created; by default checks the faux script was fully used */
     async cleanup({ keepDir = false } = {}) {
       live.delete(t)
       await vela.dispose()
@@ -197,14 +198,14 @@ export function createTestVela(options: TestVelaOptions = {}) {
 
 export type TestVela = ReturnType<typeof createTestVela>
 
-/** 在 afterEach 里调用：清理还没 cleanup 的 TestVela。 */
+/** Call in afterEach: cleans up any TestVela not yet cleaned up. */
 export async function cleanupTestVelas(): Promise<void> {
   const errors: unknown[] = []
   for (const t of [...live]) await t.cleanup().catch((e) => errors.push(e))
   if (errors.length) throw errors[0]
 }
 
-/** 新建一个临时目录（不归 TestVela 管），用于需要多个 Vela 共用目录的测试 */
+/** Creates a temp directory not owned by a TestVela, for tests where several Velas share a directory */
 export function tempDir(prefix = 'vela-test-'): {
   path: string
   cleanup(): void

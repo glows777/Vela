@@ -1,4 +1,4 @@
-/** CLI 每次启动的新会话 id（同 pi 每次一个新会话）：本地时间 + 4 位随机，可排序也好认。 */
+/** Id for the new session the CLI starts on each launch (like pi): local time + 4 random chars, sortable and readable. */
 export function newSessionId(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`

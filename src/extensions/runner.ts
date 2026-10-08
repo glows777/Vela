@@ -25,14 +25,14 @@ interface RunnerDeps {
   models: ModelRegistry
   hooks: HookPipeline
   gateway: ChannelGateway
-  /** 按 id 取已打开的会话（hooks 只知道会话 id） */
+  /** Look up an open session by id (hooks only know the session id) */
   session: (id: string) => VelaSession | undefined
 }
 
 export interface LoadedExtension {
   name: string
   tools: string[]
-  /** 注册的模型 provider */
+  /** Registered model providers */
   providers: string[]
   commands: string[]
   channels: string[]
@@ -43,8 +43,9 @@ type AnyHandler = (event: unknown, ctx: ExtensionContext) => unknown
 const COMMAND_NAME = /^[A-Za-z0-9][\w-]*$/
 
 /**
- * 扩展运行时：运行扩展工厂，保存它们注册的 handler 和命令，在对应时机按注册顺序调用。
- * 工具调用的拦截挂在 HookPipeline 上（和 audit 等内部 hook 同一条链）。
+ * Extension runtime: runs extension factories, keeps the handlers and commands they register, and
+ * calls them in registration order at the right time.
+ * Tool call interception hangs off the HookPipeline (the same chain as internal hooks such as audit).
  */
 export class ExtensionRunner {
   private readonly handlers = new Map<
@@ -56,7 +57,7 @@ export class ExtensionRunner {
     { extension: string; command: ExtensionCommand }
   >()
   private readonly loadedList: LoadedExtension[] = []
-  /** 所有扩展工厂（包括异步的）跑完；失败时 reject */
+  /** Resolves when all extension factories (including async ones) finish; rejects on failure */
   readonly ready: Promise<void>
 
   constructor(
@@ -75,7 +76,7 @@ export class ExtensionRunner {
         input,
       )
       if (result.block)
-        return { action: 'block', reason: result.reason ?? '被扩展拦截' }
+        return { action: 'block', reason: result.reason ?? 'Blocked by an extension' }
       return result.input === input
         ? { action: 'allow' }
         : { action: 'modify', modifiedInput: result.input }
@@ -107,12 +108,12 @@ export class ExtensionRunner {
       if (result instanceof Promise)
         pending.push(
           result.catch((error) => {
-            throw new Error(`扩展 ${name} 加载失败: ${errorMessage(error)}`)
+            throw new Error(`Extension ${name} failed to load: ${errorMessage(error)}`)
           }),
         )
     })
     this.ready = Promise.all(pending).then(() => {})
-    // 没人 await 时也不要变成未处理的 rejection；prompt() 会 await 它并报错
+    // Avoid an unhandled rejection when nobody awaits it; prompt() awaits it and reports the error
     this.ready.catch(() => {})
   }
 
@@ -137,8 +138,8 @@ export class ExtensionRunner {
         loaded.providers.push(providerName)
       },
       registerTool: (tool) => {
-        // 工具名加上扩展名前缀，避免和内置工具或其它扩展的工具重名；
-        // 工具名就是扩展名时不重复（memory 扩展的 memory 工具不叫 memory_memory）
+        // Prefix tool names with the extension name so they cannot clash with built-in or other
+        // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not memory_memory)
         const toolName =
           tool.name === prefix ? prefix : `${prefix}_${tool.name}`
         deps.registry.register({ ...tool, name: toolName })
@@ -146,11 +147,11 @@ export class ExtensionRunner {
       },
       registerCommand: (commandName, command) => {
         if (!COMMAND_NAME.test(commandName))
-          throw new Error(`无效的命令名 "${commandName}"`)
+          throw new Error(`Invalid command name "${commandName}"`)
         const existing = this.commandMap.get(commandName)
         if (existing)
           throw new Error(
-            `命令 /${commandName} 已由扩展 ${existing.extension} 注册`,
+            `Command /${commandName} is already registered by extension ${existing.extension}`,
           )
         this.commandMap.set(commandName, { extension: name, command })
         loaded.commands.push(commandName)
@@ -175,7 +176,7 @@ export class ExtensionRunner {
     }
   }
 
-  /** 已加载的扩展和它们注册的东西 */
+  /** Loaded extensions and what they registered */
   loaded(): LoadedExtension[] {
     return this.loadedList.map((e) => ({
       ...e,
@@ -203,18 +204,18 @@ export class ExtensionRunner {
     }
   }
 
-  /** 依次调用 handler；每份副本（handler 列表在调用前复制，调用中取消订阅不影响这一次） */
+  /** A copy of the handler list, so unsubscribing during dispatch does not affect the current dispatch */
   private list(event: ExtensionEventName) {
     return [...(this.handlers.get(event) ?? [])]
   }
 
   private report(extension: string, event: string, error: unknown) {
     this.deps.logger.error(
-      `[extension:${extension}] ${event} handler 出错: ${errorMessage(error)}`,
+      `[extension:${extension}] ${event} handler failed: ${errorMessage(error)}`,
     )
   }
 
-  /** 只读通知：不等待 handler，错误写日志。tool_call / tool_result 由拦截版本处理。 */
+  /** Read-only notification: handlers are not awaited and errors are logged. tool_call / tool_result go through the intercepting versions. */
   notify(event: VelaEvent, session: VelaSession): void {
     if (event.type === 'tool_call' || event.type === 'tool_result') return
     const handlers = this.list(event.type)
@@ -231,7 +232,7 @@ export class ExtensionRunner {
     }
   }
 
-  /** 生命周期事件：按顺序等待每个 handler，错误写日志后继续。 */
+  /** Lifecycle events: await each handler in order; log errors and continue. */
   private async lifecycle(
     event: { type: 'session_start' | 'session_shutdown' },
     session: VelaSession,
@@ -254,7 +255,7 @@ export class ExtensionRunner {
     return this.lifecycle({ type: 'session_shutdown' }, session)
   }
 
-  /** before_agent_start：收集这一轮的 system prompt 段落。 */
+  /** before_agent_start: collect this turn's system prompt sections. */
   async beforeAgentStart(
     session: VelaSession,
     prompt: string,
@@ -272,8 +273,9 @@ export class ExtensionRunner {
   }
 
   /**
-   * tool_call：handler 原地改 input 或返回 `{ block }`。handler 抛错按拦截处理（同 pi，宁可不执行）。
-   * 返回的 input 和传入的是同一个对象时表示没有改动。
+   * tool_call: handlers mutate input in place or return `{ block }`. A throwing handler counts as a
+   * block (as in pi: better not to run the tool).
+   * The returned input is the same object as the one passed in when nothing changed.
    */
   private async toolCall(
     session: VelaSession,
@@ -299,7 +301,7 @@ export class ExtensionRunner {
         this.report(extension, event.type, error)
         return {
           block: true,
-          reason: `扩展 ${extension} 检查出错: ${errorMessage(error)}`,
+          reason: `Extension ${extension} check failed: ${errorMessage(error)}`,
           input,
         }
       }
@@ -309,7 +311,7 @@ export class ExtensionRunner {
     }
   }
 
-  /** tool_result：handler 返回 `{ output }` 替换模型看到的文本，依次叠加；出错时保留上一个结果。 */
+  /** tool_result: a handler returns `{ output }` to replace the text the model sees; handlers chain. On error the previous result is kept. */
   private async toolResult(
     session: VelaSession,
     toolCallId: string | undefined,
@@ -339,10 +341,11 @@ export class ExtensionRunner {
   }
 
   /**
-   * `/name args` 是扩展命令时执行它并返回 true；不是命令时返回 false（当普通输入发给模型）。
-   * 只有 owner 会话能执行命令：通道发送者发来的 `/xxx` 只是普通文本。
+   * Runs `/name args` and returns true when it is an extension command; returns false otherwise
+   * (the text goes to the model as normal input).
+   * Only owner sessions can run commands: a `/xxx` from a channel sender is plain text.
+   * `signal` is this command's own abort signal (ctx.signal).
    */
-  /** 执行 `/name args` 命令；`signal` 是这次命令自己的中断信号（ctx.signal）。 */
   async runCommand(
     session: VelaSession,
     text: string,

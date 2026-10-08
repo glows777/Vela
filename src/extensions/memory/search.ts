@@ -6,9 +6,9 @@ export interface SearchHit {
 }
 
 /**
- * 简单的中英文分词：
- * - 英文 / 数字按非字母数字分隔
- * - 中文按字切分（粗暴但够用——记忆条目都很短）
+ * Simple tokenizer for English and Chinese:
+ * - English and digits split on non-alphanumerics
+ * - Chinese splits per character (crude, but memory entries are short)
  */
 function tokenize(text: string): string[] {
   const tokens: string[] = []
@@ -38,10 +38,10 @@ const K1 = 1.5
 const B = 0.75
 
 /**
- * BM25 排序——比简单的 includes 关键词搜索准很多：
- * - tf 饱和：一个词出现 10 次和 100 次差距不大
- * - idf：常见词权重低，罕见词权重高
- * - 文档长度归一化：长文档不会因为内容多就一定排前面
+ * BM25 ranking, much more accurate than a plain `includes` keyword match:
+ * - tf saturation: a term appearing 10 times scores close to one appearing 100 times
+ * - idf: common terms weigh less, rare terms weigh more
+ * - length normalization: long documents do not rank first just for having more text
  */
 export function bm25Search(
   entries: MemoryEntry[],
@@ -53,7 +53,7 @@ export function bm25Search(
   const queryTokens = tokenize(query)
   if (queryTokens.length === 0) return []
 
-  // 把每条记忆拼成单一文档——name/description 适当加权（重复几遍）
+  // One document per memory; name/description are weighted by repetition
   const docs = entries.map((e) => {
     const weighted = `${e.name} ${e.name} ${e.name} ${e.description} ${e.description} ${e.content}`
     return tokenize(weighted)
@@ -62,7 +62,7 @@ export function bm25Search(
   const N = docs.length
   const avgdl = docs.reduce((s, d) => s + d.length, 0) / N
 
-  // df：包含每个词的文档数
+  // df: number of documents containing each term
   const df = new Map<string, number>()
   for (const doc of docs) {
     const seen = new Set(doc)

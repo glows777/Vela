@@ -58,7 +58,7 @@ test('a write failure blocks subsequent calls, and torn history is not overwritt
   await Bun.write(blocked, 'occupied')
   const store = new ToolHistoryStore(join(blocked, 'history.jsonl'))
   await expect(store.begin('bash', 'a', {})).rejects.toThrow(
-    '保存工具调用记录失败',
+    'Failed to save tool call record',
   )
   expect(() => store.assertHealthy()).toThrow()
   const torn = join(root, 'torn.jsonl')
@@ -105,6 +105,6 @@ test('a frozen history file cannot expose later entries even when the reader omi
   const restored = new SessionStore('snapshot', root)
   await restored.loadState()
   expect(restored.results.historyViewSequence).toBe(2)
-  expect(restored.results.readingGuide()).toContain(`绝对路径：${frozen.path}`)
+  expect(restored.results.readingGuide()).toContain(`Absolute path: ${frozen.path}`)
   expect((await store.snapshot(undefined, 2)).path).toBe(frozen.path)
 })

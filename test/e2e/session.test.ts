@@ -6,8 +6,8 @@ import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 afterEach(cleanupTestVelas)
 
 test('a resumed Vela continues the saved conversation', async () => {
-  const first = createTestVela({ responses: [fauxText('第一次的回答')] })
-  await first.run('你好')
+  const first = createTestVela({ responses: [fauxText('First answer')] })
+  await first.run('hello')
   await first.cleanup({ keepDir: true })
 
   const second = createTestVela({
@@ -15,17 +15,17 @@ test('a resumed Vela continues the saved conversation', async () => {
     responses: [
       (req) =>
         fauxText(
-          JSON.stringify(req.prompt).includes('第一次的回答')
-            ? '记得'
-            : '不记得',
+          JSON.stringify(req.prompt).includes('First answer')
+            ? 'I remember'
+            : "I don't remember",
         ),
     ],
   })
   try {
     expect(await second.session.resume()).toBe(true)
     expect(second.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
-    await second.run('你还记得吗？')
-    expect(second.lastAssistantText()).toBe('记得')
+    await second.run('Do you remember?')
+    expect(second.lastAssistantText()).toBe('I remember')
   } finally {
     await second.cleanup()
     rmSync(first.cwd, { recursive: true, force: true })

@@ -6,15 +6,15 @@ import type { CommandHandler } from './index.ts'
 
 export const debugCommands: CommandHandler[] = [
   (cmd, { print, session }) => {
-    if (cmd !== '模拟长对话' && cmd !== 'sim') return false
+    if (cmd !== 'sim') return false
     const now = Date.now()
-    print('\n[模拟] 注入 20 条历史消息（含大量工具结果）...')
+    print('\n[sim] Injecting 20 history messages (with large tool results)...')
     for (let i = 0; i < 5; i++) {
       const age = (20 - i * 4) * 60 * 1000
       const idx = session.messages.length
       session.messages.push({
         role: 'user',
-        content: `第 ${i + 1} 轮：帮我读文件 file-${i}.ts`,
+        content: `Turn ${i + 1}: read file-${i}.ts for me`,
       })
       session.timestamps.set(session.messages[idx]!, now - age)
       session.messages.push({
@@ -47,19 +47,19 @@ export const debugCommands: CommandHandler[] = [
       session.messages.push({
         role: 'assistant',
         content: [
-          { type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` },
+          { type: 'text' as const, text: `Read the contents of file-${i}.ts.` },
         ],
       })
       session.timestamps.set(session.messages[idx + 3]!, now - age)
     }
     print(
-      `[模拟完成] ${session.messages.length} 条消息, ~${estimateMessageTokens(session.messages)} tokens\n`,
+      `[sim done] ${session.messages.length} messages, ~${estimateMessageTokens(session.messages)} tokens\n`,
     )
     return true
   },
 
   (cmd, { print, session }) => {
-    if (cmd !== '执行防线' && cmd !== 'defend') return false
+    if (cmd !== 'defend') return false
     const busy = session.busy
     if (busy.locked) return true
     busy.locked = true
@@ -77,7 +77,7 @@ export const debugCommands: CommandHandler[] = [
         await session.prepareContext(request, { allowSummary: false })
         await session.save()
       } catch (error) {
-        print(`[Defense] 未应用清理: ${error instanceof Error ? error.message : error}`)
+        print(`[Defense] Cleanup not applied: ${error instanceof Error ? error.message : error}`)
       } finally {
         busy.locked = false
         busy.controller = undefined
@@ -86,10 +86,10 @@ export const debugCommands: CommandHandler[] = [
   },
 
   (cmd, { print, session }) => {
-    if (cmd !== 'status' && cmd !== '查看状态') return false
+    if (cmd !== 'status') return false
     const tokens = estimateMessageTokens(session.messages)
     print(
-      `\n[状态] ${session.messages.length} 条消息, ~${tokens} tokens\n`,
+      `\n[status] ${session.messages.length} messages, ~${tokens} tokens\n`,
     )
     return true
   },
@@ -100,11 +100,11 @@ export const debugCommands: CommandHandler[] = [
     if (!on && !off) return false
     const model = vela.model as Partial<DemoModel>
     if (typeof model.setCacheEnabled !== 'function') {
-      print('\n  cache 模拟只对 VELA_MODEL=mock 的 demo 模型有效\n')
+      print('\n  Cache simulation only works with the demo model (VELA_MODEL=mock)\n')
       return true
     }
     model.setCacheEnabled(on)
-    print(on ? '\n  已开启 cache 模拟\n' : '\n  已关闭 cache 模拟\n')
+    print(on ? '\n  Cache simulation on\n' : '\n  Cache simulation off\n')
     return true
   },
 ]

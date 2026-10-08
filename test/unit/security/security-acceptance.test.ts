@@ -129,7 +129,7 @@ test('session rules layer over the role: exact names first, then *', () => {
     'ask',
   )
   expect(decidePermission('owner', 'bash', { '*': 'ask' })).toBe('ask')
-  // 角色里点名的工具优先于会话的 *
+  // A tool named in the role takes precedence over the session's *
   expect(decidePermission('guest', 'rag_search', { '*': 'deny' })).toBe('allow')
   expect(decidePermission('collaborator', 'bash', { '*': 'allow' })).toBe(
     'deny',
@@ -391,7 +391,7 @@ test('moderate bash emits a security warning and executes fake executor', async 
     {
       type: 'security_warning',
       toolName: 'bash',
-      reason: expect.stringMatching(/moderate|风险|警告|推送/),
+      reason: expect.stringMatching(/moderate|risk|warning|push/i),
       command: 'git push',
     },
   ])

@@ -2,8 +2,9 @@ import { pathToFileURL } from 'node:url'
 import type { VelaExtension } from '../extensions/types.ts'
 
 /**
- * 加载一个扩展文件：默认导出 `(vela) => {}`。返回的函数名是扩展名（决定工具前缀和配置段）。
- * Bun 直接加载 `.ts`，扩展不需要构建（pi 为此用 jiti）。
+ * Loads an extension file whose default export is `(vela) => {}`. The returned
+ * function is named after the extension, which sets its tool prefix and config section.
+ * Bun loads `.ts` directly, so extensions need no build step (pi uses jiti for this).
  */
 export async function importExtension(
   path: string,
@@ -14,8 +15,8 @@ export async function importExtension(
   }
   const factory = module.default
   if (typeof factory !== 'function')
-    throw new Error(`扩展 ${path} 没有默认导出 (vela) => {}`)
-  // 用计算属性名给函数命名：runner 用 extension.name 作扩展名
+    throw new Error(`Extension ${path} has no default export (vela) => {}`)
+  // Computed property name names the function; the runner uses extension.name as the extension name
   return {
     [name]: (vela: Parameters<VelaExtension>[0]) =>
       (factory as VelaExtension)(vela),

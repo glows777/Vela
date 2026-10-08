@@ -1,7 +1,9 @@
 /**
- * tool_call + ctx.ui.confirm：跑带 `rm` 的 bash 命令前先问用户（仿 pi 的 permission-gate 示例）。
- * 没有界面（SDK、`-p`、通道会话）时 confirm 返回 false，于是直接拦下。
- * 也可以不写扩展，用会话权限 `vela.session(id, { permissions: { bash: 'ask' } })`。
+ * tool_call + ctx.ui.confirm: ask the user before running a bash command that contains `rm`
+ * (modeled on pi's permission-gate example).
+ * With no UI (SDK, `-p`, channel sessions) confirm returns false, so the call is blocked.
+ * You can also skip the extension and use session permissions:
+ * `vela.session(id, { permissions: { bash: 'ask' } })`.
  */
 import type { VelaExtension } from '@glows777/vela'
 
@@ -10,8 +12,8 @@ const confirmDangerous: VelaExtension = (vela) => {
     if (event.toolName !== 'bash') return
     const command = String(event.input.command ?? '')
     if (!/\brm\b/.test(command)) return
-    const ok = await ctx.ui.confirm('要删除文件', command)
-    if (!ok) return { block: true, reason: '用户没有允许删除' }
+    const ok = await ctx.ui.confirm('Delete files?', command)
+    if (!ok) return { block: true, reason: 'User did not allow the deletion' }
   })
 }
 

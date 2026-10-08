@@ -1,42 +1,41 @@
 import { APICallError } from "@ai-sdk/provider";
 
-// --- 错误分类 ---
+// --- Error classification ---
 
 export function isRetryable(error: unknown): boolean {
-  // provider 的 HTTP 错误：message 是响应体里的说明（如 "Rate limit reached ..."），不含状态码，
-  // 按 statusCode 判断（AI SDK 默认 408/409/429/5xx 可重试）
+  // Provider HTTP errors: message is the response body text (e.g. "Rate limit reached ...") without
+  // the status code, so use statusCode (AI SDK retries 408/409/429/5xx by default)
   if (APICallError.isInstance(error)) return error.isRetryable;
   if (!(error instanceof Error)) return false;
 
   const message = error.message || "";
 
-  // HTTP 状态码判断
   const statusMatch = message.match(/(\d{3})/);
   if (statusMatch) {
     const status = parseInt(statusMatch[1]!);
-    // 429 Too Many Requests, 529 Site is overloaded, 408 Request Timeout
-    // 这些状态码通常表示请求过多或服务器暂时无法处理请求，适合重试
+    // 429 Too Many Requests, 529 Site is overloaded, 408 Request Timeout: transient, retry
     if ([429, 529, 408].includes(status)) return true;
 
-    // 5xx 错误通常表示服务器错误，适合重试
+    // 5xx: server error, retry
     if (status >= 500 && status < 600) return true;
 
-    // 4xx 错误通常表示客户端错误，不适合重试
+    // 4xx: client error, do not retry
     if (status >= 400 && status < 500) return false;
   }
 
-  // ECONNRESET 连接被重置，EPIPE 管道破裂，ETIMEDOUT 请求超时，fetch failed 或 network 表示网络问题，这些都适合重试
+  // Network problems (connection reset, broken pipe, timeout, fetch failed) are retryable
   if (message.includes("ECONNRESET") || message.includes("EPIPE")) return true;
   if (message.includes("ETIMEDOUT") || message.includes("timeout")) return true;
   if (message.includes("fetch failed") || message.includes("network"))
     return true;
-  // AI SDK 会把流式错误包装成 NoOutputGeneratedError, 这种错误通常表示模型没有生成输出，可能是暂时的模型问题，适合重试
+  // AI SDK wraps stream errors in NoOutputGeneratedError: the model produced no output,
+  // usually a transient model problem, so retry
   if (message.includes("No output generated")) return true;
 
   return false;
 }
 
-// --- 指数退避 + 随机抖动 ---
+// --- Exponential backoff with jitter ---
 export function calculateDelay(
   attempt: number,
   baseMs = 500,

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
-/** `~/.vela/trust.json`：目录 → 是否信任（同 pi 的 trust.json，父目录的决定对子目录生效）。 */
+/** `~/.vela/trust.json`: directory → trusted (like pi's trust.json; a parent's decision applies to its children). */
 function trustFile(agentDir: string): string {
   return join(agentDir, 'trust.json')
 }
@@ -17,7 +17,7 @@ function readDecisions(agentDir: string): Record<string, boolean> {
   }
 }
 
-/** 离 cwd 最近的已保存决定；没有时 undefined。 */
+/** The saved decision closest to cwd, or undefined. */
 export function savedTrust(agentDir: string, cwd: string): boolean | undefined {
   const decisions = readDecisions(agentDir)
   let dir = resolve(cwd)

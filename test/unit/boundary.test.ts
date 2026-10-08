@@ -2,12 +2,12 @@ import { expect, test } from 'bun:test'
 import { join, relative, resolve } from 'node:path'
 
 /**
- * core（src/ 下除 CLI 和测试工具以外的代码）是可以被别的项目 import 的 SDK：
- * 不写终端、不退出进程、不读环境变量、不碰 readline。输出走事件或注入的 logger。
+ * core (everything under src/ except the CLI and test tools) is an SDK other projects import:
+ * it never writes to the terminal, exits the process, reads env vars, or touches readline. Output goes through events or an injected logger.
  */
 const SRC = resolve(import.meta.dir, '../../src')
 
-/** 允许的地方：CLI 和测试工具 */
+/** Allowed places: the CLI and test tools */
 const ALLOWED = ['cli/', 'testing/']
 
 const FORBIDDEN: [RegExp, string][] = [
@@ -18,7 +18,7 @@ const FORBIDDEN: [RegExp, string][] = [
   [/['"]node:readline['"]/, 'node:readline'],
 ]
 
-/** 去掉注释，避免说明文字里提到 process.env 之类被误报 */
+/** Strip comments so prose mentioning process.env and the like is not flagged */
 function stripComments(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ' '))

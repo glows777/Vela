@@ -1,24 +1,24 @@
 /**
- * registerCommand + ctx.ui.notify：`/todo 买牛奶` 记一条待办，`/todo` 列出。
- * 命令只在 owner 会话里执行（通道发送者发来的 `/todo` 是普通文本）。
- * 没有界面时 notify 变成 `notify` 事件。
+ * registerCommand + ctx.ui.notify: `/todo buy milk` adds a todo, `/todo` lists them.
+ * Commands run only in owner sessions (a `/todo` from a channel sender is plain text).
+ * With no UI, notify becomes a `notify` event.
  */
 import type { VelaExtension } from '@glows777/vela'
 
 const todo: VelaExtension = (vela) => {
-  // 每个会话一份待办
+  // One todo list per session
   const todos = new Map<string, string[]>()
 
   vela.registerCommand('todo', {
-    description: '记一条待办；不带参数时列出',
+    description: 'Add a todo; with no arguments, list todos',
     handler: (args, ctx) => {
       const list = todos.get(ctx.session.id) ?? []
       todos.set(ctx.session.id, list)
       if (args) {
         list.push(args)
-        ctx.ui.notify(`已记下：${args}`)
+        ctx.ui.notify(`Added: ${args}`)
       } else {
-        ctx.ui.notify(list.length ? list.join('\n') : '没有待办')
+        ctx.ui.notify(list.length ? list.join('\n') : 'No todos')
       }
     },
   })

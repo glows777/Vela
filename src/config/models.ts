@@ -7,7 +7,7 @@ import { interpolate, isPlainObject } from './interpolate.ts'
 
 type Env = Record<string, string | undefined>
 
-/** models.json 里 provider 的线协议（同 pi 的 `api` 字段，只支持这几种）。 */
+/** Wire protocol of a models.json provider (pi's `api` field; only these are supported). */
 export type ProviderApi =
   | 'openai-completions'
   | 'openai-responses'
@@ -19,20 +19,20 @@ const APIS: readonly ProviderApi[] = [
   'anthropic-messages',
 ]
 
-/** `~/.vela/models.json` 的一个 provider（同 pi 的形状）。 */
+/** One provider in `~/.vela/models.json` (same shape as pi). */
 export interface ProviderConfig {
   api?: ProviderApi
   baseUrl?: string
-  /** `$VAR` / `${VAR}` 读环境变量 */
+  /** `$VAR` / `${VAR}` reads an environment variable */
   apiKey?: string
   headers?: Record<string, string>
   models?: ModelSpec[]
 }
 
 /**
- * 内置 provider：key 从环境变量读。models.json 里同名的 provider 覆盖这里的字段
- * （例如只写 `models` 给 openai 补上 contextWindow / cost）。
- * openai 用 Chat Completions（现有行为，OpenAI 兼容服务都能用）。
+ * Built-in providers; keys come from environment variables. A models.json provider
+ * with the same name overrides these fields (e.g. only `models`, to add contextWindow / cost to openai).
+ * openai uses Chat Completions (existing behavior; works with any OpenAI-compatible service).
  */
 const BUILTIN_PROVIDERS: Record<string, ProviderConfig> = {
   openai: {
@@ -44,8 +44,8 @@ const BUILTIN_PROVIDERS: Record<string, ProviderConfig> = {
 }
 
 /**
- * 读 `<agentDir>/models.json`，和内置 provider 合并，返回 createVela 的 `providers`。
- * 只读用户级目录（同 pi，项目里没有 models.json）。
+ * Reads `<agentDir>/models.json`, merges it with the built-in providers and returns
+ * `providers` for createVela. User-level directory only (like pi, projects have no models.json).
  */
 export function loadModels(options: {
   agentDir: string
@@ -75,18 +75,18 @@ function readModelsFile(file: string): Record<string, ProviderConfig> {
   try {
     raw = JSON.parse(readFileSync(file, 'utf-8'))
   } catch (error) {
-    throw new Error(`${file} 不是合法的 JSON: ${(error as Error).message}`)
+    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
   }
   const providers = isPlainObject(raw) ? raw.providers : undefined
   if (providers === undefined) return {}
   if (!isPlainObject(providers))
-    throw new Error(`${file}: providers 应该是对象`)
+    throw new Error(`${file}: providers must be an object`)
   for (const [name, config] of Object.entries(providers)) {
     if (!isPlainObject(config))
-      throw new Error(`${file}: providers.${name} 应该是对象`)
+      throw new Error(`${file}: providers.${name} must be an object`)
     if (config.api !== undefined && !APIS.includes(config.api as ProviderApi))
       throw new Error(
-        `${file}: providers.${name}.api 只支持 ${APIS.join(' / ')}`,
+        `${file}: providers.${name}.api must be one of ${APIS.join(' / ')}`,
       )
     const models = config.models
     if (
@@ -94,7 +94,7 @@ function readModelsFile(file: string): Record<string, ProviderConfig> {
       (!Array.isArray(models) ||
         models.some((m) => !isPlainObject(m) || typeof m.id !== 'string'))
     )
-      throw new Error(`${file}: providers.${name}.models 应该是带 id 的对象数组`)
+      throw new Error(`${file}: providers.${name}.models must be an array of objects with an id`)
   }
   return providers as Record<string, ProviderConfig>
 }
@@ -116,11 +116,11 @@ function createProvider(
     models: config.models,
     createModel(id) {
       if (!config.api)
-        throw new Error(`${file}: providers.${name} 没有写 api`)
+        throw new Error(`${file}: providers.${name} is missing api`)
       const apiKey = read(config.apiKey)
       if (!apiKey)
         throw new Error(
-          `provider ${name} 没有 API key（${config.apiKey?.startsWith('$') ? `设置环境变量 ${config.apiKey.replace(/[${}]/g, '')}，或` : ''}在 ${file} 里写 apiKey）`,
+          `Provider ${name} has no API key (${config.apiKey?.startsWith('$') ? `set the ${config.apiKey.replace(/[${}]/g, '')} environment variable, or ` : ''}set apiKey in ${file})`,
         )
       const baseURL = read(config.baseUrl)
       switch (config.api) {

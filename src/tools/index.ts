@@ -8,7 +8,7 @@ import type { ToolDefinition } from './registry.ts'
 import { createGlobTool, createGrepTool } from './search.ts'
 import { createBashTool } from './shell.ts'
 
-/** 核心工具集合；文件、搜索和 bash 工具的相对路径按 cwd 解析（默认进程工作目录）。 */
+/** Core tools. File, search and bash tools resolve relative paths against cwd (default: process working directory). */
 export function createCoreTools({
   cwd,
   bashTimeoutMs,

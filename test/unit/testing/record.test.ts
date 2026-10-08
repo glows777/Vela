@@ -22,7 +22,7 @@ import {
 
 afterEach(cleanupTestVelas)
 
-/** 用 faux 模型扮演“真实模型”，录一段会话 */
+/** Record a session with a faux model standing in for the "real model" */
 async function record(
   responses: Parameters<typeof createFauxModel>[0],
   inputs: string[],
@@ -52,15 +52,15 @@ test('a recorded session replays offline with the same events and answers', asyn
     {
       responses: [
         fauxToolCall('read_file', { path: 'notes.txt' }),
-        (req) => fauxText(`里面写着：${req.toolResults[0]?.output}`),
-        fauxText('第二轮'),
+        (req) => fauxText(`It says: ${req.toolResults[0]?.output}`),
+        fauxText('Second turn'),
       ],
     },
-    ['读 notes.txt', '再说一句'],
+    ['Read notes.txt', 'Say one more thing'],
     files,
   )
   try {
-    expect(scenario.inputs).toEqual(['读 notes.txt', '再说一句'])
+    expect(scenario.inputs).toEqual(['Read notes.txt', 'Say one more thing'])
     expect(scenario.responses).toHaveLength(3)
     expect(scenario.responses[0]!.toolCalls).toMatchObject([
       { name: 'read_file', input: { path: 'notes.txt' } },
@@ -73,7 +73,7 @@ test('a recorded session replays offline with the same events and answers', asyn
     expect(replay.t.messages.map((m) => m.role)).toEqual(
       t.messages.map((m) => m.role),
     )
-    expect(replay.t.lastAssistantText()).toBe('第二轮')
+    expect(replay.t.lastAssistantText()).toBe('Second turn')
   } finally {
     dir.cleanup()
   }
@@ -84,18 +84,18 @@ test('request errors, mid-stream errors and retries are recorded as faux errors'
     {
       responses: [
         fauxError('503 Service Unavailable'),
-        fauxStreamError('ECONNRESET', '半截'),
-        fauxText('终于好了'),
+        fauxStreamError('ECONNRESET', 'half a reply'),
+        fauxText('Finally worked'),
         fauxError('400 Bad Request'),
       ],
     },
-    ['第一问', '第二问'],
+    ['First question', 'Second question'],
   )
   try {
     expect(scenario.responses).toEqual([
       { error: '503 Service Unavailable' },
-      { text: '半截', streamError: 'ECONNRESET' },
-      expect.objectContaining({ text: '终于好了' }),
+      { text: 'half a reply', streamError: 'ECONNRESET' },
+      expect.objectContaining({ text: 'Finally worked' }),
       { error: '400 Bad Request' },
     ])
     const replay = await replayScenario(path)
@@ -113,18 +113,18 @@ test('an aborted request is recorded as hang', async () => {
   try {
     const recorder = recordModel(
       createFauxModel({
-        responses: [fauxHang('想到一半')],
+        responses: [fauxHang('Halfway through a thought')],
       }),
       { path },
     )
     const t = createTestVela({ model: recorder.model })
-    const running = t.run('等等')
+    const running = t.run('Wait')
     while (t.eventsOf('text_delta').length === 0) await Bun.sleep(1)
     t.session.abort()
     await running.catch(() => {})
     await recorder.flush()
     expect(recorder.scenario().responses).toEqual([
-      { text: '想到一半', hang: true },
+      { text: 'Halfway through a thought', hang: true },
     ])
     expect(recorder.scenario().generate).toBeUndefined()
   } finally {
@@ -137,16 +137,16 @@ test('generateText requests are recorded in the generate queue', async () => {
   const path = join(dir.path, 'scenario.json')
   try {
     const recorder = recordModel(
-      createFauxModel({ responses: [], generate: [fauxText('摘要')] }),
+      createFauxModel({ responses: [], generate: [fauxText('Summary')] }),
       { path },
     )
     const { text } = await generateText({ model: recorder.model, prompt: 'x' })
-    expect(text).toBe('摘要')
+    expect(text).toBe('Summary')
     await recorder.flush()
     const scenario = (await Bun.file(path).json()) as FauxScenario
     expect(scenario.responses).toEqual([])
     expect(scenario.generate).toEqual([
-      expect.objectContaining({ text: '摘要' }),
+      expect.objectContaining({ text: 'Summary' }),
     ])
   } finally {
     dir.cleanup()

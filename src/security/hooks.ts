@@ -3,10 +3,10 @@ import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 
 export type HookAction = 'allow' | 'block' | 'modify'
 
-/** 调用 hook 时附带的会话信息：hook 可以通过 emit 往调用所在的会话发事件。 */
+/** Session info passed to hooks; a hook can emit events into the calling session. */
 export interface HookContext {
   sessionId?: string
-  /** 模型给这次工具调用的 id */
+  /** The model's id for this tool call */
   toolCallId?: string
   emit(event: VelaEvent): void
 }
@@ -66,7 +66,7 @@ export class HookPipeline {
           modified = true
         }
       } catch (error) {
-        this.logger.error(`[hook:${hook.name}] pre 异常: ${errorMessage(error)}`)
+        this.logger.error(`[hook:${hook.name}] pre failed: ${errorMessage(error)}`)
       }
     }
     return modified
@@ -89,7 +89,7 @@ export class HookPipeline {
         }
       } catch (error) {
         this.logger.error(
-          `[hook:${hook.name}] post 异常: ${errorMessage(error)}`,
+          `[hook:${hook.name}] post failed: ${errorMessage(error)}`,
         )
       }
     }
