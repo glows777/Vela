@@ -86,7 +86,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | Option | Default | Description |
 |---|---|---|
 | `role` | `owner` | `owner`, `collaborator` or `guest`. Decides which tools are available and whether extension commands run. See [Security](security.md). |
-| `permissions` | none | Per-tool rules on top of the role: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`; at the same level session rules beat role rules. `ask` calls `ui.confirm`; without a UI it refuses. |
+| `permissions` | none | Per-tool rules that tighten the role: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`. They cannot grant a tool the role denies (`allow` on it stays denied). `ask` calls `ui.confirm`; without a UI it refuses. |
 | `tools` | all | Enable only these tools (still limited by the role) |
 | `ui` | none | A `SessionUI` extensions use to talk to the user (`notify`, `confirm`, `select`, `input`, optional `setStatus`, `setWidget`). Without it `confirm` answers no, `select`/`input` answer nothing, and `notify` becomes a `notify` event. |
 | `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
@@ -116,7 +116,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `setActiveTools(names)` | Enable only these tools; `undefined` restores all |
 | `name`, `setName(name)` | Display name, saved with the next save and shown in session lists |
 | `limits` | Limits in effect for this session's model |
-| `usage` | `{ tokens, percent, needsAction, totals }`: context estimate and this session's token and cost totals |
+| `usage` | `{ tokens, percent, needsAction, totals }`: context estimate and this session's token and cost totals; `totals.cost`, `baselineCost` and `savedCost` are undefined while no request had a known price |
 | `subscribe(listener)` | This session's events: `(event) => void`. Returns an unsubscribe function. |
 | `close()` | Aborts, waits for the run to finish and save, fires `session_shutdown` and removes the session from the Vela |
 
@@ -173,7 +173,7 @@ Steered messages arrive as another `message` followed by another turn. Follow-up
 | `tool_error` | `toolCallId`, `toolName`, `input`, `error` | A tool threw, or the call was invalid. The error goes back to the model. |
 | `loop_detected` | `level` (`warning` or `critical`), `detector`, `message` | Repeated tool calls were detected. `warning` adds a reminder to the history; `critical` stops the loop with `agent_end` reason `loop`. |
 | `retry` | `attempt`, `maxRetries`, `delayMs`, `error` | A retryable model error; the request runs again after `delayMs`. Text already streamed by the failed attempt does not enter the history, so a UI should drop it. |
-| `usage` | `modelId`, `usage` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`), `record?` (adds `cost` in USD, `ts`, `model`, `kind` (`main` or `summary`), `durationMs` and the provider's raw `usage`) | After each model request |
+| `usage` | `modelId`, `usage` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`), `record?` (adds `cost` in USD, absent when the model has no known price, `ts`, `model`, `kind` (`main` or `summary`), `durationMs` and the provider's raw `usage`) | After each model request |
 | `turn_end` | `turn`, `needsToolCall` | After each model request and its tools. `needsToolCall` is true when another turn follows to send tool results back. |
 | `agent_end` | `reason` (`done`, `loop`, `aborted`, `error`), `error?` | The loop ended. Queued messages may still start another loop. |
 | `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
@@ -199,7 +199,7 @@ const bob = vela.session('bob', { role: 'guest' })
 await Promise.all([alice.prompt('Hi'), bob.prompt('Hello')])
 ```
 
-Sessions in one Vela run concurrently. Tool definitions, extensions, skills, memory and channels are shared; history, queues, compaction, usage, tool results, role and the run lock are per session. Channels rely on this: the gateway opens one session per sender (`<channel>-<senderId>`). See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [Sessions](sessions.md#multiple-sessions).
+Sessions in one Vela run concurrently. Tool definitions, extensions, skills, memory and channels are shared; history, queues, compaction, usage, tool results, role and the run lock are per session. Channels rely on this: the gateway opens one session per conversation and sender (`<channel>-<channelId>-<senderId>`). See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [Sessions](sessions.md#multiple-sessions).
 
 ## Session storage
 
@@ -237,13 +237,13 @@ Long tool output and the tool call history are always written to files under `<d
 
 ```typescript
 import {
-  createVela, feishu, importExtension, loadConfig, memory, rag, supabase, web,
+  createVela, feishu, importExtension, loadConfig, memory, rag, web,
   type VelaExtension,
 } from '@glows777/vela'
 
 const builtins: Record<string, () => VelaExtension> = {
   memory: () => memory(), rag: () => rag(), web: () => web(),
-  supabase: () => supabase(), feishu: () => feishu(),
+  feishu: () => feishu(),
 }
 const config = loadConfig({ cwd: process.cwd(), env: process.env, builtins: Object.keys(builtins) })
 
@@ -300,7 +300,7 @@ Extensions get the same logger as `vela.logger`.
 The SDK loads no extensions by default. The CLI's built-in extensions are exported as factories:
 
 ```typescript
-import { createVela, memory, rag, createEmbedder, web, supabase, feishu } from '@glows777/vela'
+import { createVela, memory, rag, createEmbedder, web, feishu } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',

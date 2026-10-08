@@ -30,7 +30,6 @@ export { memory } from './extensions/memory/index.ts'
 export { type RagOptions, rag } from './extensions/rag/index.ts'
 export { createEmbedder, type EmbeddingFn } from './extensions/rag/embedder.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
-export { type SupabaseOptions, supabase } from './extensions/supabase.ts'
 export type {
   BeforeAgentStartEvent,
   ExtensionAPI,

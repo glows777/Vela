@@ -33,10 +33,17 @@ const ROLE_RULES: Record<Role, PermissionRules> = {
   },
 }
 
+const STRICTNESS: Record<PermissionDecision, number> = {
+  allow: 0,
+  ask: 1,
+  deny: 2,
+}
+
 /**
- * A role's decision for a tool. `overrides` are the session's own rules
- * (`vela.session(id, { permissions })`): an exact tool name beats `*`, and at the same
- * level session rules beat role rules.
+ * A session's decision for a tool. The role is the upper bound; `overrides` are the
+ * session's own rules (`vela.session(id, { permissions })`) and can only tighten it:
+ * `ask` / `deny` apply to tools the role allows, while `allow` on a tool the role forbids
+ * stays `deny`. Within each rule set an exact tool name beats `*`.
  */
 export function decidePermission(
   role: Role,
@@ -44,13 +51,9 @@ export function decidePermission(
   overrides?: PermissionRules,
 ): PermissionDecision {
   const rules = ROLE_RULES[role]
-  return (
-    overrides?.[toolName] ??
-    rules[toolName] ??
-    overrides?.['*'] ??
-    rules['*'] ??
-    'deny'
-  )
+  const byRole = rules[toolName] ?? rules['*'] ?? 'deny'
+  const bySession = overrides?.[toolName] ?? overrides?.['*'] ?? byRole
+  return STRICTNESS[bySession] > STRICTNESS[byRole] ? bySession : byRole
 }
 
 export function canUseTool(role: Role, toolName: string): boolean {

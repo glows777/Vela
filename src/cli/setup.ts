@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   type ExtensionEntry,
   extensionName,
@@ -14,7 +14,6 @@ import { deepMerge } from '../config/interpolate.ts'
 import { feishu } from '../extensions/feishu/index.ts'
 import { memory } from '../extensions/memory/index.ts'
 import { rag } from '../extensions/rag/index.ts'
-import { supabase } from '../extensions/supabase.ts'
 import type { VelaExtension } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
 import { web } from '../extensions/web/index.ts'
@@ -27,7 +26,6 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   memory: () => memory(),
   rag: () => rag(),
   web: () => web(),
-  supabase: () => supabase(),
   feishu: () => feishu(),
 }
 
@@ -56,10 +54,86 @@ export interface CliArgs {
   model?: string
   /** `--thinking <level>` */
   thinking?: ThinkingLevel
+  /** `-h, --help`: print HELP and exit */
+  help?: boolean
+  /** `-v, --version`: print the package version and exit */
+  version?: boolean
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [-h | --help] [-v | --version]'
+
+/** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
+export const HELP = `vela - terminal agent with pi-style extensions
+
+Usage:
+  vela [options] [prompt...]
+
+Modes:
+  (default)                     Interactive TUI when stdin and stdout are a terminal
+  -p, --print                   Run the prompts and exit; stdout gets only the last answer
+                                (also used when stdin or stdout is redirected)
+  --mode <text|json|rpc>        text: like -p; json: one JSON line per event; rpc: JSON commands on stdin
+
+Options:
+  -c, --continue                Continue the most recent session
+  -r, --resume                  Pick a saved session (interactive mode only)
+  --session <id>                Open this session (created if missing)
+  --no-session                  Keep the session in memory only, not on disk
+  --model <provider/id>         Model to use (providers: built-in openai / anthropic, ~/.vela/models.json, extensions)
+  --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
+  -e, --extension <path>        Load an extension file or directory, or builtin:<name> (repeatable)
+  -ne, --no-extensions          Skip built-in and discovered extensions (-e still loads)
+  --approve                     Trust project config, extensions and skills for this run (not saved)
+  --no-approve                  Ignore project config, extensions and skills for this run (not saved)
+  -h, --help                    Show this help
+  -v, --version                 Show the version number
+
+Prompts are sent in order. In interactive mode, text starting with / is a command (/hotkeys, /context,
+/usage, /skill, /model, ...); anything else goes to the model.
+
+Examples:
+  # Interactive mode
+  vela
+
+  # Interactive mode with an initial prompt
+  vela "List all .ts files in src/"
+
+  # Print mode: answer and exit
+  vela -p "Summarize README.md"
+
+  # Piped stdin is prepended to the first prompt
+  git diff | vela -p "Review this change"
+
+  # Continue the most recent session
+  vela -c "What did we discuss?"
+
+  # Pick a model and thinking level
+  vela --model anthropic/<model-id> --thinking high "Plan the refactor"
+
+  # One JSON event per line, for scripts
+  vela --mode json "Run the tests"
+
+  # Offline demo model, no API key needed
+  VELA_MODEL=mock vela
+
+Environment variables:
+  OPENAI_API_KEY                API key for the built-in openai provider
+  OPENAI_API_BASE_URL           Base URL for the built-in openai provider
+  OPENAI_API_MODEL_NAME         Default model id for openai when no --model / defaultModel is set
+  ANTHROPIC_API_KEY             API key for the built-in anthropic provider
+  VELA_DIR                      User directory (default: ~/.vela)
+  VELA_MODEL                    mock: offline demo model; faux:<scenario.json>: replay a recorded scenario
+  VELA_RECORD                   Record this run as a faux scenario at the given path
+  VELA_OFFLINE                  1: never download ripgrep / fd
+  VELA_DEBUG                    1: debug logging (interactive mode: ~/.vela/debug.log)
+`
+
+/** The package version, read from package.json two levels up (src/cli/ and dist/cli/ both sit there). */
+export function packageVersion(): string {
+  const file = new URL('../../package.json', import.meta.url)
+  return (JSON.parse(readFileSync(file, 'utf8')) as { version: string }).version
+}
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
@@ -78,7 +152,9 @@ export function parseArgs(argv: string[]): CliArgs {
       if (next === undefined) throw new Error(`${arg} requires a value`)
       return next
     }
-    if (arg === '-p' || arg === '--print') args.print = true
+    if (arg === '-h' || arg === '--help') args.help = true
+    else if (arg === '-v' || arg === '--version') args.version = true
+    else if (arg === '-p' || arg === '--print') args.print = true
     else if (arg === '--mode') {
       const mode = value()
       if (mode !== 'text' && mode !== 'json' && mode !== 'rpc')
@@ -110,7 +186,7 @@ export function parseArgs(argv: string[]): CliArgs {
 }
 
 /**
- * Decide whether to load a project's `.vela/settings.json` or `.vela/extensions/` (like pi's project trust):
+ * Decide whether to load a project's `.vela/settings.json`, `.vela/extensions/` and project skills (like pi's project trust):
  * `--approve / --no-approve` → saved decision → ask once in interactive mode and save; untrusted when we can't ask.
  * `warning` in the result is the notice shown to the user when untrusted.
  */
@@ -134,7 +210,7 @@ export async function resolveTrust(options: {
       warning: notTrusted(cwd, agentDir, 'non-interactive mode does not ask; pass --approve to trust it'),
     }
   const answer = await question(
-    `${resolve(cwd)} has project config (.vela/settings.json or .vela/extensions/).\nExtensions are code that runs on this machine. Trust this project and load it? (y/N) `,
+    `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/ or skills in .vela/skills/ or .skills/).\nExtensions are code that runs on this machine, and skills are instructions for the model. Trust this project and load it? (y/N) `,
   )
   const trusted = answer === 'y' || answer === 'yes'
   saveTrust(agentDir, cwd, trusted)
@@ -144,7 +220,7 @@ export async function resolveTrust(options: {
 }
 
 function notTrusted(cwd: string, agentDir: string, reason: string): string {
-  return `[trust] Did not load config and extensions from ${join(resolve(cwd), '.vela')} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
+  return `[trust] Did not load config, extensions and skills from ${resolve(cwd)} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
 }
 
 async function question(prompt: string): Promise<string> {
@@ -168,7 +244,6 @@ export function extensionConfigFromEnv(
 ): Record<string, Record<string, unknown>> {
   const defaults: Record<string, Record<string, unknown>> = {
     web: { tavilyKey: env.TAVILY_API_KEY, serperKey: env.SERPER_API_KEY },
-    supabase: { url: env.SUPABASE_URL, key: env.SUPABASE_KEY },
     feishu: {
       appId: env.FEISHU_APP_ID,
       appSecret: env.FEISHU_APP_SECRET,

@@ -272,6 +272,26 @@ test.concurrent('-p without a prompt prints usage and exits 2', async () => {
   expect(stderr).toContain('Usage')
 })
 
+test.concurrent('--help and --version print to stdout and exit 0 before any setup', async () => {
+  // A broken settings.json and no model must not matter: these exit before config and model are read
+  const files = { '.vela/settings.json': '{ broken' }
+  for (const flag of ['--help', '-h']) {
+    const { stdout, stderr, code } = await cli([flag], { model: '', files })
+    expect(code).toBe(0)
+    expect(stderr).toBe('')
+    expect(stdout).toContain('Usage:')
+    expect(stdout).toContain('--version')
+    expect(stdout).toContain('Examples:')
+  }
+  const { version } = await Bun.file(join(ROOT, 'package.json')).json()
+  for (const flag of ['--version', '-v']) {
+    const { stdout, stderr, code } = await cli([flag], { model: '', files })
+    expect(code).toBe(0)
+    expect(stderr).toBe('')
+    expect(stdout).toBe(`${version}\n`)
+  }
+})
+
 const GREET = (label: string) =>
   `export default function (vela) { vela.logger.info(\`[${label}] loaded \${JSON.stringify(vela.config)}\`) }`
 
@@ -339,8 +359,8 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   )
   expect(code).toBe(0)
   expect(stderr).toContain('[extra] loaded {}')
-  // The built-in supabase extension did not load (it announces mock mode when it does)
-  expect(stderr).not.toContain('[supabase]')
+  // The built-in rag extension did not load (it announces that embedding is not configured when it does)
+  expect(stderr).not.toContain('[rag]')
 })
 
 test.concurrent('--no-session keeps the session in memory', async () => {

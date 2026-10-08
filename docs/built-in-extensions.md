@@ -1,20 +1,19 @@
 # Built-in extensions
 
-Vela ships five extensions: `memory`, `rag`, `web`, `supabase` and `feishu`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
+Vela ships four extensions: `memory`, `rag`, `web` and `feishu`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
 
 | Extension | Adds |
 |---|---|
 | `memory` | Cross-session memory: the `memory` tool, a memory index in the system prompt, `/memory` and `/dream` |
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary in the system prompt, `/rag` |
 | `web` | `web_fetch`, and `web_search` when a search API key is set |
-| `supabase` | `supabase_list_tables`, `supabase_query`, `supabase_insert` (demo, see below) |
 | `feishu` | The Feishu bot channel (see [Channels](channels.md)) |
 
 ## Loading
 
-**CLI.** All five load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API, `web` registers only `web_fetch` without a search key, and `feishu` registers its channel but does not connect without an app id and secret.
+**CLI.** All four load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API, `web` registers only `web_fetch` without a search key, and `feishu` registers its channel but does not connect without an app id and secret.
 
-To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:supabase"]`. `--no-extensions` skips them, and `-e builtin:<name>` loads a single one for a run. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
+To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. `--no-extensions` skips them, and `-e builtin:<name>` loads a single one for a run. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
@@ -157,14 +156,6 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 Guest sessions can use `web_search` but not `web_fetch`, so outside senders cannot make Vela request internal addresses.
 
 **SDK.** `web({ tavilyKey, serperKey })`; both are optional.
-
-## supabase
-
-**Tools.** `supabase_list_tables`, `supabase_query` (`table`, `select`, `where`, `limit`) and `supabase_insert` (`table`, `data`).
-
-This extension is a demo. Without `url` and `key` it answers from built-in mock data (tables `users`, `posts`, `comments`, `sessions`) and says so in each result. With `url` and `key` set, the tools return a description of the request instead of calling Supabase. Disable it with `-builtin:supabase` if you don't want the model to see these tools.
-
-**SDK.** `supabase({ url, key })`.
 
 ## feishu
 

@@ -63,9 +63,15 @@ const TUI_COMMANDS = [
   { name: 'new', description: 'Start a new session' },
   { name: 'resume', description: 'Resume a saved session' },
   { name: 'name', description: 'Set the session name' },
-  { name: 'model', description: 'Select model (/model provider/id switches directly)' },
+  {
+    name: 'model',
+    description: 'Select model (/model provider/id switches directly)',
+  },
   { name: 'thinking', description: 'Select thinking level' },
-  { name: 'compact', description: 'Manually compact the session context (optional focus)' },
+  {
+    name: 'compact',
+    description: 'Manually compact the session context (optional focus)',
+  },
   { name: 'hotkeys', description: 'Show keyboard shortcuts' },
   { name: 'quit', description: 'Quit Vela' },
 ]
@@ -206,6 +212,30 @@ export class InteractiveMode {
       this.addNotice(errorMessage(error), 'error')
     }
     await this.openSession(sessionId, resume)
+    this.setAutocomplete()
+    // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
+    velaInternals(vela)
+      .resolveBinary('fd')
+      .then((fdPath) => this.setAutocomplete(fdPath))
+      .catch((error) =>
+        this.addNotice(
+          `@ file completion is off: ${errorMessage(error)}`,
+          'warning',
+        ),
+      )
+    await vela
+      .startChannels()
+      .catch((error) =>
+        this.addNotice(
+          `Failed to start channels: ${errorMessage(error)}`,
+          'error',
+        ),
+      )
+    this.tui.requestRender()
+  }
+
+  private setAutocomplete(fdPath?: string): void {
+    const vela = this.vela
     this.editor.setAutocompleteProvider(
       new CombinedAutocompleteProvider(
         [
@@ -220,14 +250,9 @@ export class InteractiveMode {
           })),
         ],
         vela.cwd,
+        fdPath,
       ),
     )
-    await vela
-      .startChannels()
-      .catch((error) =>
-        this.addNotice(`Failed to start channels: ${errorMessage(error)}`, 'error'),
-      )
-    this.tui.requestRender()
   }
 
   // ---------------------------------------------------------------- Sessions
@@ -241,7 +266,10 @@ export class InteractiveMode {
       try {
         resumed = await session.resume()
       } catch (error) {
-        this.addNotice(`Failed to resume session: ${errorMessage(error)}`, 'error')
+        this.addNotice(
+          `Failed to resume session: ${errorMessage(error)}`,
+          'error',
+        )
       }
     }
     const modelOk = this.options.configure(session)
@@ -272,7 +300,10 @@ export class InteractiveMode {
 
   private async switchSession(id: string, resume: boolean): Promise<void> {
     if (this.session.isRunning) {
-      this.addNotice('A task is running; press Esc to interrupt or wait for it to finish', 'warning')
+      this.addNotice(
+        'A task is running; press Esc to interrupt or wait for it to finish',
+        'warning',
+      )
       return
     }
     const previous = this.session
@@ -320,7 +351,10 @@ export class InteractiveMode {
       lines.push(theme.fg('dim', `Extensions: ${extensions.join(', ')}`))
     if (!modelOk)
       lines.push(
-        theme.fg('yellow', 'No model available: pick one with /model provider/id'),
+        theme.fg(
+          'yellow',
+          'No model available: pick one with /model provider/id',
+        ),
       )
     this.header.addChild(new Spacer(1))
     this.header.addChild(new Text(lines.join('\n'), 1, 0))
@@ -420,10 +454,14 @@ export class InteractiveMode {
         break
       case 'context':
         this.addNotice(contextLine(event), 'dim')
-        if (event.action === 'summary-required') this.setLoader('Compacting context…')
+        if (event.action === 'summary-required')
+          this.setLoader('Compacting context…')
         break
       case 'session_save_failed':
-        this.addNotice(`Failed to save session: ${errorMessage(event.error)}`, 'error')
+        this.addNotice(
+          `Failed to save session: ${errorMessage(event.error)}`,
+          'error',
+        )
         break
       case 'audit':
         this.addNotice(`[audit] ${event.toolName} → ${event.path}`, 'dim')
@@ -518,7 +556,9 @@ export class InteractiveMode {
   }
 
   private setLoader(message: string): void {
-    this.loader?.setMessage(`${message} ${theme.fg('dim', '(Esc to interrupt)')}`)
+    this.loader?.setMessage(
+      `${message} ${theme.fg('dim', '(Esc to interrupt)')}`,
+    )
   }
 
   private stopLoader(): void {
@@ -657,7 +697,6 @@ export class InteractiveMode {
     const name = text.split(/\s+/, 1)[0] ?? ''
     const args = text.slice(name.length).trim()
     switch (name) {
-      case 'exit':
       case '/exit':
       case '/quit':
         await this.shutdown()
@@ -670,7 +709,10 @@ export class InteractiveMode {
         return
       case '/resume': {
         if (this.session.isRunning) {
-          this.addNotice('A task is running; press Esc to interrupt or wait for it to finish', 'warning')
+          this.addNotice(
+            'A task is running; press Esc to interrupt or wait for it to finish',
+            'warning',
+          )
           return
         }
         const id = await this.pickSession()
@@ -710,7 +752,10 @@ export class InteractiveMode {
         break
       case '/compact':
         if (this.session.isRunning) {
-          this.addNotice('A task is running; press Esc to interrupt or wait for it to finish', 'warning')
+          this.addNotice(
+            'A task is running; press Esc to interrupt or wait for it to finish',
+            'warning',
+          )
           return
         }
         this.startLoader('Compacting context…')
@@ -865,7 +910,11 @@ export class InteractiveMode {
       list.onSelect = (item) => done(item.value)
       list.onCancel = () => done(undefined)
       return {
-        component: dialogBox(title, list, '↑↓ navigate · Enter select · Esc cancel'),
+        component: dialogBox(
+          title,
+          list,
+          '↑↓ navigate · Enter select · Esc cancel',
+        ),
         focus: list,
       }
     })
@@ -976,7 +1025,7 @@ class Footer implements Component {
     const left = [
       `↑${compact(totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens)}`,
       `↓${compact(totals.outputTokens)}`,
-      totals.cost > 0 ? `$${totals.cost.toFixed(3)}` : undefined,
+      totals.cost ? `$${totals.cost.toFixed(3)}` : undefined,
       `${usage.percent}%`,
     ]
       .filter(Boolean)

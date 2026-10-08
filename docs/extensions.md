@@ -4,7 +4,7 @@ Extensions are TypeScript or JavaScript modules that add behavior to Vela: tools
 
 An extension runs inside the Vela process with the same permissions as the user who started it. It can read files, call the network, see every prompt and tool call, and change tool input and output. Vela does not sandbox extensions. Load only extensions you trust; see [Security](security.md).
 
-The built-in memory, knowledge base, web, Supabase and Feishu features are extensions too; see [Built-in extensions](built-in-extensions.md).
+The built-in memory, knowledge base, web and Feishu features are extensions too; see [Built-in extensions](built-in-extensions.md).
 
 ## Create and load an extension
 
@@ -39,7 +39,7 @@ The factory can be synchronous or `async`. It runs once per Vela instance, not o
 
 The CLI loads extensions in this order:
 
-1. Built-in extensions (`memory`, `rag`, `web`, `supabase`, `feishu`). All are on by default.
+1. Built-in extensions (`memory`, `rag`, `web`, `feishu`). All are on by default.
 2. `~/.vela/extensions/` (or `$VELA_DIR/extensions/`).
 3. `<cwd>/.vela/extensions/`, only when the project is trusted (see [Project trust](settings.md#project-trust)).
 4. Paths listed in the `extensions` array of `settings.json`, user settings before project settings.
@@ -51,7 +51,7 @@ In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension 
 
 ```json
 {
-  "extensions": ["./extensions/deploy.ts", "-builtin:supabase", "-builtin:feishu"]
+  "extensions": ["./extensions/deploy.ts", "-builtin:web", "-builtin:feishu"]
 }
 ```
 

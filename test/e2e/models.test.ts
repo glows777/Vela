@@ -84,7 +84,7 @@ test('pricing follows the provider, not a shared model id', async () => {
         models: [{ id: 'big', cost: { input: 2_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }],
         createModel: () => priced,
       },
-      // Same model id but no pricing: uses the built-in price table, not fake/big's pricing
+      // Same model id but no pricing: not in the built-in price table either, so it adds no cost
       free: { createModel: () => free },
     },
   })
@@ -97,7 +97,8 @@ test('pricing follows the provider, not a shared model id', async () => {
   expect(t.session.usage.totals.baselineCost).toBeCloseTo(9)
   t.session.setModel('free/big')
   await t.run('three')
-  expect(t.session.usage.totals.cost).toBeLessThan(9.01)
+  expect(t.session.usage.totals.cost).toBeCloseTo(9)
+  expect(t.eventsOf('usage').at(-1)?.record?.cost).toBeUndefined()
 })
 
 test('setModel switches the model for the next prompt and recomputes limits', async () => {

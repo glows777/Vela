@@ -66,6 +66,7 @@ export class FeishuChannel implements ChannelDefinition {
 
         if (text && this.messageHandler) {
           this.messageHandler({
+            // The chat (group or direct) is the conversation: each sender gets one session per chat
             channelId: data.message.chat_id,
             senderId: data.sender.sender_id?.open_id || 'unknown',
             senderName: data.sender.sender_id?.open_id || 'unknown',

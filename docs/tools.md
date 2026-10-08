@@ -178,6 +178,6 @@ const session = vela.session('review', {
 ```
 
 - `tools` limits the session to the named tools; the role still applies. `session.setActiveTools(names)` changes the selection later, and `session.setActiveTools(undefined)` removes it. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
-- `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`, and at the same level session rules beat role rules. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
+- `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`. The role is the upper bound: session rules can only make a tool stricter (`allow` → `ask` → `deny`), never allow a tool the role forbids. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
 
 See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session.ts](../examples/extensions/read-only-session.ts) for an extension that sets the selection per session.

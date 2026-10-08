@@ -91,7 +91,7 @@ const t = createTestVela({
 await t.run('read src/a.ts')               // = t.session.prompt()
 ```
 
-The built-in memory extension is always loaded, like in the CLI; the RAG extension is loaded with `embedder`. Web, Supabase and Feishu are not loaded.
+The built-in memory extension is always loaded, like in the CLI; the RAG extension is loaded with `embedder`. Web and Feishu are not loaded.
 
 ### Options
 

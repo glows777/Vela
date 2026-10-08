@@ -217,3 +217,27 @@ test('a guest cannot use bash: the call is refused and recorded', async () => {
   expect(t.eventsOf('tool_error')).toHaveLength(1)
   expect(t.lastAssistantText()).toBe('No permission')
 })
+
+test('session permissions cannot grant a guest a tool its role forbids', async () => {
+  const t = createTestVela({
+    session: { role: 'guest', permissions: { bash: 'allow', '*': 'allow' } },
+    responses: [
+      (req) => {
+        // The role is the upper bound: 'allow' does not add bash or read_file
+        expect(req.tools).not.toContain('bash')
+        expect(req.tools).not.toContain('read_file')
+        return fauxToolCall('bash', { command: 'echo hi' })
+      },
+      fauxText('No permission'),
+    ],
+  })
+  // Selecting the tool explicitly does not grant it either
+  t.session.setActiveTools(['bash', 'read_file'])
+  expect(t.session.getActiveTools()).toEqual([])
+
+  await t.run('Run echo')
+
+  expect(t.eventsOf('tool_result')).toHaveLength(0)
+  expect(t.eventsOf('tool_error')).toHaveLength(1)
+  expect(t.lastAssistantText()).toBe('No permission')
+})

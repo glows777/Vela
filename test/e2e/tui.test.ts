@@ -263,3 +263,12 @@ test('Ctrl+C clears the editor, twice exits; Ctrl+D on an empty editor exits', a
   await tui.mode.exited
   expect(tui.exited()).toBe(true)
 })
+
+test('@ suggests files in the working directory (fd found on PATH, like pi)', async () => {
+  const t = createTestVela({ files: { 'src/alpha-file.ts': 'export {}\n' } })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.terminal.type('read @alpha')
+  await tui.until('src/alpha-file.ts')
+})

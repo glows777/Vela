@@ -28,9 +28,9 @@ function fakeChannel(t: TestVela, name = 'fake') {
     },
   }
   t.internals.gateway.register(channel)
-  const deliver = (senderId: string, text: string) =>
+  const deliver = (senderId: string, text: string, channelId = 'c1') =>
     t.internals.gateway.handleIncoming(name, {
-      channelId: 'c1',
+      channelId,
       senderId,
       senderName: senderId,
       text,
@@ -55,10 +55,10 @@ test('each sender gets its own persisted session', async () => {
     ['u1', 'Hello u1'],
     ['u2', 'Hello u2'],
   ])
-  expect(channelSessionId('fake', 'u1')).toBe('fake-u1')
-  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('I am u1')
-  expect(await t.readData('sessions/fake-u2.jsonl')).not.toContain('I am u1')
-  expect(t.eventsIn('fake-u1').map((e) => e.type)).toContain('channel_reply')
+  expect(channelSessionId('fake', 'c1', 'u1')).toBe('fake-c1-u1')
+  expect(await t.readData('sessions/fake-c1-u1.jsonl')).toContain('I am u1')
+  expect(await t.readData('sessions/fake-c1-u2.jsonl')).not.toContain('I am u1')
+  expect(t.eventsIn('fake-c1-u1').map((e) => e.type)).toContain('channel_reply')
   // The CLI's default session is unaffected
   expect(t.session.messages).toEqual([])
   expect(t.exists('sessions/default.jsonl')).toBe(false)
@@ -100,7 +100,7 @@ test('messages from the same sender are handled one after another', async () => 
   // The second request sees the full history of the first round
   expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('reply to the first')
   expect(
-    t.eventsIn('fake-u1').filter((e) => e.type === 'channel_error'),
+    t.eventsIn('fake-c1-u1').filter((e) => e.type === 'channel_error'),
   ).toEqual([])
 })
 
@@ -121,18 +121,24 @@ test('stopping the gateway aborts a running channel session and reports it', asy
 
 test('senders whose ids sanitize to the same string get separate sessions', async () => {
   // Only replacing illegal characters would put a@b and a_b, or (fake, x-y) and (fake-x, y), in the same session file, where they see each other's history
-  expect(channelSessionId('fake', 'a@b')).not.toBe(
-    channelSessionId('fake', 'a_b'),
+  expect(channelSessionId('fake', 'c1', 'a@b')).not.toBe(
+    channelSessionId('fake', 'c1', 'a_b'),
   )
-  expect(channelSessionId('fake', 'x-y')).not.toBe(
-    channelSessionId('fake-x', 'y'),
+  expect(channelSessionId('fake', 'c1', 'x-y')).not.toBe(
+    channelSessionId('fake-c1', 'x', 'y'),
+  )
+  expect(channelSessionId('fake', 'c-1', 'u')).not.toBe(
+    channelSessionId('fake', 'c', '1-u'),
   )
   const long = 'u'.repeat(200)
-  expect(channelSessionId('fake', `${long}1`)).not.toBe(
-    channelSessionId('fake', `${long}2`),
+  expect(channelSessionId('fake', 'c1', `${long}1`)).not.toBe(
+    channelSessionId('fake', 'c1', `${long}2`),
+  )
+  expect(channelSessionId('fake', `${long}1`, 'u1')).not.toBe(
+    channelSessionId('fake', `${long}2`, 'u1'),
   )
   // Ordinary ids stay readable
-  expect(channelSessionId('feishu', 'ou_123')).toBe('feishu-ou_123')
+  expect(channelSessionId('feishu', 'oc_9', 'ou_123')).toBe('feishu-oc_9-ou_123')
 
   const t = createTestVela({ responses: [fauxText('OK'), fauxText("I don't know")] })
   const { deliver } = fakeChannel(t)
@@ -154,9 +160,43 @@ test('a channel session closed while idle resumes its history when reopened', as
   const { sent, deliver } = fakeChannel(t)
   await deliver('u1', 'I like blue')
   // A long-running bot may close idle sessions to free memory
-  await t.vela.session(channelSessionId('fake', 'u1')).close()
+  await t.vela.session(channelSessionId('fake', 'c1', 'u1')).close()
 
   await deliver('u1', 'What color do I like?')
   expect(sent.at(-1)?.text).toBe('blue')
-  expect(await t.readData('sessions/fake-u1.jsonl')).toContain('I like blue')
+  expect(await t.readData('sessions/fake-c1-u1.jsonl')).toContain('I like blue')
+})
+
+test('sessions are keyed by conversation and sender: chats and group members stay apart', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxText('OK'),
+      (req) =>
+        fauxText(JSON.stringify(req.prompt).includes('hunter2') ? 'leaked' : 'clean'),
+      (req) =>
+        fauxText(JSON.stringify(req.prompt).includes('hunter2') ? 'leaked' : 'clean'),
+      (req) =>
+        fauxText(JSON.stringify(req.prompt).includes('hunter2') ? 'same chat' : 'lost'),
+    ],
+  })
+  const { sent, deliver } = fakeChannel(t)
+
+  // u1 tells a secret in a DM
+  await deliver('u1', 'My password is hunter2', 'dm_u1')
+  // The same person in a group chat gets a different session
+  await deliver('u1', 'What do you know?', 'group')
+  // Another member of that group gets their own session too
+  await deliver('u2', 'What do you know?', 'group')
+  // Back in the DM, the history is still there
+  await deliver('u1', 'And now?', 'dm_u1')
+
+  expect(sent.map((m) => [m.channelId, m.recipientId, m.text])).toEqual([
+    ['dm_u1', 'u1', 'OK'],
+    ['group', 'u1', 'clean'],
+    ['group', 'u2', 'clean'],
+    ['dm_u1', 'u1', 'same chat'],
+  ])
+  expect(t.exists('sessions/fake-dm_u1-u1.jsonl')).toBe(true)
+  expect(t.exists('sessions/fake-group-u1.jsonl')).toBe(true)
+  expect(t.exists('sessions/fake-group-u2.jsonl')).toBe(true)
 })

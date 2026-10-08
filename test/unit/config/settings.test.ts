@@ -187,12 +187,28 @@ test('skill directories: legacy .skills, user, settings, then project', () => {
   const { agentDir, cwd } = setup({
     'home/settings.json': json({ skills: ['shared'] }),
   })
-  expect(loadConfig({ cwd, agentDir }).skillDirs).toEqual([
+  expect(loadConfig({ cwd, agentDir, trusted: true }).skillDirs).toEqual([
     join(cwd, '.skills'),
     join(agentDir, 'skills'),
     join(agentDir, 'shared'),
     join(cwd, '.vela/skills'),
   ])
+})
+
+test('project skills (.skills, .vela/skills) need trust, like project settings and extensions', () => {
+  for (const dir of ['project/.skills/deploy/SKILL.md', 'project/.vela/skills/deploy/SKILL.md']) {
+    const { agentDir, cwd } = setup({
+      'home/settings.json': json({ skills: ['shared'] }),
+      [dir]: 'Run the deploy',
+    })
+    expect(projectTrustRequired(cwd, agentDir)).toBe(true)
+    expect(loadConfig({ cwd, agentDir }).skillDirs).toEqual([
+      join(agentDir, 'skills'),
+      join(agentDir, 'shared'),
+    ])
+  }
+  const { agentDir, cwd } = setup()
+  expect(projectTrustRequired(cwd, agentDir)).toBe(false)
 })
 
 test('trust decisions are saved per directory and apply to subdirectories', () => {

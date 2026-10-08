@@ -2,7 +2,7 @@
 
 A channel brings messages from outside into Vela, such as chat messages sent to a bot, and sends the model's replies back. Channels are specific to Vela; pi has no equivalent.
 
-Each sender gets their own session. Sessions of different senders run concurrently and share the Vela's tools and extensions, but each has its own history, role and run lock. Messages from one sender are handled one at a time: a second message waits until the reply to the first has been sent.
+Each sender gets their own session in each conversation: the same person has separate sessions in a direct chat and in each group chat, and every member of a group chat has their own session there. Sessions run concurrently and share the Vela's tools and extensions, but each has its own history, role and run lock. Messages from one sender in one conversation are handled one at a time: a second message waits until the reply to the first has been sent.
 
 Channel senders are `guest` by default. A guest's model sees only `tool_search`, `rag_search` and `web_search`: it cannot read or write files, run commands, use the owner's memory or run extension commands. See [Security](security.md) for what this boundary does and does not cover.
 
@@ -10,9 +10,9 @@ Channel senders are `guest` by default. A guest's model sees only `tool_search`,
 
 When a channel delivers a message:
 
-1. Vela picks the session id from the channel name and sender id, for example `feishu-ou_123`. Ids with other characters are sanitized and suffixed with a hash, so different senders never share a session.
+1. Vela picks the session id from the channel name, the conversation (`channelId`) and the sender id, for example `feishu-oc_456-ou_123`. Ids with other characters are sanitized and suffixed with a hash, so different senders or conversations never share a session.
 2. It sets the session's role from the channel's `roleFor(message)`, or `guest` when the channel has no `roleFor`. The role is checked again on every message, so changing the owner list takes effect on the next message.
-3. On the sender's first message since startup, the session is resumed from storage, so history survives restarts when Vela has a `dataDir`.
+3. On the session's first message since startup, the session is resumed from storage, so history survives restarts when Vela has a `dataDir`.
 4. It emits `channel_message`, runs the turn, and sends the text of the final assistant message back through the channel's `send()` to the same `channelId`. It then emits `channel_reply`, or `channel_error` if the turn or the send failed.
 
 Channel sessions have no UI. A tool whose permission is `ask` is rejected, and extension UI calls fall back to events (see [Extensions](extensions.md)).
@@ -58,7 +58,7 @@ export default myChannel
 | `onMessage(handler)` | Optional. Called once at registration with the handler to call for each incoming message |
 | `roleFor(message)` | Optional. The sender's role: `owner`, `collaborator` or `guest`. Default `guest` |
 
-An incoming message has `channelId` (the conversation to reply to), `senderId` (who sent it; this selects the session), `senderName`, `text`, and optionally `raw` (the original payload).
+An incoming message has `channelId` (the conversation: a group or direct chat, where the reply goes), `senderId` (who sent it; with `channelId` this selects the session), `senderName`, `text`, and optionally `raw` (the original payload).
 
 A failing `start()` is logged and does not stop other channels from starting.
 
@@ -103,8 +103,8 @@ channel.receive('bob', 'hi')
 channel.receive('alice', 'hi')
 await done
 await vela.dispose()
-// echo-bob guest Hello, guest
-// echo-alice owner Hello, owner
+// echo-demo-bob guest Hello, guest
+// echo-demo-alice owner Hello, owner
 ```
 
 ## Running channels
@@ -146,7 +146,7 @@ The built-in `feishu` extension connects a Feishu (Lark) bot through Feishu's lo
 Behavior:
 
 - Only text messages are handled. `@` mentions of the bot are removed from the text.
-- The sender's `open_id` is the sender id, so each person has one session across all chats they use, including group chats. The reply goes to the chat the message came from.
+- The chat's `chat_id` is the conversation and the sender's `open_id` is the sender id, so each person has one session per chat: a direct chat and each group chat are separate, and group members don't share a session. The reply goes to the chat the message came from. Sessions from older versions were keyed `feishu-<open_id>` and are not picked up again.
 - Senders in `owners` are `owner`; everyone else is `guest`.
 - Without an app id or secret the channel logs a warning and does not connect.
 

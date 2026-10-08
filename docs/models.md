@@ -97,7 +97,7 @@ An entry named `openai` or `anthropic` overrides the built-in provider field by 
 | `reasoning` | `false` means the model does not support thinking; see [Thinking levels](#thinking-levels). |
 | `cost` | Prices in dollars per million tokens: `input`, `output`, `cacheRead`, `cacheWrite`. Used for the cost in `/usage` and the footer. |
 
-Without `cost`, Vela looks the model id up in a small built-in price table and otherwise uses placeholder prices, so set `cost` if you rely on the numbers.
+Without `cost`, Vela looks the model id up in a small built-in price table. A model in neither has no cost: `/usage` and the footer show its tokens without a dollar amount.
 
 An invalid file (bad JSON, unknown `api`, a model without `id`) stops the CLI with a `[config]` error.
 

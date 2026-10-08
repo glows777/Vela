@@ -109,7 +109,7 @@ Try `hello`, `list files`, `read package.json`, `test bash`, then `/usage` and `
 
 Everything lives under `~/.vela` (set `VELA_DIR` to use another directory): `settings.json`, `models.json`, `trust.json`, user `extensions/` and `skills/` at the top, and one data directory per project folder under `projects/`, holding its sessions, memory, usage records and knowledge base. The full layout is in [Settings](settings.md#data-directory).
 
-Vela never writes into the project folder itself. A project can add its own `.vela/settings.json` and `.vela/extensions/`, which load only after you trust the project. See [Project trust](settings.md#project-trust).
+Vela never writes into the project folder itself. A project can add its own `.vela/settings.json`, `.vela/extensions/` and skills (`.skills/`, `.vela/skills/`), which load only after you trust the project. See [Project trust](settings.md#project-trust).
 
 ## Continue later
 
@@ -127,7 +127,7 @@ vela -c
 - [Models](models.md): providers, `models.json`, thinking levels.
 - [Settings](settings.md): `settings.json`, project trust, skills.
 - [Tools](tools.md): the built-in file, search and shell tools.
-- [Built-in extensions](built-in-extensions.md): memory, knowledge base, web, Supabase, Feishu.
+- [Built-in extensions](built-in-extensions.md): memory, knowledge base, web, Feishu.
 - [Extensions](extensions.md): add your own tools, commands, providers and channels.
 - [SDK](sdk.md): embed Vela in your own program.
 - [Security](security.md): roles, permissions and what Vela does not protect against.

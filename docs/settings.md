@@ -12,7 +12,7 @@ Vela reads its configuration from JSON files in the user directory (`~/.vela`, o
 | `~/.vela/trust.json` | Saved project trust decisions. |
 | `~/.vela/extensions/` | User extensions, loaded in every project. |
 | `<project>/.vela/extensions/` | Project extensions. Loaded only when the project is trusted. |
-| `~/.vela/skills/`, `<project>/.vela/skills/`, `<project>/.skills/` | Skills. See [Skills](#skills). |
+| `~/.vela/skills/`, `<project>/.vela/skills/`, `<project>/.skills/` | Skills. Project skills load only when the project is trusted. See [Skills](#skills). |
 
 All files are optional. A file that is not valid JSON, or a key with the wrong type, stops the CLI with a `[config]` error and exit code 2. Unknown top-level keys are ignored; unknown keys under `limits` are an error.
 
@@ -36,7 +36,7 @@ Relative paths in `extensions` and `skills` resolve from the directory of the se
   "defaultThinkingLevel": "medium",
   "dataDir": ".vela-data",
   "limits": { "bashTimeoutMs": 60000 },
-  "extensions": ["-builtin:supabase", "./extensions/todo.ts"],
+  "extensions": ["-builtin:feishu", "./extensions/todo.ts"],
   "skills": ["~/shared-skills"],
   "extensionConfig": {
     "web": { "tavilyKey": "$TAVILY_API_KEY" }
@@ -82,7 +82,7 @@ A 128k window gives `111616`, `96000`, `76800` and `12800`. Without `contextWind
 
 ### extensions
 
-A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:supabase"`, `"+builtin:supabase"`). Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
+A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:web"`, `"+builtin:web"`). Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
 
 ### extensionConfig
 
@@ -103,7 +103,7 @@ Each extension reads its own section, `extensionConfig.<name>`, as `vela.config`
 }
 ```
 
-The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `SUPABASE_URL`, `FEISHU_APP_ID`, `EMBEDDING_MODEL_KEY` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
+The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `FEISHU_APP_ID`, `EMBEDDING_MODEL_KEY` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
 
 ## Data directory
 
@@ -132,7 +132,7 @@ The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) 
 
 ## Project trust
 
-A project's `.vela/settings.json` and `.vela/extensions/` can change Vela's behavior and run code on your machine, so Vela loads them only for trusted projects. Projects without either are not asked about.
+A project's `.vela/settings.json`, `.vela/extensions/` and skills (`.vela/skills/`, `.skills/`) can change Vela's behavior, run code on your machine or put instructions in front of the model, so Vela loads them only for trusted projects (like pi's project resources). Projects with none of these are not asked about.
 
 | Situation | Result |
 |---|---|
@@ -149,8 +149,6 @@ When a project is not trusted, Vela prints a `[trust]` notice and runs with the 
   "/home/me/downloads": false
 }
 ```
-
-Trust does not cover skills: `.skills/` and `.vela/skills/` load in every project. Skills are text, not code, but their descriptions go into the system prompt.
 
 Trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read; see [Security](security.md#project-trust).
 
@@ -174,10 +172,12 @@ Read the diff with `git diff`, then ...
 
 The front matter is optional and supports `description` and `when_to_use`. Skills are loaded from these directories at startup, and a later directory overrides a skill with the same name from an earlier one:
 
-1. `<project>/.skills/`
+1. `<project>/.skills/` (trusted projects only)
 2. `~/.vela/skills/`
 3. the directories listed in the `skills` setting (user, then project)
-4. `<project>/.vela/skills/`
+4. `<project>/.vela/skills/` (trusted projects only)
+
+In an untrusted project, the two project directories are skipped along with the project settings, so only `~/.vela/skills/` and the user settings' `skills` load. When you start Vela from your home directory, `<home>/.skills/` counts as user configuration and always loads.
 
 The system prompt lists only each skill's name, description and when-to-use hint. The body enters the conversation when you activate the skill:
 

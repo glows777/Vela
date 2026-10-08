@@ -215,11 +215,14 @@ export function renderUsageView(tracker: TokenTracker): string {
   lines.push(`  Cache hit rate  ${bar}  ${(t.hitRate * 100).toFixed(1)}%`);
   lines.push('');
 
-  lines.push(`  ${bold('Cost')}            ${C(220, '$' + t.cost.toFixed(4))}`);
-  lines.push(`  ${C(244, 'Without cache')}   ${C(244, '$' + t.baselineCost.toFixed(4))}`);
-  const savedPct = t.baselineCost > 0 ? (t.savedCost / t.baselineCost) * 100 : 0;
-  if (t.savedCost > 0) {
-    lines.push(`  ${bold(C(36, 'Saved'))}           ${C(36, '$' + t.savedCost.toFixed(4))} (${savedPct.toFixed(1)}% off)`);
+  // No cost lines when no request had a known price: tokens only, no made-up dollar amount
+  if (t.cost !== undefined && t.baselineCost !== undefined && t.savedCost !== undefined) {
+    lines.push(`  ${bold('Cost')}            ${C(220, '$' + t.cost.toFixed(4))}`);
+    lines.push(`  ${C(244, 'Without cache')}   ${C(244, '$' + t.baselineCost.toFixed(4))}`);
+    const savedPct = t.baselineCost > 0 ? (t.savedCost / t.baselineCost) * 100 : 0;
+    if (t.savedCost > 0) {
+      lines.push(`  ${bold(C(36, 'Saved'))}           ${C(36, '$' + t.savedCost.toFixed(4))} (${savedPct.toFixed(1)}% off)`);
+    }
   }
   if (totalCacheable === 0) {
     lines.push('  ' + C(244, 'No cacheable input yet; check again after a few more turns :)'));

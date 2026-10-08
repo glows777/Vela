@@ -10,7 +10,7 @@ This page describes what Vela protects and what it does not. To report a vulnera
 |---|---|---|
 | The user running `vela` (owner) | Yes | Everything the operating-system user can do, through the model's tool calls |
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
-| Project config (`.vela/settings.json`, `.vela/extensions/`) | Only after you trust the project | Same as extensions once loaded |
+| Project config (`.vela/settings.json`, `.vela/extensions/`, project skills) | Only after you trust the project | Same as extensions once loaded |
 | Channel senders (people messaging a channel) | No, unless listed as owners | What their session role allows |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
 
@@ -36,11 +36,11 @@ Review an extension before you load it, and load only extensions from sources yo
 
 ## Project trust
 
-A project directory can contain `.vela/settings.json` and `.vela/extensions/`. Project settings can add extensions and change behavior, and project extensions are code, so Vela does not load them until you trust the project.
+A project directory can contain `.vela/settings.json`, `.vela/extensions/` and skills (`.skills/`, `.vela/skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills put instructions in front of the model, so Vela does not load them until you trust the project.
 
 Interactive mode asks once per project and saves the answer in `~/.vela/trust.json`; `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 
-Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model. Project skills (`<cwd>/.skills/` and `<cwd>/.vela/skills/`) are instructions, not code, and load without project trust.
+Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model.
 
 ## Session roles
 
@@ -63,13 +63,13 @@ The terminal session is `owner`. In the SDK, `vela.session(id, { role })` sets t
 
 ### Channel senders
 
-Each sender on a channel gets their own session. The channel's `roleFor(message)` picks the role and is checked on every message; a channel without `roleFor` makes every sender a `guest`. The built-in Feishu channel makes senders listed in `extensionConfig.feishu.owners` (or `FEISHU_OWNERS`, comma-separated) owners and everyone else a guest. See [Channels](channels.md).
+Each sender gets their own session in each conversation (a group chat or a direct chat), so one person's chats don't share history and members of a group don't see each other's turns. The channel's `roleFor(message)` picks the role and is checked on every message; a channel without `roleFor` makes every sender a `guest`. The built-in Feishu channel makes senders listed in `extensionConfig.feishu.owners` (or `FEISHU_OWNERS`, comma-separated) owners and everyone else a guest. See [Channels](channels.md).
 
 An owner on a channel has full access, including `bash`. Only list identities that you control, and remember that the security of that session is the security of the chat account.
 
 ### Per-session permissions
 
-The SDK can layer tool rules over a session's role:
+The SDK can layer tool rules over a session's role. The role is the upper bound; session rules can only tighten it:
 
 ```ts
 const session = vela.session('ci', { permissions: { bash: 'ask', write_file: 'deny' } })
@@ -81,7 +81,7 @@ const session = vela.session('ci', { permissions: { bash: 'ask', write_file: 'de
 | `deny` | The tool is not offered to the model, and calls are rejected |
 | `ask` | The session's `ui.confirm` is asked first, after extension `tool_call` handlers have run (so it sees the final input). With no UI the call is rejected |
 
-Keys are tool names, or `*` for all other tools. An exact name beats `*`, and at the same level the session's rule beats the role's rule, so permissions can also grant a tool the role denies. `vela.session(id, { tools })` and `session.setActiveTools()` further limit the tools to a list. See [SDK](sdk.md).
+Keys are tool names, or `*` for all other tools; an exact name beats `*`. `ask` and `deny` apply to tools the role allows, while `allow` on a tool the role denies has no effect: `vela.session(id, { role: 'guest', permissions: { bash: 'allow' } })` still has no `bash`. `vela.session(id, { tools })` and `session.setActiveTools()` further limit the tools to a list and cannot add tools the role denies either. The same holds when the role changes later (`session.role = ...`, `/role`, or a channel's `roleFor`). See [SDK](sdk.md).
 
 ## Prompt injection
 

@@ -23,8 +23,10 @@ import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
   extensionConfigFromEnv,
+  HELP,
   legacyDataHint,
   loadCliExtensions,
+  packageVersion,
   parseArgs,
   resolveTrust,
   USAGE,
@@ -42,6 +44,11 @@ try {
 } catch (error) {
   usageError(error instanceof Error ? error.message : String(error))
   throw error
+}
+// Like pi: --help / --version print to stdout and exit before any config, trust or model is read
+if (args.help || args.version) {
+  process.stdout.write(args.help ? HELP : `${packageVersion()}\n`)
+  process.exit(0)
 }
 const env = process.env
 const cwd = process.cwd()
@@ -171,7 +178,7 @@ const vela = createVela({
   binDir: join(agentDir, 'bin'),
   offline: ['1', 'true', 'yes'].includes((env.VELA_OFFLINE ?? '').toLowerCase()),
   extensionConfig: extensionConfigFromEnv(env, config.extensionConfig),
-  // Built-in extensions (memory / rag / web / supabase / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
+  // Built-in extensions (memory / rag / web / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
   extensions: await loadCliExtensions(config, args, (message) =>
     console.error(message),
   ),

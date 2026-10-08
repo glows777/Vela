@@ -9,7 +9,7 @@ import type {
 } from './types.ts'
 
 interface GatewayOptions {
-  /** Opens (or returns) a session by id; one session per channel sender */
+  /** Opens (or returns) a session by id; one session per channel, conversation and sender */
   session: (id: string) => VelaSession
   logger?: VelaLogger
 }
@@ -17,18 +17,25 @@ interface GatewayOptions {
 const PLAIN = /^[A-Za-z0-9_]+$/
 
 /**
- * Session id for a channel sender, e.g. `feishu-ou_123`.
- * Different senders must map to different sessions (or they would see each other's history).
- * If the channel name and sender id contain only letters, digits and `_`, they are joined directly;
- * otherwise they are sanitized and suffixed with `.` plus a hash of the original. Directly joined
- * ids never contain `.`, so the two forms never collide.
+ * Session id for a sender in one conversation, e.g. `feishu-oc_456-ou_123`: the channel name,
+ * the conversation (`channelId`: a group chat or a direct chat) and the sender id. One person
+ * gets separate sessions in different chats, and each member of a group chat has their own.
+ * Different (channel, conversation, sender) triples must map to different sessions (or they
+ * would see each other's history). If all three contain only letters, digits and `_`, they are
+ * joined with `-`; otherwise they are sanitized and suffixed with `.` plus a hash of the
+ * originals. Directly joined ids never contain `.`, so the two forms never collide.
  */
-export const channelSessionId = (channel: string, senderId: string) => {
-  const plain = `${channel}-${senderId}`
-  if (PLAIN.test(channel) && PLAIN.test(senderId) && plain.length <= 128)
+export const channelSessionId = (
+  channel: string,
+  conversationId: string,
+  senderId: string,
+) => {
+  const parts = [channel, conversationId, senderId]
+  const plain = parts.join('-')
+  if (parts.every((part) => PLAIN.test(part)) && plain.length <= 128)
     return plain
   const hash = createHash('sha256')
-    .update(`${channel}\0${senderId}`)
+    .update(parts.join('\0'))
     .digest('hex')
     .slice(0, 16)
   const safe = plain.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128 - 17)
@@ -37,7 +44,7 @@ export const channelSessionId = (channel: string, senderId: string) => {
 
 export class ChannelGateway {
   private channels = new Map<string, ChannelDefinition>()
-  /** Messages are processed serially per session: a sender's second message waits for the first */
+  /** Messages are processed serially per session: a sender's second message in a conversation waits for the first */
   private queues = new Map<string, Promise<void>>()
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
@@ -82,7 +89,7 @@ export class ChannelGateway {
 
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
-    const id = channelSessionId(channelName, msg.senderId)
+    const id = channelSessionId(channelName, msg.channelId, msg.senderId)
     const previous = this.queues.get(id) ?? Promise.resolve()
     const next = previous
       .then(() => this.process(id, channelName, msg))

@@ -21,7 +21,7 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 ## Extend Vela
 
 - [Extensions](extensions.md): add tools, slash commands, model providers and channels, and hook into the agent loop.
-- [Built-in extensions](built-in-extensions.md): memory, the RAG knowledge base, web, Supabase and Feishu.
+- [Built-in extensions](built-in-extensions.md): memory, the RAG knowledge base, web and Feishu.
 - [Channels](channels.md): connect chat apps, with one session per conversation.
 - [Testing](testing.md): test extensions and SDK code offline with the faux model.
 - [Session format](session-format.md): the on-disk session file.

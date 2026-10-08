@@ -9,7 +9,7 @@ For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session for
 Every session has an id, which is also its file name. Ids use letters, digits, `.`, `_` and `-`, don't start with `.`, and are at most 128 characters.
 
 - The CLI starts a new session on every launch with an id made from the local time and four random characters, such as `20261008-081441-da14`.
-- Channel sessions get `<channel>-<senderId>` (hashed when the sender id has other characters). See [Channels](channels.md).
+- Channel sessions get `<channel>-<conversationId>-<senderId>`, one per chat and sender (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
 The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session checkpoint and `sessions/<id>/` the long tool output and tool call history.
@@ -120,9 +120,9 @@ Retryable errors are HTTP 408, 409, 429, 5xx and 529 (as reported by the provide
 
 ## Usage
 
-Every model request records input, output, cache-read and cache-write tokens and a cost. The price comes from the model entry's `cost` in `models.json`, otherwise from a small built-in table of common models; other models are priced with placeholder values, so set `cost` if you rely on the numbers (see [Models](models.md#model-fields)).
+Every model request records input, output, cache-read and cache-write tokens and, when the price is known, a cost. The price comes from the model entry's `cost` in `models.json`, otherwise from a small built-in table of common models; a model in neither has no cost, so Vela shows its tokens without a dollar amount. Set `cost` for such a model to see its cost (see [Models](models.md#model-fields)).
 
-- `/usage` shows the session's totals, cache hit rate, the cost and what it would have cost without caching.
+- `/usage` shows the session's totals, cache hit rate, the cost and what it would have cost without caching. The cost lines only appear when at least one request had a known price.
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.

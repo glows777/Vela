@@ -3,7 +3,7 @@
  *
  * Sessions share tools, extensions and the model, but each has its own history, queue,
  * usage, role and run lock. This is how a channel (for example Feishu) serves many users:
- * one session per sender.
+ * one session per conversation and sender.
  *
  * Run: bun examples/sdk/03-multi-session.ts
  */

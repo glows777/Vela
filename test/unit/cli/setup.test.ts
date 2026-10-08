@@ -5,9 +5,12 @@ import { loadConfig } from '../../../src/config/index.ts'
 import { createVela } from '../../../src/vela.ts'
 import { createFauxModel, fauxText } from '../../../src/testing/faux.ts'
 import {
+  BUILTIN_EXTENSIONS,
   extensionConfigFromEnv,
   loadCliExtensions,
+  HELP,
   legacyDataHint,
+  packageVersion,
   parseArgs,
   resolveTrust,
 } from '../../../src/cli/setup.ts'
@@ -56,6 +59,42 @@ test('the untrusted-project notice names the real trust.json under VELA_DIR', as
   expect(result.trusted).toBe(false)
   expect(result.warning).toContain(`edit ${join(home.path, 'trust.json')} to change this`)
   expect(result.warning).not.toContain('~/.vela')
+})
+
+test('project skills alone make the project ask for trust; untrusted, the notice names skills', async () => {
+  const home = tempDir()
+  const project = tempDir()
+  dirs.push(home, project)
+  mkdirSync(join(project.path, '.skills', 'deploy'), { recursive: true })
+  writeFileSync(join(project.path, '.skills', 'deploy', 'SKILL.md'), 'Deploy')
+  const result = await resolveTrust({ cwd: project.path, agentDir: home.path, interactive: false })
+  expect(result.trusted).toBe(false)
+  expect(result.warning).toContain('Did not load config, extensions and skills')
+})
+
+test('--help / -h and --version / -v are parsed', () => {
+  expect(parseArgs(['--help']).help).toBe(true)
+  expect(parseArgs(['-h']).help).toBe(true)
+  expect(parseArgs(['--version']).version).toBe(true)
+  expect(parseArgs(['-v']).version).toBe(true)
+  expect(parseArgs([]).help).toBeUndefined()
+  expect(parseArgs([]).version).toBeUndefined()
+})
+
+test('USAGE lists every flag, the modes and examples', () => {
+  for (const flag of [
+    '--print', '-p', '--mode', '--continue', '-c', '--resume', '-r', '--session', '--extension', '-e',
+    '--no-extensions', '--no-session', '--approve', '--no-approve', '--model', '--thinking',
+    '--help', '-h', '--version', '-v',
+  ])
+    expect(HELP).toContain(flag)
+  expect(HELP).toContain('Examples:')
+  expect(HELP).toContain('rpc')
+})
+
+test('packageVersion() is the package.json version', () => {
+  const pkg = JSON.parse(readFileSync(join(import.meta.dir, '../../../package.json'), 'utf8'))
+  expect(packageVersion()).toBe(pkg.version)
 })
 
 test('settings.json extension config overrides the environment defaults key by key', () => {
@@ -167,4 +206,16 @@ test('an extension that throws or rejects while loading is reported and skipped,
   } finally {
     await vela.dispose()
   }
+})
+
+test('the removed supabase built-in is unknown, so an old -builtin:supabase fails loudly', () => {
+  expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual(['memory', 'rag', 'web', 'feishu'])
+  expect(extensionConfigFromEnv({ SUPABASE_URL: 'u' }, {})).not.toHaveProperty('supabase')
+  const dir = tempDir()
+  dirs.push(dir)
+  mkdirSync(join(dir.path, 'home'), { recursive: true })
+  writeFileSync(join(dir.path, 'home/settings.json'), JSON.stringify({ extensions: ['-builtin:supabase'] }))
+  expect(() =>
+    loadConfig({ cwd: dir.path, agentDir: join(dir.path, 'home'), builtins: Object.keys(BUILTIN_EXTENSIONS) }),
+  ).toThrow('Unknown built-in extension builtin:supabase')
 })

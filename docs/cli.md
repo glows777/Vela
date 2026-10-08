@@ -6,9 +6,10 @@ This page documents the `vela` command: its options, run modes, the interactive 
 vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>]
      [-e <extension>]... [--no-extensions] [--no-session]
      [--approve | --no-approve] [--model provider/id] [--thinking <level>]
+     [-h | --help] [-v | --version]
 ```
 
-An unknown option or a bad value prints the usage line and exits with code 2. There is no `--help` or `--version` option, and no `--` separator: every argument that starts with `-` (except a lone `-`) is read as an option. To send a prompt that starts with `-`, pipe it through stdin.
+An unknown option or a bad value prints the usage line and exits with code 2. There is no `--` separator: every argument that starts with `-` (except a lone `-`) is read as an option. To send a prompt that starts with `-`, pipe it through stdin.
 
 ## Options
 
@@ -27,8 +28,10 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
 | `-e`, `--extension <path>` | Load an extension file or directory, or `builtin:<name>`. Repeatable. Relative paths resolve from the current folder. |
 | `--no-extensions`, `-ne` | Skip the built-in extensions and every discovered or configured extension. Extensions given with `-e` still load. |
-| `--approve` | Trust this project's `.vela/settings.json` and `.vela/extensions/` for this run, without saving the decision. |
+| `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/` and project skills (`.skills/`, `.vela/skills/`) for this run, without saving the decision. |
 | `--no-approve` | Do not trust them for this run, without saving the decision. |
+| `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
+| `-v`, `--version` | Print the package version to stdout, then exit with code 0. |
 
 `-c`, `-r` and `--session` are mutually exclusive.
 
@@ -131,9 +134,11 @@ In pickers and dialogs: Up and Down move, Enter selects, Esc cancels. Keybinding
 
 Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, skills, and commands registered by extensions, filtered as you type. Tab completes file and directory paths relative to the working folder.
 
-`@` starts fuzzy file completion in the pi-tui editor. Vela currently does not give the editor an `fd` binary, so `@` shows no suggestions; type the path or use Tab. Vela does not expand `@path` into the file's contents: the text is sent as written and the model reads the file with its tools.
+`@` starts fuzzy file completion over the working directory, as in pi. It uses `fd`, found or downloaded the same way as for the `find` tool (see [Tools](tools.md)); until `fd` is ready, or if it can't be found (for example with `VELA_OFFLINE=1` and no `fd` installed), `@` shows no suggestions and a notice says so. Vela does not expand `@path` into the file's contents: the text is sent as written and the model reads the file with its tools.
 
 ## Slash commands
+
+In interactive mode, a line that starts with `/` is a command; any other text, including single words such as `exit` or `status`, is sent to the model.
 
 ### Interactive UI
 
@@ -146,7 +151,7 @@ Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, 
 | `/thinking [level]` | Without an argument, open the thinking-level picker. With an argument, set it. |
 | `/compact [focus]` | Summarize the conversation now, optionally telling the summary what to focus on. |
 | `/hotkeys` | Show the keyboard shortcuts. |
-| `/quit`, `/exit`, `exit` | Exit. |
+| `/quit`, `/exit` | Exit. |
 
 `/new`, `/resume` and `/compact` refuse to run while a task is running.
 
@@ -181,10 +186,6 @@ Skills are described in [Settings](settings.md#skills).
 
 Extension commands run only in sessions with the `owner` role. Other extensions add their own; `/extensions` lists them. See [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md).
 
-### Debug commands
-
-A few plain words (no slash) are handled by the CLI as debug commands when typed alone: `status` (message count and estimated tokens), `context`, `usage`, `skill list`, `cache on` / `cache off`, `defend` (run context cleanup now, without summarizing), and `sim` (inject 20 fake history messages with large tool results, to try out compaction).
-
 ## Debug output
 
 Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `~/.vela/debug.log` so they do not garble the screen, and Vela shows which system prompt sections are on when a session opens. In the other modes debug lines go to stderr.
@@ -203,7 +204,6 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 | `OPENAI_API_MODEL_NAME` | Fallback model: used as `openai/<name>` when neither `--model` nor `defaultModel` is set. |
 | `ANTHROPIC_API_KEY` | API key of the built-in `anthropic` provider. |
 | `TAVILY_API_KEY`, `SERPER_API_KEY` | Search keys for the `web` extension (`extensionConfig.web.tavilyKey`, `.serperKey`). Without one there is no `web_search` tool; Tavily wins if both are set. |
-| `SUPABASE_URL`, `SUPABASE_KEY` | Database for the `supabase` extension (`extensionConfig.supabase.url`, `.key`); without them it uses mock data. |
 | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | Credentials for the `feishu` channel (`extensionConfig.feishu.appId`, `.appSecret`); without them it does not connect. |
 | `FEISHU_OWNERS` | Comma-separated Feishu open_ids that get the `owner` role; everyone else is a guest (`extensionConfig.feishu.owners`). |
 | `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_MODEL_KEY` | Embedding API for the `rag` extension (`extensionConfig.rag.embedding.baseUrl`, `.model`, `.apiKey`); the knowledge base is enabled only when all three are set. |

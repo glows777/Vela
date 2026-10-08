@@ -8,7 +8,7 @@ import type { CommandHandler } from './index.ts'
 
 export const contextCommands: CommandHandler[] = [
   (cmd, { print, session, internals }) => {
-    if (cmd !== '/context' && cmd !== 'context') return false
+    if (cmd !== '/context') return false
     return (async () => {
       try {
         // Sections are built per prompt: preview the next prompt's sections so memory usage shows even before the first prompt
@@ -23,7 +23,7 @@ export const contextCommands: CommandHandler[] = [
   },
 
   (cmd, { print, session }) => {
-    if (cmd !== '/usage' && cmd !== 'usage') return false
+    if (cmd !== '/usage') return false
     print(renderUsageView(session.tracker))
     return true
   },
