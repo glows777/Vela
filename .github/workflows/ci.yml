@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.18.0
+      # grep / find run ripgrep / fd (Ubuntu names fd `fdfind`; Vela looks for both)
+      - run: sudo apt-get install -y ripgrep fd-find
       - run: bun install --frozen-lockfile
       # test/live needs a real model and doesn't run in CI (bun run test covers unit + e2e only)
       - name: Test

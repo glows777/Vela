@@ -162,7 +162,7 @@ test('read-only-session: setActiveTools narrows the tools of one session only', 
   await t.vela.session('review-1').prompt('Review the code')
   await t.run('Just chatting')
   expect(t.model.calls[0]!.tools.sort()).toEqual([
-    'glob',
+    'find',
     'grep',
     'list_directory',
     'read_file',

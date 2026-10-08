@@ -17,7 +17,7 @@ test('several tool calls in one response all run and all results go back togethe
     },
     responses: [
       [
-        fauxToolCall('glob', { pattern: 'src/*.ts' }),
+        fauxToolCall('find', { pattern: 'src/*.ts' }),
         fauxToolCall('grep', { pattern: 'export const', path: 'src' }),
         fauxToolCall('read_file', { path: 'src/b.ts' }),
       ],
@@ -28,14 +28,14 @@ test('several tool calls in one response all run and all results go back togethe
   await t.run('What is in src?')
 
   expect(t.eventsOf('tool_call').map((e) => e.toolName)).toEqual([
-    'glob',
+    'find',
     'grep',
     'read_file',
   ])
   expect(t.eventsOf('tool_result')).toHaveLength(3)
   const second = t.model.calls[1]!
   expect(second.toolResults.map((r) => r.toolName).sort()).toEqual([
-    'glob',
+    'find',
     'grep',
     'read_file',
   ])

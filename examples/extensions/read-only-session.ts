@@ -5,7 +5,7 @@
  */
 import type { VelaExtension } from '@glows777/vela'
 
-const READ_ONLY = ['read_file', 'list_directory', 'glob', 'grep']
+const READ_ONLY = ['read_file', 'list_directory', 'find', 'grep']
 
 const readOnlyReview: VelaExtension = (vela) => {
   vela.on('session_start', (_event, ctx) => {

@@ -96,7 +96,7 @@ test('roles: owner all, collaborator excludes bash, guest only tools that do not
     'bash',
     'read_file',
     'list_directory',
-    'glob',
+    'find',
     'grep',
     'rag_search',
     'web_search',

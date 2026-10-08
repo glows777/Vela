@@ -331,6 +331,7 @@
     info: (message: string) => void
     warn: (message: string) => void
   interface VelaOptions
+    binDir?: string | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
@@ -338,6 +339,7 @@
     limits?: Partial<VelaLimits> | undefined
     logger?: VelaLogger | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
+    offline?: boolean | undefined
     providers?: Record<string, ProviderDefinition> | undefined
     sessionStorage?: SessionStorage | undefined
     skillDirs?: string[] | undefined
