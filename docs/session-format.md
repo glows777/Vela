@@ -54,7 +54,7 @@ A custom `SessionStorage` receives this object in `save()` and must return it un
 
 - A checkpoint without `version` is read as version 1.
 - A checkpoint with a higher version than this Vela supports fails to resume with an error asking you to upgrade Vela.
-- An incompatible change bumps the version, and Vela migrates older versions when it loads them.
+- Only version 1 exists so far. An incompatible change will bump the version, and Vela will then migrate older versions when it loads them (as pi does).
 
 Files from before checkpoints existed hold one message per line:
 

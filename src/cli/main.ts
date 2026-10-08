@@ -71,28 +71,33 @@ const mode: 'interactive' | 'print' | 'json' | 'rpc' =
 // Non-interactive modes keep stdout for results / protocol: console output from extensions and the SDK goes to stderr
 if (mode !== 'interactive') redirectConsoleToStderr()
 if (mode === 'rpc' && args.messages.length)
-  usageError('--mode rpc reads commands from stdin and takes no prompt on the command line')
+  usageError(
+    '--mode rpc reads commands from stdin and takes no prompt on the command line',
+  )
 if (mode !== 'interactive' && args.resume)
-  usageError('-r works only in interactive mode; in print / json / rpc mode use --session <id> or -c')
+  usageError(
+    '-r works only in interactive mode; in print / json / rpc mode use --session <id> or -c',
+  )
 
 // Print mode: piped stdin is prepended to the first prompt (like pi: `git diff | vela -p "review"`)
 const messages = [...args.messages]
 if (mode === 'print' || mode === 'json') {
   const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
-  if (!messages.length) usageError('No prompt: pass one on the command line or via stdin')
+  if (!messages.length)
+    usageError('No prompt: pass one on the command line or via stdin')
 }
 // Config: ~/.vela/settings.json + <cwd>/.vela/settings.json once trusted (step 4, see 04-plan.md)
 const agentDir = defaultAgentDir(env)
-const trust = await resolveTrust({
-  cwd,
-  agentDir,
-  approve: args.approve,
-  interactive: mode === 'interactive',
-})
-if (trust.warning) console.error(trust.warning)
 let config: VelaConfig
 try {
+  const trust = await resolveTrust({
+    cwd,
+    agentDir,
+    approve: args.approve,
+    interactive: mode === 'interactive',
+  })
+  if (trust.warning) console.error(trust.warning)
   config = loadConfig({
     cwd,
     agentDir,
@@ -123,15 +128,18 @@ function cliErrorMessage(error: unknown): string {
 
 /** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports NO_MODEL) */
 async function chooseModel(): Promise<LanguageModel | string | undefined> {
+  // --model wins over VELA_MODEL (so VELA_RECORD wraps the model --model names)
+  if (args.model) return args.model
   // VELA_MODEL=mock: offline demo with the built-in keyword demo model (simulates prompt cache behavior)
   if (env.VELA_MODEL === 'mock') return createMockModel()
   // VELA_MODEL=faux:<scenario.json>: replay model responses from a JSON scenario script (bug repros, CLI e2e)
   if (env.VELA_MODEL?.startsWith('faux:'))
     return loadFauxScenario(env.VELA_MODEL.slice('faux:'.length))
   return (
-    args.model ??
     config.settings.defaultModel ??
-    (env.OPENAI_API_MODEL_NAME ? `openai/${env.OPENAI_API_MODEL_NAME}` : undefined)
+    (env.OPENAI_API_MODEL_NAME
+      ? `openai/${env.OPENAI_API_MODEL_NAME}`
+      : undefined)
   )
 }
 const chosenModel = await chooseModel()
@@ -176,7 +184,9 @@ const vela = createVela({
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
   binDir: join(agentDir, 'bin'),
-  offline: ['1', 'true', 'yes'].includes((env.VELA_OFFLINE ?? '').toLowerCase()),
+  offline: ['1', 'true', 'yes'].includes(
+    (env.VELA_OFFLINE ?? '').toLowerCase(),
+  ),
   extensionConfig: extensionConfigFromEnv(env, config.extensionConfig),
   // Built-in extensions (memory / rag / web / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
   extensions: await loadCliExtensions(config, args, (message) =>
@@ -209,9 +219,10 @@ if (recorder)
 function applyModelArgs(target: VelaSession): boolean {
   recordedSession = target.id
   if (args.thinking) target.setThinkingLevel(args.thinking)
+  // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
   const override =
-    args.model ??
     recorder?.model ??
+    args.model ??
     (typeof chosenModel === 'string' ? undefined : chosenModel)
   try {
     if (override) target.setModel(override)
@@ -247,9 +258,11 @@ if (mode === 'print' || mode === 'json') {
     }),
   )
 } else if (mode === 'rpc') {
-  await vela.ready().catch((error) =>
-    console.error(error instanceof Error ? error.message : error),
-  )
+  await vela
+    .ready()
+    .catch((error) =>
+      console.error(error instanceof Error ? error.message : error),
+    )
   await runRpcMode({
     vela,
     sessionId,

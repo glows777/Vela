@@ -37,7 +37,9 @@ function handle(record: RpcRecord): boolean {
       if (!record.success) {
         console.error(`\n[${record.command} failed] ${record.error}`)
         failed = true
-        // A failed prompt never starts a run, so there is no agent_settled to wait for
+        // A prompt rejected outright never starts a run, so there is no agent_settled to wait for. A prompt that
+        // fails after `started` (no model, extension hook) gets this response after agent_settled; the reader
+        // below keeps reading until Vela exits, so it is still printed
         return record.id === 'prompt-1'
       }
       return false

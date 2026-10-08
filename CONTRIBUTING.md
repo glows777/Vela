@@ -4,7 +4,7 @@ Thanks for helping. Bug reports, fixes and small focused features are welcome. F
 
 ## Setup
 
-Vela is developed with [Bun](https://bun.sh) 1.4 or newer. The published package also runs on Node.js 22.18 or newer, and CI checks both.
+Vela is developed with [Bun](https://bun.sh) 1.4 or newer. The published package also runs on Node.js 22.18 or newer, and CI runs the tests on Bun and the consumer smoke test on Node 22.18.
 
 ```bash
 git clone https://github.com/glows777/Vela

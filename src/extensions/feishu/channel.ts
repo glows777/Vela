@@ -99,18 +99,14 @@ export class FeishuChannel implements ChannelDefinition {
       return
     }
 
-    try {
-      await this.larkClient.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: message.channelId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: message.text }),
-        },
-      })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      this.config.logger.error(`[feishu] Send failed: ${msg}`)
-    }
+    // A failed send throws: the gateway reports it as channel_error instead of a channel_reply that never arrived
+    await this.larkClient.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: message.channelId,
+        msg_type: 'text',
+        content: JSON.stringify({ text: message.text }),
+      },
+    })
   }
 }

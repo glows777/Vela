@@ -85,7 +85,7 @@ The summary request uses the same model, system prompt and tool definitions as t
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `action: 'compact'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session, where no user message sits before the six most recent messages), it fails with `Nothing to compact (session too small)`, as in pi.
+`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `action: 'compact'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session: the split must be at a user message that is not the first message, with at least six messages from it to the end and every earlier tool call answered), it fails with `Nothing to compact (session too small)`, as in pi.
 
 ### Thresholds and context window
 
@@ -114,7 +114,7 @@ A warning emits `loop_detected` and adds a user message after that step telling 
 
 ## Retries
 
-When a model request fails with a transient error, Vela retries it with exponential backoff and jitter: `retryBaseMs × 2^(attempt-1)`, ±25%, capped at `retryMaxMs`, up to `maxRetries` times (defaults 500 ms, 30 s, 3). Each retry emits a `retry` event.
+When a model request fails with a transient error, Vela retries it with exponential backoff and jitter: `min(retryBaseMs × 2^(attempt-1), retryMaxMs)`, then ±25% jitter, up to `maxRetries` times (defaults 500 ms, 30 s, 3). Each retry emits a `retry` event.
 
 Retryable errors are HTTP 408, 409, 429, 5xx and 529 (as reported by the provider), connection resets, timeouts, network failures and streams that produced no output. Other 4xx errors fail right away. An abort is never retried.
 

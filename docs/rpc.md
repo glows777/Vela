@@ -84,7 +84,7 @@ A successful `prompt` response means the prompt was accepted, not that the model
 
 Keep reading events after the response. `agent_end` closes one agent loop, but queued steer and follow-up messages can still run after it. `agent_settled` means the session is idle and nothing else will run on its own.
 
-A prompt can also fail after it was answered with `started`, before the agent loop begins: no model is selected, the model doesn't support the thinking level, or an extension hook throws. No `agent_end` follows in that case, so Vela sends a second response with the same `id` and `success: false`:
+A prompt can also fail after it was answered with `started`, before the agent loop begins: no model is selected, the model doesn't support the thinking level, or an extension hook throws. No `agent_end` follows in that case, so Vela sends a second response with the same `id` and `success: false`. It comes after the run's `agent_settled`, so a client that stops reading at `agent_settled` misses it; keep reading until Vela exits (as the clients below do):
 
 ```json
 {"id":"req-2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
@@ -133,13 +133,15 @@ Queues a steering message during a run (`disposition: "queued"`). When idle it s
 
 Same as `steer`, but delivered when the model would otherwise stop.
 
+Queueing works only during a prompt's run: while a compaction (or an extension command's loop) holds the session, `steer`, `follow_up` and `prompt` with `streamingBehavior` fail with `A task is already running: ...`; retry after it finishes.
+
 #### abort
 
 ```json
 {"id":"5","type":"abort"}
 ```
 
-Aborts the running loop and extension commands, and responds only after the session has stopped. Queued messages stay queued and run afterwards; send `clear_queue` first to drop them.
+Aborts the running loop and extension commands, and responds once the agent loop (or compaction) has stopped; extension commands are signalled but not awaited. Queued messages stay queued and are delivered with the next prompt; send `clear_queue` first to drop them.
 
 #### clear_queue
 
@@ -260,7 +262,7 @@ Data: `{ "levels": ["off","minimal","low","medium","high","xhigh","max"] }`.
 {"id":"18","type":"compact","customInstructions":"Keep the API decisions"}
 ```
 
-Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the `context` event of the compaction, `{ "type": "context", "action": "compact", "before", "after", ... }`, or no data when nothing was compacted. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary keeps the last six messages and splits at a user message before them, so a new or short session has nothing to compact.
+Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the `context` event of the compaction, `{ "type": "context", "action": "compact", "before", "after", ... }`. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary splits at a user message that is not the first message, has at least six messages from it to the end, and has every earlier tool call answered, so a new or short session has nothing to compact.
 
 ### Commands
 
@@ -399,12 +401,11 @@ while line := process.stdout.readline():
         print(record["text"], end="", flush=True)
     elif record["type"] == "response" and not record["success"]:
         print(record["error"])
-        break
     elif record["type"] == "agent_settled":
         print()
-        break
+        # Closing stdin makes Vela exit; keep reading until then so a late prompt failure is still printed
+        process.stdin.close()
 
-process.stdin.close()
 process.wait()
 ```
 

@@ -40,7 +40,7 @@ Vela waits for stdout to drain when the pipe is full, so a slow reader slows Vel
 | Code | Meaning |
 |---|---|
 | `0` | All prompts finished. |
-| `1` | A prompt failed or was aborted (the reason is in `agent_end` and on stderr), or no usable model was found at startup. |
+| `1` | A prompt failed or was aborted (the reason is on stderr, and in `agent_end` when the agent loop had started), or no usable model was found at startup. |
 | `2` | Usage or configuration error: unknown flag, missing prompt, `-r` outside interactive mode, invalid `--thinking` or `--session` id, broken `settings.json`. |
 
 When a prompt fails, the remaining prompts are not run.

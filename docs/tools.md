@@ -95,7 +95,7 @@ grep and find need the `rg` and `fd` programs. They are looked up in this order:
 
 1. The bin directory: `~/.vela/bin` in the CLI (under `VELA_DIR` if set).
 2. `PATH` (for fd, also `fdfind`, the name Debian and Ubuntu use).
-3. Download: the CLI downloads the latest release for your platform from GitHub into `~/.vela/bin` the first time a search tool needs it.
+3. Download: the CLI downloads the latest release for your platform from GitHub (fd is pinned to 10.3.0 on Intel macOS, its last release with an Intel macOS binary) into `~/.vela/bin` the first time a search tool needs it.
 
 Set `VELA_OFFLINE=1` to turn off the download; the tool then fails with an error that says how to install the program (`brew install ripgrep fd`, or `apt install ripgrep fd-find`).
 

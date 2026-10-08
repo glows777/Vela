@@ -13,7 +13,7 @@ When a channel delivers a message:
 1. Vela picks the session id from the channel name, the conversation (`channelId`) and the sender id, for example `feishu-oc_456-ou_123`. Ids with other characters are sanitized and suffixed with a hash, so different senders or conversations never share a session.
 2. It sets the session's role from the channel's `roleFor(message)`, or `guest` when the channel has no `roleFor`. The role is checked again on every message, so changing the owner list takes effect on the next message.
 3. On the session's first message since startup, the session is resumed from storage, so history survives restarts when Vela has a `dataDir`.
-4. It emits `channel_message`, runs the turn, and sends the text of the final assistant message back through the channel's `send()` to the same `channelId`. It then emits `channel_reply`, or `channel_error` if the turn or the send failed.
+4. It emits `channel_message`, runs the turn, and sends the text of the final assistant message back through the channel's `send()` to the same `channelId`. It then emits `channel_reply`, or `channel_error` if the turn or the send failed (a `send()` that fails must throw; the built-in Feishu channel does). If the final assistant message has no text, nothing is sent and neither event is emitted.
 
 Channel sessions have no UI. A tool whose permission is `ask` is rejected, and extension UI calls fall back to events (see [Extensions](extensions.md)).
 

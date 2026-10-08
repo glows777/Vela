@@ -222,6 +222,16 @@ test('trust decisions are saved per directory and apply to subdirectories', () =
   expect(savedTrust(agentDir, project)).toBe(true)
 })
 
+test('a broken trust.json fails loudly instead of being overwritten', () => {
+  const { agentDir, root } = setup()
+  const file = join(agentDir, 'trust.json')
+  writeFileSync(file, '{ "/a": true,')
+  expect(() => savedTrust(agentDir, root)).toThrow(`${file} is not valid JSON`)
+  expect(() => saveTrust(agentDir, root, true)).toThrow(`${file} is not valid JSON`)
+  writeFileSync(file, '[]')
+  expect(() => savedTrust(agentDir, root)).toThrow('must be an object')
+})
+
 test('running in the home directory reads ~/.vela once, as user settings, without asking for trust', () => {
   const { root } = setup({
     'home/.vela/settings.json': json({ extensions: ['x.ts'] }),

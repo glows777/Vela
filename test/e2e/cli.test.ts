@@ -383,6 +383,19 @@ test.concurrent('a broken settings.json stops the CLI with the file name', async
   expect(stderr).toContain(`[config] ${join(home.path, 'settings.json')} is not valid JSON`)
 })
 
+test.concurrent('a broken trust.json stops the CLI instead of being ignored', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(join(home.path, 'trust.json'), '{ nope')
+  const { code, stderr } = await cli(['-p', 'hello'], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+    files: { '.vela/settings.json': '{}' },
+  })
+  expect(code).toBe(2)
+  expect(stderr).toContain(`[config] ${join(home.path, 'trust.json')} is not valid JSON`)
+})
+
 // The demo model streams one character every 30 ms (about 2 s); with other concurrent tests on slow CI machines that exceeds the default 5 s
 test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', async () => {
   const { code, stdout } = await cli(['-p', 'hello'], { model: 'mock' })

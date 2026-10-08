@@ -22,7 +22,7 @@ try {
 
 `createVela()` assembles one Vela: core tools (files, search, bash), hooks, the system prompt, skills, extensions and channels. Conversations are sessions, opened with `vela.session(id)`. One Vela can have many sessions open at once; they share tools and extensions, and each has its own history, compaction state, usage, role and run lock.
 
-Unlike the CLI, the SDK reads no files and no environment variables by itself: no `settings.json`, no `models.json`, no API keys, no built-in extensions. You pass what you need, or call [`loadConfig()`](#sharing-the-cli-config) to get the CLI's configuration.
+Unlike the CLI, the SDK reads no config files and no environment variables by itself: no `settings.json`, no `models.json`, no API keys, no built-in extensions. The only files it reads on its own are skills: without `skillDirs` it loads `<cwd>/.skills` and `<cwd>/.vela/skills` (there is no project trust check in the SDK; pass `skillDirs` to choose). You pass what you need, or call [`loadConfig()`](#sharing-the-cli-config) to get the CLI's configuration.
 
 All [SDK examples](../examples/sdk/) run offline with the faux model from `@glows777/vela/testing` and are typechecked with the repository.
 
@@ -58,7 +58,7 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 | `models()` | Models listed by all providers (`ModelInfo`: `provider`, `id`, `ref`, `name`, `contextWindow`, `reasoning`, `cost`) |
 | `session(id?, options?)` | Opens a session, or returns it if it is already open. `id` defaults to `default`. |
 | `sessions()` | Open sessions |
-| `listSessions()` | Saved sessions, newest first, from `SessionStorage.list()` (empty if the storage has no `list`). Sessions without messages are left out. |
+| `listSessions()` | Saved sessions, newest first, from `SessionStorage.list()` (empty if the storage has no `list`). The built-in storages leave out sessions without messages; a custom storage's `list()` is passed through as is. |
 | `subscribe(listener)` | Events from all sessions: `(event, sessionId) => void`. Returns an unsubscribe function. |
 | `ready()` | Resolves when all extensions (including async factories) have loaded; rejects if one failed |
 | `extensions()` | Loaded extensions and the tools, commands, providers and channels each registered |
@@ -118,7 +118,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `limits` | Limits in effect for this session's model |
 | `usage` | `{ tokens, percent, needsAction, totals }`: context estimate and this session's token and cost totals; `totals.cost`, `baselineCost` and `savedCost` are undefined while no request had a known price |
 | `subscribe(listener)` | This session's events: `(event) => void`. Returns an unsubscribe function. |
-| `close()` | Aborts, waits for the run to finish and save, fires `session_shutdown` and removes the session from the Vela |
+| `close()` | Aborts, waits for the run to finish and save, fires `session_shutdown` (if the session had started) and removes the session from the Vela |
 
 Members marked `@internal` in the type declarations (`store`, `tracker`, `registry`, `save()`, `emit`, ...) are used by the CLI and may change without notice.
 
@@ -159,7 +159,7 @@ agent_end
 agent_settled
 ```
 
-Steered messages arrive as another `message` followed by another turn. Follow-ups are taken when the model would otherwise stop and continue in the same loop. `agent_end` closes one agent loop; if messages are still queued after an error or abort, a new loop starts. `agent_settled` comes last and means the session is idle and nothing else will run on its own.
+Steered messages arrive as another `message` followed by another turn. Follow-ups are taken when the model would otherwise stop and continue in the same loop. `agent_end` closes one agent loop; if messages are still queued after an error or a loop-detection stop, a new loop starts; after an abort they stay queued for the next prompt. `agent_settled` comes last and means the session is idle and nothing else will run on its own.
 
 | Type | Fields | When |
 |---|---|---|
@@ -233,7 +233,7 @@ Long tool output and the tool call history are always written to files under `<d
 
 ## Sharing the CLI config
 
-`loadConfig()` reads the same files the CLI reads (`~/.vela/settings.json`, `~/.vela/models.json`, and with `trusted: true` the project's `.vela/settings.json`) and returns values ready for `createVela()`. It only reads files; it never loads extension code.
+`loadConfig()` reads the same files the CLI reads (`~/.vela/settings.json`, `~/.vela/models.json`, and with `trusted: true` the project's `.vela/settings.json`, extensions and skill directories) and returns values ready for `createVela()`. It only reads files; it never loads extension code.
 
 ```typescript
 import {
@@ -271,7 +271,7 @@ const vela = createVela({
 | `cwd` | `process.cwd()` | Project directory |
 | `agentDir` | `env.VELA_DIR` or `~/.vela` | User-level directory |
 | `env` | `{}` | Environment for `$VAR` / `${VAR}` interpolation, `VELA_DIR` and provider API keys. Core never reads `process.env` itself: pass it explicitly. |
-| `trusted` | `false` | Also load the project's `.vela/settings.json` and `.vela/extensions/` |
+| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/extensions/` and skills (`.skills/`, `.vela/skills/`, returned in `skillDirs`) |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 
 The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `providers` and `extensionConfig`. `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).

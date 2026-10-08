@@ -200,7 +200,7 @@ vela.registerChannel({
 
 ### on
 
-`vela.on(event, handler)` subscribes to an event. Handlers run in extension load order, then registration order. The handler gets the event and a context (`ctx`, see [Context](#context)). It returns a function that removes the handler; removing a handler during a dispatch does not affect that dispatch.
+`vela.on(event, handler)` subscribes to an event. Handlers run in registration order, which is extension load order when factories register synchronously (an `async` factory's handlers registered after an `await` can come after later extensions'). The handler gets the event and a context (`ctx`, see [Context](#context)). It returns a function that removes the handler; removing a handler during a dispatch does not affect that dispatch.
 
 Some events let a handler change what happens; the rest are notifications.
 
@@ -208,15 +208,15 @@ Some events let a handler change what happens; the rest are notifications.
 
 | Event | When | What a handler can do |
 |---|---|---|
-| `session_start` | Before a session's first prompt, after its history is restored | Set up per-session state, for example `ctx.session.setActiveTools(...)`. Handlers are awaited in order |
-| `before_agent_start` | At the start of each `prompt()`, before the first model request | Write system prompt sections into `event.sections` (keyed by name). `event.prompt` is the user input |
+| `session_start` | Before a session's first prompt, command or compaction, after its history is restored | Set up per-session state, for example `ctx.session.setActiveTools(...)`. Handlers are awaited in order |
+| `before_agent_start` | At the start of each agent loop (normally once per `prompt()`), before the first model request | Write system prompt sections into `event.sections` (keyed by name). `event.prompt` is the user input |
 | `tool_call` | Before a tool runs (any tool, built-in or extension) | Change `event.input` in place, or return `{ block: true, reason }` to block the call |
 | `tool_result` | After a tool runs, before the model sees the result | Return `{ output }` to replace the text the model sees |
-| `session_shutdown` | When a session closes (`session.close()`, `vela.dispose()`, CLI exit) | Release per-session resources. Handlers are awaited in order |
+| `session_shutdown` | When a session that has started closes (`session.close()`, `vela.dispose()`, CLI exit); a session never used gets no `session_shutdown` | Release per-session resources. Handlers are awaited in order |
 
 Details:
 
-- `before_agent_start`: sections are computed once per `prompt()` and stay the same for every model request in that turn, which keeps the prompt cache prefix stable. Sections appear in the system prompt in the order they were written. Example: [prompt-section.ts](../examples/extensions/prompt-section.ts).
+- `before_agent_start`: sections are computed once per agent loop (normally once per `prompt()`) and stay the same for every model request in that turn, which keeps the prompt cache prefix stable. Sections appear in the system prompt in the order they were written. Example: [prompt-section.ts](../examples/extensions/prompt-section.ts).
 - `tool_call`: `event` has `toolName`, `toolCallId` and `input`. A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`. Session permissions set to `ask` are checked after these handlers, on the final input. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
 - `tool_result`: `event` has `toolName`, `toolCallId`, `input` and `output` (the text the model will see; a preview for oversized results). Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
 - `session_start` / `session_shutdown`: errors are logged and the next handler runs. Example: [read-only-session.ts](../examples/extensions/read-only-session.ts).
