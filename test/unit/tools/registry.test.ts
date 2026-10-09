@@ -77,6 +77,12 @@ test('toAISDKFormat includes only available tools', () => {
   expect(Object.keys(registry.toAISDKFormat())).toEqual(['active-a'])
 })
 
+/** Waits until cond() holds; timing-free under a loaded test runner */
+async function waitFor(cond: () => boolean) {
+  for (let i = 0; i < 500 && !cond(); i++) await Bun.sleep(5)
+  expect(cond()).toBe(true)
+}
+
 test('tools that are not concurrency-safe run serially under a mutex', async () => {
   const registry = makeRegistry()
   const order: string[] = []
@@ -106,7 +112,7 @@ test('tools that are not concurrency-safe run serially under a mutex', async () 
     context: {},
   })
   const first = execute({ id: 'a' }, options('a'))
-  await Bun.sleep(20)
+  await waitFor(() => order.includes('a-start'))
   const second = execute({ id: 'b' }, options('b'))
   await Bun.sleep(20)
   expect(order).toEqual(['a-start'])
