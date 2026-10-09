@@ -36,6 +36,20 @@ test('registering a tool name twice throws', () => {
   expect(() => registry.register(tool('dup'))).toThrow(/already registered/)
 })
 
+test('registering a tool with the removed isConcurrencySafe or an unknown executionMode throws', () => {
+  const registry = makeRegistry()
+  expect(() =>
+    registry.register({ ...tool('old'), isConcurrencySafe: true } as ToolDefinition),
+  ).toThrow(/isConcurrencySafe was removed/)
+  expect(() =>
+    registry.register(
+      tool('typo', { executionMode: 'serial' as ToolDefinition['executionMode'] }),
+    ),
+  ).toThrow(/executionMode must be 'parallel' or 'sequential'/)
+  expect(registry.get('old')).toBeUndefined()
+  expect(registry.get('typo')).toBeUndefined()
+})
+
 test('deferred tools stay hidden until searchTools finds them', () => {
   const registry = makeRegistry()
   registry.register(

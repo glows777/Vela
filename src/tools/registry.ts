@@ -245,6 +245,19 @@ export class ToolRegistry {
           `[Tool ToolRegistry] Tool with name "${tool.name}" is already registered.`,
         )
       }
+      // Removed in favor of executionMode; ignoring it would silently change how the tool runs
+      if ('isConcurrencySafe' in tool)
+        throw new Error(
+          `Tool "${tool.name}": isConcurrencySafe was removed. Drop isConcurrencySafe: true; replace isConcurrencySafe: false with executionMode: 'sequential'.`,
+        )
+      if (
+        tool.executionMode !== undefined &&
+        tool.executionMode !== 'parallel' &&
+        tool.executionMode !== 'sequential'
+      )
+        throw new Error(
+          `Tool "${tool.name}": executionMode must be 'parallel' or 'sequential', got ${JSON.stringify(tool.executionMode)}`,
+        )
       this.tools.set(tool.name, tool)
     }
   }

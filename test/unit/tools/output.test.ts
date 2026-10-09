@@ -269,3 +269,26 @@ test('Bash timeout preserves output already written to disk', async () => {
   expect(stored.preview).toContain('Command timed out after 0.2 seconds')
   expect(stored.execution).toMatchObject({ timedOut: true, isError: true })
 })
+
+test('Bash rejects an invalid timeout and a shellPath that does not exist before running anything', async () => {
+  const results = new ToolResultStore(join(dir, 'invalid-bash'))
+  for (const timeout of [0, -1, Number.POSITIVE_INFINITY, 3_000_000])
+    await expect(
+      createBashTool().execute({ command: 'true', timeout }, { results }),
+    ).rejects.toThrow(/Invalid timeout/)
+  await expect(
+    createBashTool(undefined, { shellPath: join(dir, 'no-such-shell') }).execute(
+      { command: 'true' },
+      { results },
+    ),
+  ).rejects.toThrow(/Shell not found: .*no-such-shell\. Fix or remove shellPath/)
+})
+
+test('Bash runs commands with the configured shellPath', async () => {
+  const result = await createBashTool(undefined, { shellPath: '/bin/sh' }).execute(
+    { command: 'echo "$0"' },
+    { results: new ToolResultStore(join(dir, 'shell-path')) },
+  )
+  const stored = getStoredResult({ type: 'json', value: result as never })!
+  expect(stored.preview.trim()).toBe('/bin/sh')
+})
