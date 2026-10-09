@@ -180,7 +180,7 @@ Removes all queued messages and returns them: `{ "steering": string[], "followUp
 {"id":"8","type":"get_messages"}
 ```
 
-Data: `{ "messages": ModelMessage[] }`, the session history as AI SDK messages (the same objects as the `message` events).
+Data: `{ "messages": ModelMessage[] }`, the session history as AI SDK messages (the same objects as in the `message_end` events).
 
 ### Sessions
 
@@ -336,7 +336,7 @@ Close Vela's stdin to stop it. Vela then answers open dialogs as cancelled, abor
 
 ## Transcript
 
-A run with the offline demo model (`VELA_MODEL=mock`), from `>` client to `<` Vela. The demo model's one-character `text_delta` events and part of the `usage` record are left out.
+A run with the offline demo model (`VELA_MODEL=mock`), from `>` client to `<` Vela. The demo model's one-character `text_delta` updates and part of the `usage` record are left out.
 
 ```
 > {"id":"1","type":"get_state"}
@@ -344,12 +344,16 @@ A run with the offline demo model (`VELA_MODEL=mock`), from `>` client to `<` Ve
 > {"id":"2","type":"prompt","message":"hello"}
 < {"id":"2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
 < {"type":"agent_start","input":"hello","sessionId":"20261008-105115-a006"}
-< {"type":"message","message":{"role":"user","content":"hello"},"sessionId":"20261008-105115-a006"}
+< {"type":"message_start","message":{"role":"user","content":"hello"},"sessionId":"20261008-105115-a006"}
+< {"type":"message_end","message":{"role":"user","content":"hello"},"sessionId":"20261008-105115-a006"}
 < {"type":"turn_start","turn":1,"sessionId":"20261008-105115-a006"}
-< {"type":"usage","modelId":"mock-model","usage":{"inputTokens":2,"outputTokens":23,"cacheReadTokens":0,"cacheWriteTokens":1066},"record":{"cost":0.0014495,"kind":"main","...":"..."},"sessionId":"20261008-105115-a006"}
-< {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved."}]},"sessionId":"20261008-105115-a006"}
-< {"type":"turn_end","turn":1,"needsToolCall":false,"sessionId":"20261008-105115-a006"}
-< {"type":"agent_end","reason":"done","sessionId":"20261008-105115-a006"}
+< {"type":"message_start","message":{"role":"assistant","content":[]},"sessionId":"20261008-105115-a006"}
+< {"type":"message_update","message":{"role":"assistant","content":[]},"assistantMessageEvent":{"type":"text_start","contentIndex":0},"sessionId":"20261008-105115-a006"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved."}]},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved."},"sessionId":"20261008-105115-a006"}
+< {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved."}]},"stopReason":"stop","sessionId":"20261008-105115-a006"}
+< {"type":"usage","modelId":"mock-model","usage":{"inputTokens":2,"outputTokens":23,"cacheReadTokens":0,"cacheWriteTokens":941},"record":{"cost":0.00129325,"kind":"main","...":"..."},"sessionId":"20261008-105115-a006"}
+< {"type":"turn_end","turn":1,"message":{"role":"assistant","content":[{"type":"text","text":"Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved."}]},"toolResults":[],"sessionId":"20261008-105115-a006"}
+< {"type":"agent_end","messages":[{"role":"user","content":"hello"},{"role":"assistant","content":[{"type":"text","text":"Hi! I'm the Vela demo model, with prompt caching and cost tracking wired up :) Chat for a few turns, then type /usage to see how much you saved."}]}],"reason":"done","sessionId":"20261008-105115-a006"}
 < {"type":"agent_settled","sessionId":"20261008-105115-a006"}
 > {"id":"3","type":"set_session_name","name":"demo"}
 < {"id":"3","type":"response","command":"set_session_name","success":true}
@@ -363,17 +367,22 @@ An extension dialog, captured with the [confirm-dangerous](../examples/extension
 > {"id":"p1","type":"prompt","message":"delete the build log"}
 < {"id":"p1","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
 < {"type":"agent_start","input":"delete the build log","sessionId":"20261008-105126-f165"}
-< {"type":"message","message":{"role":"user","content":"delete the build log"},"sessionId":"20261008-105126-f165"}
+< {"type":"message_start","message":{"role":"user","content":"delete the build log"},"sessionId":"20261008-105126-f165"}
+< {"type":"message_end","message":{"role":"user","content":"delete the build log"},"sessionId":"20261008-105126-f165"}
 < {"type":"turn_start","turn":1,"sessionId":"20261008-105126-f165"}
+< {"type":"message_start","message":{"role":"assistant","content":[]},"sessionId":"20261008-105126-f165"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{}}]},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":0},"sessionId":"20261008-105126-f165"}
+< {"type":"message_update","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}},"sessionId":"20261008-105126-f165"}
+< {"type":"message_end","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"}}]},"stopReason":"toolUse","sessionId":"20261008-105126-f165"}
+< {"type":"tool_execution_start","toolCallId":"call-1","toolName":"bash","args":{"command":"rm build.log"},"sessionId":"20261008-105126-f165"}
 < {"type":"extension_ui_request","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","method":"confirm","title":"Delete files?","message":"rm build.log"}
 > {"type":"extension_ui_response","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","confirmed":false}
-< {"type":"tool_call","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"},"sessionId":"20261008-105126-f165"}
-< {"type":"tool_result","toolCallId":"call-1","toolName":"bash","input":{"command":"rm build.log"},"output":"[Blocked by hook] User did not allow the deletion","sessionId":"20261008-105126-f165"}
+< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] User did not allow the deletion","isError":false,"durationMs":3912,"sessionId":"20261008-105126-f165"}
 ...
 < {"type":"agent_settled","sessionId":"20261008-105126-f165"}
 ```
 
-The `tool_call` event comes after the extension's `tool_call` handler has run, so the dialog appears first.
+The dialog comes from the extension's `tool_call` handler, which runs after `tool_execution_start` and before the tool; `tool_execution_end` follows the answer.
 
 ## Client example
 
@@ -397,8 +406,8 @@ process.stdin.flush()
 # readline() on a binary pipe splits on b"\n" only
 while line := process.stdout.readline():
     record = json.loads(line)
-    if record["type"] == "text_delta":
-        print(record["text"], end="", flush=True)
+    if record["type"] == "message_update" and record["assistantMessageEvent"]["type"] == "text_delta":
+        print(record["assistantMessageEvent"]["delta"], end="", flush=True)
     elif record["type"] == "response" and not record["success"]:
         print(record["error"])
     elif record["type"] == "agent_settled":
@@ -413,7 +422,7 @@ process.wait()
 
 | | pi | Vela |
 |---|---|---|
-| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId` (`text_delta`, `message`, `tool_call` / `tool_result` / `tool_error`, `context`, `retry`, ...). See [SDK events](sdk.md#events). |
+| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are AI SDK `ModelMessage`s and the stop reason is on `message_end`; compaction is a `context` event; Vela adds `usage`, `loop_detected` and others. See [SDK events](sdk.md#events). |
 | `prompt` / `steer` / `follow_up` | Accept `images` | Text only |
 | `steer` / `follow_up` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |

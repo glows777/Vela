@@ -52,7 +52,7 @@ void typeChecks
 const bogus: VelaEvent = { type: 'no_such_event' }
 void bogus
 await vela.dispose()
-if (!types.includes('tool_result') || types.at(-1) !== 'agent_settled')
+if (!types.includes('tool_execution_end') || types.at(-1) !== 'agent_settled')
   throw new Error(\`unexpected events: \${types.join(',')}\`)
 if (!JSON.stringify(model.calls[1]?.prompt).includes('hi Vela'))
   throw new Error('tool result did not reach the model')

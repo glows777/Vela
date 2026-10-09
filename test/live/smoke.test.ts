@@ -44,7 +44,7 @@ test.skipIf(!live)(
     await t.run(
       'Use read_file to read secret.txt, then reply with only the code word in it',
     )
-    expect(t.eventsOf('tool_call').map((e) => e.toolName)).toContain(
+    expect(t.eventsOf('tool_execution_start').map((e) => e.toolName)).toContain(
       'read_file',
     )
     expect(t.lastAssistantText()).toContain('PINEAPPLE')

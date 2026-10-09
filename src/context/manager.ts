@@ -61,8 +61,12 @@ export class ContextManager {
     await this.commit(this.state.messages.slice())
   }
 
-  /** Manual summary (session.compact()): ignores thresholds, replaces earlier history with a summary and saves it. */
-  async compact(request: RequestSnapshot, focus?: string): Promise<void> {
+  /** Manual summary (session.compact(), or after a provider context overflow): ignores thresholds, replaces earlier history with a summary and saves it. */
+  async compact(
+    request: RequestSnapshot,
+    focus?: string,
+    action: 'compact' | 'overflow' = 'compact',
+  ): Promise<void> {
     const before = estimateRequestTokens(request)
     const compacted = await summarize(
       request,
@@ -81,7 +85,7 @@ export class ContextManager {
     this.tracker.setEstimatedTokens(after)
     this.onEvent?.({
       type: 'context',
-      action: 'compact',
+      action,
       before,
       after,
       messages: compacted.compressedCount,

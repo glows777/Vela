@@ -105,8 +105,9 @@ test.concurrent('rpc: prompt is accepted, events stream with the session id, sta
   })
   const settled = await rpc.waitFor((r) => r.type === 'agent_settled')
   const sessionId = settled.sessionId as string
-  expect(rpc.records.find((r) => r.type === 'text_delta')).toMatchObject({
+  expect(rpc.records.find((r) => r.type === 'message_update')).toMatchObject({
     sessionId,
+    assistantMessageEvent: { type: 'text_start' },
   })
 
   const state = await rpc.call({ type: 'get_state' })
@@ -160,7 +161,7 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   const rpc = startRpc(`faux:${scenario('hang')}`)
 
   await rpc.call({ type: 'prompt', message: 'Think slowly' })
-  await rpc.waitFor((r) => r.type === 'text_delta')
+  await rpc.waitFor((r) => r.type === 'message_update')
 
   expect(
     await rpc.call({ type: 'prompt', message: 'Interject' }),

@@ -164,7 +164,9 @@ test('a message from a channel runs through the same model and tools, and the re
   expect(sent).toEqual([
     { channelId: 'c1', recipientId: 'u1', text: 'We are open from 9 to 6' },
   ])
-  expect(t.eventsOf('tool_call')[0]).toMatchObject({ toolName: 'read_file' })
+  expect(t.eventsOf('tool_execution_start')[0]).toMatchObject({
+    toolName: 'read_file',
+  })
   // Channel sessions are separate from the CLI session
   expect(t.messages).toEqual([])
   const { output } = await captureConsole(() => t.dispatch('/channel list'))

@@ -31,7 +31,8 @@ test('two sessions run at the same time with separate history, files, locks and 
   a.abort()
   await expect(running).rejects.toThrow()
   expect(a.busy.locked).toBe(false)
-  expect(a.messages.map((m) => m.role)).toEqual(['user'])
+  // The partial answer streamed before the abort stays in a's history
+  expect(a.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
 
   expect(await t.readData('sessions/b.jsonl')).toContain('answer for b')
   expect(await t.readData('sessions/a.jsonl')).not.toContain('answer for b')
@@ -70,7 +71,7 @@ test('session.subscribe only sees its own events; vela.subscribe sees all with t
 
   expect(mine.filter((type) => type === 'agent_end')).toHaveLength(1)
   expect(all).toEqual(['default', 'other', 'default'])
-  expect(t.eventsIn('other').at(-2)).toEqual({
+  expect(t.eventsIn('other').at(-2)).toMatchObject({
     type: 'agent_end',
     reason: 'done',
   })

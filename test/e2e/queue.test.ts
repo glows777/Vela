@@ -58,9 +58,7 @@ test('a steer that arrives on the final answer keeps the loop going', async () =
 
   expect(t.model.calls).toHaveLength(2)
   expect(t.lastAssistantText()).toBe('Second line')
-  expect(t.eventsOf('agent_end')).toEqual([
-    { type: 'agent_end', reason: 'done' },
-  ])
+  expect(t.eventsOf('agent_end').map((e) => e.reason)).toEqual(['done'])
 })
 
 test('followUp waits until the model would stop, then continues in the same loop (pi)', async () => {
@@ -82,9 +80,7 @@ test('followUp waits until the model would stop, then continues in the same loop
   expect(t.model.calls[1]!.toolResults).toHaveLength(1)
   expect(t.model.calls[2]!.lastUserText).toBe('Then summarize')
   expect(t.eventsOf('agent_start').map((e) => e.input)).toEqual(['Read a'])
-  expect(t.eventsOf('agent_end')).toEqual([
-    { type: 'agent_end', reason: 'done' },
-  ])
+  expect(t.eventsOf('agent_end').map((e) => e.reason)).toEqual(['done'])
   expect(
     t.eventTypes().filter((type) => type === 'agent_settled'),
   ).toHaveLength(1)
@@ -187,7 +183,7 @@ test('steer and followUp on an idle session behave like prompt()', async () => {
   expect(t.model.calls.map((c) => c.lastUserText)).toEqual(['Hello', 'Bye'])
 })
 
-test('thinking text from the model is streamed as thinking_delta', async () => {
+test('thinking text from the model is streamed as thinking_delta updates', async () => {
   const t = createTestVela({
     responses: [{ reasoning: 'Let me think first', text: 'Answer' }],
   })
@@ -196,8 +192,12 @@ test('thinking text from the model is streamed as thinking_delta', async () => {
 
   expect(
     t
-      .eventsOf('thinking_delta')
-      .map((e) => e.text)
+      .eventsOf('message_update')
+      .flatMap((e) =>
+        e.assistantMessageEvent.type === 'thinking_delta'
+          ? [e.assistantMessageEvent.delta]
+          : [],
+      )
       .join(''),
   ).toBe('Let me think first')
   expect(t.streamedText()).toBe('Answer')

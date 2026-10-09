@@ -108,7 +108,7 @@ type InterceptEvents = {
   session_shutdown: [SessionShutdownEvent, void]
 }
 
-/** Read-only notifications: every VelaEvent (tool_call / tool_result use the intercepting versions above). */
+/** Read-only notifications: every VelaEvent (the intercepting tool_call / tool_result above are separate). */
 type NotifyEvents = {
   [K in Exclude<VelaEvent['type'], keyof InterceptEvents>]: [
     Extract<VelaEvent, { type: K }>,

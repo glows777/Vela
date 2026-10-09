@@ -220,9 +220,8 @@ export class ExtensionRunner {
     )
   }
 
-  /** Read-only notification: handlers are not awaited and errors are logged. tool_call / tool_result go through the intercepting versions. */
+  /** Read-only notification: handlers are not awaited and errors are logged. */
   notify(event: VelaEvent, session: VelaSession): void {
-    if (event.type === 'tool_call' || event.type === 'tool_result') return
     const handlers = this.list(event.type)
     if (!handlers.length) return
     const ctx = this.context(session)

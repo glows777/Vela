@@ -47,7 +47,8 @@ const vela = createVela({ model: 'anthropic/<model-id>', providers, cwd: process
 const session = vela.session('main')
 
 session.subscribe((event) => {
-  if (event.type === 'text_delta') process.stdout.write(event.text)
+  if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta')
+    process.stdout.write(event.assistantMessageEvent.delta)
 })
 await session.prompt('Summarize the README in this folder')
 await vela.dispose()

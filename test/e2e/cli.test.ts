@@ -169,9 +169,9 @@ test.concurrent('--mode json writes a session header and one JSON event per line
   expect(records[0]).toMatchObject({ type: 'session', thinkingLevel: 'medium' })
   const id = records[0].id
   expect(records.slice(1).every((r) => r.sessionId === id)).toBe(true)
-  expect(records.find((r) => r.type === 'tool_call')).toMatchObject({
+  expect(records.find((r) => r.type === 'tool_execution_start')).toMatchObject({
     toolName: 'read_file',
-    input: { path: 'notes.txt' },
+    args: { path: 'notes.txt' },
   })
   expect(records.at(-1)).toEqual({ type: 'agent_settled', sessionId: id })
 })
