@@ -19,7 +19,6 @@ export function tavilySearchTool(apiKey: string): ToolDefinition {
     description:
       'Search the web for up-to-date information. Returns titles, links and content summaries of relevant pages',
     inputSchema: searchInputSchema,
-    isConcurrencySafe: true,
     isReadOnly: true,
     maxResultChars: 3000,
     execute: async ({ query, max_results = 5 }: SearchInput, context) => {
@@ -65,7 +64,6 @@ export function serperSearchTool(apiKey: string): ToolDefinition {
     description:
       'Search the web for up-to-date information. Returns titles, links and snippets of Google search results',
     inputSchema: searchInputSchema,
-    isConcurrencySafe: true,
     isReadOnly: true,
     maxResultChars: 3000,
     execute: async ({ query, max_results = 5 }: SearchInput, context) => {
@@ -113,7 +111,6 @@ export const webFetchTool: ToolDefinition = {
   name: 'fetch',
   description: 'Fetch the web page at a URL and convert it to Markdown',
   inputSchema: fetchInputSchema,
-  isConcurrencySafe: true,
   isReadOnly: true,
   maxResultChars: 3000,
   execute: async ({ url }: { url: string }, context) => {

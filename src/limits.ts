@@ -18,8 +18,6 @@ export interface VelaLimits {
   minMicroSavings: number
   /** Safe input cap for a single request; the turn stops if exceeded */
   maxInputTokens: number
-  /** Timeout for the bash tool */
-  bashTimeoutMs: number
 }
 
 export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
@@ -30,7 +28,6 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   summaryThreshold: 150_000,
   minMicroSavings: 20_000,
   maxInputTokens: 183_616,
-  bashTimeoutMs: 10_000,
 })
 
 /** Unknown limit names (typos, or the removed maxTurns / tokenBudget) throw instead of being silently ignored. */

@@ -181,6 +181,7 @@ const vela = createVela({
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
   skillDirs: config.skillDirs,
   limits: config.settings.limits,
+  shellPath: config.settings.shellPath,
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
   binDir: join(agentDir, 'bin'),

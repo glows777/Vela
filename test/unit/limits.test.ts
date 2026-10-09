@@ -10,7 +10,6 @@ test('defaults match the values the CLI has always used', () => {
     summaryThreshold: 150_000,
     minMicroSavings: 20_000,
     maxInputTokens: 183_616,
-    bashTimeoutMs: 10_000,
   })
 })
 

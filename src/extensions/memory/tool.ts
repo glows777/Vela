@@ -36,7 +36,7 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
     description:
       'Manage cross-session memories. name is the logical memory name, while filename is the actual filename on disk. read and delete require the complete filename (including the type prefix and .md suffix), not name. For example, name=user_favorite_language maps to filename=user_user-favorite-language.md. Actions: save | list | search | read | delete',
     inputSchema: memoryToolParamSchema,
-    isConcurrencySafe: false,
+    executionMode: 'sequential',
     isReadOnly: false,
     execute: async (args: z.infer<typeof memoryToolParamSchema>) => {
       switch (args.action) {

@@ -59,6 +59,7 @@
     "@larksuiteoapi/node-sdk": "^1.73.3",
     "@types/turndown": "^5.0.6",
     "ai": "^7.0.130",
+    "diff": "8.0.4",
     "hono": "^4.13.7",
     "sqlite-vec": "^0.1.9",
     "turndown": "^7.2.4",

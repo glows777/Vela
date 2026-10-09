@@ -61,8 +61,7 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
       }),
       fauxToolCall('edit_file', {
         path: 'out/hello.txt',
-        old_string: 'world',
-        new_string: 'vela',
+        edits: [{ oldText: 'world', newText: 'vela' }],
       }),
       fauxText('Done writing'),
     ],
@@ -253,4 +252,50 @@ test('session permissions cannot grant a guest a tool its role forbids', async (
     t.eventsOf('tool_execution_end').filter((e) => e.isError),
   ).toHaveLength(1)
   expect(t.lastAssistantText()).toBe('No permission')
+})
+
+test('bash has no default timeout; the model can pass one and sees that the command timed out', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'echo started; sleep 20',
+        timeout: 0.3,
+      }),
+      fauxText('ok'),
+    ],
+  })
+
+  const started = performance.now()
+  await t.run('Run something slow')
+
+  expect(performance.now() - started).toBeLessThan(10_000)
+  const output = String(t.model.calls[1]!.toolResults[0]!.output)
+  expect(output).toContain('started')
+  expect(output).toContain('Command timed out after 0.3 seconds')
+})
+
+test('a long bash in one session does not hold back file writes in another session', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'sleep 1.5' }),
+      fauxToolCall('write_file', { path: 'other.txt', content: 'written' }),
+      fauxText('other done'),
+      fauxText('slow done'),
+    ],
+  })
+
+  let slowDone = false
+  const slow = t.run('Run a slow command').then(() => {
+    slowDone = true
+  })
+  await Bun.sleep(300)
+  const started = performance.now()
+  await t.vela.session('other').prompt('Write a file')
+
+  // Before, every non-read-only tool took one lock shared by all sessions
+  expect(performance.now() - started).toBeLessThan(800)
+  expect(slowDone).toBe(false)
+  expect(await t.readFile('other.txt')).toBe('written')
+  await slow
+  expect(t.lastAssistantText()).toBe('slow done')
 })

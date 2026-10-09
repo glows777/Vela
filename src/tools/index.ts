@@ -12,11 +12,12 @@ import { createBashTool } from './shell.ts'
 /** Core tools. File, search and bash tools resolve relative paths against cwd (default: process working directory). */
 export function createCoreTools({
   cwd,
-  bashTimeoutMs,
+  shellPath,
   resolveBinary,
 }: {
   cwd?: string
-  bashTimeoutMs?: number
+  /** Shell for the bash tool (settings `shellPath`); default bash on PATH */
+  shellPath?: string
   /** Finds ripgrep / fd for grep / find (default: PATH only) */
   resolveBinary?: BinaryResolver
 } = {}): ToolDefinition[] {
@@ -27,6 +28,6 @@ export function createCoreTools({
     createListDirectoryTool(cwd),
     createGrepTool(cwd, resolveBinary),
     createFindTool(cwd, resolveBinary),
-    createBashTool(cwd, { timeoutMs: bashTimeoutMs }),
+    createBashTool(cwd, { shellPath }),
   ]
 }

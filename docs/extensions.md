@@ -118,7 +118,6 @@ const hello: VelaExtension = (vela) => {
     name: 'greet',
     description: 'Say hello to someone',
     inputSchema: z.object({ name: z.string().describe('Name') }),
-    isConcurrencySafe: true,
     execute: async ({ name }: { name: string }) => `Hello, ${name}!`,
   })
 }
@@ -134,7 +133,7 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `description` | What the model reads to decide when to call the tool |
 | `inputSchema` | Zod schema, or any schema the AI SDK accepts (for example `jsonSchema(...)` from `ai`). Input is validated before `execute` |
 | `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available. Return a string, or any value that is sent as JSON. Throw to report an error to the model |
-| `isConcurrencySafe` | `true` lets calls run in parallel with other safe tools; otherwise the call takes an exclusive lock |
+| `executionMode` | `parallel` (default) runs calls alongside other tool calls; `sequential` runs the call alone within its session (other sessions are not affected). Same as pi's `executionMode`. A tool that writes files can instead wrap the write in `withFileMutationQueue(path, fn)` (exported from `@glows777/vela`, same as pi) so it queues with `write_file` / `edit_file` on the same file |
 | `isReadOnly` | Marks a tool that does not change anything |
 | `maxResultChars` | Results longer than this (default 3000) are saved to a file and the model gets a preview and the path to read the rest |
 | `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first |

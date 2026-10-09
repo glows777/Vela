@@ -6,16 +6,16 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 ## Core tools
 
-| Tool | Purpose | Read-only | Runs in parallel |
-|---|---|---|---|
-| `read_file` | Read a text file, or a saved tool result, one page at a time | yes | yes |
-| `write_file` | Create or overwrite a file | no | no |
-| `edit_file` | Replace one exact piece of text in a file | no | no |
-| `list_directory` | List a directory's entries | yes | yes |
-| `grep` | Search file contents with ripgrep | yes | yes |
-| `find` | Find files by glob pattern with fd | yes | yes |
-| `bash` | Run a shell command | no | no |
-| `tool_search` | Load the schema of a deferred tool | yes | yes |
+| Tool | Purpose | Read-only |
+|---|---|---|
+| `read_file` | Read a text file, or a saved tool result, one page at a time | yes |
+| `write_file` | Create or overwrite a file | no |
+| `edit_file` | Replace one or more exact pieces of text in a file | no |
+| `list_directory` | List a directory's entries | yes |
+| `grep` | Search file contents with ripgrep | yes |
+| `find` | Find files by glob pattern with fd | yes |
+| `bash` | Run a shell command | no |
+| `tool_search` | Load the schema of a deferred tool | yes |
 
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
 
@@ -27,10 +27,10 @@ Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `l
 |---|---|---|---|
 | `path` | string | required | File path |
 | `offset` | integer >= 1 | `1` | Line to start from |
-| `limit` | integer >= 1 | `200` | Maximum number of lines |
+| `limit` | integer >= 1 | `2000` | Maximum number of lines |
 | `column` | integer >= 0 | `0` | UTF-16 offset within the start line, for continuing a very long line |
 
-One call returns at most `limit` lines and at most 8,000 characters. The result ends with a footer naming the range shown and either `EOF: no more content.` or the exact `offset`, `column` and `limit` for the next call. The file is read as a stream, so large files are not loaded into memory.
+One call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. The result ends with a footer naming the range shown and either `EOF: no more content.` or the exact `offset`, `column` and `limit` for the next call. The file is read as a stream, so large files are not loaded into memory.
 
 ### write_file
 
@@ -46,10 +46,17 @@ Replaces the whole file and creates missing parent directories.
 | Parameter | Type | Description |
 |---|---|---|
 | `path` | string | File path |
-| `old_string` | string | Exact text to replace, including whitespace and newlines |
-| `new_string` | string | Replacement text, written literally (`$&`, `$1` and `$$` are not special) |
+| `edits` | `{ oldText, newText }[]` | One or more replacements. `newText` is written literally (`$&`, `$1` and `$$` are not special) |
 
-`old_string` must occur exactly once. When it occurs zero times or more than once, the file is left unchanged and the result says so, so the model can add context and retry. A missing file is reported the same way.
+The parameters and matching are the same as pi's `edit` tool:
+
+- Every `oldText` is matched against the original file, not after the earlier edits, and must match exactly one place. Edits must not overlap.
+- A byte order mark and CRLF line endings are ignored while matching and kept when writing.
+- When `oldText` does not match exactly, a fuzzy match is tried that ignores trailing whitespace, Unicode normalization (NFKC), smart quotes, Unicode dashes and special spaces. Only the lines the match touches are rewritten; the rest of the file keeps its original bytes.
+- When an `oldText` is not found, is found more than once, overlaps another edit, or the edits change nothing, the call fails with an error and the file is left unchanged. A missing file is an error too.
+- Arguments that some models send in the wrong shape (`edits` as a JSON string, a single edit object, or top-level `oldText` / `newText`) are rewritten into `edits[]` before validation.
+
+The model gets `Successfully replaced N block(s) in <path>.`. The diff (with line numbers), a unified patch and the first changed line are kept in the tool history, not sent to the model.
 
 ### list_directory
 
@@ -114,10 +121,11 @@ Without `binDir`, only `PATH` is searched and nothing is downloaded.
 | Parameter | Type | Description |
 |---|---|---|
 | `command` | string | Shell command |
+| `timeout` | number | Optional timeout in seconds. There is no default timeout |
 
-Runs `bash -lc <command>` in the working directory. stdout and stderr are combined and written to a file in the session's tool results directory as the command runs. The model gets the exit status (`exit=<code>`, plus `signal=<name>` when killed), the total output size, and the last 3,000 characters of output. The full output can be read with `read_file`.
+Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another shell; a path that does not exist is an error). stdout and stderr are combined and written to a file in the session's tool results directory as the command runs. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read_file`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`.
 
-- Timeout: 10 seconds by default. Change it with `limits.bashTimeoutMs` in [settings](settings.md) or in `createVela({ limits })`. On timeout or abort the whole process group is killed.
+- Timeout: none by default, as in pi; the model passes `timeout` for commands that may hang. On timeout or abort the whole process group is killed.
 - Before running, every command goes through a classifier: dangerous commands are rejected, and moderate-risk commands run but emit a `security_warning` event. See [Security](security.md).
 - A post-tool hook prefixes the output with an ISO timestamp.
 
@@ -125,9 +133,13 @@ Runs `bash -lc <command>` in the working directory. stdout and stderr are combin
 
 ### Concurrency
 
-The model can request several tool calls in one response. Tools marked as concurrency-safe (the read-only tools above) run in parallel. The others (`write_file`, `edit_file`, `bash`, and any extension tool not marked safe) take an exclusive lock and run one at a time. The lock is shared by all sessions of one Vela, so a `bash` call in one session waits for reads in another to finish.
+The model can request several tool calls in one response. As in pi, they run in parallel by default:
 
-Permission checks, hooks and confirmation prompts run before the lock is taken, so a tool waiting for approval does not block other tools.
+- `write_file` and `edit_file` queue per file (resolved through symlinks): two writes to the same file run one after the other, writes to different files run at the same time. The queue is shared by every session in the process.
+- `bash` and the read-only tools take no lock.
+- A tool with `executionMode: 'sequential'` runs alone within its session: it waits for the session's calls that started before it, and calls that start after it wait for it. Other sessions are not affected. The built-in `memory` and `rag_ingest` tools are sequential.
+
+Permission checks, hooks and confirmation prompts run before a call waits for anything, so a tool waiting for approval does not hold back other tools.
 
 ### Result size and truncation
 
@@ -135,8 +147,9 @@ Each tool has a result limit in characters:
 
 | Tool | Limit |
 |---|---|
-| `read_file`, `grep`, `find` | 12,000 |
-| `bash` | 3,000 (its own tail preview, see above) |
+| `read_file` | one page (50KB) plus its footer, so a page is never saved again |
+| `grep`, `find` | 12,000 |
+| `bash` | its own tail preview, see above |
 | everything else | 3,000 (default) |
 
 When a result is longer than its limit, Vela saves the full result to a file under the session's data directory (`sessions/<id>/tool-results/`) and gives the model a preview instead: the first 60% and last 40% of the limit, joined by a line that says how much was omitted and that the full output was saved. The model can read the file with `read_file`.

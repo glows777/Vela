@@ -20,6 +20,8 @@ export interface VelaSettings {
   defaultThinkingLevel?: ThinkingLevel
   /** Project data directory, relative to cwd; default `<agentDir>/projects/<encoded cwd>` */
   dataDir?: string
+  /** Shell the bash tool runs commands with (like pi); default bash on PATH */
+  shellPath?: string
   /** Overrides any subset of VelaLimits */
   limits?: Partial<VelaLimits>
   /** Extension files or directories (relative to this settings file), plus `builtin:<name>` / `+builtin:<name>` / `-builtin:<name>` */
@@ -187,8 +189,9 @@ function readSettings(file: string): VelaSettings | undefined {
       throw new Error(`${file}: ${key} must be an object`)
   if (settings.limits !== undefined)
     assertLimitKeys(settings.limits, `${file}: limits`)
-  if (settings.dataDir !== undefined && typeof settings.dataDir !== 'string')
-    throw new Error(`${file}: dataDir must be a string`)
+  for (const key of ['dataDir', 'shellPath'] as const)
+    if (settings[key] !== undefined && typeof settings[key] !== 'string')
+      throw new Error(`${file}: ${key} must be a string`)
   if (
     settings.defaultModel !== undefined &&
     (typeof settings.defaultModel !== 'string' ||

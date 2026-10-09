@@ -83,7 +83,7 @@ async function waitFor(cond: () => boolean) {
   expect(cond()).toBe(true)
 }
 
-test('tools that are not concurrency-safe run serially under a mutex', async () => {
+test('sequential tools run one at a time within a session', async () => {
   const registry = makeRegistry()
   const order: string[] = []
   let release!: () => void
@@ -92,7 +92,7 @@ test('tools that are not concurrency-safe run serially under a mutex', async () 
   })
   registry.register(
     tool('exclusive', {
-      isConcurrencySafe: false,
+      executionMode: 'sequential',
       execute: async (input: { id: string }) => {
         order.push(`${input.id}-start`)
         if (input.id === 'a') await gate
@@ -120,4 +120,99 @@ test('tools that are not concurrency-safe run serially under a mutex', async () 
   release()
   await Promise.all([first, second])
   expect(order).toEqual(['a-start', 'a-end', 'b-start', 'b-end'])
+})
+
+/** A tool whose calls wait until released; records start/end order */
+function blockingTool(
+  name: string,
+  order: string[],
+  overrides: Partial<ToolDefinition> = {},
+) {
+  const releases = new Map<string, () => void>()
+  const waiting = new Map<string, Promise<void>>()
+  const hold = (id: string) => {
+    if (!waiting.has(id))
+      waiting.set(
+        id,
+        new Promise<void>((resolve) => releases.set(id, resolve)),
+      )
+    return waiting.get(id)!
+  }
+  const definition = tool(name, {
+    execute: async (input: { id: string }) => {
+      order.push(`${input.id}-start`)
+      await hold(input.id)
+      order.push(`${input.id}-end`)
+      return input.id
+    },
+    ...overrides,
+  })
+  return {
+    definition,
+    release: (id: string) => {
+      hold(id)
+      releases.get(id)!()
+    },
+  }
+}
+
+const callOptions = (toolCallId: string) => ({
+  toolCallId,
+  messages: [],
+  context: {},
+})
+
+test('parallel tools run together; a sequential call waits for earlier calls and holds back later ones', async () => {
+  const registry = makeRegistry()
+  const order: string[] = []
+  const par = blockingTool('par', order)
+  const seq = blockingTool('seq', order, { executionMode: 'sequential' })
+  registry.register(par.definition, seq.definition)
+  const tools = registry.toAISDKFormat()
+  const run = (name: 'par' | 'seq', id: string) =>
+    tools[name]!.execute!({ id }, callOptions(id))
+
+  const a = run('par', 'a')
+  const b = run('par', 'b')
+  // Calls that run together may start in either order
+  const started = () => [...order].sort()
+  await Bun.sleep(20)
+  expect(started()).toEqual(['a-start', 'b-start'])
+
+  const s = run('seq', 's')
+  const c = run('par', 'c')
+  await Bun.sleep(20)
+  expect(started()).toEqual(['a-start', 'b-start'])
+
+  par.release('a')
+  par.release('b')
+  await Bun.sleep(20)
+  expect(order.slice(0, 4).sort()).toEqual(['a-end', 'a-start', 'b-end', 'b-start'])
+  expect(order.slice(4)).toEqual(['s-start'])
+
+  seq.release('s')
+  par.release('c')
+  await Promise.all([a, b, s, c])
+  expect(order.slice(4)).toEqual(['s-start', 's-end', 'c-start', 'c-end'])
+})
+
+test('a sequential call in one session does not hold back another session', async () => {
+  const base = makeRegistry()
+  const order: string[] = []
+  const seq = blockingTool('seq', order, { executionMode: 'sequential' })
+  base.register(seq.definition)
+  const one = base.fork(new ToolResultStore(join(root, 'one')))
+  const two = base.fork(new ToolResultStore(join(root, 'two')))
+
+  const first = one.toAISDKFormat().seq!.execute!({ id: 'a' }, callOptions('a'))
+  const second = two
+    .toAISDKFormat()
+    .seq!.execute!({ id: 'b' }, callOptions('b'))
+  await Bun.sleep(20)
+  expect([...order].sort()).toEqual(['a-start', 'b-start'])
+
+  seq.release('b')
+  await second
+  seq.release('a')
+  await first
 })

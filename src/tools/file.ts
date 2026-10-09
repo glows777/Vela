@@ -1,203 +1,234 @@
-import { createReadStream, readdirSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
-import z from 'zod'
-import type { ToolDefinition } from './registry.ts'
+import { createReadStream, readdirSync } from "node:fs";
+import { constants } from "node:fs";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import z from "zod";
+import {
+  applyEditsToNormalizedContent,
+  detectLineEnding,
+  generateDiffString,
+  generateUnifiedPatch,
+  normalizeToLF,
+  restoreLineEndings,
+  splitBom,
+} from "./edit-diff.ts";
+import { withFileMutationQueue } from "./file-mutation-queue.ts";
+import { ToolExecutionResult, type ToolDefinition } from "./registry.ts";
+
+/** Default page of read_file, same as pi: 2000 lines or 50KB, whichever comes first */
+export const READ_MAX_LINES = 2000;
+export const READ_MAX_BYTES = 50 * 1024;
+
+/** UTF-8 size of one code point (a string from iterating a string) */
+const utf8Bytes = (char: string) => {
+  const code = char.codePointAt(0) ?? 0;
+  return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+};
 
 /** Writes a text file, creating missing parent directories (like Bun.write). */
 async function writeText(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, content)
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
 }
 
 /** Resolves relative paths against cwd, or the process working directory when cwd is unset. */
 export const resolveIn = (cwd: string | undefined, path: string) =>
-  cwd ? resolve(cwd, path) : resolve(path)
+  cwd ? resolve(cwd, path) : resolve(path);
 
 export const readFileParamSchema = z.object({
-  path: z
-    .string()
-    .describe('File path, absolute or relative to the working directory'),
-  offset: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe('Line to start from, 1-based. Default 1'),
-  limit: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe('Maximum number of lines to read. Default 200'),
-  column: z
-    .number()
-    .int()
-    .nonnegative()
-    .optional()
-    .describe(
-      'UTF-16 offset within the start line. Default 0. To continue a very long line, pass the column from the previous result',
-    ),
-})
+  path: z.string().describe("File path, absolute or relative to the working directory"),
+  offset: z.number().int().positive().optional().describe('Line to start from, 1-based. Default 1'),
+  limit: z.number().int().positive().optional().describe(`Maximum number of lines to read. Default ${READ_MAX_LINES}`),
+  column: z.number().int().nonnegative().optional().describe('UTF-16 offset within the start line. Default 0. To continue a very long line, pass the column from the previous result'),
+});
 export const createReadFileTool = (cwd?: string): ToolDefinition => ({
-  name: 'read_file',
-  description:
-    'Reads a text file or a saved tool result file, one page at a time. Returns the range shown and the offset/column for the next page. The file is fully read only when the result says EOF.',
+  name: "read_file",
+  description: `Reads a text file or a saved tool result file, one page at a time. A page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. Returns the range shown and the offset/column for the next page. The file is fully read only when the result says EOF.`,
   inputSchema: readFileParamSchema,
-  isConcurrencySafe: true,
   isReadOnly: true,
-  maxResultChars: 12000,
+  // A full page plus the footer must fit, so pages are never saved to a file again
+  maxResultChars: READ_MAX_BYTES + 1024,
   execute: async (input: z.infer<typeof readFileParamSchema>) => {
-    const {
-      path,
-      offset = 1,
-      limit = 200,
-      column = 0,
-    } = readFileParamSchema.parse(input)
-    const file = resolveIn(cwd, path)
-    const decoder = new TextDecoder()
-    let line = 1
-    let col = 0
-    let body = ''
-    let more = false
-    let reachedStart = offset === 1 && column === 0
-    let lastLine = offset
+    const { path, offset = 1, limit = READ_MAX_LINES, column = 0 } = readFileParamSchema.parse(input);
+    const file = resolveIn(cwd, path);
+    const decoder = new TextDecoder();
+    let line = 1;
+    let col = 0;
+    let body = '';
+    let bodyBytes = 0;
+    let more = false;
+    let reachedStart = offset === 1 && column === 0;
+    let lastLine = offset;
     const consume = (text: string): boolean => {
       for (const char of text) {
-        if (line === offset && col < column && col + char.length > column)
-          throw new Error(
-            'column falls inside a Unicode character; use the column from the previous result',
-          )
+        if (line === offset && col < column && col + char.length > column) throw new Error('column falls inside a Unicode character; use the column from the previous result');
         if (line >= offset && (line > offset || col >= column)) {
-          reachedStart = true
-          if (body.length + char.length > 8000 || line >= offset + limit) {
-            more = true
-            return false
+          reachedStart = true;
+          if (bodyBytes + utf8Bytes(char) > READ_MAX_BYTES || line >= offset + limit) {
+            more = true;
+            return false;
           }
-          body += char
-          lastLine = line
+          body += char;
+          bodyBytes += utf8Bytes(char);
+          lastLine = line;
         }
         if (char === '\n') {
-          if (line === offset && col < column)
-            throw new Error('column is past the end of the start line')
-          line++
-          col = 0
+          if (line === offset && col < column) throw new Error('column is past the end of the start line');
+          line++;
+          col = 0;
         } else {
-          col += char.length
+          col += char.length;
         }
       }
-      return true
-    }
+      return true;
+    };
     for await (const chunk of createReadStream(file)) {
-      if (!consume(decoder.decode(chunk, { stream: true }))) break
+      if (!consume(decoder.decode(chunk, { stream: true }))) break;
     }
-    if (!more) consume(decoder.decode())
-    if (!reachedStart && !(line === offset && col === column))
-      throw new Error('offset/column is past the end of the file')
+    if (!more) consume(decoder.decode());
+    if (!reachedStart && !(line === offset && col === column)) throw new Error('offset/column is past the end of the file');
     const next = more
       ? `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
-      : 'EOF: no more content.'
-    return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
+      : 'EOF: no more content.';
+    return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`;
   },
-})
+});
 
 const writeFileToolParamSchema = z.object({
-  path: z
-    .string()
-    .describe('File path, absolute or relative to the working directory'),
-  content: z.string().describe('Full content to write'),
-})
+  path: z.string().describe("File path, absolute or relative to the working directory"),
+  content: z.string().describe("Full content to write"),
+});
 export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
-  name: 'write_file',
-  description:
-    'Writes content to a file, replacing the whole file. Creates the file and missing parent directories.',
+  name: "write_file",
+  description: "Writes content to a file, replacing the whole file. Creates the file and missing parent directories.",
   inputSchema: writeFileToolParamSchema,
 
-  isConcurrencySafe: false, // writes must not run in parallel
   isReadOnly: false,
   execute: async ({ path, content }: { path: string; content: string }) => {
-    await writeText(resolveIn(cwd, path), content)
-    return `Wrote ${content.length} characters to ${path}`
+    const resolved = resolveIn(cwd, path);
+    // Writes to the same file queue up; different files are written in parallel (like pi)
+    await withFileMutationQueue(resolved, () => writeText(resolved, content));
+    return `Wrote ${content.length} characters to ${path}`;
   },
-})
+});
 
 const listDirectoryToolParamSchema = z.object({
-  path: z
-    .string()
-    .optional()
-    .describe('Directory path. Defaults to the working directory'),
-})
+  path: z.string().optional().describe("Directory path. Defaults to the working directory"),
+});
 export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
-  name: 'list_directory',
-  description: 'Lists the files and subdirectories in a directory.',
+  name: "list_directory",
+  description: "Lists the files and subdirectories in a directory.",
   inputSchema: listDirectoryToolParamSchema,
-  isConcurrencySafe: true,
   isReadOnly: true,
-  execute: async ({ path = '.' }: { path?: string }) => {
-    const resolved = resolveIn(cwd, path)
+  execute: async ({ path = "." }: { path?: string }) => {
+    const resolved = resolveIn(cwd, path);
     return readdirSync(resolved, { withFileTypes: true })
-      .map(
-        (entry) => `${entry.isDirectory() ? '[DIR]' : '[FILE]'} ${entry.name}`,
-      )
-      .join('\n')
+      .map((entry) => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`)
+      .join("\n");
   },
-})
+});
 
-const editFileToolParamSchema = z.object({
-  path: z
-    .string()
-    .describe('File path, absolute or relative to the working directory'),
-  old_string: z
-    .string()
-    .describe(
-      'Exact text to replace; must match the file exactly, including whitespace and newlines',
-    ),
-  new_string: z.string().describe('Replacement text'),
-})
-export const createEditFileTool = (cwd?: string): ToolDefinition => ({
-  name: 'edit_file',
-  description:
-    'Replaces exact text in a file: old_string locates the text, new_string replaces it. Not a full rewrite; only the matched part changes. old_string must occur exactly once.',
-  inputSchema: editFileToolParamSchema,
-  isConcurrencySafe: false,
-  isReadOnly: false,
-  execute: async ({
-    path,
-    old_string,
-    new_string,
-  }: {
-    path: string
-    old_string: string
-    new_string: string
-  }) => {
-    const resolved = resolveIn(cwd, path)
-    let content: string
+const editSchema = z.object({
+  path: z.string().describe("File path, absolute or relative to the working directory"),
+  edits: z
+    .array(
+      z.object({
+        oldText: z
+          .string()
+          .describe("Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."),
+        newText: z.string().describe("Replacement text for this targeted edit."),
+      }),
+    )
+    .min(1)
+    .describe("One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."),
+});
+type EditInput = z.infer<typeof editSchema>;
+
+const isSingleEdit = (value: unknown): value is { oldText: string; newText: string } =>
+  !!value &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  typeof (value as Record<string, unknown>).oldText === "string" &&
+  typeof (value as Record<string, unknown>).newText === "string";
+
+/**
+ * Same as pi's prepareArguments: some models send edits as a JSON string, a single edit object,
+ * or a top-level oldText/newText. Rewrite those into edits[] before validation.
+ */
+function prepareEditArguments(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const args = { ...(input as Record<string, unknown>) };
+  if (typeof args.edits === "string") {
     try {
-      content = await readFile(resolved, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return `File not found: ${path}`
-      throw error
-    }
-    const count = content.split(old_string).length - 1
+      const parsed = JSON.parse(args.edits);
+      if (Array.isArray(parsed)) args.edits = parsed;
+      else if (isSingleEdit(parsed)) args.edits = [parsed];
+    } catch {}
+  } else if (isSingleEdit(args.edits)) {
+    args.edits = [args.edits];
+  }
+  if (typeof args.oldText !== "string" || typeof args.newText !== "string") return args;
+  const { oldText, newText, ...rest } = args;
+  return { ...rest, edits: [...(Array.isArray(args.edits) ? args.edits : []), { oldText, newText }] };
+}
 
-    if (count === 0) {
-      return `No match found. Check that old_string matches the file text exactly, including whitespace and newlines`
-    }
-    if (count > 1) {
-      return `Found ${count} matches. Add more context so old_string is unique`
-    }
+export const editFileToolParamSchema = z.preprocess(prepareEditArguments, editSchema);
 
-    // Slice instead of String.replace: replace would interpret $&, $$, $1 ... in new_string
-    const at = content.indexOf(old_string)
-    const updated =
-      content.slice(0, at) + new_string + content.slice(at + old_string.length)
-    await writeText(resolved, updated)
-    return `Replaced text in ${path} (${old_string.length} → ${new_string.length} characters)`
+/** Structured result of edit_file (kept in the tool history; the model only gets the summary line) */
+export interface EditFileDetails {
+  /** Display diff with line numbers and a few lines of context */
+  diff: string;
+  /** Standard unified patch */
+  patch: string;
+  /** First changed line in the new file */
+  firstChangedLine?: number;
+}
+
+export const createEditFileTool = (cwd?: string): ToolDefinition => ({
+  name: "edit_file",
+  description:
+    "Edits a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+  inputSchema: editFileToolParamSchema,
+  isReadOnly: false,
+  execute: async (input: EditInput, context) => {
+    const { path, edits } = input;
+    const resolved = resolveIn(cwd, path);
+    const signal = context?.signal;
+    return withFileMutationQueue(resolved, async () => {
+      // Check the signal after each await instead of rejecting from an abort listener, so the
+      // queue stays locked until an in-flight filesystem operation has settled (like pi)
+      const throwIfAborted = () => {
+        if (signal?.aborted) throw new Error("Operation aborted");
+      };
+      throwIfAborted();
+      try {
+        await access(resolved, constants.R_OK | constants.W_OK);
+      } catch (error) {
+        throwIfAborted();
+        const code = error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
+        throw new Error(`Could not edit file: ${path}. ${code}.`);
+      }
+      const raw = await readFile(resolved, "utf8");
+      throwIfAborted();
+      // The model never includes an invisible BOM in oldText; match without it and restore it on write
+      const { bom, text } = splitBom(raw);
+      const ending = detectLineEnding(text);
+      const { baseContent, newContent } = applyEditsToNormalizedContent(normalizeToLF(text), edits, path);
+      throwIfAborted();
+      await writeFile(resolved, bom + restoreLineEndings(newContent, ending));
+      throwIfAborted();
+      const { diff, firstChangedLine } = generateDiffString(baseContent, newContent);
+      const details: EditFileDetails = {
+        diff,
+        patch: generateUnifiedPatch(path, baseContent, newContent),
+        ...(firstChangedLine === undefined ? {} : { firstChangedLine }),
+      };
+      return new ToolExecutionResult(details, `Successfully replaced ${edits.length} block(s) in ${path}.`);
+    });
   },
-})
+});
 
-export const readFileTool = createReadFileTool()
-export const writeFileTool = createWriteFileTool()
-export const listDirectoryTool = createListDirectoryTool()
-export const editFileTool = createEditFileTool()
+export const readFileTool = createReadFileTool();
+export const writeFileTool = createWriteFileTool();
+export const listDirectoryTool = createListDirectoryTool();
+export const editFileTool = createEditFileTool();

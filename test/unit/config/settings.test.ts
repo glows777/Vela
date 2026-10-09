@@ -37,7 +37,7 @@ const json = (value: unknown) => JSON.stringify(value)
 test('project settings override user settings: objects merge deeply, resource lists concatenate', () => {
   const { agentDir, cwd } = setup({
     'home/settings.json': json({
-      limits: { maxRetries: 5, bashTimeoutMs: 1000 },
+      limits: { maxRetries: 5, retryBaseMs: 1000 },
       extensions: ['ext/a.ts'],
       extensionConfig: { web: { tavilyKey: 'user', serperKey: 's' } },
     }),
@@ -50,7 +50,7 @@ test('project settings override user settings: objects merge deeply, resource li
     'project/b.ts': 'export default () => {}',
   })
   const config = loadConfig({ cwd, agentDir, trusted: true })
-  expect(config.settings.limits).toEqual({ maxRetries: 9, bashTimeoutMs: 1000 })
+  expect(config.settings.limits).toEqual({ maxRetries: 9, retryBaseMs: 1000 })
   expect(config.extensionConfig.web).toEqual({
     tavilyKey: 'project',
     serperKey: 's',

@@ -35,7 +35,8 @@ Relative paths in `extensions` and `skills` resolve from the directory of the se
   "defaultModel": "anthropic/<model-id>",
   "defaultThinkingLevel": "medium",
   "dataDir": ".vela-data",
-  "limits": { "bashTimeoutMs": 60000 },
+  "shellPath": "/bin/zsh",
+  "limits": { "maxRetries": 5 },
   "extensions": ["-builtin:feishu", "./extensions/todo.ts"],
   "skills": ["~/shared-skills"],
   "extensionConfig": {
@@ -49,6 +50,7 @@ Relative paths in `extensions` and `skills` resolve from the directory of the se
 | `defaultModel` | `"provider/id"` | none | Model for new sessions. See [Models](models.md#selecting-a-model). |
 | `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. |
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
+| `shellPath` | string | `bash` on `PATH` | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. A path that does not exist makes every `bash` call fail with an error. |
 | `limits` | object | see below | Overrides runtime limits. |
 | `extensions` | string[] | `[]` | Extension files or directories, and `builtin:` switches. |
 | `skills` | string[] | `[]` | Extra skill directories. |
@@ -65,7 +67,6 @@ Relative paths in `extensions` and `skills` resolve from the directory of the se
 | `summaryThreshold` | `150000` | Estimated input tokens at which the history is summarized. |
 | `minMicroSavings` | `20000` | Microcompaction is applied only if it saves at least this many tokens. |
 | `maxInputTokens` | `183616` | Hard cap for one request; the turn stops if the input is larger. |
-| `bashTimeoutMs` | `10000` | Timeout of the `bash` tool. |
 
 The SDK takes the same keys as `createVela({ limits })`; unknown keys are an error in both places.
 
