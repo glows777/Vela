@@ -53,7 +53,7 @@ Every session has a role. The role decides which tools the session's model can c
 | `collaborator` | All except `bash` | No | Injected into the system prompt; `memory` tool available |
 | `guest` | Only `rag_search`, `web_search` and `tool_search` | No | Not injected; no `memory` tool |
 
-A guest has no file, shell or memory tools and no extension tools: extension tool names carry an `<extension>_` prefix, so only an extension named `rag` or `web` can register `rag_search` and `web_search`. Don't load third-party extensions with those names. A guest's system prompt does not include the file rules, the working directory, `AGENTS.md` / `CLAUDE.md` or the skills list, and `/skill:<name>` and prompt templates are not expanded for guests. A tool the role denies is left out of the tool list, and a call to it is rejected and recorded in the tool history.
+A guest has no file, shell or memory tools and no extension tools: extension tool names carry an `<extension>_` prefix, so only an extension named `rag` or `web` can register `rag_search` and `web_search`. Don't load third-party extensions with those names. A guest's system prompt does not include the file rules, the working directory, `AGENTS.md` / `CLAUDE.md` or the skills list, and `/skill:<name>` and prompt templates are not expanded for guests. The appended system prompt (`APPEND_SYSTEM.md`, `--append-system-prompt`, `appendSystemPrompt`) is the owner's own text and goes to every role, guests included, so keep anything a channel sender shouldn't see out of it. A tool the role denies is left out of the tool list, and a call to it is rejected and recorded in the tool history.
 
 Note what each role can still reach:
 

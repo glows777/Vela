@@ -84,7 +84,7 @@ test('templates expand before steer / followUp queue them', async () => {
   expect(t.model.calls[1]!.lastUserText).toBe('Then do cleanup')
 })
 
-test('AGENTS.md and the appended prompt go into the system prompt in pi order; guests get neither', async () => {
+test('AGENTS.md and skills go into the system prompt in pi order; guests get neither', async () => {
   const t = createTestVela({
     files: { 'AGENTS.md': 'Always use bun.' },
     skills: [REVIEW],
@@ -121,6 +121,10 @@ test('SDK options: contextFiles false loads none, appendSystemPrompt adds an <ad
     const system = vela.session().buildSystem()
     expect(system).not.toContain('Always use bun.')
     expect(system).toContain('<addendum>\nAnswer in French.\n</addendum>')
+    // The addendum is the owner's own text: guests get it too (docs/security.md)
+    expect(vela.session('guest', { role: 'guest' }).buildSystem()).toContain(
+      '<addendum>\nAnswer in French.\n</addendum>',
+    )
   } finally {
     await vela.dispose()
   }
