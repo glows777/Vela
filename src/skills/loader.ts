@@ -61,7 +61,9 @@ export class SkillLoader {
     // Codex style: the system prompt holds only the skill index (name + description).
     // The body never goes into the system prompt; /<skill-name> injects it once as a
     // message, so it never appears in both the system prompt and the conversation.
-    const lines = ['Available skills (activate with /skill load <name> or just /<name>):']
+    const lines = [
+      'Available skills (activate with /skill load <name> or just /<name>):',
+    ]
 
     for (const skill of this.list()) {
       const hint = skill.whenToUse ? ` (when to use: ${skill.whenToUse})` : ''

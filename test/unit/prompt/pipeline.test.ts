@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
-  PromptPipeline,
   type PromptContext,
+  PromptPipeline,
 } from '../../../src/prompt/pipeline.ts'
 
 const ctx: PromptContext = {

@@ -3,7 +3,12 @@ import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { renderUsageView } from '../../../src/context/view.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
 
-const usage = { inputTokens: 60, cacheReadTokens: 30, cacheWriteTokens: 10, outputTokens: 7 }
+const usage = {
+  inputTokens: 60,
+  cacheReadTokens: 30,
+  cacheWriteTokens: 10,
+  outputTokens: 7,
+}
 
 test('/usage shows tokens but no dollar amount for a model without a price', () => {
   const tracker = new TokenTracker()

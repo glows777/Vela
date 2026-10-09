@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import type { IncomingMessage, OutgoingMessage } from '../../src/channels/types.ts'
 import { z } from 'zod'
+import type {
+  IncomingMessage,
+  OutgoingMessage,
+} from '../../src/channels/types.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
@@ -31,12 +34,24 @@ test('/context and /usage report the conversation after a run', async () => {
 
 test('text without a leading / is never a command: the CLI dispatcher leaves it for the model', () => {
   const t = createTestVela()
-  for (const text of ['status', 'context', 'usage', 'sim', 'defend', 'cache on', 'cache off', 'skill list', 'exit'])
+  for (const text of [
+    'status',
+    'context',
+    'usage',
+    'sim',
+    'defend',
+    'cache on',
+    'cache off',
+    'skill list',
+    'exit',
+  ])
     expect(t.dispatch(text)).toBe(false)
 })
 
 test('in the TUI, bare words like exit and status are sent to the model', async () => {
-  const t = createTestVela({ responses: [fauxText('Not leaving'), fauxText('All good')] })
+  const t = createTestVela({
+    responses: [fauxText('Not leaving'), fauxText('All good')],
+  })
   const tui = await startTui(t.vela)
   try {
     await tui.started
@@ -53,10 +68,17 @@ test('in the TUI, bare words like exit and status are sent to the model', async 
 
 test('/context counts the skills index and shows the real summary threshold as the autocompact buffer', async () => {
   const t = createTestVela({
-    skills: [{ name: 'deploy', description: 'Ship the app to production'.repeat(20), body: 'steps' }],
+    skills: [
+      {
+        name: 'deploy',
+        description: 'Ship the app to production'.repeat(20),
+        body: 'steps',
+      },
+    ],
     limits: { summaryThreshold: 100_000 },
   })
-  const window = t.session.modelInfo.contextWindow ?? t.session.tracker.contextWindow
+  const window =
+    t.session.modelInfo.contextWindow ?? t.session.tracker.contextWindow
   const { output } = await captureConsole(() => t.command('/context'))
   const plain = stripTerminalSequences(output)
   // The skills index sits in the system prompt; it used to be reported as 0 (and the row hidden)
@@ -86,7 +108,9 @@ test('an extension registers tools the model can call, listed by /extensions', a
       },
       (req) =>
         fauxText(
-          req.toolResults[0]!.output.includes('users') ? 'There is a users table' : '?',
+          req.toolResults[0]!.output.includes('users')
+            ? 'There is a users table'
+            : '?',
         ),
     ],
   })

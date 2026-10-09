@@ -83,7 +83,9 @@ export class ToolResultStore {
     const history = this.makeHistory(id)
     await history.load()
     if (history.throughSequence < minimumSequence)
-      throw new Error('Tool history is missing, so the session cannot be safely restored; the original checkpoint was not overwritten')
+      throw new Error(
+        'Tool history is missing, so the session cannot be safely restored; the original checkpoint was not overwritten',
+      )
     if (viewSequence !== undefined)
       await history.snapshot(undefined, viewSequence)
     this.historyId = id
@@ -119,7 +121,9 @@ export class ToolResultStore {
       const file = await open(path, 'wx', 0o600)
       return { path, file }
     } catch (error) {
-      throw new Error(`Failed to save tool result; no readable reference was created: ${error}`)
+      throw new Error(
+        `Failed to save tool result; no readable reference was created: ${error}`,
+      )
     }
   }
 
@@ -132,12 +136,7 @@ export class ToolResultStore {
     callId?: string,
   ): Promise<StoredToolResult> {
     const { size } = await stat(path)
-    const reference = new StoredToolResult(
-      path,
-      this.indexPath,
-      size,
-      preview,
-    )
+    const reference = new StoredToolResult(path, this.indexPath, size, preview)
     reference.execution = execution
     reference.callId = callId
     return reference
@@ -185,7 +184,9 @@ export class ToolResultStore {
         await file.close()
       }
     } catch (error) {
-      throw new Error(`Failed to save tool result; no readable reference was created: ${error}`)
+      throw new Error(
+        `Failed to save tool result; no readable reference was created: ${error}`,
+      )
     }
     const recorded = toolCallId
       ? await this.history.completed(toolCallId)
@@ -249,8 +250,6 @@ export async function archiveToolResults(
           })
         }
       } else if (await store.history.completed(part.toolCallId)) {
-        // Original small output is already in the immutable tool_result record.
-        continue
       } else {
         await store.save(
           outputText(part.output),

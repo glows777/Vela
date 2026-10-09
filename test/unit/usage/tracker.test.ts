@@ -39,10 +39,14 @@ test('records cumulative usage per step', () => {
   expect(tracker.totals().inputTokens).toBe(60)
   expect(tracker.totals().cacheReadTokens).toBe(30)
   expect(tracker.totals().cacheWriteTokens).toBe(10)
-
 })
 
-const sampleUsage = { inputTokens: 60, cacheReadTokens: 30, cacheWriteTokens: 10, outputTokens: 7 }
+const sampleUsage = {
+  inputTokens: 60,
+  cacheReadTokens: 30,
+  cacheWriteTokens: 10,
+  outputTokens: 7,
+}
 
 test('a model without a known price has no cost', () => {
   const tracker = new TokenTracker()
@@ -64,10 +68,25 @@ test('the mock model keeps its demo price', () => {
 
 test('totals add up only the priced requests', () => {
   const tracker = new TokenTracker()
-  tracker.setPricing({ input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 })
-  tracker.record('priced', { inputTokens: 3, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+  tracker.setPricing({
+    input: 1_000_000,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  })
+  tracker.record('priced', {
+    inputTokens: 3,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  })
   tracker.setPricing(undefined)
-  tracker.record('unpriced', { inputTokens: 5, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+  tracker.record('unpriced', {
+    inputTokens: 5,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  })
 
   const totals = tracker.totals()
   expect(totals.inputTokens).toBe(8)

@@ -46,7 +46,9 @@ export class MemoryStore {
     } else {
       // A store written by an older version has default permissions: tighten the directory and its files
       fs.chmodSync(this.memoryDir, 0o700)
-      for (const entry of fs.readdirSync(this.memoryDir, { withFileTypes: true }))
+      for (const entry of fs.readdirSync(this.memoryDir, {
+        withFileTypes: true,
+      }))
         if (entry.isFile() && entry.name.endsWith('.md'))
           fs.chmodSync(path.join(this.memoryDir, entry.name), 0o600)
     }
@@ -196,7 +198,7 @@ export class MemoryStore {
       'Memory index:',
       index,
       '',
-      'Use the memory tool\'s read action to read a memory; search for BM25 search; lint to check the store\'s health.',
+      "Use the memory tool's read action to read a memory; search for BM25 search; lint to check the store's health.",
       '',
       'How to use memory:',
       '- Memories are leads, not facts: verify with tools before relying on them (read_file, grep to confirm paths and content still exist)',

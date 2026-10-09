@@ -2,11 +2,11 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  ToolHistoryStore,
-  type ResultRecord,
-} from '../../../src/session/tool-history.ts'
 import { SessionStore } from '../../../src/session/index.ts'
+import {
+  type ResultRecord,
+  ToolHistoryStore,
+} from '../../../src/session/tool-history.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-history-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -105,6 +105,8 @@ test('a frozen history file cannot expose later entries even when the reader omi
   const restored = new SessionStore('snapshot', root)
   await restored.loadState()
   expect(restored.results.historyViewSequence).toBe(2)
-  expect(restored.results.readingGuide()).toContain(`Absolute path: ${frozen.path}`)
+  expect(restored.results.readingGuide()).toContain(
+    `Absolute path: ${frozen.path}`,
+  )
   expect((await store.snapshot(undefined, 2)).path).toBe(frozen.path)
 })

@@ -9,6 +9,15 @@ import type { VelaExtension } from './extensions/types.ts'
 import { resolveLimits, type VelaLimits } from './limits.ts'
 import { silentLogger, type VelaLogger } from './logger.ts'
 import {
+  DEFAULT_THINKING_LEVEL,
+  describeModel,
+  type ModelInfo,
+  ModelRegistry,
+  type ProviderDefinition,
+  type ResolvedModel,
+  type ThinkingLevel,
+} from './models/index.ts'
+import {
   coreRules,
   deferredTools,
   extensionSections,
@@ -27,15 +36,6 @@ import { SkillLoader } from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
-import {
-  DEFAULT_THINKING_LEVEL,
-  describeModel,
-  type ModelInfo,
-  ModelRegistry,
-  type ProviderDefinition,
-  type ResolvedModel,
-  type ThinkingLevel,
-} from './models/index.ts'
 import { registerToolSearchTool } from './tools/tool-search.ts'
 import { type SessionOptions, VelaSession } from './vela-session.ts'
 

@@ -6,13 +6,9 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../models/index.ts'
-import { loadModels } from './models.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
-import {
-  defaultAgentDir,
-  projectDataDir,
-  resolveConfigPath,
-} from './paths.ts'
+import { loadModels } from './models.ts'
+import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
 
 type Env = Record<string, string | undefined>
 
@@ -109,7 +105,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     const builtin = /^([+-]?)builtin:(.+)$/.exec(entry)
     if (builtin) {
       const [, sign, name] = builtin as unknown as [string, string, string]
-      if (!builtins.has(name)) throw new Error(`Unknown built-in extension builtin:${name}`)
+      if (!builtins.has(name))
+        throw new Error(`Unknown built-in extension builtin:${name}`)
       if (sign === '-') disabled.add(name)
       else disabled.delete(name)
     } else paths.push(...discoverExtensions(entry, true))
@@ -209,7 +206,10 @@ function readSettings(file: string): VelaSettings | undefined {
 }
 
 /** Project overrides user: objects deep-merge, extensions / skills concatenate, other values are replaced. */
-function mergeSettings(base: VelaSettings, override: VelaSettings): VelaSettings {
+function mergeSettings(
+  base: VelaSettings,
+  override: VelaSettings,
+): VelaSettings {
   const merged = deepMerge(base, override) as VelaSettings
   for (const key of RESOURCE_KEYS) {
     const list = [...(base[key] ?? []), ...(override[key] ?? [])]
@@ -238,7 +238,11 @@ function discoverExtensions(path: string, explicit = false): string[] {
     a.name.localeCompare(b.name),
   )) {
     const full = join(path, entry.name)
-    if (entry.isFile() && EXTENSION_FILE.test(entry.name) && !entry.name.endsWith('.d.ts'))
+    if (
+      entry.isFile() &&
+      EXTENSION_FILE.test(entry.name) &&
+      !entry.name.endsWith('.d.ts')
+    )
       found.push(full)
     else if (entry.isDirectory()) {
       const nested = indexFile(full)

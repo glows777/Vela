@@ -1,5 +1,5 @@
-import { APICallError } from '@ai-sdk/provider'
 import { afterEach, expect, test } from 'bun:test'
+import { APICallError } from '@ai-sdk/provider'
 import z from 'zod'
 import {
   fauxError,
@@ -221,7 +221,9 @@ test('a critical loop stop keeps the stopping step in the history: the tool that
   expect(t.messages.at(-1)?.role).toBe('tool')
   // The step's messages are emitted as message events before turn_end
   const types = t.eventTypes()
-  expect(types.lastIndexOf('message')).toBeLessThan(types.lastIndexOf('turn_end'))
+  expect(types.lastIndexOf('message')).toBeLessThan(
+    types.lastIndexOf('turn_end'),
+  )
   expect(types.lastIndexOf('turn_end')).toBeGreaterThan(
     types.lastIndexOf('tool_result'),
   )

@@ -652,7 +652,10 @@ export function createMockModel(): DemoModel {
       const intent = detectToolIntent(prompt)
       if (intent) {
         return {
-          stream: createDelayedStream(makeToolCallChunks(state, [intent], prompt), 20),
+          stream: createDelayedStream(
+            makeToolCallChunks(state, [intent], prompt),
+            20,
+          ),
         }
       }
 

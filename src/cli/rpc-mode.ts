@@ -42,7 +42,8 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   const { vela } = options
   const describe =
     options.describeError ??
-    ((error: unknown) => (error instanceof Error ? error.message : String(error)))
+    ((error: unknown) =>
+      error instanceof Error ? error.message : String(error))
   let output = Promise.resolve()
   const send = (record: unknown) => {
     const line = toJsonLine(record)

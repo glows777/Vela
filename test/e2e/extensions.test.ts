@@ -1,6 +1,7 @@
-import { join } from 'node:path'
 import { afterEach, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import type { SessionUI, VelaExtension } from '@glows777/vela'
+import { z } from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import { echoChannel } from '../../examples/extensions/echo-channel.ts'
 import hello from '../../examples/extensions/hello-tool.ts'
@@ -9,7 +10,6 @@ import today from '../../examples/extensions/prompt-section.ts'
 import readOnlyReview from '../../examples/extensions/read-only-session.ts'
 import redact from '../../examples/extensions/redact-secrets.ts'
 import todo from '../../examples/extensions/todo-command.ts'
-import { z } from 'zod'
 import { MemoryStore } from '../../src/extensions/memory/store.ts'
 import { web } from '../../src/extensions/web/index.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
@@ -119,7 +119,9 @@ test('confirm-dangerous: blocks rm without a ui, runs it when the user agrees', 
     ],
   })
   await headless.run('Delete junk.txt')
-  expect(headless.lastAssistantText()).toContain('User did not allow the deletion')
+  expect(headless.lastAssistantText()).toContain(
+    'User did not allow the deletion',
+  )
   expect(await Bun.file(headless.path('junk.txt')).exists()).toBe(true)
 
   const { ui, asked } = scriptedUI(true)
@@ -349,7 +351,9 @@ test('an extension whose factory fails makes prompts fail with its name', async 
   await expect(t.vela.ready()).rejects.toThrow(
     'Extension broken failed to load: no config',
   )
-  await expect(t.run('Hello')).rejects.toThrow('Extension broken failed to load')
+  await expect(t.run('Hello')).rejects.toThrow(
+    'Extension broken failed to load',
+  )
 })
 
 test('registering a tool or command twice throws', () => {
@@ -529,7 +533,9 @@ test('local-provider: models from a registered provider can be picked by name', 
     extensionConfig: { localProvider: { baseUrl: 'http://127.0.0.1:1/v1' } },
   })
   await t.vela.ready()
-  expect(t.vela.extensions().find((e) => e.name === 'localProvider')).toMatchObject({
+  expect(
+    t.vela.extensions().find((e) => e.name === 'localProvider'),
+  ).toMatchObject({
     providers: ['local'],
   })
   expect(t.vela.models().map((m) => m.ref)).toContain('local/qwen3:8b')
@@ -538,5 +544,9 @@ test('local-provider: models from a registered provider can be picked by name', 
   expect(t.session.limits.maxInputTokens).toBe(40_960 - 16_384)
   // Unlisted ids work too, just without metadata
   t.session.setModel('local/llama3')
-  expect(t.session.modelInfo).toEqual({ id: 'llama3', provider: 'local', ref: 'local/llama3' })
+  expect(t.session.modelInfo).toEqual({
+    id: 'llama3',
+    provider: 'local',
+    ref: 'local/llama3',
+  })
 })

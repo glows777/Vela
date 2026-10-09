@@ -26,7 +26,9 @@ export const modelCommands: CommandHandler[] = [
     const lines = [`\n[model] Current: ${current}`]
     const models = vela.models()
     if (models.length) {
-      lines.push('  Configured models (switch with /model <provider/id>; unlisted ids work too):')
+      lines.push(
+        '  Configured models (switch with /model <provider/id>; unlisted ids work too):',
+      )
       for (const m of models) {
         const meta = [
           m.contextWindow && `${Math.round(m.contextWindow / 1000)}k`,
@@ -37,7 +39,9 @@ export const modelCommands: CommandHandler[] = [
         )
       }
     } else
-      lines.push('  Switch with /model <provider/id>, e.g. /model anthropic/<model id>')
+      lines.push(
+        '  Switch with /model <provider/id>, e.g. /model anthropic/<model id>',
+      )
     print(lines.join('\n'))
     return true
   },

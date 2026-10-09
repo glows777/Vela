@@ -2,16 +2,9 @@ import { afterAll, afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { z } from 'zod'
 import { jsonSchema } from 'ai'
+import { z } from 'zod'
 import type { VelaEvent } from '../../../src/agent/events.ts'
-import { cleanupTestVelas, createTestVela } from '../../support/vela.ts'
-import { ToolResultStore } from '../../../src/session/tool-results.ts'
-import {
-  ToolExecutionResult,
-  ToolRegistry,
-  type ToolDefinition,
-} from '../../../src/tools/registry.ts'
 import { classifyBashCommand } from '../../../src/security/bash-classifier.ts'
 import { HookPipeline } from '../../../src/security/hooks.ts'
 import {
@@ -20,6 +13,13 @@ import {
   filterToolsForRole,
   type Role,
 } from '../../../src/security/roles.ts'
+import { ToolResultStore } from '../../../src/session/tool-results.ts'
+import {
+  type ToolDefinition,
+  ToolExecutionResult,
+  ToolRegistry,
+} from '../../../src/tools/registry.ts'
+import { cleanupTestVelas, createTestVela } from '../../support/vela.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-security-acceptance-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

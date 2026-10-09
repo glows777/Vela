@@ -1,16 +1,16 @@
 import type { Vela } from '../vela.ts'
+import { velaInternals } from '../vela.ts'
+import { channelCommands } from './commands/channel.ts'
+import { extensionCommands } from './commands/extensions.ts'
 import {
   type CommandHandler,
   contextCommands,
   createDispatcher,
   debugCommands,
 } from './commands/index.ts'
-import { channelCommands } from './commands/channel.ts'
-import { extensionCommands } from './commands/extensions.ts'
 import { modelCommands } from './commands/model.ts'
 import { securityCommands } from './commands/security.ts'
 import { createSkillCommands } from './commands/skill.ts'
-import { velaInternals } from '../vela.ts'
 
 /**
  * The CLI's own slash commands. Tests use the same dispatcher so commands behave as in the real entry point.

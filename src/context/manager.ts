@@ -1,10 +1,15 @@
 import type { ModelMessage } from 'ai'
 import type { VelaEventListener } from '../agent/events.ts'
+import { resolveLimits, type VelaLimits } from '../limits.ts'
 import type { SessionState, SessionStore } from '../session/index.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
-import { resolveLimits, type VelaLimits } from '../limits.ts'
-import { persistMicrocompact, planMicrocompact, summarize } from './compressor.ts'
+import {
+  persistMicrocompact,
+  planMicrocompact,
+  summarize,
+} from './compressor.ts'
 import { estimateRequestTokens, type RequestSnapshot } from './request.ts'
+
 export { createRequestSnapshot } from './request.ts'
 
 export class ContextManager {
@@ -135,7 +140,9 @@ export class ContextManager {
       )
       const after = estimateRequestTokens(request, compacted.messages)
       if (after > this.limits.maxInputTokens)
-        throw new Error('Context still exceeds the safe input size after summarizing; this turn was stopped and the original history kept.')
+        throw new Error(
+          'Context still exceeds the safe input size after summarizing; this turn was stopped and the original history kept.',
+        )
       request.abortSignal?.throwIfAborted()
       await this.commit(
         compacted.messages,
@@ -153,7 +160,9 @@ export class ContextManager {
       return
     }
     if (before > this.limits.maxInputTokens)
-      throw new Error('Context exceeds the safe input size; this turn was stopped and the original history kept.')
+      throw new Error(
+        'Context exceeds the safe input size; this turn was stopped and the original history kept.',
+      )
     this.tracker.setEstimatedTokens(before)
   }
 }

@@ -31,7 +31,7 @@
     "paths": {
       "@glows777/vela": ["./src/index.ts"],
       "@glows777/vela/testing": ["./src/testing/index.ts"]
-    },
+    }
   },
-  "exclude": ["dist", "node_modules"],
+  "exclude": ["dist", "node_modules"]
 }

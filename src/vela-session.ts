@@ -1,13 +1,17 @@
 import { join } from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
-import { agentLoop } from './agent/index.ts'
 import type { VelaEvent, VelaEventListener } from './agent/events.ts'
+import { agentLoop } from './agent/index.ts'
 import { canSummarize } from './context/compressor.ts'
 import { estimateMessageTokens } from './context/defense.ts'
-import type { ExtensionUI, SessionUI } from './extensions/types.ts'
 import { ContextManager } from './context/manager.ts'
-import { createRequestSnapshot, type RequestSnapshot } from './context/request.ts'
+import {
+  createRequestSnapshot,
+  type RequestSnapshot,
+} from './context/request.ts'
+import type { ExtensionUI, SessionUI } from './extensions/types.ts'
 import type { VelaLimits } from './limits.ts'
+import type { VelaLogger } from './logger.ts'
 import {
   limitsForModel,
   type ModelInfo,
@@ -16,7 +20,6 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from './models/index.ts'
-import type { VelaLogger } from './logger.ts'
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
 import { SessionStore } from './session/index.ts'
@@ -24,8 +27,8 @@ import type { SessionStorage } from './session/storage.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import {
   CONTEXT_WINDOW,
-  TokenTracker,
   type TokenStatus,
+  TokenTracker,
   type UsageTotals,
 } from './usage/tracker.ts'
 
@@ -197,7 +200,7 @@ export class VelaSession {
     this.store.settings = () => ({
       model:
         typeof this.modelChoice === 'string'
-          ? this.resolved?.info.ref ?? this.modelChoice
+          ? (this.resolved?.info.ref ?? this.modelChoice)
           : undefined,
       thinkingLevel: this.thinking,
       ...(this.displayName ? { name: this.displayName } : {}),
@@ -222,7 +225,8 @@ export class VelaSession {
   private thinking: ThinkingLevel
 
   private resolveModel(): ResolvedModel {
-    if (!this.resolved) this.applyModel(this.deps.resolveModel(this.modelChoice))
+    if (!this.resolved)
+      this.applyModel(this.deps.resolveModel(this.modelChoice))
     return this.resolved as ResolvedModel
   }
 
@@ -268,7 +272,9 @@ export class VelaSession {
    */
   setThinkingLevel(level: ThinkingLevel): void {
     if (!THINKING_LEVELS.includes(level))
-      throw new Error(`Thinking level must be one of ${THINKING_LEVELS.join(' / ')}`)
+      throw new Error(
+        `Thinking level must be one of ${THINKING_LEVELS.join(' / ')}`,
+      )
     this.thinking = level
   }
 
@@ -396,7 +402,8 @@ export class VelaSession {
    * In owner sessions, `/name args` matching an extension command runs the command instead of going to the model (immediately, even while running).
    */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
-    if (this.closed) return Promise.reject(new Error(`Session ${this.id} is closed`))
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
     if (input.startsWith('/'))
       return (async () => {
         await this.start()
@@ -438,8 +445,7 @@ export class VelaSession {
       steering: this.steeringQueue.splice(0),
       followUp: this.followUpQueue.splice(0),
     }
-    if (cleared.steering.length || cleared.followUp.length)
-      this.emitQueue()
+    if (cleared.steering.length || cleared.followUp.length) this.emitQueue()
     return cleared
   }
 
@@ -481,7 +487,8 @@ export class VelaSession {
 
   /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
   private promptModel(input: string, options: PromptOptions): Promise<void> {
-    if (this.closed) return Promise.reject(new Error(`Session ${this.id} is closed`))
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
     if (this.busy.locked) {
       // Only the prompt loop drains the queue; nothing can be queued while /defend, a skill or compact holds the lock
       if (!this.prompting || !options.streamingBehavior)
@@ -609,7 +616,8 @@ export class VelaSession {
    */
   async compact(focus?: string): Promise<void> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    if (this.busy.locked) throw new Error('A task is already running; compact after it finishes')
+    if (this.busy.locked)
+      throw new Error('A task is already running; compact after it finishes')
     const busy = this.busy
     busy.locked = true
     const controller = new AbortController()
@@ -647,7 +655,10 @@ export class VelaSession {
    * (like pi's `await abort()`). Queued messages stay in the queue; call clearQueue() first if needed.
    */
   async abort(
-    reason: unknown = new DOMException('User cancelled the current operation', 'AbortError'),
+    reason: unknown = new DOMException(
+      'User cancelled the current operation',
+      'AbortError',
+    ),
   ): Promise<void> {
     for (const controller of [this.busy.controller, ...this.commands.keys()])
       if (controller && !controller.signal.aborted) controller.abort(reason)

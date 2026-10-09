@@ -3,9 +3,9 @@ import { open, stat } from 'node:fs/promises'
 import { constants } from 'node:os'
 import z from 'zod'
 import { DEFAULT_LIMITS } from '../limits.ts'
+import type { ExecutionMetadata } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import type { ToolDefinition } from './registry.ts'
-import type { ExecutionMetadata } from '../session/tool-history.ts'
 
 const bashToolParamSchema = z.object({
   command: z.string().describe('Shell command to run'),
@@ -16,8 +16,7 @@ export const createBashTool = (
   { timeoutMs = DEFAULT_LIMITS.bashTimeoutMs }: { timeoutMs?: number } = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description:
-    `Runs a shell command (${Math.round(timeoutMs / 1000)}s timeout). Saves the full stdout/stderr and returns the exit status with a preview of the end of the output. Read the full output page by page with read_file.`,
+  description: `Runs a shell command (${Math.round(timeoutMs / 1000)}s timeout). Saves the full stdout/stderr and returns the exit status with a preview of the end of the output. Read the full output page by page with read_file.`,
   inputSchema: bashToolParamSchema,
   isConcurrencySafe: false,
   isReadOnly: false,
@@ -35,12 +34,13 @@ export const createBashTool = (
         // POSIX process group lets timeout/cancellation stop pipelines and descendants.
         detached: process.platform !== 'win32',
       })
-      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve, reject) => {
-          proc.once('error', reject)
-          proc.once('exit', (code, signal) => resolve({ code, signal }))
-        },
-      )
+      const exited = new Promise<{
+        code: number | null
+        signal: NodeJS.Signals | null
+      }>((resolve, reject) => {
+        proc.once('error', reject)
+        proc.once('exit', (code, signal) => resolve({ code, signal }))
+      })
       const terminate = () => {
         try {
           if (process.platform === 'win32') proc.kill('SIGKILL')

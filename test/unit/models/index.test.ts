@@ -15,10 +15,19 @@ const provider = (models = [{ id: 'm', contextWindow: 64_000 }]) => ({
 test('resolve splits provider/id at the first slash and attaches listed metadata', () => {
   const registry = new ModelRegistry({ p: provider() })
   const listed = registry.resolve('p/m')
-  expect(listed.info).toEqual({ id: 'm', contextWindow: 64_000, provider: 'p', ref: 'p/m' })
+  expect(listed.info).toEqual({
+    id: 'm',
+    contextWindow: 64_000,
+    provider: 'p',
+    ref: 'p/m',
+  })
   // Unlisted ids work too (there is no built-in model catalog), and an id may contain /
   const unlisted = registry.resolve('p/vendor/model-x')
-  expect(unlisted.info).toEqual({ id: 'vendor/model-x', provider: 'p', ref: 'p/vendor/model-x' })
+  expect(unlisted.info).toEqual({
+    id: 'vendor/model-x',
+    provider: 'p',
+    ref: 'p/vendor/model-x',
+  })
   expect((unlisted.model as { modelId: string }).modelId).toBe('vendor/model-x')
   expect(registry.list().map((m) => m.ref)).toEqual(['p/m'])
 })
@@ -27,9 +36,15 @@ test('resolve and register report mistakes', () => {
   const registry = new ModelRegistry({ p: provider() })
   expect(() => registry.resolve('m')).toThrow('Model must be provider/id')
   expect(() => registry.resolve('p/')).toThrow('Model must be provider/id')
-  expect(() => registry.resolve('q/m')).toThrow('No provider named q (available: p)')
-  expect(() => registry.register('p', provider())).toThrow('Provider p is already registered')
-  expect(() => registry.register('a b', provider())).toThrow('Invalid provider name')
+  expect(() => registry.resolve('q/m')).toThrow(
+    'No provider named q (available: p)',
+  )
+  expect(() => registry.register('p', provider())).toThrow(
+    'Provider p is already registered',
+  )
+  expect(() => registry.register('a b', provider())).toThrow(
+    'Invalid provider name',
+  )
 })
 
 test('thinking levels map to the AI SDK reasoning option', () => {
@@ -61,7 +76,9 @@ test('context limits follow the model window; explicit limits win', () => {
     maxRetries: DEFAULT_LIMITS.maxRetries,
   })
   // A 200k window yields the current defaults
-  expect(limitsForModel({ contextWindow: 200_000 })).toEqual({ ...DEFAULT_LIMITS })
+  expect(limitsForModel({ contextWindow: 200_000 })).toEqual({
+    ...DEFAULT_LIMITS,
+  })
   // A very small window reserves at most half for output
   expect(limitsForModel({ contextWindow: 16_000 }).maxInputTokens).toBe(8_000)
   expect(

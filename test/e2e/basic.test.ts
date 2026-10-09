@@ -25,11 +25,15 @@ test('plain text reply streams, ends the loop and saves the session', async () =
     'agent_settled',
   ])
   expect(t.events[0]).toEqual({ type: 'agent_start', input: 'hello' })
-  expect(
-    t.eventsOf('message').map((e) => e.message.role),
-  ).toEqual(['user', 'assistant'])
+  expect(t.eventsOf('message').map((e) => e.message.role)).toEqual([
+    'user',
+    'assistant',
+  ])
   expect(t.streamedText()).toBe('Hi, this is Vela.')
-  expect(t.eventsOf('agent_end').at(-1)).toEqual({ type: 'agent_end', reason: 'done' })
+  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+    type: 'agent_end',
+    reason: 'done',
+  })
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
   expect(t.lastAssistantText()).toBe('Hi, this is Vela.')
 
@@ -58,7 +62,9 @@ test('multi-turn: the second request carries the first exchange', async () => {
       (req) => {
         const history = JSON.stringify(req.prompt)
         return fauxText(
-          history.includes('My name is Sam') ? 'Your name is Sam.' : "I don't know.",
+          history.includes('My name is Sam')
+            ? 'Your name is Sam.'
+            : "I don't know.",
         )
       },
     ],

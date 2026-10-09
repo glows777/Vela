@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { createInterface } from 'node:readline'
 import { join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import {
   type ExtensionEntry,
   extensionName,
@@ -15,8 +15,8 @@ import { feishu } from '../extensions/feishu/index.ts'
 import { memory } from '../extensions/memory/index.ts'
 import { rag } from '../extensions/rag/index.ts'
 import type { VelaExtension } from '../extensions/types.ts'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
 import { web } from '../extensions/web/index.ts'
+import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
 import { assertSessionId } from '../vela-session.ts'
 
 type Env = Record<string, string | undefined>
@@ -165,9 +165,10 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--session') {
       args.session = value()
       assertSessionId(args.session)
-    }
-    else if (arg === '-e' || arg === '--extension') args.extensions.push(value())
-    else if (arg === '--no-extensions' || arg === '-ne') args.noExtensions = true
+    } else if (arg === '-e' || arg === '--extension')
+      args.extensions.push(value())
+    else if (arg === '--no-extensions' || arg === '-ne')
+      args.noExtensions = true
     else if (arg === '--no-session') args.noSession = true
     else if (arg === '--approve') args.approve = true
     else if (arg === '--no-approve') args.approve = false
@@ -175,12 +176,18 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--thinking') {
       const level = value()
       if (!THINKING_LEVELS.includes(level as ThinkingLevel))
-        throw new Error(`--thinking must be one of ${THINKING_LEVELS.join(' / ')}`)
+        throw new Error(
+          `--thinking must be one of ${THINKING_LEVELS.join(' / ')}`,
+        )
       args.thinking = level as ThinkingLevel
-    } else if (arg.startsWith('-') && arg !== '-') throw new Error(`Unknown option ${arg}`)
+    } else if (arg.startsWith('-') && arg !== '-')
+      throw new Error(`Unknown option ${arg}`)
     else args.messages.push(arg)
   }
-  if ([args.continue, args.resume, args.session !== undefined].filter(Boolean).length > 1)
+  if (
+    [args.continue, args.resume, args.session !== undefined].filter(Boolean)
+      .length > 1
+  )
     throw new Error('Use only one of -c, -r and --session')
   return args
 }
@@ -203,11 +210,22 @@ export async function resolveTrust(options: {
   if (saved !== undefined)
     return saved
       ? { trusted: true }
-      : { trusted: false, warning: notTrusted(cwd, agentDir, 'you chose not to trust it before') }
+      : {
+          trusted: false,
+          warning: notTrusted(
+            cwd,
+            agentDir,
+            'you chose not to trust it before',
+          ),
+        }
   if (!options.interactive)
     return {
       trusted: false,
-      warning: notTrusted(cwd, agentDir, 'non-interactive mode does not ask; pass --approve to trust it'),
+      warning: notTrusted(
+        cwd,
+        agentDir,
+        'non-interactive mode does not ask; pass --approve to trust it',
+      ),
     }
   const answer = await question(
     `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/ or skills in .vela/skills/ or .skills/).\nExtensions are code that runs on this machine, and skills are instructions for the model. Trust this project and load it? (y/N) `,
@@ -295,7 +313,8 @@ export async function loadCliExtensions(
       let extension: VelaExtension
       if ('builtin' in entry) {
         const factory = BUILTIN_EXTENSIONS[entry.name]
-        if (!factory) throw new Error(`Unknown built-in extension builtin:${entry.name}`)
+        if (!factory)
+          throw new Error(`Unknown built-in extension builtin:${entry.name}`)
         extension = factory()
       } else extension = await importExtension(entry.path, entry.name)
       loaded.push(reportFailures(extension, report))
@@ -332,7 +351,10 @@ function reportFailures(
  * Older versions wrote data into cwd (`.sessions` etc.); if found, explain how to move it to the new data dir (no automatic move).
  * The commands are safe to rerun: once the old data is gone cp / mv fail without deleting anything, and a failed copy keeps the old data.
  */
-export function legacyDataHint(cwd: string, dataDir: string): string | undefined {
+export function legacyDataHint(
+  cwd: string,
+  dataDir: string,
+): string | undefined {
   const moves = (
     [
       ['.sessions', 'sessions'],

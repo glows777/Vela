@@ -18,7 +18,10 @@ const checkpoint = (text: string): SessionCheckpoint => ({
   timestamp: '2026-10-07T00:00:00.000Z',
   summary: '',
   messages: [
-    { timestamp: '2026-10-07T00:00:00.000Z', message: { role: 'user', content: text } },
+    {
+      timestamp: '2026-10-07T00:00:00.000Z',
+      message: { role: 'user', content: text },
+    },
   ],
 })
 
@@ -40,7 +43,9 @@ test('file storage writes <dir>/<id>.jsonl and reads old one-message-per-line fi
   dirs.push(dir)
   const storage = fileSessionStorage(join(dir.path, 'sessions'))
   await storage.save('a', checkpoint('hi'))
-  expect(await Bun.file(join(dir.path, 'sessions/a.jsonl')).text()).toContain('"hi"')
+  expect(await Bun.file(join(dir.path, 'sessions/a.jsonl')).text()).toContain(
+    '"hi"',
+  )
   expect((await storage.load('a'))?.messages[0]?.message).toEqual({
     role: 'user',
     content: 'hi',
@@ -49,9 +54,17 @@ test('file storage writes <dir>/<id>.jsonl and reads old one-message-per-line fi
   writeFileSync(
     join(dir.path, 'sessions/old.jsonl'),
     [
-      JSON.stringify({ type: 'message', timestamp: 't', message: { role: 'user', content: 'one' } }),
+      JSON.stringify({
+        type: 'message',
+        timestamp: 't',
+        message: { role: 'user', content: 'one' },
+      }),
       'not json',
-      JSON.stringify({ type: 'message', timestamp: 't', message: { role: 'user', content: 'two' } }),
+      JSON.stringify({
+        type: 'message',
+        timestamp: 't',
+        message: { role: 'user', content: 'two' },
+      }),
     ].join('\n'),
   )
   const old = await storage.load('old')
@@ -61,16 +74,38 @@ test('file storage writes <dir>/<id>.jsonl and reads old one-message-per-line fi
 test('both storages list sessions newest first, skipping empty ones; a missing directory lists nothing', async () => {
   const dir = tempDir()
   dirs.push(dir)
-  const later = { ...checkpoint('second'), timestamp: '2026-10-08T00:00:00.000Z', name: 'Name' }
-  for (const storage of [memorySessionStorage(), fileSessionStorage(join(dir.path, 's'))]) {
+  const later = {
+    ...checkpoint('second'),
+    timestamp: '2026-10-08T00:00:00.000Z',
+    name: 'Name',
+  }
+  for (const storage of [
+    memorySessionStorage(),
+    fileSessionStorage(join(dir.path, 's')),
+  ]) {
     expect(await storage.list?.()).toEqual([])
     await storage.save('a', checkpoint('first'))
     await storage.save('b', later)
     // A session with no messages (only opened) is not listed, so -c will not pick it up
-    await storage.save('empty', { ...checkpoint('x'), messages: [], timestamp: '2026-10-09T00:00:00.000Z' })
+    await storage.save('empty', {
+      ...checkpoint('x'),
+      messages: [],
+      timestamp: '2026-10-09T00:00:00.000Z',
+    })
     expect(await storage.list?.()).toEqual([
-      { id: 'b', name: 'Name', updatedAt: later.timestamp, messageCount: 1, firstMessage: 'second' },
-      { id: 'a', updatedAt: '2026-10-07T00:00:00.000Z', messageCount: 1, firstMessage: 'first' },
+      {
+        id: 'b',
+        name: 'Name',
+        updatedAt: later.timestamp,
+        messageCount: 1,
+        firstMessage: 'second',
+      },
+      {
+        id: 'a',
+        updatedAt: '2026-10-07T00:00:00.000Z',
+        messageCount: 1,
+        firstMessage: 'first',
+      },
     ])
   }
 })

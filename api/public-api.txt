@@ -14,7 +14,10 @@
     stop: () => Promise<void> | void
   function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
   function createVela: (options?: VelaOptions) => Vela
-  type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
+  type EmbeddingFn = (
+      texts: string[],
+      signal?: AbortSignal,
+      ) => Promise<number[][]>
   interface ExtensionAPI
     on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
     readonly config: Readonly<Record<string, unknown>>
@@ -293,7 +296,12 @@
       }
       | { type: 'session_save_failed'; error: unknown }
       | { type: 'audit'; toolName: string; path: string }
-      | { type: 'security_warning'; toolName: string; reason: string; command: string }
+      | {
+      type: 'security_warning'
+      toolName: string
+      reason: string
+      command: string
+      }
       | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
       | {
       type: 'channel_message'
@@ -302,7 +310,12 @@
       senderName: string
       text: string
       }
-      | { type: 'channel_reply'; channel: string; recipientId: string; text: string }
+      | {
+      type: 'channel_reply'
+      channel: string
+      recipientId: string
+      text: string
+      }
       | {
       type: 'channel_error'
       channel: string

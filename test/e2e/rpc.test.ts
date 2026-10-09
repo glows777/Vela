@@ -162,7 +162,9 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   await rpc.call({ type: 'prompt', message: 'Think slowly' })
   await rpc.waitFor((r) => r.type === 'text_delta')
 
-  expect(await rpc.call({ type: 'prompt', message: 'Interject' })).toMatchObject({
+  expect(
+    await rpc.call({ type: 'prompt', message: 'Interject' }),
+  ).toMatchObject({
     success: false,
   })
   expect(
@@ -174,7 +176,9 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   ).toMatchObject({
     data: { disposition: 'queued' },
   })
-  expect(await rpc.call({ type: 'steer', message: 'Change course' })).toMatchObject({
+  expect(
+    await rpc.call({ type: 'steer', message: 'Change course' }),
+  ).toMatchObject({
     data: { disposition: 'queued' },
   })
   expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
@@ -208,7 +212,10 @@ test.concurrent('rpc: while running, prompt needs a streamingBehavior; queued me
   })
   const list = await rpc.call({ type: 'list_sessions' })
   expect((list.data as { sessions: unknown[] }).sessions).toEqual([
-    expect.objectContaining({ name: 'Renamed while running', firstMessage: 'Think slowly' }),
+    expect.objectContaining({
+      name: 'Renamed while running',
+      firstMessage: 'Think slowly',
+    }),
   ])
 
   expect(await rpc.close()).toBe(0)
@@ -225,7 +232,9 @@ test.concurrent('rpc: a prompt that fails before the loop starts gets a failed r
   const failed = await rpc.waitFor((r) => r.id === 'p1' && r.success === false)
   expect(failed).toMatchObject({ type: 'response', command: 'prompt' })
   // The CLI's hint on how to pick a model, not the SDK's createVela() / setModel() hint
-  expect(String(failed.error)).toContain('No model selected. Use --model provider/id')
+  expect(String(failed.error)).toContain(
+    'No model selected. Use --model provider/id',
+  )
   expect(String(failed.error)).not.toContain('createVela')
   const compact = await rpc.call({ type: 'compact' })
   expect(compact).toMatchObject({ success: false })

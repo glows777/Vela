@@ -69,8 +69,7 @@ test('microcompact folds old tool results once more than five calls have complet
 })
 
 test('summary compaction replaces old history with a grounded summary and keeps recent messages', async () => {
-  const filler = (i: number) =>
-    `Question ${i}: ${'Background. '.repeat(100)}`
+  const filler = (i: number) => `Question ${i}: ${'Background. '.repeat(100)}`
   const probe = createTestVela()
   const base = await requestTokens(probe)
   await probe.cleanup()
@@ -78,7 +77,9 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   const t = createTestVela({
     // Summary triggers on the 5th question, after 4 rounds (8 messages)
     limits: { microcompactThreshold: 1e9, summaryThreshold: base + 4 * 400 },
-    responses: [...Array.from({ length: 5 }, (_, i) => fauxText(`Answer ${i}`))],
+    responses: [
+      ...Array.from({ length: 5 }, (_, i) => fauxText(`Answer ${i}`)),
+    ],
     generate: [fauxSummary()],
   })
   for (let i = 0; i < 5; i++) await t.run(filler(i))
@@ -97,7 +98,9 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   const after = t.model.calls.at(-1)!
   expect(after.kind).toBe('stream')
   const firstUser = after.prompt.find((m) => m.role === 'user')!
-  expect(JSON.stringify(firstUser.content)).toContain('[Summary of the earlier conversation]')
+  expect(JSON.stringify(firstUser.content)).toContain(
+    '[Summary of the earlier conversation]',
+  )
   expect(JSON.stringify(firstUser.content)).toContain('Question 0')
   expect(after.lastUserText).toContain('Question 4')
   expect(t.session.contextManager.state.summary).toContain('## User goal')

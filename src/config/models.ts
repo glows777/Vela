@@ -94,7 +94,9 @@ function readModelsFile(file: string): Record<string, ProviderConfig> {
       (!Array.isArray(models) ||
         models.some((m) => !isPlainObject(m) || typeof m.id !== 'string'))
     )
-      throw new Error(`${file}: providers.${name}.models must be an array of objects with an id`)
+      throw new Error(
+        `${file}: providers.${name}.models must be an array of objects with an id`,
+      )
   }
   return providers as Record<string, ProviderConfig>
 }
@@ -109,7 +111,10 @@ function createProvider(
     value === undefined ? undefined : interpolate(value, env) || undefined
   const headers = config.headers
     ? Object.fromEntries(
-        Object.entries(config.headers).map(([k, v]) => [k, interpolate(v, env)]),
+        Object.entries(config.headers).map(([k, v]) => [
+          k,
+          interpolate(v, env),
+        ]),
       )
     : undefined
   return {

@@ -42,7 +42,9 @@ export function recordModel(
   options: RecordOptions,
 ): Recorder {
   if (typeof model === 'string')
-    throw new Error('recordModel: needs a model instance, not a model id string')
+    throw new Error(
+      'recordModel: needs a model instance, not a model id string',
+    )
   const inner = model as LanguageModelV4
   const responses: (FauxResponse | undefined)[] = []
   const generate: (FauxResponse | undefined)[] = []

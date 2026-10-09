@@ -16,8 +16,10 @@ export interface WebOptions {
  */
 export function web(options: WebOptions = {}): VelaExtension {
   return function web(vela) {
-    const tavilyKey = options.tavilyKey ?? configString(vela.config, 'tavilyKey')
-    const serperKey = options.serperKey ?? configString(vela.config, 'serperKey')
+    const tavilyKey =
+      options.tavilyKey ?? configString(vela.config, 'tavilyKey')
+    const serperKey =
+      options.serperKey ?? configString(vela.config, 'serperKey')
     vela.registerTool(webFetchTool)
     if (tavilyKey) vela.registerTool(tavilySearchTool(tavilyKey))
     else if (serperKey) vela.registerTool(serperSearchTool(serperKey))

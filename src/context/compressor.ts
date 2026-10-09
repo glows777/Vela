@@ -1,15 +1,15 @@
 import { open } from 'node:fs/promises'
 import {
   generateText,
-  Output,
-  NoObjectGeneratedError,
   type LanguageModelUsage,
   type ModelMessage,
+  NoObjectGeneratedError,
+  Output,
   type ToolResultPart,
   type ToolSet,
 } from 'ai'
 import z from 'zod'
-import { toolResultOutputToText } from './tool-result-output.ts'
+import { DEFAULT_LIMITS } from '../limits.ts'
 import {
   archiveToolResults,
   getStoredResult,
@@ -17,13 +17,13 @@ import {
   storedResultOutput,
   type ToolResultStore,
 } from '../session/tool-results.ts'
-import { DEFAULT_LIMITS } from '../limits.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import {
   estimateRequestTokens,
   MAX_INPUT_TOKENS,
   type RequestSnapshot,
 } from './request.ts'
+import { toolResultOutputToText } from './tool-result-output.ts'
 
 export const MICROCOMPACT_TOKEN_THRESHOLD = DEFAULT_LIMITS.microcompactThreshold
 export const SUMMARY_TOKEN_THRESHOLD = DEFAULT_LIMITS.summaryThreshold
@@ -270,7 +270,7 @@ export async function summarize(
   for (const [name, tool] of Object.entries(request.tools)) {
     if (tool.type === 'provider' || typeof tool.description === 'function')
       throw new Error(
-        'Cannot disable this tool\'s execution while keeping the main request prefix; summary stopped and the original history kept.',
+        "Cannot disable this tool's execution while keeping the main request prefix; summary stopped and the original history kept.",
       )
     tools[name] = {
       description: tool.description,
@@ -286,7 +286,9 @@ export async function summarize(
     tools,
   }
   if (estimateRequestTokens(summaryRequest) > maxInputTokens)
-    throw new Error('Summary input exceeds the safe input size; this turn was stopped and the original history kept.')
+    throw new Error(
+      'Summary input exceeds the safe input size; this turn was stopped and the original history kept.',
+    )
   const started = performance.now()
   const modelId =
     typeof request.model === 'string' ? request.model : request.model.modelId
@@ -308,7 +310,9 @@ export async function summarize(
   }).catch((error) => {
     if (NoObjectGeneratedError.isInstance(error)) {
       if (error.usage) recordUsage(error.usage)
-      throw new Error('Summary was not fully generated as valid JSON; this turn was stopped and the original history kept.')
+      throw new Error(
+        'Summary was not fully generated as valid JSON; this turn was stopped and the original history kept.',
+      )
     }
     throw error
   })
@@ -319,10 +323,14 @@ export async function summarize(
     !response.text.trim() ||
     response.finishReason !== 'stop'
   )
-    throw new Error('Summary was not fully generated or returned tool calls; this turn was stopped and the original history kept.')
+    throw new Error(
+      'Summary was not fully generated or returned tool calls; this turn was stopped and the original history kept.',
+    )
   const parsed = summarySchema.safeParse(response.output)
   if (!parsed.success || parsed.data.sourceMessageCount !== index)
-    throw new Error('Summary does not match the required structure; this turn was stopped and the original history kept.')
+    throw new Error(
+      'Summary does not match the required structure; this turn was stopped and the original history kept.',
+    )
   const data = parsed.data
   const facts = [
     data.goal,
@@ -357,7 +365,10 @@ export async function summarize(
     `\n\n${results.history.readingGuide(snapshot.sequence, snapshot.path)}`
   return {
     messages: [
-      { role: 'user', content: `[Summary of the earlier conversation]\n${summary}` },
+      {
+        role: 'user',
+        content: `[Summary of the earlier conversation]\n${summary}`,
+      },
       ...request.messages.slice(index),
     ],
     summary,

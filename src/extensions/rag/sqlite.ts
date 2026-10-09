@@ -29,7 +29,9 @@ const CUSTOM_SQLITE_CANDIDATES = [
 
 let customSqliteLoaded = false
 
-function loadCustomSqlite(Database: { setCustomSQLite(path: string): void }): void {
+function loadCustomSqlite(Database: {
+  setCustomSQLite(path: string): void
+}): void {
   if (customSqliteLoaded) return
   const path = CUSTOM_SQLITE_CANDIDATES.find((p) => existsSync(p))
   if (!path) {

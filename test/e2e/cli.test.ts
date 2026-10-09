@@ -162,7 +162,10 @@ test.concurrent('--mode json writes a session header and one JSON event per line
     files: { 'notes.txt': 'remember the milk' },
   })
   expect(code).toBe(0)
-  const records = stdout.trim().split('\n').map((line) => JSON.parse(line))
+  const records = stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
   expect(records[0]).toMatchObject({ type: 'session', thinkingLevel: 'medium' })
   const id = records[0].id
   expect(records.slice(1).every((r) => r.sessionId === id)).toBe(true)
@@ -207,14 +210,24 @@ test.concurrent('each run starts a new session; -c continues the most recent one
   const files = sessionFiles(first.dataDir)
   expect(files).toHaveLength(2)
   const contents = await Promise.all(files.map((f) => Bun.file(f).text()))
-  expect(contents.some((c) => c.includes('first message') && !c.includes('second message'))).toBe(true)
-  expect(contents.some((c) => c.includes('second message') && c.includes('third message'))).toBe(true)
+  expect(
+    contents.some(
+      (c) => c.includes('first message') && !c.includes('second message'),
+    ),
+  ).toBe(true)
+  expect(
+    contents.some(
+      (c) => c.includes('second message') && c.includes('third message'),
+    ),
+  ).toBe(true)
   expect(second.code).toBe(0)
   // Three CLI processes; alongside other concurrent tests the default 5 s is not enough
 }, 20_000)
 
 test.concurrent('-c -p with a command prints nothing on stdout, not the previous answer', async () => {
-  const first = await cli(['-p', 'hello'], { model: `faux:${scenario('hello')}` })
+  const first = await cli(['-p', 'hello'], {
+    model: `faux:${scenario('hello')}`,
+  })
   expect(first.code).toBe(0)
   const dir = tempDir('vela-ext-')
   dirs.push(dir)
@@ -260,7 +273,9 @@ test.concurrent('a model error makes -p exit 1 with the real cause on stderr', a
     model: `faux:${scenario('bad-request')}`,
   })
   expect(code).toBe(1)
-  expect(stderr).toContain('[Agent] Turn stopped: 400 Bad Request: model not found')
+  expect(stderr).toContain(
+    '[Agent] Turn stopped: 400 Bad Request: model not found',
+  )
 })
 
 test.concurrent('-p without a prompt prints usage and exits 2', async () => {
@@ -380,7 +395,9 @@ test.concurrent('a broken settings.json stops the CLI with the file name', async
     agentDir: home.path,
   })
   expect(code).toBe(2)
-  expect(stderr).toContain(`[config] ${join(home.path, 'settings.json')} is not valid JSON`)
+  expect(stderr).toContain(
+    `[config] ${join(home.path, 'settings.json')} is not valid JSON`,
+  )
 })
 
 test.concurrent('a broken trust.json stops the CLI instead of being ignored', async () => {
@@ -393,7 +410,9 @@ test.concurrent('a broken trust.json stops the CLI instead of being ignored', as
     files: { '.vela/settings.json': '{}' },
   })
   expect(code).toBe(2)
-  expect(stderr).toContain(`[config] ${join(home.path, 'trust.json')} is not valid JSON`)
+  expect(stderr).toContain(
+    `[config] ${join(home.path, 'trust.json')} is not valid JSON`,
+  )
 })
 
 // The demo model streams one character every 30 ms (about 2 s); with other concurrent tests on slow CI machines that exceeds the default 5 s
@@ -485,10 +504,13 @@ export default (vela) => vela.registerProvider('local', {
 })
 `,
   )
-  const first = await cli(['-p', 'hello', '--model', 'local/m', '--thinking', 'high'], {
-    model: '',
-    agentDir: home.path,
-  })
+  const first = await cli(
+    ['-p', 'hello', '--model', 'local/m', '--thinking', 'high'],
+    {
+      model: '',
+      agentDir: home.path,
+    },
+  )
   expect(first.stderr).not.toContain('[model]')
   expect(first.code).toBe(0)
   expect(first.stdout).toBe('from m high\n')
@@ -523,9 +545,12 @@ test.concurrent('an unknown --model or no model at all stops with a clear messag
   expect(none.code).toBe(1)
   expect(none.stderr).toContain('No model selected')
 
-  const missingKey = await cli(['-p', 'hello', '--model', 'anthropic/claude-x'], {
-    model: '',
-  })
+  const missingKey = await cli(
+    ['-p', 'hello', '--model', 'anthropic/claude-x'],
+    {
+      model: '',
+    },
+  )
   expect(missingKey.code).toBe(1)
   expect(missingKey.stderr).toContain('ANTHROPIC_API_KEY')
 
@@ -548,16 +573,28 @@ test.concurrent('a reader that closes stdout early makes the CLI exit quietly', 
   const run = async (args: string, lines: number) => {
     const proc = Bun.spawn(
       // The CLI's pid and exit code go to files (the pipeline's code is head's); if the CLI hangs, the timer kills it
-      ['sh', '-c', `{ bun '${ENTRY}' ${args} < /dev/null & echo $! > pid; wait $!; echo $? > status; } | head -${lines}`],
+      [
+        'sh',
+        '-c',
+        `{ bun '${ENTRY}' ${args} < /dev/null & echo $! > pid; wait $!; echo $? > status; } | head -${lines}`,
+      ],
       {
         cwd: dir.path,
-        env: { PATH: process.env.PATH ?? '', HOME: home.path, VELA_DIR: home.path, VELA_MODEL: `faux:${file}` },
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: home.path,
+          VELA_DIR: home.path,
+          VELA_MODEL: `faux:${file}`,
+        },
         stdout: 'pipe',
         stderr: 'pipe',
       },
     )
     const timer = setTimeout(async () => {
-      process.kill(Number(await Bun.file(join(dir.path, 'pid')).text()), 'SIGKILL')
+      process.kill(
+        Number(await Bun.file(join(dir.path, 'pid')).text()),
+        'SIGKILL',
+      )
     }, 15_000)
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -566,11 +603,20 @@ test.concurrent('a reader that closes stdout early makes the CLI exit quietly', 
     ])
     clearTimeout(timer)
     expect(code).toBe(0)
-    return { stdout, stderr, code: Number(await Bun.file(join(dir.path, 'status')).text()) }
+    return {
+      stdout,
+      stderr,
+      code: Number(await Bun.file(join(dir.path, 'status')).text()),
+    }
   }
   const json = await run('--mode json hi', 3)
   expect(json.code).toBe(0)
-  expect(json.stdout.split('\n').slice(0, 1).map((l) => JSON.parse(l).type)).toEqual(['session'])
+  expect(
+    json.stdout
+      .split('\n')
+      .slice(0, 1)
+      .map((l) => JSON.parse(l).type),
+  ).toEqual(['session'])
   expect(json.stderr).not.toContain('EPIPE')
   const print = await run('-p hi', 2)
   expect(print.code).toBe(0)

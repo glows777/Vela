@@ -3,7 +3,10 @@ import { embedMany } from 'ai'
 
 const DIMS = 128
 
-export type EmbeddingFn = (texts: string[], signal?: AbortSignal) => Promise<number[][]>
+export type EmbeddingFn = (
+  texts: string[],
+  signal?: AbortSignal,
+) => Promise<number[][]>
 
 export function createEmbedder({
   modelId,
@@ -58,7 +61,10 @@ export async function embed(
   }
 
   if (uncached.length > 0) {
-    const vectors = await fn(uncached.map((u) => u.text), signal)
+    const vectors = await fn(
+      uncached.map((u) => u.text),
+      signal,
+    )
     signal?.throwIfAborted()
     for (let i = 0; i < uncached.length; i++) {
       results[uncached[i]!.idx] = vectors[i]!

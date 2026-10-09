@@ -18,10 +18,8 @@ function agentDir(models?: unknown) {
   return dir.path
 }
 
-const modelOf = (
-  providers: ReturnType<typeof loadModels>,
-  ref: string,
-) => new ModelRegistry(providers).resolve(ref)
+const modelOf = (providers: ReturnType<typeof loadModels>, ref: string) =>
+  new ModelRegistry(providers).resolve(ref)
 
 test('openai and anthropic are built in and read their keys from the environment', () => {
   const providers = loadModels({

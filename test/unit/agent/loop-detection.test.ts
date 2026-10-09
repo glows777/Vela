@@ -17,7 +17,10 @@ test('generic repeat: warning at 10 identical calls, critical at 20', () => {
 test('the first critical for any repetition is at most the 21st call, well inside the 30-call window', () => {
   // Identical calls (whatever their results) and two-call ping-pong both stop at the 21st call,
   // so no detector needs a full window of 30 identical calls
-  for (const argsAt of [() => ({ p: 'x' }), (i: number) => ({ p: i % 2 ? 'a' : 'b' })]) {
+  for (const argsAt of [
+    () => ({ p: 'x' }),
+    (i: number) => ({ p: i % 2 ? 'a' : 'b' }),
+  ]) {
     const detector = new LoopDetector()
     let firstCritical = -1
     for (let i = 0; i < 30 && firstCritical < 0; i++) {

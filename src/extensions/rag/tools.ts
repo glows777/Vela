@@ -72,7 +72,8 @@ export function createRagTools(
 
   const ragSearchTool: ToolDefinition = {
     name: 'search',
-    description: 'Search the knowledge base for relevant information. Returns the most relevant document chunks.',
+    description:
+      'Search the knowledge base for relevant information. Returns the most relevant document chunks.',
     inputSchema: ragSearchToolInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,

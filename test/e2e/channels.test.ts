@@ -74,7 +74,9 @@ test('a sender continues the conversation after a restart', async () => {
     responses: [
       (req) =>
         fauxText(
-          JSON.stringify(req.prompt).includes('I like blue') ? 'blue' : "I don't know",
+          JSON.stringify(req.prompt).includes('I like blue')
+            ? 'blue'
+            : "I don't know",
         ),
     ],
   })
@@ -90,15 +92,23 @@ test('a sender continues the conversation after a restart', async () => {
 
 test('messages from the same sender are handled one after another', async () => {
   const t = createTestVela({
-    responses: [fauxText('reply to the first'), fauxText('reply to the second')],
+    responses: [
+      fauxText('reply to the first'),
+      fauxText('reply to the second'),
+    ],
   })
   const { sent, deliver } = fakeChannel(t)
 
   await Promise.all([deliver('u1', 'first'), deliver('u1', 'second')])
 
-  expect(sent.map((m) => m.text)).toEqual(['reply to the first', 'reply to the second'])
+  expect(sent.map((m) => m.text)).toEqual([
+    'reply to the first',
+    'reply to the second',
+  ])
   // The second request sees the full history of the first round
-  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('reply to the first')
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain(
+    'reply to the first',
+  )
   expect(
     t.eventsIn('fake-c1-u1').filter((e) => e.type === 'channel_error'),
   ).toEqual([])
@@ -138,9 +148,13 @@ test('senders whose ids sanitize to the same string get separate sessions', asyn
     channelSessionId('fake', `${long}2`, 'u1'),
   )
   // Ordinary ids stay readable
-  expect(channelSessionId('feishu', 'oc_9', 'ou_123')).toBe('feishu-oc_9-ou_123')
+  expect(channelSessionId('feishu', 'oc_9', 'ou_123')).toBe(
+    'feishu-oc_9-ou_123',
+  )
 
-  const t = createTestVela({ responses: [fauxText('OK'), fauxText("I don't know")] })
+  const t = createTestVela({
+    responses: [fauxText('OK'), fauxText("I don't know")],
+  })
   const { deliver } = fakeChannel(t)
   await deliver('a@b', 'My password is hunter2')
   await deliver('a_b', 'What do you know?')
@@ -153,7 +167,9 @@ test('a channel session closed while idle resumes its history when reopened', as
       fauxText('Got it: blue'),
       (req) =>
         fauxText(
-          JSON.stringify(req.prompt).includes('I like blue') ? 'blue' : "I don't know",
+          JSON.stringify(req.prompt).includes('I like blue')
+            ? 'blue'
+            : "I don't know",
         ),
     ],
   })
@@ -172,11 +188,17 @@ test('sessions are keyed by conversation and sender: chats and group members sta
     responses: [
       fauxText('OK'),
       (req) =>
-        fauxText(JSON.stringify(req.prompt).includes('hunter2') ? 'leaked' : 'clean'),
+        fauxText(
+          JSON.stringify(req.prompt).includes('hunter2') ? 'leaked' : 'clean',
+        ),
       (req) =>
-        fauxText(JSON.stringify(req.prompt).includes('hunter2') ? 'leaked' : 'clean'),
+        fauxText(
+          JSON.stringify(req.prompt).includes('hunter2') ? 'leaked' : 'clean',
+        ),
       (req) =>
-        fauxText(JSON.stringify(req.prompt).includes('hunter2') ? 'same chat' : 'lost'),
+        fauxText(
+          JSON.stringify(req.prompt).includes('hunter2') ? 'same chat' : 'lost',
+        ),
     ],
   })
   const { sent, deliver } = fakeChannel(t)

@@ -17,8 +17,7 @@ export const extensionCommands: CommandHandler[] = [
       if (ext.tools.length) print(`    Tools: ${ext.tools.join(', ')}`)
       if (ext.commands.length)
         print(`    Commands: ${ext.commands.map((c) => `/${c}`).join(', ')}`)
-      if (ext.channels.length)
-        print(`    Channels: ${ext.channels.join(', ')}`)
+      if (ext.channels.length) print(`    Channels: ${ext.channels.join(', ')}`)
     }
     print('')
     return true

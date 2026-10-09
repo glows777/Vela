@@ -1,5 +1,5 @@
-import { join } from 'node:path'
 import { afterEach, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import { MemoryStore } from '../../src/extensions/memory/store.ts'
 import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import {
@@ -44,7 +44,9 @@ test('a memory saved through the tool shows up in the next system prompt and sur
 
   const restarted = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
   await restarted.run('Hello')
-  expect(restarted.model.calls[0]!.system).toContain("The user's favorite programming language")
+  expect(restarted.model.calls[0]!.system).toContain(
+    "The user's favorite programming language",
+  )
 })
 
 test('the model can search and read memories back', async () => {
