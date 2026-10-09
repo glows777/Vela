@@ -21,7 +21,7 @@ Run these before opening a pull request. CI runs the same ones.
 ```bash
 bun run test            # unit + e2e tests, offline, a few seconds
 bun run typecheck
-bun run lint            # bun run lint:fix fixes what it can
+bun run lint            # biome check: formatting, import order and lint; bun run lint:fix fixes what it can
 bun run smoke:consumer  # builds, packs and installs the package into empty Node and Bun projects
 ```
 
@@ -46,6 +46,16 @@ If you change the exports of `@glows777/vela` or `@glows777/vela/testing`, run `
 - Add tests for new behavior and bug fixes.
 - Update the docs in `docs/` when you change user-facing behavior.
 - If the change affects users, add a line to the top section of [CHANGELOG.md](CHANGELOG.md) under the right heading (New Features, Breaking Changes, Added, Changed, Fixed). A breaking change must say how to migrate.
+
+## Releasing
+
+Maintainers release from an up-to-date `main` with entries under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md):
+
+```bash
+bun run release patch   # or minor, major, or an exact version like 0.2.0
+```
+
+The script bumps the version, dates the changelog section, runs the checks, commits, tags `vX.Y.Z` and pushes. The tag starts the Release workflow, which runs CI on the tagged commit, publishes to npm with provenance through trusted publishing, and creates the GitHub release from the changelog section. If a release fails partway, run the Release workflow by hand with the tag; a version already on npm skips to the GitHub release.
 
 ## API stability
 

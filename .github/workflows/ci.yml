@@ -4,9 +4,19 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The release workflow runs the same checks on the tagged commit before publishing
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -14,12 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
       # The package must work on Node: the consumer smoke test runs the SDK and CLI on the oldest supported Node
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.18.0
       # grep / find run ripgrep / fd (Ubuntu names fd `fdfind`; Vela looks for both)
@@ -30,6 +43,7 @@ jobs:
         run: bun run test
       - name: Typecheck
         run: bun run typecheck
+      # biome check: formatting, import order and lint
       - name: Lint
         run: bun run lint
       # Build, pack and install into empty Node and Bun projects; import, type-check and run the CLI like a consumer (needs network)
