@@ -4,7 +4,10 @@ import type { ToolDefinition } from '../../index.ts'
 
 const searchInputSchema = z.object({
   query: z.string().describe('Search keywords'),
-  max_results: z.number().describe('Number of results to return, default 5').default(5),
+  max_results: z
+    .number()
+    .describe('Number of results to return, default 5')
+    .default(5),
 })
 
 type SearchInput = z.infer<typeof searchInputSchema>
@@ -13,7 +16,8 @@ type SearchInput = z.infer<typeof searchInputSchema>
 export function tavilySearchTool(apiKey: string): ToolDefinition {
   return {
     name: 'search',
-    description: 'Search the web for up-to-date information. Returns titles, links and content summaries of relevant pages',
+    description:
+      'Search the web for up-to-date information. Returns titles, links and content summaries of relevant pages',
     inputSchema: searchInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,

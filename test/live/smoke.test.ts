@@ -41,7 +41,9 @@ test.skipIf(!live)(
       files: { 'secret.txt': 'the code word is PINEAPPLE' },
       limits: { retryBaseMs: 500 },
     })
-    await t.run('Use read_file to read secret.txt, then reply with only the code word in it')
+    await t.run(
+      'Use read_file to read secret.txt, then reply with only the code word in it',
+    )
     expect(t.eventsOf('tool_call').map((e) => e.toolName)).toContain(
       'read_file',
     )

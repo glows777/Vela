@@ -41,7 +41,8 @@ export function rag(options: RagOptions = {}): VelaExtension {
     })
 
     vela.registerCommand('rag', {
-      description: 'Show the knowledge base; /rag ingest <path> to ingest a document',
+      description:
+        'Show the knowledge base; /rag ingest <path> to ingest a document',
       handler: async (args, ctx) => {
         if (args.startsWith('ingest ')) {
           const path = args.slice('ingest '.length).trim()

@@ -35,11 +35,11 @@ The faux model, the demo model and createTestVela live in `src/testing/` rather 
 | `bun test <file or dir>` | a targeted subset | |
 | `bun run typecheck` | `tsc --noEmit`; must report 0 errors | |
 | `bun run smoke:consumer` | runs `bun run build`, packs a tarball and installs it into an empty Node project (strict NodeNext tsconfig, no @types/bun) and an empty Bun project; in each, type-checks like a consumer, runs a faux session and `vela -p`. Needs network; CI runs it as its own step (on Node 22.18) | ~30 s |
-| `bun run lint` | `biome lint`; must report 0 errors (warnings don't block) | |
+| `bun run lint` | `biome check` (formatting, import order, lint); must report 0 errors (warnings don't block); `bun run lint:fix` fixes formatting and imports | |
 
 The suite never touches the network and needs no environment variables, but it needs ripgrep and fd installed: the `grep` / `find` tools run the real `rg` / `fd` (macOS `brew install ripgrep fd`, Ubuntu `apt install ripgrep fd-find`). The test Vela passes no `binDir`, so it only looks on PATH and never downloads. Every test runs in its own temp directory, isolated from the others and removed afterwards.
 
-CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint` and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. `test/live/` does not run in CI.
+CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint` and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. The Release workflow runs the same job on a release tag before publishing. `test/live/` does not run in CI.
 
 ## Layers
 
@@ -178,6 +178,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | unit/testing/record | record then replay yields the same events; recording errors, broken streams, retries, aborts (hang) and the generate queue |
 | unit/boundary | core modules contain no console, process.stdout/stderr/exit/env or readline |
 | unit/public-api | the public API of `@glows777/vela` and `@glows777/vela/testing` matches `api/public-api.txt`; after changing the public surface run `bun run api:update` |
+| unit/scripts | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version |
 | unit/security | roles (owner / collaborator / guest), session permission rules, ask goes through confirm, the hook chain, bash classification, `/role` changes only the current session |
 | unit/… | other module-level rules; see each file |
 

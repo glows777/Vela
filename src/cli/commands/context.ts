@@ -17,7 +17,9 @@ export const contextCommands: CommandHandler[] = [
           internals.skillLoader.buildPromptSection(session.activeSkills) ?? ''
         print(renderContextView(contextSnapshot(session, sections, skills)))
       } catch (error) {
-        print(`[context] Failed: ${error instanceof Error ? error.message : error}`)
+        print(
+          `[context] Failed: ${error instanceof Error ? error.message : error}`,
+        )
       }
     })()
   },

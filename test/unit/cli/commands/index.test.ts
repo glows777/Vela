@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import {
-  createDispatcher,
   type CommandContext,
   type CommandHandler,
+  createDispatcher,
 } from '../../../../src/cli/commands/index.ts'
 
 const fakeCtx = {} as CommandContext

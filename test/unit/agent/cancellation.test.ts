@@ -3,15 +3,15 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import z from 'zod'
-import { ToolRegistry } from '../../../src/tools/registry.ts'
+import { agentLoop } from '../../../src/agent/index.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
-import { TokenTracker } from '../../../src/usage/tracker.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
 } from '../../../src/testing/faux.ts'
-import { agentLoop } from '../../../src/agent/index.ts'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-agent-cancel-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))

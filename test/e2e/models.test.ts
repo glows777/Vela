@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
-import { DEFAULT_LIMITS } from '../../src/limits.ts'
 import type { VelaEvent } from '../../src/agent/events.ts'
+import { DEFAULT_LIMITS } from '../../src/limits.ts'
 import type { VelaLogger } from '../../src/logger.ts'
-import { createVela } from '../../src/vela.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
 import { createFauxModel, fauxText } from '../../src/testing/faux.ts'
+import { createVela } from '../../src/vela.ts'
 import {
   captureConsole,
   cleanupTestVelas,
@@ -81,7 +81,12 @@ test('pricing follows the provider, not a shared model id', async () => {
     providers: {
       ...providers,
       priced: {
-        models: [{ id: 'big', cost: { input: 2_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+        models: [
+          {
+            id: 'big',
+            cost: { input: 2_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
         createModel: () => priced,
       },
       // Same model id but no pricing: not in the built-in price table either, so it adds no cost
@@ -266,9 +271,7 @@ test('a model passed as an object is not saved with the session', async () => {
   try {
     const a = createTestVela({ cwd: dir.path, responses: [fauxText('x')] })
     await a.run('hi')
-    expect(await a.readData('sessions/default.jsonl')).not.toContain(
-      '"model"',
-    )
+    expect(await a.readData('sessions/default.jsonl')).not.toContain('"model"')
     await a.cleanup()
   } finally {
     dir.cleanup()

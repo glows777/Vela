@@ -1,5 +1,5 @@
-import { APICallError } from '@ai-sdk/provider'
 import { expect, test } from 'bun:test'
+import { APICallError } from '@ai-sdk/provider'
 import { calculateDelay, isRetryable, sleep } from '../../../src/agent/retry.ts'
 
 test('rate limits, overload, timeouts and 5xx are retryable; other 4xx are not', () => {

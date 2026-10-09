@@ -85,7 +85,7 @@ export class ToolHistoryStore {
 
   async load(): Promise<void> {
     if (this.loaded) return
-    if (await fileSize(this.path) !== undefined) {
+    if ((await fileSize(this.path)) !== undefined) {
       const consume = (line: string) => {
         this.byteLength += Buffer.byteLength(line) + 1
         if (!line.trim()) return
@@ -96,7 +96,9 @@ export class ToolHistoryStore {
           !Number.isSafeInteger(record.seq) ||
           record.seq <= this.sequence
         )
-          throw new Error('Tool history has a corrupt format or order; keeping the original file and stopping writes')
+          throw new Error(
+            'Tool history has a corrupt format or order; keeping the original file and stopping writes',
+          )
         this.remember(record)
         this.byteOffsets.set(record.seq, this.byteLength)
       }
@@ -112,7 +114,10 @@ export class ToolHistoryStore {
         }
       }
       pending += decoder.decode()
-      if (pending) throw new Error('Tool history ends with an incomplete line; keeping the original file and stopping writes')
+      if (pending)
+        throw new Error(
+          'Tool history ends with an incomplete line; keeping the original file and stopping writes',
+        )
     }
     this.loaded = true
   }
@@ -221,11 +226,14 @@ export class ToolHistoryStore {
       const sequence = through ?? this.sequence
       const path = this.snapshotPath(sequence)
       const end = sequence === 0 ? 0 : this.byteOffsets.get(sequence)
-      if (end === undefined) throw new Error('History snapshot boundary does not exist')
+      if (end === undefined)
+        throw new Error('History snapshot boundary does not exist')
       const existing = await fileSize(path)
       if (existing !== undefined) {
         if (existing !== end)
-          throw new Error('History snapshot is corrupt; the existing file was not overwritten')
+          throw new Error(
+            'History snapshot is corrupt; the existing file was not overwritten',
+          )
         return { path, sequence }
       }
       await mkdir(dirname(path), { recursive: true, mode: 0o700 })

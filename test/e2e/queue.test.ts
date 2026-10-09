@@ -111,7 +111,11 @@ test('one-at-a-time takes one queued steer per step; all takes them together', a
   })
 
   await t.run('Start')
-  expect(t.model.calls.map((c) => c.lastUserText)).toEqual(['Start', 'one', 'two'])
+  expect(t.model.calls.map((c) => c.lastUserText)).toEqual([
+    'Start',
+    'one',
+    'two',
+  ])
 
   t.session.steeringMode = 'all'
   await t.run('Again')
@@ -131,7 +135,10 @@ test('prompt() while running needs a streamingBehavior; with one it queues', asy
   expect(t.session.queue).toEqual({ steering: [], followUp: ['Interject'] })
 
   // Clear the queue before interrupting (as TUI / RPC do); abort waits until it really stops
-  expect(t.session.clearQueue()).toEqual({ steering: [], followUp: ['Interject'] })
+  expect(t.session.clearQueue()).toEqual({
+    steering: [],
+    followUp: ['Interject'],
+  })
   await t.session.abort()
   expect(t.session.isRunning).toBe(false)
   await expect(running).rejects.toThrow()
@@ -220,7 +227,12 @@ test('an extension command can abort the running task without waiting on itself'
 
 test('messages cannot be queued while a non-prompt task (compact) holds the session', async () => {
   const t = createTestVela({
-    responses: [fauxText('one'), fauxText('two'), fauxText('three'), fauxText('four')],
+    responses: [
+      fauxText('one'),
+      fauxText('two'),
+      fauxText('three'),
+      fauxText('four'),
+    ],
     generate: [fauxHang()],
     // Compaction may be interrupted before it sends the summary request
     allowPendingResponses: true,
@@ -229,7 +241,9 @@ test('messages cannot be queued while a non-prompt task (compact) holds the sess
   const compacting = t.session.compact()
   expect(t.session.isRunning).toBe(true)
 
-  await expect(t.session.steer('Cut in')).rejects.toThrow('A task is already running')
+  await expect(t.session.steer('Cut in')).rejects.toThrow(
+    'A task is already running',
+  )
   await t.session.abort()
   await expect(compacting).rejects.toThrow()
 })

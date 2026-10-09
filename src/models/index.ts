@@ -155,7 +155,10 @@ export function limitsForModel(
   let derived: Partial<VelaLimits> = {}
   if (window) {
     // Windows under 2 × 16384 (rare) reserve at most half, so the input cap never hits 0
-    const maxInputTokens = Math.max(window - RESERVE_TOKENS, Math.floor(window / 2))
+    const maxInputTokens = Math.max(
+      window - RESERVE_TOKENS,
+      Math.floor(window / 2),
+    )
     const summaryThreshold = Math.min(
       Math.floor(window * 0.75),
       maxInputTokens - Math.floor(window * 0.1),

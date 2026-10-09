@@ -115,7 +115,9 @@ export const agentLoop = async ({
           messages,
         ) > limits.maxInputTokens
       )
-        throw new Error('Request exceeds the safe input size; this turn was stopped.')
+        throw new Error(
+          'Request exceeds the safe input size; this turn was stopped.',
+        )
 
       let needToolCall = false
       let fullContent = ''

@@ -102,7 +102,13 @@ test('tools discovered with tool_search are only active in the session that sear
 
 test('active skills belong to the session', () => {
   const t = createTestVela({
-    skills: [{ name: 'review', description: 'Code review', body: 'Review against the checklist' }],
+    skills: [
+      {
+        name: 'review',
+        description: 'Code review',
+        body: 'Review against the checklist',
+      },
+    ],
   })
   t.session.activeSkills.add('review')
   expect(t.session.buildSystem()).toContain('✓ active')
@@ -159,7 +165,12 @@ test('tool calls from sessions running at the same time are recorded in their ow
     fauxToolCall('read_file', { path: `${req.lastUserText}.txt` })
   const t = createTestVela({
     files: { 'a.txt': big('AAA'), 'b.txt': big('BBB') },
-    responses: [readOwn, readOwn, fauxText('Done reading'), fauxText('Done reading')],
+    responses: [
+      readOwn,
+      readOwn,
+      fauxText('Done reading'),
+      fauxText('Done reading'),
+    ],
   })
   const a = t.vela.session('a')
   const b = t.vela.session('b')

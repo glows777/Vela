@@ -1,3 +1,4 @@
+import type { BinaryResolver } from './binaries.ts'
 import {
   createEditFileTool,
   createListDirectoryTool,
@@ -5,7 +6,6 @@ import {
   createWriteFileTool,
 } from './file.ts'
 import type { ToolDefinition } from './registry.ts'
-import type { BinaryResolver } from './binaries.ts'
 import { createFindTool, createGrepTool } from './search.ts'
 import { createBashTool } from './shell.ts'
 

@@ -1,20 +1,20 @@
 #!/usr/bin/env node
+import { join } from 'node:path'
 import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
   loadConfig,
   type VelaConfig,
 } from '../config/index.ts'
+import { ModelRegistry } from '../models/index.ts'
 import { memorySessionStorage } from '../session/storage.ts'
 import { createMockModel } from '../testing/demo-model.ts'
 import { loadFauxScenario } from '../testing/faux.ts'
 import { recordModel } from '../testing/record.ts'
-import { ModelRegistry } from '../models/index.ts'
 import { createVela } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
-import { join } from 'node:path'
 import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
 import { runPrintMode } from './print-mode.ts'
 import { runRpcMode } from './rpc-mode.ts'

@@ -3,22 +3,25 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import z from 'zod'
+import { agentLoop } from '../../../src/agent/index.ts'
+import { SessionStore } from '../../../src/session/index.ts'
+import { ToolHistoryStore } from '../../../src/session/tool-history.ts'
+import {
+  archiveToolResults,
+  getStoredResult,
+  ToolResultStore,
+} from '../../../src/session/tool-results.ts'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
 } from '../../../src/testing/faux.ts'
-import { agentLoop } from '../../../src/agent/index.ts'
-import { TokenTracker } from '../../../src/usage/tracker.ts'
-import { ToolRegistry, ToolExecutionResult } from '../../../src/tools/registry.ts'
 import {
-  ToolResultStore,
-  getStoredResult,
-  archiveToolResults,
-} from '../../../src/session/tool-results.ts'
-import { ToolHistoryStore } from '../../../src/session/tool-history.ts'
-import { SessionStore } from '../../../src/session/index.ts'
+  ToolExecutionResult,
+  ToolRegistry,
+} from '../../../src/tools/registry.ts'
 import { bashTool } from '../../../src/tools/shell.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-tool-history-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

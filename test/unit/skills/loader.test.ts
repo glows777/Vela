@@ -1,7 +1,7 @@
+import { afterAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, expect, test } from 'bun:test'
 import { SkillLoader } from '../../../src/skills/loader.ts'
 
 const tempDirs: string[] = []
@@ -70,11 +70,15 @@ test('buildPromptSection outputs only the index, never the body', () => {
   expect(inactive).not.toContain('✓ active')
 
   const active = loader.buildPromptSection(new Set(['demo']))
-  expect(active).toContain('/demo — Demo (when to use: Demo scenarios) ✓ active')
+  expect(active).toContain(
+    '/demo — Demo (when to use: Demo scenarios) ✓ active',
+  )
   expect(active).not.toContain('SECRET_SKILL_BODY')
 })
 
 test('buildPromptSection returns null when there are no skills', () => {
   const dir = makeTempDir()
-  expect(new SkillLoader([path.join(dir, '.skills')]).buildPromptSection(new Set())).toBeNull()
+  expect(
+    new SkillLoader([path.join(dir, '.skills')]).buildPromptSection(new Set()),
+  ).toBeNull()
 })

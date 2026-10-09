@@ -66,7 +66,9 @@ export class HookPipeline {
           modified = true
         }
       } catch (error) {
-        this.logger.error(`[hook:${hook.name}] pre failed: ${errorMessage(error)}`)
+        this.logger.error(
+          `[hook:${hook.name}] pre failed: ${errorMessage(error)}`,
+        )
       }
     }
     return modified

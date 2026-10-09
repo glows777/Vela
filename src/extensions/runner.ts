@@ -1,8 +1,8 @@
 import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
-import type { HookPipeline } from '../security/hooks.ts'
 import type { ModelRegistry } from '../models/index.ts'
+import type { HookPipeline } from '../security/hooks.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type {
@@ -76,7 +76,10 @@ export class ExtensionRunner {
         input,
       )
       if (result.block)
-        return { action: 'block', reason: result.reason ?? 'Blocked by an extension' }
+        return {
+          action: 'block',
+          reason: result.reason ?? 'Blocked by an extension',
+        }
       return result.input === input
         ? { action: 'allow' }
         : { action: 'modify', modifiedInput: result.input }
@@ -108,7 +111,9 @@ export class ExtensionRunner {
       if (result instanceof Promise)
         pending.push(
           result.catch((error) => {
-            throw new Error(`Extension ${name} failed to load: ${errorMessage(error)}`)
+            throw new Error(
+              `Extension ${name} failed to load: ${errorMessage(error)}`,
+            )
           }),
         )
     })

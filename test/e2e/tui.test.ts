@@ -110,7 +110,9 @@ test('an extension confirm opens a dialog in place of the editor', async () => {
   tui.terminal.press(KEYS.down)
   tui.terminal.press(KEYS.enter)
   await tui.until('Okay, skipped')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('User did not allow the deletion')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+    'User did not allow the deletion',
+  )
 })
 
 test('slash commands: CLI command output, extension commands and /hotkeys go to the chat', async () => {
@@ -215,7 +217,9 @@ test('model and thinking selectors; Shift+Tab cycles thinking', async () => {
 })
 
 test('/name, /new and /resume switch between saved sessions', async () => {
-  const t = createTestVela({ responses: [fauxText('answer in the first session')] })
+  const t = createTestVela({
+    responses: [fauxText('answer in the first session')],
+  })
   const tui = await startTui(t.vela, { sessionId: 'first' })
   await tui.started
   tui.submit('Hi there')

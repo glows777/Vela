@@ -75,7 +75,12 @@ export type VelaEvent =
   /** Audit record before a file-writing tool call (emitted by a pre hook) */
   | { type: 'audit'; toolName: string; path: string }
   /** A bash command was rated medium risk; it still runs, with a warning */
-  | { type: 'security_warning'; toolName: string; reason: string; command: string }
+  | {
+      type: 'security_warning'
+      toolName: string
+      reason: string
+      command: string
+    }
   /** An extension called ui.notify() in a session without a UI */
   | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
   /** A channel received a message (channel session) */
@@ -87,7 +92,12 @@ export type VelaEvent =
       text: string
     }
   /** A channel sent a reply */
-  | { type: 'channel_reply'; channel: string; recipientId: string; text: string }
+  | {
+      type: 'channel_reply'
+      channel: string
+      recipientId: string
+      text: string
+    }
   /** A channel turn failed (including aborts) */
   | {
       type: 'channel_error'

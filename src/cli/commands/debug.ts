@@ -8,7 +8,9 @@ export const debugCommands: CommandHandler[] = [
     if (!on && !off) return false
     const model = vela.model as Partial<DemoModel>
     if (typeof model.setCacheEnabled !== 'function') {
-      print('\n  Cache simulation only works with the demo model (VELA_MODEL=mock)\n')
+      print(
+        '\n  Cache simulation only works with the demo model (VELA_MODEL=mock)\n',
+      )
       return true
     }
     model.setCacheEnabled(on)

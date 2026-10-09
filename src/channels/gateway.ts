@@ -71,7 +71,9 @@ export class ChannelGateway {
         await ch.start()
         this.logger.info(`[gateway] ✓ ${name} started`)
       } catch (err) {
-        this.logger.error(`[gateway] ✗ ${name} failed to start: ${errorMessage(err)}`)
+        this.logger.error(
+          `[gateway] ✗ ${name} failed to start: ${errorMessage(err)}`,
+        )
       }
     }
   }

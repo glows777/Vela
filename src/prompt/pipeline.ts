@@ -1,49 +1,49 @@
-import type { Role } from "../security/roles.ts";
-import type { ToolResultStore } from "../session/tool-results.ts";
+import type { Role } from '../security/roles.ts'
+import type { ToolResultStore } from '../session/tool-results.ts'
 
 export interface PromptContext {
-  toolCount: number;
-  deferredToolSummary: string;
-  sessionMessageCount: number;
-  sessionId: string;
+  toolCount: number
+  deferredToolSummary: string
+  sessionMessageCount: number
+  sessionId: string
   /** Current session's tool result store (used by toolHistoryGuide) */
-  toolResults?: ToolResultStore;
+  toolResults?: ToolResultStore
   /** Skills activated in the current session */
-  activeSkills?: ReadonlySet<string>;
+  activeSkills?: ReadonlySet<string>
   /** Current session's role; defaults to owner */
-  role?: Role;
+  role?: Role
   /** Sections written by extensions in before_agent_start (name → content); fixed within a turn */
-  extensionSections?: Readonly<Record<string, string>>;
+  extensionSections?: Readonly<Record<string, string>>
 }
 
-export type PipeFn = (ctx: PromptContext) => string | null;
+export type PipeFn = (ctx: PromptContext) => string | null
 
 export class PromptPipeline {
-  private pipeLines: Array<{ name: string; fn: PipeFn }> = [];
+  private pipeLines: Array<{ name: string; fn: PipeFn }> = []
 
   pipe(name: string, fn: PipeFn) {
-    this.pipeLines.push({ name, fn });
-    return this;
+    this.pipeLines.push({ name, fn })
+    return this
   }
 
   build(ctx: PromptContext) {
-    const prompts: string[] = [];
+    const prompts: string[] = []
 
     for (const { fn } of this.pipeLines) {
-      const prompt = fn(ctx);
+      const prompt = fn(ctx)
       if (prompt !== null) {
-        prompts.push(prompt);
+        prompts.push(prompt)
       }
     }
 
-    return prompts.join("\n\n");
+    return prompts.join('\n\n')
   }
 
   /** Whether each section is enabled and its length in chars (null means the section is off). */
   status(ctx: PromptContext): Array<{ name: string; chars: number | null }> {
     return this.pipeLines.map(({ name, fn }) => {
-      const result = fn(ctx);
-      return { name, chars: result === null ? null : result.length };
-    });
+      const result = fn(ctx)
+      return { name, chars: result === null ? null : result.length }
+    })
   }
 }

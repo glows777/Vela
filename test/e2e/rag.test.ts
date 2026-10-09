@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import type { EmbeddingFn } from '../../src/index.ts'
+import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { createFauxEmbedder } from '../../src/testing/faux-embedder.ts'
 import {
   cleanupTestVelas,
@@ -46,7 +46,10 @@ test('ingest a document relative to cwd, then search it, offline with the faux e
         expect(req.toolResults[0]!.output).toContain('Ingested')
         // The knowledge base overview is written into the system prompt at the start of each prompt and stays fixed for the round (keeps the prompt cache)
         expect(req.system).not.toContain('[knowledge base]')
-        return fauxToolCall('rag_search', { query: 'how to roll back a deployment', top_k: 1 })
+        return fauxToolCall('rag_search', {
+          query: 'how to roll back a deployment',
+          top_k: 1,
+        })
       },
       (req) => {
         expect(req.toolResults[0]!.output).toContain('deploy rollback')
@@ -74,7 +77,9 @@ test('searching an empty knowledge base tells the model to ingest first', async 
     ],
   })
   await t.run('Search for it')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('The knowledge base is empty')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+    'The knowledge base is empty',
+  )
 })
 
 test('the knowledge base persists in the data dir across restarts', async () => {
@@ -122,7 +127,11 @@ test('re-ingesting a changed document replaces its old chunks', async () => {
   const t = createTestVela({
     embedder: true,
     // Three paragraphs of ~900 characters: one chunk each
-    files: { 'docs/guide.md': ['a', 'b', 'c'].map((p) => `${p} `.repeat(450)).join('\n\n') },
+    files: {
+      'docs/guide.md': ['a', 'b', 'c']
+        .map((p) => `${p} `.repeat(450))
+        .join('\n\n'),
+    },
   })
   await t.run('/rag ingest docs/guide.md')
   expect(notes(t)).toContain('The knowledge base has 3 chunks')

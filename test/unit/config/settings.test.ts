@@ -102,7 +102,9 @@ test('extension directories: files, folders with index.ts, and a folder that is 
 
 test('built-in extensions load by default; -builtin: turns one off and a project +builtin: turns it back on', () => {
   const { agentDir, cwd } = setup({
-    'home/settings.json': json({ extensions: ['-builtin:web', '-builtin:rag'] }),
+    'home/settings.json': json({
+      extensions: ['-builtin:web', '-builtin:rag'],
+    }),
     'project/.vela/settings.json': json({ extensions: ['+builtin:web'] }),
   })
   const builtins = ['memory', 'rag', 'web']
@@ -122,8 +124,12 @@ test('mistakes in settings are reported with the file name', () => {
     `${join(broken.agentDir, 'settings.json')} is not valid JSON`,
   )
   const badList = setup({ 'home/settings.json': json({ extensions: 'a.ts' }) })
-  expect(() => loadConfig(badList)).toThrow('extensions must be an array of strings')
-  const missing = setup({ 'home/settings.json': json({ extensions: ['nope.ts'] }) })
+  expect(() => loadConfig(badList)).toThrow(
+    'extensions must be an array of strings',
+  )
+  const missing = setup({
+    'home/settings.json': json({ extensions: ['nope.ts'] }),
+  })
   expect(() => loadConfig(missing)).toThrow('Extension path does not exist')
   const unknown = setup({
     'home/settings.json': json({ extensions: ['-builtin:nope'] }),
@@ -131,12 +137,18 @@ test('mistakes in settings are reported with the file name', () => {
   expect(() => loadConfig({ ...unknown, builtins: ['memory'] })).toThrow(
     'Unknown built-in extension builtin:nope',
   )
-  const badModel = setup({ 'home/settings.json': json({ defaultModel: 'gpt' }) })
-  expect(() => loadConfig(badModel)).toThrow('defaultModel must be "provider/id"')
+  const badModel = setup({
+    'home/settings.json': json({ defaultModel: 'gpt' }),
+  })
+  expect(() => loadConfig(badModel)).toThrow(
+    'defaultModel must be "provider/id"',
+  )
   const badThinking = setup({
     'home/settings.json': json({ defaultThinkingLevel: 'huge' }),
   })
-  expect(() => loadConfig(badThinking)).toThrow('defaultThinkingLevel must be one of')
+  expect(() => loadConfig(badThinking)).toThrow(
+    'defaultThinkingLevel must be one of',
+  )
   const badModels = setup({
     'home/models.json': json({ providers: { x: { api: 'grpc' } } }),
   })
@@ -196,7 +208,10 @@ test('skill directories: legacy .skills, user, settings, then project', () => {
 })
 
 test('project skills (.skills, .vela/skills) need trust, like project settings and extensions', () => {
-  for (const dir of ['project/.skills/deploy/SKILL.md', 'project/.vela/skills/deploy/SKILL.md']) {
+  for (const dir of [
+    'project/.skills/deploy/SKILL.md',
+    'project/.vela/skills/deploy/SKILL.md',
+  ]) {
     const { agentDir, cwd } = setup({
       'home/settings.json': json({ skills: ['shared'] }),
       [dir]: 'Run the deploy',
@@ -227,7 +242,9 @@ test('a broken trust.json fails loudly instead of being overwritten', () => {
   const file = join(agentDir, 'trust.json')
   writeFileSync(file, '{ "/a": true,')
   expect(() => savedTrust(agentDir, root)).toThrow(`${file} is not valid JSON`)
-  expect(() => saveTrust(agentDir, root, true)).toThrow(`${file} is not valid JSON`)
+  expect(() => saveTrust(agentDir, root, true)).toThrow(
+    `${file} is not valid JSON`,
+  )
   writeFileSync(file, '[]')
   expect(() => savedTrust(agentDir, root)).toThrow('must be an object')
 })
@@ -244,5 +261,8 @@ test('running in the home directory reads ~/.vela once, as user settings, withou
   const config = loadConfig({ cwd: home, agentDir, trusted: true })
   expect(config.files).toEqual([join(agentDir, 'settings.json')])
   expect(config.extensions.map((e) => e.name)).toEqual(['y', 'x'])
-  expect(config.skillDirs).toEqual([join(home, '.skills'), join(agentDir, 'skills')])
+  expect(config.skillDirs).toEqual([
+    join(home, '.skills'),
+    join(agentDir, 'skills'),
+  ])
 })

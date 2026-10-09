@@ -2,6 +2,12 @@
 
 All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a release that breaks the public API bumps the minor version and lists the break under **Breaking Changes** with how to migrate; patch releases don't break anything. See [API stability](docs/sdk.md#api-stability) for what counts as public.
 
+## [Unreleased]
+
+### Added
+
+- Releases are automated: `bun run release <patch|minor|x.y.z>` tags a release, and CI publishes it to npm with provenance and creates the GitHub release from this changelog.
+
 ## [0.1.0] - 2026-10-09
 
 First public release.

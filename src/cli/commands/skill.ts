@@ -61,14 +61,18 @@ export function createSkillCommands(
       }
       // A message appended mid-run would land before this turn's answer and break history order
       if (session.busy.locked) {
-        print(`\n[skills] A task is running; try /skill load ${name} again when it finishes\n`)
+        print(
+          `\n[skills] A task is running; try /skill load ${name} again when it finishes\n`,
+        )
         return true
       }
       session.activeSkills.add(name)
       // Codex style: activating injects the body once (the system prompt keeps only the index);
       // loading again does not re-inject, so history doesn't grow linearly
       if (contentAlreadyInjected(session.messages, skill.content)) {
-        print(`\n[skills] ${name} is already in the session; not injecting again\n`)
+        print(
+          `\n[skills] ${name} is already in the session; not injecting again\n`,
+        )
         return true
       }
       session.append({
@@ -116,7 +120,9 @@ export function createSkillCommands(
       if (!skill) return false
 
       if (session.busy.locked) {
-        print(`\n[skills] A task is running; try /${name} again when it finishes\n`)
+        print(
+          `\n[skills] A task is running; try /${name} again when it finishes\n`,
+        )
         return true
       }
 

@@ -1,5 +1,5 @@
-import type { PipeFn, PromptContext } from './pipeline.ts'
 import type { ToolResultStore } from '../session/tool-results.ts'
+import type { PipeFn, PromptContext } from './pipeline.ts'
 
 export * from './pipeline.ts'
 
@@ -33,7 +33,8 @@ export function coreRules(cwd?: string): PipeFn {
         : 'You are Vela, an AI agent that helps users by calling the tools this session provides: reading, searching and editing files, running commands, and any extra tools from extensions.',
       `<rules>\n${rules.map((rule) => `- ${rule}`).join('\n')}\n</rules>`,
     ]
-    if (cwd && !guest) sections.push(`<cwd>\n${cwd.replace(/\\/g, '/')}\n</cwd>`)
+    if (cwd && !guest)
+      sections.push(`<cwd>\n${cwd.replace(/\\/g, '/')}\n</cwd>`)
     return sections.join('\n\n')
   }
 }

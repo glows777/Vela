@@ -11,8 +11,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { $ } from 'bun'
-import { createBinaryResolver } from '../../../src/tools/binaries.ts'
 import type { VelaLogger } from '../../../src/logger.ts'
+import { createBinaryResolver } from '../../../src/tools/binaries.ts'
 
 // A local stand-in for github.com: /releases/latest redirects to the tag, the asset is a tar.gz
 // with the binary nested in a versioned directory, like the real ripgrep / fd releases.

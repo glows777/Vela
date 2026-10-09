@@ -282,7 +282,8 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
             return
           }
           if (i < parts.length) {
-            if (chunkDelayMs > 0 && i > 0) await new Promise((r) => setTimeout(r, chunkDelayMs))
+            if (chunkDelayMs > 0 && i > 0)
+              await new Promise((r) => setTimeout(r, chunkDelayMs))
             controller.enqueue(parts[i++]!)
             return
           }

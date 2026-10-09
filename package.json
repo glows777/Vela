@@ -36,10 +36,11 @@
     "test:e2e": "bun test test/e2e",
     "test:live": "VELA_LIVE=1 bun test test/live",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint",
-    "lint:fix": "biome lint --write",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
     "api:update": "bun scripts/api-report.ts",
     "smoke:consumer": "bun scripts/consumer-smoke.ts",
+    "release": "bun scripts/release.ts",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {

@@ -24,18 +24,19 @@ export function createConsoleLogger(
  * Interactive-mode logger: prints to the terminal until the TUI starts; after `attach()`, info / warn / error
  * show in the chat log. debug (VELA_DEBUG=1) goes to the `debugLog` file so it doesn't garble the screen.
  */
-export function createInteractiveLogger(options: {
-  debugLog?: string
-}): {
+export function createInteractiveLogger(options: { debugLog?: string }): {
   logger: VelaLogger
-  attach: (sink: (level: 'info' | 'warning' | 'error', message: string) => void) => void
+  attach: (
+    sink: (level: 'info' | 'warning' | 'error', message: string) => void,
+  ) => void
 } {
-  let sink: ((level: 'info' | 'warning' | 'error', message: string) => void) | undefined
-  const write =
-    (level: 'info' | 'warning' | 'error') => (message: string) => {
-      if (sink) sink(level, message)
-      else (level === 'info' ? console.log : console.error)(`  ${message}`)
-    }
+  let sink:
+    | ((level: 'info' | 'warning' | 'error', message: string) => void)
+    | undefined
+  const write = (level: 'info' | 'warning' | 'error') => (message: string) => {
+    if (sink) sink(level, message)
+    else (level === 'info' ? console.log : console.error)(`  ${message}`)
+  }
   const { debugLog } = options
   if (debugLog) mkdirSync(dirname(debugLog), { recursive: true })
   return {

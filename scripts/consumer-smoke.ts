@@ -153,7 +153,10 @@ async function project(
       private: true,
       type: 'module',
       dependencies: { [pkg.name]: tarball, zod: pkg.dependencies.zod },
-      devDependencies: { typescript: pkg.devDependencies.typescript, ...devDependencies },
+      devDependencies: {
+        typescript: pkg.devDependencies.typescript,
+        ...devDependencies,
+      },
     }),
   )
   await writeFile(join(app, 'tsconfig.json'), JSON.stringify(tsconfig))
@@ -175,9 +178,13 @@ async function cli(app: string, runtime: string): Promise<void> {
   if (!out.trim()) throw new Error(`vela -p (${runtime}) printed nothing`)
   console.log(out.trim())
   // --version reads package.json relative to dist/cli/: check that path holds in the installed package
-  const version = (await $`${runtime} ./node_modules/.bin/vela --version`.cwd(app).text()).trim()
+  const version = (
+    await $`${runtime} ./node_modules/.bin/vela --version`.cwd(app).text()
+  ).trim()
   if (version !== pkg.version)
-    throw new Error(`vela --version (${runtime}) printed ${JSON.stringify(version)}, expected ${pkg.version}`)
+    throw new Error(
+      `vela --version (${runtime}) printed ${JSON.stringify(version)}, expected ${pkg.version}`,
+    )
 }
 
 try {

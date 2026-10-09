@@ -123,7 +123,10 @@ export class ToolBlock implements Component {
         lines.push(theme.fg(this.status === 'error' ? 'red' : 'muted', line))
       if (all.length > limit)
         lines.push(
-          theme.fg('dim', `… ${all.length - limit} more lines (Ctrl+O to expand)`),
+          theme.fg(
+            'dim',
+            `… ${all.length - limit} more lines (Ctrl+O to expand)`,
+          ),
         )
     }
     const pad = (line: string) => {
@@ -156,7 +159,9 @@ export function notice(
           : 'muted'
   const container = new Container()
   container.addChild(new Spacer(1))
-  container.addChild(new Text(theme.fg(color, raw ? text : sanitize(text)), 1, 0))
+  container.addChild(
+    new Text(theme.fg(color, raw ? text : sanitize(text)), 1, 0),
+  )
   return container
 }
 
@@ -199,8 +204,10 @@ function rawOutput(output: unknown): string {
  * screen. Newlines and tabs are kept.
  */
 export function sanitize(text: string): string {
-  return stripTerminalSequences(text)
-    .replace(/\r\n?/g, '\n')
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
-    .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\uFFF9-\uFFFB]/g, '')
+  return (
+    stripTerminalSequences(text)
+      .replace(/\r\n?/g, '\n')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+      .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\uFFF9-\uFFFB]/g, '')
+  )
 }

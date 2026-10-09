@@ -1,11 +1,11 @@
 import { spyOn } from 'bun:test'
 import type { CommandContext } from '../../src/cli/commands/index.ts'
 import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
-import { velaInternals } from '../../src/vela.ts'
 import {
-  createTestVela as createCoreTestVela,
   type TestVelaOptions as CoreTestVelaOptions,
+  createTestVela as createCoreTestVela,
 } from '../../src/testing/test-vela.ts'
+import { velaInternals } from '../../src/vela.ts'
 
 export {
   cleanupTestVelas,

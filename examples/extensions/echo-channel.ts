@@ -6,7 +6,11 @@
  * This example sends and receives in memory instead of over a real IM connection;
  * `receive()` simulates an incoming message.
  */
-import type { IncomingMessage, OutgoingMessage, VelaExtension } from '@glows777/vela'
+import type {
+  IncomingMessage,
+  OutgoingMessage,
+  VelaExtension,
+} from '@glows777/vela'
 
 export function echoChannel(options: { owners?: string[] } = {}) {
   let handler: ((msg: IncomingMessage) => void) | undefined

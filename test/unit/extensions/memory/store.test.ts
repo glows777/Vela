@@ -1,7 +1,7 @@
+import { afterAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, expect, test } from 'bun:test'
 import { MemoryStore } from '../../../../src/extensions/memory/store.ts'
 
 const tempDirs: string[] = []
@@ -102,7 +102,10 @@ test('buildPromptSection outputs the memory index and usage guidance', () => {
 })
 
 test('memory files and the index are private (0600), the directory 0700', () => {
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vela-memory-')), 'memory')
+  const dir = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'vela-memory-')),
+    'memory',
+  )
   tempDirs.push(path.dirname(dir))
   const store = new MemoryStore(dir)
   const filename = store.save({
@@ -121,11 +124,16 @@ test('memory files and the index are private (0600), the directory 0700', () => 
 })
 
 test('an existing store with default permissions is tightened when it opens', () => {
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vela-memory-')), 'memory')
+  const dir = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'vela-memory-')),
+    'memory',
+  )
   tempDirs.push(path.dirname(dir))
   fs.mkdirSync(dir, { mode: 0o755 })
   fs.chmodSync(dir, 0o755)
-  fs.writeFileSync(path.join(dir, 'MEMORY.md'), '# Memory Index\n', { mode: 0o644 })
+  fs.writeFileSync(path.join(dir, 'MEMORY.md'), '# Memory Index\n', {
+    mode: 0o644,
+  })
   fs.writeFileSync(path.join(dir, 'old.md'), 'old memory', { mode: 0o644 })
   new MemoryStore(dir).init()
   const mode = (file: string) => fs.statSync(path.join(dir, file)).mode & 0o777

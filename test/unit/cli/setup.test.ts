@@ -1,19 +1,19 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadConfig } from '../../../src/config/index.ts'
-import { createVela } from '../../../src/vela.ts'
-import { createFauxModel, fauxText } from '../../../src/testing/faux.ts'
 import {
   BUILTIN_EXTENSIONS,
   extensionConfigFromEnv,
-  loadCliExtensions,
   HELP,
   legacyDataHint,
+  loadCliExtensions,
   packageVersion,
   parseArgs,
   resolveTrust,
 } from '../../../src/cli/setup.ts'
+import { loadConfig } from '../../../src/config/index.ts'
+import { createFauxModel, fauxText } from '../../../src/testing/faux.ts'
+import { createVela } from '../../../src/vela.ts'
 import { tempDir } from '../../support/vela.ts'
 
 const dirs: { cleanup(): void }[] = []
@@ -23,7 +23,18 @@ afterEach(() => {
 
 test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   expect(
-    parseArgs(['-p', 'hi', '-e', 'a.ts', '--extension', 'builtin:web', '--no-extensions', '--no-session', '--approve', '--continue']),
+    parseArgs([
+      '-p',
+      'hi',
+      '-e',
+      'a.ts',
+      '--extension',
+      'builtin:web',
+      '--no-extensions',
+      '--no-session',
+      '--approve',
+      '--continue',
+    ]),
   ).toEqual({
     print: true,
     messages: ['hi'],
@@ -41,12 +52,18 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   })
   expect(parseArgs(['-r']).resume).toBe(true)
   expect(parseArgs(['--session', 'abc']).session).toBe('abc')
-  expect(() => parseArgs(['--mode', 'xml'])).toThrow('--mode must be text, json or rpc')
-  expect(() => parseArgs(['-c', '--session', 'x'])).toThrow('Use only one of -c, -r and --session')
+  expect(() => parseArgs(['--mode', 'xml'])).toThrow(
+    '--mode must be text, json or rpc',
+  )
+  expect(() => parseArgs(['-c', '--session', 'x'])).toThrow(
+    'Use only one of -c, -r and --session',
+  )
   expect(() => parseArgs(['--model'])).toThrow('--model requires a value')
   expect(() => parseArgs(['--wat'])).toThrow('Unknown option --wat')
   // A bad session id is a usage error at parse time, not a stack trace from deep inside session startup
-  expect(() => parseArgs(['--session', '.bad'])).toThrow('Invalid session id ".bad"')
+  expect(() => parseArgs(['--session', '.bad'])).toThrow(
+    'Invalid session id ".bad"',
+  )
 })
 
 test('the untrusted-project notice names the real trust.json under VELA_DIR', async () => {
@@ -55,9 +72,15 @@ test('the untrusted-project notice names the real trust.json under VELA_DIR', as
   dirs.push(home, project)
   mkdirSync(join(project.path, '.vela'), { recursive: true })
   writeFileSync(join(project.path, '.vela', 'settings.json'), '{}')
-  const result = await resolveTrust({ cwd: project.path, agentDir: home.path, interactive: false })
+  const result = await resolveTrust({
+    cwd: project.path,
+    agentDir: home.path,
+    interactive: false,
+  })
   expect(result.trusted).toBe(false)
-  expect(result.warning).toContain(`edit ${join(home.path, 'trust.json')} to change this`)
+  expect(result.warning).toContain(
+    `edit ${join(home.path, 'trust.json')} to change this`,
+  )
   expect(result.warning).not.toContain('~/.vela')
 })
 
@@ -67,7 +90,11 @@ test('project skills alone make the project ask for trust; untrusted, the notice
   dirs.push(home, project)
   mkdirSync(join(project.path, '.skills', 'deploy'), { recursive: true })
   writeFileSync(join(project.path, '.skills', 'deploy', 'SKILL.md'), 'Deploy')
-  const result = await resolveTrust({ cwd: project.path, agentDir: home.path, interactive: false })
+  const result = await resolveTrust({
+    cwd: project.path,
+    agentDir: home.path,
+    interactive: false,
+  })
   expect(result.trusted).toBe(false)
   expect(result.warning).toContain('Did not load config, extensions and skills')
 })
@@ -83,9 +110,26 @@ test('--help / -h and --version / -v are parsed', () => {
 
 test('USAGE lists every flag, the modes and examples', () => {
   for (const flag of [
-    '--print', '-p', '--mode', '--continue', '-c', '--resume', '-r', '--session', '--extension', '-e',
-    '--no-extensions', '--no-session', '--approve', '--no-approve', '--model', '--thinking',
-    '--help', '-h', '--version', '-v',
+    '--print',
+    '-p',
+    '--mode',
+    '--continue',
+    '-c',
+    '--resume',
+    '-r',
+    '--session',
+    '--extension',
+    '-e',
+    '--no-extensions',
+    '--no-session',
+    '--approve',
+    '--no-approve',
+    '--model',
+    '--thinking',
+    '--help',
+    '-h',
+    '--version',
+    '-v',
   ])
     expect(HELP).toContain(flag)
   expect(HELP).toContain('Examples:')
@@ -93,14 +137,24 @@ test('USAGE lists every flag, the modes and examples', () => {
 })
 
 test('packageVersion() is the package.json version', () => {
-  const pkg = JSON.parse(readFileSync(join(import.meta.dir, '../../../package.json'), 'utf8'))
+  const pkg = JSON.parse(
+    readFileSync(join(import.meta.dir, '../../../package.json'), 'utf8'),
+  )
   expect(packageVersion()).toBe(pkg.version)
 })
 
 test('settings.json extension config overrides the environment defaults key by key', () => {
   const config = extensionConfigFromEnv(
-    { TAVILY_API_KEY: 'env-tavily', SERPER_API_KEY: 'env-serper', EMBEDDING_MODEL: 'm' },
-    { web: { tavilyKey: 'file' }, rag: { embedding: { apiKey: 'k' } }, mine: { a: 1 } },
+    {
+      TAVILY_API_KEY: 'env-tavily',
+      SERPER_API_KEY: 'env-serper',
+      EMBEDDING_MODEL: 'm',
+    },
+    {
+      web: { tavilyKey: 'file' },
+      rag: { embedding: { apiKey: 'k' } },
+      mine: { a: 1 },
+    },
   )
   expect(config.web).toEqual({ tavilyKey: 'file', serperKey: 'env-serper' })
   expect(config.rag).toEqual({
@@ -154,7 +208,8 @@ test('the migration commands keep old data, win over startup files and can run t
   expect(commands).toHaveLength(3)
   const run = () =>
     commands.map(
-      (command) => Bun.spawnSync(['sh', '-c', command], { cwd: dir.path }).exitCode,
+      (command) =>
+        Bun.spawnSync(['sh', '-c', command], { cwd: dir.path }).exitCode,
     )
   expect(run()).toEqual([0, 0, 0])
   const read = (path: string) => readFileSync(join(dataDir, path), 'utf-8')
@@ -178,8 +233,14 @@ test('an extension that throws or rejects while loading is reported and skipped,
     writeFileSync(path, body)
     return path
   }
-  const sync = file('boom.ts', "export default () => { throw new Error('sync boom') }")
-  const async = file('later.ts', "export default async () => { throw new Error('async boom') }")
+  const sync = file(
+    'boom.ts',
+    "export default () => { throw new Error('sync boom') }",
+  )
+  const async = file(
+    'later.ts',
+    "export default async () => { throw new Error('async boom') }",
+  )
   const good = file(
     'good.ts',
     "export default (vela) => { vela.registerCommand('hi', { description: 'hi', handler: async () => {} }) }",
@@ -191,7 +252,11 @@ test('an extension that throws or rejects while loading is reported and skipped,
     parseArgs(['-e', sync, '-e', async, '-e', good]),
     (message) => errors.push(message),
   )
-  expect(extensions.map((extension) => extension.name)).toEqual(['boom', 'later', 'good'])
+  expect(extensions.map((extension) => extension.name)).toEqual([
+    'boom',
+    'later',
+    'good',
+  ])
   const vela = createVela({
     model: createFauxModel({ responses: [fauxText('ok')] }),
     extensions,
@@ -209,13 +274,27 @@ test('an extension that throws or rejects while loading is reported and skipped,
 })
 
 test('the removed supabase built-in is unknown, so an old -builtin:supabase fails loudly', () => {
-  expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual(['memory', 'rag', 'web', 'feishu'])
-  expect(extensionConfigFromEnv({ SUPABASE_URL: 'u' }, {})).not.toHaveProperty('supabase')
+  expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual([
+    'memory',
+    'rag',
+    'web',
+    'feishu',
+  ])
+  expect(extensionConfigFromEnv({ SUPABASE_URL: 'u' }, {})).not.toHaveProperty(
+    'supabase',
+  )
   const dir = tempDir()
   dirs.push(dir)
   mkdirSync(join(dir.path, 'home'), { recursive: true })
-  writeFileSync(join(dir.path, 'home/settings.json'), JSON.stringify({ extensions: ['-builtin:supabase'] }))
+  writeFileSync(
+    join(dir.path, 'home/settings.json'),
+    JSON.stringify({ extensions: ['-builtin:supabase'] }),
+  )
   expect(() =>
-    loadConfig({ cwd: dir.path, agentDir: join(dir.path, 'home'), builtins: Object.keys(BUILTIN_EXTENSIONS) }),
+    loadConfig({
+      cwd: dir.path,
+      agentDir: join(dir.path, 'home'),
+      builtins: Object.keys(BUILTIN_EXTENSIONS),
+    }),
   ).toThrow('Unknown built-in extension builtin:supabase')
 })

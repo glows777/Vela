@@ -1,16 +1,17 @@
 import { afterAll, expect, test } from 'bun:test'
-import { createOpenAI } from '@ai-sdk/openai'
-import { generateText, type ModelMessage } from 'ai'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createOpenAI } from '@ai-sdk/openai'
+import { generateText, type ModelMessage } from 'ai'
 import z from 'zod'
-import { ToolRegistry } from '../../../src/tools/registry.ts'
-import { SessionStore } from '../../../src/session/index.ts'
-import { TokenTracker } from '../../../src/usage/tracker.ts'
-import { coreRules, PromptPipeline } from '../../../src/prompt/index.ts'
-import { createRequestSnapshot } from '../../../src/context/request.ts'
 import { summarize } from '../../../src/context/compressor.ts'
+import { createRequestSnapshot } from '../../../src/context/request.ts'
+import { coreRules, PromptPipeline } from '../../../src/prompt/index.ts'
+import { SessionStore } from '../../../src/session/index.ts'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
+import { TokenTracker } from '../../../src/usage/tracker.ts'
+
 const dir = mkdtempSync(join(tmpdir(), 'vela-prefix-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -84,8 +85,7 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
       exposure: 'deferred',
     },
   )
-  const builder = new PromptPipeline()
-    .pipe('core', coreRules('/work'))
+  const builder = new PromptPipeline().pipe('core', coreRules('/work'))
   const system = (n: number) =>
     builder.build({
       toolCount: 1,

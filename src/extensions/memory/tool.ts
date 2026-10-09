@@ -88,8 +88,12 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
             : `File not found: ${args.filename}`
         case 'lint': {
           const reports = memoryStore.lint()
-          if (reports.length === 0) return 'Memory store is healthy; no issues found.'
-          const lines = [`Memory lint report (${reports.length} with issues):`, '']
+          if (reports.length === 0)
+            return 'Memory store is healthy; no issues found.'
+          const lines = [
+            `Memory lint report (${reports.length} with issues):`,
+            '',
+          ]
           for (const r of reports) {
             const fname = r.entry.filePath.split('/').pop()
             const preview = r.entry.content.slice(0, 100).replace(/\n/g, ' ')

@@ -15,7 +15,11 @@ export function jsonEvent(event: VelaEvent, sessionId: string): string {
 }
 
 /** Error codes meaning the reader of stdout went away (e.g. `vela --mode json … | head -3`). */
-const CLOSED_PIPE_CODES = new Set(['EPIPE', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'])
+const CLOSED_PIPE_CODES = new Set([
+  'EPIPE',
+  'ERR_STREAM_DESTROYED',
+  'ERR_STREAM_WRITE_AFTER_END',
+])
 let guarded = false
 
 /**

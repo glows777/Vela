@@ -8,8 +8,13 @@ import {
   type TestVelaOptions,
 } from '../../../support/vela.ts'
 
-const BODY = '## Review checklist\n- Run the diff\n- Confirm there are no regressions'
-const SKILL = { name: 'code-review', description: 'Review code changes', body: BODY }
+const BODY =
+  '## Review checklist\n- Run the diff\n- Confirm there are no regressions'
+const SKILL = {
+  name: 'code-review',
+  description: 'Review code changes',
+  body: BODY,
+}
 
 afterEach(cleanupTestVelas)
 
@@ -64,7 +69,9 @@ test('/<skill> trigger: activeSkills updates, the body is injected once as a mes
   const { result } = await captureConsole(() => t.command('/code-review extra'))
   expect(result).toBe(true)
   expect(t.session.activeSkills.has('code-review')).toBe(true)
-  expect(String(t.messages[0]!.content)).toBe(`${BODY}\n\nUser instruction: extra`)
+  expect(String(t.messages[0]!.content)).toBe(
+    `${BODY}\n\nUser instruction: extra`,
+  )
 
   const system = t.session.buildSystem()
   expect(system).not.toContain(BODY)
@@ -72,7 +79,9 @@ test('/<skill> trigger: activeSkills updates, the body is injected once as a mes
   expect(countOccurrences(allPromptText(t), BODY)).toBe(1)
 
   // The model receives the skill body + the user instruction; the reply goes back into the session and is saved
-  expect(t.model.calls[0]!.lastUserText).toBe(`${BODY}\n\nUser instruction: extra`)
+  expect(t.model.calls[0]!.lastUserText).toBe(
+    `${BODY}\n\nUser instruction: extra`,
+  )
   expect(t.lastAssistantText()).toBe('Review done')
   expect(await t.readData('sessions/default.jsonl')).toContain('Review done')
 })

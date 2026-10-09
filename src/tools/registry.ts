@@ -1,9 +1,9 @@
 import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
-import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { VelaEventListener } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
+import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { HookPipeline } from '../security/hooks.ts'
 import {
   decidePermission,
@@ -11,7 +11,10 @@ import {
   type PermissionRules,
   type Role,
 } from '../security/roles.ts'
-import type { ExecutionMetadata, ResultRecord } from '../session/tool-history.ts'
+import type {
+  ExecutionMetadata,
+  ResultRecord,
+} from '../session/tool-history.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 
 /** Internal tool return envelope: preserve native data separately from model-facing text. */
@@ -309,7 +312,9 @@ export class ToolRegistry {
             if (pipeline) {
               const pre = await pipeline.runPre(name, input, hookContext)
               if (pre.action === 'block') {
-                return await reject(`[Blocked by hook] ${pre.reason || 'Operation blocked'}`)
+                return await reject(
+                  `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
+                )
               }
               if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
                 input = pre.modifiedInput
@@ -360,14 +365,17 @@ export class ToolRegistry {
                   )
                 : false
               options?.abortSignal?.throwIfAborted()
-              if (!approved) return await reject(`[Rejected] ${name} was not approved`)
+              if (!approved)
+                return await reject(`[Rejected] ${name} was not approved`)
             }
             if (isSafe) {
               await this.acquireConcurrent()
               this.shared.logger.debug(`[tools] ${name} acquired shared lock`)
             } else {
               await this.acquireExclusive()
-              this.shared.logger.debug(`[tools] ${name} acquired exclusive lock`)
+              this.shared.logger.debug(
+                `[tools] ${name} acquired exclusive lock`,
+              )
             }
             try {
               this.assertHealthy()

@@ -38,7 +38,8 @@ export function memory(): VelaExtension {
     })
 
     vela.registerCommand('memory', {
-      description: 'List memories; /memory search <keywords> to search, /memory lint to check',
+      description:
+        'List memories; /memory search <keywords> to search, /memory lint to check',
       handler: (args, ctx) => {
         if (args === 'lint') return ctx.ui.notify(lintReport(store))
         if (args.startsWith('search ')) {
@@ -61,7 +62,8 @@ export function memory(): VelaExtension {
     })
 
     vela.registerCommand('dream', {
-      description: 'Have the model clean up the memory store (merge duplicates, delete stale entries)',
+      description:
+        'Have the model clean up the memory store (merge duplicates, delete stale entries)',
       handler: async (_args, ctx) => {
         ctx.ui.notify('[dream] Starting memory cleanup...')
         await ctx.session.prompt(DREAM_PROMPT, { signal: ctx.signal })
@@ -73,7 +75,8 @@ export function memory(): VelaExtension {
 
 function lintReport(store: MemoryStore): string {
   const reports = store.lint()
-  if (reports.length === 0) return '[lint] Memory store is healthy; no issues found.'
+  if (reports.length === 0)
+    return '[lint] Memory store is healthy; no issues found.'
   const lines = [`[lint] ${reports.length} memories with warnings:`]
   for (const r of reports) {
     lines.push(
