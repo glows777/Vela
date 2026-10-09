@@ -273,10 +273,10 @@ Summarizes earlier history now, keeps recent messages and saves. `customInstruct
 ```
 
 ```json
-{"id":"19","type":"response","command":"get_commands","success":true,"data":{"commands":[{"name":"memory","description":"List memories; /memory search <keywords> to search, /memory lint to check","extension":"memory"},{"name":"dream","description":"Have the model clean up the memory store (merge duplicates, delete stale entries)","extension":"memory"}]}}
+{"id":"19","type":"response","command":"get_commands","success":true,"data":{"commands":[{"name":"memory","description":"List memories; /memory search <keywords> to search, /memory lint to check","extension":"memory","source":"extension"},{"name":"dream","description":"Have the model clean up the memory store (merge duplicates, delete stale entries)","extension":"memory","source":"extension"},{"name":"skill:code-review","description":"Review the current diff","source":"skill"}]}}
 ```
 
-The commands registered by extensions. Run one with `prompt` and `/name args`. Skills and the interactive CLI's built-in commands are not listed.
+Extension commands (`source: "extension"`, with the `extension` that registered them), prompt templates (`source: "prompt"`) and skills (`source: "skill"`, named `skill:<name>`), as in pi. Run any of them with `prompt` and `/name args`. The interactive CLI's built-in commands are not listed.
 
 ## Extension UI
 
@@ -429,7 +429,7 @@ process.wait()
 | `set_model` | `provider` + `modelId` | Also accepts `model: "provider/id"` |
 | `get_state` | `model` is an object; also `sessionFile`, `isCompacting`, `autoCompactionEnabled` | `model` is a `provider/id` string; no session file |
 | Extra commands | | `list_sessions` |
-| `get_commands` | Extension commands, prompt templates, skills, with `source` / `sourceInfo` | Extension commands only, with `extension` |
+| `get_commands` | Extension commands, prompt templates, skills, with `source` / `sourceInfo` | Same entries and `source`; extension commands also carry `extension`, no `sourceInfo` |
 | Extension UI | Also `editor`, `setTitle`, `set_editor_text`, `timeout` | `confirm`, `select`, `input`, `notify`, `setStatus`, `setWidget` |
 | Typed client | `RpcClient` exported | No client export; see [examples/rpc-client.ts](../examples/rpc-client.ts) |
 

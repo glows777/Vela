@@ -8,7 +8,7 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 
 - [CLI](cli.md): options, run modes, keybindings and slash commands.
 - [Models](models.md): built-in providers, `models.json`, thinking levels and the offline demo model.
-- [Settings](settings.md): `settings.json`, the data directory, project trust and skills.
+- [Settings](settings.md): `settings.json`, the data directory, project trust, `AGENTS.md`, skills and prompt templates.
 - [Tools](tools.md): the built-in tools the model can call.
 - [Sessions and context](sessions.md): continuing sessions, queued messages and compaction.
 

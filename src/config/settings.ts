@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { assertLimitKeys, type VelaLimits } from '../limits.ts'
 import {
@@ -6,6 +7,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../models/index.ts'
+import { type ContextFile, loadContextFiles } from '../prompt/context-files.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
@@ -26,8 +28,10 @@ export interface VelaSettings {
   limits?: Partial<VelaLimits>
   /** Extension files or directories (relative to this settings file), plus `builtin:<name>` / `+builtin:<name>` / `-builtin:<name>` */
   extensions?: string[]
-  /** Extra skill directories (relative to this settings file) */
+  /** Extra skill directories or files (relative to this settings file) */
   skills?: string[]
+  /** Extra prompt template directories or files (relative to this settings file) */
+  prompts?: string[]
   /** Per-extension config section `extensionConfig.<extension name>`; strings support `$VAR` / `${VAR}` */
   extensionConfig?: Record<string, Record<string, unknown>>
 }
@@ -44,8 +48,10 @@ export interface LoadConfigOptions {
   agentDir?: string
   /** Environment for `$VAR` interpolation and `VELA_DIR`; empty by default (core never reads process.env) */
   env?: Record<string, string | undefined>
-  /** Whether to load the project's `.vela/settings.json`, `.vela/extensions/` and skills in `.skills/` and `.vela/skills/` (see projectTrustRequired) */
+  /** Whether to load the project's `.vela/` settings, extensions, skills, prompts and `APPEND_SYSTEM.md`, `.skills/` and `.agents/skills/` (see projectTrustRequired) */
   trusted?: boolean
+  /** Home directory for `~/.agents/skills`, default os.homedir() */
+  homeDir?: string
   /** Built-in extension names; all load by default, `-builtin:<name>` in settings disables one */
   builtins?: readonly string[]
 }
@@ -61,15 +67,21 @@ export interface VelaConfig {
   files: string[]
   /** Extensions to load, in order: built-in → ~/.vela/extensions → .vela/extensions → listed in settings */
   extensions: ExtensionEntry[]
-  /** Skill directories, lowest priority first (a later skill overrides an earlier one with the same name) */
+  /** Skill directories, highest priority first (the first skill with a name wins, like pi): project, settings, user */
   skillDirs: string[]
+  /** Prompt template directories, highest priority first: project, settings, user */
+  promptDirs: string[]
+  /** AGENTS.md / CLAUDE.md files: `<agentDir>/AGENTS.md`, then from the filesystem root down to cwd (not gated by trust, like pi) */
+  contextFiles: ContextFile[]
+  /** Contents of `.vela/APPEND_SYSTEM.md` (trusted) or `<agentDir>/APPEND_SYSTEM.md`, like pi */
+  appendSystemPrompt?: string
   /** Built-in providers (openai / anthropic) plus those in `<agentDir>/models.json`, for createVela's `providers` */
   providers: Record<string, ProviderDefinition>
   /** Per-extension config sections (`$VAR` already interpolated) */
   extensionConfig: Record<string, Record<string, unknown>>
 }
 
-const RESOURCE_KEYS = ['extensions', 'skills'] as const
+const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
 
 /**
  * Reads user and project settings.json and discovers extensions and skill directories
@@ -120,16 +132,31 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     ...[...new Set(paths)].map((path) => ({ name: extensionName(path), path })),
   ]
 
-  // Project skills need trust like project extensions (pi skips .pi/skills and .agents/skills when untrusted).
-  // Run from the home directory, `.skills` next to ~/.vela counts as user-level and always loads.
+  // Project skills and prompts need trust like project extensions (pi skips .pi/skills, .agents/skills and
+  // .pi/prompts when untrusted). Run from the home directory, `.skills` next to ~/.vela counts as user-level.
+  const homeDir = resolve(options.homeDir ?? homedir())
   const skillDirs = [
     ...new Set([
+      ...(trusted
+        ? [join(projectDir, 'skills'), ...ancestorAgentsSkillDirs(cwd)]
+        : []),
       ...(trusted || projectDir === agentDir ? [join(cwd, '.skills')] : []),
-      join(agentDir, 'skills'),
       ...(settings.skills ?? []),
-      ...(trusted ? [join(projectDir, 'skills')] : []),
+      join(agentDir, 'skills'),
+      join(homeDir, '.agents', 'skills'),
     ]),
   ]
+  const promptDirs = [
+    ...new Set([
+      ...(trusted ? [join(projectDir, 'prompts')] : []),
+      ...(settings.prompts ?? []),
+      join(agentDir, 'prompts'),
+    ]),
+  ]
+  const appendFile = [
+    ...(trusted ? [join(projectDir, 'APPEND_SYSTEM.md')] : []),
+    join(agentDir, 'APPEND_SYSTEM.md'),
+  ].find((file) => existsSync(file))
 
   return {
     cwd,
@@ -141,26 +168,73 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     files,
     extensions,
     skillDirs,
+    promptDirs,
+    contextFiles: loadContextFiles({ cwd, agentDir }),
+    ...(appendFile
+      ? { appendSystemPrompt: readFileSync(appendFile, 'utf-8') }
+      : {}),
     providers: loadModels({ agentDir, env }),
     extensionConfig: interpolateDeep(settings.extensionConfig ?? {}, env),
   }
 }
 
+/** Project resources in `.vela/` that need trust (same list as pi's, minus what Vela doesn't have) */
+const TRUSTED_PROJECT_RESOURCES = [
+  'settings.json',
+  'extensions',
+  'skills',
+  'prompts',
+  'APPEND_SYSTEM.md',
+]
+
 /**
- * The project has executable or behavior-changing config (`.vela/settings.json`,
- * `.vela/extensions/`, skills in `.vela/skills/` or `.skills/`) that needs the user's trust
- * before loading (like pi's trust-requiring project resources). Not counted when the
- * project dir is the user-level dir (running from the home directory).
+ * The project has executable or behavior-changing config (`.vela/settings.json`, `.vela/extensions/`,
+ * skills in `.vela/skills/`, `.skills/` or `.agents/skills/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md`) that
+ * needs the user's trust before loading (like pi's trust-requiring project resources). Not counted when the
+ * project dir is the user-level dir (running from the home directory). AGENTS.md / CLAUDE.md don't count (like pi).
  */
-export function projectTrustRequired(cwd: string, agentDir?: string): boolean {
+export function projectTrustRequired(
+  cwd: string,
+  agentDir?: string,
+  homeDir: string = homedir(),
+): boolean {
   const projectDir = join(resolve(cwd), '.vela')
   if (agentDir && resolve(agentDir) === projectDir) return false
+  const userAgentsSkills = join(resolve(homeDir), '.agents', 'skills')
   return (
-    existsSync(join(projectDir, 'settings.json')) ||
-    existsSync(join(projectDir, 'extensions')) ||
-    existsSync(join(projectDir, 'skills')) ||
-    existsSync(join(resolve(cwd), '.skills'))
+    TRUSTED_PROJECT_RESOURCES.some((name) =>
+      existsSync(join(projectDir, name)),
+    ) ||
+    existsSync(join(resolve(cwd), '.skills')) ||
+    ancestorAgentsSkillDirs(cwd).some(
+      (dir) => dir !== userAgentsSkills && existsSync(dir),
+    )
   )
+}
+
+/** `.agents/skills` in cwd and each parent up to the git repository root (or the filesystem root outside git), like pi. */
+function ancestorAgentsSkillDirs(cwd: string): string[] {
+  const dirs: string[] = []
+  let dir = resolve(cwd)
+  const gitRoot = findGitRoot(dir)
+  while (true) {
+    dirs.push(join(dir, '.agents', 'skills'))
+    if (dir === gitRoot) break
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return dirs
+}
+
+function findGitRoot(start: string): string | undefined {
+  let dir = start
+  while (true) {
+    if (existsSync(join(dir, '.git'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return
+    dir = parent
+  }
 }
 
 /** Reads one settings file: undefined if missing, throws if malformed. Resource paths become absolute. */

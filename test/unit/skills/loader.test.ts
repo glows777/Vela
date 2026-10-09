@@ -1,84 +1,128 @@
-import { afterAll, expect, test } from 'bun:test'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import { afterEach, expect, test } from 'bun:test'
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { SkillLoader } from '../../../src/skills/loader.ts'
+import { tempDir } from '../../support/vela.ts'
 
-const tempDirs: string[] = []
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vela-loader-'))
-  tempDirs.push(dir)
-  return dir
+const dirs: { cleanup(): void }[] = []
+afterEach(() => {
+  for (const dir of dirs.splice(0)) dir.cleanup()
+})
+
+function setup(files: Record<string, string>): string {
+  const dir = tempDir()
+  dirs.push(dir)
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir.path, path)), { recursive: true })
+    writeFileSync(join(dir.path, path), content)
+  }
+  return dir.path
 }
-afterAll(() => {
-  for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+
+const skill = (meta: string, body = 'Body') => `---\n${meta}\n---\n\n${body}\n`
+
+test('name comes from frontmatter, falling back to the directory; multi-line YAML descriptions work', () => {
+  const root = setup({
+    'skills/a/SKILL.md': skill('name: pdf-tools\ndescription: Work with PDFs'),
+    'skills/b-dir/SKILL.md': skill('description: >\n  Folded\n  description'),
+  })
+  const loader = new SkillLoader([join(root, 'skills')])
+  const skills = loader.load()
+  expect(skills.map((s) => s.name).sort()).toEqual(['b-dir', 'pdf-tools'])
+  const pdf = loader.get('pdf-tools')!
+  expect(pdf.description).toBe('Work with PDFs')
+  expect(pdf.filePath).toBe(join(root, 'skills/a/SKILL.md'))
+  expect(pdf.baseDir).toBe(join(root, 'skills/a'))
+  expect(loader.get('b-dir')!.description).toBe('Folded description')
+  expect(loader.diagnostics).toEqual([])
 })
 
-function writeSkill(base: string, name: string, content: string): void {
-  const dir = path.join(base, '.skills', name)
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'SKILL.md'), content, 'utf-8')
-}
-
-test('load parses description and when_to_use from the frontmatter', () => {
-  const dir = makeTempDir()
-  writeSkill(
-    dir,
-    'demo',
-    '---\ndescription: A demo skill\nwhen_to_use: When the user wants a demo\n---\n\nBody text\n',
-  )
-  const loader = new SkillLoader([path.join(dir, '.skills')])
-  loader.load()
-  const skill = loader.get('demo')
-  expect(skill?.name).toBe('demo')
-  expect(skill?.description).toBe('A demo skill')
-  expect(skill?.whenToUse).toBe('When the user wants a demo')
-  expect(skill?.content).toBe('Body text')
+test('a SKILL.md without description is skipped with a diagnostic; invalid names only warn', () => {
+  const root = setup({
+    'skills/empty/SKILL.md': 'No frontmatter',
+    'skills/Bad_Name/SKILL.md': skill('description: Still loads'),
+  })
+  const loader = new SkillLoader([join(root, 'skills')])
+  expect(loader.load().map((s) => s.name)).toEqual(['Bad_Name'])
+  const messages = loader.diagnostics.map((d) => d.message)
+  expect(messages).toContain('description is required; skipped')
+  expect(messages.some((m) => m.includes('invalid characters'))).toBe(true)
 })
 
-test('a SKILL.md without frontmatter falls back to an empty description', () => {
-  const dir = makeTempDir()
-  writeSkill(dir, 'bare', 'Content without frontmatter\n')
-  const loader = new SkillLoader([path.join(dir, '.skills')])
-  loader.load()
-  expect(loader.get('bare')?.description).toBe('')
-  expect(loader.get('bare')?.content).toBe('Content without frontmatter\n')
-})
-
-test('load skips directories without a SKILL.md', () => {
-  const dir = makeTempDir()
-  writeSkill(dir, 'valid', '---\ndescription: ok\n---\n\nContent\n')
-  fs.mkdirSync(path.join(dir, '.skills', 'no-skill-file'), { recursive: true })
-  const loader = new SkillLoader([path.join(dir, '.skills')])
-  loader.load()
-  expect(loader.list().map((s) => s.name)).toEqual(['valid'])
-})
-
-test('buildPromptSection outputs only the index, never the body', () => {
-  const dir = makeTempDir()
-  writeSkill(
-    dir,
-    'demo',
-    '---\ndescription: Demo\nwhen_to_use: Demo scenarios\n---\n\nSECRET_SKILL_BODY\n',
-  )
-  const loader = new SkillLoader([path.join(dir, '.skills')])
-  loader.load()
-
-  const inactive = loader.buildPromptSection(new Set())
-  expect(inactive).toContain('/demo — Demo (when to use: Demo scenarios)')
-  expect(inactive).not.toContain('SECRET_SKILL_BODY')
-  expect(inactive).not.toContain('✓ active')
-
-  const active = loader.buildPromptSection(new Set(['demo']))
-  expect(active).toContain(
-    '/demo — Demo (when to use: Demo scenarios) ✓ active',
-  )
-  expect(active).not.toContain('SECRET_SKILL_BODY')
-})
-
-test('buildPromptSection returns null when there are no skills', () => {
-  const dir = makeTempDir()
+test('discovery: SKILL.md stops recursion, nested skills are found, root .md files with a description count', () => {
+  const root = setup({
+    'skills/group/inner/SKILL.md': skill('description: Nested'),
+    'skills/outer/SKILL.md': skill('description: Outer'),
+    'skills/outer/sub/SKILL.md': skill('description: Hidden by outer'),
+    'skills/notes.md': skill('description: A root file skill'),
+    'skills/readme.md': 'Just a document',
+    'skills/.hidden/SKILL.md': skill('description: Hidden'),
+    'skills/node_modules/x/SKILL.md': skill('description: Dependency'),
+  })
+  const loader = new SkillLoader([join(root, 'skills')])
   expect(
-    new SkillLoader([path.join(dir, '.skills')]).buildPromptSection(new Set()),
-  ).toBeNull()
+    loader
+      .load()
+      .map((s) => s.name)
+      .sort(),
+  ).toEqual(['inner', 'notes', 'outer'])
+})
+
+test('the first skill with a name wins and the collision is reported; a symlinked copy is not a collision', () => {
+  const root = setup({
+    'project/deploy/SKILL.md': skill('description: Project deploy'),
+    'user/deploy/SKILL.md': skill('description: User deploy'),
+  })
+  symlinkSync(join(root, 'project/deploy'), join(root, 'user/linked'))
+  const loader = new SkillLoader([
+    join(root, 'project'),
+    join(root, 'user'),
+    join(root, 'missing'),
+  ])
+  loader.load()
+  expect(loader.get('deploy')!.description).toBe('Project deploy')
+  expect(loader.diagnostics).toHaveLength(1)
+  expect(loader.diagnostics[0]!.message).toContain('already used by')
+})
+
+test('the prompt section lists name, description and location, needs a reading tool and hides manual-only skills', () => {
+  const root = setup({
+    'skills/review/SKILL.md': skill('description: Review <code> & more'),
+    'skills/release/SKILL.md': skill(
+      'description: Release\ndisable-model-invocation: true',
+    ),
+  })
+  const loader = new SkillLoader([join(root, 'skills')])
+  loader.load()
+  const section = loader.buildPromptSection(['read_file', 'bash'])!
+  expect(section.startsWith('<skills>\n')).toBe(true)
+  expect(section).toContain('Use the read_file tool to load')
+  expect(section).toContain('<name>review</name>')
+  expect(section).toContain(
+    '<description>Review &lt;code&gt; &amp; more</description>',
+  )
+  expect(section).toContain(
+    `<location>${join(root, 'skills/review/SKILL.md')}</location>`,
+  )
+  expect(section).not.toContain('release')
+  expect(section).not.toContain('Body')
+  expect(loader.buildPromptSection(['bash'])).toContain('Use bash to load')
+  expect(loader.buildPromptSection(['grep'])).toBeNull()
+})
+
+test('/skill:<name> args expands to the body in a <skill> block; unknown names and other text are left alone', () => {
+  const root = setup({
+    'skills/review/SKILL.md': skill('description: Review', 'Check the diff'),
+  })
+  const loader = new SkillLoader([join(root, 'skills')])
+  loader.load()
+  const file = join(root, 'skills/review/SKILL.md')
+  expect(loader.expand('/skill:review')).toBe(
+    `<skill name="review" location="${file}">\nReferences are relative to ${join(root, 'skills/review')}.\n\nCheck the diff\n</skill>`,
+  )
+  expect(loader.expand('/skill:review  focus on tests ')).toEndWith(
+    '</skill>\n\nfocus on tests',
+  )
+  expect(loader.expand('/skill:nope')).toBeUndefined()
+  expect(loader.expand('/review')).toBeUndefined()
 })

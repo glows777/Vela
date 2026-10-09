@@ -29,7 +29,12 @@ function setup(files: Record<string, string> = {}) {
     mkdirSync(dirname(full), { recursive: true })
     writeFileSync(full, content)
   }
-  return { agentDir, cwd, root: root.path }
+  return {
+    agentDir,
+    cwd,
+    root: root.path,
+    homeDir: join(root.path, 'userhome'),
+  }
 }
 
 const json = (value: unknown) => JSON.stringify(value)
@@ -195,35 +200,118 @@ test('the data directory defaults to <agentDir>/projects/<encoded cwd>; settings
   expect(loadConfig(custom).dataDir).toBe(join(custom.cwd, 'data'))
 })
 
-test('skill directories: legacy .skills, user, settings, then project', () => {
-  const { agentDir, cwd } = setup({
-    'home/settings.json': json({ skills: ['shared'] }),
+test('skill directories, first wins: project (.vela/skills, .agents/skills up the tree, .skills), settings, user', () => {
+  const { agentDir, cwd, homeDir, root } = setup({
+    'home/settings.json': json({
+      skills: ['shared'],
+      prompts: ['more-prompts'],
+    }),
   })
-  expect(loadConfig({ cwd, agentDir, trusted: true }).skillDirs).toEqual([
-    join(cwd, '.skills'),
-    join(agentDir, 'skills'),
-    join(agentDir, 'shared'),
+  const config = loadConfig({ cwd, agentDir, homeDir, trusted: true })
+  // .agents/skills is searched in cwd and each parent (to the git root, here the filesystem root)
+  const agentsDirs = config.skillDirs.filter((dir) =>
+    dir.endsWith(join('.agents', 'skills')),
+  )
+  expect(agentsDirs.slice(0, 2)).toEqual([
+    join(cwd, '.agents/skills'),
+    join(root, '.agents/skills'),
+  ])
+  expect(
+    config.skillDirs.filter(
+      (dir) => !agentsDirs.includes(dir) || dir.startsWith(homeDir),
+    ),
+  ).toEqual([
     join(cwd, '.vela/skills'),
+    join(cwd, '.skills'),
+    join(agentDir, 'shared'),
+    join(agentDir, 'skills'),
+    join(homeDir, '.agents/skills'),
+  ])
+  expect(config.promptDirs).toEqual([
+    join(cwd, '.vela/prompts'),
+    join(agentDir, 'more-prompts'),
+    join(agentDir, 'prompts'),
   ])
 })
 
-test('project skills (.skills, .vela/skills) need trust, like project settings and extensions', () => {
+test('.agents/skills stops at the git repository root', () => {
+  const { agentDir, cwd, homeDir } = setup({
+    'project/.git/HEAD': '',
+    'project/sub/x': '',
+  })
+  const config = loadConfig({
+    cwd: join(cwd, 'sub'),
+    agentDir,
+    homeDir,
+    trusted: true,
+  })
+  expect(
+    config.skillDirs.filter((dir) => dir.endsWith(join('.agents', 'skills'))),
+  ).toEqual([
+    join(cwd, 'sub/.agents/skills'),
+    join(cwd, '.agents/skills'),
+    join(homeDir, '.agents/skills'),
+  ])
+})
+
+test('project skills and prompts need trust, like project settings and extensions', () => {
   for (const dir of [
     'project/.skills/deploy/SKILL.md',
     'project/.vela/skills/deploy/SKILL.md',
+    'project/.agents/skills/deploy/SKILL.md',
+    'project/.vela/prompts/fix.md',
+    'project/.vela/APPEND_SYSTEM.md',
   ]) {
-    const { agentDir, cwd } = setup({
+    const { agentDir, cwd, homeDir } = setup({
       'home/settings.json': json({ skills: ['shared'] }),
       [dir]: 'Run the deploy',
     })
-    expect(projectTrustRequired(cwd, agentDir)).toBe(true)
-    expect(loadConfig({ cwd, agentDir }).skillDirs).toEqual([
-      join(agentDir, 'skills'),
+    expect(projectTrustRequired(cwd, agentDir, homeDir)).toBe(true)
+    const config = loadConfig({ cwd, agentDir, homeDir })
+    expect(config.skillDirs).toEqual([
       join(agentDir, 'shared'),
+      join(agentDir, 'skills'),
+      join(homeDir, '.agents/skills'),
     ])
+    expect(config.promptDirs).toEqual([join(agentDir, 'prompts')])
+    expect(config.appendSystemPrompt).toBeUndefined()
   }
-  const { agentDir, cwd } = setup()
-  expect(projectTrustRequired(cwd, agentDir)).toBe(false)
+  const { agentDir, cwd, homeDir } = setup({ 'project/AGENTS.md': 'Use bun' })
+  // AGENTS.md doesn't need trust (like pi) and loads untrusted
+  expect(projectTrustRequired(cwd, agentDir, homeDir)).toBe(false)
+  expect(loadConfig({ cwd, agentDir, homeDir }).contextFiles.at(-1)).toEqual({
+    path: join(cwd, 'AGENTS.md'),
+    content: 'Use bun',
+  })
+})
+
+test("~/.agents/skills is the user's, so it never asks for trust when running from home", () => {
+  const { root } = setup({ 'userhome/.agents/skills/x/SKILL.md': '' })
+  const homeDir = join(root, 'userhome')
+  expect(projectTrustRequired(homeDir, join(root, 'home'), homeDir)).toBe(false)
+})
+
+test('APPEND_SYSTEM.md: the trusted project file wins over the user one', () => {
+  const { agentDir, cwd, homeDir } = setup({
+    'home/APPEND_SYSTEM.md': 'user addendum',
+    'project/.vela/APPEND_SYSTEM.md': 'project addendum',
+  })
+  expect(
+    loadConfig({ cwd, agentDir, homeDir, trusted: true }).appendSystemPrompt,
+  ).toBe('project addendum')
+  expect(loadConfig({ cwd, agentDir, homeDir }).appendSystemPrompt).toBe(
+    'user addendum',
+  )
+})
+
+test('the user AGENTS.md comes first in contextFiles', () => {
+  const { agentDir, cwd, homeDir } = setup({
+    'home/AGENTS.md': 'user',
+    'project/CLAUDE.md': 'project',
+  })
+  const files = loadConfig({ cwd, agentDir, homeDir }).contextFiles
+  expect(files[0]!.content).toBe('user')
+  expect(files.at(-1)!.content).toBe('project')
 })
 
 test('trust decisions are saved per directory and apply to subdirectories', () => {
@@ -258,11 +346,17 @@ test('running in the home directory reads ~/.vela once, as user settings, withou
   const home = join(root, 'home')
   const agentDir = join(home, '.vela')
   expect(projectTrustRequired(home, agentDir)).toBe(false)
-  const config = loadConfig({ cwd: home, agentDir, trusted: true })
+  const config = loadConfig({
+    cwd: home,
+    agentDir,
+    homeDir: home,
+    trusted: true,
+  })
   expect(config.files).toEqual([join(agentDir, 'settings.json')])
   expect(config.extensions.map((e) => e.name)).toEqual(['y', 'x'])
   expect(config.skillDirs).toEqual([
     join(home, '.skills'),
     join(agentDir, 'skills'),
+    join(home, '.agents/skills'),
   ])
 })

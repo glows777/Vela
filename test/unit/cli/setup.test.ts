@@ -44,6 +44,20 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     noExtensions: true,
     noSession: true,
     approve: true,
+    appendSystemPrompt: [],
+    noContextFiles: false,
+  })
+  expect(
+    parseArgs([
+      '--append-system-prompt',
+      'a',
+      '--append-system-prompt',
+      'b.md',
+      '-nc',
+    ]),
+  ).toMatchObject({
+    appendSystemPrompt: ['a', 'b.md'],
+    noContextFiles: true,
   })
   expect(parseArgs(['--no-approve']).approve).toBe(false)
   expect(parseArgs(['--mode', 'json', 'one', 'two'])).toMatchObject({
@@ -96,7 +110,9 @@ test('project skills alone make the project ask for trust; untrusted, the notice
     interactive: false,
   })
   expect(result.trusted).toBe(false)
-  expect(result.warning).toContain('Did not load config, extensions and skills')
+  expect(result.warning).toContain(
+    'Did not load config, extensions, skills and prompts',
+  )
 })
 
 test('--help / -h and --version / -v are parsed', () => {

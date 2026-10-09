@@ -28,7 +28,9 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
 | `-e`, `--extension <path>` | Load an extension file or directory, or `builtin:<name>`. Repeatable. Relative paths resolve from the current folder. |
 | `--no-extensions`, `-ne` | Skip the built-in extensions and every discovered or configured extension. Extensions given with `-e` still load. |
-| `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/` and project skills (`.skills/`, `.vela/skills/`) for this run, without saving the decision. |
+| `--append-system-prompt <text>` | Append text, or the contents of the file at that path, to the system prompt. Repeatable. Replaces `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` for this run. See [Settings](settings.md#appending-to-the-system-prompt). |
+| `--no-context-files`, `-nc` | Don't put `AGENTS.md` / `CLAUDE.md` into the system prompt. See [Settings](settings.md#context-files). |
+| `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
 | `--no-approve` | Do not trust them for this run, without saving the decision. |
 | `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
 | `-v`, `--version` | Print the package version to stdout, then exit with code 0. |
@@ -132,7 +134,7 @@ In pickers and dialogs: Up and Down move, Enter selects, Esc cancels. Keybinding
 
 ### Completion
 
-Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, skills, and commands registered by extensions, filtered as you type. Tab completes file and directory paths relative to the working folder.
+Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, prompt templates, skills (as `skill:<name>`), and commands registered by extensions, filtered as you type. Tab completes file and directory paths relative to the working folder.
 
 `@` starts fuzzy file completion over the working directory, as in pi. It uses `fd`, found or downloaded the same way as for the `find` tool (see [Tools](tools.md)); until `fd` is ready, or if it can't be found (for example with `VELA_OFFLINE=1` and no `fd` installed), `@` shows no suggestions and a notice says so. Vela does not expand `@path` into the file's contents: the text is sent as written and the model reads the file with its tools.
 
@@ -161,17 +163,14 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 |---|---|
 | `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
-| `/skill`, `/skill list` | List skills. |
-| `/skill load <name>` | Activate a skill: its instructions are added to the conversation once. |
-| `/skill unload <name>` | Mark a skill inactive. |
-| `/<skill-name> [instruction]` | Activate a skill and run it right away, with an optional instruction. |
+| `/skill`, `/skills` | List skills. |
 | `/extensions` | Loaded extensions and the tools, commands and channels each registered. |
 | `/channel`, `/channel list` | Registered channels. See [Channels](channels.md). |
 | `/role [owner\|collaborator\|guest]` | Show or set this session's role. See [Security](security.md). |
 | `/hooks` | Registered pre- and post-tool hooks. |
 | `/cache on`, `/cache off` | Turn the prompt cache simulation of the demo model on or off (`VELA_MODEL=mock` only). |
 
-Skills are described in [Settings](settings.md#skills).
+Two more kinds of `/` input are expanded by the session itself, so they also work in print, JSON and RPC mode: `/skill:<name> [instruction]` sends a skill, and `/<template> [args]` sends a prompt template. See [Skills](settings.md#skills) and [Prompt templates](settings.md#prompt-templates).
 
 ### Built-in extension commands
 

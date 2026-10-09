@@ -10,6 +10,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **`bash` has no default timeout** (same as pi). The model passes an optional `timeout` in seconds instead. `limits.bashTimeoutMs` is removed; setting it in `settings.json` or `createVela({ limits })` is now an "unknown key" error. Remove the key.
 - **`edit_file` takes pi's parameters**: `{ path, edits: [{ oldText, newText }] }` instead of `old_string` / `new_string`. A text that is not found, found more than once or overlapping another edit is now a tool error instead of a successful result describing the problem. Faux scenarios that call `edit_file` need the new arguments.
 - **`ToolDefinition.isConcurrencySafe` is replaced by `executionMode`** (`'parallel'`, the default, or `'sequential'`, same as pi). Drop `isConcurrencySafe: true`; replace `isConcurrencySafe: false` with `executionMode: 'sequential'` if the tool must not run alongside the session's other calls. Registering a tool that still sets `isConcurrencySafe` throws, so the change is not silently ignored.
+- **Skills use the Agent Skills format and the model loads them itself** (like pi). The system prompt now lists each skill's name, description and `SKILL.md` path, and the model reads the file with `read_file` when a task matches. `description` is required (skills without one are skipped with a warning) and the name comes from the `name` front matter, falling back to the directory name. `when_to_use` is no longer read: fold it into `description`. `/skill load`, `/skill unload`, `/<skill-name>` and the per-session active state are gone: send a skill yourself with `/skill:<name> [instruction]`, which now works in every mode and in `session.prompt()`. When two skills share a name, the first one found wins (project before user) instead of the last. See [Skills](docs/settings.md#skills).
+- `FixtureSkill` in `@glows777/vela/testing` drops `whenToUse` and gains `disableModelInvocation`.
 
 ### Fixed
 
@@ -26,6 +28,11 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - `edit_file` applies several disjoint edits in one call, falls back to fuzzy matching (trailing whitespace, smart quotes, Unicode dashes and spaces), keeps BOM and CRLF line endings, and records a diff and unified patch in the tool history. Ported from pi.
 - `shellPath` setting and `createVela({ shellPath })` choose the shell of the `bash` tool.
 - `withFileMutationQueue(path, fn)` is exported for extension tools that write files.
+- **AGENTS.md / CLAUDE.md**: project instructions go into the system prompt, found like pi: `~/.vela/AGENTS.md`, then one file per directory from the filesystem root down to the working folder (`AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, ...). Like pi they load whether or not the project is trusted; guest sessions don't get them. `--no-context-files` turns them off; the SDK takes `contextFiles` and exports `loadContextFiles()`. See [Context files](docs/settings.md#context-files).
+- **Prompt templates**: `/<name> [args]` expands a Markdown template from `~/.vela/prompts/`, `.vela/prompts/` (trusted projects) or the new `prompts` setting, with pi's `$1`, `$@`, `${N:-default}` and `${@:N}` placeholders. Templates and skills show up in `/` completion and in RPC `get_commands` (with pi's `source` field). See [Prompt templates](docs/settings.md#prompt-templates).
+- **More skill locations and options**: `.agents/skills/` in the project (up to the git root, trusted projects) and `~/.agents/skills/`; nested skill directories; `disable-model-invocation: true` for skills only you can run.
+- **Appending to the system prompt**: `--append-system-prompt <text or file>` (repeatable), `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` (trusted projects), and the SDK's `appendSystemPrompt`. See [Settings](docs/settings.md#appending-to-the-system-prompt).
+- System prompt sections follow pi's order (rules, addendum, project context, skills, working directory, then extension sections), and the skills list no longer changes during a session, which keeps the prompt cache prefix stable.
 
 ### Changed
 

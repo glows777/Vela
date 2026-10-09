@@ -105,7 +105,7 @@ The built-in memory extension is always loaded, like in the CLI; the RAG extensi
 | `session` | Options for the default session: `role`, `permissions`, `tools`, `ui`. |
 | `sessionId` | Id of the default session (default `default`). |
 | `files` | Files to create in `cwd`, as relative path to content. |
-| `skills` | Skills to write to `cwd/.skills/<name>/SKILL.md` (`name`, `description`, `whenToUse?`, `body`). |
+| `skills` | Skills to write to `cwd/.skills/<name>/SKILL.md` (`name`, `description`, `body`, `disableModelInvocation?`). |
 | `embedder` | `true` loads RAG with the faux embedder, or pass your own. |
 | `cwd`, `dataDir` | Reuse a directory (for resume tests); `dataDir` is relative to `cwd`, default `.vela-data`. |
 | `thinkingLevel`, `limits`, `logger` | Same as `createVela()`. `limits.retryBaseMs` defaults to 0 so retries don't wait. |

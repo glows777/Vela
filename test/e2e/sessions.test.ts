@@ -101,21 +101,6 @@ test('tools discovered with tool_search are only active in the session that sear
   expect(t.model.calls[2]!.system).toContain('deferred_echo')
 })
 
-test('active skills belong to the session', () => {
-  const t = createTestVela({
-    skills: [
-      {
-        name: 'review',
-        description: 'Code review',
-        body: 'Review against the checklist',
-      },
-    ],
-  })
-  t.session.activeSkills.add('review')
-  expect(t.session.buildSystem()).toContain('✓ active')
-  expect(t.vela.session('other').buildSystem()).not.toContain('✓ active')
-})
-
 test('close() stops a running prompt, saves it and removes the session', async () => {
   const t = createTestVela({
     responses: [fauxHang()],

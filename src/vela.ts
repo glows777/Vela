@@ -17,13 +17,22 @@ import {
   type ResolvedModel,
   type ThinkingLevel,
 } from './models/index.ts'
+import { type ContextFile, loadContextFiles } from './prompt/context-files.ts'
 import {
+  addendum,
   coreRules,
   deferredTools,
   extensionSections,
+  projectContext,
   toolHistoryGuide,
+  workingDirectory,
 } from './prompt/index.ts'
 import { PromptPipeline } from './prompt/pipeline.ts'
+import {
+  expandPromptTemplate,
+  loadPromptTemplates,
+  type PromptTemplate,
+} from './prompt/templates.ts'
 import { HookPipeline } from './security/hooks.ts'
 import {
   fileSessionStorage,
@@ -61,8 +70,21 @@ export interface VelaOptions {
   dataDir?: string
   /** Where session history is stored; defaults to `<dataDir>/sessions/*.jsonl` with dataDir, otherwise memory */
   sessionStorage?: SessionStorage
-  /** Skill directories (one `SKILL.md` per subdirectory); later skills override earlier ones with the same name. Default `<cwd>/.skills`, `<cwd>/.vela/skills` */
+  /**
+   * Skill directories or `.md` files (Agent Skills format, see docs/skills.md), in priority order: the first skill
+   * with a name wins. Default `<cwd>/.vela/skills`, `<cwd>/.skills`. The model sees each skill's name, description
+   * and path and reads the file itself; `/skill:<name> args` sends a skill explicitly.
+   */
   skillDirs?: string[]
+  /** Prompt template directories or `.md` files (`/<name> args` expands the template); first name wins. Default `<cwd>/.vela/prompts` */
+  promptTemplateDirs?: string[]
+  /**
+   * AGENTS.md / CLAUDE.md files put into the system prompt (owner and collaborator sessions). Default: found from cwd
+   * up to the filesystem root like pi (`loadContextFiles({ cwd })`; the CLI also passes `~/.vela/AGENTS.md`). `false` loads none.
+   */
+  contextFiles?: false | ContextFile[]
+  /** Text appended to the system prompt (pi's `--append-system-prompt`) */
+  appendSystemPrompt?: string
   /** Config section per extension; each extension reads its own section from `vela.config` (by extension name) */
   extensionConfig?: Record<string, Record<string, unknown>>
   /** Retry, compaction threshold and other limits; missing fields use defaults (see src/limits.ts). */
@@ -127,6 +149,7 @@ export interface VelaInternals {
   hooks: HookPipeline
   builder: PromptPipeline
   skillLoader: SkillLoader
+  promptTemplates: PromptTemplate[]
   gateway: ChannelGateway
   /** Finds (or downloads) rg / fd, shared with the grep and find tools */
   resolveBinary: BinaryResolver
@@ -207,18 +230,35 @@ export function createVela(options: VelaOptions = {}): Vela {
   registerToolSearchTool(registry)
 
   const skillLoader = new SkillLoader(
-    options.skillDirs ?? [join(cwd, '.skills'), join(cwd, '.vela', 'skills')],
+    options.skillDirs ?? [join(cwd, '.vela', 'skills'), join(cwd, '.skills')],
   )
   skillLoader.load()
+  const templates = loadPromptTemplates(
+    options.promptTemplateDirs ?? [join(cwd, '.vela', 'prompts')],
+  )
+  for (const { message, path } of [
+    ...skillLoader.diagnostics,
+    ...templates.diagnostics,
+  ])
+    logger.warn(`[resources] ${path}: ${message}`)
+  const promptTemplates = templates.templates
+  const contextFiles =
+    options.contextFiles === false
+      ? []
+      : (options.contextFiles ?? loadContextFiles({ cwd }))
 
+  // Same order as pi: intro + rules, addendum, project context, skills, cwd, then extension sections
   const builder = new PromptPipeline()
-    .pipe('coreRules', coreRules(cwd))
+    .pipe('coreRules', coreRules())
     .pipe('toolHistoryGuide', toolHistoryGuide())
     .pipe('deferredTools', deferredTools())
-    .pipe('extensions', extensionSections())
-    .pipe('skillContext', (ctx) =>
-      skillLoader.buildPromptSection(ctx.activeSkills ?? new Set()),
+    .pipe('appendSystemPrompt', addendum(options.appendSystemPrompt))
+    .pipe('projectContext', projectContext(contextFiles))
+    .pipe('skills', (ctx) =>
+      skillLoader.buildPromptSection(ctx.activeTools ?? []),
     )
+    .pipe('cwd', workingDirectory(cwd))
+    .pipe('extensions', extensionSections())
 
   const listeners = new Set<VelaSessionEventListener>()
   const sessions = new Map<string, VelaSession>()
@@ -244,6 +284,11 @@ export function createVela(options: VelaOptions = {}): Vela {
         sessionStorage,
         registry,
         builder,
+        // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
+        expandInput: (text) =>
+          skillLoader.expand(text) ??
+          expandPromptTemplate(text, promptTemplates) ??
+          text,
         extensions: {
           ready: runner.ready,
           sessionStart: (s) => runner.sessionStart(s),
@@ -327,6 +372,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     hooks,
     builder,
     skillLoader,
+    promptTemplates,
     gateway,
     resolveBinary,
   })
