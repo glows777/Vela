@@ -1,9 +1,9 @@
 import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
-import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { VelaEventListener } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
+import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { HookPipeline } from '../security/hooks.ts'
 import {
   decidePermission,

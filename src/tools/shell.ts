@@ -3,9 +3,9 @@ import { existsSync } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
 import { constants } from 'node:os'
 import z from 'zod'
+import type { ExecutionMetadata } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import type { ToolDefinition } from './registry.ts'
-import type { ExecutionMetadata } from '../session/tool-history.ts'
 
 /** What the model gets of the output, same as pi: the last 2000 lines or 50KB, whichever is smaller */
 export const BASH_MAX_LINES = 2000

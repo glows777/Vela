@@ -277,15 +277,18 @@ test('Bash rejects an invalid timeout and a shellPath that does not exist before
       createBashTool().execute({ command: 'true', timeout }, { results }),
     ).rejects.toThrow(/Invalid timeout/)
   await expect(
-    createBashTool(undefined, { shellPath: join(dir, 'no-such-shell') }).execute(
-      { command: 'true' },
-      { results },
-    ),
-  ).rejects.toThrow(/Shell not found: .*no-such-shell\. Fix or remove shellPath/)
+    createBashTool(undefined, {
+      shellPath: join(dir, 'no-such-shell'),
+    }).execute({ command: 'true' }, { results }),
+  ).rejects.toThrow(
+    /Shell not found: .*no-such-shell\. Fix or remove shellPath/,
+  )
 })
 
 test('Bash runs commands with the configured shellPath', async () => {
-  const result = await createBashTool(undefined, { shellPath: '/bin/sh' }).execute(
+  const result = await createBashTool(undefined, {
+    shellPath: '/bin/sh',
+  }).execute(
     { command: 'echo "$0"' },
     { results: new ToolResultStore(join(dir, 'shell-path')) },
   )

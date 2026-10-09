@@ -39,11 +39,16 @@ test('registering a tool name twice throws', () => {
 test('registering a tool with the removed isConcurrencySafe or an unknown executionMode throws', () => {
   const registry = makeRegistry()
   expect(() =>
-    registry.register({ ...tool('old'), isConcurrencySafe: true } as ToolDefinition),
+    registry.register({
+      ...tool('old'),
+      isConcurrencySafe: true,
+    } as ToolDefinition),
   ).toThrow(/isConcurrencySafe was removed/)
   expect(() =>
     registry.register(
-      tool('typo', { executionMode: 'serial' as ToolDefinition['executionMode'] }),
+      tool('typo', {
+        executionMode: 'serial' as ToolDefinition['executionMode'],
+      }),
     ),
   ).toThrow(/executionMode must be 'parallel' or 'sequential'/)
   expect(registry.get('old')).toBeUndefined()
@@ -146,10 +151,7 @@ function blockingTool(
   const waiting = new Map<string, Promise<void>>()
   const hold = (id: string) => {
     if (!waiting.has(id))
-      waiting.set(
-        id,
-        new Promise<void>((resolve) => releases.set(id, resolve)),
-      )
+      waiting.set(id, new Promise<void>((resolve) => releases.set(id, resolve)))
     return waiting.get(id)!
   }
   const definition = tool(name, {
@@ -190,7 +192,7 @@ test('parallel tools run together; a sequential call waits for earlier calls and
   const b = run('par', 'b')
   // Calls that run together may start in either order
   const started = () => [...order].sort()
-  await Bun.sleep(20)
+  await waitFor(() => order.length === 2)
   expect(started()).toEqual(['a-start', 'b-start'])
 
   const s = run('seq', 's')
@@ -200,8 +202,13 @@ test('parallel tools run together; a sequential call waits for earlier calls and
 
   par.release('a')
   par.release('b')
-  await Bun.sleep(20)
-  expect(order.slice(0, 4).sort()).toEqual(['a-end', 'a-start', 'b-end', 'b-start'])
+  await waitFor(() => order.includes('s-start'))
+  expect(order.slice(0, 4).sort()).toEqual([
+    'a-end',
+    'a-start',
+    'b-end',
+    'b-start',
+  ])
   expect(order.slice(4)).toEqual(['s-start'])
 
   seq.release('s')
@@ -219,10 +226,11 @@ test('a sequential call in one session does not hold back another session', asyn
   const two = base.fork(new ToolResultStore(join(root, 'two')))
 
   const first = one.toAISDKFormat().seq!.execute!({ id: 'a' }, callOptions('a'))
-  const second = two
-    .toAISDKFormat()
-    .seq!.execute!({ id: 'b' }, callOptions('b'))
-  await Bun.sleep(20)
+  const second = two.toAISDKFormat().seq!.execute!(
+    { id: 'b' },
+    callOptions('b'),
+  )
+  await waitFor(() => order.length === 2)
   expect([...order].sort()).toEqual(['a-start', 'b-start'])
 
   seq.release('b')
