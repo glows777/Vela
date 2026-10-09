@@ -184,7 +184,7 @@ test('the model can call the say_hello tool', async () => {
 
   await t.run('Say hi to Ada')
 
-  expect(t.eventsOf('tool_result')[0]?.output).toBe('Hello, Ada!')
+  expect(t.eventsOf('tool_execution_end')[0]?.result).toBe('Hello, Ada!')
   expect(t.lastAssistantText()).toBe('The tool said: Hello, Ada!')
   expect(t.model.calls[0]?.tools).toContain('greet_say_hello')
 })

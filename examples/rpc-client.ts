@@ -43,14 +43,20 @@ function handle(record: RpcRecord): boolean {
         return record.id === 'prompt-1'
       }
       return false
-    case 'text_delta':
-      process.stdout.write(String(record.text))
+    case 'message_update': {
+      const update = record.assistantMessageEvent as {
+        type: string
+        delta?: string
+      }
+      if (update.type === 'text_delta')
+        process.stdout.write(String(update.delta))
       return false
-    case 'tool_call':
-      console.log(`\n[tool] ${record.toolName} ${JSON.stringify(record.input)}`)
+    }
+    case 'tool_execution_start':
+      console.log(`\n[tool] ${record.toolName} ${JSON.stringify(record.args)}`)
       return false
-    case 'tool_error':
-      console.log(`[tool error] ${record.toolName}`)
+    case 'tool_execution_end':
+      if (record.isError) console.log(`[tool error] ${record.toolName}`)
       return false
     case 'agent_end':
       if (record.reason !== 'done') {

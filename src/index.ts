@@ -5,6 +5,8 @@
  */
 
 export type {
+  AssistantMessageEvent,
+  StopReason,
   VelaEvent,
   VelaEventListener,
   VelaSessionEventListener,

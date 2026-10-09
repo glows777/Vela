@@ -4,9 +4,22 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
-### Added
+### Breaking Changes
 
-- Releases are automated: `bun run release <patch|minor|x.y.z>` tags a release, and CI publishes it to npm with provenance and creates the GitHub release from this changelog.
+- **Events now have pi's shape.** `message` is replaced by `message_start` / `message_end`; `text_delta` and `thinking_delta` by `message_update` (`assistantMessageEvent.type` is `text_delta` / `thinking_delta` and the text is in `delta`, alongside `text_start` / `text_end`, `thinking_start` / `thinking_end` and `toolcall_start` / `toolcall_delta` / `toolcall_end`); `tool_call` by `tool_execution_start` (`input` is now `args`); `tool_result` and `tool_error` by `tool_execution_end` (`output` / `error` is now `result`, with `isError` and `durationMs`); `retry` by `auto_retry_start` (`maxRetries` → `maxAttempts`, `error` → `errorMessage`) and the new `auto_retry_end`. `turn_end` has `message` and `toolResults` instead of `needsToolCall`; `agent_end` adds `messages`. The assistant `message_end` carries `stopReason` (`stop`, `toolUse`, `length`, `aborted`, `error`) and `errorMessage`. `--mode json`, `--mode rpc` and SDK subscribers see the new events. To migrate, print `message_update` events whose `assistantMessageEvent.type` is `text_delta`, and read final messages from `message_end`. See [SDK events](docs/sdk.md#events) and [JSON mode](docs/json.md). The extension `tool_call` / `tool_result` interception events are unchanged.
+
+### Fixed
+
+- A response cut off by the output token limit while calling tools no longer breaks the session (every later prompt failed with `AI_InvalidPromptError`): like pi, each truncated call gets an error result asking the model to re-issue it. See [Sessions](docs/sessions.md#truncated-responses).
+- An aborted or failed turn keeps what it produced: the streamed text and finished tool calls stay in the history, each call paired with its result or `Operation aborted`. Before, the whole step was dropped and the model didn't know a tool had already run. See [Sessions](docs/sessions.md#interrupted-and-failed-turns).
+- A request that already started running tools is no longer sent again after an error, so tools don't run twice.
+- When a request is retried, the interactive mode keeps the failed attempt's text marked `(response failed)` and shows the retry as a new message, instead of appending the retry to the old text.
+
+### New Features
+
+- **Context overflow recovery**: when the provider says the context is too long, Vela summarizes the history once and sends the step again, like pi (`context` event with `action: 'overflow'`). See [Sessions](docs/sessions.md#context-overflow).
+- **Anthropic prompt caching**: the system prompt, last tool and last message are sent as cache breakpoints, like pi. See [Sessions](docs/sessions.md#prompt-caching).
+- **Automated releases**: `bun run release <patch|minor|x.y.z>` tags a release, and CI publishes it to npm with provenance and creates the GitHub release from this changelog.
 
 ## [0.1.0] - 2026-10-09
 

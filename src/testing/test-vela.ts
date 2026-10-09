@@ -163,11 +163,15 @@ export function createTestVela(options: TestVelaOptions = {}) {
       events.length = 0
       sessionIds.length = 0
     },
-    /** All text_delta text joined */
+    /** All streamed text (message_update text_delta) joined */
     streamedText: () =>
       events
-        .filter((e) => e.type === 'text_delta')
-        .map((e) => (e as { text: string }).text)
+        .flatMap((e) =>
+          e.type === 'message_update' &&
+          e.assistantMessageEvent.type === 'text_delta'
+            ? [e.assistantMessageEvent.delta]
+            : [],
+        )
         .join(''),
     /** Text of the default session's last assistant message */
     lastAssistantText: () => lastAssistantText(session.messages),

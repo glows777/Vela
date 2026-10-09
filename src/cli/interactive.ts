@@ -398,35 +398,49 @@ export class InteractiveMode {
         this.shownError = undefined
         this.startLoader('Thinking…')
         break
-      case 'message':
+      case 'message_start':
         if (event.message.role === 'user') this.renderMessage(event.message)
         break
       case 'turn_start':
         this.current = undefined
         this.startLoader('Thinking…')
         break
-      case 'thinking_delta':
-        this.assistant().appendThinking(event.text)
-        break
-      case 'text_delta':
-        this.assistant().appendText(event.text)
-        this.setLoader('Answering…')
-        break
-      case 'tool_call': {
-        this.current = undefined
-        this.addTool(event.toolCallId, event.toolName, event.input)
-        this.setLoader(`Running ${event.toolName}…`)
+      case 'message_update': {
+        const update = event.assistantMessageEvent
+        if (update.type === 'thinking_delta')
+          this.assistant().appendThinking(update.delta)
+        else if (update.type === 'text_delta') {
+          this.assistant().appendText(update.delta)
+          this.setLoader('Answering…')
+        } else if (update.type === 'toolcall_end') {
+          // Like pi: the tool block appears once the call is written; its result arrives with tool_execution_end
+          this.current = undefined
+          this.addTool(
+            update.toolCall.toolCallId,
+            update.toolCall.toolName,
+            update.toolCall.input,
+          )
+        }
         break
       }
-      case 'tool_result':
-        this.tools.get(event.toolCallId)?.setResult(event.output)
+      case 'message_end':
+        if (event.message.role !== 'assistant') break
+        // Like pi: a failed attempt keeps its partial text, marked as failed; a retry starts a new message
+        if (event.stopReason === 'error' && this.current?.hasContent)
+          this.current.markFailed()
+        this.current = undefined
         break
-      case 'tool_error':
-        this.tools.get(event.toolCallId)?.setResult(event.error, true)
+      case 'tool_execution_start':
+        if (!this.tools.has(event.toolCallId))
+          this.addTool(event.toolCallId, event.toolName, event.args)
+        this.setLoader(`Running ${event.toolName}…`)
         break
-      case 'retry':
+      case 'tool_execution_end':
+        this.tools.get(event.toolCallId)?.setResult(event.result, event.isError)
+        break
+      case 'auto_retry_start':
         this.addNotice(
-          `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxRetries}): ${errorMessage(event.error)}`,
+          `Request failed, retrying in ${Math.round(event.delayMs / 1000)}s (${event.attempt}/${event.maxAttempts}): ${event.errorMessage}`,
           'warning',
         )
         break
@@ -1072,6 +1086,8 @@ function contextLine(event: Extract<VelaEvent, { type: 'context' }>): string {
       return `[context] Summarized ${event.before} → ${event.after} tokens`
     case 'compact':
       return `[context] Manually compacted ${event.before} → ${event.after} tokens`
+    case 'overflow':
+      return `[context] The model said the context is too long; summarized ${event.before} → ${event.after} tokens and retrying`
   }
 }
 

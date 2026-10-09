@@ -1,33 +1,89 @@
-import type { ModelMessage } from 'ai'
+import type {
+  AssistantModelMessage,
+  ModelMessage,
+  ToolCallPart,
+  ToolResultPart,
+} from 'ai'
 import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 
 /**
  * Events the agent reports while it runs. Core code only emits events and never
  * writes to the terminal; the CLI, channels and tests decide how to show or assert them.
  */
+/** Why an assistant message ended (like pi's `stopReason`; on the event because `ModelMessage` has no such field). */
+export type StopReason = 'stop' | 'length' | 'toolUse' | 'aborted' | 'error'
+
+/**
+ * What changed in a streaming assistant message (same names and fields as pi's `AssistantMessageEvent`).
+ * `contentIndex` is the index of the changed part in `message.content`.
+ */
+export type AssistantMessageEvent =
+  | { type: 'text_start'; contentIndex: number }
+  | { type: 'text_delta'; contentIndex: number; delta: string }
+  | { type: 'text_end'; contentIndex: number; content: string }
+  | { type: 'thinking_start'; contentIndex: number }
+  | { type: 'thinking_delta'; contentIndex: number; delta: string }
+  | { type: 'thinking_end'; contentIndex: number; content: string }
+  | { type: 'toolcall_start'; contentIndex: number }
+  | { type: 'toolcall_delta'; contentIndex: number; delta: string }
+  | { type: 'toolcall_end'; contentIndex: number; toolCall: ToolCallPart }
+
+/**
+ * Events the agent reports while it runs. Core code only emits events and never
+ * writes to the terminal; the CLI, channels and tests decide how to show or assert them.
+ * Message and tool events have pi's shape (`message_start / message_update / message_end`,
+ * `tool_execution_start / update / end`), with AI SDK `ModelMessage`s as the messages.
+ */
 export type VelaEvent =
   /** session.prompt() starts handling a user input (including skills / dream triggered by slash commands) */
   | { type: 'agent_start'; input: string }
-  /** A message entered the session history: user input, model reply, tool result, loop-detection reminder */
-  | { type: 'message'; message: ModelMessage }
   | { type: 'turn_start'; turn: number }
-  | { type: 'text_delta'; text: string }
-  /** Model thinking / reasoning text (only when the provider returns it) */
-  | { type: 'thinking_delta'; text: string }
-  | { type: 'tool_call'; toolCallId: string; toolName: string; input: unknown }
+  /**
+   * A message starts. User, tool and loop-reminder messages get `message_start` and `message_end` back to back;
+   * an assistant message streams `message_update`s in between.
+   */
+  | { type: 'message_start'; message: ModelMessage }
+  /** The assistant message so far (`message`) and what just changed (`assistantMessageEvent`). */
   | {
-      type: 'tool_result'
-      toolCallId: string
-      toolName: string
-      input: unknown
-      output: unknown
+      type: 'message_update'
+      message: AssistantModelMessage
+      assistantMessageEvent: AssistantMessageEvent
     }
+  /**
+   * A message is complete. Assistant messages carry `stopReason` (and `errorMessage` when it is `error` / `aborted`).
+   * An assistant message that ended in a retried error is not in the session history; every other one is
+   * (an aborted / failed one with the text and whole tool calls received so far).
+   */
   | {
-      type: 'tool_error'
+      type: 'message_end'
+      message: ModelMessage
+      stopReason?: StopReason
+      errorMessage?: string
+    }
+  /** A tool call is about to run (after the assistant message's `message_end`). */
+  | {
+      type: 'tool_execution_start'
       toolCallId: string
       toolName: string
-      input: unknown
-      error: unknown
+      args: unknown
+    }
+  /** Partial output of a running tool (like pi; tools that stream their output emit it). */
+  | {
+      type: 'tool_execution_update'
+      toolCallId: string
+      toolName: string
+      args: unknown
+      partialResult: unknown
+    }
+  /** A tool call finished: `result` is the tool's output, or the error when `isError`. */
+  | {
+      type: 'tool_execution_end'
+      toolCallId: string
+      toolName: string
+      result: unknown
+      isError: boolean
+      /** How long the tool ran; absent when it did not run */
+      durationMs?: number
     }
   | {
       type: 'loop_detected'
@@ -35,12 +91,20 @@ export type VelaEvent =
       detector: string
       message: string
     }
+  /** A request failed with a retryable error; the step is sent again after `delayMs` (like pi). */
   | {
-      type: 'retry'
+      type: 'auto_retry_start'
       attempt: number
-      maxRetries: number
+      maxAttempts: number
       delayMs: number
-      error: unknown
+      errorMessage: string
+    }
+  /** Retrying ended: the step succeeded, or failed for good (`finalError`). */
+  | {
+      type: 'auto_retry_end'
+      success: boolean
+      attempt: number
+      finalError?: string
     }
   | {
       type: 'usage'
@@ -48,9 +112,20 @@ export type VelaEvent =
       usage: StepUsage
       record?: StepRecord
     }
-  | { type: 'turn_end'; turn: number; needsToolCall: boolean }
+  /** A turn (one assistant message and its tool results) ended. */
+  | {
+      type: 'turn_end'
+      turn: number
+      message: AssistantModelMessage
+      toolResults: ToolResultPart[]
+    }
+  /**
+   * The agent loop ended. `messages` are the messages it added (like pi); `reason` / `error` say why it stopped
+   * (Vela keeps them: `loop` is Vela's loop detection, and `prompt()` still rejects with `error`).
+   */
   | {
       type: 'agent_end'
+      messages: ModelMessage[]
       reason: 'done' | 'loop' | 'aborted' | 'error'
       error?: unknown
     }
@@ -63,8 +138,8 @@ export type VelaEvent =
   | { type: 'agent_settled' }
   | {
       type: 'context'
-      /** compact = manual summary via session.compact() */
-      action: 'micro' | 'summary' | 'summary-required' | 'compact'
+      /** compact = manual summary via session.compact(); overflow = summary after the provider said the context is too long */
+      action: 'micro' | 'summary' | 'summary-required' | 'compact' | 'overflow'
       before: number
       after?: number
       saved?: number

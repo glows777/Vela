@@ -32,7 +32,12 @@ export async function runPrintMode(options: {
   // -p prints only answers from this run, not old ones in a resumed session (e.g. `vela -c -p /memory` must not print the previous answer)
   let answer: ModelMessage | undefined
   const offAnswer = session.subscribe((event) => {
-    if (event.type === 'message' && event.message.role === 'assistant')
+    if (
+      event.type === 'message_end' &&
+      event.message.role === 'assistant' &&
+      event.stopReason !== 'error' &&
+      event.stopReason !== 'aborted'
+    )
       answer = event.message
   })
   const off: () => void =

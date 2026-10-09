@@ -33,6 +33,7 @@ export class UserMessage extends Container {
 export class AssistantMessage extends Container {
   private thinking = ''
   private text = ''
+  private failed = false
   private hideThinking: boolean
 
   constructor(hideThinking: boolean) {
@@ -47,6 +48,16 @@ export class AssistantMessage extends Container {
 
   appendText(delta: string): void {
     this.text += delta
+    this.rebuild()
+  }
+
+  get hasContent(): boolean {
+    return this.thinking.trim() !== '' || this.text.trim() !== ''
+  }
+
+  /** The request that produced this text failed (it was retried or the turn stopped). */
+  markFailed(): void {
+    this.failed = true
     this.rebuild()
   }
 
@@ -77,6 +88,8 @@ export class AssistantMessage extends Container {
       if (text) this.addChild(new Spacer(1))
     }
     if (text) this.addChild(new Markdown(text, 1, 0, markdownTheme))
+    if (this.failed)
+      this.addChild(new Text(theme.fg('red', '(response failed)'), 1, 0))
   }
 }
 

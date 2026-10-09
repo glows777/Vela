@@ -27,12 +27,14 @@ test('several tool calls in one response all run and all results go back togethe
 
   await t.run('What is in src?')
 
-  expect(t.eventsOf('tool_call').map((e) => e.toolName)).toEqual([
+  expect(t.eventsOf('tool_execution_start').map((e) => e.toolName)).toEqual([
     'find',
     'grep',
     'read_file',
   ])
-  expect(t.eventsOf('tool_result')).toHaveLength(3)
+  expect(
+    t.eventsOf('tool_execution_end').filter((e) => !e.isError),
+  ).toHaveLength(3)
   const second = t.model.calls[1]!
   expect(second.toolResults.map((r) => r.toolName).sort()).toEqual([
     'find',
@@ -73,7 +75,7 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
     ['write_file', 'out/hello.txt'],
     ['edit_file', 'out/hello.txt'],
   ])
-  expect(t.eventsOf('tool_error')).toEqual([])
+  expect(t.eventsOf('tool_execution_end').filter((e) => e.isError)).toEqual([])
 })
 
 test('bash runs in cwd and its output carries the timestamp post-hook', async () => {
@@ -108,7 +110,7 @@ test('a dangerous bash command is refused before it runs and the model sees why'
   expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
     '[Rejected] Dangerous operation detected',
   )
-  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'done',
   })
@@ -124,17 +126,19 @@ test('a tool that throws becomes a tool error the model can react to', async () 
 
   await t.run('Read missing.txt')
 
-  expect(t.eventTypes().slice(2, 5)).toEqual([
-    'turn_start',
-    'tool_call',
-    'tool_error',
-  ])
+  expect(
+    t.eventTypes().filter((type) => type.startsWith('tool_execution')),
+  ).toEqual(['tool_execution_start', 'tool_execution_end'])
+  expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
+    toolName: 'read_file',
+    isError: true,
+  })
   const result = t.model.calls[1]!.toolResults[0]!
   expect(result.toolName).toBe('read_file')
   expect(result.raw).toMatchObject({ type: 'error-text' })
   expect(result.output).toContain('ENOENT')
   expect(t.lastAssistantText()).toBe('The file does not exist')
-  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'done',
   })
@@ -155,12 +159,13 @@ test('an unknown tool and invalid arguments are rejected without crashing the lo
 
   expect(
     t
-      .eventsOf('tool_error')
+      .eventsOf('tool_execution_end')
+      .filter((e) => e.isError)
       .map((e) => e.toolName)
       .sort(),
   ).toEqual(['no_such_tool', 'read_file'])
   expect(t.model.calls[1]!.toolResults).toHaveLength(2)
-  expect(t.eventsOf('agent_end').at(-1)).toEqual({
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'done',
   })
@@ -213,8 +218,12 @@ test('a guest cannot use bash: the call is refused and recorded', async () => {
 
   await t.run('Run echo')
 
-  expect(t.eventsOf('tool_result')).toHaveLength(0)
-  expect(t.eventsOf('tool_error')).toHaveLength(1)
+  expect(
+    t.eventsOf('tool_execution_end').filter((e) => !e.isError),
+  ).toHaveLength(0)
+  expect(
+    t.eventsOf('tool_execution_end').filter((e) => e.isError),
+  ).toHaveLength(1)
   expect(t.lastAssistantText()).toBe('No permission')
 })
 
@@ -237,7 +246,11 @@ test('session permissions cannot grant a guest a tool its role forbids', async (
 
   await t.run('Run echo')
 
-  expect(t.eventsOf('tool_result')).toHaveLength(0)
-  expect(t.eventsOf('tool_error')).toHaveLength(1)
+  expect(
+    t.eventsOf('tool_execution_end').filter((e) => !e.isError),
+  ).toHaveLength(0)
+  expect(
+    t.eventsOf('tool_execution_end').filter((e) => e.isError),
+  ).toHaveLength(1)
   expect(t.lastAssistantText()).toBe('No permission')
 })

@@ -4,6 +4,7 @@ import {
   estimateRequestTokens,
 } from '../../src/context/request.ts'
 import {
+  fauxError,
   fauxHang,
   fauxSummary,
   fauxText,
@@ -170,4 +171,68 @@ test('session.compact() refuses while a task is running', async () => {
   await expect(t.session.compact()).rejects.toThrow('A task is already running')
   await t.session.abort()
   await expect(running).rejects.toThrow()
+})
+
+test('when the provider says the context is too long, Vela compacts once and sends the step again (like pi)', async () => {
+  const overflow = 'prompt is too long: 213462 tokens > 200000 maximum'
+  const t = createTestVela({
+    responses: [
+      ...Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
+      fauxError(`400 ${overflow}`),
+      fauxText('fits now'),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
+
+  await t.run('Question 4')
+
+  expect(t.lastAssistantText()).toBe('fits now')
+  // The step was sent again with the compacted history
+  const streams = t.model.calls.filter((c) => c.kind === 'stream')
+  expect(streams.at(-1)!.prompt.length).toBeLessThan(
+    streams.at(-2)!.prompt.length,
+  )
+  const overflowEvent = t
+    .eventsOf('context')
+    .find((e) => e.action === 'overflow')
+  expect(overflowEvent).toMatchObject({
+    before: expect.any(Number),
+    after: expect.any(Number),
+  })
+  // Not a retry: the failed request ends as an error, compaction runs, then the same step is sent again
+  expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
+  expect(t.session.contextManager.state.summary).toContain('## User goal')
+  expect(t.messages.at(-2)).toEqual({ role: 'user', content: 'Question 4' })
+})
+
+test('a second overflow in the same step fails the run with the provider error', async () => {
+  const overflow = '400 prompt is too long: 213462 tokens > 200000 maximum'
+  const t = createTestVela({
+    responses: [
+      ...Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
+      fauxError(overflow),
+      fauxError(overflow),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
+
+  await expect(t.run('Question 4')).rejects.toThrow('prompt is too long')
+  expect(
+    t.eventsOf('context').filter((e) => e.action === 'overflow'),
+  ).toHaveLength(1)
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({ reason: 'error' })
+})
+
+test('an overflow with nothing to compact fails and says why', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxError('400 prompt is too long: 213462 tokens > 200000 maximum'),
+    ],
+  })
+
+  await expect(t.run('hi')).rejects.toThrow(
+    'prompt is too long: 213462 tokens > 200000 maximum (compacting the context to recover failed: Nothing to compact',
+  )
 })

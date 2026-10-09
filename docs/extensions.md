@@ -223,7 +223,7 @@ Details:
 
 #### Notification events
 
-Every other session event (`agent_start`, `message`, `text_delta`, `usage`, `agent_end`, `context`, `channel_reply`, ...) is delivered to handlers as a notification: return values are ignored, async handlers are not awaited, and errors are logged. The `tool_call` and `tool_result` names refer to the intercepting events above. The event types and their fields are listed in [SDK](sdk.md#events).
+Every other session event (`agent_start`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`, `usage`, `agent_end`, `context`, `channel_reply`, ...) is delivered to handlers as a notification: return values are ignored, async handlers are not awaited, and errors are logged. The `tool_call` and `tool_result` names refer to the intercepting events above. The event types and their fields are listed in [SDK](sdk.md#events).
 
 ## Context
 

@@ -391,7 +391,8 @@ export class VelaSession {
     this.messages.push(message)
     this.tracker.addMessage(message)
     this.timestamps.set(message, Date.now())
-    this.emit({ type: 'message', message })
+    this.emit({ type: 'message_start', message })
+    this.emit({ type: 'message_end', message })
   }
 
   /**
@@ -592,7 +593,12 @@ export class VelaSession {
     const input = inputs.join('\n\n')
     this.sections = await this.deps.extensions.beforeAgentStart(this, input)
     this.emit({ type: 'agent_start', input })
-    for (const text of inputs) this.append({ role: 'user', content: text })
+    const newMessages: ModelMessage[] = []
+    for (const text of inputs) {
+      const message: ModelMessage = { role: 'user', content: text }
+      this.append(message)
+      newMessages.push(message)
+    }
     await agentLoop({
       model,
       reasoning,
@@ -601,12 +607,29 @@ export class VelaSession {
       messages: this.messages,
       tokenTracker: this.tracker,
       prepareContext: (request) => this.prepareContext(request),
+      compactOnOverflow: (overflowSignal) =>
+        this.compactForOverflow(overflowSignal),
+      newMessages,
       abortSignal: signal,
       onEvent: this.emit,
       limits: this.limits,
       takeSteering: () => this.dequeue('steering'),
       takeFollowUp: () => this.dequeue('followUp'),
     })
+  }
+
+  /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
+  private async compactForOverflow(signal?: AbortSignal): Promise<void> {
+    const request = await createRequestSnapshot(
+      this.model,
+      this.buildSystem(),
+      this.registry.toAISDKFormat(),
+      this.messages,
+      signal,
+    )
+    if (!canSummarize(request.messages))
+      throw new Error('Nothing to compact (session too small)')
+    await this.contextManager.compact(request, undefined, 'overflow')
   }
 
   /**

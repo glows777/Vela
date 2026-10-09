@@ -44,7 +44,11 @@ async function record(
 const shape = (events: VelaEvent[]) =>
   events
     .filter((e) => e.type !== 'usage')
-    .map((e) => (e.type === 'tool_call' ? `tool_call:${e.toolName}` : e.type))
+    .map((e) =>
+      e.type === 'tool_execution_start'
+        ? `tool_execution_start:${e.toolName}`
+        : e.type,
+    )
 
 test('a recorded session replays offline with the same events and answers', async () => {
   const files = { 'notes.txt': 'remember the milk' }
@@ -99,7 +103,7 @@ test('request errors, mid-stream errors and retries are recorded as faux errors'
       { error: '400 Bad Request' },
     ])
     const replay = await replayScenario(path)
-    expect(replay.t.eventsOf('retry')).toHaveLength(2)
+    expect(replay.t.eventsOf('auto_retry_start')).toHaveLength(2)
     expect(replay.errors[0]).toBeUndefined()
     expect((replay.errors[1] as Error).message).toContain('400')
   } finally {
@@ -119,7 +123,7 @@ test('an aborted request is recorded as hang', async () => {
     )
     const t = createTestVela({ model: recorder.model })
     const running = t.run('Wait')
-    while (t.eventsOf('text_delta').length === 0) await Bun.sleep(1)
+    while (!t.streamedText()) await Bun.sleep(1)
     t.session.abort()
     await running.catch(() => {})
     await recorder.flush()

@@ -5,6 +5,7 @@ import type { ProviderDefinition } from '../../src/models/index.ts'
 import {
   createFauxModel,
   fauxHang,
+  fauxStreamError,
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
@@ -41,6 +42,28 @@ test('a prompt shows the user message, tool calls with results and the streamed 
   expect(screen).toMatch(/faux.* · medium/)
   await tui.until(() => !t.vela.session('tui').isRunning)
   expect(tui.screen()).not.toContain('Esc to interrupt)')
+})
+
+test('a retried response keeps its partial text marked as failed, and the retry is a new message (like pi)', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxStreamError('ECONNRESET', 'Half an ans'),
+      fauxText('The full answer'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('hi')
+  await tui.until('The full answer')
+
+  const screen = tui.screen()
+  expect(screen).toContain('Half an ans')
+  expect(screen).toContain('(response failed)')
+  expect(screen).toContain('Request failed, retrying')
+  expect(screen.indexOf('(response failed)')).toBeLessThan(
+    screen.indexOf('The full answer'),
+  )
 })
 
 test('Enter while running steers, Alt+Enter queues a follow-up, Esc puts the queue back and aborts', async () => {

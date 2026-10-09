@@ -1,5 +1,5 @@
 /**
- * Subscribe to session events: streamed text, tool calls and results, usage and the end of the run.
+ * Subscribe to session events (pi's shape): streamed text, tool calls and results, usage and the end of the run.
  *
  * The faux model first asks for the `read_file` tool, then answers. The tool really runs,
  * against a temporary working directory created here.
@@ -36,30 +36,37 @@ try {
       case 'turn_start':
         console.log(`[turn_start] turn ${event.turn}`)
         break
-      case 'text_delta':
-        process.stdout.write(event.text)
-        streaming = true
+      case 'message_update':
+        // The assistant message streams as updates; text_delta carries the new text
+        if (event.assistantMessageEvent.type === 'text_delta') {
+          process.stdout.write(event.assistantMessageEvent.delta)
+          streaming = true
+        }
         break
-      case 'tool_call':
+      case 'message_end':
+        if (event.message.role === 'assistant')
+          console.log(
+            `${streaming ? '\n' : ''}[message_end] assistant, ${event.stopReason}`,
+          )
+        streaming = false
+        break
+      case 'tool_execution_start':
         console.log(
-          `[tool_call] ${event.toolName} ${JSON.stringify(event.input)}`,
+          `[tool_execution_start] ${event.toolName} ${JSON.stringify(event.args)}`,
         )
         break
-      case 'tool_result':
+      case 'tool_execution_end':
         console.log(
-          `[tool_result] ${event.toolName}: ${String(event.output).split('\n')[0]}`,
+          `[tool_execution_end] ${event.toolName}: ${String(event.result).split('\n')[0]}`,
         )
         break
       case 'usage':
-        // usage follows the streamed text of a model response
-        if (streaming) process.stdout.write('\n')
-        streaming = false
         console.log(
           `[usage] in=${event.usage.inputTokens} out=${event.usage.outputTokens}`,
         )
         break
       case 'turn_end':
-        console.log(`[turn_end] needsToolCall=${event.needsToolCall}`)
+        console.log(`[turn_end] ${event.toolResults.length} tool result(s)`)
         break
       case 'agent_end':
         console.log(`[agent_end] ${event.reason}`)

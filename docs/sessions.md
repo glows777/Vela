@@ -114,9 +114,30 @@ A warning emits `loop_detected` and adds a user message after that step telling 
 
 ## Retries
 
-When a model request fails with a transient error, Vela retries it with exponential backoff and jitter: `min(retryBaseMs × 2^(attempt-1), retryMaxMs)`, then ±25% jitter, up to `maxRetries` times (defaults 500 ms, 30 s, 3). Each retry emits a `retry` event.
+When a model request fails with a transient error, Vela retries it with exponential backoff and jitter: `min(retryBaseMs × 2^(attempt-1), retryMaxMs)`, then ±25% jitter, up to `maxRetries` times (defaults 500 ms, 30 s, 3). Like pi, the failed attempt's assistant message ends with `stopReason: 'error'` (the TUI keeps its partial text marked as failed) and is not kept in the history; `auto_retry_start` is emitted before each new attempt, and `auto_retry_end` when the request succeeds or retrying gives up. A request is never sent again once its tools have started running.
 
 Retryable errors are HTTP 408, 409, 429, 5xx and 529 (as reported by the provider), connection resets, timeouts, network failures and streams that produced no output. Other 4xx errors fail right away. An abort is never retried.
+
+## Interrupted and failed turns
+
+When a turn is aborted or fails for good, what it produced stays in the history, so the model knows what already happened. Unlike pi, which keeps an interrupted message in the session but leaves it out of the model's context, Vela sends the partial text to the model too: the history is also what a resumed session shows.
+
+- The text streamed so far and every tool call the model finished writing are kept as the assistant message; half-written reasoning and tool calls are dropped. Its `message_end` has `stopReason: 'aborted'` or `'error'`.
+- Each kept tool call gets a result: its real result if it finished, otherwise an error result (`Operation aborted`, as in pi, or that the call was not executed because the response failed).
+
+`agent_end` reports `aborted` or `error`, and `prompt()` rejects, as before.
+
+## Truncated responses
+
+When the model hits its output token limit (`stopReason: 'length'`) while writing tool calls, their arguments may be cut off, so the tools are not run. Like pi, each call gets an error result telling the model the response was truncated and to re-issue the call with complete arguments, and the loop continues.
+
+## Context overflow
+
+The size estimate can be wrong. When the provider rejects a request because the context is too long (recognized with pi's list of provider error messages, for example Anthropic's `prompt is too long`), Vela summarizes the history like `/compact` (`context` event with `action: 'overflow'`) and sends the same step again, once, like pi. If it overflows again, or there is nothing to summarize, the run fails with the provider's error.
+
+## Prompt caching
+
+With Anthropic models, Vela marks the system prompt, the last tool definition and the last message as cache breakpoints (`cache_control: ephemeral`, the default 5-minute cache), like pi. Each request then reads the prefix the previous one wrote; `/usage` shows the cache hit rate. Other providers ignore the markers (OpenAI caches automatically).
 
 ## Usage
 

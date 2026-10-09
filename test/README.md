@@ -105,8 +105,8 @@ t.internals                       // internals: registry, hooks, builder, gatewa
 t.session                         // the default session (id = sessionId, 'default' by default)
 await t.run('read a.txt')         // = t.session.prompt()
 t.vela.session('other')           // another session on the same Vela
-t.eventTypes()                    // events from all sessions: ['agent_start', 'message', 'turn_start', ...]
-t.eventsOf('tool_call')           // events of one type, typed
+t.eventTypes()                    // events from all sessions: ['agent_start', 'message_start', 'message_end', 'turn_start', ...]
+t.eventsOf('tool_execution_start') // events of one type, typed
 t.eventsIn('other')               // events of one session
 t.streamedText(); t.lastAssistantText(); t.messages
 t.model.calls                     // requests the model received
@@ -125,7 +125,7 @@ Slash commands print to the terminal; collect their output with `captureConsole(
 
 ### Events
 
-`session.subscribe(listener)` receives only that session's events; `vela.subscribe((event, sessionId) => …)` receives every session's. One `prompt()` emits, in order: `agent_start{input}` → `message` (the user input) → per turn `turn_start` … (`thinking_delta`, `text_delta`, `tool_call`, `tool_result` / `tool_error`, `retry`, `usage`) … `message` (the assistant / tool messages added this turn, and loop-detection reminders) → `turn_end` → (messages steered in while running: `message`, then another turn; follow-ups are taken when the model would otherwise stop and, again after a `message`, continue in the same loop, like pi) → `agent_end{reason}` → (messages still queued after a loop error or abort start a new loop) → finally `agent_settled`. Queue changes emit `queue_update{steering, followUp}`. There are also `context` (compaction), `audit`, `security_warning`, `session_save_failed` and `notify` (an extension's `ui.notify` when there is no UI); channel sessions also emit `channel_message` / `channel_reply` / `channel_error`.
+`session.subscribe(listener)` receives only that session's events; `vela.subscribe((event, sessionId) => …)` receives every session's. Message and tool events have pi's shape. One `prompt()` emits, in order: `agent_start{input}` → `message_start` / `message_end` (the user input) → per turn `turn_start` → `message_start` (assistant) → `message_update`s (`assistantMessageEvent`: `text_*`, `thinking_*`, `toolcall_*`) → `message_end{stopReason}` → `tool_execution_start` / `tool_execution_end` per tool call → `usage` → `message_start` / `message_end` (the tool results, then loop-detection reminders) → `turn_end{message, toolResults}` → (messages steered in while running: `message_start` / `message_end`, then another turn; follow-ups are taken when the model would otherwise stop and continue in the same loop, like pi) → `agent_end{messages, reason}`. A retried attempt ends its assistant message with `stopReason: 'error'` and is followed by `auto_retry_start` (and finally `auto_retry_end`); an aborted or failed turn keeps its partial message in history (`stopReason: 'aborted'` / `'error'`), its tool calls answered with errors → (messages still queued after a loop error or abort start a new loop) → finally `agent_settled`. Queue changes emit `queue_update{steering, followUp}`. There are also `context` (compaction), `audit`, `security_warning`, `session_save_failed` and `notify` (an extension's `ui.notify` when there is no UI); channel sessions also emit `channel_message` / `channel_reply` / `channel_error`.
 
 Core never writes to the terminal (`test/unit/boundary.test.ts` guards this): diagnostics that aren't events go to `createVela({ logger })`, which is silent by default.
 

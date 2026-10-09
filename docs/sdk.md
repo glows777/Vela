@@ -12,7 +12,8 @@ const vela = createVela({ model: 'openai/<model-id>', providers: myProviders })
 try {
   const session = vela.session()
   session.subscribe((event) => {
-    if (event.type === 'text_delta') process.stdout.write(event.text)
+    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta')
+      process.stdout.write(event.assistantMessageEvent.delta)
   })
   await session.prompt('What files are in the current directory?')
 } finally {
@@ -145,40 +146,46 @@ Input starting with `/` that names an extension command runs the command instead
 
 `session.subscribe()` receives that session's events; `vela.subscribe()` receives events from every session with the session id. Core never writes to the terminal: everything the CLI shows comes from these events.
 
-One prompt produces:
+Message and tool events have pi's shape (`message_start / message_update / message_end`, `tool_execution_start / update / end`, `auto_retry_start / end`); the messages in them are AI SDK `ModelMessage`s. One prompt produces:
 
 ```
 agent_start
-message                      the user input
+message_start, message_end            the user input
 turn_start
-  text_delta / thinking_delta / tool_call / tool_result / tool_error / retry / usage ...
-  message ...                the assistant message, then the tool results
+  message_start                        the assistant message starts
+  message_update ...                   text / thinking / tool call streaming in
+  message_end                          the assistant message, with stopReason
+  tool_execution_start ...             its tool calls run
+  tool_execution_end ...
+  usage
+  message_start, message_end           the tool results message
 turn_end
-turn_start ...               another turn if the model called tools
+turn_start ...                         another turn if the model called tools
 agent_end
 agent_settled
 ```
 
-Steered messages arrive as another `message` followed by another turn. Follow-ups are taken when the model would otherwise stop and continue in the same loop. `agent_end` closes one agent loop; if messages are still queued after an error or a loop-detection stop, a new loop starts; after an abort they stay queued for the next prompt. `agent_settled` comes last and means the session is idle and nothing else will run on its own.
+Steered messages arrive as another `message_start` / `message_end` followed by another turn. Follow-ups are taken when the model would otherwise stop and continue in the same loop. `agent_end` closes one agent loop; if messages are still queued after an error or a loop-detection stop, a new loop starts; after an abort they stay queued for the next prompt. `agent_settled` comes last and means the session is idle and nothing else will run on its own.
 
 | Type | Fields | When |
 |---|---|---|
 | `agent_start` | `input` | A loop starts handling user input (queued inputs taken together are joined with a blank line) |
-| `message` | `message` (`ModelMessage`) | A message entered the history: user input, model reply (`text`, `reasoning` and `tool-call` parts), tool results (`tool-result` parts), loop-detection reminder. The assistant `message` is the authoritative final text; `text_delta` is for live display. |
 | `turn_start` | `turn` | Before each model request (1-based within the loop) |
-| `text_delta` | `text` | A chunk of streamed answer text |
-| `thinking_delta` | `text` | Streamed reasoning text, when the provider returns it |
-| `tool_call` | `toolCallId`, `toolName`, `input` | The model called a tool |
-| `tool_result` | `toolCallId`, `toolName`, `input`, `output` | A tool finished. A call blocked by an extension or refused by a role or permission rule also ends here, with the reason as `output`. |
-| `tool_error` | `toolCallId`, `toolName`, `input`, `error` | A tool threw, or the call was invalid. The error goes back to the model. |
+| `message_start` | `message` (`ModelMessage`) | A message starts: user input, the assistant reply, tool results (`tool-result` parts), loop-detection reminder. Every message except the streaming assistant one gets `message_start` and `message_end` back to back. |
+| `message_update` | `message` (the assistant message so far), `assistantMessageEvent` | The assistant message is streaming. `assistantMessageEvent` says what changed, with pi's names: `text_start` / `text_delta` / `text_end`, `thinking_start` / `thinking_delta` / `thinking_end`, `toolcall_start` / `toolcall_delta` / `toolcall_end`; each has `contentIndex` (the part in `message.content`), deltas have `delta`, `toolcall_end` has `toolCall`. |
+| `message_end` | `message`, `stopReason?`, `errorMessage?` | A message is complete. Assistant messages carry `stopReason`: `stop`, `toolUse`, `length` (cut off by the output limit), `aborted` or `error` (with `errorMessage`). The assistant `message_end` is the authoritative final text. |
+| `tool_execution_start` | `toolCallId`, `toolName`, `args` | A tool call is about to run (after the assistant `message_end`) |
+| `tool_execution_update` | `toolCallId`, `toolName`, `args`, `partialResult` | Partial output of a running tool, for tools that stream it |
+| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError`, `durationMs?` | A tool call finished. `result` is the output, or the error when `isError`. A call blocked by an extension or refused by a role or permission rule ends here with the reason as `result`. The result goes back to the model. |
 | `loop_detected` | `level` (`warning` or `critical`), `detector`, `message` | Repeated tool calls were detected. `warning` adds a reminder to the history; `critical` stops the loop with `agent_end` reason `loop`. |
-| `retry` | `attempt`, `maxRetries`, `delayMs`, `error` | A retryable model error; the request runs again after `delayMs`. Text already streamed by the failed attempt does not enter the history, so a UI should drop it. |
+| `auto_retry_start` | `attempt`, `maxAttempts`, `delayMs`, `errorMessage` | A retryable model error; the request runs again after `delayMs`. The failed attempt's assistant message ended with `stopReason: 'error'` and is not in the history; the retry streams a new assistant message. See [Sessions](sessions.md#retries). |
+| `auto_retry_end` | `success`, `attempt`, `finalError?` | Retrying ended: the request succeeded, or failed for good |
 | `usage` | `modelId`, `usage` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`), `record?` (adds `cost` in USD, absent when the model has no known price, `ts`, `model`, `kind` (`main` or `summary`), `durationMs` and the provider's raw `usage`) | After each model request |
-| `turn_end` | `turn`, `needsToolCall` | After each model request and its tools. `needsToolCall` is true when another turn follows to send tool results back. |
-| `agent_end` | `reason` (`done`, `loop`, `aborted`, `error`), `error?` | The loop ended. Queued messages may still start another loop. |
+| `turn_end` | `turn`, `message` (the assistant message), `toolResults` (`tool-result` parts) | After each model request and its tools, including one that was aborted or failed |
+| `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `loop`, `aborted`, `error`), `error?` | The loop ended. Queued messages may still start another loop. |
 | `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
-| `context` | `action`, `before`, `after?`, `saved?`, `calls?`, `messages?` | Context management ran: `micro` (old tool results folded), `summary` (history summarized), `summary-required` (the summary threshold was reached but this run may not summarize) or `compact` (manual compaction). Token counts are estimates. See [Sessions](sessions.md#compaction). |
+| `context` | `action`, `before`, `after?`, `saved?`, `calls?`, `messages?` | Context management ran: `micro` (old tool results folded), `summary` (history summarized), `summary-required` (the summary threshold was reached but this run may not summarize) `compact` (manual compaction) or `overflow` (summarized because the provider said the context is too long). Token counts are estimates. See [Sessions](sessions.md#compaction). |
 | `session_save_failed` | `error` | Saving the session failed (the run itself continued) |
 | `audit` | `toolName`, `path` | Before `write_file` or `edit_file` writes `path` |
 | `security_warning` | `toolName`, `reason`, `command` | A bash command was rated medium risk; it still runs |
@@ -187,7 +194,7 @@ Steered messages arrive as another `message` followed by another turn. Follow-up
 | `channel_reply` | `channel`, `recipientId`, `text` | A channel sent a reply |
 | `channel_error` | `channel`, `senderId`, `error`, `aborted` | A channel turn failed or was aborted |
 
-The types are `VelaEvent`, `VelaEventListener` and `VelaSessionEventListener`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` and `--mode rpc` write these same events as JSON lines, see [JSON mode](json.md).
+The types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` and `--mode rpc` write these same events as JSON lines, see [JSON mode](json.md).
 
 See [02-events.ts](../examples/sdk/02-events.ts).
 
