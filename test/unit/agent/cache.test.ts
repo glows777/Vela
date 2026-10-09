@@ -57,3 +57,28 @@ test('the Anthropic request carries cache breakpoints on the system prompt, the 
   // History is not changed
   expect(messages[2]).toEqual({ role: 'user', content: 'second' })
 })
+
+test('the cache breakpoint keeps other Anthropic options already set on the tool and the message', () => {
+  const deferred = {
+    ...tools.bash,
+    providerOptions: { anthropic: { deferLoading: true } },
+  }
+  const { tools: sentTools, messages: sent } = withPromptCache({
+    system: 'S',
+    tools: { read_file: tools.read_file, bash: deferred },
+    messages: [
+      {
+        role: 'user',
+        content: 'hi',
+        providerOptions: { anthropic: { custom: 1 }, other: { x: 1 } },
+      },
+    ],
+  })
+  expect(sentTools.bash?.providerOptions).toEqual({
+    anthropic: { deferLoading: true, cacheControl: { type: 'ephemeral' } },
+  })
+  expect(sent[0]?.providerOptions).toEqual({
+    anthropic: { custom: 1, cacheControl: { type: 'ephemeral' } },
+    other: { x: 1 },
+  })
+})

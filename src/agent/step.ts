@@ -73,7 +73,14 @@ export class StepMessage {
             (part.type === 'tool-call' && finished.has(part.toolCallId)),
       )
       .filter((part) => part.type !== 'text' || part.text !== '')
-      .map((part) => ({ ...part }))
+      .map((part) => {
+        if (complete) return { ...part }
+        // Replayed as plain text and calls: provider metadata of an interrupted response points at items the
+        // provider may not have kept (e.g. OpenAI Responses sends a text part's itemId as an item_reference,
+        // which also needs the dropped reasoning item), so replaying it would break every later request
+        const { providerOptions: _, ...plain } = part
+        return plain
+      })
     return { role: 'assistant', content }
   }
 

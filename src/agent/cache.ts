@@ -1,3 +1,4 @@
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider'
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai'
 
 /**
@@ -6,9 +7,15 @@ import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai'
  * The `anthropic` provider options are only read by the Anthropic provider; other providers ignore them.
  * Messages and tools are copied, never changed: history keeps no cache markers.
  */
-const cacheControl = {
-  anthropic: { cacheControl: { type: 'ephemeral' } },
-} as const
+const cacheControl = { type: 'ephemeral' } as const
+
+/** Adds the cache breakpoint to provider options, keeping any other Anthropic options already set. */
+const withCacheControl = (
+  providerOptions: SharedV4ProviderOptions | undefined,
+): SharedV4ProviderOptions => ({
+  ...providerOptions,
+  anthropic: { ...providerOptions?.anthropic, cacheControl },
+})
 
 export function withPromptCache(request: {
   system: string
@@ -28,10 +35,9 @@ export function withPromptCache(request: {
           ...request.tools,
           [lastTool]: {
             ...request.tools[lastTool],
-            providerOptions: {
-              ...request.tools[lastTool]?.providerOptions,
-              ...cacheControl,
-            },
+            providerOptions: withCacheControl(
+              request.tools[lastTool]?.providerOptions,
+            ),
           } as ToolSet[string],
         }
   const last = request.messages.at(-1)
@@ -42,14 +48,14 @@ export function withPromptCache(request: {
           ...request.messages.slice(0, -1),
           {
             ...last,
-            providerOptions: { ...last.providerOptions, ...cacheControl },
+            providerOptions: withCacheControl(last.providerOptions),
           } as ModelMessage,
         ]
   return {
     instructions: {
       role: 'system',
       content: request.system,
-      providerOptions: cacheControl,
+      providerOptions: withCacheControl(undefined),
     },
     tools,
     messages,
