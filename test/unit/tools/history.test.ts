@@ -175,7 +175,7 @@ test('begin storage failure prevents execution; rejection records preserve inval
   })
 })
 
-test('new sessions get separate histories; checkpoint resume reuses exact history and sequence', async () => {
+test('new sessions get separate histories; session resume reuses exact history and sequence', async () => {
   const session = new SessionStore('default', join(root, 'sessions'))
   const registry = new ToolRegistry(session.results)
   registry.register({
@@ -185,10 +185,11 @@ test('new sessions get separate histories; checkpoint resume reuses exact histor
     execute: async () => 'saved',
   })
   await registry.toAISDKFormat().one!.execute!({}, options('one'))
-  await session.replace([], new Map(), 'summary')
+  session.appendMessage({ role: 'user', content: 'hi' })
+  await session.flush()
   const resumed = new SessionStore('default', join(root, 'sessions'))
   expect(resumed.results.historyId).not.toBe(session.results.historyId)
-  await resumed.loadState()
+  await resumed.loadSaved()
   expect(resumed.results.indexPath).toBe(session.results.indexPath)
   expect(resumed.results.history.throughSequence).toBe(2)
   expect((await resumed.results.history.completed('one'))?.output).toBe('saved')
@@ -315,9 +316,10 @@ test('legacy references are indexed honestly without inventing call parameters',
   expect(records[0].input).toBeUndefined()
 })
 
-test('SIGKILL after the start record leaves an unconfirmed call recoverable from the checkpoint', async () => {
+test('SIGKILL after the start record leaves an unconfirmed call recoverable from the session', async () => {
   const session = new SessionStore('crash', join(root, 'crash-session'))
-  await session.replace([], new Map(), '')
+  session.appendMessage({ role: 'user', content: 'hi' })
+  await session.flush()
   const modulePath = new URL(
     '../../../src/session/tool-history.ts',
     import.meta.url,
@@ -330,7 +332,7 @@ test('SIGKILL after the start record leaves an unconfirmed call recoverable from
   })
   expect(await child.exited).not.toBe(0)
   const restored = new SessionStore('crash', join(root, 'crash-session'))
-  await restored.loadState()
+  await restored.loadSaved()
   expect(restored.results.indexPath).toBe(session.results.indexPath)
   expect(await restored.results.history.completed('crash-sdk')).toBeUndefined()
   const records = await read(restored.results)

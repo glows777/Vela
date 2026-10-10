@@ -22,7 +22,9 @@ import {
 } from './models/index.ts'
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
+import type { NestedToolCalls, SessionEntry } from './session/entries.ts'
 import { SessionStore } from './session/index.ts'
+import { NestedCallLog } from './session/nested-calls.ts'
 import type { SessionStorage } from './session/storage.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import {
@@ -99,6 +101,8 @@ export interface SessionDeps {
   limitOverrides: Partial<VelaLimits>
   logger: VelaLogger
   dataDir: string
+  /** Working directory, recorded in new session files */
+  cwd?: string
   /** Where session history is stored (file / memory / custom) */
   sessionStorage: SessionStorage
   /** dataDir is a temp dir that dispose() deletes (no dataDir given): tool history may be gone on resume */
@@ -144,6 +148,8 @@ export class VelaSession {
   readonly hasUI: boolean
 
   private readonly listeners = new Set<VelaEventListener>()
+  /** Calls tools made through ctx.executeTool(), recorded on their caller's tool result (like pi's nestedCalls) */
+  private readonly nestedCalls = new NestedCallLog()
   private readonly builder: PromptPipeline
   private readonly deps: SessionDeps
   private closed = false
@@ -173,6 +179,7 @@ export class VelaSession {
       deps.logger,
       deps.sessionStorage,
       deps.temporaryDataDir,
+      deps.cwd,
     )
     this.hasUI = options.ui !== undefined
     this.ui = options.ui ? withDefaults(options.ui) : headlessUI(this.emit)
@@ -197,14 +204,10 @@ export class VelaSession {
       this.limits,
     )
     this.timestamps = this.contextManager.state.timestamps
-    this.store.settings = () => ({
-      model:
-        typeof this.modelChoice === 'string'
-          ? (this.resolved?.info.ref ?? this.modelChoice)
-          : undefined,
-      thinkingLevel: this.thinking,
-      ...(this.displayName ? { name: this.displayName } : {}),
-    })
+    // Like pi: a new session starts with its model and thinking level (written with the first message)
+    if (typeof this.modelChoice === 'string')
+      this.store.appendModelChange(this.modelChoice)
+    this.store.appendThinkingLevelChange(this.thinking)
   }
 
   private displayName?: string
@@ -214,9 +217,12 @@ export class VelaSession {
     return this.displayName
   }
 
-  /** Sets the display name (empty string clears it); written on the next save. Call `await save()` to write it now. */
+  /** Sets the display name (empty string clears it), appended to the session like pi's session_info. */
   setName(name: string | undefined): void {
-    this.displayName = name?.trim() || undefined
+    const next = name?.replace(/[\r\n]+/g, ' ').trim() || undefined
+    if (next === this.displayName) return
+    this.displayName = next
+    this.store.appendSessionInfo(next)
   }
 
   /** Selected model (name or object); resolution is deferred until first use (providers registered by extensions may not be loaded yet) */
@@ -253,12 +259,18 @@ export class VelaSession {
   /**
    * Switches the model (like pi's setModel): `provider/id` or LanguageModel, effective from the next prompt().
    * Compaction thresholds are recomputed from the new model's context window. Throws and keeps the
-   * current model if the name cannot be resolved. A model chosen by name is saved with the session.
+   * current model if the name cannot be resolved. A model chosen by name is appended to the session (`model_change`).
    */
   setModel(model: string | LanguageModel): void {
+    this.selectModel(model, true)
+  }
+
+  private selectModel(model: string | LanguageModel, record: boolean): void {
     const resolved = this.deps.resolveModel(model)
     this.modelChoice = model
     this.applyModel(resolved)
+    if (record && typeof model === 'string')
+      this.store.appendModelChange(resolved.info.ref ?? model)
   }
 
   /** Thinking level (off … max, default medium). */
@@ -275,7 +287,9 @@ export class VelaSession {
       throw new Error(
         `Thinking level must be one of ${THINKING_LEVELS.join(' / ')}`,
       )
+    if (level === this.thinking) return
     this.thinking = level
+    this.store.appendThinkingLevelChange(level)
   }
 
   /** Session role (owner / collaborator / guest): decides which tools are available and whether extension commands can run. */
@@ -315,6 +329,7 @@ export class VelaSession {
 
   /** @internal Emits an event to this session's subscribers and Vela's subscribers. */
   readonly emit = (event: VelaEvent): void => {
+    this.nestedCalls.observe(event)
     for (const listener of this.listeners) listener(event)
     this.deps.forward(event, this.id)
   }
@@ -355,27 +370,36 @@ export class VelaSession {
     return this.contextManager.prepare(request, options)
   }
 
-  /** @internal Writes the current history to storage. */
+  /** @internal Waits until the session's entries are written to storage; rejects if some could not be. */
   save(): Promise<void> {
     return this.contextManager.save()
+  }
+
+  /**
+   * The session's entries in append order (a copy; like pi's `getEntries()`): messages, including summarized
+   * ones and aborted messages that are no longer sent to the model, compactions, context edits and setting changes.
+   */
+  getEntries(): SessionEntry[] {
+    return this.store.getEntries()
   }
 
   /** Restores history from session storage (replacing the in-memory history); returns whether a saved session was found. Not allowed while running. */
   async resume(): Promise<boolean> {
     if (this.busy.locked)
       throw new Error(`Session ${this.id} is running; cannot restore history`)
+    // Entries not yet written would be replaced by the loaded ones
+    await this.store.flush()
     const saved = await this.store.loadSaved()
     if (!saved) return false
     this.contextManager.restore(saved)
-    if (saved.name) this.displayName = saved.name
-    // Older checkpoints lack this field: keep the current level
+    this.displayName = saved.name
     if (saved.thinkingLevel && THINKING_LEVELS.includes(saved.thinkingLevel))
       this.thinking = saved.thinkingLevel
     if (saved.model) {
       // Providers registered by extensions resolve only after extensions load
       await this.deps.extensions.ready.catch(() => {})
       try {
-        this.setModel(saved.model)
+        this.selectModel(saved.model, false)
       } catch (error) {
         this.deps.logger.warn(
           `[session] Saved model ${saved.model} for ${this.id} is unavailable, keeping the current model: ${error instanceof Error ? error.message : error}`,
@@ -386,13 +410,26 @@ export class VelaSession {
     return true
   }
 
-  /** Appends a message to history (without calling the model). */
+  /** Appends a message to history and the session (without calling the model). */
   append(message: ModelMessage): void {
     this.messages.push(message)
     this.tracker.addMessage(message)
-    this.timestamps.set(message, Date.now())
+    this.record(message)
     this.emit({ type: 'message_start', message })
     this.emit({ type: 'message_end', message })
+  }
+
+  /** Appends a message that entered the history to the session; a tool message carries the nested calls its tools made. */
+  private record(message: ModelMessage): void {
+    this.timestamps.set(message, Date.now())
+    const nestedCalls: Record<string, NestedToolCalls> = {}
+    if (message.role === 'tool')
+      for (const part of message.content) {
+        if (part.type !== 'tool-result') continue
+        const calls = this.nestedCalls.take(part.toolCallId)
+        if (calls) nestedCalls[part.toolCallId] = calls
+      }
+    this.store.appendMessage(message, { nestedCalls })
   }
 
   /**
@@ -608,6 +645,8 @@ export class VelaSession {
     const reasoning = reasoningOption(this.thinking, info)
     const input = inputs.join('\n\n')
     this.sections = await this.deps.extensions.beforeAgentStart(this, input)
+    // Appending to a saved session that was not resumed would mix two conversations in one log
+    await this.store.assertNew()
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
     for (const text of inputs) {
@@ -631,6 +670,10 @@ export class VelaSession {
       limits: this.limits,
       takeSteering: () => this.dequeue('steering'),
       takeFollowUp: () => this.dequeue('followUp'),
+      onMessage: (message) => this.record(message),
+      // Like pi: kept in the session, never sent to the model again
+      onInterrupted: (message, stopReason) =>
+        this.store.appendMessage(message, { stopReason }),
     })
   }
 
@@ -674,6 +717,7 @@ export class VelaSession {
       if (!canSummarize(request.messages))
         throw new Error('Nothing to compact (session too small)')
       await this.contextManager.compact(request, focus)
+      await this.saveOrReport()
     })()
     const running = run.then(
       () => {},
@@ -723,6 +767,8 @@ export class VelaSession {
       await this.started.catch(() => {})
       await this.deps.extensions.sessionShutdown(this)
     }
+    // Entries appended while idle (setName, setModel) are written here at the latest
+    await this.saveOrReport()
     this.listeners.clear()
     this.deps.onClose(this)
   }

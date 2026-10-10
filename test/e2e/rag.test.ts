@@ -95,6 +95,8 @@ test('the knowledge base persists in the data dir across restarts', async () => 
 
   const again = createTestVela({
     cwd: t.cwd,
+    // A new session: the saved default session would need resume()
+    sessionId: 'after-restart',
     embedder: true,
     responses: [fauxText('ok')],
   })

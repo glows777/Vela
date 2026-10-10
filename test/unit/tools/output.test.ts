@@ -200,8 +200,15 @@ test('summary keeps a readable index even if the summarizer omits every file ref
   expect(entry.type).toBe('legacy_result')
   expect(await Bun.file(entry.outputPath).text()).toBe('SUMMARY_EVIDENCE')
   const store = new SessionStore('summary', dir)
-  await store.replace(compacted.messages, new Map(), compacted.summary)
-  expect((await store.loadState()).summary).toContain('/snapshots/through-')
+  store.appendMessage({ role: 'user', content: 'hi' })
+  store.appendCompaction(
+    compacted.messages[0]!,
+    compacted.summary,
+    undefined,
+    0,
+  )
+  await store.flush()
+  expect((await store.loadSaved())?.summary).toContain('/snapshots/through-')
   const repeated = await summarize(
     await createRequestSnapshot(model, 'stable', {}, [
       ...compacted.messages,

@@ -222,8 +222,9 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     async compact(command) {
       let result: unknown
       const off = session.subscribe((event) => {
-        if (event.type === 'context' && event.action === 'compact')
-          result = event
+        // Like pi: the compaction result
+        if (event.type === 'compaction_end' && event.reason === 'manual')
+          result = event.result
       })
       try {
         await session.compact(
@@ -240,8 +241,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       session.setName(
         typeof command.name === 'string' ? command.name : undefined,
       )
-      // Can't save separately mid-run (it would interleave with the loop's writes and drop new messages); the run saves when it ends
-      if (!session.isRunning) await session.save()
+      await session.save()
     },
     // Like pi: extension commands, prompt templates and skills, each with its `source`
     get_commands: () => ({

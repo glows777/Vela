@@ -42,7 +42,12 @@ test('a memory saved through the tool shows up in the next system prompt and sur
   const index = await t.readData('memory/MEMORY.md')
   expect(index).toContain('favorite-language')
 
-  const restarted = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
+  // A new session: the saved default session would need resume()
+  const restarted = createTestVela({
+    cwd: t.cwd,
+    sessionId: 'after-restart',
+    responses: [fauxText('ok')],
+  })
   await restarted.run('Hello')
   expect(restarted.model.calls[0]!.system).toContain(
     "The user's favorite programming language",

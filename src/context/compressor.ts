@@ -10,6 +10,7 @@ import {
 } from 'ai'
 import z from 'zod'
 import { DEFAULT_LIMITS } from '../limits.ts'
+import { summaryMessageText } from '../session/entries.ts'
 import {
   archiveToolResults,
   getStoredResult,
@@ -367,7 +368,7 @@ export async function summarize(
     messages: [
       {
         role: 'user',
-        content: `[Summary of the earlier conversation]\n${summary}`,
+        content: summaryMessageText(summary),
       },
       ...request.messages.slice(index),
     ],

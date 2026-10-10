@@ -188,8 +188,10 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `loop`, `aborted`, `error`), `error?` | The loop ended. Queued messages may still start another loop. |
 | `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
-| `context` | `action`, `before`, `after?`, `saved?`, `calls?`, `messages?` | Context management ran: `micro` (old tool results folded), `summary` (history summarized), `summary-required` (the summary threshold was reached but this run may not summarize) `compact` (manual compaction) or `overflow` (summarized because the provider said the context is too long). Token counts are estimates. See [Sessions](sessions.md#compaction). |
-| `session_save_failed` | `error` | Saving the session failed (the run itself continued) |
+| `context` | `action`, `before`, `after?`, `saved?`, `calls?` | Vela-specific context management: `micro` (old tool results folded) or `summary-required` (the summary threshold was reached but this run may not summarize). Token counts are estimates. See [Sessions](sessions.md#compaction). |
+| `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
+| `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
+| `session_save_failed` | `error` | Writing the session's entries failed (the run itself continued). The entries are kept and written again with the next entry or at the end of the run |
 | `audit` | `toolName`, `path` | Before `write_file` or `edit_file` writes `path` |
 | `security_warning` | `toolName`, `reason`, `command` | A bash command was rated medium risk; it still runs |
 | `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ui.notify()` in a session without a UI. In RPC mode this is an [extension UI request](rpc.md#extension-ui) instead. |
@@ -231,15 +233,17 @@ A custom storage implements `SessionStorage`:
 
 ```typescript
 interface SessionStorage {
-  load(id: string): Promise<SessionCheckpoint | undefined>
-  save(id: string, checkpoint: SessionCheckpoint): Promise<void>
+  load(id: string): Promise<SessionFileEntry[] | undefined> // header first, then entries, in append order
+  append(id: string, entries: SessionFileEntry[]): Promise<void>
   list?(): Promise<SessionSummary[]> // optional, newest first
 }
 ```
 
-Every save is a full checkpoint of the history after compaction; `load` returns the latest one. Store the checkpoint as given, including `version`. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts) and [Session format](session-format.md).
+A session is an append-only list of entries in pi's format: a header, then one entry per message, compaction, context edit or setting change (see [Session format](session-format.md)). Vela calls `append` as entries happen (the first call of a new session starts with the header) and never rewrites them; `load` returns everything appended, in order. Store entries as given. `summarizeSession(id, entries)` builds a `list()` row, and `migrateSessionV1(id, lines)` converts data saved by Vela 0.1's checkpoint storage. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts).
 
-Long tool output and the tool call history are always written to files under `<dataDir>/sessions/<id>/`, whatever the storage. A checkpoint refers to that history; resuming with a persistent `dataDir` where the history is missing throws instead of continuing with a broken reference. Without `dataDir` (temp dir), resume logs a warning and starts the tool history over.
+`session.getEntries()` returns a session's entries, including messages that were summarized or are no longer sent to the model.
+
+Long tool output and the tool call history are always written to files under `<dataDir>/sessions/<id>/`, whatever the storage. The session header refers to that history; resuming with a persistent `dataDir` where the history is missing throws instead of continuing with a broken reference. Without `dataDir` (temp dir), resume logs a warning and starts the tool history over.
 
 ## Sharing the CLI config
 

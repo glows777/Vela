@@ -85,10 +85,24 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   })
   for (let i = 0; i < 5; i++) await t.run(filler(i))
 
-  const summary = t.eventsOf('context').find((e) => e.action === 'summary')
-  expect(summary).toBeDefined()
+  expect(t.eventsOf('compaction_start')).toEqual([
+    { type: 'compaction_start', reason: 'threshold' },
+  ])
+  const summary = t.eventsOf('compaction_end')[0]
+  expect(summary).toMatchObject({
+    reason: 'threshold',
+    aborted: false,
+    willRetry: false,
+  })
   // Keeps at least the latest 6 and cuts at a full round: the first round (2 messages) is replaced by the summary
-  expect(summary!.messages).toBe(2)
+  expect(summary?.result?.messages).toBe(2)
+  // Like pi: the summarized messages stay in the session, after them a compaction entry
+  const entries = t.session.getEntries()
+  const compaction = entries.find((e) => e.type === 'compaction')
+  expect(compaction).toMatchObject({
+    firstKeptEntryId: summary?.result?.firstKeptEntryId,
+  })
+  expect(JSON.stringify(entries)).toContain('Question 0')
 
   // The summary request goes through generateText and sees the compaction control instruction
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
@@ -112,12 +126,13 @@ test('summary compaction replaces old history with a grounded summary and keeps 
       .some((r) => r.kind === 'summary'),
   ).toBe(true)
 
-  // The summary is saved; a new Vela restores it on resume
+  // The summary is saved; a new Vela restores the same context on resume
   const resumed = createTestVela({ cwd: t.cwd, responses: [fauxText('ok')] })
   expect(await resumed.session.resume()).toBe(true)
   expect(resumed.session.contextManager.state.summary).toBe(
     t.session.contextManager.state.summary,
   )
+  expect(resumed.messages).toEqual(t.messages)
   await resumed.run('continue')
   expect(JSON.stringify(resumed.model.calls[0]!.prompt)).toContain(
     '[Summary of the earlier conversation]',
@@ -154,8 +169,9 @@ test('session.compact() summarizes old history on demand, with an optional focus
 
   await t.session.compact('Keep question 0')
 
-  const compact = t.eventsOf('context').find((e) => e.action === 'compact')
-  expect(compact?.messages).toBe(2)
+  const compact = t.eventsOf('compaction_end')[0]
+  expect(compact).toMatchObject({ reason: 'manual', aborted: false })
+  expect(compact?.result?.messages).toBe(2)
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
   expect(generate.lastUserText).toContain('Keep question 0')
   expect(t.session.contextManager.state.summary).toContain('## User goal')
@@ -193,13 +209,16 @@ test('when the provider says the context is too long, Vela compacts once and sen
   expect(streams.at(-1)!.prompt.length).toBeLessThan(
     streams.at(-2)!.prompt.length,
   )
-  const overflowEvent = t
-    .eventsOf('context')
-    .find((e) => e.action === 'overflow')
-  expect(overflowEvent).toMatchObject({
-    before: expect.any(Number),
-    after: expect.any(Number),
-  })
+  expect(t.eventsOf('compaction_end')).toEqual([
+    expect.objectContaining({
+      reason: 'overflow',
+      willRetry: true,
+      result: expect.objectContaining({
+        tokensBefore: expect.any(Number),
+        tokensAfter: expect.any(Number),
+      }),
+    }),
+  ])
   // Not a retry: the failed request ends as an error, compaction runs, then the same step is sent again
   expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
   expect(t.session.contextManager.state.summary).toContain('## User goal')
@@ -219,9 +238,9 @@ test('a second overflow in the same step fails the run with the provider error',
   for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
 
   await expect(t.run('Question 4')).rejects.toThrow('prompt is too long')
-  expect(
-    t.eventsOf('context').filter((e) => e.action === 'overflow'),
-  ).toHaveLength(1)
+  expect(t.eventsOf('compaction_end')).toEqual([
+    expect.objectContaining({ reason: 'overflow' }),
+  ])
   expect(t.eventsOf('agent_end').at(-1)).toMatchObject({ reason: 'error' })
 })
 

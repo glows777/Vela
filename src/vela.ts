@@ -282,6 +282,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         dataDir,
         temporaryDataDir: ephemeral,
         sessionStorage,
+        cwd,
         registry,
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)

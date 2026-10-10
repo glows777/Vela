@@ -13,6 +13,20 @@ import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 /** Why an assistant message ended (like pi's `stopReason`; on the event because `ModelMessage` has no such field). */
 export type StopReason = 'stop' | 'length' | 'toolUse' | 'aborted' | 'error'
 
+/** Why earlier history is summarized (pi's compaction reasons). */
+export type CompactionReason = 'manual' | 'threshold' | 'overflow'
+
+/** What a summary did (like pi's `CompactionResult`). */
+export interface CompactionResult {
+  summary: string
+  /** Session entry the kept history starts at */
+  firstKeptEntryId: string
+  tokensBefore: number
+  tokensAfter: number
+  /** How many messages were summarized */
+  messages: number
+}
+
 /**
  * What changed in a streaming assistant message (same names and fields as pi's `AssistantMessageEvent`).
  * `contentIndex` is the index of the changed part in `message.content`.
@@ -142,16 +156,33 @@ export type VelaEvent =
    * and the session is idle again. Same as pi's agent_settled.
    */
   | { type: 'agent_settled' }
+  /**
+   * Old tool output was folded into file references (`micro`), or the context needs a summary that this
+   * request may not run (`summary-required`). Vela-specific; summaries are compaction_start / compaction_end.
+   */
   | {
       type: 'context'
-      /** compact = manual summary via session.compact(); overflow = summary after the provider said the context is too long */
-      action: 'micro' | 'summary' | 'summary-required' | 'compact' | 'overflow'
+      action: 'micro' | 'summary-required'
       before: number
       after?: number
       saved?: number
       calls?: number
-      messages?: number
     }
+  /** Summarizing earlier history starts (like pi): `threshold` before a request, `manual` from session.compact(), `overflow` after the provider said the context is too long. */
+  | { type: 'compaction_start'; reason: CompactionReason }
+  /**
+   * Summarizing ended (like pi). `result` is set when it succeeded; `aborted` when it was interrupted;
+   * otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again.
+   */
+  | {
+      type: 'compaction_end'
+      reason: CompactionReason
+      result?: CompactionResult
+      aborted: boolean
+      willRetry: boolean
+      errorMessage?: string
+    }
+  /** Writing the session's entries failed; they are kept and written with the next entry or at the end of the run. */
   | { type: 'session_save_failed'; error: unknown }
   /** Audit record before a file-writing tool call (emitted by a pre hook) */
   | { type: 'audit'; toolName: string; path: string }

@@ -129,15 +129,15 @@ test('retries give up after maxRetries', async () => {
   expect(t.messages.map((m) => m.role)).toEqual(['user'])
 })
 
-test('a non-retryable error midway keeps the streamed text in history; the next prompt works', async () => {
+test('a non-retryable error midway keeps the streamed text in the session but not in the context (like pi); the next prompt works', async () => {
   const t = createTestVela({
     responses: [
       fauxStreamError('400 Bad Request: content policy', 'Half an answer'),
       (req) =>
         fauxText(
           JSON.stringify(req.prompt).includes('Half an answer')
-            ? 'saw it'
-            : 'missing',
+            ? 'resent'
+            : 'not resent',
         ),
     ],
   })
@@ -149,11 +149,16 @@ test('a non-retryable error midway keeps the streamed text in history; the next 
     stopReason: 'error',
     errorMessage: '400 Bad Request: content policy',
   })
-  expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+  expect(t.messages.map((m) => m.role)).toEqual(['user'])
+  expect(t.session.getEntries().at(-1)).toMatchObject({
+    type: 'message',
+    stopReason: 'error',
+    message: { content: [{ type: 'text', text: 'Half an answer' }] },
+  })
   expect(t.eventsOf('turn_end')).toHaveLength(1)
 
   await t.run('go on')
-  expect(t.lastAssistantText()).toBe('saw it')
+  expect(t.lastAssistantText()).toBe('not resent')
 })
 
 test('a response cut off by the output limit answers its tool calls with an error and continues (like pi)', async () => {
@@ -209,14 +214,19 @@ test('aborting while the model is streaming stops the run; the next run works', 
     reason: 'aborted',
   })
   expect(t.session.busy.locked).toBe(false)
-  // The text streamed before the abort is kept, so the model sees what it said
+  // Like pi: the text streamed before the abort is kept in the session, but not sent to the model again
   expect(t.eventsOf('message_end').at(-1)).toMatchObject({
     message: { role: 'assistant' },
     stopReason: 'aborted',
     errorMessage: 'Operation aborted',
   })
-  expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
-  expect(t.lastAssistantText()).toBe(t.streamedText())
+  expect(t.messages.map((m) => m.role)).toEqual(['user'])
+  expect(t.session.getEntries().at(-1)).toMatchObject({
+    type: 'message',
+    stopReason: 'aborted',
+    message: { content: [{ type: 'text', text: t.streamedText() }] },
+  })
+  expect(await t.readData('sessions/default.jsonl')).toContain('"aborted"')
 
   await t.run('Again')
   expect(t.lastAssistantText()).toBe('Second run works')

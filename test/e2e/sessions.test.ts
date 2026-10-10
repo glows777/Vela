@@ -31,8 +31,9 @@ test('two sessions run at the same time with separate history, files, locks and 
   a.abort()
   await expect(running).rejects.toThrow()
   expect(a.busy.locked).toBe(false)
-  // The partial answer streamed before the abort stays in a's history
-  expect(a.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+  // The partial answer streamed before the abort stays in a's session, not in its context (like pi)
+  expect(a.messages.map((m) => m.role)).toEqual(['user'])
+  expect(a.getEntries().at(-1)).toMatchObject({ stopReason: 'aborted' })
 
   expect(await t.readData('sessions/b.jsonl')).toContain('answer for b')
   expect(await t.readData('sessions/a.jsonl')).not.toContain('answer for b')

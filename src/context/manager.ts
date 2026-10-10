@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import type { VelaEventListener } from '../agent/events.ts'
+import type { CompactionReason, VelaEventListener } from '../agent/events.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import type { SessionState, SessionStore } from '../session/index.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
@@ -39,57 +39,112 @@ export class ContextManager {
     this.state.summary = state.summary
   }
 
-  async commit(
-    messages: ModelMessage[],
-    summary = this.state.summary,
-    historyViewSequence = this.store.results.historyViewSequence,
-  ): Promise<void> {
+  /** Replaces the context in memory with `messages` (already recorded in the session). */
+  private replace(messages: ModelMessage[], summary = this.state.summary) {
     const timestamps = new Map(
       messages.map((message) => [
         message,
         this.state.timestamps.get(message) ?? Date.now(),
       ]),
     )
-    await this.store.replace(messages, timestamps, summary, historyViewSequence)
-    this.store.results.historyViewSequence = historyViewSequence
     const previous = this.state.messages.slice()
-    this.restore({ messages: messages.slice(), timestamps, summary })
+    this.restore({ messages, timestamps, summary })
     this.tracker.replaceMessages(previous, this.state.messages)
   }
 
+  /** Waits until the session's entries are written; rejects if some could not be. */
   async save(): Promise<void> {
-    await this.commit(this.state.messages.slice())
+    await this.store.flush()
   }
 
-  /** Manual summary (session.compact(), or after a provider context overflow): ignores thresholds, replaces earlier history with a summary and saves it. */
+  /** Folded tool output: each changed message is recorded as a context edit (the original stays in the session). */
+  private applyMicrocompact(messages: ModelMessage[]): void {
+    messages.forEach((message, index) => {
+      const original = this.state.messages[index]
+      if (original && message !== original) {
+        this.store.appendContextEdit(original, message)
+        const timestamp = this.state.timestamps.get(original)
+        if (timestamp !== undefined)
+          this.state.timestamps.set(message, timestamp)
+      }
+    })
+    this.replace(messages)
+  }
+
+  /**
+   * Summarizes earlier history (like pi's compaction): emits compaction_start / compaction_end, appends a
+   * compaction entry (the summarized messages stay in the session) and replaces the context in memory.
+   */
+  private async summarizeHistory(
+    request: RequestSnapshot,
+    reason: CompactionReason,
+    focus?: string,
+  ): Promise<void> {
+    this.onEvent?.({ type: 'compaction_start', reason })
+    try {
+      const before = estimateRequestTokens(request)
+      const compacted = await summarize(
+        request,
+        this.store.results,
+        this.tracker,
+        this.limits.maxInputTokens,
+        focus,
+      )
+      const after = estimateRequestTokens(request, compacted.messages)
+      if (reason === 'threshold' && after > this.limits.maxInputTokens)
+        throw new Error(
+          'Context still exceeds the safe input size after summarizing; this turn was stopped and the original history kept.',
+        )
+      request.abortSignal?.throwIfAborted()
+      const [summaryMessage, firstKept] = compacted.messages
+      const entry = this.store.appendCompaction(
+        summaryMessage as ModelMessage,
+        compacted.summary,
+        firstKept,
+        before,
+        compacted.historyViewSequence,
+      )
+      this.store.results.historyViewSequence = compacted.historyViewSequence
+      this.replace(compacted.messages, compacted.summary)
+      this.tracker.setEstimatedTokens(after)
+      this.onEvent?.({
+        type: 'compaction_end',
+        reason,
+        result: {
+          summary: compacted.summary,
+          firstKeptEntryId: entry.firstKeptEntryId,
+          tokensBefore: before,
+          tokensAfter: after,
+          messages: compacted.compressedCount,
+        },
+        aborted: false,
+        willRetry: reason === 'overflow',
+      })
+    } catch (error) {
+      const aborted = request.abortSignal?.aborted ?? false
+      this.onEvent?.({
+        type: 'compaction_end',
+        reason,
+        aborted,
+        willRetry: false,
+        ...(aborted
+          ? {}
+          : {
+              errorMessage:
+                error instanceof Error ? error.message : String(error),
+            }),
+      })
+      throw error
+    }
+  }
+
+  /** Manual summary (session.compact(), or after a provider context overflow): ignores thresholds, replaces earlier history with a summary. */
   async compact(
     request: RequestSnapshot,
     focus?: string,
-    action: 'compact' | 'overflow' = 'compact',
+    reason: 'manual' | 'overflow' = 'manual',
   ): Promise<void> {
-    const before = estimateRequestTokens(request)
-    const compacted = await summarize(
-      request,
-      this.store.results,
-      this.tracker,
-      this.limits.maxInputTokens,
-      focus,
-    )
-    const after = estimateRequestTokens(request, compacted.messages)
-    request.abortSignal?.throwIfAborted()
-    await this.commit(
-      compacted.messages,
-      compacted.summary,
-      compacted.historyViewSequence,
-    )
-    this.tracker.setEstimatedTokens(after)
-    this.onEvent?.({
-      type: 'context',
-      action,
-      before,
-      after,
-      messages: compacted.compressedCount,
-    })
+    await this.summarizeHistory(request, reason, focus)
   }
 
   async prepare(
@@ -113,7 +168,7 @@ export class ContextManager {
     ) {
       await persistMicrocompact(micro.candidates, this.store.results)
       request.abortSignal?.throwIfAborted()
-      await this.commit(micro.messages)
+      this.applyMicrocompact(micro.messages)
       this.tracker.setEstimatedTokens(microAfter)
       this.onEvent?.({
         type: 'context',
@@ -136,31 +191,7 @@ export class ContextManager {
         return
       }
       // Summarize before micro changes history so the main request prefix stays intact.
-      const compacted = await summarize(
-        request,
-        this.store.results,
-        this.tracker,
-        this.limits.maxInputTokens,
-      )
-      const after = estimateRequestTokens(request, compacted.messages)
-      if (after > this.limits.maxInputTokens)
-        throw new Error(
-          'Context still exceeds the safe input size after summarizing; this turn was stopped and the original history kept.',
-        )
-      request.abortSignal?.throwIfAborted()
-      await this.commit(
-        compacted.messages,
-        compacted.summary,
-        compacted.historyViewSequence,
-      )
-      this.tracker.setEstimatedTokens(after)
-      this.onEvent?.({
-        type: 'context',
-        action: 'summary',
-        before,
-        after,
-        messages: compacted.compressedCount,
-      })
+      await this.summarizeHistory(request, 'threshold')
       return
     }
     if (before > this.limits.maxInputTokens)
