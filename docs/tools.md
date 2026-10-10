@@ -184,7 +184,7 @@ A deferred tool is not sent to the model as a tool. Instead, the system prompt l
 |---|---|---|
 | `query` | string | A tool name, or several separated by commas |
 
-It matches exact tool names (it is not a fuzzy search), returns each tool's name, description, input schema and `namespace` (with its `instructions`), and makes the tool available to the model for the rest of the session. Discovery is per session.
+It matches exact tool names (it is not a fuzzy search), returns each tool's name, description, input schema and `namespace` (with its `instructions` on the namespace's first tool in the result; later tools carry only the namespace name), and makes the tool available to the model for the rest of the session. Discovery is per session.
 
 All core tools are direct. Deferred exposure is for extensions that register many tools, so their schemas do not fill the context until needed. See [Extensions](extensions.md).
 

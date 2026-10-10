@@ -322,13 +322,17 @@ test('tool_search is model-only and returns the namespace with its instructions'
   }
   registry.register(
     tool('mcp__docs__read', { exposure: 'deferred', namespace }),
+    tool('mcp__docs__search', { exposure: 'deferred', namespace }),
   )
   expect(registry.get('tool_search')?.exposure).toBe('model-only')
   const result = await registry.toAISDKFormat().tool_search!.execute!(
-    { query: 'mcp__docs__read' },
+    { query: 'mcp__docs__read, mcp__docs__search' },
     { toolCallId: 'search', messages: [], context: {} },
   )
+  // The instructions come once, with the namespace's first tool
   expect(JSON.parse(String(result))).toMatchObject([
     { name: 'mcp__docs__read', namespace },
+    { name: 'mcp__docs__search', namespace: { name: 'mcp__docs' } },
   ])
+  expect(JSON.parse(String(result))[1].namespace).toEqual({ name: 'mcp__docs' })
 })

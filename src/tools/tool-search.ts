@@ -23,13 +23,22 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
     execute: async ({ query }: { query: string }, context) => {
       const results = (context?.registry ?? registry).searchTools(query)
       if (results.length === 0) return `No tools match "${query}"`
-      // Vela has no codemode describeNamespace() yet, so the namespace instructions come with the tool
-      return results.map<Tool & { namespace?: ToolNamespace }>((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-        ...(t.namespace ? { namespace: t.namespace } : {}),
-      }))
+      // Vela has no codemode describeNamespace() yet, so the namespace instructions come with the
+      // tool: in full on its first tool, by name on the others
+      const described = new Set<string>()
+      return results.map<Tool & { namespace?: ToolNamespace }>((t) => {
+        const namespace =
+          t.namespace && described.has(t.namespace.name)
+            ? { name: t.namespace.name }
+            : t.namespace
+        if (namespace) described.add(namespace.name)
+        return {
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          ...(namespace ? { namespace } : {}),
+        }
+      })
     },
   }
 

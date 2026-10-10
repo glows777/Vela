@@ -338,6 +338,35 @@ export class ToolRegistry {
   private discoveredTools = new Set<string>()
 
   private readonly gate = new ExecutionGate()
+  /** Sequential nested calls run one at a time (like pi's nested call queue) */
+  private nestedTail: Promise<void> = Promise.resolve()
+  /** Nested calls running while holding that queue: their own nested calls don't wait for it again */
+  private readonly nestedHolders = new Set<string>()
+
+  private async runNested<T>(
+    mode: ToolExecutionMode,
+    parentToolCallId: string,
+    toolCallId: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const holds = this.nestedHolders.has(parentToolCallId)
+    const exclusive = mode === 'sequential' && !holds
+    let release: (() => void) | undefined
+    if (exclusive) {
+      const previous = this.nestedTail
+      this.nestedTail = new Promise((resolve) => {
+        release = resolve
+      })
+      await previous
+    }
+    if ((holds || exclusive) && toolCallId) this.nestedHolders.add(toolCallId)
+    try {
+      return await fn()
+    } finally {
+      if (toolCallId) this.nestedHolders.delete(toolCallId)
+      release?.()
+    }
+  }
 
   register(...tools: ToolDefinition[]) {
     for (const tool of tools) {
@@ -480,9 +509,12 @@ export class ToolRegistry {
       signal?.throwIfAborted()
       if (!approved) return await reject(`[Rejected] ${name} was not approved`)
     }
-    // A nested call runs inside its parent's turn at the gate: waiting there could deadlock
+    // A nested call runs inside its parent's turn at the gate (waiting there could deadlock), so
+    // nested calls have their own queue
     const gated = <T>(fn: () => Promise<T>) =>
-      options.parentToolCallId === undefined ? this.gate.run(mode, fn) : fn()
+      options.parentToolCallId === undefined
+        ? this.gate.run(mode, fn)
+        : this.runNested(mode, options.parentToolCallId, options.toolCallId, fn)
     return await gated(async () => {
       this.shared.logger.debug(`[tools] ${name} started (${mode})`)
       this.assertHealthy()

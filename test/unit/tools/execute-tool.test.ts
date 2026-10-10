@@ -233,6 +233,45 @@ test('a sequential tool can call another sequential tool without deadlocking', a
   expect(outcomes[0]).toMatchObject({ result: 'in', isError: false })
 })
 
+test('sequential nested calls run one at a time; nested calls inside one do not wait for it', async () => {
+  let running = 0
+  let maxRunning = 0
+  const inner = tool('inner', {
+    executionMode: 'sequential',
+    execute: async () => {
+      maxRunning = Math.max(maxRunning, ++running)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      running--
+      return 'in'
+    },
+  })
+  // mid holds the nested queue while it calls inner, which must not wait for mid
+  const mid = tool('mid', {
+    executionMode: 'sequential',
+    execute: async (_input, context) =>
+      (await context!.executeTool!('inner', {})).result,
+  })
+  const { registry } = makeSession(
+    tool('caller', {
+      execute: async (_input, context) =>
+        Promise.all([
+          context!.executeTool!('inner', {}),
+          context!.executeTool!('inner', {}),
+          context!.executeTool!('mid', {}),
+        ]),
+    }),
+    inner,
+    mid,
+  )
+  const outcomes = await callCaller(registry)
+  expect(outcomes.map((o) => [o.result, o.isError])).toEqual([
+    ['in', false],
+    ['in', false],
+    ['in', false],
+  ])
+  expect(maxRunning).toBe(1)
+})
+
 test('onUpdate emits tool_execution_update until the call settles, also for nested calls', async () => {
   let late: ((partial: unknown) => void) | undefined
   const forwarded: unknown[] = []
