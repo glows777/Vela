@@ -16,7 +16,6 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
     description:
       "Fetches the full definition of a deferred tool. Pass a tool name from the deferred tool list in the system prompt; returns that tool's full parameter schema.",
     inputSchema: toolSearchToolSchema,
-    isConcurrencySafe: true,
     isReadOnly: true,
     // Use the calling session's registry: discovered deferred tools apply only to that session
     execute: async ({ query }: { query: string }, context) => {

@@ -7,6 +7,9 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 ### Breaking Changes
 
 - **Events now have pi's shape.** `message` is replaced by `message_start` / `message_end`; `text_delta` and `thinking_delta` by `message_update` (`assistantMessageEvent.type` is `text_delta` / `thinking_delta` and the text is in `delta`, alongside `text_start` / `text_end`, `thinking_start` / `thinking_end` and `toolcall_start` / `toolcall_delta` / `toolcall_end`); `tool_call` by `tool_execution_start` (`input` is now `args`); `tool_result` and `tool_error` by `tool_execution_end` (`output` / `error` is now `result`, with `isError` and `durationMs`); `retry` by `auto_retry_start` (`maxRetries` → `maxAttempts`, `error` → `errorMessage`) and the new `auto_retry_end`. `turn_end` has `message` and `toolResults` instead of `needsToolCall`; `agent_end` adds `messages`. The assistant `message_end` carries `stopReason` (`stop`, `toolUse`, `length`, `aborted`, `error`) and `errorMessage`. `--mode json`, `--mode rpc` and SDK subscribers see the new events. To migrate, print `message_update` events whose `assistantMessageEvent.type` is `text_delta`, and read final messages from `message_end`. See [SDK events](docs/sdk.md#events) and [JSON mode](docs/json.md). The extension `tool_call` / `tool_result` interception events are unchanged.
+- **`bash` has no default timeout** (same as pi). The model passes an optional `timeout` in seconds instead. `limits.bashTimeoutMs` is removed; setting it in `settings.json` or `createVela({ limits })` is now an "unknown key" error. Remove the key.
+- **`edit_file` takes pi's parameters**: `{ path, edits: [{ oldText, newText }] }` instead of `old_string` / `new_string`. A text that is not found, found more than once or overlapping another edit is now a tool error instead of a successful result describing the problem. Faux scenarios that call `edit_file` need the new arguments.
+- **`ToolDefinition.isConcurrencySafe` is replaced by `executionMode`** (`'parallel'`, the default, or `'sequential'`, same as pi). Drop `isConcurrencySafe: true`; replace `isConcurrencySafe: false` with `executionMode: 'sequential'` if the tool must not run alongside the session's other calls. Registering a tool that still sets `isConcurrencySafe` throws, so the change is not silently ignored.
 
 ### Fixed
 
@@ -20,6 +23,15 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **Context overflow recovery**: when the provider says the context is too long, Vela summarizes the history once and sends the step again, like pi (`context` event with `action: 'overflow'`). See [Sessions](docs/sessions.md#context-overflow).
 - **Anthropic prompt caching**: the system prompt, last tool and last message are sent as cache breakpoints, like pi. See [Sessions](docs/sessions.md#prompt-caching).
 - **Automated releases**: `bun run release <patch|minor|x.y.z>` tags a release, and CI publishes it to npm with provenance and creates the GitHub release from this changelog.
+- `edit_file` applies several disjoint edits in one call, falls back to fuzzy matching (trailing whitespace, smart quotes, Unicode dashes and spaces), keeps BOM and CRLF line endings, and records a diff and unified patch in the tool history. Ported from pi.
+- `shellPath` setting and `createVela({ shellPath })` choose the shell of the `bash` tool.
+- `withFileMutationQueue(path, fn)` is exported for extension tools that write files.
+
+### Changed
+
+- Tools no longer share one lock across all sessions: `write_file` / `edit_file` queue per file, `bash` takes no lock, and a `sequential` tool only waits for calls in its own session. A long `bash` in one session no longer holds back other sessions (including channel senders).
+- `bash` returns the last 2,000 lines or 50KB of output (was the last 3,000 characters) and ends with `Command exited with code N`, `Command timed out after N seconds` or `Command aborted` instead of `exit=N`.
+- `read_file` pages default to 2,000 lines and at most 50KB (was 200 lines and 8,000 characters).
 
 ## [0.1.0] - 2026-10-09
 

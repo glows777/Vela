@@ -95,7 +95,7 @@ A request that is still above `maxInputTokens` after compaction is not sent; the
 
 ## Long tool output
 
-A tool result longer than the tool's limit (12,000 characters for `read_file`, `grep` and `find`, 3,000 for the other tools; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets a preview (the first 60% and last 40% of the limit) with the file path, size and a hint to page through it with `read_file`.
+A tool result longer than the tool's limit (12,000 characters for `grep` and `find`, 3,000 for most other tools; `read_file` pages and `bash` previews have their own limits; see [Tools](tools.md#result-size-and-truncation)) is saved in full to `<dataDir>/sessions/<id>/tool-results/<callId>.txt`. The model gets a preview (the first 60% and last 40% of the limit) with the file path, size and a hint to page through it with `read_file`.
 
 Every tool call and its result is also appended to a tool call history file (`<dataDir>/sessions/<id>/<historyId>/tool-history.jsonl`), which survives compaction. See [Session format](session-format.md#tool-call-history).
 

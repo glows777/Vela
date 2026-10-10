@@ -71,7 +71,12 @@ export {
   type SessionStorage,
   type SessionSummary,
 } from './session/storage.ts'
-export type { ToolContext, ToolDefinition } from './tools/registry.ts'
+export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
+export type {
+  ToolContext,
+  ToolDefinition,
+  ToolExecutionMode,
+} from './tools/registry.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'
 export {

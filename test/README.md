@@ -146,7 +146,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 
 ### Tunable limits (`src/limits.ts`)
 
-`createVela({ limits })` can override `maxRetries`, `retryBaseMs`, `retryMaxMs`, `microcompactThreshold`, `summaryThreshold`, `minMicroSavings`, `maxInputTokens` and `bashTimeoutMs`. The defaults are what the CLI has always used; unknown keys (such as the removed `maxTurns` / `tokenBudget`) throw. Tests lower thresholds instead of building huge inputs; for example `test/e2e/context.test.ts` measures an empty session's request size first and sets the summary threshold just above it.
+`createVela({ limits })` can override `maxRetries`, `retryBaseMs`, `retryMaxMs`, `microcompactThreshold`, `summaryThreshold`, `minMicroSavings` and `maxInputTokens`. The defaults are what the CLI has always used; unknown keys (such as the removed `maxTurns`, `tokenBudget` and `bashTimeoutMs`) throw. Tests lower thresholds instead of building huge inputs; for example `test/e2e/context.test.ts` measures an empty session's request size first and sets the summary threshold just above it.
 
 ## Coverage
 

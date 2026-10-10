@@ -51,7 +51,12 @@ export interface ToolDefinition {
     context?: ToolContext,
   ) => Promise<unknown>
 
-  isConcurrencySafe?: boolean
+  /**
+   * Same as pi: "sequential" tools run one at a time with the session's other tool calls;
+   * "parallel" (default) tools run concurrently. Only calls of the same session wait for each
+   * other. write_file / edit_file additionally queue per file across all sessions.
+   */
+  executionMode?: ToolExecutionMode
   isReadOnly?: boolean
   maxResultChars?: number
 
@@ -64,25 +69,53 @@ export interface ToolDefinition {
   searchHint?: string // Hint shown next to the name in the deferred tool list
 }
 
+export type ToolExecutionMode = 'sequential' | 'parallel'
+
 const DEFAULT_MAX_RESULT_CHARS = 3000 // Beyond this, the full result is saved and only a preview returned
 
 /**
- * State shared by all sessions of one Vela: tool definitions, hooks, execution lock.
- * Role and permissions, tool selection, discovered deferred tools, the tool result store and
- * persistence failure state are per session.
+ * State shared by all sessions of one Vela: tool definitions and hooks.
+ * Role and permissions, tool selection, discovered deferred tools, the tool result store,
+ * persistence failure state and the execution gate are per session.
  */
 interface SharedToolState {
   tools: Map<string, ToolDefinition>
   hookPipeline?: HookPipeline
-  // Known limits of the current lock design:
-  // 1. The lock covers the whole ToolRegistry (and every session forked from it); while one exclusive tool runs, unrelated tools block too.
-  // 2. No per-resource lock key, so "serialize per file, parallel across files" can't be expressed.
-  // 3. acquireConcurrent only checks exclusiveLock, not whether an exclusive task is waiting, so reads can jump ahead of writes.
-  // 4. drainQueue wakes every waiter at once and they race again in the while loop; no strict FIFO fairness.
-  exclusiveLock: boolean // whether an exclusive holder exists
-  concurrentCount: number // number of shared holders
-  waitQueue: Array<() => void> // resolvers of blocked waiters
   logger: VelaLogger
+}
+
+/**
+ * One session's tool calls: parallel calls run together; a sequential call waits for the calls
+ * started before it and holds back the calls started after it (first come, first served).
+ */
+class ExecutionGate {
+  private barrier: Promise<void> = Promise.resolve()
+  private readonly running = new Set<Promise<unknown>>()
+
+  async run<T>(mode: ToolExecutionMode, fn: () => Promise<T>): Promise<T> {
+    if (mode === 'parallel') {
+      await this.barrier
+      const job = fn()
+      this.running.add(job)
+      try {
+        return await job
+      } finally {
+        this.running.delete(job)
+      }
+    }
+    const previous = this.barrier
+    let release!: () => void
+    this.barrier = new Promise((resolve) => {
+      release = resolve
+    })
+    try {
+      await previous
+      await Promise.allSettled([...this.running])
+      return await fn()
+    } finally {
+      release()
+    }
+  }
 }
 
 export interface ToolRegistryForkOptions {
@@ -103,18 +136,12 @@ export class ToolRegistry {
     readonly results = new ToolResultStore(),
     shared?: SharedToolState,
   ) {
-    this.shared = shared ?? {
-      tools: new Map(),
-      exclusiveLock: false,
-      concurrentCount: 0,
-      waitQueue: [],
-      logger: silentLogger,
-    }
+    this.shared = shared ?? { tools: new Map(), logger: silentLogger }
   }
 
   /**
-   * A registry for one session: shares tool definitions, roles, hooks and the lock with this
-   * registry, but has its own tool result store, discovered deferred tools and persistence state.
+   * A registry for one session: shares tool definitions and hooks with this registry, but has its
+   * own tool result store, discovered deferred tools, persistence state and execution gate.
    */
   fork(results: ToolResultStore, options: ToolRegistryForkOptions = {}) {
     const forked = new ToolRegistry(results, this.shared)
@@ -209,44 +236,7 @@ export class ToolRegistry {
 
   private discoveredTools = new Set<string>()
 
-  // Acquire the shared lock
-  private async acquireConcurrent() {
-    const shared = this.shared
-    while (shared.exclusiveLock) {
-      await new Promise<void>((resolve) => shared.waitQueue.push(resolve))
-    }
-    shared.concurrentCount++
-  }
-
-  // Acquire the exclusive lock: wait until no shared or exclusive holder remains
-  private async acquireExclusive() {
-    const shared = this.shared
-    while (shared.exclusiveLock || shared.concurrentCount > 0) {
-      await new Promise<void>((resolve) => shared.waitQueue.push(resolve))
-    }
-    shared.exclusiveLock = true
-  }
-
-  // Release the shared lock; wake waiters once no shared holder remains
-  private releaseConcurrent() {
-    this.shared.concurrentCount--
-    if (this.shared.concurrentCount === 0) {
-      this.drainQueue()
-    }
-  }
-
-  // Release the exclusive lock and wake waiters
-  private releaseExclusive() {
-    this.shared.exclusiveLock = false
-    this.drainQueue()
-  }
-
-  private drainQueue() {
-    const waiting = this.shared.waitQueue.splice(0)
-    for (const resolve of waiting) {
-      resolve()
-    }
-  }
+  private readonly gate = new ExecutionGate()
 
   register(...tools: ToolDefinition[]) {
     for (const tool of tools) {
@@ -255,6 +245,19 @@ export class ToolRegistry {
           `[Tool ToolRegistry] Tool with name "${tool.name}" is already registered.`,
         )
       }
+      // Removed in favor of executionMode; ignoring it would silently change how the tool runs
+      if ('isConcurrencySafe' in tool)
+        throw new Error(
+          `Tool "${tool.name}": isConcurrencySafe was removed. Drop isConcurrencySafe: true; replace isConcurrencySafe: false with executionMode: 'sequential'.`,
+        )
+      if (
+        tool.executionMode !== undefined &&
+        tool.executionMode !== 'parallel' &&
+        tool.executionMode !== 'sequential'
+      )
+        throw new Error(
+          `Tool "${tool.name}": executionMode must be 'parallel' or 'sequential', got ${JSON.stringify(tool.executionMode)}`,
+        )
       this.tools.set(tool.name, tool)
     }
   }
@@ -275,7 +278,7 @@ export class ToolRegistry {
     for (const tool of activeTools) {
       const maxChar = tool.maxResultChars
       const excuteFn = tool.execute
-      const isSafe = tool.isConcurrencySafe === true
+      const mode = tool.executionMode ?? 'parallel'
       const name = tool.name
 
       result[name] = AITool({
@@ -283,7 +286,7 @@ export class ToolRegistry {
         inputSchema: tool.inputSchema,
         execute: (input: unknown, options) =>
           this.track(async () => {
-            // Permissions, hooks and ask run before taking the lock, so waiting on the user doesn't block other sessions' tools
+            // Permissions, hooks and ask run before the execution gate, so waiting on the user doesn't hold back other calls
             this.assertHealthy()
             const reject = async (reason: string) => {
               await this.recordRejection(
@@ -368,16 +371,8 @@ export class ToolRegistry {
               if (!approved)
                 return await reject(`[Rejected] ${name} was not approved`)
             }
-            if (isSafe) {
-              await this.acquireConcurrent()
-              this.shared.logger.debug(`[tools] ${name} acquired shared lock`)
-            } else {
-              await this.acquireExclusive()
-              this.shared.logger.debug(
-                `[tools] ${name} acquired exclusive lock`,
-              )
-            }
-            try {
+            return await this.gate.run(mode, async () => {
+              this.shared.logger.debug(`[tools] ${name} started (${mode})`)
               this.assertHealthy()
               const history = this.results.history
               const call = await history.begin(
@@ -426,10 +421,15 @@ export class ToolRegistry {
                     : typeof raw === 'string'
                       ? raw
                       : (JSON.stringify(raw, null, 2) ?? String(raw))
+                // Only what the model gets decides: a string is the text itself (its JSON escaping
+                // doesn't count), and a ToolExecutionResult's value is structured data for the
+                // history (e.g. edit_file's diff)
                 if (
                   !stored &&
                   (text.length > maxChars ||
-                    JSON.stringify(value)?.length > maxChars)
+                    (typeof value !== 'string' &&
+                      !(raw instanceof ToolExecutionResult) &&
+                      JSON.stringify(value)?.length > maxChars))
                 ) {
                   stored = await this.results.save(
                     typeof value === 'string'
@@ -494,13 +494,7 @@ export class ToolRegistry {
                   output = String(post.modifiedOutput)
               }
               return stored ? { ...stored, preview: output } : output
-            } finally {
-              if (isSafe) {
-                this.releaseConcurrent()
-              } else {
-                this.releaseExclusive()
-              }
-            }
+            })
           }),
       })
     }

@@ -294,8 +294,12 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
       toolName: 'edit_file',
       args: {
         path: 'sample-data.txt',
-        old_string: '1. Tool registration',
-        new_string: '1. Tool registration (updated)',
+        edits: [
+          {
+            oldText: '1. Tool registration',
+            newText: '1. Tool registration (updated)',
+          },
+        ],
       },
     }
   }

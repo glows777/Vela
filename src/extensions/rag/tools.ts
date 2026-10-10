@@ -53,7 +53,7 @@ export function createRagTools(
     description:
       'Ingest a document into the knowledge base. path is the file path; the content is chunked, embedded and stored.',
     inputSchema: createRagToolsInputSchema,
-    isConcurrencySafe: false,
+    executionMode: 'sequential',
     isReadOnly: false,
     execute: async ({ path }: { path: string }, context) => {
       try {
@@ -75,7 +75,6 @@ export function createRagTools(
     description:
       'Search the knowledge base for relevant information. Returns the most relevant document chunks.',
     inputSchema: ragSearchToolInputSchema,
-    isConcurrencySafe: true,
     isReadOnly: true,
     execute: async (
       { query, top_k }: { query: string; top_k?: number },

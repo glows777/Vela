@@ -197,13 +197,14 @@
   interface ToolDefinition
     description: string
     execute: (input: any, context?: ToolContext) => Promise<unknown>
+    executionMode?: ToolExecutionMode | undefined
     exposure?: "direct" | "deferred" | undefined
     inputSchema: FlexibleSchema<any>
-    isConcurrencySafe?: boolean | undefined
     isReadOnly?: boolean | undefined
     maxResultChars?: number | undefined
     name: string
     searchHint?: string | undefined
+  type ToolExecutionMode = 'sequential' | 'parallel'
   interface ToolResultEvent
     input: unknown
     output: string
@@ -363,7 +364,6 @@
   type VelaEventListener = (event: VelaEvent) => void
   type VelaExtension = (vela: ExtensionAPI) => void | Promise<void>
   interface VelaLimits
-    bashTimeoutMs: number
     maxInputTokens: number
     maxRetries: number
     microcompactThreshold: number
@@ -388,6 +388,7 @@
     offline?: boolean | undefined
     providers?: Record<string, ProviderDefinition> | undefined
     sessionStorage?: SessionStorage | undefined
+    shellPath?: string | undefined
     skillDirs?: string[] | undefined
     thinkingLevel?: ThinkingLevel | undefined
   class VelaSession
@@ -431,11 +432,13 @@
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: string[] | undefined
     limits?: Partial<VelaLimits> | undefined
+    shellPath?: string | undefined
     skills?: string[] | undefined
   function web: (options?: WebOptions) => VelaExtension
   interface WebOptions
     serperKey?: string | undefined
     tavilyKey?: string | undefined
+  function withFileMutationQueue: <T>(filePath: string, fn: () => Promise<T>) => Promise<T>
 
 # @glows777/vela/testing
 
