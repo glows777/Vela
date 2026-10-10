@@ -26,6 +26,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - A response cut off by the output token limit while calling tools no longer breaks the session (every later prompt failed with `AI_InvalidPromptError`): like pi, each truncated call gets an error result asking the model to re-issue it. See [Sessions](docs/sessions.md#truncated-responses).
 - An aborted or failed turn keeps what it produced: tool calls that were running stay in the history, each paired with its result or `Operation aborted`, and a message cut off while streaming is kept in the session. Before, the whole step was dropped and the model didn't know a tool had already run. See [Sessions](docs/sessions.md#interrupted-and-failed-turns).
 - A request that already started running tools is no longer sent again after an error, so tools don't run twice.
+- Interactive mode no longer stays running and spins a CPU after its terminal closes: on SIGHUP it saves and exits even though restoring the terminal fails, and a read or write error on a dead terminal exits at once with code 129, like pi.
 - When a request is retried, the interactive mode keeps the failed attempt's text marked `(response failed)` and shows the retry as a new message, instead of appending the retry to the old text.
 
 ### New Features
@@ -46,6 +47,11 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **`ctx.executeTool(name, args, { signal, onUpdate })`** lets a tool run another tool through the same permissions, hooks, `bash` check, confirmation and tool history as a model call, same as pi. Nested calls get ids `<parent>/<n>` and `parentToolCallId` on their events, and failures come back as `isError` results instead of throwing. See [Extensions](docs/extensions.md#registertool).
 - **Streaming tool output**: `ctx.onUpdate(partialResult)` emits `tool_execution_update` (pi's event), and `bash` sends the tail of its output while it runs.
 - **Tool metadata from pi**: `exposure` adds `model-only`, `codemode` and `hidden` to `direct` and `deferred`; `namespace` groups deferred tools (and is returned by `tool_search` with its `instructions`); `annotations` describe what a tool does. See [Tools](docs/tools.md#deferred-tools-and-tool_search).
+
+- **Interactive mode tool blocks like pi's**: `bash` output streams into its block while it runs, with the elapsed time, and the collapsed block keeps the last 5 lines; `edit_file` shows a colored diff with changed words highlighted; other tools show the first 10 lines; calls made through `ctx.executeTool()` are listed inside the calling tool's block. See [CLI](docs/cli.md#tool-output).
+- `tool_execution_end` has `details`: display data the model doesn't get, such as `edit_file`'s diff (pi's `result.details`).
+- **`/copy`** copies the last answer to the clipboard, like pi (system clipboard tools, or OSC 52 over SSH).
+- **`--tools` / `--no-tools` / `--exclude-tools`** (`-t` / `-nt` / `-xt`) choose the tools by name or `*` pattern, like pi; an entry that matches no tool is an error. **`--list-models [search]`** lists the configured models.
 
 ### Changed
 

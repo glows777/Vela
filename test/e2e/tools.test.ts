@@ -413,3 +413,47 @@ test('a long bash in one session does not hold back file writes in another sessi
   await slow
   expect(t.lastAssistantText()).toBe('slow done')
 })
+
+test('tool_execution_end carries edit_file diff details for display, the model gets only the summary (like pi)', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'one\ntwo\n' },
+    responses: [
+      fauxToolCall('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'two', newText: 'TWO' }],
+      }),
+      fauxToolCall('runner', {}),
+      fauxText('done'),
+    ],
+  })
+  t.internals.registry.register({
+    name: 'runner',
+    description: 'Runs other tools',
+    inputSchema: z.object({}),
+    execute: async (_input, context) => {
+      await context!.executeTool!('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'TWO', newText: 'three' }],
+      })
+      return 'ok'
+    },
+  })
+
+  await t.run('edit')
+
+  const [direct, nested, runner] = t.eventsOf('tool_execution_end')
+  expect(direct!.details).toMatchObject({
+    diff: expect.stringContaining('+2 TWO'),
+    patch: expect.stringContaining('-two'),
+    firstChangedLine: 2,
+  })
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
+    'Successfully replaced 1 block(s) in a.txt.',
+  )
+  expect(nested!.parentToolCallId).toBe(runner!.toolCallId)
+  expect(nested!.details).toMatchObject({
+    diff: expect.stringContaining('+2 three'),
+  })
+  // Tools that return plain values have no details
+  expect('details' in runner!).toBe(false)
+})

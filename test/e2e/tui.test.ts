@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import z from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import todo from '../../examples/extensions/todo-command.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
@@ -318,4 +319,119 @@ test('/ suggests prompt templates (with their argument hint) and skills as skill
   tui.terminal.press(KEYS.ctrlC)
   tui.terminal.type('/skill:rev')
   await tui.until('skill:reviewer')
+})
+
+test('bash output streams into its block while it runs; the block keeps the last lines and the time taken (like pi)', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'seq 1 12; echo out$((1+1)); sleep 1; echo end$((2+2))',
+      }),
+      fauxText('all done'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('count')
+  // Still running: the partial output is already on screen with a live clock
+  // (the command line itself reads `out$((1+1))`, so `out2` can only come from the output)
+  await tui.until('out2')
+  expect(tui.screen()).not.toContain('end4')
+  await tui.until('Elapsed')
+  await tui.until('all done')
+
+  const screen = tui.screen()
+  expect(screen).toContain('$ seq 1 12')
+  // Collapsed: only the last 5 lines
+  expect(screen).toContain('… 9 earlier lines (Ctrl+O to expand)')
+  expect(screen).toContain('end4')
+  expect(screen).not.toMatch(/^\s*3\s*$/m)
+  expect(screen).toMatch(/Took \d+\.\ds/)
+})
+
+test('edit_file shows the diff of its change', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'one\ntwo\nthree\n' },
+    responses: [
+      fauxToolCall('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'two', newText: 'TWO' }],
+      }),
+      fauxText('edited'),
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('edit it')
+  await tui.until('edited')
+
+  const screen = tui.screen()
+  expect(screen).toContain('edit_file a.txt')
+  expect(screen).toContain('-2 two')
+  expect(screen).toContain('+2 TWO')
+  expect(screen).toContain(' 1 one')
+  // The model's summary line is replaced by the diff
+  expect(screen).not.toContain('Successfully replaced')
+})
+
+test('calls a tool makes through ctx.executeTool are listed inside its block', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'hello' },
+    responses: [fauxToolCall('runner', {}), fauxText('ran')],
+  })
+  t.internals.registry.register({
+    name: 'runner',
+    description: 'Runs other tools',
+    inputSchema: z.object({}),
+    execute: async (_input, context) => {
+      await context!.executeTool!('read_file', { path: 'a.txt' })
+      await context!.executeTool!('read_file', { path: 'missing.txt' })
+      return 'ok'
+    },
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('run')
+  await tui.until('ran')
+
+  const screen = tui.screen()
+  expect(screen).toMatch(/↳ ✓ read_file a\.txt \d+\.\ds/)
+  expect(screen).toMatch(/↳ ✗ read_file missing\.txt/)
+  // No separate blocks for the nested calls
+  expect(screen.match(/read_file/g)).toHaveLength(2)
+})
+
+test('/copy copies the last answer to the clipboard (like pi)', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxText('The **answer**'),
+      fauxToolCall('read_file', { path: 'missing.txt' }),
+      fauxText(''),
+    ],
+  })
+  const copied: string[] = []
+  const tui = await startTui(t.vela, {
+    copyToClipboard: async (text) => {
+      copied.push(text)
+    },
+  })
+  await tui.started
+
+  tui.submit('/copy')
+  await tui.until('No answer to copy yet')
+
+  tui.submit('question')
+  await tui.until('answer')
+  await tui.until(() => !t.vela.session('tui').isRunning)
+  // A later step with only a tool call and no text doesn't hide the last answer
+  tui.submit('again')
+  await tui.until(
+    () => t.model.pending() === 0 && !t.vela.session('tui').isRunning,
+  )
+  tui.submit('/copy')
+  await tui.until('Copied the last answer to the clipboard')
+  expect(copied).toEqual(['The **answer**'])
 })

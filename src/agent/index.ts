@@ -258,6 +258,7 @@ export const agentLoop = async ({
               }
               case 'tool-error': {
                 step.endBeforeResults()
+                toolRegistry.takeDetails(part.toolCallId)
                 step.result(part, { error: part.error })
                 await toolRegistry.recordRejection(
                   part.toolName,
@@ -270,7 +271,10 @@ export const agentLoop = async ({
               }
               case 'tool-result': {
                 step.endBeforeResults()
-                step.result(part, { output: part.output })
+                step.result(part, {
+                  output: part.output,
+                  details: toolRegistry.takeDetails(part.toolCallId),
+                })
                 break
               }
               case 'finish-step':
