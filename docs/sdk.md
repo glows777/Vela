@@ -36,6 +36,7 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 | `model` | none | Default model: `provider/id` (looked up in `providers` and providers registered by extensions) or an AI SDK `LanguageModel`. Without it, a session must call `setModel()`, or resume a session with a saved model, before it can prompt. |
 | `providers` | `{}` | Model providers by name, `Record<string, ProviderDefinition>`. `loadConfig().providers` gives the built-in `openai` and `anthropic` providers plus those in `models.json`. See [Models](models.md). |
 | `thinkingLevel` | `medium` | Thinking level for new sessions: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `autoCompaction` | `true` | Automatic compaction for new sessions (pi's `compaction.enabled`). `false`: no microcompaction, threshold summary or compact-and-retry on overflow; `compact()` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `cwd` | `process.cwd()` | Working directory for file, search and bash tools and for skills. |
 | `dataDir` | temp dir | Project data directory: `sessions/`, `usage/` and extension data such as `memory/` and `rag/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
 | `sessionStorage` | see [Session storage](#session-storage) | Where session history is stored. |
@@ -95,6 +96,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `ui` | none | A `SessionUI` extensions use to talk to the user (`notify`, `confirm`, `select`, `input`, optional `setStatus`, `setWidget`). Without it `confirm` answers no, `select`/`input` answer nothing, and `notify` becomes a `notify` event. |
 | `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
 | `thinkingLevel` | Vela's level | Thinking level for this session |
+| `autoCompaction` | Vela's setting | Automatic compaction for this session |
 
 ### Session members
 
@@ -119,12 +121,47 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `getActiveTools()` | Tool names the model can currently see (after role, selection and deferred loading) |
 | `setActiveTools(names)` | Enable only these tools; `undefined` restores all |
 | `name`, `setName(name)` | Display name, saved with the next save and shown in session lists |
+| `autoCompaction` | Get or set automatic compaction (pi's `autoCompactionEnabled` / `setAutoCompactionEnabled`) |
+| `getEntries()` | Copies of all the session's entries in append order, every branch included |
+| `getTree()`, `getBranch(fromId?)`, `getLeafId()`, `parentSession` | The session tree; see [Session tree](#session-tree) |
+| `navigateTree(entryId, options?)`, `setLabel(entryId, label)` | Move in the session tree; bookmark an entry |
+| `fork(entryId, options?)`, `clone(options?)` | Copy a branch into a new session |
+| `exportHtml(path?)`, `exportJsonl(path?)` | Write the current branch as HTML or JSONL; return the path written |
 | `limits` | Limits in effect for this session's model |
 | `usage` | `{ tokens, percent, needsAction, totals }`: context estimate and this session's token and cost totals; `totals.cost`, `baselineCost` and `savedCost` are undefined while no request had a known price |
 | `subscribe(listener)` | This session's events: `(event) => void`. Returns an unsubscribe function. |
 | `close()` | Aborts, waits for the run to finish and save, fires `session_shutdown` (if the session had started) and removes the session from the Vela |
 
 Members marked `@internal` in the type declarations (`store`, `tracker`, `registry`, `save()`, `emit`, ...) are used by the CLI and may change without notice.
+
+### Session tree
+
+Like pi, a session's entries form a tree (see [Sessions](sessions.md#session-tree) and [Session format](session-format.md)). New entries are appended under the current leaf; the model sees the branch from the root to the leaf.
+
+```typescript
+const entries = session.getEntries()
+const question = entries.find((e) => e.type === 'message' && e.message.role === 'user')!
+
+// Move to just before that message; its text comes back for editing
+const { editorText } = await session.navigateTree(question.id, { summarize: true })
+await session.prompt(`${editorText} (but in TypeScript)`) // a new branch
+
+// Or copy the branch up to it into a new session; the original stays open
+const { session: copy, selectedText } = await session.fork(question.id, { sessionId: 'try-2' })
+```
+
+| Member | Description |
+|---|---|
+| `getTree()` | `SessionTreeNode[]` (`{ entry, children, label? }`), roots first, children oldest first. Normally one root; an entry whose parent is missing is also a root. |
+| `getBranch(fromId?)` | Entries from the root to `fromId` (default: the leaf) |
+| `getLeafId()` | The current leaf; `null` when there are no entries |
+| `navigateTree(entryId, { summarize?, focus?, label? })` | Like pi's: a user message moves the leaf to its parent and returns `{ editorText }`; any other entry becomes the leaf. `summarize` first summarizes the old branch below the entry it shares with the target (`focus` steers the summary) and appends a `branch_summary` where the session moves. `label` labels the target (or the summary). Rebuilds `messages`, the model and thinking level from the new branch. Returns `{ cancelled: true }` when an extension or `abort()` stopped it. |
+| `setLabel(entryId, label)` | Sets a label; `undefined` or `''` clears it |
+| `fork(entryId, { position?, sessionId? })` | Copies the branch into a new session: `position: 'before'` (default) needs a user message and ends just before it (returns its text as `selectedText`); `'at'` includes the entry. Returns `{ cancelled, session?, selectedText? }`. The new session opens in the same Vela with this session's options, model, thinking level and automatic compaction setting; this session stays open (pi replaces its one session instead). `sessionId` defaults to a new time-based id; one already open or already saved throws. |
+| `clone({ sessionId? })` | `fork(getLeafId(), { position: 'at' })`; throws when the session has no entries |
+| `parentSession` | Id of the session this one was forked from |
+
+`navigateTree()`, `fork()` and `clone()` throw while the session is running. Extensions can cancel or adjust them with the [`session_before_tree`, `session_tree` and `session_before_fork` events](extensions.md#intercepting-events).
 
 ### Prompting
 

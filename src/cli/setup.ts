@@ -48,6 +48,10 @@ export interface CliArgs {
   noExtensions: boolean
   /** `--no-session`: keep the session in memory only, not on disk (memory and knowledge base work as usual) */
   noSession: boolean
+  /** `--fork <id>`: start in a new session copied from this saved one (like pi) */
+  fork?: string
+  /** `--export <id or .jsonl file> [output]`: write the session as HTML and exit (like pi) */
+  export?: string
   /** `--approve` / `--no-approve`: trust / don't trust project config for this run, without saving */
   approve?: boolean
   /** `--model provider/id` */
@@ -65,7 +69,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-h | --help] [-v | --version]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-h | --help] [-v | --version]'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -84,6 +88,8 @@ Options:
   -r, --resume                  Pick a saved session (interactive mode only)
   --session <id>                Open this session (created if missing)
   --no-session                  Keep the session in memory only, not on disk
+  --fork <id>                   Start in a new session copied from a saved session
+  --export <id|file> [output]   Write a saved session (id or .jsonl file) as HTML and exit
   --model <provider/id>         Model to use (providers: built-in openai / anthropic, ~/.vela/models.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
   --append-system-prompt <text> Append text or a file's contents to the system prompt (repeatable;
@@ -175,7 +181,11 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--session') {
       args.session = value()
       assertSessionId(args.session)
-    } else if (arg === '-e' || arg === '--extension')
+    } else if (arg === '--fork') {
+      args.fork = value()
+      assertSessionId(args.fork)
+    } else if (arg === '--export') args.export = value()
+    else if (arg === '-e' || arg === '--extension')
       args.extensions.push(value())
     else if (arg === '--no-extensions' || arg === '-ne')
       args.noExtensions = true
@@ -199,10 +209,14 @@ export function parseArgs(argv: string[]): CliArgs {
     else args.messages.push(arg)
   }
   if (
-    [args.continue, args.resume, args.session !== undefined].filter(Boolean)
-      .length > 1
+    [
+      args.continue,
+      args.resume,
+      args.session !== undefined,
+      args.fork !== undefined,
+    ].filter(Boolean).length > 1
   )
-    throw new Error('Use only one of -c, -r and --session')
+    throw new Error('Use only one of -c, -r, --session and --fork')
   return args
 }
 

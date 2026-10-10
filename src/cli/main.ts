@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
@@ -8,6 +9,15 @@ import {
   type VelaConfig,
 } from '../config/index.ts'
 import { ModelRegistry } from '../models/index.ts'
+import {
+  buildSessionPath,
+  isSessionV1,
+  migrateSessionV1,
+  type SessionEntry,
+  type SessionHeader,
+} from '../session/entries.ts'
+import { renderSessionHtml } from '../session/export-html.ts'
+import { newSessionId } from '../session/session-id.ts'
 import { memorySessionStorage } from '../session/storage.ts'
 import { createMockModel } from '../testing/demo-model.ts'
 import { loadFauxScenario } from '../testing/faux.ts'
@@ -19,7 +29,6 @@ import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
 import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
 import { runPrintMode } from './print-mode.ts'
 import { runRpcMode } from './rpc-mode.ts'
-import { newSessionId } from './sessions.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -75,6 +84,8 @@ if (mode === 'rpc' && args.messages.length)
   usageError(
     '--mode rpc reads commands from stdin and takes no prompt on the command line',
   )
+if (args.export && (args.messages.length > 1 || args.mode || args.print))
+  usageError('--export takes a session and an optional output path only')
 if (mode !== 'interactive' && args.resume)
   usageError(
     '-r works only in interactive mode; in print / json / rpc mode use --session <id> or -c',
@@ -82,7 +93,7 @@ if (mode !== 'interactive' && args.resume)
 
 // Print mode: piped stdin is prepended to the first prompt (like pi: `git diff | vela -p "review"`)
 const messages = [...args.messages]
-if (mode === 'print' || mode === 'json') {
+if ((mode === 'print' || mode === 'json') && !args.export) {
   const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
   if (!messages.length)
@@ -187,6 +198,7 @@ const vela = createVela({
     ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
     : config.appendSystemPrompt,
   limits: config.settings.limits,
+  autoCompaction: config.settings.autoCompaction,
   shellPath: config.settings.shellPath,
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
@@ -201,11 +213,45 @@ const vela = createVela({
   ),
 })
 
+const exit = async (code: number): Promise<never> => {
+  await vela.dispose()
+  await recorder?.flush()
+  process.exit(code)
+}
+
+// --export <id or .jsonl file> [output]: write the session as HTML and exit (like pi)
+if (args.export) {
+  try {
+    const written = await exportHtml(args.export, args.messages[0])
+    console.error(`Exported to ${written}`)
+  } catch (error) {
+    console.error(`[export] ${error instanceof Error ? error.message : error}`)
+    await exit(1)
+  }
+  await exit(0)
+}
+
+// --fork <id>: copy a saved session into a new one and start there (like pi)
+let forkedId: string | undefined
+if (args.fork) {
+  const source = vela.session(args.fork)
+  try {
+    if (!(await source.resume()))
+      throw new Error(`Session ${args.fork} has no saved history`)
+    forkedId = (await source.clone()).session?.id
+  } catch (error) {
+    console.error(`[fork] ${error instanceof Error ? error.message : error}`)
+    await exit(1)
+  }
+  await source.close()
+}
+
 /**
  * Which session to use (like pi): `--session <id>`; `-c` continues the most recent saved one (or starts a new one);
  * `-r` picks one in interactive mode; otherwise each launch starts a new session.
  */
 const sessionId =
+  forkedId ??
   args.session ??
   (args.continue ? (await vela.listSessions())[0]?.id : undefined) ??
   newSessionId()
@@ -248,12 +294,6 @@ function readPromptInput(input: string): string {
   return existsSync(input) && statSync(input).isFile()
     ? readFileSync(input, 'utf-8')
     : input
-}
-
-const exit = async (code: number): Promise<never> => {
-  await vela.dispose()
-  await recorder?.flush()
-  process.exit(code)
 }
 
 if (mode === 'print' || mode === 'json') {
@@ -305,6 +345,36 @@ if (mode === 'print' || mode === 'json') {
     },
   })
   process.exit(0)
+}
+
+/** Writes a saved session (by id, or a .jsonl session file) as HTML; returns the path written. */
+async function exportHtml(source: string, output?: string): Promise<string> {
+  let html: string
+  let id = source
+  if (existsSync(source) && statSync(source).isFile()) {
+    const lines = readFileSync(source, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as unknown)
+    const fileEntries = isSessionV1(lines)
+      ? migrateSessionV1('imported', lines)
+      : (lines as (SessionHeader | SessionEntry)[])
+    const header =
+      fileEntries[0]?.type === 'session' ? fileEntries[0] : undefined
+    id = header?.id ?? 'imported'
+    const entries = fileEntries.filter(
+      (entry): entry is SessionEntry => entry.type !== 'session',
+    )
+    html = renderSessionHtml({ id, entries: buildSessionPath(entries) })
+  } else {
+    const session = vela.session(source)
+    if (!(await session.resume()))
+      throw new Error(`Session ${source} has no saved history`)
+    return session.exportHtml(output)
+  }
+  const target = resolve(cwd, output ?? `vela-session-${id}.html`)
+  await writeFile(target, html, { mode: 0o600 })
+  return target
 }
 
 async function readStdin(): Promise<string> {

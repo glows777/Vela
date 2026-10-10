@@ -21,6 +21,7 @@ import type { ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type { SessionUI } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import { messageText } from '../session/entries.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { createCliDispatcher } from './dispatcher.ts'
@@ -33,6 +34,7 @@ import {
 } from './tui/components.ts'
 import { VelaEditor } from './tui/editor.ts'
 import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
+import { nearestShown, treeItems } from './tui/tree-selector.ts'
 
 export interface InteractiveOptions {
   vela: Vela
@@ -68,6 +70,16 @@ const TUI_COMMANDS = [
     description: 'Select model (/model provider/id switches directly)',
   },
   { name: 'thinking', description: 'Select thinking level' },
+  { name: 'tree', description: 'Move to another point in the session tree' },
+  {
+    name: 'fork',
+    description: 'Start a new session from before an earlier message',
+  },
+  { name: 'clone', description: 'Copy the current branch into a new session' },
+  {
+    name: 'export',
+    description: 'Write the current branch as HTML (or .jsonl) [path]',
+  },
   {
     name: 'compact',
     description: 'Manually compact the session context (optional focus)',
@@ -287,6 +299,13 @@ export class InteractiveMode {
       this.renderHistory(session.messages)
       this.addNotice(
         `Resumed session ${session.name ?? session.id}, ${session.messages.length} messages`,
+        'dim',
+      )
+    } else if (session.parentSession && session.messages.length) {
+      // A fork / clone opens with the copied branch
+      this.renderHistory(session.messages)
+      this.addNotice(
+        `Session ${session.id}, copied from ${session.parentSession}`,
         'dim',
       )
     }
@@ -783,6 +802,25 @@ export class InteractiveMode {
           return
         }
         break
+      case '/tree':
+        await this.treeCommand()
+        return
+      case '/fork':
+        await this.forkCommand()
+        return
+      case '/clone':
+        await this.forkCommand(true)
+        return
+      case '/export':
+        try {
+          const path = args.endsWith('.jsonl')
+            ? await this.session.exportJsonl(args)
+            : await this.session.exportHtml(args || undefined)
+          this.addNotice(`Exported to ${path}`, 'dim')
+        } catch (error) {
+          this.addNotice(`Export failed: ${errorMessage(error)}`, 'error')
+        }
+        return
       case '/compact':
         if (this.session.isRunning) {
           this.addNotice(
@@ -831,6 +869,149 @@ export class InteractiveMode {
       // Loop errors were already shown at agent_end
       if (error !== this.shownError)
         this.addNotice(`Error: ${this.describeError(error)}`, 'error')
+    }
+    this.tui.requestRender()
+  }
+
+  // ---------------------------------------------------------------- Session tree
+
+  private busyNotice(): boolean {
+    if (!this.session.isRunning) return false
+    this.addNotice(
+      'A task is running; press Esc to interrupt or wait for it to finish',
+      'warning',
+    )
+    return true
+  }
+
+  /** `/tree` (like pi): pick an entry, choose whether to summarize the branch being left, then move. */
+  private async treeCommand(): Promise<void> {
+    if (this.busyNotice()) return
+    const session = this.session
+    const branch = session.getBranch()
+    const items = treeItems(
+      session.getTree(),
+      new Set(branch.map((entry) => entry.id)),
+      null,
+    )
+    if (!items.length) {
+      this.addNotice('No messages in this session yet', 'dim')
+      return
+    }
+    const current = nearestShown(branch, items)
+    for (const item of items)
+      if (item.value === current) item.description = '← current'
+    const targetId = await this.select('Session Tree', items, current)
+    if (!targetId) return
+    const action = await this.select('Move here', [
+      { value: 'go', label: 'No summary' },
+      { value: 'summarize', label: 'Summarize the branch I leave' },
+      { value: 'focus', label: 'Summarize with a focus…' },
+      { value: 'label', label: 'Set a label on this entry…' },
+    ])
+    if (!action) return
+    if (action === 'label') {
+      const label = await this.input('Label', 'empty clears the label')
+      try {
+        session.setLabel(targetId, label)
+        await session.save()
+        this.addNotice(label ? `Label set: ${label}` : 'Label cleared', 'dim')
+      } catch (error) {
+        this.addNotice(errorMessage(error), 'error')
+      }
+      return
+    }
+    let focus: string | undefined
+    if (action === 'focus') {
+      focus = await this.input('Summary focus', 'what the summary should keep')
+      if (focus === undefined) return
+    }
+    const atLeaf =
+      targetId === session.getLeafId() &&
+      !session
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.id === targetId &&
+            entry.type === 'message' &&
+            entry.message.role === 'user',
+        )
+    if (atLeaf) {
+      this.addNotice('Already at this point', 'dim')
+      return
+    }
+    if (action !== 'go') this.startLoader('Summarizing branch…')
+    try {
+      const result = await session.navigateTree(targetId, {
+        summarize: action !== 'go',
+        focus,
+      })
+      if (result.cancelled) {
+        this.addNotice('Navigation cancelled', 'dim')
+        return
+      }
+      this.resetChat()
+      this.renderHistory(session.messages)
+      if (result.editorText !== undefined)
+        this.editor.setText(result.editorText)
+      this.addNotice('Moved in the session tree', 'dim')
+    } catch (error) {
+      this.addNotice(`Navigation failed: ${errorMessage(error)}`, 'error')
+    } finally {
+      this.stopLoader()
+      this.updateBorder()
+      this.tui.requestRender()
+    }
+  }
+
+  /** `/fork` (pick an earlier user message) and `/clone` (the current branch), like pi: switch to the copy. */
+  private async forkCommand(clone = false): Promise<void> {
+    if (this.busyNotice()) return
+    const session = this.session
+    let entryId: string | undefined
+    if (!clone) {
+      const users = session
+        .getEntries()
+        .flatMap((entry) =>
+          entry.type === 'message' && entry.message.role === 'user'
+            ? [{ id: entry.id, text: messageText(entry.message.content) }]
+            : [],
+        )
+      if (!users.length) {
+        this.addNotice('No messages to fork from', 'dim')
+        return
+      }
+      entryId = await this.select(
+        'Fork from before',
+        users.map((user) => ({
+          value: user.id,
+          label: oneLine(sanitize(user.text)).slice(0, 80),
+        })),
+        users.at(-1)?.id,
+      )
+      if (!entryId) return
+    }
+    try {
+      const result = clone
+        ? await session.clone({ sessionId: this.options.newSessionId() })
+        : await session.fork(entryId as string, {
+            sessionId: this.options.newSessionId(),
+          })
+      if (result.cancelled || !result.session) {
+        this.addNotice(`${clone ? 'Clone' : 'Fork'} cancelled`, 'dim')
+        return
+      }
+      await this.switchSession(result.session.id, false)
+      this.editor.setText(result.selectedText ?? '')
+      this.addNotice(
+        clone ? 'Cloned to a new session' : 'Forked to a new session',
+        'dim',
+      )
+    } catch (error) {
+      this.addNotice(
+        `${clone ? 'Clone' : 'Fork'} failed: ${errorMessage(error)}`,
+        'error',
+      )
     }
     this.tui.requestRender()
   }

@@ -2,6 +2,7 @@ import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelDefinition } from '../channels/types.ts'
 import type { VelaLogger } from '../logger.ts'
 import type { ProviderDefinition } from '../models/index.ts'
+import type { BranchSummaryEntry, SessionEntry } from '../session/entries.ts'
 import type { ToolDefinition } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 
@@ -100,12 +101,75 @@ export interface SessionShutdownEvent {
   type: 'session_shutdown'
 }
 
+/** What `session.navigateTree()` is about to do (pi's `TreePreparation`). */
+export interface TreePreparation {
+  /** The entry the user selected */
+  targetId: string
+  /** The leaf being left */
+  oldLeafId: string | null
+  /** Deepest entry shared by the old leaf's branch and the target's */
+  commonAncestorId: string | null
+  /** Entries of the branch being left, after the common ancestor (what a branch summary covers) */
+  entriesToSummarize: SessionEntry[]
+  /** Whether the caller asked for a branch summary */
+  userWantsSummary: boolean
+  /** What the summary should prefer to keep (pi's customInstructions) */
+  focus?: string
+  /** Label to put on the target (or on the summary entry) */
+  label?: string
+}
+
+/** Before moving within the session tree (pi's session_before_tree). */
+export interface SessionBeforeTreeEvent {
+  type: 'session_before_tree'
+  preparation: TreePreparation
+  /** Aborted when the navigation is aborted */
+  signal: AbortSignal
+}
+
+/**
+ * `cancel` stops the navigation. `summary` replaces the built-in branch summary (used only when one was
+ * asked for); `focus` and `label` override the caller's.
+ */
+export interface SessionBeforeTreeEventResult {
+  cancel?: boolean
+  summary?: { summary: string }
+  focus?: string
+  label?: string
+}
+
+/** After moving within the session tree (pi's session_tree). */
+export interface SessionTreeEvent {
+  type: 'session_tree'
+  newLeafId: string | null
+  oldLeafId: string | null
+  /** The branch summary appended, if any */
+  summaryEntry?: BranchSummaryEntry
+  /** Whether that summary came from an extension */
+  fromExtension?: boolean
+}
+
+/** Before `session.fork()` / `clone()` creates a new session (pi's session_before_fork). */
+export interface SessionBeforeForkEvent {
+  type: 'session_before_fork'
+  entryId: string
+  /** `before`: from before a user message; `at`: including the entry (clone) */
+  position: 'before' | 'at'
+}
+
+export interface SessionBeforeForkEventResult {
+  cancel?: boolean
+}
+
 type InterceptEvents = {
   tool_call: [ToolCallEvent, ToolCallEventResult]
   tool_result: [ToolResultEvent, ToolResultEventResult]
   before_agent_start: [BeforeAgentStartEvent, void]
   session_start: [SessionStartEvent, void]
   session_shutdown: [SessionShutdownEvent, void]
+  session_before_tree: [SessionBeforeTreeEvent, SessionBeforeTreeEventResult]
+  session_tree: [SessionTreeEvent, void]
+  session_before_fork: [SessionBeforeForkEvent, SessionBeforeForkEventResult]
 }
 
 /** Read-only notifications: every VelaEvent (the intercepting tool_call / tool_result above are separate). */

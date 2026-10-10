@@ -26,6 +26,8 @@ export interface VelaSettings {
   shellPath?: string
   /** Overrides any subset of VelaLimits */
   limits?: Partial<VelaLimits>
+  /** Automatic compaction (like pi's `compaction.enabled`); default true. Manual /compact works either way */
+  autoCompaction?: boolean
   /** Extension files or directories (relative to this settings file), plus `builtin:<name>` / `+builtin:<name>` / `-builtin:<name>` */
   extensions?: string[]
   /** Extra skill directories or files (relative to this settings file) */
@@ -266,6 +268,11 @@ function readSettings(file: string): VelaSettings | undefined {
   for (const key of ['dataDir', 'shellPath'] as const)
     if (settings[key] !== undefined && typeof settings[key] !== 'string')
       throw new Error(`${file}: ${key} must be a string`)
+  if (
+    settings.autoCompaction !== undefined &&
+    typeof settings.autoCompaction !== 'boolean'
+  )
+    throw new Error(`${file}: autoCompaction must be true or false`)
   if (
     settings.defaultModel !== undefined &&
     (typeof settings.defaultModel !== 'string' ||

@@ -1,5 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { projectDataDir } from '../../src/config/index.ts'
@@ -266,6 +266,36 @@ test.concurrent('--session opens a named session id; -r needs interactive mode',
   expect(bad.code).toBe(2)
   expect(bad.stderr).toContain('Invalid session id ".bad"')
   expect(bad.stderr).not.toMatch(/\n\s+at /)
+})
+
+test.concurrent('--fork copies a saved session into a new one; --export writes a session as HTML and exits', async () => {
+  const model = `faux:${scenario('hello')}`
+  const first = await cli(['-p', 'hello', '--session', 'work'], { model })
+  expect(first.code).toBe(0)
+  const opts = { model, cwd: first.cwd, agentDir: first.agentDir }
+
+  const forked = await cli(['-p', 'again', '--fork', 'work'], opts)
+  expect(forked.code).toBe(0)
+  const files = sessionFiles(first.dataDir).filter(
+    (f) => !f.endsWith('/work.jsonl'),
+  )
+  expect(files).toHaveLength(1)
+  const lines = readFileSync(files[0]!, 'utf8').trim().split('\n')
+  expect(JSON.parse(lines[0]!)).toMatchObject({ parentSession: 'work' })
+  expect(lines.join('\n')).toContain('"hello"')
+  expect(lines.join('\n')).toContain('"again"')
+
+  const byId = await cli(['--export', 'work', 'work.html'], opts)
+  expect(byId.code).toBe(0)
+  expect(byId.stderr).toContain('Exported to')
+  expect(readFileSync(join(first.cwd, 'work.html'), 'utf8')).toContain('hello')
+  const byFile = await cli(['--export', files[0]!, 'fork.html'], opts)
+  expect(byFile.code).toBe(0)
+  expect(readFileSync(join(first.cwd, 'fork.html'), 'utf8')).toContain('again')
+
+  const missing = await cli(['--fork', 'nope', '-p', 'x'], opts)
+  expect(missing.code).toBe(1)
+  expect(missing.stderr).toContain('Session nope has no saved history')
 })
 
 test.concurrent('a model error makes -p exit 1 with the real cause on stderr', async () => {

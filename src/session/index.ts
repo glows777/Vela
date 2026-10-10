@@ -1,10 +1,15 @@
+import { copyFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
+  type BranchSummaryEntry,
   buildSessionContext,
+  buildSessionPath,
+  buildSessionTree,
   type CompactionEntry,
+  copyBranch,
   createEntryId,
   type NestedToolCalls,
   type NewEntry,
@@ -14,6 +19,7 @@ import {
   type SessionFileEntry,
   type SessionHeader,
   type SessionMessageEntry,
+  type SessionTreeNode,
 } from './entries.ts'
 import { fileSessionStorage, type SessionStorage } from './storage.ts'
 import { ToolResultStore } from './tool-results.ts'
@@ -38,6 +44,9 @@ export class SessionStore {
   private header?: SessionHeader
   private readonly entries: SessionEntry[] = []
   private readonly entryIds = new Set<string>()
+  private readonly byId = new Map<string, SessionEntry>()
+  /** The entry new entries are appended under (like pi's leaf pointer); null before the first entry */
+  private leafId: string | null = null
   /** Entry id of each message in the model context */
   private readonly ids = new Map<ModelMessage, string>()
   /** The header has gone into the write queue */
@@ -67,6 +76,136 @@ export class SessionStore {
     return structuredClone(this.entries)
   }
 
+  /** The current leaf (like pi's getLeafId); null when the session has no entries or the leaf was reset. */
+  getLeafId(): string | null {
+    return this.leafId
+  }
+
+  /** A copy of one entry. */
+  getEntry(id: string): SessionEntry | undefined {
+    const entry = this.byId.get(id)
+    return entry && structuredClone(entry)
+  }
+
+  /** Copies of the entries from the root to `fromId` (default: the current leaf), like pi's getBranch. */
+  getBranch(fromId: string | null = this.leafId): SessionEntry[] {
+    return structuredClone(buildSessionPath(this.entries, fromId, this.byId))
+  }
+
+  /** The session as a tree (copies), like pi's getTree. */
+  getTree(): SessionTreeNode[] {
+    return buildSessionTree(structuredClone(this.entries))
+  }
+
+  /** Session id this one was forked from, if any. */
+  get parentSession(): string | undefined {
+    return this.header?.parentSession
+  }
+
+  /**
+   * Moves the leaf (like pi's branch / resetLeaf): the next entry becomes a child of `id`, or a new root
+   * when `id` is null. Entries are never changed or removed.
+   */
+  branch(id: string | null): void {
+    if (id !== null && !this.byId.has(id))
+      throw new Error(`Entry ${id} is not in the session`)
+    this.leafId = id
+  }
+
+  /** Moves the leaf to `id` and appends a summary of the branch left there (like pi's branchWithSummary). */
+  branchWithSummary(id: string | null, summary: string): BranchSummaryEntry {
+    const fromId = this.leafId ?? 'root'
+    this.branch(id)
+    return this.append<BranchSummaryEntry>({
+      type: 'branch_summary',
+      fromId,
+      summary,
+    })
+  }
+
+  /** Sets or clears (undefined / empty) the label of an entry (like pi's appendLabelChange). */
+  appendLabelChange(targetId: string, label: string | undefined): void {
+    if (!this.byId.has(targetId))
+      throw new Error(`Entry ${targetId} is not in the session`)
+    this.append({ type: 'label', targetId, label: label || undefined })
+  }
+
+  /** Rebuilds the model context of the current branch and points context messages at their entries. */
+  buildContext(): SessionContext {
+    const context = buildSessionContext(this.entries, this.leafId, this.byId)
+    this.ids.clear()
+    for (const [message, id] of context.ids) this.ids.set(message, id)
+    return context
+  }
+
+  /**
+   * Starts this (new, never written) session as a copy of another session's branch (fork / clone, like
+   * pi's createBranchedSession). The parent's tool call history is copied so summaries that point into it
+   * keep working. Written right away when the branch has a conversation.
+   */
+  async seedFrom(
+    branch: SessionEntry[],
+    parent: { id: string; results: ToolResultStore },
+  ): Promise<void> {
+    // Setup entries the new session holds in memory are replaced by the branch's own
+    if (this.started)
+      throw new Error('Only a new session can be seeded from another branch')
+    await this.checkNew()
+    const entries = copyBranch(structuredClone(branch))
+    const context = buildSessionContext(entries)
+    const source = parent.results.history.path
+    const target = join(
+      this.results.dir,
+      '..',
+      this.results.historyId,
+      'tool-history.jsonl',
+    )
+    try {
+      await mkdir(join(target, '..'), { recursive: true, mode: 0o700 })
+      await copyFile(source, target)
+    } catch (error) {
+      // The parent has not run a tool yet: nothing to copy
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    await this.results.resumeHistory(
+      this.results.historyId,
+      0,
+      context.toolHistoryViewSeq,
+    )
+    this.header = {
+      type: 'session',
+      version: SESSION_FORMAT_VERSION,
+      id: this.sessionId,
+      timestamp: new Date().toISOString(),
+      ...(this.cwd ? { cwd: this.cwd } : {}),
+      toolHistoryId: this.results.historyId,
+      parentSession: parent.id,
+    }
+    this.replaceEntries(entries)
+    if (
+      entries.some(
+        (entry) =>
+          entry.type === 'message' &&
+          (entry.message.role === 'user' || entry.message.role === 'assistant'),
+      )
+    ) {
+      this.started = true
+      this.pending.push(this.header, ...this.entries)
+      this.writing = this.writing.then(() => this.write())
+    }
+  }
+
+  private replaceEntries(entries: SessionEntry[]): void {
+    this.entries.splice(0, this.entries.length, ...entries)
+    this.entryIds.clear()
+    this.byId.clear()
+    for (const entry of entries) {
+      this.entryIds.add(entry.id)
+      this.byId.set(entry.id, entry)
+    }
+    this.leafId = entries.at(-1)?.id ?? null
+  }
+
   /** Entry id of a message in the current context. */
   idOf(message: ModelMessage): string | undefined {
     return this.ids.get(message)
@@ -78,10 +217,12 @@ export class SessionStore {
     const entry = {
       ...input,
       id,
-      parentId: this.entries.at(-1)?.id ?? null,
+      parentId: this.leafId,
       timestamp: new Date().toISOString(),
     } as unknown as T
     this.entries.push(entry)
+    this.byId.set(id, entry)
+    this.leafId = id
     this.persist(entry)
     return entry
   }
@@ -247,7 +388,8 @@ export class SessionStore {
         typeof entry.id !== 'string' ||
         (!seen.has(entry.id) && !!seen.add(entry.id)),
     )
-    const context = buildSessionContext(entries)
+    // Like pi: the leaf is the last entry
+    const context = buildSessionContext(entries, entries.at(-1)?.id ?? null)
     if (header.toolHistoryId) {
       try {
         await this.results.resumeHistory(
@@ -264,9 +406,7 @@ export class SessionStore {
       }
     }
     this.header = header
-    this.entries.splice(0, this.entries.length, ...entries)
-    this.entryIds.clear()
-    for (const entry of entries) this.entryIds.add(entry.id)
+    this.replaceEntries(entries)
     this.ids.clear()
     for (const [message, id] of context.ids) this.ids.set(message, id)
     this.started = true

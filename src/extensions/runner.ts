@@ -11,8 +11,12 @@ import type {
   ExtensionContext,
   ExtensionEventName,
   ExtensionHandler,
+  SessionBeforeForkEventResult,
+  SessionBeforeTreeEventResult,
+  SessionTreeEvent,
   ToolCallEventResult,
   ToolResultEventResult,
+  TreePreparation,
   VelaExtension,
 } from './types.ts'
 
@@ -257,6 +261,65 @@ export class ExtensionRunner {
 
   sessionShutdown(session: VelaSession) {
     return this.lifecycle({ type: 'session_shutdown' }, session)
+  }
+
+  /**
+   * session_before_tree (like pi): handlers run in order; the first `cancel` wins, other fields are merged
+   * (later handlers override). A failing handler is logged and skipped.
+   */
+  async beforeTree(
+    session: VelaSession,
+    preparation: TreePreparation,
+    signal: AbortSignal,
+  ): Promise<SessionBeforeTreeEventResult> {
+    const event = { type: 'session_before_tree' as const, preparation, signal }
+    const merged: SessionBeforeTreeEventResult = {}
+    const ctx = this.context(session, signal)
+    for (const { extension, fn } of this.list(event.type)) {
+      try {
+        const result = (await fn(event, ctx)) as
+          | SessionBeforeTreeEventResult
+          | undefined
+        if (result?.cancel) return { cancel: true }
+        Object.assign(merged, result)
+      } catch (error) {
+        this.report(extension, event.type, error)
+      }
+    }
+    return merged
+  }
+
+  /** session_tree: awaited in order, errors logged. */
+  async tree(session: VelaSession, event: SessionTreeEvent): Promise<void> {
+    const ctx = this.context(session)
+    for (const { extension, fn } of this.list(event.type)) {
+      try {
+        await fn(event, ctx)
+      } catch (error) {
+        this.report(extension, event.type, error)
+      }
+    }
+  }
+
+  /** session_before_fork: true when a handler cancels. A failing handler is logged and skipped. */
+  async beforeFork(
+    session: VelaSession,
+    entryId: string,
+    position: 'before' | 'at',
+  ): Promise<boolean> {
+    const event = { type: 'session_before_fork' as const, entryId, position }
+    const ctx = this.context(session)
+    for (const { extension, fn } of this.list(event.type)) {
+      try {
+        const result = (await fn(event, ctx)) as
+          | SessionBeforeForkEventResult
+          | undefined
+        if (result?.cancel) return true
+      } catch (error) {
+        this.report(extension, event.type, error)
+      }
+    }
+    return false
   }
 
   /** before_agent_start: collect this turn's system prompt sections. */

@@ -13,6 +13,13 @@
     prompt: string
     sections: Record<string, string>
     type: "before_agent_start"
+  interface BranchSummaryEntry
+    fromId: string
+    id: string
+    parentId: string | null
+    summary: string
+    timestamp: string
+    type: "branch_summary"
   interface ChannelDefinition
     description: string
     name: string
@@ -98,6 +105,13 @@
     appSecret?: string | undefined
     owners?: string[] | undefined
   function fileSessionStorage: (dir: string, logger?: VelaLogger) => SessionStorage
+  interface ForkOptions
+    position?: "before" | "at" | undefined
+    sessionId?: string | undefined
+  interface ForkResult
+    cancelled: boolean
+    selectedText?: string | undefined
+    session?: VelaSession | undefined
   function importExtension: (path: string, name: string) => Promise<VelaExtension>
   interface IncomingMessage
     channelId: string
@@ -105,6 +119,13 @@
     senderId: string
     senderName: string
     text: string
+  interface LabelEntry
+    id: string
+    label: string | undefined
+    parentId: string | null
+    targetId: string
+    timestamp: string
+    type: "label"
   function loadConfig: (options?: LoadConfigOptions) => VelaConfig
   interface LoadConfigOptions
     agentDir?: string | undefined
@@ -149,6 +170,10 @@
     id: string
     name?: string | undefined
     reasoning?: boolean | undefined
+  interface NavigateTreeOptions
+    focus?: string | undefined
+    label?: string | undefined
+    summarize?: boolean | undefined
   interface NestedToolCallRecord
     arguments?: unknown
     argumentsBytes?: number | undefined
@@ -187,12 +212,29 @@
     embedder?: EmbeddingFn | undefined
   type Role = 'owner' | 'collaborator' | 'guest'
   const SESSION_FORMAT_VERSION: 2
+  interface SessionBeforeForkEvent
+    entryId: string
+    position: "before" | "at"
+    type: "session_before_fork"
+  interface SessionBeforeForkEventResult
+    cancel?: boolean | undefined
+  interface SessionBeforeTreeEvent
+    preparation: TreePreparation
+    signal: AbortSignal
+    type: "session_before_tree"
+  interface SessionBeforeTreeEventResult
+    cancel?: boolean | undefined
+    focus?: string | undefined
+    label?: string | undefined
+    summary?: { summary: string; } | undefined
   type SessionEntry = | SessionMessageEntry
       | ModelChangeEntry
       | ThinkingLevelChangeEntry
       | SessionInfoEntry
       | CompactionEntry
       | ContextEditEntry
+      | BranchSummaryEntry
+      | LabelEntry
   interface SessionEntryBase
     id: string
     parentId: string | null
@@ -202,6 +244,7 @@
   interface SessionHeader
     cwd?: string | undefined
     id: string
+    parentSession?: string | undefined
     timestamp: string
     type: "session"
     version: number
@@ -220,6 +263,7 @@
     timestamp: string
     type: "message"
   interface SessionOptions
+    autoCompaction?: boolean | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     permissions?: PermissionRules | undefined
     role?: Role | undefined
@@ -240,6 +284,16 @@
     messageCount: number
     name?: string | undefined
     updatedAt: string
+  interface SessionTreeEvent
+    fromExtension?: boolean | undefined
+    newLeafId: string | null
+    oldLeafId: string | null
+    summaryEntry?: BranchSummaryEntry | undefined
+    type: "session_tree"
+  interface SessionTreeNode
+    children: SessionTreeNode[]
+    entry: SessionEntry
+    label?: string | undefined
   type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
       Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
   const silentLogger: VelaLogger
@@ -315,6 +369,14 @@
     type: "tool_result"
   interface ToolResultEventResult
     output?: string | undefined
+  interface TreePreparation
+    commonAncestorId: string | null
+    entriesToSummarize: SessionEntry[]
+    focus?: string | undefined
+    label?: string | undefined
+    oldLeafId: string | null
+    targetId: string
+    userWantsSummary: boolean
   interface UsageTotals
     baselineCost?: number | undefined
     cacheReadTokens: number
@@ -494,6 +556,7 @@
     warn: (message: string) => void
   interface VelaOptions
     appendSystemPrompt?: string | undefined
+    autoCompaction?: boolean | undefined
     binDir?: string | undefined
     contextFiles?: false | ContextFile[] | undefined
     cwd?: string | undefined
@@ -513,20 +576,30 @@
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
     append: (message: ModelMessage) => void
+    autoCompaction: boolean
     clearQueue: () => { steering: string[]; followUp: string[]; }
+    clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
     close: () => Promise<void>
     compact: (focus?: string) => Promise<void>
+    exportHtml: (path?: string) => Promise<string>
+    exportJsonl: (path?: string) => Promise<string>
     followUp: (input: string) => Promise<void>
     followUpMode: QueueMode
+    fork: (entryId: string, options?: ForkOptions) => Promise<ForkResult>
     get isRunning: boolean
     get model: LanguageModel
     get modelInfo: ModelInfo
     get name: string | undefined
+    get parentSession: string | undefined
     get queue: { steering: string[]; followUp: string[]; }
     get thinkingLevel: ThinkingLevel
     get usage: TokenStatus & { totals: UsageTotals; }
     getActiveTools: () => string[]
+    getBranch: (fromId?: string) => SessionEntry[]
     getEntries: () => SessionEntry[]
+    getLeafId: () => string | null
+    getTree: () => SessionTreeNode[]
+    navigateTree: (targetId: string, options?: NavigateTreeOptions) => Promise<{ editorText?: string; cancelled: boolean; }>
     prompt: (input: string, options?: PromptOptions) => Promise<void>
     readonly id: string
     readonly limits: VelaLimits
@@ -534,6 +607,7 @@
     resume: () => Promise<boolean>
     role: Role
     setActiveTools: (names: string[] | undefined) => void
+    setLabel: (entryId: string, label: string | undefined) => void
     setModel: (model: string | LanguageModel) => void
     setName: (name: string | undefined) => void
     setThinkingLevel: (level: ThinkingLevel) => void
@@ -546,6 +620,7 @@
       sessionId: string,
       ) => void
   interface VelaSettings
+    autoCompaction?: boolean | undefined
     dataDir?: string | undefined
     defaultModel?: string | undefined
     defaultThinkingLevel?: ThinkingLevel | undefined

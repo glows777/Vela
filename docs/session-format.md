@@ -1,6 +1,6 @@
 # Session file format
 
-A Vela session file is an append-only JSONL log in pi's format: a header line, then one entry per line for every message, compaction, context edit and setting change, in the order they happened. Entries are never rewritten. A summary does not delete the messages it replaces; it adds a `compaction` entry, and the model context is rebuilt from the entries when a session is resumed.
+A Vela session file is an append-only JSONL log in pi's format: a header line, then one entry per line for every message, compaction, context edit and setting change, in the order they happened. Entries are never rewritten. Like pi, the entries form a tree: each entry names its parent, and moving back to an earlier entry ([`/tree`](sessions.md#session-tree)) and continuing from there starts a new branch in the same file. A summary does not delete the messages it replaces; it adds a `compaction` entry, and the model context is rebuilt from the entries of the current branch when a session is resumed.
 
 The format is part of Vela's public API. See [Sessions](sessions.md) for behavior and [SDK](sdk.md#session-storage) for custom storage.
 
@@ -28,6 +28,7 @@ interface SessionHeader {
   timestamp: string        // when the session was created (ISO)
   cwd?: string             // working directory
   toolHistoryId?: string   // @internal: the tool call history directory
+  parentSession?: string   // id of the session this one was forked or cloned from
 }
 ```
 
@@ -39,7 +40,7 @@ Every other line is an entry. All entries have pi's base fields:
 |---|---|
 | `type` | The entry type, below |
 | `id` | 8 hex characters, unique in the session |
-| `parentId` | The entry this one follows (`null` for the first). Vela writes a single branch, so this is the previous entry; the field is there so sessions can branch later (pi's session tree) |
+| `parentId` | The entry this one follows (`null` for a root). New entries are children of the session's current leaf, so entries with the same parent are branches |
 | `timestamp` | When the entry was appended (ISO) |
 
 | `type` | Fields | Description |
@@ -50,6 +51,8 @@ Every other line is an entry. All entries have pi's base fields:
 | `session_info` | `name?` | The display name (`session.setName()`, `/name`); no `name` clears it |
 | `compaction` | `summary`, `firstKeptEntryId`, `tokensBefore`, `toolHistoryViewSeq?` | Earlier history was summarized. The model context becomes the summary followed by the messages from `firstKeptEntryId` on (that entry is before the compaction; when it is the compaction itself, nothing was kept) and everything after the compaction. `tokensBefore` is the estimated context size before the summary |
 | `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
+| `branch_summary` | `fromId`, `summary` | A summary of the branch the session left with `navigateTree(…, { summarize: true })` (`/tree` → summarize). It is a child of the entry the session moved to, and the model sees it as a user message starting with `[Summary of the conversation branch you left]`. `fromId` is the leaf that was left (`root` if none) |
+| `label` | `targetId`, `label?` | A bookmark on entry `targetId` (`/tree` → label, `session.setLabel()`); no `label` clears it. Not sent to the model |
 
 Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
@@ -57,15 +60,22 @@ Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
 `resume()` rebuilds the model context like pi's `buildSessionContext`:
 
-1. Take the latest `compaction` entry, if any: the context starts with its summary message, then the `message` entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, all `message` entries.
-2. Apply the `context_edit` entries to their targets.
-3. Leave out messages with a `stopReason`.
+1. Take the current branch: the entries from the leaf back to the root along `parentId`. When a session is loaded, the leaf is the last entry in the file (like pi; moving the leaf without appending anything afterwards is not remembered).
+2. Take the branch's latest `compaction` entry, if any: the context starts with its summary message, then the entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, the whole branch.
+3. Apply the branch's `context_edit` entries to their targets.
+4. Keep `message` entries (leaving out those with a `stopReason`) and `branch_summary` entries (as user messages).
 
-The model, thinking level and name are the latest `model_change`, `thinking_level_change` and `session_info`.
+The model and thinking level are the latest `model_change` and `thinking_level_change` on the branch; the name is the latest `session_info` in the whole file (like pi, it belongs to the session).
+
+### Forks and clones
+
+`session.fork()`, `session.clone()` and `--fork` write a new session file holding one branch of the original: the entries from the root to the fork point, re-chained without `label` entries, followed by fresh `label` entries for the labels on that path (pi's `createBranchedSession`). The header's `parentSession` is the original's id. The tool call history is copied into the new session's directory under a new `toolHistoryId`; long tool output files are not copied, and references to them keep pointing into the original session's directory.
+
+`session.exportJsonl()` writes the same kind of file for the current branch (header and entries, re-chained), without `toolHistoryId`.
 
 ## Versions
 
-`SESSION_FORMAT_VERSION` is the version Vela writes. The current version is `2`.
+`SESSION_FORMAT_VERSION` is the version Vela writes. The current version is `2`. Branching did not change the version: pi's version 2 is already a tree, and a file with one branch is a valid tree. (Builds of Vela from before session trees would read a file with several branches as one long conversation; no released version writes branches.)
 
 - A header with a higher version than this Vela supports fails to resume with an error asking you to upgrade Vela.
 - Version 1 files (Vela 0.1: one `checkpoint` line holding the whole history after compaction, or the even older one message per line) are converted when the file storage loads them, and the file is rewritten as version 2 (written to a temp file and renamed over it). Messages become `message` entries, the checkpoint's model, thinking level and name become entries, and a compacted checkpoint (its first message is the summary) becomes its kept messages followed by a `compaction` entry, which rebuilds the same context. A custom storage holding version 1 data can convert it with `migrateSessionV1(id, lines)`.
@@ -148,4 +158,4 @@ for (const summary of await storage.list!()) console.log(summary.id, summary.mes
 const entries = await storage.load('20261008-081441-da14') // header first, then the entries
 ```
 
-An open session returns its entries with `session.getEntries()`.
+An open session returns its entries with `session.getEntries()`, its current branch with `session.getBranch()` and the whole tree with `session.getTree()`.
