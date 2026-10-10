@@ -222,3 +222,20 @@ test('sessions are keyed by conversation and sender: chats and group members sta
   expect(t.exists('sessions/fake-group-u1.jsonl')).toBe(true)
   expect(t.exists('sessions/fake-group-u2.jsonl')).toBe(true)
 })
+
+test('an input handled by an extension sends no reply (not the previous answer again)', async () => {
+  const t = createTestVela({
+    extensions: [
+      (vela) => {
+        vela.on('input', (event) =>
+          event.text === 'skip' ? { action: 'handled' } : undefined,
+        )
+      },
+    ],
+    responses: [fauxText('First answer')],
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await deliver('u1', 'hello')
+  await deliver('u1', 'skip')
+  expect(sent.map((m) => m.text)).toEqual(['First answer'])
+})

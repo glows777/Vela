@@ -1,4 +1,5 @@
 import {
+  Box,
   type Component,
   Container,
   Markdown,
@@ -26,6 +27,37 @@ export class UserMessage extends Container {
         bgColor: (t) => theme.bg('userBg', t),
       }),
     )
+  }
+}
+
+/**
+ * An extension's custom message (`session.sendMessage()` with `display: true`), drawn like pi's default:
+ * `[customType]` above the text on a violet background; long ones show only the first lines.
+ */
+export class CustomMessageBlock extends Container {
+  constructor(customType: string, text: string, maxLines = 12) {
+    super()
+    const lines = sanitize(text).split('\n')
+    const shown =
+      lines.length > maxLines
+        ? `${lines.slice(0, maxLines).join('\n')}\n… (${lines.length - maxLines} more lines)`
+        : lines.join('\n')
+    const box = new Box(1, 1, (t) => theme.bg('customMessageBg', t))
+    box.addChild(
+      new Text(
+        theme.bold(theme.fg('accent', `[${sanitize(customType)}]`)),
+        0,
+        0,
+      ),
+    )
+    box.addChild(new Spacer(1))
+    box.addChild(
+      new Markdown(shown, 0, 0, markdownTheme, {
+        color: (t) => theme.fg('muted', t),
+      }),
+    )
+    this.addChild(new Spacer(1))
+    this.addChild(box)
   }
 }
 

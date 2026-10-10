@@ -148,14 +148,17 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       )
         throw new Error('streamingBehavior must be steer or followUp')
       if (isExtensionCommand(message)) {
-        await session.prompt(message)
+        await session.prompt(message, { source: 'rpc' })
         return { disposition: 'handled' }
       }
       if (session.isRunning) {
-        await session.prompt(message, { streamingBehavior: behavior })
+        await session.prompt(message, {
+          streamingBehavior: behavior,
+          source: 'rpc',
+        })
         return { disposition: 'queued' }
       }
-      start(session.prompt(message), command)
+      start(session.prompt(message, { source: 'rpc' }), command)
       return { disposition: 'started' }
     },
     steer: (command) => enqueue(command, 'steer'),
@@ -270,12 +273,12 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     if (message.startsWith('/') && isExtensionCommand(message))
       throw new Error('Run extension commands with prompt')
     if (!session.isRunning) {
-      start(session.prompt(message), command)
+      start(session.prompt(message, { source: 'rpc' }), command)
       return { disposition: 'started' }
     }
     await (behavior === 'steer'
-      ? session.steer(message)
-      : session.followUp(message))
+      ? session.steer(message, { source: 'rpc' })
+      : session.followUp(message, { source: 'rpc' }))
     return { disposition: 'queued' }
   }
 

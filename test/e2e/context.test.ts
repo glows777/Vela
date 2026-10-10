@@ -55,7 +55,9 @@ test('microcompact folds old tool results once more than five calls have complet
 
   await t.run('Read f0 through f7')
 
-  const micro = t.eventsOf('context').filter((e) => e.action === 'micro')
+  const micro = t
+    .eventsOf('context_prepare')
+    .filter((e) => e.action === 'micro')
   expect(micro.length).toBeGreaterThan(0)
   expect(micro[0]!.after).toBeLessThan(micro[0]!.before)
 

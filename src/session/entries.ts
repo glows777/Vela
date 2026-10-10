@@ -1,4 +1,5 @@
-import type { ModelMessage } from 'ai'
+import type { ModelMessage, UserContent } from 'ai'
+import type { CustomMessageInfo } from '../agent/events.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 
 /**
@@ -110,6 +111,25 @@ export interface ContextEditEntry extends SessionEntryBase {
   replacement: { content: ModelMessage['content'] } | null
 }
 
+/** Extension state saved with `session.appendEntry()` (pi's `custom` entry); never sent to the model. */
+export interface CustomEntry extends SessionEntryBase {
+  type: 'custom'
+  customType: string
+  data?: unknown
+}
+
+/**
+ * A message an extension sent with `session.sendMessage()` (pi's `custom_message` entry). The model context
+ * gets it as a user message with `content`; `display` and `details` are for UIs and the extension.
+ */
+export interface CustomMessageEntry extends SessionEntryBase {
+  type: 'custom_message'
+  customType: string
+  content: UserContent
+  display: boolean
+  details?: unknown
+}
+
 /** Entries Vela writes. Readers keep entries of other types (written by newer versions or extensions) and ignore them. */
 export type SessionEntry =
   | SessionMessageEntry
@@ -118,6 +138,8 @@ export type SessionEntry =
   | SessionInfoEntry
   | CompactionEntry
   | ContextEditEntry
+  | CustomEntry
+  | CustomMessageEntry
 
 /** An entry before it gets its place in the log (`id`, `parentId`, `timestamp`); keeps each type's own fields. */
 export type NewEntry<T> = T extends SessionEntry
@@ -149,6 +171,8 @@ export interface SessionContext {
   ids: Map<ModelMessage, string>
   /** When each context message entered the history */
   timestamps: Map<ModelMessage, number>
+  /** Context messages that are extensions' custom messages (from `custom_message` entries) */
+  custom: Map<ModelMessage, CustomMessageInfo>
   /** Latest `model_change` */
   model?: string
   /** Latest `thinking_level_change` */
@@ -175,6 +199,7 @@ export function buildSessionContext(entries: SessionEntry[]): SessionContext {
     messages: [],
     ids: new Map(),
     timestamps: new Map(),
+    custom: new Map(),
     summary: '',
   }
   let compactionIndex = -1
@@ -214,15 +239,28 @@ export function buildSessionContext(entries: SessionEntry[]): SessionContext {
   for (const entry of selected)
     if (entry.type === 'context_edit') edits.set(entry.targetId, entry)
   for (const entry of selected) {
-    if (entry.type !== 'message' || entry.stopReason) continue
+    let original: ModelMessage
+    if (entry.type === 'message') {
+      if (entry.stopReason) continue
+      original = entry.message
+    } else if (entry.type === 'custom_message')
+      // Like pi's convertToLlm: the model sees a custom message as a user message
+      original = { role: 'user', content: entry.content }
+    else continue
     const edit = edits.get(entry.id)
     if (edit?.replacement === null) continue
     const message = edit
       ? ({
-          ...entry.message,
+          ...original,
           content: edit.replacement.content,
         } as ModelMessage)
-      : entry.message
+      : original
+    if (entry.type === 'custom_message')
+      context.custom.set(message, {
+        customType: entry.customType,
+        display: entry.display,
+        ...(entry.details === undefined ? {} : { details: entry.details }),
+      })
     context.messages.push(message)
     context.ids.set(message, entry.id)
     context.timestamps.set(message, parseTime(entry.timestamp))

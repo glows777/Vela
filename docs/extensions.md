@@ -213,7 +213,11 @@ Some events let a handler change what happens; the rest are notifications.
 | Event | When | What a handler can do |
 |---|---|---|
 | `session_start` | Before a session's first prompt, command or compaction, after its history is restored | Set up per-session state, for example `ctx.session.setActiveTools(...)`. Handlers are awaited in order |
-| `before_agent_start` | At the start of each agent loop (normally once per `prompt()`), before the first model request | Write system prompt sections into `event.sections` (keyed by name). `event.prompt` is the user input |
+| `input` | User input arrives (`prompt()`, `steer()`, `followUp()`, `sendUserMessage()`), after extension commands and before `/skill:` and prompt template expansion | Return `{ action: 'transform', text }` to rewrite it or `{ action: 'handled' }` to drop it |
+| `before_agent_start` | At the start of each agent loop (normally once per `prompt()`), before the first model request | Write system prompt sections into `event.sections` (keyed by name); return `{ message }` to add a custom message after the user message. `event.prompt` is the user input |
+| `context` | Before every model request | Change `event.messages` (a copy) in place or return `{ messages }`: changes what this request sends, not the history |
+| `before_provider_request` | Before a request goes to the provider (summaries too) | Change `event.params` (AI SDK call options) in place or return replacement options |
+| `after_provider_response` | The provider answered, before the response is read | Read `event.headers`. Handlers are awaited in order |
 | `tool_call` | Before a tool runs (any tool, built-in or extension) | Change `event.input` in place, or return `{ block: true, reason }` to block the call |
 | `tool_result` | After a tool runs, before the model sees the result | Return `{ output }` to replace the text the model sees |
 | `session_shutdown` | When a session that has started closes (`session.close()`, `vela.dispose()`, CLI exit); a session never used gets no `session_shutdown` | Release per-session resources. Handlers are awaited in order |
@@ -221,13 +225,43 @@ Some events let a handler change what happens; the rest are notifications.
 Details:
 
 - `before_agent_start`: sections are computed once per agent loop (normally once per `prompt()`) and stay the same for every model request in that turn, which keeps the prompt cache prefix stable. Sections appear in the system prompt in the order they were written. Example: [prompt-section.ts](../examples/extensions/prompt-section.ts).
-- `tool_call`: `event` has `toolName`, `toolCallId` and `input`. A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`. Session permissions set to `ask` are checked after these handlers, on the final input. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
-- `tool_result`: `event` has `toolName`, `toolCallId`, `input` and `output` (the text the model will see; a preview for oversized results). Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
+- `input` (like pi): `event` has `text`, `source` (`interactive` for the TUI and `-p`, `rpc`, `extension` for `sendUserMessage()`, `channel` for channel senders, `sdk` by default; set it with `prompt(text, { source })`) and `streamingBehavior` (`steer` / `followUp` while the session is running). It fires in sessions of every role, so check `ctx.session.role`. Transforms chain; `handled` stops the remaining handlers and `prompt()` resolves without running. Extension commands run before it and never reach it. A throwing handler is logged and skipped.
+- `before_agent_start` messages: like pi, a returned `{ message: { customType, content, display, details? } }` is added as a custom message (see [Messages](#messages)) after the user message and any `nextTurn` messages. Unlike a section it is part of the conversation, so it does not change the cached system prompt.
+- `context` (like pi): `event.messages` is a copy of the messages the request sends, without the system prompt; handlers chain. The history, the session file and later requests are unchanged. After an overflow compaction the request is built again and handlers run again. A throwing handler is logged and the previous result is used.
+- Provider hooks (like pi's, with one difference): pi's providers are its own, so pi passes the provider's JSON body; Vela uses the AI SDK, which builds the body inside the provider, so `before_provider_request` gets the AI SDK call options (`prompt`, `tools`, `providerOptions`, `headers`, `maxOutputTokens`, ...). Add request headers through `event.params.headers`. `after_provider_response` gets the response headers but no status: the AI SDK reports a failed response as the request's error. Errors in either are logged and the request goes on.
+- `tool_call`: `event` has `toolName`, `toolCallId`, `parentToolCallId` and `input`. `parentToolCallId` is set when another tool issued the call through `ctx.executeTool()` (the call's id is then `<parent id>/<n>`, like pi). A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`. Session permissions set to `ask` are checked after these handlers, on the final input. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
+- `tool_result`: `event` has `toolName`, `toolCallId`, `parentToolCallId`, `input` and `output` (the text the model will see; a preview for oversized results). Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
 - `session_start` / `session_shutdown`: errors are logged and the next handler runs. Example: [read-only-session.ts](../examples/extensions/read-only-session.ts).
 
 #### Notification events
 
-Every other session event (`agent_start`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`, `usage`, `agent_end`, `context`, `channel_reply`, ...) is delivered to handlers as a notification: return values are ignored, async handlers are not awaited, and errors are logged. The `tool_call` and `tool_result` names refer to the intercepting events above. The event types and their fields are listed in [SDK](sdk.md#events).
+`provider_stream_event` is a notification with the raw provider stream chunks (`provider`, `model`, `data`) before the AI SDK normalizes them (like pi). Vela asks the provider for raw chunks only while a handler is subscribed.
+
+Every other session event (`agent_start`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`, `usage`, `agent_end`, `context_prepare`, `channel_reply`, ...) is delivered to handlers as a notification: return values are ignored, async handlers are not awaited, and errors are logged. The `tool_call` and `tool_result` names refer to the intercepting events above. The event types and their fields are listed in [SDK](sdk.md#events).
+
+## Messages
+
+Like pi's `sendMessage`, `sendUserMessage` and `appendEntry`, but on the session rather than on the API: one Vela serves many sessions at once (a channel opens one per chat), so there is no "current session". Use `ctx.session` in a handler, or keep the session from `session_start` for background work.
+
+```ts
+vela.on('session_start', (_event, ctx) => {
+  watcher.onDone((job) =>
+    ctx.session.sendMessage(
+      { customType: 'job', content: `Job ${job.id} finished`, display: true, details: job },
+      { triggerTurn: true },
+    ),
+  )
+})
+```
+
+- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or AI SDK text / image parts) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
+  - `deliverAs: 'nextTurn'`: held until the next prompt and added after its user message.
+  - While running, unless `triggerTurn: false`: queued like `steer()` (or `followUp()` with `deliverAs: 'followUp'`). Queued custom messages are not listed in `session.queue`.
+  - Idle with `triggerTurn: true`: runs the agent loop with the message as its input; resolves when the run ends.
+  - While running with `triggerTurn: false`: appended once the current step's tool results are in, so it never lands between a tool call and its result.
+  - Otherwise: appended right away, without calling the model.
+- `session.sendUserMessage(text, { deliverAs? })` sends input as if the user typed it: it goes through `input` handlers with source `extension`, but is not run as a command or expanded as a skill or prompt template. While running, pass `deliverAs` (`steer` / `followUp`), as with `prompt()`.
+- `session.appendEntry(customType, data?)` saves extension state as a `custom` entry, never sent to the model. Read it back from `session.getEntries()`, for example in `session_start` after a resume. Like pi, entries added before the session has any conversation are written once the first message is (a session that never gets one is not saved).
 
 ## Context
 
