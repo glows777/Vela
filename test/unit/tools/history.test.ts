@@ -8,7 +8,6 @@ import { SessionStore } from '../../../src/session/index.ts'
 import { ToolHistoryStore } from '../../../src/session/tool-history.ts'
 import {
   archiveToolResults,
-  getStoredResult,
   ToolResultStore,
 } from '../../../src/session/tool-results.ts'
 import {
@@ -93,7 +92,10 @@ test('native MCP errors and thrown errors are recorded without parsing preview s
       },
     },
   )
-  await registry.toAISDKFormat().mcp!.execute!({}, options('mcp'))
+  // A native error is an error result for the model (like pi), and recorded as is
+  await expect(
+    registry.toAISDKFormat().mcp!.execute!({}, options('mcp')),
+  ).rejects.toThrow('remote problem')
   await expect(
     registry.toAISDKFormat().throw!.execute!({}, options('throw')),
   ).rejects.toThrow('explicit failure')
@@ -254,10 +256,16 @@ test('Bash cancellation persists status and original stdout', async () => {
     }
     expect(ready).toBe(true)
     abort.abort()
-    const value = await pending
-    const stored = getStoredResult({ type: 'json', value: value as never })!
-    expect(await Bun.file(stored.path).text()).toContain('BEFORE_CANCEL')
-    expect((await read(results))[1]).toMatchObject({
+    // An aborted command is an error result whose text ends with the status (like pi)
+    await expect(Promise.resolve(pending)).rejects.toThrow(
+      /BEFORE_CANCEL\n\n\nCommand aborted$/,
+    )
+    const [call, result] = await read(results)
+    expect(await Bun.file(call.plannedOutputPath).text()).toContain(
+      'BEFORE_CANCEL',
+    )
+    expect(result).toMatchObject({
+      outputPath: call.plannedOutputPath,
       status: 'cancelled',
       signal: 'SIGKILL',
       isError: true,

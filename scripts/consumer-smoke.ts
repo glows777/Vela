@@ -28,7 +28,7 @@ const hello: VelaExtension = (vela) => {
     name: 'greet',
     description: 'greet someone',
     inputSchema: z.object({ name: z.string() }),
-    isReadOnly: true,
+    annotations: { readOnlyHint: true },
     execute: async ({ name }: { name: string }) => \`hi \${name}\`,
   })
 }

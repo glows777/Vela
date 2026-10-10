@@ -66,6 +66,8 @@ export type VelaEvent =
       toolCallId: string
       toolName: string
       args: unknown
+      /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */
+      parentToolCallId?: string
     }
   /** Partial output of a running tool (like pi; tools that stream their output emit it). */
   | {
@@ -74,6 +76,8 @@ export type VelaEvent =
       toolName: string
       args: unknown
       partialResult: unknown
+      /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */
+      parentToolCallId?: string
     }
   /** A tool call finished: `result` is the tool's output, or the error when `isError`. */
   | {
@@ -84,6 +88,8 @@ export type VelaEvent =
       isError: boolean
       /** How long the tool ran; absent when it did not run */
       durationMs?: number
+      /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */
+      parentToolCallId?: string
     }
   | {
       type: 'loop_detected'

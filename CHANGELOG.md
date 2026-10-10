@@ -12,6 +12,9 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **`ToolDefinition.isConcurrencySafe` is replaced by `executionMode`** (`'parallel'`, the default, or `'sequential'`, same as pi). Drop `isConcurrencySafe: true`; replace `isConcurrencySafe: false` with `executionMode: 'sequential'` if the tool must not run alongside the session's other calls. Registering a tool that still sets `isConcurrencySafe` throws, so the change is not silently ignored.
 - **Skills use the Agent Skills format and the model loads them itself** (like pi). The system prompt now lists each skill's name, description and `SKILL.md` path, and the model reads the file with `read_file` when a task matches. `description` is required (skills without one are skipped with a warning) and the name comes from the `name` front matter, falling back to the directory name. `when_to_use` is no longer read: fold it into `description`. `/skill load`, `/skill unload`, `/<skill-name>` and the per-session active state are gone: send a skill yourself with `/skill:<name> [instruction]`, which now works in every mode and in `session.prompt()`. When two skills share a name, the first one found wins (project before user) instead of the last. See [Skills](docs/settings.md#skills).
 - `FixtureSkill` in `@glows777/vela/testing` drops `whenToUse` and gains `disableModelInvocation`.
+- **`ToolDefinition.isReadOnly` is replaced by `annotations`** (pi's and MCP's `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). Replace `isReadOnly: true` with `annotations: { readOnlyHint: true }`. Registering a tool that still sets `isReadOnly` throws.
+- **A failed `bash` command is an error result** (same as pi): a non-zero exit, a timeout or an abort ends with `tool_execution_end` `isError: true`, and the model gets the output preview and status as the error text. Tools returning a `ToolExecutionResult` with `isError` are error results too. Code that read the status line from a successful result should check `isError`.
+- `tool_search` is `model-only`: other tools cannot run it with `ctx.executeTool()`.
 
 ### Fixed
 
@@ -33,6 +36,9 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **More skill locations and options**: `.agents/skills/` in the project (up to the git root, trusted projects) and `~/.agents/skills/`; nested skill directories; `disable-model-invocation: true` for skills only you can run.
 - **Appending to the system prompt**: `--append-system-prompt <text or file>` (repeatable), `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` (trusted projects), and the SDK's `appendSystemPrompt`. See [Settings](docs/settings.md#appending-to-the-system-prompt).
 - System prompt sections follow pi's order (rules, addendum, project context, skills, working directory, then extension sections), and the skills list no longer changes during a session, which keeps the prompt cache prefix stable.
+- **`ctx.executeTool(name, args, { signal, onUpdate })`** lets a tool run another tool through the same permissions, hooks, `bash` check, confirmation and tool history as a model call, same as pi. Nested calls get ids `<parent>/<n>` and `parentToolCallId` on their events, and failures come back as `isError` results instead of throwing. See [Extensions](docs/extensions.md#registertool).
+- **Streaming tool output**: `ctx.onUpdate(partialResult)` emits `tool_execution_update` (pi's event), and `bash` sends the tail of its output while it runs.
+- **Tool metadata from pi**: `exposure` adds `model-only`, `codemode` and `hidden` to `direct` and `deferred`; `namespace` groups deferred tools (and is returned by `tool_search` with its `instructions`); `annotations` describe what a tool does. See [Tools](docs/tools.md#deferred-tools-and-tool_search).
 
 ### Changed
 

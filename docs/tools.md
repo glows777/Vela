@@ -6,16 +6,18 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 ## Core tools
 
-| Tool | Purpose | Read-only |
+| Tool | Purpose | Annotations |
 |---|---|---|
-| `read_file` | Read a text file, or a saved tool result, one page at a time | yes |
-| `write_file` | Create or overwrite a file | no |
-| `edit_file` | Replace one or more exact pieces of text in a file | no |
-| `list_directory` | List a directory's entries | yes |
-| `grep` | Search file contents with ripgrep | yes |
-| `find` | Find files by glob pattern with fd | yes |
-| `bash` | Run a shell command | no |
-| `tool_search` | Load the schema of a deferred tool | yes |
+| `read_file` | Read a text file, or a saved tool result, one page at a time | read-only |
+| `write_file` | Create or overwrite a file | destructive, idempotent |
+| `edit_file` | Replace one or more exact pieces of text in a file | destructive |
+| `list_directory` | List a directory's entries | read-only |
+| `grep` | Search file contents with ripgrep | read-only |
+| `find` | Find files by glob pattern with fd | read-only |
+| `bash` | Run a shell command | destructive, open world |
+| `tool_search` | Load the schema of a deferred tool | read-only |
+
+The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not decide permissions from them; a permission extension can.
 
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
 
@@ -123,7 +125,7 @@ Without `binDir`, only `PATH` is searched and nothing is downloaded.
 | `command` | string | Shell command |
 | `timeout` | number | Optional timeout in seconds. There is no default timeout |
 
-Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another shell; a path that does not exist is an error). stdout and stderr are combined and written to a file in the session's tool results directory as the command runs. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read_file`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`.
+Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another shell; a path that does not exist is an error). stdout and stderr are combined and written to a file in the session's tool results directory as the command runs. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read_file`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
 
 - Timeout: none by default, as in pi; the model passes `timeout` for commands that may hang. On timeout or abort the whole process group is killed.
 - Before running, every command goes through a classifier: dangerous commands are rejected, and moderate-risk commands run but emit a `security_warning` event. See [Security](security.md).
@@ -162,7 +164,19 @@ When a long session's estimated input reaches `limits.microcompactThreshold`, Ve
 
 ## Deferred tools and tool_search
 
-A tool definition can set `exposure: 'deferred'`. A deferred tool is not sent to the model as a tool. Instead, the system prompt lists its name, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` first.
+A tool definition's `exposure` decides where the tool shows up. The values and their meaning are pi's:
+
+| `exposure` | Sent to the model | Found by `tool_search` | Callable with `ctx.executeTool()` |
+|---|---|---|---|
+| `direct` (default) | yes | yes | yes |
+| `model-only` | yes | yes | no |
+| `deferred` | after `tool_search` loads it | yes | yes |
+| `codemode` | no | no | yes |
+| `hidden` | no | no | no |
+
+Vela has no codemode tool yet, so a `codemode` tool can only be run by other tools through `ctx.executeTool()`. A `hidden` tool stays registered but unused, for example while it is turned off.
+
+A deferred tool is not sent to the model as a tool. Instead, the system prompt lists its name, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` first. Tools with the same `namespace` (`{ name, description?, instructions? }`, for example the tools of one MCP server) are listed together under the namespace's name and description.
 
 `tool_search` takes one parameter:
 
@@ -170,7 +184,7 @@ A tool definition can set `exposure: 'deferred'`. A deferred tool is not sent to
 |---|---|---|
 | `query` | string | A tool name, or several separated by commas |
 
-It matches exact tool names (it is not a fuzzy search), returns each tool's name, description and input schema, and makes the tool available to the model for the rest of the session. Discovery is per session.
+It matches exact tool names (it is not a fuzzy search), returns each tool's name, description, input schema and `namespace` (with its `instructions` on the namespace's first tool in the result; later tools carry only the namespace name), and makes the tool available to the model for the rest of the session. Discovery is per session.
 
 All core tools are direct. Deferred exposure is for extensions that register many tools, so their schemas do not fill the context until needed. See [Extensions](extensions.md).
 

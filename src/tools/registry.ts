@@ -26,11 +26,47 @@ export class ToolExecutionResult {
   ) {}
 }
 
+/** What a tool call ended with (`ctx.executeTool()`, like pi's `AgentToolCallOutcome`). */
+export interface ToolCallOutcome {
+  toolCallId: string
+  toolName: string
+  /** The tool's output, or the error message when `isError` */
+  result: unknown
+  /** Unknown or uncallable tool, invalid arguments, rejected or blocked call, thrown error, or an error result */
+  isError: boolean
+  /** How long the tool ran; absent when it did not run */
+  durationMs?: number
+}
+
+/** Options for `ctx.executeTool()` (like pi's `ExecuteToolOptions`). */
+export interface ExecuteToolOptions {
+  /** Defaults to the calling tool's signal */
+  signal?: AbortSignal
+  /** Receives the nested tool's partial results, in addition to `tool_execution_update` events */
+  onUpdate?: (partialResult: unknown) => void
+}
+
 /** Context passed to a tool's execute. */
 export interface ToolContext {
   toolCallId?: string
   /** Fires when the session is interrupted (abort, close); long-running tools should honor it */
   signal?: AbortSignal
+  /**
+   * Reports partial output while the tool runs (like pi's `onUpdate`); each call emits a
+   * `tool_execution_update` event. Calls after the tool settled are ignored.
+   */
+  onUpdate?: (partialResult: unknown) => void
+  /**
+   * Runs another tool through the same permission checks, hooks, confirmation and tool history as
+   * a model-issued call (like pi's `ctx.executeTool()`). The call gets the id `<calling id>/<n>`, its
+   * `tool_execution_*` events carry `parentToolCallId`, and it does not enter the conversation.
+   * Never rejects for tool failures: they come back as `isError: true`.
+   */
+  executeTool?: (
+    name: string,
+    args: unknown,
+    options?: ExecuteToolOptions,
+  ) => Promise<ToolCallOutcome>
   /** @internal The session's tool result store (bash writes large output to files) */
   results: ToolResultStore
   /** @internal This call's id in the tool history */
@@ -57,19 +93,84 @@ export interface ToolDefinition {
    * other. write_file / edit_file additionally queue per file across all sessions.
    */
   executionMode?: ToolExecutionMode
-  isReadOnly?: boolean
+  /** Hints about what the tool does (MCP's tool annotations, like pi); not verified, core does not act on them */
+  annotations?: ToolAnnotations
   maxResultChars?: number
 
-  /**
-   * How the model gets this tool (like pi): direct (default) appears in the tool list;
-   * deferred is only named in the system prompt, and the model must fetch its definition
-   * with tool_search before calling it
-   */
-  exposure?: 'direct' | 'deferred'
+  /** How the model reaches the tool (like pi). Default `direct`. See {@link ToolExposure}. */
+  exposure?: ToolExposure
+  /** Group the tool belongs to, for example its MCP server (like pi) */
+  namespace?: ToolNamespace
   searchHint?: string // Hint shown next to the name in the deferred tool list
 }
 
 export type ToolExecutionMode = 'sequential' | 'parallel'
+
+/**
+ * How the model reaches a tool (same values and meaning as pi). "Callable" means callable from
+ * other tools through `ctx.executeTool()`.
+ * - `direct`: declared to the model and callable.
+ * - `model-only`: declared to the model, never callable (orchestrating or interactive tools).
+ * - `deferred`: named in the system prompt; declared once `tool_search` loads it; always callable.
+ * - `codemode`: never declared and not listed; callable (for tools that orchestrate other tools).
+ * - `hidden`: registered but unreachable.
+ */
+export type ToolExposure =
+  | 'direct'
+  | 'model-only'
+  | 'codemode'
+  | 'deferred'
+  | 'hidden'
+
+/** MCP-style hints about a tool (same fields as pi's `ToolAnnotations`). */
+export interface ToolAnnotations {
+  /** The tool does not modify its environment */
+  readOnlyHint?: boolean
+  /** The tool may delete or overwrite data, rather than only add to it. Meaningful when not read-only */
+  destructiveHint?: boolean
+  /** Repeating a call with the same arguments has no further effect. Meaningful when not read-only */
+  idempotentHint?: boolean
+  /** The tool reaches an open world of external entities, such as the web */
+  openWorldHint?: boolean
+}
+
+/** A group of related tools, such as the tools of one MCP server (same fields as pi's `ToolNamespace`). */
+export interface ToolNamespace {
+  /** For example `mcp__docs` */
+  name: string
+  /** Short summary shown once with the group in the deferred tool list */
+  description?: string
+  /** Longer usage guidance, such as MCP server instructions; returned by tool_search with the group's tools */
+  instructions?: string
+}
+
+const EXPOSURES: readonly ToolExposure[] = [
+  'direct',
+  'model-only',
+  'codemode',
+  'deferred',
+  'hidden',
+]
+
+/** A permission check, hook or the user turned the call down; the model gets `reason` as the result. */
+class ToolRejection {
+  constructor(readonly reason: string) {}
+}
+
+/**
+ * A tool reported an error result (e.g. bash exiting non-zero): like pi's `isError`, the model gets
+ * the output as an error result.
+ */
+class ToolResultError extends Error {}
+
+/** Per call: how the call was issued */
+interface CallOptions {
+  toolCallId?: string
+  abortSignal?: AbortSignal
+  /** Set for calls a tool made through ctx.executeTool() */
+  parentToolCallId?: string
+  onUpdate?: (partialResult: unknown) => void
+}
 
 const DEFAULT_MAX_RESULT_CHARS = 3000 // Beyond this, the full result is saved and only a preview returned
 
@@ -237,6 +338,35 @@ export class ToolRegistry {
   private discoveredTools = new Set<string>()
 
   private readonly gate = new ExecutionGate()
+  /** Sequential nested calls run one at a time (like pi's nested call queue) */
+  private nestedTail: Promise<void> = Promise.resolve()
+  /** Nested calls running while holding that queue: their own nested calls don't wait for it again */
+  private readonly nestedHolders = new Set<string>()
+
+  private async runNested<T>(
+    mode: ToolExecutionMode,
+    parentToolCallId: string,
+    toolCallId: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const holds = this.nestedHolders.has(parentToolCallId)
+    const exclusive = mode === 'sequential' && !holds
+    let release: (() => void) | undefined
+    if (exclusive) {
+      const previous = this.nestedTail
+      this.nestedTail = new Promise((resolve) => {
+        release = resolve
+      })
+      await previous
+    }
+    if ((holds || exclusive) && toolCallId) this.nestedHolders.add(toolCallId)
+    try {
+      return await fn()
+    } finally {
+      if (toolCallId) this.nestedHolders.delete(toolCallId)
+      release?.()
+    }
+  }
 
   register(...tools: ToolDefinition[]) {
     for (const tool of tools) {
@@ -249,6 +379,14 @@ export class ToolRegistry {
       if ('isConcurrencySafe' in tool)
         throw new Error(
           `Tool "${tool.name}": isConcurrencySafe was removed. Drop isConcurrencySafe: true; replace isConcurrencySafe: false with executionMode: 'sequential'.`,
+        )
+      if ('isReadOnly' in tool)
+        throw new Error(
+          `Tool "${tool.name}": isReadOnly was removed. Use annotations: { readOnlyHint: true } (same as pi).`,
+        )
+      if (tool.exposure !== undefined && !EXPOSURES.includes(tool.exposure))
+        throw new Error(
+          `Tool "${tool.name}": exposure must be one of ${EXPOSURES.join(', ')}, got ${JSON.stringify(tool.exposure)}`,
         )
       if (
         tool.executionMode !== undefined &&
@@ -272,247 +410,348 @@ export class ToolRegistry {
 
   toAISDKFormat(): ToolSet {
     const result: Record<string, Tool> = {}
-
-    const activeTools = this.getActiveTools()
-
-    for (const tool of activeTools) {
-      const maxChar = tool.maxResultChars
-      const excuteFn = tool.execute
-      const mode = tool.executionMode ?? 'parallel'
-      const name = tool.name
-
-      result[name] = AITool({
+    for (const tool of this.getActiveTools()) {
+      result[tool.name] = AITool({
         description: tool.description,
         inputSchema: tool.inputSchema,
         execute: (input: unknown, options) =>
           this.track(async () => {
-            // Permissions, hooks and ask run before the execution gate, so waiting on the user doesn't hold back other calls
-            this.assertHealthy()
-            const reject = async (reason: string) => {
-              await this.recordRejection(
-                name,
-                options?.toolCallId ?? crypto.randomUUID(),
-                input,
-                reason,
-              )
-              return reason
-            }
-            const decision = this.decide(name)
-            if (decision === 'deny') {
-              return await reject(
-                this.selection && !this.selection.has(name)
-                  ? `[Rejected] ${name} is not enabled in this session`
-                  : `[Rejected] Role ${this.role} may not use ${name}`,
-              )
-            }
-            const pipeline = this.shared.hookPipeline
-            const hookContext = {
-              sessionId: this.sessionId,
+            const output = await this.runCall(tool, input, {
               toolCallId: options?.toolCallId,
-              emit: (event: Parameters<VelaEventListener>[0]) =>
-                this.onEvent?.(event),
-            }
-            if (pipeline) {
-              const pre = await pipeline.runPre(name, input, hookContext)
-              if (pre.action === 'block') {
-                return await reject(
-                  `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
-                )
-              }
-              if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
-                input = pre.modifiedInput
-                try {
-                  const schema = asSchema(tool.inputSchema)
-                  if (schema.validate) {
-                    const validated = await schema.validate(input)
-                    if (!validated.success) throw validated.error
-                    input = validated.value
-                  } else {
-                    const validated = new Validator(
-                      await schema.jsonSchema,
-                    ).validate(input)
-                    if (!validated.valid)
-                      throw new Error(JSON.stringify(validated.errors))
-                  }
-                } catch (error) {
-                  return await reject(
-                    `[Rejected] Input modified by hook is invalid: ${error instanceof Error ? error.message : String(error)}`,
-                  )
-                }
-              }
-            }
-            if (name === 'bash') {
-              const command = (input as { command?: unknown } | null)?.command
-              if (typeof command !== 'string')
-                return await reject('[Rejected] bash command must be a string')
-              const risk = classifyBashCommand(command)
-              if (risk.level === 'dangerous') {
-                return await reject(
-                  `[Rejected] Dangerous operation detected: ${risk.reason}\nCommand: ${command}`,
-                )
-              }
-              if (risk.level === 'moderate')
-                this.onEvent?.({
-                  type: 'security_warning',
-                  toolName: name,
-                  reason: risk.reason ?? 'Moderate-risk command',
-                  command,
-                })
-            }
-            // ask runs after hooks, on the final input, so input changed by extensions still needs approval
-            if (decision === 'ask') {
-              const approved = this.confirm
-                ? await untilAborted(
-                    this.confirm(name, input).catch(() => false),
-                    options?.abortSignal,
-                  )
-                : false
-              options?.abortSignal?.throwIfAborted()
-              if (!approved)
-                return await reject(`[Rejected] ${name} was not approved`)
-            }
-            return await this.gate.run(mode, async () => {
-              this.shared.logger.debug(`[tools] ${name} started (${mode})`)
-              this.assertHealthy()
-              const history = this.results.history
-              const call = await history.begin(
-                name,
-                options?.toolCallId,
-                input,
-                this.results.dir,
-              )
-              const started = performance.now()
-              let raw: unknown
-              try {
-                options?.abortSignal?.throwIfAborted()
-                raw = await excuteFn(input, {
-                  results: this.results,
-                  toolCallId: options?.toolCallId,
-                  callId: call.callId,
-                  signal: options?.abortSignal,
-                  registry: this,
-                })
-              } catch (error) {
-                await history.append<ResultRecord>({
-                  type: 'tool_result',
-                  callId: call.callId,
-                  status: options?.abortSignal?.aborted
-                    ? 'cancelled'
-                    : 'failed',
-                  durationMs: performance.now() - started,
-                  error: error instanceof Error ? error.message : String(error),
-                })
-                throw error
-              }
-              // Persist native results before formatting/truncating the model response.
-              const value = raw instanceof ToolExecutionResult ? raw.value : raw
-              const execution =
-                raw instanceof ToolExecutionResult ||
-                raw instanceof StoredToolResult
-                  ? (raw.execution ?? {})
-                  : {}
-              const maxChars = maxChar ?? DEFAULT_MAX_RESULT_CHARS
-              let stored = raw instanceof StoredToolResult ? raw : undefined
-              let text: string
-              try {
-                text =
-                  raw instanceof ToolExecutionResult
-                    ? raw.text
-                    : typeof raw === 'string'
-                      ? raw
-                      : (JSON.stringify(raw, null, 2) ?? String(raw))
-                // Only what the model gets decides: a string is the text itself (its JSON escaping
-                // doesn't count), and a ToolExecutionResult's value is structured data for the
-                // history (e.g. edit_file's diff)
-                if (
-                  !stored &&
-                  (text.length > maxChars ||
-                    (typeof value !== 'string' &&
-                      !(raw instanceof ToolExecutionResult) &&
-                      JSON.stringify(value)?.length > maxChars))
-                ) {
-                  stored = await this.results.save(
-                    typeof value === 'string'
-                      ? value
-                      : (JSON.stringify(value, null, 2) ?? String(value)),
-                    name,
-                    truncateResult(text, maxChars),
-                    options?.toolCallId,
-                    call.callId,
-                  )
-                }
-                const record = await history.append<ResultRecord>({
-                  type: 'tool_result',
-                  callId: call.callId,
-                  status: options?.abortSignal?.aborted
-                    ? 'cancelled'
-                    : execution.isError
-                      ? 'failed'
-                      : 'completed',
-                  durationMs: performance.now() - started,
-                  ...execution,
-                  ...(stored
-                    ? {
-                        outputPath: stored.path,
-                        bytes: stored.bytes,
-                        format:
-                          raw instanceof StoredToolResult ||
-                          typeof value === 'string'
-                            ? ('text' as const)
-                            : ('json' as const),
-                      }
-                    : { output: value ?? null }),
-                })
-                if (stored) {
-                  stored.callId = call.callId
-                  stored.historySeq = record.seq
-                  stored.execution = execution
-                }
-              } catch (error) {
-                // Do not invent a terminal result when the result could not be recorded.
-                const location = stored
-                  ? `full output saved at: ${stored.path}`
-                  : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
-                const status =
-                  execution.exitCode === undefined
-                    ? ''
-                    : ` exitCode=${execution.exitCode}`
-                this.persistenceFailure = new Error(
-                  `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. The output location is also recorded in tool_call.plannedOutputPath; verify it is complete, and do not treat the call as successful because of it. ${error}`,
-                )
-                throw this.persistenceFailure
-              }
-              let output = stored ? stored.preview : text
-              if (pipeline) {
-                const post = await pipeline.runPost(
-                  name,
-                  input,
-                  output,
-                  hookContext,
-                )
-                if (post.modifiedOutput !== undefined)
-                  output = String(post.modifiedOutput)
-              }
-              return stored ? { ...stored, preview: output } : output
+              abortSignal: options?.abortSignal,
             })
+            // A rejection is a normal result the model reads (it can change its approach)
+            return output instanceof ToolRejection ? output.reason : output
           }),
       })
     }
     return result
   }
 
+  /** Permission checks, hooks, confirmation, execution, tool history and post hooks for one call. */
+  private async runCall(
+    tool: ToolDefinition,
+    input: unknown,
+    options: CallOptions,
+  ): Promise<unknown> {
+    const name = tool.name
+    const mode = tool.executionMode ?? 'parallel'
+    const signal = options.abortSignal
+    // Permissions, hooks and ask run before the execution gate, so waiting on the user doesn't hold back other calls
+    this.assertHealthy()
+    const reject = async (reason: string) => {
+      await this.recordRejection(
+        name,
+        options.toolCallId ?? crypto.randomUUID(),
+        input,
+        reason,
+      )
+      return new ToolRejection(reason)
+    }
+    const decision = this.decide(name)
+    if (decision === 'deny') {
+      return await reject(
+        this.selection && !this.selection.has(name)
+          ? `[Rejected] ${name} is not enabled in this session`
+          : `[Rejected] Role ${this.role} may not use ${name}`,
+      )
+    }
+    const pipeline = this.shared.hookPipeline
+    const hookContext = {
+      sessionId: this.sessionId,
+      toolCallId: options.toolCallId,
+      emit: (event: Parameters<VelaEventListener>[0]) => this.onEvent?.(event),
+    }
+    if (pipeline) {
+      const pre = await pipeline.runPre(name, input, hookContext)
+      if (pre.action === 'block') {
+        return await reject(
+          `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
+        )
+      }
+      if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
+        input = pre.modifiedInput
+        try {
+          input = await validateInput(tool, input)
+        } catch (error) {
+          return await reject(
+            `[Rejected] Input modified by hook is invalid: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      }
+    }
+    if (name === 'bash') {
+      const command = (input as { command?: unknown } | null)?.command
+      if (typeof command !== 'string')
+        return await reject('[Rejected] bash command must be a string')
+      const risk = classifyBashCommand(command)
+      if (risk.level === 'dangerous') {
+        return await reject(
+          `[Rejected] Dangerous operation detected: ${risk.reason}\nCommand: ${command}`,
+        )
+      }
+      if (risk.level === 'moderate')
+        this.onEvent?.({
+          type: 'security_warning',
+          toolName: name,
+          reason: risk.reason ?? 'Moderate-risk command',
+          command,
+        })
+    }
+    // ask runs after hooks, on the final input, so input changed by extensions still needs approval
+    if (decision === 'ask') {
+      const approved = this.confirm
+        ? await untilAborted(
+            this.confirm(name, input).catch(() => false),
+            signal,
+          )
+        : false
+      signal?.throwIfAborted()
+      if (!approved) return await reject(`[Rejected] ${name} was not approved`)
+    }
+    // A nested call runs inside its parent's turn at the gate (waiting there could deadlock), so
+    // nested calls have their own queue
+    const gated = <T>(fn: () => Promise<T>) =>
+      options.parentToolCallId === undefined
+        ? this.gate.run(mode, fn)
+        : this.runNested(mode, options.parentToolCallId, options.toolCallId, fn)
+    return await gated(async () => {
+      this.shared.logger.debug(`[tools] ${name} started (${mode})`)
+      this.assertHealthy()
+      const history = this.results.history
+      const call = await history.begin(
+        name,
+        options.toolCallId,
+        input,
+        this.results.dir,
+      )
+      const started = performance.now()
+      let settled = false
+      const onUpdate = (partialResult: unknown) => {
+        if (settled || options.toolCallId === undefined) return
+        this.onEvent?.({
+          type: 'tool_execution_update',
+          toolCallId: options.toolCallId,
+          toolName: name,
+          args: input,
+          partialResult,
+          ...(options.parentToolCallId === undefined
+            ? {}
+            : { parentToolCallId: options.parentToolCallId }),
+        })
+        options.onUpdate?.(partialResult)
+      }
+      let nested = 0
+      const parentId = options.toolCallId ?? call.callId
+      let raw: unknown
+      try {
+        signal?.throwIfAborted()
+        raw = await tool.execute(input, {
+          results: this.results,
+          toolCallId: options.toolCallId,
+          callId: call.callId,
+          signal,
+          registry: this,
+          onUpdate,
+          executeTool: (nestedName, args, nestedOptions = {}) =>
+            this.executeTool(
+              `${parentId}/${++nested}`,
+              parentId,
+              nestedName,
+              args,
+              {
+                ...nestedOptions,
+                signal: nestedOptions.signal ?? signal,
+              },
+            ),
+        })
+      } catch (error) {
+        settled = true
+        await history.append<ResultRecord>({
+          type: 'tool_result',
+          callId: call.callId,
+          status: signal?.aborted ? 'cancelled' : 'failed',
+          durationMs: performance.now() - started,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        throw error
+      }
+      settled = true
+      // Persist native results before formatting/truncating the model response.
+      const value = raw instanceof ToolExecutionResult ? raw.value : raw
+      const execution =
+        raw instanceof ToolExecutionResult || raw instanceof StoredToolResult
+          ? (raw.execution ?? {})
+          : {}
+      const maxChars = tool.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS
+      let stored = raw instanceof StoredToolResult ? raw : undefined
+      let text: string
+      try {
+        text =
+          raw instanceof ToolExecutionResult
+            ? raw.text
+            : typeof raw === 'string'
+              ? raw
+              : (JSON.stringify(raw, null, 2) ?? String(raw))
+        // Only what the model gets decides: a string is the text itself (its JSON escaping
+        // doesn't count), and a ToolExecutionResult's value is structured data for the
+        // history (e.g. edit_file's diff)
+        if (
+          !stored &&
+          (text.length > maxChars ||
+            (typeof value !== 'string' &&
+              !(raw instanceof ToolExecutionResult) &&
+              JSON.stringify(value)?.length > maxChars))
+        ) {
+          stored = await this.results.save(
+            typeof value === 'string'
+              ? value
+              : (JSON.stringify(value, null, 2) ?? String(value)),
+            name,
+            truncateResult(text, maxChars),
+            options.toolCallId,
+            call.callId,
+          )
+        }
+        const record = await history.append<ResultRecord>({
+          type: 'tool_result',
+          callId: call.callId,
+          status: signal?.aborted
+            ? 'cancelled'
+            : execution.isError
+              ? 'failed'
+              : 'completed',
+          durationMs: performance.now() - started,
+          ...execution,
+          ...(stored
+            ? {
+                outputPath: stored.path,
+                bytes: stored.bytes,
+                format:
+                  raw instanceof StoredToolResult || typeof value === 'string'
+                    ? ('text' as const)
+                    : ('json' as const),
+              }
+            : { output: value ?? null }),
+        })
+        if (stored) {
+          stored.callId = call.callId
+          stored.historySeq = record.seq
+          stored.execution = execution
+        }
+      } catch (error) {
+        // Do not invent a terminal result when the result could not be recorded.
+        const location = stored
+          ? `full output saved at: ${stored.path}`
+          : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
+        const status =
+          execution.exitCode === undefined
+            ? ''
+            : ` exitCode=${execution.exitCode}`
+        this.persistenceFailure = new Error(
+          `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. The output location is also recorded in tool_call.plannedOutputPath; verify it is complete, and do not treat the call as successful because of it. ${error}`,
+        )
+        throw this.persistenceFailure
+      }
+      let output = stored ? stored.preview : text
+      if (pipeline) {
+        const post = await pipeline.runPost(name, input, output, hookContext)
+        if (post.modifiedOutput !== undefined)
+          output = String(post.modifiedOutput)
+      }
+      // Like pi: a failed command is an error result, with its output (and where the full output is) as the message
+      if (execution.isError) throw new ToolResultError(output)
+      return stored ? { ...stored, preview: output } : output
+    })
+  }
+
+  /**
+   * Whether `name` can be run through ctx.executeTool() in this session (like pi: active direct
+   * tools and every codemode / deferred tool; never model-only or hidden ones).
+   */
+  isCallable(name: string): boolean {
+    const tool = this.tools.get(name)
+    if (!tool || this.decide(name) === 'deny') return false
+    const exposure = tool.exposure ?? 'direct'
+    return exposure !== 'model-only' && exposure !== 'hidden'
+  }
+
+  /** Runs a call a tool made through ctx.executeTool(); never rejects for tool failures. */
+  private async executeTool(
+    toolCallId: string,
+    parentToolCallId: string,
+    name: string,
+    args: unknown,
+    options: ExecuteToolOptions,
+  ): Promise<ToolCallOutcome> {
+    const event = { toolCallId, toolName: name, parentToolCallId }
+    this.onEvent?.({ type: 'tool_execution_start', ...event, args })
+    const started = performance.now()
+    const finish = (result: unknown, isError: boolean, ran: boolean) => {
+      const outcome: ToolCallOutcome = {
+        toolCallId,
+        toolName: name,
+        result,
+        isError,
+        ...(ran ? { durationMs: Math.round(performance.now() - started) } : {}),
+      }
+      this.onEvent?.({
+        type: 'tool_execution_end',
+        ...event,
+        result,
+        isError,
+        ...(outcome.durationMs === undefined
+          ? {}
+          : { durationMs: outcome.durationMs }),
+      })
+      return outcome
+    }
+    const tool = this.tools.get(name)
+    if (!tool || !this.isCallable(name)) {
+      const reason = tool
+        ? `[Rejected] ${name} cannot be called from a tool in this session`
+        : `Tool ${name} not found`
+      await this.recordRejection(name, toolCallId, args, reason)
+      return finish(reason, true, false)
+    }
+    let input: unknown
+    try {
+      input = await validateInput(tool, args)
+    } catch (error) {
+      const reason = `Invalid arguments for ${name}: ${error instanceof Error ? error.message : String(error)}`
+      await this.recordRejection(name, toolCallId, args, reason)
+      return finish(reason, true, false)
+    }
+    try {
+      const output = await this.track(() =>
+        this.runCall(tool, input, {
+          toolCallId,
+          parentToolCallId,
+          abortSignal: options.signal,
+          onUpdate: options.onUpdate,
+        }),
+      )
+      return output instanceof ToolRejection
+        ? finish(output.reason, true, false)
+        : finish(output, false, true)
+    } catch (error) {
+      // A failed result save stops the session, as it does for model-issued calls
+      if (error === this.persistenceFailure) throw error
+      return finish(
+        error instanceof Error ? error.message : String(error),
+        true,
+        true,
+      )
+    }
+  }
+
+  /** Tools declared to the model: allowed, and direct / model-only, or deferred and loaded with tool_search. */
   getActiveTools() {
     return this.getAllTools().filter((tool) => {
-      if (this.decide(tool.name) === 'deny') {
-        return false
-      }
-      if (
-        tool.exposure === 'deferred' &&
-        !this.discoveredTools.has(tool.name)
-      ) {
-        return false
-      }
-      return true
+      if (this.decide(tool.name) === 'deny') return false
+      const exposure = tool.exposure ?? 'direct'
+      if (exposure === 'deferred') return this.discoveredTools.has(tool.name)
+      return exposure === 'direct' || exposure === 'model-only'
     })
   }
 
@@ -527,10 +766,22 @@ export class ToolRegistry {
 
     if (deferred.length === 0) return ''
 
-    const lines = deferred.map((t) => {
-      const hint = t.searchHint ? ` — ${t.searchHint}` : ''
-      return `- ${t.name}${hint}`
-    })
+    const line = (t: ToolDefinition) =>
+      `- ${t.name}${t.searchHint ? ` — ${t.searchHint}` : ''}`
+    // Tools without a namespace first, then one group per namespace (like pi's namespace listing)
+    const groups = new Map<string, ToolDefinition[]>()
+    for (const tool of deferred) {
+      const key = tool.namespace?.name ?? ''
+      groups.set(key, [...(groups.get(key) ?? []), tool])
+    }
+    const lines: string[] = (groups.get('') ?? []).map(line)
+    for (const [key, tools] of groups) {
+      if (!key) continue
+      const description = tools.find((t) => t.namespace?.description)?.namespace
+        ?.description
+      lines.push(`${key}${description ? ` — ${description}` : ''}:`)
+      lines.push(...tools.map((t) => `  ${line(t)}`))
+    }
     return [
       'The tools below are available, but before calling one you must call tool_search to get its full schema:',
       ...lines,
@@ -553,6 +804,8 @@ export class ToolRegistry {
       if (
         tool &&
         tool.name !== 'tool_search' &&
+        tool.exposure !== 'hidden' &&
+        tool.exposure !== 'codemode' &&
         this.decide(tool.name) !== 'deny'
       ) {
         results.push(tool)
@@ -566,7 +819,9 @@ export class ToolRegistry {
     let active = 0
     let deferred = 0
 
+    const declared = new Set(this.getActiveTools().map((tool) => tool.name))
     for (const tool of this.tools.values()) {
+      if (tool.exposure === 'hidden') continue
       const schemaSize = JSON.stringify({
         name: tool.name,
         description: tool.description,
@@ -574,14 +829,8 @@ export class ToolRegistry {
       }).length
       const tokens = Math.ceil(schemaSize / 4)
 
-      if (
-        tool.exposure === 'deferred' &&
-        !this.discoveredTools.has(tool.name)
-      ) {
-        deferred += tokens
-      } else {
-        active += tokens
-      }
+      if (declared.has(tool.name)) active += tokens
+      else deferred += tokens
     }
 
     return { active, deferred, total: active + deferred }
@@ -591,6 +840,22 @@ export class ToolRegistry {
     this.discoveredTools.delete(name)
     return this.tools.delete(name)
   }
+}
+
+/** Validates (and parses) input against the tool's schema; throws when it does not match. */
+async function validateInput(
+  tool: ToolDefinition,
+  input: unknown,
+): Promise<unknown> {
+  const schema = asSchema(tool.inputSchema)
+  if (schema.validate) {
+    const validated = await schema.validate(input)
+    if (!validated.success) throw validated.error
+    return validated.value
+  }
+  const validated = new Validator(await schema.jsonSchema).validate(input)
+  if (!validated.valid) throw new Error(JSON.stringify(validated.errors))
+  return input
 }
 
 /** Awaits the promise; resolves false early if signal aborts (stop waiting for the user). */

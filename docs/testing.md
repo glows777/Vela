@@ -148,7 +148,7 @@ export const greet: VelaExtension = (vela) => {
     name: 'say_hello',
     description: 'Say hello to someone',
     inputSchema: z.object({ name: z.string() }),
-    isReadOnly: true,
+    annotations: { readOnlyHint: true },
     execute: async ({ name }: { name: string }) => `Hello, ${name}!`,
   })
   vela.on('tool_call', async (event, ctx) => {

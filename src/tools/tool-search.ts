@@ -1,6 +1,6 @@
 import type { Tool } from 'ai'
 import z from 'zod'
-import type { ToolDefinition, ToolRegistry } from './registry.ts'
+import type { ToolDefinition, ToolNamespace, ToolRegistry } from './registry.ts'
 
 const toolSearchToolSchema = z.object({
   query: z
@@ -16,16 +16,29 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
     description:
       "Fetches the full definition of a deferred tool. Pass a tool name from the deferred tool list in the system prompt; returns that tool's full parameter schema.",
     inputSchema: toolSearchToolSchema,
-    isReadOnly: true,
+    annotations: { readOnlyHint: true },
+    // Searching changes what the model sees; other tools have no use for it (same as pi)
+    exposure: 'model-only',
     // Use the calling session's registry: discovered deferred tools apply only to that session
     execute: async ({ query }: { query: string }, context) => {
       const results = (context?.registry ?? registry).searchTools(query)
       if (results.length === 0) return `No tools match "${query}"`
-      return results.map<Tool>((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-      }))
+      // Vela has no codemode describeNamespace() yet, so the namespace instructions come with the
+      // tool: in full on its first tool, by name on the others
+      const described = new Set<string>()
+      return results.map<Tool & { namespace?: ToolNamespace }>((t) => {
+        const namespace =
+          t.namespace && described.has(t.namespace.name)
+            ? { name: t.namespace.name }
+            : t.namespace
+        if (namespace) described.add(namespace.name)
+        return {
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          ...(namespace ? { namespace } : {}),
+        }
+      })
     },
   }
 
