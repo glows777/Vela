@@ -388,3 +388,31 @@ test('navigateTree and fork refuse while a task runs', async () => {
     'not in the session',
   )
 })
+
+test('a fork holds the run lock: a prompt sent while it copies the branch is refused', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const slowFork: VelaExtension = (vela) => {
+    vela.on('session_before_fork', async () => {
+      await gate
+    })
+  }
+  const t = await twoRounds({ extensions: [slowFork] })
+  const q2 = entryOf(t.session.getEntries(), 'q2')
+
+  const forking = t.session.fork(q2.id, { sessionId: 'locked' })
+  await Bun.sleep(10)
+  expect(t.session.isRunning).toBe(true)
+  await expect(t.session.prompt('meanwhile')).rejects.toThrow(
+    'A task is already running',
+  )
+  release()
+  const { session } = await forking
+  expect(t.session.isRunning).toBe(false)
+  expect(texts(session!.messages)).toEqual([
+    'q1',
+    '[{"type":"text","text":"a1"}]',
+  ])
+})

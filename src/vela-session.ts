@@ -676,9 +676,6 @@ export class VelaSession {
    * The new session records this one as `parentSession`. Throws while running.
    */
   async fork(entryId: string, options: ForkOptions = {}): Promise<ForkResult> {
-    if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    if (this.busy.locked)
-      throw new Error('A task is already running; fork after it finishes')
     const position = options.position ?? 'before'
     const entry = this.store.getEntry(entryId)
     if (!entry) throw new Error(`Entry ${entryId} is not in the session`)
@@ -690,28 +687,34 @@ export class VelaSession {
       leafId = entry.parentId
       selectedText = messageText(entry.message.content)
     }
-    await this.start()
-    if (await this.deps.extensions.beforeFork(this, entryId, position))
-      return { cancelled: true }
-    const branch = leafId === null ? [] : this.store.getBranch(leafId)
-    const session = this.deps.openSession(options.sessionId ?? newSessionId(), {
-      ...this.options,
-      role: this.role,
-      model: this.modelChoice,
-      thinkingLevel: this.thinking,
-      autoCompaction: this.autoCompaction,
+    // Holds the run lock so no prompt appends to this session (or its tool history) while it is copied
+    return this.exclusive('fork', async () => {
+      await this.start()
+      if (await this.deps.extensions.beforeFork(this, entryId, position))
+        return { cancelled: true }
+      const branch = leafId === null ? [] : this.store.getBranch(leafId)
+      const session = this.deps.openSession(
+        options.sessionId ?? newSessionId(),
+        {
+          ...this.options,
+          role: this.role,
+          model: this.modelChoice,
+          thinkingLevel: this.thinking,
+          autoCompaction: this.autoCompaction,
+        },
+      )
+      try {
+        await session.seedFrom(this, branch)
+      } catch (error) {
+        await session.close()
+        throw error
+      }
+      return {
+        cancelled: false,
+        session,
+        ...(selectedText === undefined ? {} : { selectedText }),
+      }
     })
-    try {
-      await session.seedFrom(this, branch)
-    } catch (error) {
-      await session.close()
-      throw error
-    }
-    return {
-      cancelled: false,
-      session,
-      ...(selectedText === undefined ? {} : { selectedText }),
-    }
   }
 
   /** Copies the current branch into a new session (like pi's /clone, a fork at the leaf). */
