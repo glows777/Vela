@@ -151,6 +151,28 @@ Aborts the running loop and extension commands, and responds once the agent loop
 
 Removes all queued messages and returns them: `{ "steering": string[], "followUp": string[] }`. To mirror the TUI's Esc behavior, send `clear_queue`, then `abort`, then put the returned text back in your input box.
 
+### Shell commands
+
+#### bash
+
+```json
+{"id":"6b","type":"bash","command":"git status --short"}
+```
+
+```json
+{"id":"6b","type":"response","command":"bash","success":true,"data":{"output":" M src/a.ts","exitCode":0,"cancelled":false,"truncated":false}}
+```
+
+Runs a shell command for the user, like the TUI's `!command` (see `session.executeBash()` in [SDK](sdk.md#session-members)), and responds when it finishes. `output` is the last 2,000 lines or 50 KB of combined stdout and stderr; when `truncated`, `fullOutputPath` names the file with all of it. `exitCode` is missing when the command was cancelled. The command and output go to the model as a user message with the next prompt; `"excludeFromContext": true` (the TUI's `!!`) saves it without sending it. While the agent runs, the result is recorded when the run ends. Only one command runs at a time.
+
+#### abort_bash
+
+```json
+{"id":"6c","type":"abort_bash"}
+```
+
+Cancels the running `bash` command; its response then has `cancelled: true`.
+
 ### State
 
 #### get_state
@@ -429,8 +451,9 @@ process.wait()
 | `set_model` | `provider` + `modelId` | Also accepts `model: "provider/id"` |
 | `get_state` | `model` is an object; also `sessionFile`, `isCompacting`, `autoCompactionEnabled` | `model` is a `provider/id` string; no session file |
 | Extra commands | | `list_sessions` |
+| `bash` | `command` | Also takes `excludeFromContext` |
 | `get_commands` | Extension commands, prompt templates, skills, with `source` / `sourceInfo` | Same entries and `source`; extension commands also carry `extension`, no `sourceInfo` |
 | Extension UI | Also `editor`, `setTitle`, `set_editor_text`, `timeout` | `confirm`, `select`, `input`, `notify`, `setStatus`, `setWidget` |
 | Typed client | `RpcClient` exported | No client export; see [examples/rpc-client.ts](../examples/rpc-client.ts) |
 
-pi commands Vela doesn't have: `cycle_model`, `cycle_thinking_level`, `set_auto_compaction`, `set_auto_retry`, `abort_retry`, `bash`, `abort_bash`, `get_session_stats`, `export_html`, `fork`, `clone`, `get_fork_messages`, `get_entries`, `get_tree`, `get_last_assistant_text`. Sending one returns `Unknown command`.
+pi commands Vela doesn't have: `cycle_model`, `cycle_thinking_level`, `set_auto_compaction`, `set_auto_retry`, `abort_retry`, `get_session_stats`, `export_html`, `fork`, `clone`, `get_fork_messages`, `get_entries`, `get_tree`, `get_last_assistant_text`. Sending one returns `Unknown command`.

@@ -65,6 +65,27 @@ export interface SessionMessageEntry extends SessionEntryBase {
   stopReason?: 'aborted' | 'error'
   /** On a tool message: calls each of its tools made through `ctx.executeTool()`, by tool call id. Not sent to the model. */
   nestedCalls?: Record<string, NestedToolCalls>
+  /** On a tool message: each tool's display data (`tool_execution_end`'s `details`), by tool call id. Not sent to the model. */
+  details?: Record<string, unknown>
+}
+
+/**
+ * A command the user ran with `!` / `!!` (pi's `bashExecution` message). It reaches the model as a user
+ * message (`bashExecutionToText`) unless `excludeFromContext` (`!!`).
+ */
+export interface BashExecutionEntry extends SessionEntryBase {
+  type: 'bash_execution'
+  command: string
+  /** The end of the output (see `truncated`) */
+  output: string
+  /** Undefined when the command was cancelled */
+  exitCode?: number
+  cancelled: boolean
+  truncated: boolean
+  /** File with the whole output, when truncated */
+  fullOutputPath?: string
+  /** `!!`: kept in the session, never sent to the model */
+  excludeFromContext?: boolean
 }
 
 /** The session's model changed (`session.setModel()` with a name). */
@@ -118,6 +139,7 @@ export type SessionEntry =
   | SessionInfoEntry
   | CompactionEntry
   | ContextEditEntry
+  | BashExecutionEntry
 
 /** An entry before it gets its place in the log (`id`, `parentId`, `timestamp`); keeps each type's own fields. */
 export type NewEntry<T> = T extends SessionEntry
@@ -130,6 +152,28 @@ export type SessionFileEntry = SessionHeader | SessionEntry
 /** Text of the user message that stands for a summary in the model context. */
 export function summaryMessageText(summary: string): string {
   return `[Summary of the earlier conversation]\n${summary}`
+}
+
+/** What the model sees of a `!` command (pi's `bashExecutionToText`). */
+export function bashExecutionToText(
+  entry: Pick<
+    BashExecutionEntry,
+    | 'command'
+    | 'output'
+    | 'exitCode'
+    | 'cancelled'
+    | 'truncated'
+    | 'fullOutputPath'
+  >,
+): string {
+  let text = `Ran \`${entry.command}\`\n`
+  text += entry.output ? `\`\`\`\n${entry.output}\n\`\`\`` : '(no output)'
+  if (entry.cancelled) text += '\n\n(command cancelled)'
+  else if (entry.exitCode !== undefined && entry.exitCode !== 0)
+    text += `\n\nCommand exited with code ${entry.exitCode}`
+  if (entry.truncated && entry.fullOutputPath)
+    text += `\n\n[Output truncated. Full output: ${entry.fullOutputPath}]`
+  return text
 }
 
 /** A unique short entry id (like pi's generateId: 8 hex characters, collision-checked). */
@@ -166,9 +210,40 @@ function parseTime(value: string): number {
 }
 
 /**
+ * The entries the context is built from (like the path pi's `buildSessionContext` walks): with a compaction,
+ * the latest one and the entries it keeps plus everything after it; otherwise all entries.
+ * The TUI renders a resumed session from these.
+ */
+export function contextEntries(entries: SessionEntry[]): {
+  compaction?: CompactionEntry
+  entries: SessionEntry[]
+} {
+  let compactionIndex = -1
+  entries.forEach((entry, index) => {
+    if (entry.type === 'compaction') compactionIndex = index
+  })
+  if (compactionIndex < 0) return { entries }
+  const compaction = entries[compactionIndex] as CompactionEntry
+  const firstKept = entries.findIndex(
+    (entry) => entry.id === compaction.firstKeptEntryId,
+  )
+  if (firstKept < 0 || firstKept > compactionIndex)
+    throw new Error(
+      `Compaction entry ${compaction.id} keeps entry ${compaction.firstKeptEntryId}, which is not before it in the session`,
+    )
+  return {
+    compaction,
+    entries: [
+      ...entries.slice(firstKept, compactionIndex),
+      ...entries.slice(compactionIndex + 1),
+    ],
+  }
+}
+
+/**
  * Rebuilds the model context and settings from a session's entries (like pi's `buildSessionContext`):
  * the latest compaction's summary, then the kept and later messages, with context edits applied.
- * Aborted / failed assistant messages are left out (like pi's transform-messages).
+ * Aborted / failed assistant messages and `!!` commands are left out (like pi's transform-messages).
  */
 export function buildSessionContext(entries: SessionEntry[]): SessionContext {
   const context: SessionContext = {
@@ -177,27 +252,17 @@ export function buildSessionContext(entries: SessionEntry[]): SessionContext {
     timestamps: new Map(),
     summary: '',
   }
-  let compactionIndex = -1
-  entries.forEach((entry, index) => {
+  for (const entry of entries) {
     if (entry.type === 'model_change') context.model = entry.model
     else if (entry.type === 'thinking_level_change')
       context.thinkingLevel = entry.thinkingLevel
     else if (entry.type === 'session_info')
       context.name = entry.name?.trim() || undefined
-    else if (entry.type === 'compaction') compactionIndex = index
-  })
-  let selected: SessionEntry[] = entries
-  if (compactionIndex >= 0) {
-    const compaction = entries[compactionIndex] as CompactionEntry
+  }
+  const { compaction, entries: selected } = contextEntries(entries)
+  if (compaction) {
     context.summary = compaction.summary
     context.toolHistoryViewSeq = compaction.toolHistoryViewSeq
-    const firstKept = entries.findIndex(
-      (entry) => entry.id === compaction.firstKeptEntryId,
-    )
-    if (firstKept < 0 || firstKept > compactionIndex)
-      throw new Error(
-        `Compaction entry ${compaction.id} keeps entry ${compaction.firstKeptEntryId}, which is not before it in the session`,
-      )
     const summary: ModelMessage = {
       role: 'user',
       content: summaryMessageText(compaction.summary),
@@ -205,29 +270,32 @@ export function buildSessionContext(entries: SessionEntry[]): SessionContext {
     context.messages.push(summary)
     context.ids.set(summary, compaction.id)
     context.timestamps.set(summary, parseTime(compaction.timestamp))
-    selected = [
-      ...entries.slice(firstKept, compactionIndex),
-      ...entries.slice(compactionIndex + 1),
-    ]
   }
   const edits = new Map<string, ContextEditEntry>()
   for (const entry of selected)
     if (entry.type === 'context_edit') edits.set(entry.targetId, entry)
   for (const entry of selected) {
-    if (entry.type !== 'message' || entry.stopReason) continue
+    const original = contextMessage(entry)
+    if (!original) continue
     const edit = edits.get(entry.id)
     if (edit?.replacement === null) continue
     const message = edit
-      ? ({
-          ...entry.message,
-          content: edit.replacement.content,
-        } as ModelMessage)
-      : entry.message
+      ? ({ ...original, content: edit.replacement.content } as ModelMessage)
+      : original
     context.messages.push(message)
     context.ids.set(message, entry.id)
     context.timestamps.set(message, parseTime(entry.timestamp))
   }
   return context
+}
+
+/** The message an entry puts in the model context, if any. */
+function contextMessage(entry: SessionEntry): ModelMessage | undefined {
+  if (entry.type === 'message')
+    return entry.stopReason ? undefined : entry.message
+  if (entry.type === 'bash_execution' && !entry.excludeFromContext)
+    return { role: 'user', content: bashExecutionToText(entry) }
+  return undefined
 }
 
 /** One `SessionStorage.list()` entry, used by the session picker and `vela.listSessions()`. */

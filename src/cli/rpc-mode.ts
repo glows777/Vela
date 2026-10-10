@@ -164,6 +164,17 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       await session.abort()
     },
     clear_queue: () => session.clearQueue(),
+    // Like pi: runs a shell command for the user (the TUI's `!`), answered with its result when it finishes
+    bash(command) {
+      if (typeof command.command !== 'string' || !command.command.trim())
+        throw new Error('command must be a non-empty string')
+      return session.executeBash(command.command, {
+        excludeFromContext: command.excludeFromContext === true,
+      })
+    },
+    abort_bash() {
+      session.abortBash()
+    },
     async new_session() {
       idle()
       const next = vela.session(options.newSessionId(), { ui })
@@ -354,6 +365,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   for (const [id, resolve] of pending)
     resolve({ type: 'extension_ui_response', id, cancelled: true })
   pending.clear()
+  session.abortBash()
   await session.abort()
   await Promise.allSettled(inFlight)
   await output

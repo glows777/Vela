@@ -9,6 +9,25 @@
       | { type: 'toolcall_start'; contentIndex: number }
       | { type: 'toolcall_delta'; contentIndex: number; delta: string }
       | { type: 'toolcall_end'; contentIndex: number; toolCall: ToolCallPart }
+  interface BashExecutionEntry
+    cancelled: boolean
+    command: string
+    excludeFromContext?: boolean | undefined
+    exitCode?: number | undefined
+    fullOutputPath?: string | undefined
+    id: string
+    output: string
+    parentId: string | null
+    timestamp: string
+    truncated: boolean
+    type: "bash_execution"
+  function bashExecutionToText: (entry: Pick<BashExecutionEntry, "command" | "output" | "exitCode" | "cancelled" | "truncated" | "fullOutputPath">) => string
+  interface BashResult
+    cancelled: boolean
+    exitCode: number | undefined
+    fullOutputPath?: string | undefined
+    output: string
+    truncated: boolean
   interface BeforeAgentStartEvent
     prompt: string
     sections: Record<string, string>
@@ -193,6 +212,7 @@
       | SessionInfoEntry
       | CompactionEntry
       | ContextEditEntry
+      | BashExecutionEntry
   interface SessionEntryBase
     id: string
     parentId: string | null
@@ -212,6 +232,7 @@
     timestamp: string
     type: "session_info"
   interface SessionMessageEntry
+    details?: Record<string, unknown> | undefined
     id: string
     message: ModelMessage
     nestedCalls?: Record<string, NestedToolCalls> | undefined
@@ -513,12 +534,15 @@
     thinkingLevel?: ThinkingLevel | undefined
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
+    abortBash: () => void
     append: (message: ModelMessage) => void
     clearQueue: () => { steering: string[]; followUp: string[]; }
     close: () => Promise<void>
     compact: (focus?: string) => Promise<void>
+    executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; }) => Promise<BashResult>
     followUp: (input: string) => Promise<void>
     followUpMode: QueueMode
+    get isBashRunning: boolean
     get isRunning: boolean
     get model: LanguageModel
     get modelInfo: ModelInfo

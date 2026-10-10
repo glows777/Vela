@@ -3,6 +3,7 @@ import type { ModelMessage } from 'ai'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
+  type BashExecutionEntry,
   buildSessionContext,
   type CompactionEntry,
   createEntryId,
@@ -89,9 +90,11 @@ export class SessionStore {
   private persist(entry: SessionEntry): void {
     if (!this.started) {
       // Like pi: setup entries (model, thinking level, name) stay in memory until there is a conversation
+      // A `!` command starts the session like a user message
       if (
-        entry.type !== 'message' ||
-        (entry.message.role !== 'user' && entry.message.role !== 'assistant')
+        entry.type !== 'bash_execution' &&
+        (entry.type !== 'message' ||
+          (entry.message.role !== 'user' && entry.message.role !== 'assistant'))
       )
         return
       this.started = true
@@ -154,12 +157,13 @@ export class SessionStore {
     this.checked = true
   }
 
-  /** Appends a message (with the stop reason of an aborted / failed assistant message, or a tool message's nested calls). */
+  /** Appends a message (with the stop reason of an aborted / failed assistant message, or a tool message's nested calls and details). */
   appendMessage(
     message: ModelMessage,
     extra: {
       stopReason?: 'aborted' | 'error'
       nestedCalls?: Record<string, NestedToolCalls>
+      details?: Record<string, unknown>
     } = {},
   ): SessionMessageEntry {
     const entry = this.append<SessionMessageEntry>({
@@ -169,8 +173,21 @@ export class SessionStore {
       ...(extra.nestedCalls && Object.keys(extra.nestedCalls).length
         ? { nestedCalls: extra.nestedCalls }
         : {}),
+      ...(extra.details && Object.keys(extra.details).length
+        ? { details: extra.details }
+        : {}),
     })
     if (!extra.stopReason) this.ids.set(message, entry.id)
+    return entry
+  }
+
+  /** Appends a `!` command; `message` is what it put in the context (none for `!!`). */
+  appendBashExecution(
+    execution: NewEntry<BashExecutionEntry>,
+    message?: ModelMessage,
+  ): BashExecutionEntry {
+    const entry = this.append<BashExecutionEntry>(execution)
+    if (message) this.ids.set(message, entry.id)
     return entry
   }
 
