@@ -14,7 +14,9 @@ export const contextCommands: CommandHandler[] = [
         // Sections are built per prompt: preview the next prompt's sections so memory usage shows even before the first prompt
         const sections = await session.previewSections()
         const skills =
-          internals.skillLoader.buildPromptSection(session.activeSkills) ?? ''
+          internals.skillLoader.buildPromptSection(
+            session.registry.getActiveTools().map((tool) => tool.name),
+          ) ?? ''
         print(renderContextView(contextSnapshot(session, sections, skills)))
       } catch (error) {
         print(

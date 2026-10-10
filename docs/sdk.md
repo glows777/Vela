@@ -23,7 +23,7 @@ try {
 
 `createVela()` assembles one Vela: core tools (files, search, bash), hooks, the system prompt, skills, extensions and channels. Conversations are sessions, opened with `vela.session(id)`. One Vela can have many sessions open at once; they share tools and extensions, and each has its own history, compaction state, usage, role and run lock.
 
-Unlike the CLI, the SDK reads no config files and no environment variables by itself: no `settings.json`, no `models.json`, no API keys, no built-in extensions. The only files it reads on its own are skills: without `skillDirs` it loads `<cwd>/.skills` and `<cwd>/.vela/skills` (there is no project trust check in the SDK; pass `skillDirs` to choose). You pass what you need, or call [`loadConfig()`](#sharing-the-cli-config) to get the CLI's configuration.
+Unlike the CLI, the SDK reads no config files and no environment variables by itself: no `settings.json`, no `models.json`, no API keys, no built-in extensions. The only files it reads on its own are skills, prompt templates and context files: without `skillDirs` it loads `<cwd>/.vela/skills` and `<cwd>/.skills`, without `promptTemplateDirs` `<cwd>/.vela/prompts`, and without `contextFiles` the `AGENTS.md` / `CLAUDE.md` files from `cwd` up to the filesystem root (there is no project trust check in the SDK; pass these options to choose). You pass what you need, or call [`loadConfig()`](#sharing-the-cli-config) to get the CLI's configuration.
 
 All [SDK examples](../examples/sdk/) run offline with the faux model from `@glows777/vela/testing` and are typechecked with the repository.
 
@@ -39,7 +39,10 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 | `cwd` | `process.cwd()` | Working directory for file, search and bash tools and for skills. |
 | `dataDir` | temp dir | Project data directory: `sessions/`, `usage/` and extension data such as `memory/` and `rag/`. Relative paths resolve against `cwd`. Without it nothing persists: sessions stay in memory and long tool output goes to a temp dir that `dispose()` deletes. The CLI uses the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. |
 | `sessionStorage` | see [Session storage](#session-storage) | Where session history is stored. |
-| `skillDirs` | `<cwd>/.skills`, `<cwd>/.vela/skills` | Skill directories, one `SKILL.md` per subdirectory. A later skill overrides an earlier one with the same name. |
+| `skillDirs` | `<cwd>/.vela/skills`, `<cwd>/.skills` | Skill directories or files in the [Agent Skills format](settings.md#skills). The first skill with a name wins. |
+| `promptTemplateDirs` | `<cwd>/.vela/prompts` | Prompt template directories or files; `/<name> args` expands one. See [Prompt templates](settings.md#prompt-templates). |
+| `contextFiles` | `loadContextFiles({ cwd })` | `AGENTS.md` / `CLAUDE.md` files (`{ path, content }[]`) put into the system prompt of owner and collaborator sessions; `false` for none. `loadContextFiles({ cwd, agentDir })` finds them like the CLI. See [Context files](settings.md#context-files). |
+| `appendSystemPrompt` | none | Text appended to the system prompt in an `<addendum>` section. |
 | `extensionConfig` | `{}` | Config section per extension, keyed by extension name. An extension reads its own section as `vela.config`. |
 | `limits` | see below | Overrides for retry, compaction and timeout limits (`Partial<VelaLimits>`). Unknown keys throw. |
 | `logger` | silent | A `VelaLogger` for diagnostics that are not events. See [Logger](#logger). |
@@ -240,7 +243,7 @@ Long tool output and the tool call history are always written to files under `<d
 
 ## Sharing the CLI config
 
-`loadConfig()` reads the same files the CLI reads (`~/.vela/settings.json`, `~/.vela/models.json`, and with `trusted: true` the project's `.vela/settings.json`, extensions and skill directories) and returns values ready for `createVela()`. It only reads files; it never loads extension code.
+`loadConfig()` reads the same files the CLI reads (`~/.vela/settings.json`, `~/.vela/models.json`, `AGENTS.md` / `CLAUDE.md`, and with `trusted: true` the project's `.vela/settings.json`, extensions, skill and prompt directories and `APPEND_SYSTEM.md`) and returns values ready for `createVela()`. It only reads files; it never loads extension code.
 
 ```typescript
 import {
@@ -265,6 +268,9 @@ const vela = createVela({
   cwd: config.cwd,
   dataDir: config.dataDir,
   skillDirs: config.skillDirs,
+  promptTemplateDirs: config.promptDirs,
+  contextFiles: config.contextFiles,
+  appendSystemPrompt: config.appendSystemPrompt,
   limits: config.settings.limits,
   extensionConfig: config.extensionConfig,
   extensions,
@@ -278,10 +284,11 @@ const vela = createVela({
 | `cwd` | `process.cwd()` | Project directory |
 | `agentDir` | `env.VELA_DIR` or `~/.vela` | User-level directory |
 | `env` | `{}` | Environment for `$VAR` / `${VAR}` interpolation, `VELA_DIR` and provider API keys. Core never reads `process.env` itself: pass it explicitly. |
-| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/extensions/` and skills (`.skills/`, `.vela/skills/`, returned in `skillDirs`) |
+| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/` and `.vela/APPEND_SYSTEM.md` |
+| `homeDir` | `os.homedir()` | Home directory for `~/.agents/skills` |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 
-The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `providers` and `extensionConfig`. `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
+The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers` and `extensionConfig`. `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
 
 The CLI also fills built-in extension config from environment variables such as `TAVILY_API_KEY`; with the SDK, put those values in `extensionConfig` or pass them to the extension factories.
 

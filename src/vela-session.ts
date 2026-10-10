@@ -106,6 +106,8 @@ export interface SessionDeps {
   /** Vela-level tool registry; each session forks its own from it */
   registry: ToolRegistry
   builder: PromptPipeline
+  /** Expands `/skill:<name>` and prompt templates in owner input (src/prompt/templates.ts) */
+  expandInput: (text: string) => string
   extensions: SessionExtensionHooks
   /** Session events also go to Vela's subscribers */
   forward: (event: VelaEvent, sessionId: string) => void
@@ -132,8 +134,6 @@ export class VelaSession {
   readonly contextManager: ContextManager
   /** @internal This session's registry: shared tool definitions, separate tool results, permissions and discovered deferred tools */
   readonly registry: ToolRegistry
-  /** @internal */
-  readonly activeSkills = new Set<string>()
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */
   readonly busy: { locked: boolean; controller?: AbortController } = {
     locked: false,
@@ -329,7 +329,7 @@ export class VelaSession {
       sessionMessageCount: this.messages.length,
       sessionId: this.id,
       toolResults: this.store.results,
-      activeSkills: this.activeSkills,
+      activeTools: this.registry.getActiveTools().map((tool) => tool.name),
     }
   }
 
@@ -409,9 +409,25 @@ export class VelaSession {
       return (async () => {
         await this.start()
         if (await this.runCommand(input, options.signal)) return
-        return this.promptModel(input, options)
+        return this.promptExpanded(input, options)
       })()
     return this.promptModel(input, options)
+  }
+
+  /**
+   * Expands `/skill:<name>` and prompt templates, then prompts (or queues). Like extension commands, only for the
+   * session's owner. A skill file that can't be read rejects instead of sending the raw command.
+   */
+  private promptExpanded(input: string, options: PromptOptions): Promise<void> {
+    if (this.role !== 'owner' || !input.startsWith('/'))
+      return this.promptModel(input, options)
+    let expanded: string
+    try {
+      expanded = this.deps.expandInput(input)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    return this.promptModel(expanded, options)
   }
 
   /** Runs an extension command; abort() and options.signal abort the command's ctx.signal. */
@@ -432,12 +448,12 @@ export class VelaSession {
 
   /** While running: joins the current task, sent as a user message after this step's tools finish and before the next model request. Same as prompt() when idle. */
   steer(input: string): Promise<void> {
-    return this.promptModel(input, { streamingBehavior: 'steer' })
+    return this.promptExpanded(input, { streamingBehavior: 'steer' })
   }
 
   /** While running: runs as a user message when the model would otherwise stop (no tool calls, no steer). Same as prompt() when idle. */
   followUp(input: string): Promise<void> {
-    return this.promptModel(input, { streamingBehavior: 'followUp' })
+    return this.promptExpanded(input, { streamingBehavior: 'followUp' })
   }
 
   /** Clears queued messages and returns them (the TUI puts them back in the input box before aborting). */

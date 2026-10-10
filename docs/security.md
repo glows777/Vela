@@ -10,7 +10,8 @@ This page describes what Vela protects and what it does not. To report a vulnera
 |---|---|---|
 | The user running `vela` (owner) | Yes | Everything the operating-system user can do, through the model's tool calls |
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
-| Project config (`.vela/settings.json`, `.vela/extensions/`, project skills) | Only after you trust the project | Same as extensions once loaded |
+| Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
+| `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt of owner and collaborator sessions |
 | Channel senders (people messaging a channel) | No, unless listed as owners | What their session role allows |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
 
@@ -36,7 +37,7 @@ Review an extension before you load it, and load only extensions from sources yo
 
 ## Project trust
 
-A project directory can contain `.vela/settings.json`, `.vela/extensions/` and skills (`.skills/`, `.vela/skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills put instructions in front of the model, so Vela does not load them until you trust the project.
+A project directory can contain `.vela/settings.json`, `.vela/extensions/`, prompt templates, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills and prompts put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
 
 Interactive mode asks once per project and saves the answer in `~/.vela/trust.json`; `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 
@@ -52,7 +53,7 @@ Every session has a role. The role decides which tools the session's model can c
 | `collaborator` | All except `bash` | No | Injected into the system prompt; `memory` tool available |
 | `guest` | Only `rag_search`, `web_search` and `tool_search` | No | Not injected; no `memory` tool |
 
-A guest has no file, shell or memory tools and no extension tools: extension tool names carry an `<extension>_` prefix, so only an extension named `rag` or `web` can register `rag_search` and `web_search`. Don't load third-party extensions with those names. A guest's system prompt does not include the file rules or the working directory. A tool the role denies is left out of the tool list, and a call to it is rejected and recorded in the tool history.
+A guest has no file, shell or memory tools and no extension tools: extension tool names carry an `<extension>_` prefix, so only an extension named `rag` or `web` can register `rag_search` and `web_search`. Don't load third-party extensions with those names. A guest's system prompt does not include the file rules, the working directory, `AGENTS.md` / `CLAUDE.md` or the skills list, and `/skill:<name>` and prompt templates are not expanded for guests. The appended system prompt (`APPEND_SYSTEM.md`, `--append-system-prompt`, `appendSystemPrompt`) is the owner's own text and goes to every role, guests included, so keep anything a channel sender shouldn't see out of it. A tool the role denies is left out of the tool list, and a call to it is rejected and recorded in the tool history.
 
 Note what each role can still reach:
 

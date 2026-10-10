@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { LanguageModel } from 'ai'
 import {
@@ -180,6 +181,11 @@ const vela = createVela({
   dataDir: config.dataDir,
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
   skillDirs: config.skillDirs,
+  promptTemplateDirs: config.promptDirs,
+  contextFiles: args.noContextFiles ? false : config.contextFiles,
+  appendSystemPrompt: args.appendSystemPrompt.length
+    ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
+    : config.appendSystemPrompt,
   limits: config.settings.limits,
   shellPath: config.settings.shellPath,
   logger,
@@ -235,6 +241,13 @@ function applyModelArgs(target: VelaSession): boolean {
     )
     return false
   }
+}
+
+/** `--append-system-prompt` takes text or a file path (like pi: an existing file is read). */
+function readPromptInput(input: string): string {
+  return existsSync(input) && statSync(input).isFile()
+    ? readFileSync(input, 'utf-8')
+    : input
 }
 
 const exit = async (code: number): Promise<never> => {

@@ -299,3 +299,23 @@ test('@ suggests files in the working directory (fd found on PATH, like pi)', as
   tui.terminal.type('read @alpha')
   await tui.until('src/alpha-file.ts')
 })
+
+test('/ suggests prompt templates (with their argument hint) and skills as skill:<name>', async () => {
+  const t = createTestVela({
+    files: {
+      '.vela/prompts/fixbug.md':
+        '---\ndescription: Fix a bug\nargument-hint: <file>\n---\nFix $1',
+    },
+    skills: [
+      { name: 'reviewer', description: 'Review a change', body: 'Review' },
+    ],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.terminal.type('/fixb')
+  await tui.until('<file> — Fix a bug')
+  tui.terminal.press(KEYS.ctrlC)
+  tui.terminal.type('/skill:rev')
+  await tui.until('skill:reviewer')
+})

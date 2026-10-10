@@ -21,6 +21,9 @@
     send: (message: OutgoingMessage) => Promise<void>
     start: () => Promise<void> | void
     stop: () => Promise<void> | void
+  interface ContextFile
+    content: string
+    path: string
   function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
   function createVela: (options?: VelaOptions) => Vela
   type EmbeddingFn = (
@@ -83,7 +86,9 @@
     builtins?: readonly string[] | undefined
     cwd?: string | undefined
     env?: Record<string, string | undefined> | undefined
+    homeDir?: string | undefined
     trusted?: boolean | undefined
+  function loadContextFiles: (options: { cwd: string; agentDir?: string; }) => ContextFile[]
   interface LoadedExtension
     channels: string[]
     commands: string[]
@@ -241,11 +246,14 @@
     subscribe: (listener: VelaSessionEventListener) => () => void
   interface VelaConfig
     agentDir: string
+    appendSystemPrompt?: string | undefined
+    contextFiles: ContextFile[]
     cwd: string
     dataDir: string
     extensionConfig: Record<string, Record<string, unknown>>
     extensions: ExtensionEntry[]
     files: string[]
+    promptDirs: string[]
     providers: Record<string, ProviderDefinition>
     settings: VelaSettings
     skillDirs: string[]
@@ -377,7 +385,9 @@
     info: (message: string) => void
     warn: (message: string) => void
   interface VelaOptions
+    appendSystemPrompt?: string | undefined
     binDir?: string | undefined
+    contextFiles?: false | ContextFile[] | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
@@ -386,6 +396,7 @@
     logger?: VelaLogger | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     offline?: boolean | undefined
+    promptTemplateDirs?: string[] | undefined
     providers?: Record<string, ProviderDefinition> | undefined
     sessionStorage?: SessionStorage | undefined
     shellPath?: string | undefined
@@ -432,6 +443,7 @@
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: string[] | undefined
     limits?: Partial<VelaLimits> | undefined
+    prompts?: string[] | undefined
     shellPath?: string | undefined
     skills?: string[] | undefined
   function web: (options?: WebOptions) => VelaExtension
@@ -512,8 +524,8 @@
   interface FixtureSkill
     body: string
     description: string
+    disableModelInvocation?: boolean | undefined
     name: string
-    whenToUse?: string | undefined
   function loadFauxScenario: (path: string) => Promise<FauxModel>
   function readFauxScenario: (path: string) => Promise<FauxScenario>
   interface Recorder

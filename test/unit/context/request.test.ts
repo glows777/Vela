@@ -85,7 +85,7 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
       exposure: 'deferred',
     },
   )
-  const builder = new PromptPipeline().pipe('core', coreRules('/work'))
+  const builder = new PromptPipeline().pipe('core', coreRules())
   const system = (n: number) =>
     builder.build({
       toolCount: 1,

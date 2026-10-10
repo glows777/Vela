@@ -59,6 +59,10 @@ export type {
   ProviderDefinition,
   ThinkingLevel,
 } from './models/index.ts'
+export {
+  type ContextFile,
+  loadContextFiles,
+} from './prompt/context-files.ts'
 export type {
   PermissionDecision,
   PermissionRules,

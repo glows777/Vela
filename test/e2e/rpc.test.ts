@@ -292,3 +292,31 @@ test.concurrent('rpc: extension ui dialogs round-trip through extension_ui_reque
 
   expect(await rpc.close()).toBe(0)
 })
+
+test.concurrent('rpc: get_commands lists extension commands, prompt templates and skills with their source (like pi)', async () => {
+  const rpc = startRpc(`faux:${scenario('hello')}`, [], {
+    'prompts/fix.md': '---\ndescription: Fix a bug\n---\nFix $1',
+    'skills/review/SKILL.md': '---\ndescription: Review a change\n---\nReview',
+  })
+  const { commands } = (await rpc.call({ type: 'get_commands' })).data as {
+    commands: { name: string; description?: string; source: string }[]
+  }
+  expect(commands).toContainEqual({
+    name: 'fix',
+    description: 'Fix a bug',
+    source: 'prompt',
+  })
+  expect(commands).toContainEqual({
+    name: 'skill:review',
+    description: 'Review a change',
+    source: 'skill',
+  })
+  expect(commands).toContainEqual(
+    expect.objectContaining({
+      name: 'memory',
+      extension: 'memory',
+      source: 'extension',
+    }),
+  )
+  await rpc.close()
+})

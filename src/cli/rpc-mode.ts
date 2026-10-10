@@ -1,6 +1,6 @@
 import type { SessionUI } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
-import type { Vela } from '../vela.ts'
+import { type Vela, velaInternals } from '../vela.ts'
 import type { QueueMode, VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
 
@@ -243,7 +243,26 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       // Can't save separately mid-run (it would interleave with the loop's writes and drop new messages); the run saves when it ends
       if (!session.isRunning) await session.save()
     },
-    get_commands: () => ({ commands: vela.commands() }),
+    // Like pi: extension commands, prompt templates and skills, each with its `source`
+    get_commands: () => ({
+      commands: [
+        ...vela
+          .commands()
+          .map((command) => ({ ...command, source: 'extension' as const })),
+        ...velaInternals(vela).promptTemplates.map((t) => ({
+          name: t.name,
+          description: t.description,
+          source: 'prompt' as const,
+        })),
+        ...velaInternals(vela)
+          .skillLoader.list()
+          .map((s) => ({
+            name: `skill:${s.name}`,
+            description: s.description,
+            source: 'skill' as const,
+          })),
+      ],
+    }),
   }
 
   async function enqueue(command: RpcCommand, behavior: 'steer' | 'followUp') {

@@ -8,8 +8,8 @@ export interface PromptContext {
   sessionId: string
   /** Current session's tool result store (used by toolHistoryGuide) */
   toolResults?: ToolResultStore
-  /** Skills activated in the current session */
-  activeSkills?: ReadonlySet<string>
+  /** Names of the tools the model can call this turn (the skills index needs read_file or bash) */
+  activeTools?: readonly string[]
   /** Current session's role; defaults to owner */
   role?: Role
   /** Sections written by extensions in before_agent_start (name → content); fixed within a turn */

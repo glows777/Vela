@@ -78,7 +78,7 @@ const TUI_COMMANDS = [
 const CLI_COMMANDS = [
   { name: 'context', description: 'Context usage' },
   { name: 'usage', description: 'Token usage and cost' },
-  { name: 'skill', description: 'List / load / unload skills' },
+  { name: 'skill', description: 'List skills (run one with /skill:<name>)' },
   { name: 'extensions', description: 'Loaded extensions' },
   { name: 'channel', description: 'Channels' },
   { name: 'role', description: 'Show / switch role' },
@@ -241,9 +241,18 @@ export class InteractiveMode {
         [
           ...TUI_COMMANDS,
           ...CLI_COMMANDS,
+          ...velaInternals(vela).promptTemplates.map((t) => ({
+            name: t.name,
+            description: t.argumentHint
+              ? `${t.argumentHint} — ${t.description}`
+              : t.description,
+          })),
           ...velaInternals(vela)
             .skillLoader.list()
-            .map((s) => ({ name: s.name, description: s.description })),
+            .map((s) => ({
+              name: `skill:${s.name}`,
+              description: s.description,
+            })),
           ...vela.commands().map((c) => ({
             name: c.name,
             description: c.description ?? `Extension ${c.extension}`,

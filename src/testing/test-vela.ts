@@ -34,8 +34,9 @@ import { createFauxEmbedder } from './faux-embedder.ts'
 export interface FixtureSkill {
   name: string
   description: string
-  whenToUse?: string
   body: string
+  /** `disable-model-invocation: true`: only `/skill:<name>` runs it */
+  disableModelInvocation?: boolean
 }
 
 export interface TestVelaOptions {
@@ -59,7 +60,7 @@ export interface TestVelaOptions {
   sessionId?: string
   /** Files to create in cwd: relative path → content */
   files?: Record<string, string>
-  /** Skills to create in cwd/.skills */
+  /** Skills to create in cwd/.skills (`<name>/SKILL.md`) */
   skills?: FixtureSkill[]
   /** Load the rag extension: true uses the deterministic faux embedder, or pass an embedder */
   embedder?: boolean | EmbeddingFn
@@ -233,8 +234,12 @@ function writeFile(path: string, content: string) {
 }
 
 function writeSkill(cwd: string, skill: FixtureSkill) {
-  const meta = ['---', `description: ${skill.description}`]
-  if (skill.whenToUse) meta.push(`when_to_use: ${skill.whenToUse}`)
+  const meta = [
+    '---',
+    `name: ${skill.name}`,
+    `description: ${JSON.stringify(skill.description)}`,
+  ]
+  if (skill.disableModelInvocation) meta.push('disable-model-invocation: true')
   writeFile(
     join(cwd, '.skills', skill.name, 'SKILL.md'),
     `${meta.join('\n')}\n---\n\n${skill.body}\n`,

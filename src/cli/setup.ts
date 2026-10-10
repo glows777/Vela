@@ -54,6 +54,10 @@ export interface CliArgs {
   model?: string
   /** `--thinking <level>` */
   thinking?: ThinkingLevel
+  /** `--append-system-prompt <text or file>` (repeatable, like pi); replaces APPEND_SYSTEM.md */
+  appendSystemPrompt: string[]
+  /** `--no-context-files` (`-nc`): don't load AGENTS.md / CLAUDE.md */
+  noContextFiles: boolean
   /** `-h, --help`: print HELP and exit */
   help?: boolean
   /** `-v, --version`: print the package version and exit */
@@ -61,7 +65,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [-h | --help] [-v | --version]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-h | --help] [-v | --version]'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -82,15 +86,19 @@ Options:
   --no-session                  Keep the session in memory only, not on disk
   --model <provider/id>         Model to use (providers: built-in openai / anthropic, ~/.vela/models.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
+  --append-system-prompt <text> Append text or a file's contents to the system prompt (repeatable;
+                                replaces ~/.vela/APPEND_SYSTEM.md and .vela/APPEND_SYSTEM.md)
+  -nc, --no-context-files       Don't load AGENTS.md / CLAUDE.md
   -e, --extension <path>        Load an extension file or directory, or builtin:<name> (repeatable)
   -ne, --no-extensions          Skip built-in and discovered extensions (-e still loads)
-  --approve                     Trust project config, extensions and skills for this run (not saved)
-  --no-approve                  Ignore project config, extensions and skills for this run (not saved)
+  --approve                     Trust project config, extensions, skills and prompts for this run (not saved)
+  --no-approve                  Ignore project config, extensions, skills and prompts for this run (not saved)
   -h, --help                    Show this help
   -v, --version                 Show the version number
 
 Prompts are sent in order. In interactive mode, text starting with / is a command (/hotkeys, /context,
-/usage, /skill, /model, ...); anything else goes to the model.
+/usage, /skill, /model, ...), /skill:<name> sends a skill and /<template> expands a prompt template;
+anything else goes to the model.
 
 Examples:
   # Interactive mode
@@ -144,6 +152,8 @@ export function parseArgs(argv: string[]): CliArgs {
     extensions: [],
     noExtensions: false,
     noSession: false,
+    appendSystemPrompt: [],
+    noContextFiles: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string
@@ -173,6 +183,10 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--approve') args.approve = true
     else if (arg === '--no-approve') args.approve = false
     else if (arg === '--model') args.model = value()
+    else if (arg === '--append-system-prompt')
+      args.appendSystemPrompt.push(value())
+    else if (arg === '--no-context-files' || arg === '-nc')
+      args.noContextFiles = true
     else if (arg === '--thinking') {
       const level = value()
       if (!THINKING_LEVELS.includes(level as ThinkingLevel))
@@ -228,7 +242,7 @@ export async function resolveTrust(options: {
       ),
     }
   const answer = await question(
-    `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/ or skills in .vela/skills/ or .skills/).\nExtensions are code that runs on this machine, and skills are instructions for the model. Trust this project and load it? (y/N) `,
+    `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/, .vela/prompts/, .vela/APPEND_SYSTEM.md, or skills in .vela/skills/, .skills/ or .agents/skills/).\nExtensions are code that runs on this machine; skills, prompts and APPEND_SYSTEM.md are instructions for the model. Trust this project and load it? (y/N) `,
   )
   const trusted = answer === 'y' || answer === 'yes'
   saveTrust(agentDir, cwd, trusted)
@@ -238,7 +252,7 @@ export async function resolveTrust(options: {
 }
 
 function notTrusted(cwd: string, agentDir: string, reason: string): string {
-  return `[trust] Did not load config, extensions and skills from ${resolve(cwd)} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
+  return `[trust] Did not load config, extensions, skills and prompts from ${resolve(cwd)} (${reason}; edit ${join(agentDir, 'trust.json')} to change this)`
 }
 
 async function question(prompt: string): Promise<string> {
