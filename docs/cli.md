@@ -24,6 +24,8 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `-r`, `--resume` | Pick a saved session at startup. Interactive mode only. |
 | `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
 | `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Memory, the knowledge base, usage records and long tool output are still written to the data directory. |
+| `--fork <id>` | Copy the saved session `<id>` into a new session (with a new id) and start there, like pi. The original is not changed. |
+| `--export <id or file> [output]` | Write a saved session (by id, or a session `.jsonl` file) as HTML and exit, like pi. `output` defaults to `vela-session-<id>…html` in the current folder. |
 | `--model <provider/id>` | Use this model. See [Models](models.md). |
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
 | `-e`, `--extension <path>` | Load an extension file or directory, or `builtin:<name>`. Repeatable. Relative paths resolve from the current folder. |
@@ -35,7 +37,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
 | `-v`, `--version` | Print the package version to stdout, then exit with code 0. |
 
-`-c`, `-r` and `--session` are mutually exclusive.
+`-c`, `-r`, `--session` and `--fork` are mutually exclusive.
 
 An extension that fails to load is reported on stderr (or in the chat log) and skipped; Vela still starts. Extension loading, discovery and the `builtin:` names are described in [Extensions](extensions.md#where-extensions-load-from) and [Built-in extensions](built-in-extensions.md).
 
@@ -78,6 +80,7 @@ Each launch starts a new session with an id like `20261008-081430-df22` (local d
 | `-r`, `--resume` | Show a picker of saved sessions (interactive mode only; use `-c` or `--session` in the other modes). |
 | `--session <id>` | Open the session with that id, creating it if it does not exist. |
 | `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Long tool output, memory, the knowledge base and usage logs are still written to the data directory. |
+| `--fork <id>` | Copy that saved session into a new one and start there. |
 
 ```bash
 vela --session refactor "Plan the parser refactor"
@@ -152,10 +155,14 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 | `/model [provider/id]` | Without an argument, open the model picker (models listed in `models.json` or by extension providers). With an argument, switch to that model. |
 | `/thinking [level]` | Without an argument, open the thinking-level picker. With an argument, set it. |
 | `/compact [focus]` | Summarize the conversation now, optionally telling the summary what to focus on. |
+| `/tree` | Move to another point in the session tree, optionally summarizing the branch you leave, or label an entry. See [Sessions](sessions.md#session-tree). |
+| `/fork` | Pick one of your earlier messages and continue in a new session from just before it (its text goes into the editor). |
+| `/clone` | Copy the current branch into a new session and switch to it. |
+| `/export [path]` | Write the current branch as HTML, or as JSONL when the path ends in `.jsonl`. |
 | `/hotkeys` | Show the keyboard shortcuts. |
 | `/quit`, `/exit` | Exit. |
 
-`/new`, `/resume` and `/compact` refuse to run while a task is running.
+`/new`, `/resume`, `/compact`, `/tree`, `/fork` and `/clone` refuse to run while a task is running.
 
 ### CLI commands
 

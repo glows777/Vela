@@ -1,4 +1,5 @@
-import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import type { LanguageModel, ModelMessage } from 'ai'
 import type { VelaEvent, VelaEventListener } from './agent/events.ts'
 import { agentLoop } from './agent/index.ts'
@@ -9,7 +10,13 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
-import type { ExtensionUI, SessionUI } from './extensions/types.ts'
+import type {
+  ExtensionUI,
+  SessionBeforeTreeEventResult,
+  SessionTreeEvent,
+  SessionUI,
+  TreePreparation,
+} from './extensions/types.ts'
 import type { VelaLimits } from './limits.ts'
 import type { VelaLogger } from './logger.ts'
 import {
@@ -22,9 +29,20 @@ import {
 } from './models/index.ts'
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
-import type { NestedToolCalls, SessionEntry } from './session/entries.ts'
+import {
+  type BranchSummaryEntry,
+  messageText,
+  type NestedToolCalls,
+  SESSION_FORMAT_VERSION,
+  type SessionContext,
+  type SessionEntry,
+  type SessionHeader,
+  type SessionTreeNode,
+} from './session/entries.ts'
+import { renderSessionHtml } from './session/export-html.ts'
 import { SessionStore } from './session/index.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
+import { newSessionId } from './session/session-id.ts'
 import type { SessionStorage } from './session/storage.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import {
@@ -61,6 +79,36 @@ export interface SessionOptions {
   model?: string | LanguageModel
   /** Thinking level, default Vela's (Vela defaults to medium, like pi) */
   thinkingLevel?: ThinkingLevel
+  /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
+  autoCompaction?: boolean
+}
+
+/** Options for `session.navigateTree()` (like pi's). */
+export interface NavigateTreeOptions {
+  /** Summarize the branch being left; the summary is attached where the session goes */
+  summarize?: boolean
+  /** What the summary should prefer to keep (pi's customInstructions) */
+  focus?: string
+  /** Label for the target entry (or for the summary entry when summarizing) */
+  label?: string
+}
+
+/** Options for `session.fork()` / `clone()`. */
+export interface ForkOptions {
+  /** `before` (default): the new session ends before this user message; `at`: it includes the entry */
+  position?: 'before' | 'at'
+  /** Id of the new session; default a new time-based id like the CLI's */
+  sessionId?: string
+}
+
+/** What `fork()` / `clone()` returns. */
+export interface ForkResult {
+  /** True when an extension cancelled it (no session was created) */
+  cancelled: boolean
+  /** The new session, open in the same Vela (the original stays open) */
+  session?: VelaSession
+  /** Text of the user message forked from (`before`), for the input box */
+  selectedText?: string
 }
 
 /** What the extension runtime does during the session lifecycle (provided by createVela). */
@@ -77,6 +125,18 @@ export interface SessionExtensionHooks {
     session: VelaSession,
     text: string,
     signal: AbortSignal,
+  ): Promise<boolean>
+  beforeTree(
+    session: VelaSession,
+    preparation: TreePreparation,
+    signal: AbortSignal,
+  ): Promise<SessionBeforeTreeEventResult>
+  tree(session: VelaSession, event: SessionTreeEvent): Promise<void>
+  /** True when an extension cancels the fork */
+  beforeFork(
+    session: VelaSession,
+    entryId: string,
+    position: 'before' | 'at',
   ): Promise<boolean>
 }
 
@@ -97,6 +157,10 @@ export interface SessionDeps {
   /** Resolves a model by name or object (including the provider registry) */
   resolveModel: (model: string | LanguageModel | undefined) => ResolvedModel
   thinkingLevel: ThinkingLevel
+  /** Automatic compaction for new sessions */
+  autoCompaction: boolean
+  /** Opens a new session in the same Vela (fork / clone); throws if the id is already open */
+  openSession: (id: string, options: SessionOptions) => VelaSession
   /** Explicitly given limits; the rest are derived from the model's context window */
   limitOverrides: Partial<VelaLimits>
   logger: VelaLogger
@@ -152,6 +216,8 @@ export class VelaSession {
   private readonly nestedCalls = new NestedCallLog()
   private readonly builder: PromptPipeline
   private readonly deps: SessionDeps
+  /** Options the session was opened with (a fork opens with the same) */
+  private readonly options: SessionOptions
   private closed = false
   private started?: Promise<void>
   private running?: Promise<void>
@@ -169,6 +235,7 @@ export class VelaSession {
     assertSessionId(id)
     this.id = id
     this.deps = deps
+    this.options = options
     this.modelChoice = options.model ?? deps.model
     this.thinking = options.thinkingLevel ?? deps.thinkingLevel
     this.limits = limitsForModel({}, deps.limitOverrides)
@@ -204,6 +271,8 @@ export class VelaSession {
       this.limits,
     )
     this.timestamps = this.contextManager.state.timestamps
+    this.contextManager.autoCompaction =
+      options.autoCompaction ?? deps.autoCompaction
     // Like pi: a new session starts with its model and thinking level (written with the first message)
     if (typeof this.modelChoice === 'string')
       this.store.appendModelChange(this.modelChoice)
@@ -383,6 +452,344 @@ export class VelaSession {
     return this.store.getEntries()
   }
 
+  /** The session as a tree (copies; like pi's getTree): every branch, with labels. */
+  getTree(): SessionTreeNode[] {
+    return this.store.getTree()
+  }
+
+  /** The current leaf: new messages are appended under it. Null before the first entry. */
+  getLeafId(): string | null {
+    return this.store.getLeafId()
+  }
+
+  /** The entries from the root to `fromId` (default: the current leaf), like pi's getBranch. */
+  getBranch(fromId?: string): SessionEntry[] {
+    return this.store.getBranch(fromId)
+  }
+
+  /** Id of the session this one was forked or cloned from. */
+  get parentSession(): string | undefined {
+    return this.store.parentSession
+  }
+
+  /** Sets (or clears, with undefined / empty) a label on an entry, like pi's `/tree` labels. */
+  setLabel(entryId: string, label: string | undefined): void {
+    this.store.appendLabelChange(
+      entryId,
+      label?.replace(/[\r\n]+/g, ' ').trim() || undefined,
+    )
+  }
+
+  /**
+   * Whether the context is compacted automatically (like pi's autoCompactionEnabled). Off: no microcompaction,
+   * no threshold summary, no compact-and-retry on overflow; compact() still works.
+   */
+  get autoCompaction(): boolean {
+    return this.contextManager.autoCompaction
+  }
+
+  set autoCompaction(enabled: boolean) {
+    this.contextManager.autoCompaction = enabled
+  }
+
+  /** Takes the run lock for a session-level task (compact, tree navigation); throws if something runs. */
+  private async exclusive<T>(
+    what: string,
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (this.busy.locked)
+      throw new Error(`A task is already running; ${what} after it finishes`)
+    const busy = this.busy
+    busy.locked = true
+    const controller = new AbortController()
+    busy.controller = controller
+    const run = task(controller.signal)
+    const running = run.then(
+      () => {},
+      () => {},
+    )
+    this.running = running
+    try {
+      return await run
+    } finally {
+      if (this.running === running) this.running = undefined
+      busy.locked = false
+      busy.controller = undefined
+    }
+  }
+
+  /**
+   * Moves to another entry of the session tree (like pi's navigateTree); the session file keeps every branch.
+   * Selecting a user message moves to just before it and returns its text (edit and send it to start a new
+   * branch); selecting any other entry continues after it. With `summarize`, the branch being left is
+   * summarized and the summary is attached where the session goes. Throws while running; abort() stops a
+   * summary in progress. `cancelled` is true when an extension (session_before_tree) or abort() stopped it.
+   */
+  async navigateTree(
+    targetId: string,
+    options: NavigateTreeOptions = {},
+  ): Promise<{ editorText?: string; cancelled: boolean }> {
+    const target = this.store.getEntry(targetId)
+    if (!target) throw new Error(`Entry ${targetId} is not in the session`)
+    const oldLeafId = this.store.getLeafId()
+    if (targetId === oldLeafId) return { cancelled: false }
+    return this.exclusive('navigate the session tree', async (signal) => {
+      await this.start()
+      const oldBranch = this.store.getBranch(oldLeafId)
+      const targetIds = new Set(
+        this.store.getBranch(targetId).map((entry) => entry.id),
+      )
+      let common = -1
+      while (
+        common + 1 < oldBranch.length &&
+        targetIds.has((oldBranch[common + 1] as SessionEntry).id)
+      )
+        common++
+      const commonAncestorId = oldBranch[common]?.id ?? null
+      const preparation: TreePreparation = {
+        targetId,
+        oldLeafId,
+        commonAncestorId,
+        entriesToSummarize: oldBranch.slice(common + 1),
+        userWantsSummary: options.summarize ?? false,
+        ...(options.focus ? { focus: options.focus } : {}),
+        ...(options.label ? { label: options.label } : {}),
+      }
+      const hook = await this.deps.extensions.beforeTree(
+        this,
+        preparation,
+        signal,
+      )
+      if (hook.cancel) return { cancelled: true }
+      const focus = hook.focus ?? options.focus
+      const label = (hook.label ?? options.label)?.trim() || undefined
+      let summary: string | undefined
+      let fromExtension = false
+      if (options.summarize && preparation.entriesToSummarize.length) {
+        if (hook.summary) {
+          summary = hook.summary.summary
+          fromExtension = true
+        } else {
+          try {
+            summary = await this.summarizeBranch(
+              new Set(oldBranch.slice(0, common + 1).map((entry) => entry.id)),
+              focus,
+              signal,
+            )
+          } catch (error) {
+            if (signal.aborted) return { cancelled: true }
+            throw error
+          }
+        }
+      }
+      let newLeafId: string | null = targetId
+      let editorText: string | undefined
+      if (target.type === 'message' && target.message.role === 'user') {
+        newLeafId = target.parentId
+        editorText = messageText(target.message.content)
+      }
+      let summaryEntry: BranchSummaryEntry | undefined
+      if (summary) {
+        summaryEntry = this.store.branchWithSummary(newLeafId, summary)
+        if (label) this.store.appendLabelChange(summaryEntry.id, label)
+      } else {
+        this.store.branch(newLeafId)
+        if (label) this.store.appendLabelChange(targetId, label)
+      }
+      await this.loadBranch(this.store.buildContext())
+      await this.deps.extensions.tree(this, {
+        type: 'session_tree',
+        newLeafId: this.store.getLeafId(),
+        oldLeafId,
+        ...(summaryEntry
+          ? { summaryEntry: structuredClone(summaryEntry), fromExtension }
+          : {}),
+      })
+      await this.saveOrReport()
+      return {
+        ...(editorText === undefined ? {} : { editorText }),
+        cancelled: false,
+      }
+    })
+  }
+
+  /**
+   * Summarizes the context messages after the common ancestor (the branch being left). Returns undefined
+   * when that part has no messages.
+   */
+  private async summarizeBranch(
+    ancestorIds: Set<string>,
+    focus: string | undefined,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    let start = 0
+    this.messages.forEach((message, index) => {
+      const id = this.store.idOf(message)
+      if (id && ancestorIds.has(id)) start = index + 1
+    })
+    if (start >= this.messages.length) return
+    const request = await createRequestSnapshot(
+      this.model,
+      this.buildSystem(),
+      this.registry.toAISDKFormat(),
+      this.messages,
+      signal,
+    )
+    return this.contextManager.summarizeBranch(request, start, focus)
+  }
+
+  /** Makes the store's current branch the session's context, model and thinking level. */
+  private async loadBranch(context: SessionContext): Promise<void> {
+    this.contextManager.restore(context)
+    if (
+      context.thinkingLevel &&
+      THINKING_LEVELS.includes(context.thinkingLevel)
+    )
+      this.thinking = context.thinkingLevel
+    if (context.model && context.model !== this.resolved?.info.ref) {
+      // Providers registered by extensions resolve only after extensions load
+      await this.deps.extensions.ready.catch(() => {})
+      try {
+        this.selectModel(context.model, false)
+      } catch (error) {
+        this.deps.logger.warn(
+          `[session] Saved model ${context.model} for ${this.id} is unavailable, keeping the current model: ${error instanceof Error ? error.message : error}`,
+        )
+      }
+    }
+    // The branch's latest summary points into the tool call history up to this sequence
+    const results = this.store.results
+    const sequence = context.toolHistoryViewSeq
+    await results.history.load()
+    if (sequence !== undefined && sequence <= results.history.throughSequence) {
+      await results.history.snapshot(undefined, sequence)
+      results.historyViewSequence = sequence
+    } else results.historyViewSequence = undefined
+    this.tracker.setEstimatedTokens(estimateMessageTokens(this.messages))
+  }
+
+  /**
+   * Copies the branch up to an entry into a new session (like pi's fork). `before` (default) needs a user
+   * message and ends just before it, returning its text; `at` includes the entry. Unlike pi, which replaces
+   * its one session, Vela opens the copy as another session in the same Vela and leaves this one open.
+   * The new session records this one as `parentSession`. Throws while running.
+   */
+  async fork(entryId: string, options: ForkOptions = {}): Promise<ForkResult> {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (this.busy.locked)
+      throw new Error('A task is already running; fork after it finishes')
+    const position = options.position ?? 'before'
+    const entry = this.store.getEntry(entryId)
+    if (!entry) throw new Error(`Entry ${entryId} is not in the session`)
+    let leafId: string | null = entryId
+    let selectedText: string | undefined
+    if (position === 'before') {
+      if (entry.type !== 'message' || entry.message.role !== 'user')
+        throw new Error(`Entry ${entryId} is not a user message to fork from`)
+      leafId = entry.parentId
+      selectedText = messageText(entry.message.content)
+    }
+    await this.start()
+    if (await this.deps.extensions.beforeFork(this, entryId, position))
+      return { cancelled: true }
+    const branch = leafId === null ? [] : this.store.getBranch(leafId)
+    const session = this.deps.openSession(options.sessionId ?? newSessionId(), {
+      ...this.options,
+      role: this.role,
+      model: this.modelChoice,
+      thinkingLevel: this.thinking,
+      autoCompaction: this.autoCompaction,
+    })
+    try {
+      await session.seedFrom(this, branch)
+    } catch (error) {
+      await session.close()
+      throw error
+    }
+    return {
+      cancelled: false,
+      session,
+      ...(selectedText === undefined ? {} : { selectedText }),
+    }
+  }
+
+  /** Copies the current branch into a new session (like pi's /clone, a fork at the leaf). */
+  clone(options: Omit<ForkOptions, 'position'> = {}): Promise<ForkResult> {
+    const leafId = this.store.getLeafId()
+    if (!leafId) return Promise.reject(new Error('Nothing to clone yet'))
+    return this.fork(leafId, { ...options, position: 'at' })
+  }
+
+  /** @internal Starts this new session as a copy of `parent`'s branch (fork / clone). */
+  async seedFrom(parent: VelaSession, branch: SessionEntry[]): Promise<void> {
+    await this.store.seedFrom(branch, {
+      id: parent.id,
+      results: parent.store.results,
+    })
+    if (branch.length) await this.loadBranch(this.store.buildContext())
+    await this.store.flush()
+  }
+
+  /** The current branch as JSONL lines (like pi's exportToJsonl): a header, then the entries re-chained. */
+  private branchJsonl(): string {
+    const header: SessionHeader = {
+      type: 'session',
+      version: SESSION_FORMAT_VERSION,
+      id: this.id,
+      timestamp: new Date().toISOString(),
+      ...(this.deps.cwd ? { cwd: this.deps.cwd } : {}),
+    }
+    const lines: object[] = [header]
+    let parentId: string | null = null
+    for (const entry of this.store.getBranch()) {
+      lines.push({ ...entry, parentId })
+      parentId = entry.id
+    }
+    return lines.map((line) => `${JSON.stringify(line)}\n`).join('')
+  }
+
+  private async writeExport(
+    path: string | undefined,
+    extension: string,
+    content: string,
+  ): Promise<string> {
+    const target = resolve(
+      this.deps.cwd ?? process.cwd(),
+      path ??
+        `vela-session-${this.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
+    )
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, content, { mode: 0o600 })
+    return target
+  }
+
+  /**
+   * Writes the current branch as JSONL (like pi's exportToJsonl; the session file format, one branch).
+   * Relative paths resolve against Vela's cwd; returns the path written.
+   */
+  exportJsonl(path?: string): Promise<string> {
+    return this.writeExport(path, 'jsonl', this.branchJsonl())
+  }
+
+  /**
+   * Writes the current branch as a self-contained HTML page (messages, thinking, tool calls and results).
+   * Relative paths resolve against Vela's cwd; returns the path written. Review it before sharing: it holds
+   * everything the session saw, including tool output.
+   */
+  exportHtml(path?: string): Promise<string> {
+    return this.writeExport(
+      path,
+      'html',
+      renderSessionHtml({
+        id: this.id,
+        name: this.name,
+        model: this.modelChoice,
+        entries: this.store.getBranch(),
+      }),
+    )
+  }
+
   /** Restores history from session storage (replacing the in-memory history); returns whether a saved session was found. Not allowed while running. */
   async resume(): Promise<boolean> {
     if (this.busy.locked)
@@ -391,22 +798,8 @@ export class VelaSession {
     await this.store.flush()
     const saved = await this.store.loadSaved()
     if (!saved) return false
-    this.contextManager.restore(saved)
     this.displayName = saved.name
-    if (saved.thinkingLevel && THINKING_LEVELS.includes(saved.thinkingLevel))
-      this.thinking = saved.thinkingLevel
-    if (saved.model) {
-      // Providers registered by extensions resolve only after extensions load
-      await this.deps.extensions.ready.catch(() => {})
-      try {
-        this.selectModel(saved.model, false)
-      } catch (error) {
-        this.deps.logger.warn(
-          `[session] Saved model ${saved.model} for ${this.id} is unavailable, keeping the current model: ${error instanceof Error ? error.message : error}`,
-        )
-      }
-    }
-    this.tracker.setEstimatedTokens(estimateMessageTokens(this.messages))
+    await this.loadBranch(saved)
     return true
   }
 
@@ -662,8 +1055,10 @@ export class VelaSession {
       messages: this.messages,
       tokenTracker: this.tracker,
       prepareContext: (request) => this.prepareContext(request),
-      compactOnOverflow: (overflowSignal) =>
-        this.compactForOverflow(overflowSignal),
+      // Like pi: with automatic compaction off, a context overflow is reported as is
+      compactOnOverflow: this.autoCompaction
+        ? (overflowSignal) => this.compactForOverflow(overflowSignal)
+        : undefined,
       newMessages,
       abortSignal: signal,
       onEvent: this.emit,
@@ -697,40 +1092,21 @@ export class VelaSession {
    * Throws while the session is running; can be interrupted by abort().
    */
   async compact(focus?: string): Promise<void> {
-    if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    if (this.busy.locked)
-      throw new Error('A task is already running; compact after it finishes')
-    const busy = this.busy
-    busy.locked = true
-    const controller = new AbortController()
-    busy.controller = controller
-    const run = (async () => {
+    await this.exclusive('compact', async (signal) => {
       await this.start()
       const request = await createRequestSnapshot(
         this.model,
         this.buildSystem(),
         this.registry.toAISDKFormat(),
         this.messages,
-        controller.signal,
+        signal,
       )
       // Like pi: say so plainly when there is no earlier turn to summarize
       if (!canSummarize(request.messages))
         throw new Error('Nothing to compact (session too small)')
       await this.contextManager.compact(request, focus)
       await this.saveOrReport()
-    })()
-    const running = run.then(
-      () => {},
-      () => {},
-    )
-    this.running = running
-    try {
-      await run
-    } finally {
-      if (this.running === running) this.running = undefined
-      busy.locked = false
-      busy.controller = undefined
-    }
+    })
   }
 
   /**

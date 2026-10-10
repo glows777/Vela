@@ -56,6 +56,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
 | `shellPath` | string | `bash` on `PATH` | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. A path that does not exist makes every `bash` call fail with an error. |
 | `limits` | object | see below | Overrides runtime limits. |
+| `autoCompaction` | boolean | `true` | Compact the context automatically (pi's `compaction.enabled`). `false` turns off microcompaction, threshold summaries and compact-and-retry on overflow; `/compact` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `extensions` | string[] | `[]` | Extension files or directories, and `builtin:` switches. |
 | `skills` | string[] | `[]` | Extra skill directories or files. |
 | `prompts` | string[] | `[]` | Extra prompt template directories or files. |

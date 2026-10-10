@@ -160,7 +160,7 @@ Removes all queued messages and returns them: `{ "steering": string[], "followUp
 ```
 
 ```json
-{"id":"7","type":"response","command":"get_state","success":true,"data":{"sessionId":"20261008-105115-a006","sessionName":"demo","model":"anthropic/<model-id>","thinkingLevel":"medium","isStreaming":false,"steeringMode":"one-at-a-time","followUpMode":"one-at-a-time","messageCount":2,"pendingMessageCount":0}}
+{"id":"7","type":"response","command":"get_state","success":true,"data":{"sessionId":"20261008-105115-a006","sessionName":"demo","model":"anthropic/<model-id>","thinkingLevel":"medium","isStreaming":false,"steeringMode":"one-at-a-time","followUpMode":"one-at-a-time","messageCount":2,"pendingMessageCount":0,"autoCompactionEnabled":true}}
 ```
 
 | Field | Meaning |
@@ -173,6 +173,7 @@ Removes all queued messages and returns them: `{ "steering": string[], "followUp
 | `steeringMode`, `followUpMode` | `one-at-a-time` or `all`. |
 | `messageCount` | Messages in the history. |
 | `pendingMessageCount` | Queued steer plus follow-up messages. |
+| `autoCompactionEnabled` | Whether the context is compacted automatically (see [`set_auto_compaction`](#set_auto_compaction)). |
 
 #### get_messages
 
@@ -215,6 +216,46 @@ Data: `{ "sessions": [{ "id", "name"?, "updatedAt", "messageCount", "firstMessag
 ```
 
 Sets the display name shown in session lists; an empty or missing `name` clears it. It is saved right away when idle, or when the current run ends.
+
+### Session tree
+
+pi's commands, with pi's response shapes. See [Sessions](sessions.md#session-tree).
+
+#### get_tree
+
+Data: `{ "tree": SessionTreeNode[], "leafId": string | null }`. Each node is `{ "entry", "children", "label"? }`; see [Session format](session-format.md#entries).
+
+#### get_entries
+
+```json
+{"id":"20","type":"get_entries","since":"a3c90e12"}
+```
+
+Data: `{ "entries": SessionEntry[], "leafId": string | null }`: all entries in append order, or only those after `since` (fails when that entry doesn't exist).
+
+#### get_fork_messages
+
+Data: `{ "messages": [{ "entryId", "text" }] }`, every user message of the session, to pick a `fork` point.
+
+#### fork
+
+```json
+{"id":"21","type":"fork","entryId":"a3c90e12"}
+```
+
+Copies the branch up to just before user message `entryId` into a new session, closes the active one and switches to the copy (later events carry its id). Data: `{ "text", "cancelled" }`, where `text` is the forked message's text, for the client's input box. Fails while a run is in progress.
+
+#### clone
+
+Copies the current branch into a new session and switches to it. Data: `{ "cancelled" }`. Fails while a run is in progress or when the session has no entries.
+
+#### export_html
+
+```json
+{"id":"22","type":"export_html","outputPath":"session.html"}
+```
+
+Writes the current branch as HTML. `outputPath` is optional and relative to the working directory. Data: `{ "path" }`.
 
 ### Model and thinking
 
@@ -263,6 +304,14 @@ Data: `{ "levels": ["off","minimal","low","medium","high","xhigh","max"] }`.
 ```
 
 Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the compaction result, like pi: `{ "summary", "firstKeptEntryId", "tokensBefore", "tokensAfter", "messages" }`. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary splits at a user message that is not the first message, has at least six messages from it to the end, and has every earlier tool call answered, so a new or short session has nothing to compact.
+
+#### set_auto_compaction
+
+```json
+{"id":"23","type":"set_auto_compaction","enabled":false}
+```
+
+Turns automatic compaction on or off for the active session (like pi; not saved). Off: no microcompaction, threshold summary or compact-and-retry on overflow; `compact` still works.
 
 ### Commands
 
@@ -427,10 +476,11 @@ process.wait()
 | `steer` / `follow_up` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |
 | `set_model` | `provider` + `modelId` | Also accepts `model: "provider/id"` |
-| `get_state` | `model` is an object; also `sessionFile`, `isCompacting`, `autoCompactionEnabled` | `model` is a `provider/id` string; no session file |
+| `get_state` | `model` is an object; also `sessionFile`, `isCompacting` | `model` is a `provider/id` string; no session file |
+| `fork`, `clone` | Replace the runtime's session | Open the copy as a new session, close the old one and switch (same effect for the client) |
 | Extra commands | | `list_sessions` |
 | `get_commands` | Extension commands, prompt templates, skills, with `source` / `sourceInfo` | Same entries and `source`; extension commands also carry `extension`, no `sourceInfo` |
 | Extension UI | Also `editor`, `setTitle`, `set_editor_text`, `timeout` | `confirm`, `select`, `input`, `notify`, `setStatus`, `setWidget` |
 | Typed client | `RpcClient` exported | No client export; see [examples/rpc-client.ts](../examples/rpc-client.ts) |
 
-pi commands Vela doesn't have: `cycle_model`, `cycle_thinking_level`, `set_auto_compaction`, `set_auto_retry`, `abort_retry`, `bash`, `abort_bash`, `get_session_stats`, `export_html`, `fork`, `clone`, `get_fork_messages`, `get_entries`, `get_tree`, `get_last_assistant_text`. Sending one returns `Unknown command`.
+pi commands Vela doesn't have: `cycle_model`, `cycle_thinking_level`, `set_auto_retry`, `abort_retry`, `bash`, `abort_bash`, `get_session_stats`, `get_last_assistant_text`. Sending one returns `Unknown command`.

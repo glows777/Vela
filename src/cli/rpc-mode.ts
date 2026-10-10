@@ -1,5 +1,6 @@
 import type { SessionUI } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import { messageText } from '../session/entries.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { QueueMode, VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
@@ -181,6 +182,54 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       return { sessionId: next.id }
     },
     list_sessions: async () => ({ sessions: await vela.listSessions() }),
+    // Session tree (pi's command names and shapes); fork / clone switch to the new session like pi
+    get_tree: () => ({ tree: session.getTree(), leafId: session.getLeafId() }),
+    get_entries(command) {
+      let entries = session.getEntries()
+      if (command.since !== undefined) {
+        const index = entries.findIndex((entry) => entry.id === command.since)
+        if (index < 0) throw new Error(`Entry not found: ${command.since}`)
+        entries = entries.slice(index + 1)
+      }
+      return { entries, leafId: session.getLeafId() }
+    },
+    get_fork_messages: () => ({
+      messages: session
+        .getEntries()
+        .flatMap((entry) =>
+          entry.type === 'message' && entry.message.role === 'user'
+            ? [{ entryId: entry.id, text: messageText(entry.message.content) }]
+            : [],
+        ),
+    }),
+    async fork(command) {
+      idle()
+      const result = await session.fork(String(command.entryId ?? ''), {
+        sessionId: options.newSessionId(),
+      })
+      if (result.session) await switchTo(result.session)
+      return { text: result.selectedText ?? '', cancelled: result.cancelled }
+    },
+    async clone() {
+      idle()
+      const result = await session.clone({ sessionId: options.newSessionId() })
+      if (result.session) await switchTo(result.session)
+      return { cancelled: result.cancelled }
+    },
+    async export_html(command) {
+      return {
+        path: await session.exportHtml(
+          typeof command.outputPath === 'string'
+            ? command.outputPath
+            : undefined,
+        ),
+      }
+    },
+    set_auto_compaction(command) {
+      if (typeof command.enabled !== 'boolean')
+        throw new Error('enabled must be true or false')
+      session.autoCompaction = command.enabled
+    },
     get_state() {
       let model: string | undefined
       try {
@@ -196,6 +245,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         steeringMode: session.steeringMode,
         followUpMode: session.followUpMode,
         messageCount: session.messages.length,
+        autoCompactionEnabled: session.autoCompaction,
         pendingMessageCount: queue.steering.length + queue.followUp.length,
       }
     },

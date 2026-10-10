@@ -320,3 +320,65 @@ test.concurrent('rpc: get_commands lists extension commands, prompt templates an
   )
   await rpc.close()
 })
+
+test.concurrent('rpc: session tree commands follow pi (get_tree, get_entries, get_fork_messages, fork, clone, export_html, set_auto_compaction)', async () => {
+  const rpc = startRpc(`faux:${scenario('hello')}`)
+  await rpc.call({ type: 'prompt', message: 'Hello' })
+  const settled = await rpc.waitFor((r) => r.type === 'agent_settled')
+  const sessionId = settled.sessionId as string
+
+  const tree = (await rpc.call({ type: 'get_tree' })).data as {
+    tree: unknown[]
+    leafId: string
+  }
+  expect(tree.tree).toHaveLength(1)
+  const entries = (await rpc.call({ type: 'get_entries' })).data as {
+    entries: { id: string }[]
+    leafId: string
+  }
+  expect(entries.leafId).toBe(tree.leafId)
+  const since = (
+    await rpc.call({ type: 'get_entries', since: entries.entries.at(-2)!.id })
+  ).data as { entries: unknown[] }
+  expect(since.entries).toHaveLength(1)
+  const forkMessages = (await rpc.call({ type: 'get_fork_messages' })).data as {
+    messages: { entryId: string; text: string }[]
+  }
+  expect(forkMessages.messages).toEqual([
+    { entryId: expect.any(String), text: 'Hello' },
+  ])
+
+  expect(
+    await rpc.call({ type: 'set_auto_compaction', enabled: false }),
+  ).toMatchObject({ success: true })
+  expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
+    autoCompactionEnabled: false,
+  })
+  const exported = await rpc.call({
+    type: 'export_html',
+    outputPath: 'out.html',
+  })
+  expect((exported.data as { path: string }).path).toEndWith('out.html')
+
+  expect(await rpc.call({ type: 'clone' })).toMatchObject({
+    success: true,
+    data: { cancelled: false },
+  })
+  const cloned = (await rpc.call({ type: 'get_state' })).data as {
+    sessionId: string
+    messageCount: number
+  }
+  expect(cloned.sessionId).not.toBe(sessionId)
+  expect(cloned.messageCount).toBe(2)
+
+  expect(
+    await rpc.call({
+      type: 'fork',
+      entryId: forkMessages.messages[0]!.entryId,
+    }),
+  ).toMatchObject({ success: true, data: { text: 'Hello', cancelled: false } })
+  expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
+    messageCount: 0,
+  })
+  expect(await rpc.close()).toBe(0)
+})
