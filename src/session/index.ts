@@ -91,10 +91,12 @@ export class SessionStore {
 
   private persist(entry: SessionEntry): void {
     if (!this.started) {
-      // Like pi: setup entries (model, thinking level, name) stay in memory until there is a conversation
+      // Like pi: setup entries (model, thinking level, name) and extension state stay in memory until there is
+      // a conversation; an extension's custom message is part of the conversation (the model sees it)
       if (
-        entry.type !== 'message' ||
-        (entry.message.role !== 'user' && entry.message.role !== 'assistant')
+        entry.type !== 'custom_message' &&
+        (entry.type !== 'message' ||
+          (entry.message.role !== 'user' && entry.message.role !== 'assistant'))
       )
         return
       this.started = true

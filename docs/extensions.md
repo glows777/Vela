@@ -261,7 +261,7 @@ vela.on('session_start', (_event, ctx) => {
   - While running with `triggerTurn: false`: appended once the current step's tool results are in, so it never lands between a tool call and its result.
   - Otherwise: appended right away, without calling the model.
 - `session.sendUserMessage(text, { deliverAs? })` sends input as if the user typed it: it goes through `input` handlers with source `extension`, but is not run as a command or expanded as a skill or prompt template. While running, pass `deliverAs` (`steer` / `followUp`), as with `prompt()`.
-- `session.appendEntry(customType, data?)` saves extension state as a `custom` entry, never sent to the model. Read it back from `session.getEntries()`, for example in `session_start` after a resume.
+- `session.appendEntry(customType, data?)` saves extension state as a `custom` entry, never sent to the model. Read it back from `session.getEntries()`, for example in `session_start` after a resume. Like pi, entries added before the session has any conversation are written once the first message is (a session that never gets one is not saved).
 
 ## Context
 

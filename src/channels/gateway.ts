@@ -129,6 +129,8 @@ export class ChannelGateway {
     })
 
     this.active.add(session)
+    // An input handler can handle the message without a run: then there is no new answer to send
+    const previous = session.messages.at(-1)
     try {
       await session.prompt(msg.text, { source: 'channel' })
     } catch (error) {
@@ -144,6 +146,7 @@ export class ChannelGateway {
       this.active.delete(session)
     }
 
+    if (session.messages.at(-1) === previous) return
     const replyText = lastAssistantText(session.messages)
     const channel = this.channels.get(channelName)
     if (!replyText || !channel) return

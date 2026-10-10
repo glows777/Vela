@@ -195,6 +195,30 @@ test('custom messages and entries survive a resume; entries never reach the mode
   )
 })
 
+test('a custom message alone starts the session file; earlier entries are written with it', async () => {
+  const first = createTestVela()
+  first.session.appendEntry('state', { n: 1 })
+  await first.session.save()
+  // Extension state alone is not a conversation (like pi)
+  expect(first.exists('sessions/default.jsonl')).toBe(false)
+  await first.session.sendMessage({
+    customType: 'note',
+    content: 'Saved note',
+    display: false,
+  })
+  await first.cleanup({ keepDir: true })
+
+  const second = createTestVela({ cwd: first.cwd })
+  expect(await second.session.resume()).toBe(true)
+  expect(
+    second.session
+      .getEntries()
+      .filter((e) => e.type === 'custom' || e.type === 'custom_message')
+      .map((e) => e.type),
+  ).toEqual(['custom', 'custom_message'])
+  expect(second.messages).toEqual([{ role: 'user', content: 'Saved note' }])
+})
+
 test('sendMessage and appendEntry reject a missing customType', async () => {
   const t = createTestVela()
   expect(() => t.session.appendEntry('')).toThrow('customType')
