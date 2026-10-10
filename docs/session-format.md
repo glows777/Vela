@@ -14,7 +14,7 @@ Source: `src/session/entries.ts` (entry types, rebuilding the context, migration
 
 In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)). Unlike pi (`<timestamp>_<uuid>.jsonl`), the file is named by the session id, which the caller chooses (`--session`, a channel, `vela.session(id)`).
 
-Entries are appended as they happen; like pi, a session is written only once it has a user or assistant message, so opening a session and closing it leaves no file. Files are created with mode `0600` and the directory with `0700`. A line cut off by a crash is skipped when the file is read (and reported to the logger).
+Entries are appended as they happen; like pi, a session is written only once it has a user or assistant message, so opening a session and closing it leaves no file. Files are created with mode `0600` and the directory with `0700`. A line cut off by a crash is skipped when the file is read (and reported to the logger). A failed write is retried with the next entry; if the failed attempt had already written some entries, the repeated copies are ignored on resume (the first entry with an id counts). A file whose first entry is not a header (and not a version 1 file) fails to resume instead of being converted.
 
 ## Header
 

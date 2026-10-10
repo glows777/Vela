@@ -113,6 +113,8 @@ export class SessionStore {
     const batch = this.pending.splice(0)
     if (!batch.length) return
     try {
+      // A header starts a new session: check storage first (also when messages were appended without prompt())
+      if (batch[0]?.type === 'session') await this.checkNew()
       await this.storage.append(this.sessionId, batch)
       this.lastError = undefined
     } catch (error) {
@@ -128,7 +130,9 @@ export class SessionStore {
   async flush(): Promise<void> {
     this.writing = this.writing.then(() => this.write())
     await this.writing
-    if (this.pending.length) throw this.lastError
+    // Entries appended while flushing are not failures; they go out with the next write
+    if (this.pending.length && this.lastError !== undefined)
+      throw this.lastError
   }
 
   /**
@@ -136,8 +140,13 @@ export class SessionStore {
    * with this id (appending to it would mix two conversations).
    */
   async assertNew(): Promise<void> {
-    // Already writing this session (started by append() before the first prompt)
-    if (this.checked || this.started) return
+    // Already writing this session (started by append() before the first prompt): the write checks before the header
+    if (this.started) return
+    await this.checkNew()
+  }
+
+  private async checkNew(): Promise<void> {
+    if (this.checked) return
     if (await this.storage.load(this.sessionId))
       throw new Error(
         `Session ${this.sessionId} already has saved history: call resume() to continue it, or use another session id`,
@@ -231,7 +240,13 @@ export class SessionStore {
       throw new Error(
         `Session ${this.sessionId} uses file format version ${version}; its storage must convert it (see migrateSessionV1)`,
       )
-    const entries = loaded.slice(1) as SessionEntry[]
+    // A write retried after it failed part way can repeat entries: the first copy of each id counts
+    const seen = new Set<string>()
+    const entries = (loaded.slice(1) as SessionEntry[]).filter(
+      (entry) =>
+        typeof entry.id !== 'string' ||
+        (!seen.has(entry.id) && !!seen.add(entry.id)),
+    )
     const context = buildSessionContext(entries)
     if (header.toolHistoryId) {
       try {

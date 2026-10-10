@@ -129,6 +129,20 @@ test('file storage converts version-1 files (checkpoint and one message per line
   expect(await storage.load('checkpoint')).toEqual(migrated)
 })
 
+test('a file whose header line is damaged is not mistaken for version 1 and rewritten', async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  await storage.append('cut', [header('cut'), message('kept')])
+  const path = join(sessions, 'cut.jsonl')
+  const [, ...rest] = readFileSync(path, 'utf8').split('\n')
+  const damaged = ['{"type":"sess', ...rest].join('\n')
+  writeFileSync(path, damaged)
+  expect((await storage.load('cut'))?.[0]).toMatchObject({ type: 'message' })
+  expect(readFileSync(path, 'utf8')).toBe(damaged)
+})
+
 test('both storages list sessions newest first, skipping ones without messages; a missing directory lists nothing', async () => {
   const dir = tempDir()
   dirs.push(dir)

@@ -33,7 +33,7 @@ In interactive mode:
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
 
-In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in one file.
+In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in one file; messages added with `session.append()` to such a session are not written either (`session_save_failed`).
 
 The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed.
 

@@ -291,10 +291,17 @@ interface CheckpointV1 {
   toolHistoryViewSeq?: number
 }
 
-/** Whether parsed lines are a version-1 file (a checkpoint, or the older one-message-per-line form). */
+/**
+ * Whether parsed lines are a version-1 file: a checkpoint, or the older one-message-per-line form
+ * (message lines without entry ids). Anything else without a header (say a version-2 file whose header
+ * line is damaged) is not converted, so it is never rewritten with less than it holds.
+ */
 export function isSessionV1(lines: unknown[]): boolean {
-  const first = lines[0] as { type?: unknown } | undefined
-  return first !== undefined && first.type !== 'session'
+  const first = lines[0] as { type?: unknown; id?: unknown } | undefined
+  return (
+    first?.type === 'checkpoint' ||
+    (first?.type === 'message' && first.id === undefined)
+  )
 }
 
 /**

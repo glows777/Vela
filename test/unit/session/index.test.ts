@@ -126,6 +126,55 @@ test('assertNew refuses to start over a saved session that was not resumed', asy
   await resumed.assertNew()
 })
 
+test('messages appended without prompt() do not go into a saved session that was not resumed', async () => {
+  const storage = memorySessionStorage()
+  const first = new SessionStore('s', 'unused', undefined, storage)
+  first.appendMessage(user('first conversation'))
+  await first.flush()
+  const second = new SessionStore('s', 'unused', undefined, storage)
+  second.appendMessage(user('second conversation'))
+  await expect(second.flush()).rejects.toThrow('already has saved history')
+  expect(await storage.load('s')).toHaveLength(2)
+})
+
+test('loadSaved keeps the first copy of entries repeated by a retried write', async () => {
+  const storage = memorySessionStorage()
+  const store = new SessionStore('s', 'unused', undefined, storage)
+  store.appendMessage(user('hi'))
+  store.appendMessage(assistant('hello'))
+  await store.flush()
+  const saved = (await storage.load('s')) as SessionFileEntry[]
+  // The first write failed after its first entries reached storage, then the whole batch was retried
+  await storage.append('s', saved.slice(1))
+  const loaded = await new SessionStore(
+    's',
+    'unused',
+    undefined,
+    storage,
+  ).loadSaved()
+  expect(loaded?.messages).toEqual([user('hi'), assistant('hello')])
+})
+
+test('entries appended while flushing are not reported as a failed write', async () => {
+  const inner = memorySessionStorage()
+  const storage: SessionStorage = {
+    load: inner.load,
+    append: async (id, entries) => {
+      await Bun.sleep(20)
+      await inner.append(id, entries)
+    },
+  }
+  const store = new SessionStore('s', 'unused', undefined, storage)
+  store.appendMessage(user('one'))
+  const flushing = store.flush()
+  // `two` goes out with flush()'s own write; `three` lands while that write is still running
+  setTimeout(() => store.appendMessage(assistant('two')), 10)
+  setTimeout(() => store.appendMessage(user('three')), 30)
+  await flushing
+  await store.flush()
+  expect(await inner.load('s')).toHaveLength(4)
+})
+
 test('compaction and context edits are appended; the originals stay and the context is rebuilt from them', async () => {
   const storage = memorySessionStorage()
   const store = new SessionStore('s', 'unused', undefined, storage)
