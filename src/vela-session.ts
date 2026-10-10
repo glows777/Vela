@@ -877,6 +877,8 @@ export class VelaSession {
     const input = inputs.map(messageText).join('\n\n')
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.sections = started.sections
+    // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
+    const added = started.messages.map((message) => this.customMessage(message))
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
     this.flushPendingCustom()
@@ -885,7 +887,7 @@ export class VelaSession {
     for (const message of [
       ...inputs,
       ...this.nextTurnMessages.splice(0),
-      ...started.messages.map((message) => this.customMessage(message)),
+      ...added,
     ]) {
       this.append(message)
       newMessages.push(message)

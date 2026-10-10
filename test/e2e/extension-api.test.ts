@@ -207,6 +207,65 @@ test('sendMessage and appendEntry reject a missing customType', async () => {
   ).rejects.toThrow('customType')
 })
 
+test('while running, deliverAs followUp waits until the model would stop', async () => {
+  let session: VelaSession | undefined
+  function ext(vela: ExtensionAPI) {
+    vela.on('session_start', (_event, ctx) => {
+      session = ctx.session
+    })
+    vela.registerTool({
+      name: 'work',
+      description: 'Does work',
+      inputSchema: z.object({}),
+      execute: async () => {
+        await session!.sendMessage(
+          { customType: 'later', content: 'Follow-up note', display: false },
+          { deliverAs: 'followUp' },
+        )
+        return 'worked'
+      },
+    })
+  }
+  const t = createTestVela({
+    extensions: [ext],
+    responses: [fauxToolCall('ext_work', {}), fauxText('done'), fauxText('ok')],
+  })
+  await t.run('Do the work')
+  // Not added after the tool result: only once the model answered without tool calls
+  expect(transcript(t.model.calls[1]!).at(-1)).toBe(
+    'tool: [tool-result ext_work]',
+  )
+  expect(transcript(t.model.calls[2]!).slice(-2)).toEqual([
+    'assistant: done',
+    'user: Follow-up note',
+  ])
+})
+
+test('an invalid before_agent_start message fails the prompt before agent_start and keeps nextTurn messages', async () => {
+  let bad = true
+  function ext(vela: ExtensionAPI) {
+    vela.on('before_agent_start', () =>
+      bad
+        ? { message: { customType: '', content: 'x', display: false } }
+        : undefined,
+    )
+  }
+  const t = createTestVela({ extensions: [ext], responses: [fauxText('ok')] })
+  await t.session.sendMessage(
+    { customType: 'hint', content: 'A hint', display: false },
+    { deliverAs: 'nextTurn' },
+  )
+  await expect(t.session.prompt('first')).rejects.toThrow('customType')
+  expect(t.eventsOf('agent_start')).toHaveLength(0)
+  expect(t.messages).toEqual([])
+  bad = false
+  await t.run('second')
+  expect(transcript(t.model.calls[0]!)).toEqual([
+    'user: second',
+    'user: A hint',
+  ])
+})
+
 // ---------- context / input ----------
 
 test('context handlers change what a request sends, not the history', async () => {
