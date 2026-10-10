@@ -41,7 +41,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 
 `-c`, `-r` and `--session` are mutually exclusive.
 
-The tool options apply to every session the CLI opens (also after `/new` and `/resume`) and are checked after extensions load: an entry that matches no tool stops the CLI with exit code 2 and lists the available tools. pi ignores unknown names; Vela reports them so that a typo can't leave a tool on or off.
+The tool options apply to every session the CLI opens (also after `/new` and `/resume`) and are checked after extensions load: an entry that matches no tool stops the CLI with exit code 2 and lists the available tools. pi ignores unknown names; Vela reports them so that a typo can't leave a tool on or off. Like pi, they set the tools each session starts with: an extension can still change them with `setActiveTools()`.
 
 An extension that fails to load is reported on stderr (or in the chat log) and skipped; Vela still starts. Extension loading, discovery and the `builtin:` names are described in [Extensions](extensions.md#where-extensions-load-from) and [Built-in extensions](built-in-extensions.md).
 

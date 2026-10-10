@@ -306,6 +306,14 @@ test.concurrent('--list-models lists configured models and exits', async () => {
   expect(stdout).toBe(
     'provider  model  context  thinking\nlocal     small  32K      -\n',
   )
+  // Listing needs no runnable model or recorder
+  const unusable = await cli(['--list-models'], {
+    model: 'faux:missing.json',
+    agentDir: home.path,
+    env: { VELA_RECORD: join(home.path, 'record.json') },
+  })
+  expect(unusable.code).toBe(0)
+  expect(unusable.stdout).toContain('local     big')
 })
 
 test.concurrent('--session opens a named session id; -r needs interactive mode', async () => {

@@ -145,12 +145,13 @@ async function chooseModel(): Promise<LanguageModel | string | undefined> {
       : undefined)
   )
 }
-const chosenModel = await chooseModel()
+// --list-models needs neither a runnable model nor a recorder
+const chosenModel = args.listModels ? undefined : await chooseModel()
 
 // VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
 // (records the default model only; a model chosen by name is resolved here via models.json / built-in providers, so extension providers can't be recorded)
 let recorder: ReturnType<typeof recordModel> | undefined
-if (env.VELA_RECORD) {
+if (env.VELA_RECORD && !args.listModels) {
   try {
     if (!chosenModel) throw new Error(NO_MODEL)
     const model =
@@ -166,7 +167,7 @@ if (env.VELA_RECORD) {
 
 // Interactive mode logs to the TUI chat log and debug to ~/.vela/debug.log; other modes log to stderr
 const interactiveLogger =
-  mode === 'interactive'
+  mode === 'interactive' && !args.listModels
     ? createInteractiveLogger({
         debugLog:
           env.VELA_DEBUG === '1' ? join(agentDir, 'debug.log') : undefined,
