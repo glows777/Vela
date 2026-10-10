@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import z from 'zod'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { ToolExecutionResult } from '../../src/tools/registry.ts'
 import {
   captureConsole,
   cleanupTestVelas,
@@ -456,4 +457,24 @@ test('tool_execution_end carries edit_file diff details for display, the model g
   })
   // Tools that return plain values have no details
   expect('details' in runner!).toBe(false)
+})
+
+test('details of a call cut off by an abort are dropped with the call', async () => {
+  const t = createTestVela({
+    responses: [fauxToolCall('marker', {})],
+  })
+  t.internals.registry.register({
+    name: 'marker',
+    description: 'Returns display data, then the run is aborted',
+    inputSchema: z.object({}),
+    execute: async () => {
+      void t.session.abort()
+      return new ToolExecutionResult({ shown: true }, 'ok')
+    },
+  })
+
+  await t.run('go').catch(() => {})
+
+  const [call] = t.eventsOf('tool_execution_start')
+  expect(t.session.registry.takeDetails(call!.toolCallId)).toBeUndefined()
 })
