@@ -23,6 +23,7 @@ import type { SessionUI } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
+import { copyToClipboard } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
 import {
   AssistantMessage,
@@ -54,6 +55,8 @@ export interface InteractiveOptions {
   attachLogger?: (sink: (level: LogLevel, message: string) => void) => void
   /** Rewrites an error for display (the CLI swaps the SDK's no-model hint for its own) */
   describeError?: (error: unknown) => string
+  /** Clipboard for `/copy`; defaults to the system clipboard (tests pass a fake) */
+  copyToClipboard?: (text: string) => Promise<void>
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
@@ -72,6 +75,7 @@ const TUI_COMMANDS = [
     name: 'compact',
     description: 'Manually compact the session context (optional focus)',
   },
+  { name: 'copy', description: 'Copy the last answer to the clipboard' },
   { name: 'hotkeys', description: 'Show keyboard shortcuts' },
   { name: 'quit', description: 'Quit Vela' },
 ]
@@ -110,6 +114,7 @@ export async function runInteractive(
 
 export class InteractiveMode {
   readonly tui: TuiMainScreen
+  private readonly terminal: Terminal
   private readonly vela: Vela
   private readonly options: InteractiveOptions
   private session!: VelaSession
@@ -170,7 +175,8 @@ export class InteractiveMode {
   constructor(options: InteractiveOptions) {
     this.options = options
     this.vela = options.vela
-    this.tui = new TuiMainScreen(options.terminal ?? new ProcessTerminal())
+    this.terminal = options.terminal ?? new ProcessTerminal()
+    this.tui = new TuiMainScreen(this.terminal)
     this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
     this.footer = new Footer(this.vela.cwd, () => this.session)
     this.dispatch = createCliDispatcher(this.vela)
@@ -338,6 +344,7 @@ export class InteractiveMode {
   }
 
   private resetChat(): void {
+    for (const block of this.allTools) block.stop()
     this.chat.clear()
     this.tools.clear()
     this.allTools.length = 0
@@ -440,12 +447,41 @@ export class InteractiveMode {
         this.current = undefined
         break
       case 'tool_execution_start':
+        // Calls made through ctx.executeTool() are listed inside the top-level call's block (like pi)
+        if (event.parentToolCallId) {
+          this.rootTool(event.parentToolCallId)?.addNested(
+            event.toolCallId,
+            event.toolName,
+            event.args,
+          )
+          break
+        }
         if (!this.tools.has(event.toolCallId))
           this.addTool(event.toolCallId, event.toolName, event.args)
+        this.tools.get(event.toolCallId)?.start()
         this.setLoader(`Running ${event.toolName}…`)
         break
+      case 'tool_execution_update':
+        if (!event.parentToolCallId)
+          this.tools.get(event.toolCallId)?.update(event.partialResult)
+        break
       case 'tool_execution_end':
-        this.tools.get(event.toolCallId)?.setResult(event.result, event.isError)
+        if (event.parentToolCallId) {
+          this.rootTool(event.parentToolCallId)?.setNestedResult(
+            event.toolCallId,
+            event.isError,
+            event.durationMs,
+          )
+          break
+        }
+        this.tools
+          .get(event.toolCallId)
+          ?.setResult(
+            event.result,
+            event.isError,
+            event.details,
+            event.durationMs,
+          )
         break
       case 'auto_retry_start':
         this.addNotice(
@@ -461,6 +497,7 @@ export class InteractiveMode {
         break
       case 'agent_end':
         this.current = undefined
+        for (const block of this.allTools) block.stop()
         if (event.reason === 'aborted') this.addNotice('Interrupted', 'dim')
         else if (event.reason === 'loop')
           this.addNotice('Repeated tool calls detected, stopped', 'error')
@@ -556,10 +593,20 @@ export class InteractiveMode {
   }
 
   private addTool(id: string, name: string, input: unknown): void {
-    const block = new ToolBlock(name, input, this.toolsExpanded)
+    const block = new ToolBlock(name, input, this.toolsExpanded, () =>
+      this.tui.requestRender(),
+    )
     this.tools.set(id, block)
     this.allTools.push(block)
     this.chat.addChild(block)
+  }
+
+  /** The top-level block a nested call belongs to: nested ids are `<parent>/<n>`, at any depth */
+  private rootTool(parentToolCallId: string): ToolBlock | undefined {
+    return (
+      this.tools.get(parentToolCallId) ??
+      this.tools.get(parentToolCallId.split('/', 1)[0] as string)
+    )
   }
 
   private addNotice(
@@ -738,6 +785,9 @@ export class InteractiveMode {
       case '/hotkeys':
         this.addNotice(HOTKEYS.join('\n'))
         return
+      case '/copy':
+        await this.copyLastAnswer()
+        return
       case '/new':
         await this.switchSession(this.options.newSessionId(), false)
         return
@@ -833,6 +883,27 @@ export class InteractiveMode {
         this.addNotice(`Error: ${this.describeError(error)}`, 'error')
     }
     this.tui.requestRender()
+  }
+
+  /** `/copy` (like pi): the last assistant answer with text goes to the clipboard */
+  private async copyLastAnswer(): Promise<void> {
+    const text = lastAnswer(this.session.messages)
+    if (!text) {
+      this.addNotice('No answer to copy yet', 'error')
+      return
+    }
+    try {
+      await (
+        this.options.copyToClipboard ??
+        ((value: string) =>
+          copyToClipboard(value, {
+            writeTerminal: (data) => this.terminal.write(data),
+          }))
+      )(text)
+      this.addNotice('Copied the last answer to the clipboard', 'dim')
+    } catch (error) {
+      this.addNotice(errorMessage(error), 'error')
+    }
   }
 
   private describeError(error: unknown): string {
@@ -994,12 +1065,23 @@ export class InteractiveMode {
     const signals: NodeJS.Signals[] =
       process.platform === 'win32' ? ['SIGTERM'] : ['SIGTERM', 'SIGHUP']
     for (const signal of signals) {
-      const handler = () => void this.shutdown()
+      const handler = () => void this.shutdown({ fromSignal: true })
       process.prependListener(signal, handler)
       this.cleanups.push(() => process.off(signal, handler))
     }
     if (this.options.terminal) return
+    // Like pi: once the terminal is gone, reads, writes and setRawMode fail with EIO / EPIPE / ENOTTY.
+    // Without a listener those errors are uncaught; exit without touching the terminal again.
+    const terminalError = (error: Error) => {
+      if (isDeadTerminalError(error)) this.emergencyExit()
+      throw error
+    }
+    for (const stream of [process.stdin, process.stdout, process.stderr]) {
+      stream.on('error', terminalError)
+      this.cleanups.push(() => stream.off('error', terminalError))
+    }
     const crash = (error: Error) => {
+      if (isDeadTerminalError(error)) this.emergencyExit()
       try {
         this.tui.stop()
       } catch {}
@@ -1011,18 +1093,36 @@ export class InteractiveMode {
     this.cleanups.push(() => process.off('uncaughtException', crash))
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * Exit: restore the terminal, then wrap up the sessions (`onExit`). After SIGHUP / SIGTERM the
+   * sessions are wrapped up first (like pi), since the terminal may already be gone. Restoring a
+   * terminal that is gone throws (setRawMode fails with EIO); that must not stop the exit, or the
+   * process stays alive polling a dead terminal and spins a CPU.
+   */
+  async shutdown(options: { fromSignal?: boolean } = {}): Promise<void> {
     if (this.shuttingDown) return
     this.shuttingDown = true
-    for (const cleanup of this.cleanups.splice(0)) cleanup()
     this.stopLoader()
-    this.tui.stop()
-    this.restoreConsole?.()
+    const restore = () => {
+      try {
+        this.tui.stop()
+      } catch {}
+      this.restoreConsole?.()
+    }
     try {
+      if (!options.fromSignal) restore()
       await this.options.onExit()
     } finally {
+      if (options.fromSignal) restore()
+      for (const cleanup of this.cleanups.splice(0)) cleanup()
       this.resolveExit()
     }
+  }
+
+  /** The terminal is gone (like pi's emergencyTerminalExit): exit without writing restore sequences. */
+  private emergencyExit(): never {
+    this.shuttingDown = true
+    process.exit(129)
   }
 }
 
@@ -1117,6 +1217,35 @@ function contextLine(event: Extract<VelaEvent, { type: 'context' }>): string {
     case 'summary-required':
       return `[context] ${event.before} tokens, summarizing before the next request`
   }
+}
+
+/** Text of the last assistant message that has any (tool-call-only steps are skipped). */
+function lastAnswer(messages: readonly ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as ModelMessage
+    if (message.role !== 'assistant') continue
+    const text =
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+            .map((part) => (part.type === 'text' ? part.text : ''))
+            .join('')
+    if (text.trim()) return text
+  }
+  return ''
+}
+
+/** EIO: tty reads / writes after hangup; ENOTTY: the tty was revoked (same set as pi). */
+const DEAD_TERMINAL_ERROR_CODES = new Set([
+  'EIO',
+  'EPIPE',
+  'ENOTCONN',
+  'ENOTTY',
+])
+
+function isDeadTerminalError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' && DEAD_TERMINAL_ERROR_CODES.has(code)
 }
 
 function errorMessage(error: unknown): string {

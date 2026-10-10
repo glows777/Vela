@@ -258,6 +258,7 @@ export const agentLoop = async ({
               }
               case 'tool-error': {
                 step.endBeforeResults()
+                toolRegistry.takeDetails(part.toolCallId)
                 step.result(part, { error: part.error })
                 await toolRegistry.recordRejection(
                   part.toolName,
@@ -270,7 +271,10 @@ export const agentLoop = async ({
               }
               case 'tool-result': {
                 step.endBeforeResults()
-                step.result(part, { output: part.output })
+                step.result(part, {
+                  output: part.output,
+                  details: toolRegistry.takeDetails(part.toolCallId),
+                })
                 break
               }
               case 'finish-step':
@@ -474,6 +478,8 @@ export const agentLoop = async ({
     step.endInterrupted(stopReason, errorMessage)
     const assistant = step.snapshot({ complete: step.complete })
     step.closeOpenCalls(openCallResult)
+    // A call that finished after the stream stopped never reached its tool-result: drop its details
+    for (const call of step.toolCalls) toolRegistry.takeDetails(call.toolCallId)
     const toolMessage = step.toolMessage()
     if (!step.complete && !step.toolsStarted) {
       if (assistant.content.length) onInterrupted?.(assistant, stopReason)

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { fuzzyFilter } from '@earendil-works/pi-tui'
 import {
   type ExtensionEntry,
   extensionName,
@@ -16,7 +17,11 @@ import { memory } from '../extensions/memory/index.ts'
 import { rag } from '../extensions/rag/index.ts'
 import type { VelaExtension } from '../extensions/types.ts'
 import { web } from '../extensions/web/index.ts'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import {
+  type ModelInfo,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from '../models/index.ts'
 import { assertSessionId } from '../vela-session.ts'
 
 type Env = Record<string, string | undefined>
@@ -58,6 +63,14 @@ export interface CliArgs {
   appendSystemPrompt: string[]
   /** `--no-context-files` (`-nc`): don't load AGENTS.md / CLAUDE.md */
   noContextFiles: boolean
+  /** `-t, --tools <a,b,c*>`: enable only these tools (names or `*` patterns, like pi) */
+  tools?: string[]
+  /** `-nt, --no-tools`: start with no tools (`--tools` still adds) */
+  noTools: boolean
+  /** `-xt, --exclude-tools <a,b,c*>`: disable these tools (names or `*` patterns) */
+  excludeTools: string[]
+  /** `--list-models [search]`: print the configured models (fuzzy-filtered) and exit; `true` without a search */
+  listModels?: string | true
   /** `-h, --help`: print HELP and exit */
   help?: boolean
   /** `-v, --version`: print the package version and exit */
@@ -65,7 +78,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-h | --help] [-v | --version]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -89,6 +102,10 @@ Options:
   --append-system-prompt <text> Append text or a file's contents to the system prompt (repeatable;
                                 replaces ~/.vela/APPEND_SYSTEM.md and .vela/APPEND_SYSTEM.md)
   -nc, --no-context-files       Don't load AGENTS.md / CLAUDE.md
+  -t, --tools <tools>           Comma-separated tools to enable (names or * patterns); all others are off
+  -nt, --no-tools               Start with no tools (--tools still enables the ones it names)
+  -xt, --exclude-tools <tools>  Comma-separated tools to disable (names or * patterns)
+  --list-models [search]        List the configured models (optional fuzzy search) and exit
   -e, --extension <path>        Load an extension file or directory, or builtin:<name> (repeatable)
   -ne, --no-extensions          Skip built-in and discovered extensions (-e still loads)
   --approve                     Trust project config, extensions, skills and prompts for this run (not saved)
@@ -118,6 +135,12 @@ Examples:
 
   # Pick a model and thinking level
   vela --model anthropic/<model-id> --thinking high "Plan the refactor"
+
+  # Read-only tools only
+  vela --tools read_file,grep,find,list_directory -p "Review the code in src/"
+
+  # Everything except bash
+  vela --exclude-tools bash
 
   # One JSON event per line, for scripts
   vela --mode json "Run the tests"
@@ -154,6 +177,8 @@ export function parseArgs(argv: string[]): CliArgs {
     noSession: false,
     appendSystemPrompt: [],
     noContextFiles: false,
+    noTools: false,
+    excludeTools: [],
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string
@@ -187,7 +212,17 @@ export function parseArgs(argv: string[]): CliArgs {
       args.appendSystemPrompt.push(value())
     else if (arg === '--no-context-files' || arg === '-nc')
       args.noContextFiles = true
-    else if (arg === '--thinking') {
+    else if (arg === '--tools' || arg === '-t')
+      args.tools = [...(args.tools ?? []), ...toolList(value())]
+    else if (arg === '--no-tools' || arg === '-nt') args.noTools = true
+    else if (arg === '--exclude-tools' || arg === '-xt')
+      args.excludeTools.push(...toolList(value()))
+    else if (arg === '--list-models') {
+      // Like pi: the next argument is the search unless it is an option
+      const next = argv[i + 1]
+      args.listModels =
+        next !== undefined && !next.startsWith('-') ? (i++, next) : true
+    } else if (arg === '--thinking') {
       const level = value()
       if (!THINKING_LEVELS.includes(level as ThinkingLevel))
         throw new Error(
@@ -204,6 +239,104 @@ export function parseArgs(argv: string[]): CliArgs {
   )
     throw new Error('Use only one of -c, -r and --session')
   return args
+}
+
+function toolList(value: string): string[] {
+  return value
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+}
+
+/**
+ * The tools a session enables for `--tools / --no-tools / --exclude-tools` (like pi), or undefined
+ * for all. Entries are names or `*` patterns; one that matches no registered tool is an error
+ * (pi ignores it; a typo would silently leave a tool on or off).
+ */
+export function selectTools(
+  available: readonly string[],
+  args: Pick<CliArgs, 'tools' | 'noTools' | 'excludeTools'>,
+): string[] | undefined {
+  if (!args.tools && !args.noTools && !args.excludeTools.length) return
+  const unknown = [...(args.tools ?? []), ...args.excludeTools].filter(
+    (entry) => !available.some(toolMatcher(entry)),
+  )
+  if (unknown.length)
+    throw new Error(
+      `Unknown tool${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. Available: ${available.join(', ')}`,
+    )
+  const matches = (entries: readonly string[]) => (name: string) =>
+    entries.some((entry) => toolMatcher(entry)(name))
+  const enabled = args.tools
+    ? available.filter(matches(args.tools))
+    : args.noTools
+      ? []
+      : [...available]
+  return enabled.filter((name) => !matches(args.excludeTools)(name))
+}
+
+function toolMatcher(entry: string): (name: string) => boolean {
+  if (!entry.includes('*')) return (name) => name === entry
+  const pattern = new RegExp(
+    `^${entry
+      .split('*')
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*')}$`,
+  )
+  return (name) => pattern.test(name)
+}
+
+/**
+ * `--list-models` output (like pi's): provider, model, context window and thinking support, sorted by
+ * provider and id. Vela has no built-in model catalog, so only models listed in models.json, settings
+ * or by extensions appear.
+ */
+export function formatModelList(
+  models: readonly ModelInfo[],
+  search?: string,
+): string {
+  if (!models.length)
+    return 'No models configured. List them in ~/.vela/models.json (or in an extension provider); any provider/id still works with --model.\n'
+  const found = (
+    search
+      ? fuzzyFilter([...models], search, (m) => `${m.provider} ${m.id}`)
+      : [...models]
+  ).sort(
+    (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
+  )
+  if (!found.length) return `No models matching "${search}"\n`
+  const rows = [
+    ['provider', 'model', 'context', 'thinking'],
+    ...found.map((m) => [
+      m.provider,
+      m.id,
+      m.contextWindow ? tokenCount(m.contextWindow) : '-',
+      m.reasoning === undefined ? '-' : m.reasoning ? 'yes' : 'no',
+    ]),
+  ]
+  const widths = rows[0]!.map((_, column) =>
+    Math.max(...rows.map((row) => row[column]!.length)),
+  )
+  return rows
+    .map((row) =>
+      row
+        .map((cell, column) => cell.padEnd(widths[column]!))
+        .join('  ')
+        .trimEnd(),
+    )
+    .join('\n')
+    .concat('\n')
+}
+
+/** 200000 → 200K, 1000000 → 1M (like pi) */
+function tokenCount(count: number): string {
+  const [value, unit] =
+    count >= 1_000_000
+      ? [count / 1_000_000, 'M']
+      : count >= 1_000
+        ? [count / 1_000, 'K']
+        : [count, '']
+  return `${value % 1 === 0 ? value : value.toFixed(1)}${unit}`
 }
 
 /**

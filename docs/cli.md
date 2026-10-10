@@ -30,12 +30,18 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--no-extensions`, `-ne` | Skip the built-in extensions and every discovered or configured extension. Extensions given with `-e` still load. |
 | `--append-system-prompt <text>` | Append text, or the contents of the file at that path, to the system prompt. Repeatable. Replaces `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` for this run. See [Settings](settings.md#appending-to-the-system-prompt). |
 | `--no-context-files`, `-nc` | Don't put `AGENTS.md` / `CLAUDE.md` into the system prompt. See [Settings](settings.md#context-files). |
+| `--tools`, `-t <tools>` | Enable only these tools: a comma-separated list of names or `*` patterns (`read_*`), repeatable. Every other tool, built-in or from an extension, is off. |
+| `--no-tools`, `-nt` | Start with no tools; `--tools` still enables the ones it names. |
+| `--exclude-tools`, `-xt <tools>` | Turn these tools off (names or `*` patterns), after `--tools`. |
+| `--list-models [search]` | Print the models listed in `models.json` and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. |
 | `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
 | `--no-approve` | Do not trust them for this run, without saving the decision. |
 | `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
 | `-v`, `--version` | Print the package version to stdout, then exit with code 0. |
 
 `-c`, `-r` and `--session` are mutually exclusive.
+
+The tool options apply to every session the CLI opens (also after `/new` and `/resume`) and are checked after extensions load: an entry that matches no tool stops the CLI with exit code 2 and lists the available tools. pi ignores unknown names; Vela reports them so that a typo can't leave a tool on or off. Like pi, they set the tools each session starts with: an extension can still change them with `setActiveTools()`.
 
 An extension that fails to load is reported on stderr (or in the chat log) and skipped; Vela still starts. Extension loading, discovery and the `builtin:` names are described in [Extensions](extensions.md#where-extensions-load-from) and [Built-in extensions](built-in-extensions.md).
 
@@ -132,6 +138,12 @@ Vela's own keys:
 
 In pickers and dialogs: Up and Down move, Enter selects, Esc cancels. Keybindings cannot be changed.
 
+### Tool output
+
+Each tool call is a block showing the tool and its key argument, like pi. While `bash` runs, its output streams into the block with the elapsed time; collapsed, the block keeps the last 5 lines and shows how long the command took. `edit_file` shows the diff of its change. Other tools show the first 10 lines of their result. Ctrl+O expands every block. Calls a tool makes through `ctx.executeTool()` are listed inside its block, one line each with ✓ or ✗ and the time taken.
+
+If the terminal goes away (the window is closed or the SSH connection drops), Vela exits: on SIGHUP it saves and closes the sessions first, and when reading or writing the terminal fails it exits at once with code 129.
+
 ### Completion
 
 Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, prompt templates, skills (as `skill:<name>`), and commands registered by extensions, filtered as you type. Tab completes file and directory paths relative to the working folder.
@@ -152,6 +164,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 | `/model [provider/id]` | Without an argument, open the model picker (models listed in `models.json` or by extension providers). With an argument, switch to that model. |
 | `/thinking [level]` | Without an argument, open the thinking-level picker. With an argument, set it. |
 | `/compact [focus]` | Summarize the conversation now, optionally telling the summary what to focus on. |
+| `/copy` | Copy the last answer to the clipboard (`pbcopy`, `clip`, `wl-copy`, `xclip` or `xsel`; over SSH or without a display, the terminal's OSC 52). If none works, the error says what to install. |
 | `/hotkeys` | Show the keyboard shortcuts. |
 | `/quit`, `/exit` | Exit. |
 

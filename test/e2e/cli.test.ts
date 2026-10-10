@@ -63,6 +63,8 @@ async function cli(
       ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null'],
       { cwd, env, stdout: 'pipe', stderr: 'pipe', stdin: 'pipe' },
     )
+    // A CLI that hangs is killed before the test times out, so it doesn't outlive the suite
+    const timer = setTimeout(() => proc.kill('SIGKILL'), 25_000)
     const steps = [...options.terminal]
     let stdout = ''
     const decoder = new TextDecoder()
@@ -78,6 +80,7 @@ async function cli(
       new Response(proc.stderr).text(),
       proc.exited,
     ])
+    clearTimeout(timer)
     return {
       stdout: stripTerminalSequences(stdout),
       stderr,
@@ -97,11 +100,14 @@ async function cli(
         ? 'ignore'
         : new TextEncoder().encode(options.stdin),
   })
+  // A CLI that hangs is killed before the test times out, so it doesn't outlive the suite
+  const timer = setTimeout(() => proc.kill('SIGKILL'), 25_000)
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ])
+  clearTimeout(timer)
   return {
     stdout,
     stderr,
@@ -246,6 +252,69 @@ test.concurrent('-c -p with a command prints nothing on stdout, not the previous
   // The previous answer is in the resumed history, but this run did not produce it
   expect(second.stdout).toBe('')
 }, 20_000)
+
+test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stops the CLI', async () => {
+  const run = (args: string[]) =>
+    cli(['--mode', 'json', ...args, 'check notes.txt'], {
+      model: `faux:${scenario('read-file')}`,
+      files: { 'notes.txt': 'remember the milk' },
+    })
+  const ended = (stdout: string) =>
+    stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find((event) => event.type === 'tool_execution_end')
+  const allowed = await run(['--tools', 'read_*,grep'])
+  expect(allowed.code).toBe(0)
+  expect(ended(allowed.stdout)).toMatchObject({ isError: false })
+  const excluded = await run(['--exclude-tools', 'read_file'])
+  // The model isn't offered the tool, so the call fails as an unavailable tool
+  expect(JSON.stringify(ended(excluded.stdout).result)).toContain(
+    "unavailable tool 'read_file'",
+  )
+  const none = await run(['--no-tools'])
+  expect(JSON.stringify(ended(none.stdout).result)).toContain(
+    'Available tools: .',
+  )
+
+  const typo = await run(['--tools', 'read'])
+  expect(typo.code).toBe(2)
+  expect(typo.stderr).toContain('Unknown tool: read. Available: read_file')
+})
+
+test.concurrent('--list-models lists configured models and exits', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(
+    join(home.path, 'models.json'),
+    JSON.stringify({
+      providers: {
+        local: {
+          baseUrl: 'http://localhost:1/v1',
+          api: 'openai-completions',
+          models: [{ id: 'small', contextWindow: 32000 }, { id: 'big' }],
+        },
+      },
+    }),
+  )
+  const { stdout, code } = await cli(['--list-models', 'sma'], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+  })
+  expect(code).toBe(0)
+  expect(stdout).toBe(
+    'provider  model  context  thinking\nlocal     small  32K      -\n',
+  )
+  // Listing needs no runnable model or recorder
+  const unusable = await cli(['--list-models'], {
+    model: 'faux:missing.json',
+    agentDir: home.path,
+    env: { VELA_RECORD: join(home.path, 'record.json') },
+  })
+  expect(unusable.code).toBe(0)
+  expect(unusable.stdout).toContain('local     big')
+})
 
 test.concurrent('--session opens a named session id; -r needs interactive mode', async () => {
   const first = await cli(['-p', 'hello', '--session', 'work'], {
@@ -466,6 +535,60 @@ test.if(hasScript)(
     expect(picked.stdout).toContain('Hello, this is Vela (faux replay).')
     expect(sessionFiles(first.dataDir)).toHaveLength(1)
   },
+)
+
+test.if(hasScript)(
+  'interactive mode exits when its terminal goes away instead of spinning a CPU',
+  async () => {
+    const dir = tempDir('vela-cli-')
+    dirs.push(dir)
+    const home = tempDir('vela-home-')
+    dirs.push(home)
+    const pidFile = join(dir.path, 'pid')
+    // `script` owns the pseudo-terminal: killing it closes the terminal under the CLI (SIGHUP, then EIO)
+    const proc = Bun.spawn(
+      [
+        'script',
+        '-qec',
+        `echo $$ > '${pidFile}'; exec bun '${ENTRY}'`,
+        '/dev/null',
+      ],
+      {
+        cwd: dir.path,
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: home.path,
+          VELA_DIR: home.path,
+          VELA_MODEL: `faux:${scenario('hello')}`,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+        stdin: 'pipe',
+      },
+    )
+    let stdout = ''
+    const decoder = new TextDecoder()
+    for await (const chunk of proc.stdout) {
+      stdout += decoder.decode(chunk, { stream: true })
+      if (stripTerminalSequences(stdout).includes('Ctrl+D exit')) break
+    }
+    const pid = Number(await Bun.file(pidFile).text())
+    proc.kill('SIGKILL')
+    const alive = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    const deadline = Date.now() + 5000
+    while (alive() && Date.now() < deadline) await Bun.sleep(50)
+    const stillAlive = alive()
+    if (stillAlive) process.kill(pid, 'SIGKILL')
+    expect(stillAlive).toBe(false)
+  },
+  20_000,
 )
 
 test.concurrent('VELA_RECORD records a run that VELA_MODEL=faux: replays offline', async () => {
