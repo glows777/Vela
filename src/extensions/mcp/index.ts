@@ -167,12 +167,21 @@ export function mcp(options: McpOptions = {}): VelaExtension {
     vela.on('before_agent_start', async (event, ctx) => {
       // Guests can't use MCP tools, so they neither wait for servers nor see their names
       if (!started || ctx.session.role === 'guest') return
-      // Servers still connecting are listed by name, so the model knows to search for their tools
-      // (like pi's mcp_servers section); connected servers appear in the deferred tool list
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        directReady,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, DIRECT_WAIT_MS)
+        }),
+      ])
+      clearTimeout(timer)
+      // Servers still connecting once the wait is over are listed by name, so the model knows to
+      // search for their tools (like pi's mcp_servers section); connected servers appear in the
+      // deferred tool list
       const pending = [...connections.values()].filter(
         (c) =>
           (c.state === 'connecting' || c.state === 'idle') &&
-          c.entry.config.exposure !== 'hidden',
+          hasVisibleTools(c.entry),
       )
       if (pending.length)
         event.sections.mcp_servers = [
@@ -182,18 +191,16 @@ export function mcp(options: McpOptions = {}): VelaExtension {
               `- ${namespaceName(c.name)}${c.entry.config.description ? ` — ${c.entry.config.description}` : ''}`,
           ),
         ].join('\n')
-      let timer: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        directReady,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, DIRECT_WAIT_MS)
-        }),
-      ])
-      clearTimeout(timer)
     })
 
-    vela.on('tool_call', async (event) => {
-      if (event.toolName === 'tool_search' && started) await started
+    vela.on('tool_call', async (event, ctx) => {
+      // Guests can't use MCP tools, so their searches don't wait for servers
+      if (
+        event.toolName === 'tool_search' &&
+        started &&
+        ctx.session.role !== 'guest'
+      )
+        await started
     })
 
     vela.registerCommand('mcp', {
@@ -230,6 +237,15 @@ export function mcp(options: McpOptions = {}): VelaExtension {
       await Promise.all([...connections.values()].map((c) => c.close()))
     })
   }
+}
+
+/** Whether any of the server's tools may be visible to the model (not all `hidden`). */
+function hasVisibleTools(entry: McpServerEntry): boolean {
+  const { config } = entry
+  return (
+    config.exposure !== 'hidden' ||
+    Object.values(config.toolExposure ?? {}).some((e) => e !== 'hidden')
+  )
 }
 
 /** Whether any of the server's tools may have `direct` exposure. */

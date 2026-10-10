@@ -6,6 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import z from 'zod'
+import type { McpServerEntry } from '../../src/extensions/mcp/config.ts'
 import { mcp } from '../../src/extensions/mcp/index.ts'
 import type { SessionUI } from '../../src/index.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
@@ -322,43 +323,66 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
   expect(closed).toBe(true)
 })
 
-test('only non-guest sessions see servers still connecting; dispose stops a connect in progress', async () => {
-  // A server that never answers initialize
-  let closed = false
-  const hanging = async (): Promise<Transport> => {
+test('only non-guest sessions see servers still connecting, after the direct wait; guests never wait; dispose stops a connect in progress', async () => {
+  // Servers that never answer initialize
+  const closed: string[] = []
+  const hanging = async (entry: { name: string }): Promise<Transport> => {
     const transport: Transport = {
       start: async () => {},
       send: async () => {},
       close: async () => {
-        closed = true
+        closed.push(entry.name)
         transport.onclose?.()
       },
     }
     return transport
   }
+  // A direct server that connects during the first prompt's wait
+  const fake = servers({ docs })
+  const createTransport = async (entry: McpServerEntry) => {
+    if (entry.name !== 'docs') return hanging(entry)
+    await Bun.sleep(50)
+    return fake.createTransport(entry)
+  }
   const t = createTestVela({
     extensions: [
       mcp({
-        servers: { slow: { command: 'unused', description: 'Slow docs' } },
-        createTransport: hanging,
+        servers: {
+          slow: { command: 'unused', description: 'Slow docs' },
+          // Hidden, but one tool is deferred: still worth searching for
+          partly: {
+            command: 'unused',
+            exposure: 'hidden',
+            toolExposure: { 'search-*': 'deferred' },
+          },
+          gone: { command: 'unused', exposure: 'hidden' },
+          docs: { command: 'unused', exposure: 'direct' },
+        },
+        createTransport,
       }),
     ],
     responses: [
       (req) => {
         expect(req.system).toContain('- mcp__slow — Slow docs')
+        expect(req.system).toContain('- mcp__partly')
+        expect(req.system).not.toContain('mcp__gone')
+        expect(req.system).not.toContain('- mcp__docs')
+        expect(req.tools).toContain('mcp__docs__search_pages')
         return fauxText('owner')
       },
+      fauxToolCall('tool_search', { query: 'docs' }),
       (req) => {
         expect(req.system).not.toContain('mcp__slow')
+        expect(req.toolResults[0]!.output).toBe('No matching tools found.')
         return fauxText('guest')
       },
     ],
   })
   await t.run('hi')
   await t.vela.session('g', { role: 'guest' }).prompt('Hello')
-  expect(closed).toBe(false)
+  expect(closed).toEqual([])
   await t.vela.dispose()
-  expect(closed).toBe(true)
+  expect(closed.sort()).toEqual(['gone', 'partly', 'slow'])
 })
 
 test('a stdio server: Vela starts the process, calls its tool and stops it on dispose', async () => {
