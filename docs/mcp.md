@@ -22,7 +22,7 @@ Vela reads servers from `~/.vela/mcp.json` and, when the project is [trusted](se
 }
 ```
 
-A project entry replaces the user entry of the same name. A project entry without `command`, `url` or `type` only overrides `enabled`, `exposure` and `toolExposure` of the user entry and keeps the rest, so this turns off a user-level server in one project:
+A project entry replaces the user entry of the same name. A project entry without `command`, `url` or `type` only overrides `enabled`, `exposure` and `toolExposure` of the user entry and keeps the rest (any other key is an error, so a project cannot add headers or variables to your server), so this turns off a user-level server in one project:
 
 ```json
 { "mcpServers": { "internal-tools": { "enabled": false } } }
@@ -99,7 +99,7 @@ Text content reaches the model as text. Vela tool results are text only, so imag
 
 MCP tools go through the same pipeline as every tool: the session's role and permissions, extensions' `tool_call` and `tool_result` handlers, confirmation for `ask`, and the tool history. The server's `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` annotations are on each tool's `annotations` for permission extensions to use; Vela itself does not act on them.
 
-`owner` and `collaborator` sessions can use MCP tools. `guest` sessions, such as channel senders, cannot: the tools are not listed, `tool_search` does not find them, and a call is rejected. See [Security](security.md#session-roles).
+`owner` and `collaborator` sessions can use MCP tools. `guest` sessions, such as channel senders, cannot: the tools are not listed, `tool_search` does not find them, a call is rejected, and the system prompt does not name the servers. See [Security](security.md#session-roles).
 
 An MCP server runs with your permissions (stdio) or acts with the credentials you give it (HTTP), and its tool descriptions and results are text the model reads. Add only servers you trust.
 

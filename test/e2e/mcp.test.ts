@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import z from 'zod'
 import { mcp } from '../../src/extensions/mcp/index.ts'
 import type { SessionUI } from '../../src/index.ts'
@@ -317,6 +318,45 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
   docsServer.server.onclose = () => {
     closed = true
   }
+  await t.vela.dispose()
+  expect(closed).toBe(true)
+})
+
+test('only non-guest sessions see servers still connecting; dispose stops a connect in progress', async () => {
+  // A server that never answers initialize
+  let closed = false
+  const hanging = async (): Promise<Transport> => {
+    const transport: Transport = {
+      start: async () => {},
+      send: async () => {},
+      close: async () => {
+        closed = true
+        transport.onclose?.()
+      },
+    }
+    return transport
+  }
+  const t = createTestVela({
+    extensions: [
+      mcp({
+        servers: { slow: { command: 'unused', description: 'Slow docs' } },
+        createTransport: hanging,
+      }),
+    ],
+    responses: [
+      (req) => {
+        expect(req.system).toContain('- mcp__slow — Slow docs')
+        return fauxText('owner')
+      },
+      (req) => {
+        expect(req.system).not.toContain('mcp__slow')
+        return fauxText('guest')
+      },
+    ],
+  })
+  await t.run('hi')
+  await t.vela.session('g', { role: 'guest' }).prompt('Hello')
+  expect(closed).toBe(false)
   await t.vela.dispose()
   expect(closed).toBe(true)
 })

@@ -291,6 +291,15 @@ export function loadMcpServers(options: {
         raw.url === undefined &&
         raw.type === undefined
       ) {
+        const extra = Object.keys(raw).filter(
+          (key) => !(OVERRIDE_KEYS as readonly string[]).includes(key),
+        )
+        if (extra.length > 0) {
+          result.errors.push(
+            `${file}: MCP server "${name}": an override can only set ${OVERRIDE_KEYS.join(', ')} (found ${extra.join(', ')})`,
+          )
+          continue
+        }
         const overrides = Object.fromEntries(
           OVERRIDE_KEYS.filter((key) => key in raw).map((key) => [
             key,

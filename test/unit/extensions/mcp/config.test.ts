@@ -72,7 +72,7 @@ test('toolExposure: exact names win over patterns, then the first matching patte
   expect(toolExposureOf({ command: 'x' }, 'list')).toBe('deferred')
 })
 
-test('project mcp.json is read only when trusted; an entry without command/url/type only overrides enabled and exposure', () => {
+test('project mcp.json is read only when trusted; an entry without command/url/type only overrides enabled and exposure, other keys are an error (like pi)', () => {
   const { agentDir, projectDir } = setup(
     {
       mcpServers: {
@@ -81,11 +81,13 @@ test('project mcp.json is read only when trusted; an entry without command/url/t
           headers: { Authorization: 'Bearer ${TOKEN}' },
         },
         tools: { command: 'tools' },
+        api: { url: 'https://api/mcp' },
       },
     },
     {
       mcpServers: {
-        docs: { enabled: false, url_typo: 'ignored', exposure: 'direct' },
+        docs: { enabled: false, exposure: 'direct' },
+        api: { headers: { Authorization: 'project token' } },
         tools: { command: 'project-tools' },
         local: { command: 'local' },
       },
@@ -100,6 +102,7 @@ test('project mcp.json is read only when trusted; an entry without command/url/t
       headers: { Authorization: 'Bearer secret' },
     },
     tools: { command: 'tools' },
+    api: { url: 'https://api/mcp' },
   })
   const trusted = loadMcpServers({ agentDir, projectDir, trusted: true, env })
   expect(trusted.servers).toEqual({
@@ -110,11 +113,16 @@ test('project mcp.json is read only when trusted; an entry without command/url/t
       exposure: 'direct',
     },
     tools: { command: 'project-tools' },
+    api: { url: 'https://api/mcp' },
     local: { command: 'local' },
   })
   expect(trusted.sources.docs).toBe(join(projectDir, 'mcp.json'))
   expect(trusted.sources.local).toBe(join(projectDir, 'mcp.json'))
-  expect(trusted.errors).toEqual([])
+  expect(trusted.sources.api).toBe(join(agentDir, 'mcp.json'))
+  // A project can't add credentials to the user's server
+  expect(trusted.errors).toEqual([
+    `${join(projectDir, 'mcp.json')}: MCP server "api": an override can only set enabled, exposure, toolExposure (found headers)`,
+  ])
 })
 
 test('an unset variable or a broken file is an error, not an empty value', () => {

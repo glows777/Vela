@@ -97,6 +97,8 @@ export class McpConnection implements McpToolCaller {
   instructions: string | undefined
   private client: Client | undefined
   private opening: Promise<Client> | undefined
+  /** The transport of a connect in progress, closed by close() so a starting server doesn't outlive the Vela */
+  private connecting: Transport | undefined
   /** Aborted by close(): cancels a connect in progress, including the wait between retries */
   private readonly shutdown = new AbortController()
   private stderrTail = ''
@@ -192,6 +194,11 @@ export class McpConnection implements McpToolCaller {
     const transport = await (
       this.options.createTransport ?? this.createTransport
     )(this.entry, this.options.cwd)
+    if (this.shutdown.signal.aborted) {
+      await transport.close().catch(() => {})
+      throw new Error('shut down')
+    }
+    this.connecting = transport
     const stderr = (transport as { stderr?: NodeJS.ReadableStream | null })
       .stderr
     stderr?.on('data', (chunk: Buffer | string) => {
@@ -226,6 +233,8 @@ export class McpConnection implements McpToolCaller {
     } catch (error) {
       await client.close().catch(() => {})
       throw error
+    } finally {
+      this.connecting = undefined
     }
     return client
   }
@@ -305,7 +314,10 @@ export class McpConnection implements McpToolCaller {
     this.setState('closed')
     const client = this.client
     this.client = undefined
-    await client?.close().catch(() => {})
+    await Promise.all([
+      client?.close().catch(() => {}),
+      this.connecting?.close().catch(() => {}),
+    ])
   }
 
   /** Drops the connection and connects again (`/mcp reconnect`). */

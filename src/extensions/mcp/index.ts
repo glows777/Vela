@@ -164,8 +164,9 @@ export function mcp(options: McpOptions = {}): VelaExtension {
 
     // The first prompt waits (up to 10s) only for servers with direct tools, which must be declared
     // in its request; deferred tools are waited for by tool_search (like pi)
-    vela.on('before_agent_start', async (event) => {
-      if (!started) return
+    vela.on('before_agent_start', async (event, ctx) => {
+      // Guests can't use MCP tools, so they neither wait for servers nor see their names
+      if (!started || ctx.session.role === 'guest') return
       // Servers still connecting are listed by name, so the model knows to search for their tools
       // (like pi's mcp_servers section); connected servers appear in the deferred tool list
       const pending = [...connections.values()].filter(
