@@ -319,3 +319,31 @@ test('/ suggests prompt templates (with their argument hint) and skills as skill
   tui.terminal.type('/skill:rev')
   await tui.until('skill:reviewer')
 })
+
+test('custom messages show as a labeled block only with display: true (like pi)', async () => {
+  function notes(vela: import('../../src/extensions/types.ts').ExtensionAPI) {
+    vela.registerCommand('note', {
+      handler: async (_args, ctx) => {
+        await ctx.session.sendMessage({
+          customType: 'reminder',
+          content: 'Shown reminder',
+          display: true,
+        })
+        await ctx.session.sendMessage({
+          customType: 'hidden',
+          content: 'Hidden context',
+          display: false,
+        })
+      },
+    })
+  }
+  const t = createTestVela({ extensions: [notes] })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('/note')
+  await tui.until('Shown reminder')
+  const screen = tui.screen()
+  expect(screen).toContain('[reminder]')
+  expect(screen).not.toContain('Hidden context')
+})

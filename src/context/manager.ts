@@ -171,7 +171,7 @@ export class ContextManager {
       this.applyMicrocompact(micro.messages)
       this.tracker.setEstimatedTokens(microAfter)
       this.onEvent?.({
-        type: 'context',
+        type: 'context_prepare',
         action: 'micro',
         before,
         after: microAfter,
@@ -183,7 +183,7 @@ export class ContextManager {
     if (before >= this.limits.summaryThreshold) {
       if (options.allowSummary === false) {
         this.onEvent?.({
-          type: 'context',
+          type: 'context_prepare',
           action: 'summary-required',
           before,
           saved: savings,

@@ -28,6 +28,16 @@ export interface CompactionResult {
 }
 
 /**
+ * Marks a message an extension sent with `session.sendMessage()` (pi's custom message). The model sees it as a
+ * user message; `display` says whether a UI shows it, `details` is the extension's own data (not sent to the model).
+ */
+export interface CustomMessageInfo {
+  customType: string
+  display: boolean
+  details?: unknown
+}
+
+/**
  * What changed in a streaming assistant message (same names and fields as pi's `AssistantMessageEvent`).
  * `contentIndex` is the index of the changed part in `message.content`.
  */
@@ -56,7 +66,12 @@ export type VelaEvent =
    * A message starts. User, tool and loop-reminder messages get `message_start` and `message_end` back to back;
    * an assistant message streams `message_update`s in between.
    */
-  | { type: 'message_start'; message: ModelMessage }
+  | {
+      type: 'message_start'
+      message: ModelMessage
+      /** Set when the message is an extension's custom message (`session.sendMessage()`) */
+      custom?: CustomMessageInfo
+    }
   /** The assistant message so far (`message`) and what just changed (`assistantMessageEvent`). */
   | {
       type: 'message_update'
@@ -73,6 +88,8 @@ export type VelaEvent =
       message: ModelMessage
       stopReason?: StopReason
       errorMessage?: string
+      /** Set when the message is an extension's custom message (`session.sendMessage()`) */
+      custom?: CustomMessageInfo
     }
   /** A tool call is about to run (after the assistant message's `message_end`). */
   | {
@@ -161,7 +178,7 @@ export type VelaEvent =
    * request may not run (`summary-required`). Vela-specific; summaries are compaction_start / compaction_end.
    */
   | {
-      type: 'context'
+      type: 'context_prepare'
       action: 'micro' | 'summary-required'
       before: number
       after?: number

@@ -1,3 +1,5 @@
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import type { ModelMessage, UserContent } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelDefinition } from '../channels/types.ts'
 import type { VelaLogger } from '../logger.ts'
@@ -53,10 +55,106 @@ export interface ExtensionCommand {
   handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
 }
 
+/**
+ * A message an extension adds to a session's conversation (pi's custom message), for
+ * `session.sendMessage()` and `before_agent_start` results. The model sees `content` as a user message;
+ * `display` says whether UIs show it; `details` is the extension's own data, saved but never sent to the model.
+ */
+export interface CustomMessage {
+  customType: string
+  content: UserContent
+  display: boolean
+  details?: unknown
+}
+
+/** How `session.sendMessage()` delivers a custom message (same as pi). */
+export interface SendMessageOptions {
+  /** When idle: run the agent loop with the message as its input. Default false (the message is only appended) */
+  triggerTurn?: boolean
+  /**
+   * `steer` / `followUp`: while running, queue it like steer() / followUp() (default steer).
+   * `nextTurn`: hold it and add it after the user message of the next prompt.
+   */
+  deliverAs?: 'steer' | 'followUp' | 'nextTurn'
+}
+
+/**
+ * Where an input came from (pi's sources plus Vela's): the TUI and `-p` send `interactive`, RPC clients `rpc`,
+ * `session.sendUserMessage()` `extension`, channels (Feishu) `channel`; SDK calls default to `sdk`.
+ */
+export type InputSource =
+  | 'interactive'
+  | 'rpc'
+  | 'extension'
+  | 'channel'
+  | 'sdk'
+
+/**
+ * User input arrived (prompt / steer / followUp), after extension commands and before `/skill:` and prompt
+ * template expansion (like pi). Fires in sessions of every role; check `ctx.session.role`.
+ */
+export interface InputEvent {
+  type: 'input'
+  text: string
+  source: InputSource
+  /** How the input will be queued while the session is running; undefined when idle */
+  streamingBehavior?: 'steer' | 'followUp'
+}
+
+/** `transform` replaces the text (later handlers see the new text); `handled` drops the input (prompt() resolves). */
+export type InputEventResult =
+  | { action: 'continue' }
+  | { action: 'transform'; text: string }
+  | { action: 'handled' }
+
+/**
+ * Before each model request (like pi's `context`): `messages` is a copy of the conversation this request sends
+ * (no system prompt). Edit it in place or return `{ messages }`; only this request changes, not the history.
+ */
+export interface ContextEvent {
+  type: 'context'
+  messages: ModelMessage[]
+}
+
+export interface ContextEventResult {
+  messages?: ModelMessage[]
+}
+
+/**
+ * Before a request goes to the provider (pi's `before_provider_request`). Unlike pi, `params` are the AI SDK
+ * call options (prompt, tools, providerOptions, headers, maxOutputTokens, …), not the provider's JSON body,
+ * which the AI SDK builds inside the provider. Edit them in place or return replacement options.
+ * Fires for summary requests too.
+ */
+export interface BeforeProviderRequestEvent {
+  type: 'before_provider_request'
+  params: LanguageModelV4CallOptions
+}
+
+/**
+ * The provider answered, before the response is read (pi's `after_provider_response`). The AI SDK gives no
+ * status for a successful response; a failed one is reported as the request's error.
+ */
+export interface AfterProviderResponseEvent {
+  type: 'after_provider_response'
+  headers: Record<string, string>
+}
+
+/** A raw provider stream chunk before the AI SDK normalizes it (pi's `provider_stream_event`); read-only. */
+export interface ProviderStreamEvent {
+  type: 'provider_stream_event'
+  /** Provider id of the model, e.g. `anthropic.messages` */
+  provider: string
+  model: string
+  data: unknown
+}
+
 /** Before a tool runs. A handler can mutate `input` in place or return `{ block: true, reason }` to block; a throwing handler also blocks. */
 export interface ToolCallEvent {
   type: 'tool_call'
   toolCallId: string | undefined
+  /** Set when another tool issued this call through `ctx.executeTool()` (its id is then `<parent id>/<n>`) */
+  parentToolCallId?: string
   toolName: string
   input: Record<string, unknown>
 }
@@ -70,6 +168,8 @@ export interface ToolCallEventResult {
 export interface ToolResultEvent {
   type: 'tool_result'
   toolCallId: string | undefined
+  /** Set when another tool issued this call through `ctx.executeTool()` */
+  parentToolCallId?: string
   toolName: string
   input: unknown
   /** The text the model will see (a preview for oversized results) */
@@ -90,6 +190,11 @@ export interface BeforeAgentStartEvent {
   sections: Record<string, string>
 }
 
+/** Return `{ message }` to add a custom message after the user message (like pi); each handler can add one. */
+export interface BeforeAgentStartEventResult {
+  message?: CustomMessage
+}
+
 /** Before the session's first prompt() (after history is restored). */
 export interface SessionStartEvent {
   type: 'session_start'
@@ -103,12 +208,20 @@ export interface SessionShutdownEvent {
 type InterceptEvents = {
   tool_call: [ToolCallEvent, ToolCallEventResult]
   tool_result: [ToolResultEvent, ToolResultEventResult]
-  before_agent_start: [BeforeAgentStartEvent, void]
+  before_agent_start: [BeforeAgentStartEvent, BeforeAgentStartEventResult]
+  input: [InputEvent, InputEventResult]
+  context: [ContextEvent, ContextEventResult]
+  before_provider_request: [
+    BeforeProviderRequestEvent,
+    LanguageModelV4CallOptions,
+  ]
+  after_provider_response: [AfterProviderResponseEvent, void]
+  provider_stream_event: [ProviderStreamEvent, void]
   session_start: [SessionStartEvent, void]
   session_shutdown: [SessionShutdownEvent, void]
 }
 
-/** Read-only notifications: every VelaEvent (the intercepting tool_call / tool_result above are separate). */
+/** Read-only notifications: every other VelaEvent. */
 type NotifyEvents = {
   [K in Exclude<VelaEvent['type'], keyof InterceptEvents>]: [
     Extract<VelaEvent, { type: K }>,

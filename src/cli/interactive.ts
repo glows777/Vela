@@ -26,6 +26,7 @@ import type { VelaSession } from '../vela-session.ts'
 import { createCliDispatcher } from './dispatcher.ts'
 import {
   AssistantMessage,
+  CustomMessageBlock,
   notice,
   sanitize,
   ToolBlock,
@@ -408,7 +409,8 @@ export class InteractiveMode {
         this.startLoader('Thinking…')
         break
       case 'message_start':
-        if (event.message.role === 'user') this.renderMessage(event.message)
+        if (event.message.role === 'user')
+          this.renderMessage(event.message, false, event.custom)
         break
       case 'turn_start':
         this.current = undefined
@@ -475,7 +477,7 @@ export class InteractiveMode {
       case 'queue_update':
         this.updatePending()
         break
-      case 'context':
+      case 'context_prepare':
         this.addNotice(contextLine(event), 'dim')
         if (event.action === 'summary-required')
           this.setLoader('Compacting context…')
@@ -510,7 +512,11 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  private renderMessage(message: ModelMessage, history = false): void {
+  private renderMessage(
+    message: ModelMessage,
+    history = false,
+    custom = this.session.customMessageOf(message),
+  ): void {
     if (message.role === 'user') {
       const text =
         typeof message.content === 'string'
@@ -518,7 +524,11 @@ export class InteractiveMode {
           : message.content
               .map((part) => (part.type === 'text' ? part.text : ''))
               .join('')
-      if (text.trim()) this.chat.addChild(new UserMessage(text))
+      // Like pi: an extension's custom message shows only with `display: true`, in its own block
+      if (custom) {
+        if (custom.display)
+          this.chat.addChild(new CustomMessageBlock(custom.customType, text))
+      } else if (text.trim()) this.chat.addChild(new UserMessage(text))
       this.current = undefined
       return
     }
@@ -715,7 +725,10 @@ export class InteractiveMode {
 
   private async queue(text: string, behavior: 'steer' | 'followUp') {
     try {
-      await this.session.prompt(text, { streamingBehavior: behavior })
+      await this.session.prompt(text, {
+        streamingBehavior: behavior,
+        source: 'interactive',
+      })
     } catch (error) {
       this.addNotice(this.describeError(error), 'error')
     }
@@ -826,7 +839,7 @@ export class InteractiveMode {
       return
     }
     try {
-      await this.session.prompt(text)
+      await this.session.prompt(text, { source: 'interactive' })
     } catch (error) {
       // Loop errors were already shown at agent_end
       if (error !== this.shownError)
@@ -1110,7 +1123,9 @@ function compactionLine(
   }
 }
 
-function contextLine(event: Extract<VelaEvent, { type: 'context' }>): string {
+function contextLine(
+  event: Extract<VelaEvent, { type: 'context_prepare' }>,
+): string {
   switch (event.action) {
     case 'micro':
       return `[context] Folded old tool results ${event.before} → ${event.after} tokens`

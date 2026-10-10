@@ -1,10 +1,13 @@
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
+import type { CustomMessageInfo } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
   buildSessionContext,
   type CompactionEntry,
+  type CustomEntry,
+  type CustomMessageEntry,
   createEntryId,
   type NestedToolCalls,
   type NewEntry,
@@ -172,6 +175,31 @@ export class SessionStore {
     })
     if (!extra.stopReason) this.ids.set(message, entry.id)
     return entry
+  }
+
+  /** Appends an extension's custom message (pi's `custom_message`); `message` is the user message the model sees. */
+  appendCustomMessage(
+    message: ModelMessage & { role: 'user' },
+    info: CustomMessageInfo,
+  ): CustomMessageEntry {
+    const entry = this.append<CustomMessageEntry>({
+      type: 'custom_message',
+      customType: info.customType,
+      content: message.content,
+      display: info.display,
+      ...(info.details === undefined ? {} : { details: info.details }),
+    })
+    this.ids.set(message, entry.id)
+    return entry
+  }
+
+  /** Appends extension state (pi's `custom` entry); not part of the model context. */
+  appendCustom(customType: string, data?: unknown): CustomEntry {
+    return this.append<CustomEntry>({
+      type: 'custom',
+      customType,
+      ...(data === undefined ? {} : { data }),
+    })
   }
 
   appendModelChange(model: string): void {

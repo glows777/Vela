@@ -460,6 +460,9 @@ export class ToolRegistry {
     const hookContext = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
+      ...(options.parentToolCallId === undefined
+        ? {}
+        : { parentToolCallId: options.parentToolCallId }),
       emit: (event: Parameters<VelaEventListener>[0]) => this.onEvent?.(event),
     }
     if (pipeline) {

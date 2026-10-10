@@ -130,7 +130,7 @@ export class ChannelGateway {
 
     this.active.add(session)
     try {
-      await session.prompt(msg.text)
+      await session.prompt(msg.text, { source: 'channel' })
     } catch (error) {
       session.emit({
         type: 'channel_error',
