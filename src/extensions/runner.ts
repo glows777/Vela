@@ -57,6 +57,10 @@ export class ExtensionRunner {
     { extension: string; command: ExtensionCommand }
   >()
   private readonly loadedList: LoadedExtension[] = []
+  private readonly shutdownHandlers: {
+    extension: string
+    fn: () => void | Promise<void>
+  }[] = []
   /** Resolves when all extension factories (including async ones) finish; rejects on failure */
   readonly ready: Promise<void>
 
@@ -144,11 +148,24 @@ export class ExtensionRunner {
       },
       registerTool: (tool) => {
         // Prefix tool names with the extension name so they cannot clash with built-in or other
-        // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not memory_memory)
+        // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not
+        // memory_memory) or already carries it (mcp's mcp__docs__search)
         const toolName =
-          tool.name === prefix ? prefix : `${prefix}_${tool.name}`
+          tool.name === prefix || tool.name.startsWith(`${prefix}_`)
+            ? tool.name
+            : `${prefix}_${tool.name}`
         deps.registry.register({ ...tool, name: toolName })
         loaded.tools.push(toolName)
+        return toolName
+      },
+      unregisterTool: (toolName) => {
+        const index = loaded.tools.indexOf(toolName)
+        if (index === -1) return false
+        loaded.tools.splice(index, 1)
+        return deps.registry.unregister(toolName)
+      },
+      onShutdown: (handler) => {
+        this.shutdownHandlers.push({ extension: name, fn: handler })
       },
       registerCommand: (commandName, command) => {
         if (!COMMAND_NAME.test(commandName))
@@ -257,6 +274,17 @@ export class ExtensionRunner {
 
   sessionShutdown(session: VelaSession) {
     return this.lifecycle({ type: 'session_shutdown' }, session)
+  }
+
+  /** vela.dispose(): runs the onShutdown handlers in registration order; errors are logged. */
+  async shutdown(): Promise<void> {
+    for (const { extension, fn } of this.shutdownHandlers.splice(0)) {
+      try {
+        await fn()
+      } catch (error) {
+        this.report(extension, 'shutdown', error)
+      }
+    }
   }
 
   /** before_agent_start: collect this turn's system prompt sections. */

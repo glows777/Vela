@@ -251,13 +251,13 @@ Long tool output and the tool call history are always written to files under `<d
 
 ```typescript
 import {
-  createVela, feishu, importExtension, loadConfig, memory, rag, web,
+  createVela, feishu, importExtension, loadConfig, mcp, memory, rag, web,
   type VelaExtension,
 } from '@glows777/vela'
 
 const builtins: Record<string, () => VelaExtension> = {
   memory: () => memory(), rag: () => rag(), web: () => web(),
-  feishu: () => feishu(),
+  feishu: () => feishu(), mcp: () => mcp({ servers: config.mcp.servers }),
 }
 const config = loadConfig({ cwd: process.cwd(), env: process.env, builtins: Object.keys(builtins) })
 
@@ -288,11 +288,11 @@ const vela = createVela({
 | `cwd` | `process.cwd()` | Project directory |
 | `agentDir` | `env.VELA_DIR` or `~/.vela` | User-level directory |
 | `env` | `{}` | Environment for `$VAR` / `${VAR}` interpolation, `VELA_DIR` and provider API keys. Core never reads `process.env` itself: pass it explicitly. |
-| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/` and `.vela/APPEND_SYSTEM.md` |
+| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/mcp.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/` and `.vela/APPEND_SYSTEM.md` |
 | `homeDir` | `os.homedir()` | Home directory for `~/.agents/skills` |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 
-The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers` and `extensionConfig`. `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
+The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
 
 The CLI also fills built-in extension config from environment variables such as `TAVILY_API_KEY`; with the SDK, put those values in `extensionConfig` or pass them to the extension factories.
 
@@ -318,7 +318,7 @@ Extensions get the same logger as `vela.logger`.
 The SDK loads no extensions by default. The CLI's built-in extensions are exported as factories:
 
 ```typescript
-import { createVela, memory, rag, createEmbedder, web, feishu } from '@glows777/vela'
+import { createVela, memory, rag, createEmbedder, web, feishu, mcp } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
@@ -326,6 +326,7 @@ const vela = createVela({
     memory(),
     rag({ embedder: createEmbedder({ modelId, apiKey, url }) }),
     web({ tavilyKey: process.env.TAVILY_API_KEY }),
+    mcp({ servers: { docs: { url: 'https://example.com/mcp' } } }),
   ],
 })
 ```
@@ -334,7 +335,7 @@ Options not passed to a factory are read from its `extensionConfig` section. See
 
 ## Disposal
 
-Call `await vela.dispose()` when you are done. It stops channels, aborts running sessions, waits for them to save, fires `session_shutdown` for extensions and, when there is no `dataDir`, deletes the temp data dir. A disposed Vela throws on `session()`.
+Call `await vela.dispose()` when you are done. It stops channels, aborts running sessions, waits for them to save, fires `session_shutdown` for extensions, runs extensions' `onShutdown` handlers (the mcp extension closes its server connections there) and, when there is no `dataDir`, deletes the temp data dir. A disposed Vela throws on `session()`.
 
 `await session.close()` closes one session the same way and removes it from the Vela; a later `vela.session(id)` opens a fresh object for that id (call `resume()` to reload its history).
 

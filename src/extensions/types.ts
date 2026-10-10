@@ -142,10 +142,19 @@ export interface ExtensionAPI {
   /**
    * Registers a tool shared by all sessions. The model sees it as `<extension name>_<name>` (e.g. the
    * web extension's `fetch` is `web_fetch`), so it cannot clash with built-in tools; a
-   * duplicate name throws. When the tool name equals the extension name the prefix is not repeated
-   * (the memory extension's `memory` tool is just `memory`).
+   * duplicate name throws. The prefix is not repeated when the tool name equals the extension name
+   * (the memory extension's `memory` tool is just `memory`) or already starts with
+   * `<extension name>_` (the mcp extension's `mcp__docs__search`).
+   * Can be called at any time, e.g. when a server announces new tools; returns the registered name.
    */
-  registerTool(tool: ToolDefinition): void
+  registerTool(tool: ToolDefinition): string
+  /** Removes a tool this extension registered, by its registered name; returns whether it existed. */
+  unregisterTool(name: string): boolean
+  /**
+   * Runs once when the Vela is disposed, after all sessions closed (for resources shared by all
+   * sessions, such as MCP server connections). Errors are logged.
+   */
+  onShutdown(handler: () => void | Promise<void>): void
   /**
    * Registers a model provider (like pi's registerProvider, but only the "return an AI SDK model" form).
    * Afterwards `provider/id` works in createVela's model, `session.setModel()`, and the CLI's

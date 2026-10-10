@@ -363,6 +363,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       disposed = true
       await gateway.stopAll()
       await Promise.all([...sessions.values()].map((s) => s.close()))
+      await runner.shutdown()
       listeners.clear()
       if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
     },

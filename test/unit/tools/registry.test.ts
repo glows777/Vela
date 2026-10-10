@@ -70,7 +70,7 @@ test('registering a tool with the removed isReadOnly or an unknown exposure thro
   expect(registry.get('ok')?.annotations).toEqual({ readOnlyHint: true })
 })
 
-test('exposure decides what the model sees, what tool_search finds and what executeTool can call (like pi)', () => {
+test('exposure decides what the model sees, what tool_search finds and what executeTool can call (like pi)', async () => {
   const registry = makeRegistry()
   for (const exposure of [
     'direct',
@@ -88,14 +88,14 @@ test('exposure decides what the model sees, what tool_search finds and what exec
     ),
   ).toEqual(['direct', 'codemode', 'deferred'])
   expect(
-    registry.searchTools('codemode,hidden,deferred').map((t) => t.name),
+    (await registry.searchTools('codemode,hidden,deferred')).map((t) => t.name),
   ).toEqual(['deferred'])
   expect(active()).toEqual(['direct', 'model-only', 'deferred'])
   registry.setPermissions({ direct: 'deny' })
   expect(registry.isCallable('direct')).toBe(false)
 })
 
-test('the deferred tool summary groups tools by namespace', () => {
+test('the deferred tool summary lists each namespace once, not its tools (like pi)', () => {
   const registry = makeRegistry()
   const docs = {
     name: 'mcp__docs',
@@ -117,25 +117,22 @@ test('the deferred tool summary groups tools by namespace', () => {
   )
   expect(registry.getDeferredToolSummary()).toBe(
     [
-      'The tools below are available, but before calling one you must call tool_search to get its full schema:',
+      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
       '- plain',
-      'mcp__docs — Project documentation:',
-      '  - mcp__docs__read',
-      '  - mcp__docs__search — full text',
-      'mcp__git:',
-      '  - mcp__git__log',
+      '- mcp__docs (2 tools) — Project documentation',
+      '- mcp__git (1 tool)',
     ].join('\n'),
   )
 })
 
-test('deferred tools stay hidden until searchTools finds them', () => {
+test('deferred tools stay hidden until searchTools finds them', async () => {
   const registry = makeRegistry()
   registry.register(
     tool('deferred', { exposure: 'deferred', searchHint: 'xxx tool hint' }),
   )
   expect(registry.getActiveTools().map((t) => t.name)).toEqual([])
 
-  registry.searchTools('deferred')
+  await registry.searchTools('deferred')
   expect(registry.getActiveTools().map((t) => t.name)).toEqual(['deferred'])
   expect(registry.getDeferredToolSummary()).toBe('')
 })
@@ -146,20 +143,68 @@ test('the deferred tool summary is a heading plus one evenly indented line per t
   registry.register(tool('b', { exposure: 'deferred' }))
   expect(registry.getDeferredToolSummary()).toBe(
     [
-      'The tools below are available, but before calling one you must call tool_search to get its full schema:',
+      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
       '- a — hint a',
       '- b',
     ].join('\n'),
   )
 })
 
-test('searchTools matches exactly and skips tool_search itself', () => {
+test('searchTools loads exact names, and only deferred tools other than tool_search', async () => {
   const registry = makeRegistry()
-  registry.register(tool('tool_search'))
-  registry.register(tool('present'))
-  const hits = registry.searchTools('present')
+  registry.register(tool('tool_search', { exposure: 'deferred' }))
+  registry.register(tool('present', { exposure: 'deferred' }))
+  registry.register(tool('direct'))
+  const hits = await registry.searchTools('present')
   expect(hits.map((t) => t.name)).toEqual(['present'])
-  expect(registry.searchTools('tool_search')).toHaveLength(0)
+  // Asking again for a loaded tool returns it again
+  expect((await registry.searchTools('present')).map((t) => t.name)).toEqual([
+    'present',
+  ])
+  expect(await registry.searchTools('tool_search')).toHaveLength(0)
+  expect(await registry.searchTools('direct')).toHaveLength(0)
+})
+
+test('searchTools ranks deferred tools by keywords (BM25, like pi) and loads at most `limit`', async () => {
+  const registry = makeRegistry()
+  const github = { name: 'mcp__github', description: 'GitHub repositories' }
+  registry.register(
+    tool('mcp__github__list_issues', {
+      exposure: 'deferred',
+      namespace: github,
+      description: 'List issues in a repository',
+    }),
+    tool('mcp__github__create_issue', {
+      exposure: 'deferred',
+      namespace: github,
+      description: 'Create a new issue',
+    }),
+    tool('mcp__github__get_file', {
+      exposure: 'deferred',
+      namespace: github,
+      description: 'Read a file from a repository',
+    }),
+    tool('mcp__slack__post', {
+      exposure: 'deferred',
+      description: 'Post a message to a channel',
+    }),
+  )
+  const hits = await registry.searchTools('github issues', 2)
+  expect(hits.map((t) => t.name).sort()).toEqual([
+    'mcp__github__create_issue',
+    'mcp__github__list_issues',
+  ])
+  expect(
+    registry
+      .getActiveTools()
+      .map((t) => t.name)
+      .sort(),
+  ).toEqual(['mcp__github__create_issue', 'mcp__github__list_issues'])
+  // Loaded tools are not found again by keywords; unrelated words find nothing
+  expect((await registry.searchTools('issue')).map((t) => t.name)).toEqual([])
+  expect(await registry.searchTools('weather forecast')).toHaveLength(0)
+  registry.setPermissions({ mcp__slack__post: 'deny' })
+  expect(await registry.searchTools('post message channel')).toHaveLength(0)
 })
 
 test('toAISDKFormat includes only available tools', () => {
@@ -312,7 +357,7 @@ test('a sequential call in one session does not hold back another session', asyn
   await first
 })
 
-test('tool_search is model-only and returns the namespace with its instructions', async () => {
+test("tool_search is model-only and lists the loaded tools with each namespace's instructions once", async () => {
   const registry = makeRegistry()
   registerToolSearchTool(registry)
   const namespace = {
@@ -321,18 +366,29 @@ test('tool_search is model-only and returns the namespace with its instructions'
     instructions: 'Search before reading.',
   }
   registry.register(
-    tool('mcp__docs__read', { exposure: 'deferred', namespace }),
+    tool('mcp__docs__read', {
+      exposure: 'deferred',
+      namespace,
+      description: 'Read a page\nMore details',
+    }),
     tool('mcp__docs__search', { exposure: 'deferred', namespace }),
   )
   expect(registry.get('tool_search')?.exposure).toBe('model-only')
-  const result = await registry.toAISDKFormat().tool_search!.execute!(
-    { query: 'mcp__docs__read, mcp__docs__search' },
-    { toolCallId: 'search', messages: [], context: {} },
+  const run = (query: string) =>
+    registry.toAISDKFormat().tool_search!.execute!(
+      { query },
+      { toolCallId: 'search', messages: [], context: {} },
+    )
+  expect(await run('mcp__docs__read, mcp__docs__search')).toBe(
+    [
+      'Loaded 2 tools. They are available from your next call:',
+      '- mcp__docs__read: Read a page',
+      '- mcp__docs__search: tool mcp__docs__search',
+      '',
+      '<instructions namespace="mcp__docs">',
+      'Search before reading.',
+      '</instructions>',
+    ].join('\n'),
   )
-  // The instructions come once, with the namespace's first tool
-  expect(JSON.parse(String(result))).toMatchObject([
-    { name: 'mcp__docs__read', namespace },
-    { name: 'mcp__docs__search', namespace: { name: 'mcp__docs' } },
-  ])
-  expect(JSON.parse(String(result))[1].namespace).toEqual({ name: 'mcp__docs' })
+  expect(await run('unrelated words')).toBe('No matching tools found.')
 })

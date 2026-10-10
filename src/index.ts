@@ -30,6 +30,15 @@ export {
   type VelaSettings,
 } from './config/index.ts'
 export { type FeishuOptions, feishu } from './extensions/feishu/index.ts'
+export {
+  type McpExposure,
+  type McpHttpServerConfig,
+  type McpOptions,
+  type McpServerConfig,
+  type McpServersFile,
+  type McpStdioServerConfig,
+  mcp,
+} from './extensions/mcp/index.ts'
 export { memory } from './extensions/memory/index.ts'
 export { createEmbedder, type EmbeddingFn } from './extensions/rag/embedder.ts'
 export { type RagOptions, rag } from './extensions/rag/index.ts'
