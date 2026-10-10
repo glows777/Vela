@@ -550,3 +550,42 @@ test('local-provider: models from a registered provider can be picked by name', 
     ref: 'local/llama3',
   })
 })
+
+test('registerTool keeps a name that already carries the prefix; unregisterTool removes only own tools; onShutdown runs on dispose', async () => {
+  const calls: string[] = []
+  const t = createTestVela({
+    extensions: [
+      function demo(vela) {
+        const tool = {
+          description: 'x',
+          inputSchema: z.object({}),
+          execute: async () => 'x',
+        }
+        expect(vela.registerTool({ ...tool, name: 'plain' })).toBe('demo_plain')
+        expect(vela.registerTool({ ...tool, name: 'demo__a__b' })).toBe(
+          'demo__a__b',
+        )
+        expect(vela.unregisterTool('read_file')).toBe(false)
+        expect(vela.unregisterTool('demo_plain')).toBe(true)
+        expect(vela.unregisterTool('demo_plain')).toBe(false)
+        vela.onShutdown(async () => {
+          calls.push('first')
+          throw new Error('logged, not thrown')
+        })
+        vela.onShutdown(() => {
+          calls.push('second')
+        })
+      },
+    ],
+    responses: [],
+  })
+  await t.vela.ready()
+  expect(t.vela.extensions().find((e) => e.name === 'demo')?.tools).toEqual([
+    'demo__a__b',
+  ])
+  expect(t.internals.registry.get('read_file')).toBeDefined()
+  expect(t.internals.registry.get('demo_plain')).toBeUndefined()
+  await t.vela.dispose()
+  await t.vela.dispose()
+  expect(calls).toEqual(['first', 'second'])
+})

@@ -57,6 +57,7 @@
     signal?: AbortSignal | undefined
   interface ExtensionAPI
     on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    onShutdown: (handler: () => void | Promise<void>) => void
     readonly config: Readonly<Record<string, unknown>>
     readonly cwd: string
     readonly dataDir: string
@@ -64,7 +65,8 @@
     registerChannel: (channel: ChannelDefinition) => void
     registerCommand: (name: string, command: ExtensionCommand) => void
     registerProvider: (name: string, provider: ProviderDefinition) => void
-    registerTool: (tool: ToolDefinition) => void
+    registerTool: (tool: ToolDefinition) => string
+    unregisterTool: (name: string) => boolean
   interface ExtensionCommand
     description?: string | undefined
     handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
@@ -121,6 +123,35 @@
     providers: string[]
     tools: string[]
   function loadModels: (options: { agentDir: string; env?: Env; }) => Record<string, ProviderDefinition>
+  function mcp: (options?: McpOptions) => VelaExtension
+  type McpExposure = 'direct' | 'deferred' | 'hidden'
+  interface McpHttpServerConfig
+    description?: string | undefined
+    enabled?: boolean | undefined
+    exposure?: McpExposure | undefined
+    headers?: Record<string, string> | undefined
+    timeout?: number | undefined
+    toolExposure?: Record<string, McpExposure> | undefined
+    type?: "http" | "streamable-http" | undefined
+    url: string
+  interface McpOptions
+    servers?: Record<string, McpServerConfig> | undefined
+  type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig
+  interface McpServersFile
+    errors: string[]
+    servers: Record<string, unknown>
+    sources: Record<string, string>
+  interface McpStdioServerConfig
+    args?: string[] | undefined
+    command: string
+    cwd?: string | undefined
+    description?: string | undefined
+    enabled?: boolean | undefined
+    env?: Record<string, string> | undefined
+    exposure?: McpExposure | undefined
+    timeout?: number | undefined
+    toolExposure?: Record<string, McpExposure> | undefined
+    type?: "stdio" | undefined
   function memory: () => VelaExtension
   function memorySessionStorage: () => SessionStorage
   function migrateSessionV1: (id: string, lines: unknown[]) => SessionFileEntry[]
@@ -350,6 +381,7 @@
     extensionConfig: Record<string, Record<string, unknown>>
     extensions: ExtensionEntry[]
     files: string[]
+    mcp: McpServersFile
     promptDirs: string[]
     providers: Record<string, ProviderDefinition>
     settings: VelaSettings

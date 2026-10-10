@@ -37,7 +37,7 @@ Review an extension before you load it, and load only extensions from sources yo
 
 ## Project trust
 
-A project directory can contain `.vela/settings.json`, `.vela/extensions/`, prompt templates, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills and prompts put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
+A project directory can contain `.vela/settings.json`, `.vela/mcp.json` (MCP servers, which Vela starts as processes or connects to), `.vela/extensions/`, prompt templates, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills and prompts put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
 
 Interactive mode asks once per project and saves the answer in `~/.vela/trust.json`; `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 
@@ -57,7 +57,8 @@ A guest has no file, shell or memory tools and no extension tools: extension too
 
 Note what each role can still reach:
 
-- A `collaborator` can read and write any file the Vela process can, sees the owner's memory index in its system prompt and can read and change memories with the `memory` tool, and can call extension tools.
+- A `collaborator` can read and write any file the Vela process can, sees the owner's memory index in its system prompt and can read and change memories with the `memory` tool, and can call extension tools, MCP server tools included.
+- A `guest` cannot use MCP server tools: they are extension tools (`mcp__<server>__<tool>`), and `tool_search` does not find tools the role denies.
 - A `guest` can search the knowledge base with `rag_search`. Do not index private documents if untrusted people can message a channel.
 
 The terminal session is `owner`. In the SDK, `vela.session(id, { role })` sets the role (default `owner`). In interactive mode, `/role [owner|collaborator|guest]` shows or changes the current session's role, which is useful for trying out what a channel sender sees.

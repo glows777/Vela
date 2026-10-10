@@ -12,6 +12,7 @@ Vela reads its configuration from JSON files in the user directory (`~/.vela`, o
 | `~/.vela/trust.json` | Saved project trust decisions. |
 | `~/.vela/extensions/` | User extensions, loaded in every project. |
 | `<project>/.vela/extensions/` | Project extensions. Loaded only when the project is trusted. |
+| `~/.vela/mcp.json`, `<project>/.vela/mcp.json` | MCP servers. The project file is read only when the project is trusted. See [MCP servers](mcp.md). |
 | `~/.vela/skills/`, `~/.agents/skills/`, `<project>/.vela/skills/`, `<project>/.agents/skills/`, `<project>/.skills/` | Skills. Project skills load only when the project is trusted. See [Skills](#skills). |
 | `~/.vela/prompts/`, `<project>/.vela/prompts/` | Prompt templates. Project templates load only when the project is trusted. See [Prompt templates](#prompt-templates). |
 | `~/.vela/AGENTS.md`, `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Instructions put into the system prompt. Not gated by trust. See [Context files](#context-files). |
