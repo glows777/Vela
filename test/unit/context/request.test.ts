@@ -113,8 +113,9 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
       }),
     ),
   ]
-  await store.replace(history, new Map(), '')
-  const restored = (await store.loadState()).messages
+  for (const message of history) store.appendMessage(message)
+  await store.flush()
+  const restored = (await store.loadSaved())?.messages ?? []
   await generateText({
     model,
     instructions: system(8),

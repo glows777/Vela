@@ -6,6 +6,8 @@
 
 export type {
   AssistantMessageEvent,
+  CompactionReason,
+  CompactionResult,
   StopReason,
   VelaEvent,
   VelaEventListener,
@@ -69,11 +71,27 @@ export type {
   Role,
 } from './security/roles.ts'
 export {
+  type CompactionEntry,
+  type ContextEditEntry,
+  type ModelChangeEntry,
+  migrateSessionV1,
+  type NestedToolCallRecord,
+  type NestedToolCalls,
+  SESSION_FORMAT_VERSION,
+  type SessionEntry,
+  type SessionEntryBase,
+  type SessionFileEntry,
+  type SessionHeader,
+  type SessionInfoEntry,
+  type SessionMessageEntry,
+  type SessionSummary,
+  summarizeSession,
+  type ThinkingLevelChangeEntry,
+} from './session/entries.ts'
+export {
   fileSessionStorage,
   memorySessionStorage,
-  type SessionCheckpoint,
   type SessionStorage,
-  type SessionSummary,
 } from './session/storage.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export type {

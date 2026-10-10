@@ -1,10 +1,10 @@
 # Session file format
 
-A Vela session file is a JSONL file holding one checkpoint: the full message history after compaction, plus the session's settings. Every save writes a new checkpoint that replaces the file, so a file written by Vela has exactly one line. Unlike pi's session files, there is no entry tree and no append log: branching and history before a summary are not kept in the session file (the tool call history keeps the raw tool calls and outputs).
+A Vela session file is an append-only JSONL log in pi's format: a header line, then one entry per line for every message, compaction, context edit and setting change, in the order they happened. Entries are never rewritten. A summary does not delete the messages it replaces; it adds a `compaction` entry, and the model context is rebuilt from the entries when a session is resumed.
 
 The format is part of Vela's public API. See [Sessions](sessions.md) for behavior and [SDK](sdk.md#session-storage) for custom storage.
 
-Source: `src/session/storage.ts` (checkpoint type, file storage, parsing) and `src/session/index.ts` (saving and loading).
+Source: `src/session/entries.ts` (entry types, rebuilding the context, migration), `src/session/storage.ts` (file and memory storage) and `src/session/index.ts` (appending and loading).
 
 ## File location
 
@@ -12,57 +12,63 @@ Source: `src/session/storage.ts` (checkpoint type, file storage, parsing) and `s
 <dataDir>/sessions/<id>.jsonl
 ```
 
-In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)).
+In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)). Unlike pi (`<timestamp>_<uuid>.jsonl`), the file is named by the session id, which the caller chooses (`--session`, a channel, `vela.session(id)`).
 
-Files are written by writing a temp file next to the target, syncing it and renaming it over the target, so a crash never leaves a half-written session. Files are created with mode `0600` and the directory with `0700`.
+Entries are appended as they happen; like pi, a session is written only once it has a user or assistant message, so opening a session and closing it leaves no file. Files are created with mode `0600` and the directory with `0700`. A line cut off by a crash is skipped when the file is read (and reported to the logger). A failed write is retried with the next entry; if the failed attempt had already written some entries, the repeated copies are ignored on resume (the first entry with an id counts). A file whose first entry is not a header (and not a version 1 file) fails to resume instead of being converted.
 
-## Checkpoint
+## Header
+
+The first line:
 
 ```typescript
-interface SessionCheckpoint {
-  type: 'checkpoint'
-  version?: number          // format version; always written
-  timestamp: string         // ISO time of this save
-  summary: string           // latest compaction summary, '' if never compacted
-  messages: { timestamp: string; message: ModelMessage }[]
-  model?: string            // `provider/id`, only when the model was chosen by name
-  thinkingLevel?: ThinkingLevel
-  name?: string             // display name (session.setName(), /name)
-  toolHistoryId?: string    // @internal
-  toolHistorySeq?: number   // @internal
-  toolHistoryViewSeq?: number // @internal
+interface SessionHeader {
+  type: 'session'
+  version: number          // format version, see Versions
+  id: string               // session id
+  timestamp: string        // when the session was created (ISO)
+  cwd?: string             // working directory
+  toolHistoryId?: string   // @internal: the tool call history directory
 }
 ```
 
+## Entries
+
+Every other line is an entry. All entries have pi's base fields:
+
 | Field | Description |
 |---|---|
-| `type` | Always `checkpoint` |
-| `version` | Format version, see [Versions](#versions) |
-| `timestamp` | When the checkpoint was saved; used to sort session lists |
-| `summary` | Text of the latest compaction summary. The same text is in the first message after a summary; this field is informational. |
-| `messages` | The history in order. `timestamp` is the ISO time the message entered the history; `message` is an AI SDK `ModelMessage`. |
-| `model` | Model reference restored by `resume()`. Absent when the model was passed as a `LanguageModel` object. |
-| `thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; restored by `resume()` |
-| `name` | Session display name |
-| `toolHistoryId`, `toolHistorySeq`, `toolHistoryViewSeq` | Link the checkpoint to its [tool call history](#tool-call-history): the history directory and how many records it must contain. Internal: their meaning may change without a format version bump as long as old files keep loading. |
+| `type` | The entry type, below |
+| `id` | 8 hex characters, unique in the session |
+| `parentId` | The entry this one follows (`null` for the first). Vela writes a single branch, so this is the previous entry; the field is there so sessions can branch later (pi's session tree) |
+| `timestamp` | When the entry was appended (ISO) |
 
-A custom `SessionStorage` receives this object in `save()` and must return it unchanged from `load()`.
+| `type` | Fields | Description |
+|---|---|---|
+| `message` | `message`, `stopReason?`, `nestedCalls?` | A message entered the conversation (user input, assistant reply, tool results, loop-detection reminders). `message` is an AI SDK `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `nestedCalls` is on a tool message whose tools called other tools through `ctx.executeTool()`: by tool call id, `{ calls: [{ id, name, arguments?, argumentsBytes?, status, durationMs?, error? }], complete }` (pi's `nestedCalls`, with pi's limits: 256 calls, 8 KB of arguments per call and 32 KB in total, 500 characters of error); not sent to the model |
+| `model_change` | `model` | The session's model, as `provider/id`. Written when a session starts with a model given by name and on `setModel()` with a name; `resume()` restores the latest |
+| `thinking_level_change` | `thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Written when a session starts and on `setThinkingLevel()`; `resume()` restores the latest |
+| `session_info` | `name?` | The display name (`session.setName()`, `/name`); no `name` clears it |
+| `compaction` | `summary`, `firstKeptEntryId`, `tokensBefore`, `toolHistoryViewSeq?` | Earlier history was summarized. The model context becomes the summary followed by the messages from `firstKeptEntryId` on (that entry is before the compaction; when it is the compaction itself, nothing was kept) and everything after the compaction. `tokensBefore` is the estimated context size before the summary |
+| `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
+
+Entries of other types (from a newer Vela or an extension) are kept and ignored.
+
+### Rebuilding the context
+
+`resume()` rebuilds the model context like pi's `buildSessionContext`:
+
+1. Take the latest `compaction` entry, if any: the context starts with its summary message, then the `message` entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, all `message` entries.
+2. Apply the `context_edit` entries to their targets.
+3. Leave out messages with a `stopReason`.
+
+The model, thinking level and name are the latest `model_change`, `thinking_level_change` and `session_info`.
 
 ## Versions
 
-`SESSION_FORMAT_VERSION` (in `src/session/storage.ts`) is the version Vela writes. The current version is `1`.
+`SESSION_FORMAT_VERSION` is the version Vela writes. The current version is `2`.
 
-- A checkpoint without `version` is read as version 1.
-- A checkpoint with a higher version than this Vela supports fails to resume with an error asking you to upgrade Vela.
-- Only version 1 exists so far. An incompatible change will bump the version, and Vela will then migrate older versions when it loads them (as pi does).
-
-Files from before checkpoints existed hold one message per line:
-
-```json
-{"type":"message","timestamp":"2026-05-01T09:00:00.000Z","message":{"role":"user","content":"hello"}}
-```
-
-They are still read: each `message` line is appended to the history, and message lines after the last checkpoint line are appended to that checkpoint. The next save rewrites the file as a single checkpoint. Lines that are not valid JSON are skipped and reported to the logger.
+- A header with a higher version than this Vela supports fails to resume with an error asking you to upgrade Vela.
+- Version 1 files (Vela 0.1: one `checkpoint` line holding the whole history after compaction, or the even older one message per line) are converted when the file storage loads them, and the file is rewritten as version 2 (written to a temp file and renamed over it). Messages become `message` entries, the checkpoint's model, thinking level and name become entries, and a compacted checkpoint (its first message is the summary) becomes its kept messages followed by a `compaction` entry, which rebuilds the same context. A custom storage holding version 1 data can convert it with `migrateSessionV1(id, lines)`.
 
 ## Messages
 
@@ -89,13 +95,13 @@ Vela adds two conventions on top:
 
 `preview` is what the model sees; `path` is the full output.
 
-**Summaries.** After a compaction summary, the history starts with a user message whose content begins with `[Summary of the earlier conversation]`, followed by the summary sections (User goal, Completed, Pending, Constraints, Key facts) and a guide to the tool call history. The messages after it are the ones kept.
+**Summaries.** After a compaction, the model context starts with a user message whose content is `[Summary of the earlier conversation]` followed by the `compaction` entry's summary: the summary sections (User goal, Completed, Pending, Constraints, Key facts) and a guide to the tool call history. This message is not stored as a `message` entry; it is rebuilt from the `compaction` entry.
 
 Loop-detection reminders are user messages starting with `[system message]`.
 
 ## Tool call history
 
-Next to the checkpoint, each session has a directory:
+Next to the session file, each session has a directory:
 
 ```
 <dataDir>/sessions/<id>/
@@ -113,32 +119,33 @@ Next to the checkpoint, each session has a directory:
 
 `tool_result.status` is `completed`, `failed`, `cancelled` or `rejected`; the body is in `output` or, for long output, in the file at `outputPath`. Execution details (`exitCode`, `signal`, `isError`, `timedOut`, `error`) are included when known. A `tool_call` without a `tool_result` has an unknown outcome.
 
-The model reads this history (through `bash` and `read_file`) to look up tool calls that were summarized away. The checkpoint's `toolHistoryId` and `toolHistorySeq` point to it; resuming fails if the history has fewer records than the checkpoint expects, rather than continuing with a broken reference.
+The model reads this history (through `bash` and `read_file`) to look up tool calls that were summarized away. The header's `toolHistoryId` points to it and a `compaction` entry's `toolHistoryViewSeq` to the snapshot its summary refers to; resuming fails if that history or snapshot is missing, rather than continuing with a broken reference.
 
 ## Example
 
-A session where the user asked one question and the model read a file (the actual file is a single line; it is wrapped here for reading):
+A session where the user asked one question and the model read a file:
 
 ```json
-{"type":"checkpoint","version":1,"timestamp":"2026-10-08T10:50:32.648Z","summary":"",
- "toolHistoryId":"2bbdf095-0fa4-4ab5-80ad-0603a6dab4c2","toolHistorySeq":2,
- "model":"openai/gpt-5","thinkingLevel":"medium","name":"notes",
- "messages":[
-  {"timestamp":"2026-10-08T10:50:32.574Z","message":{"role":"user","content":"What does notes.txt say?"}},
-  {"timestamp":"2026-10-08T10:50:32.648Z","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]}},
-  {"timestamp":"2026-10-08T10:50:32.648Z","message":{"role":"tool","content":[{"type":"tool-result","toolCallId":"call_1","toolName":"read_file","output":{"type":"text","value":"Ship the docs on Friday.\n\n\n[read_file: lines 1-1, starting column=0; 25 UTF-16 code units shown. EOF: no more content.]"}}]}},
-  {"timestamp":"2026-10-08T10:50:32.648Z","message":{"role":"assistant","content":[{"type":"text","text":"The note says: ship the docs on Friday."}]}}
- ]}
+{"type":"session","version":2,"id":"notes","timestamp":"2026-10-08T10:50:32.570Z","cwd":"/home/me/app","toolHistoryId":"2bbdf095-0fa4-4ab5-80ad-0603a6dab4c2"}
+{"type":"model_change","model":"openai/gpt-5","id":"5f1c2a90","parentId":null,"timestamp":"2026-10-08T10:50:32.570Z"}
+{"type":"thinking_level_change","thinkingLevel":"medium","id":"0b7e44d1","parentId":"5f1c2a90","timestamp":"2026-10-08T10:50:32.570Z"}
+{"type":"message","message":{"role":"user","content":"What does notes.txt say?"},"id":"a3c90e12","parentId":"0b7e44d1","timestamp":"2026-10-08T10:50:32.574Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]},"id":"77d2f0b4","parentId":"a3c90e12","timestamp":"2026-10-08T10:50:32.640Z"}
+{"type":"message","message":{"role":"tool","content":[{"type":"tool-result","toolCallId":"call_1","toolName":"read_file","output":{"type":"text","value":"Ship the docs on Friday.\n\n\n[read_file: lines 1-1, starting column=0; 25 UTF-16 code units shown. EOF: no more content.]"}}]},"id":"c01b9a6e","parentId":"77d2f0b4","timestamp":"2026-10-08T10:50:32.646Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"The note says: ship the docs on Friday."}]},"id":"e5a8d3f7","parentId":"c01b9a6e","timestamp":"2026-10-08T10:50:32.648Z"}
+{"type":"session_info","name":"notes","id":"19f04c2b","parentId":"e5a8d3f7","timestamp":"2026-10-08T10:51:02.000Z"}
 ```
 
 ## Reading sessions from code
 
-Use the storage functions instead of parsing files yourself; they handle versions and the legacy format:
+Use the storage functions instead of parsing files yourself; they handle versions and the version 1 format:
 
 ```typescript
 import { fileSessionStorage } from '@glows777/vela'
 
 const storage = fileSessionStorage('/home/me/.vela/projects/--home-me-app--1a2b3c4d/sessions')
 for (const summary of await storage.list!()) console.log(summary.id, summary.messageCount)
-const checkpoint = await storage.load('20261008-081441-da14')
+const entries = await storage.load('20261008-081441-da14') // header first, then the entries
 ```
+
+An open session returns its entries with `session.getEntries()`.

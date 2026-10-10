@@ -97,9 +97,10 @@ function summaryModel(text?: string) {
   })
 }
 
-test('micro commits once, keeps references across restart and is idempotent', async () => {
+test('micro is recorded as context edits once, keeps references across restart and is idempotent; the original output stays in the session', async () => {
   const store = new SessionStore('micro', dir)
   const messages = history(10, 41000)
+  for (const message of messages) store.appendMessage(message)
   const manager = new ContextManager(store, new TokenTracker(), {
     messages,
     timestamps: new Map(),
@@ -122,9 +123,13 @@ test('micro commits once, keeps references across restart and is idempotent', as
     await createRequestSnapshot(model, 'stable', {}, messages),
   )
   expect(await Bun.file(store.results.indexPath).text()).toBe(index)
-  const restored = await new SessionStore('micro', dir).loadState()
-  expect(restored.messages).toEqual(messages)
-  expect(restored.summary).toBe('old summary')
+  await manager.save()
+  const reopened = new SessionStore('micro', dir)
+  const restored = await reopened.loadSaved()
+  expect(restored?.messages).toEqual(messages)
+  const entries = reopened.getEntries()
+  expect(entries.filter((e) => e.type === 'context_edit')).toHaveLength(5)
+  expect(JSON.stringify(entries)).toContain('evidence-0')
 })
 
 test('low net savings does not clear even above the micro trigger', async () => {
@@ -180,6 +185,7 @@ test('summary chosen directly when a profitable micro still leaves >=150k', asyn
     ),
   )
   const store = new SessionStore('summary', dir)
+  for (const message of messages) store.appendMessage(message)
   const tracker = new TokenTracker()
   const manager = new ContextManager(store, tracker, {
     messages,
@@ -194,7 +200,10 @@ test('summary chosen directly when a profitable micro still leaves >=150k', asyn
   expect(manager.state.summary).toContain('preserved decisions')
   expect(manager.state.summary).toContain('/snapshots/through-')
   expect(store.results.historyViewSequence).toBeDefined()
-  expect((await store.loadState()).summary).toBe(manager.state.summary)
+  await manager.save()
+  expect((await new SessionStore('summary', dir).loadSaved())?.summary).toBe(
+    manager.state.summary,
+  )
   expect(tracker.recent(1)[0]!.kind).toBe('summary')
 })
 
@@ -270,35 +279,6 @@ test('debug never generates a paid summary; oversized input and missing boundary
     manager.prepare(await createRequestSnapshot(m, 'stable', {}, messages)),
   ).rejects.toThrow('safe input size')
   expect(m.calls).toHaveLength(0)
-})
-
-test('checkpoint failure does not commit a cleared in-memory view', async () => {
-  const { spyOn } = await import('bun:test')
-  const store = new SessionStore('atomic', dir)
-  const messages = history(10, 41000)
-  const tracker = new TokenTracker()
-  const manager = new ContextManager(store, tracker, {
-    messages,
-    timestamps: new Map(),
-    summary: 'before',
-  })
-  await manager.save()
-  const original = JSON.stringify(messages)
-  const failure = spyOn(store, 'replace').mockRejectedValue(
-    new Error('disk failure'),
-  )
-  try {
-    await expect(
-      manager.prepare(
-        await createRequestSnapshot(model, 'stable', {}, messages),
-      ),
-    ).rejects.toThrow('disk failure')
-    expect(JSON.stringify(messages)).toBe(original)
-    expect(manager.state.summary).toBe('before')
-  } finally {
-    failure.mockRestore()
-  }
-  expect((await store.loadState()).messages).toEqual(messages)
 })
 
 test('empty summary is rejected without changing the live summary or messages', async () => {

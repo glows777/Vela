@@ -357,6 +357,29 @@ test('a tool calling another tool through ctx.executeTool goes through permissio
   // Nested calls are in the tool history, not in the conversation
   const history = await Bun.file(t.session.registry.results.indexPath).text()
   expect(history).toContain(`${runnerId}/2`)
+  // Like pi's nestedCalls: recorded on the calling tool's result in the session, not sent to the model
+  const toolEntry = t.session
+    .getEntries()
+    .find((e) => e.type === 'message' && e.message.role === 'tool')
+  expect(toolEntry).toMatchObject({
+    nestedCalls: {
+      [runnerId]: {
+        complete: true,
+        calls: [
+          {
+            id: `${runnerId}/1`,
+            name: 'bash',
+            arguments: { command: 'echo nested' },
+            status: 'ok',
+          },
+          { id: `${runnerId}/2`, name: 'bash', status: 'error' },
+          { id: `${runnerId}/3`, name: 'write_file', status: 'error' },
+          { id: `${runnerId}/4`, name: 'read_file', status: 'error' },
+        ],
+      },
+    },
+  })
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain('nestedCalls')
   expect(t.messages.map((m) => m.role)).toEqual([
     'user',
     'assistant',

@@ -101,9 +101,17 @@ test('a frozen history file cannot expose later entries even when the reader omi
   expect(rows.map((row) => row.seq)).toEqual([1, 2])
   expect(rows[0].input.command).toBe('汉😀'.repeat(20000))
   expect(await Bun.file(frozen.path).text()).toBe(before)
-  await session.replace([], new Map(), 'summary', frozen.sequence)
+  session.appendMessage({ role: 'user', content: 'hi' })
+  session.appendCompaction(
+    { role: 'user', content: 'summary' },
+    'summary',
+    undefined,
+    0,
+    frozen.sequence,
+  )
+  await session.flush()
   const restored = new SessionStore('snapshot', root)
-  await restored.loadState()
+  await restored.loadSaved()
   expect(restored.results.historyViewSequence).toBe(2)
   expect(restored.results.readingGuide()).toContain(
     `Absolute path: ${frozen.path}`,

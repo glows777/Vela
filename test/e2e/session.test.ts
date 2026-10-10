@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import { fauxText } from '../../src/testing/faux.ts'
+import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -30,6 +30,89 @@ test('a resumed Vela continues the saved conversation', async () => {
     await second.cleanup()
     rmSync(first.cwd, { recursive: true, force: true })
   }
+})
+
+test('each message is written as it enters the history, so a killed process keeps the finished steps (like pi)', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'A' },
+    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxHang('…')],
+  })
+  const running = t.run('Read a.txt')
+  const messages = async () =>
+    (t.exists('sessions/default.jsonl')
+      ? (await t.readData('sessions/default.jsonl')).trim().split('\n')
+      : []
+    )
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.type === 'message')
+      .map((entry) => entry.message.role)
+  // The second request is still running: the first step is already on disk
+  while ((await messages()).length < 3) await Bun.sleep(1)
+  expect(await messages()).toEqual(['user', 'assistant', 'tool'])
+  await t.session.abort()
+  await expect(running).rejects.toThrow()
+})
+
+test('prompting a saved session that was not resumed fails instead of mixing two conversations', async () => {
+  const first = createTestVela({ responses: [fauxText('First answer')] })
+  await first.run('hello')
+  await first.cleanup({ keepDir: true })
+  const second = createTestVela({ cwd: first.cwd })
+  try {
+    await expect(second.run('hi')).rejects.toThrow('already has saved history')
+    expect(second.model.calls).toHaveLength(0)
+    expect(await second.session.resume()).toBe(true)
+  } finally {
+    await second.cleanup()
+    rmSync(first.cwd, { recursive: true, force: true })
+  }
+})
+
+test('a version-1 session file resumes with its settings and is rewritten in the new format', async () => {
+  const t = createTestVela({
+    files: {
+      '.vela-data/sessions/default.jsonl': `${JSON.stringify({
+        type: 'checkpoint',
+        version: 1,
+        timestamp: '2026-10-01T00:00:00.000Z',
+        summary: '',
+        thinkingLevel: 'low',
+        name: 'Old chat',
+        messages: [
+          {
+            timestamp: '2026-10-01T00:00:00.000Z',
+            message: { role: 'user', content: 'old question' },
+          },
+          {
+            timestamp: '2026-10-01T00:00:01.000Z',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'old answer' }],
+            },
+          },
+        ],
+      })}\n`,
+    },
+    responses: [
+      (req) =>
+        fauxText(
+          JSON.stringify(req.prompt).includes('old answer') ? 'kept' : 'lost',
+        ),
+    ],
+  })
+  expect(await t.session.resume()).toBe(true)
+  expect(t.session.name).toBe('Old chat')
+  expect(t.session.thinkingLevel).toBe('low')
+  await t.run('new question')
+  expect(t.lastAssistantText()).toBe('kept')
+  const lines = (await t.readData('sessions/default.jsonl'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(lines[0]).toMatchObject({ type: 'session', version: 2 })
+  expect(
+    lines.filter((l) => l.type === 'message').map((l) => l.message.role),
+  ).toEqual(['user', 'assistant', 'user', 'assistant'])
 })
 
 test('resume on an empty data dir reports no session', async () => {

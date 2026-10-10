@@ -262,7 +262,7 @@ Data: `{ "levels": ["off","minimal","low","medium","high","xhigh","max"] }`.
 {"id":"18","type":"compact","customInstructions":"Keep the API decisions"}
 ```
 
-Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the `context` event of the compaction, `{ "type": "context", "action": "compact", "before", "after", ... }`. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary splits at a user message that is not the first message, has at least six messages from it to the end, and has every earlier tool call answered, so a new or short session has nothing to compact.
+Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the compaction result, like pi: `{ "summary", "firstKeptEntryId", "tokensBefore", "tokensAfter", "messages" }`. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary splits at a user message that is not the first message, has at least six messages from it to the end, and has every earlier tool call answered, so a new or short session has nothing to compact.
 
 ### Commands
 
@@ -422,7 +422,7 @@ process.wait()
 
 | | pi | Vela |
 |---|---|---|
-| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are AI SDK `ModelMessage`s and the stop reason is on `message_end`; compaction is a `context` event; Vela adds `usage`, `loop_detected` and others. See [SDK events](sdk.md#events). |
+| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are AI SDK `ModelMessage`s and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context` (microcompaction), `usage`, `loop_detected` and others. See [SDK events](sdk.md#events). |
 | `prompt` / `steer` / `follow_up` | Accept `images` | Text only |
 | `steer` / `follow_up` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |

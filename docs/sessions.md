@@ -1,6 +1,6 @@
 # Sessions and context
 
-A session is one conversation: its message history, queued messages, compaction state, token usage, tool results, role and run lock. Vela saves a session after every prompt, so you can continue it later. This page covers where sessions live, how to continue them, and how Vela keeps a long session within the model's context window.
+A session is one conversation: its message history, queued messages, compaction state, token usage, tool results, role and run lock. Like pi, Vela appends each message to the session file as it enters the history, so a crash loses at most the step in progress, and you can continue the session later. This page covers where sessions live, how to continue them, and how Vela keeps a long session within the model's context window.
 
 For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session format](session-format.md).
 
@@ -12,7 +12,7 @@ Every session has an id, which is also its file name. Ids use letters, digits, `
 - Channel sessions get `<channel>-<conversationId>-<senderId>`, one per chat and sender (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
-The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session checkpoint and `sessions/<id>/` the long tool output and tool call history.
+The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session's entries (messages, compactions, setting changes) and `sessions/<id>/` the long tool output and tool call history.
 
 To delete a session, delete `<id>.jsonl` and the `<id>/` directory.
 
@@ -32,6 +32,8 @@ In interactive mode:
 | `/compact [focus]` | Compact the context now (see [Compaction](#compaction)) |
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
+
+In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in one file; messages added with `session.append()` to such a session are not written either (`session_save_failed`).
 
 The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed.
 
@@ -68,7 +70,7 @@ When the estimate reaches `microcompactThreshold`, Vela folds old tool results: 
 - The five most recent tool calls are kept as they are.
 - Failed or timed-out results, and failed bash commands, are kept. A folded successful `bash` result keeps its `exit=0` line.
 
-Microcompaction is applied only if it saves at least `minMicroSavings` tokens and brings the request below `summaryThreshold`. It emits a `context` event with `action: 'micro'`. Because it changes messages only from the oldest ones forward, most of the cached prompt prefix survives.
+Microcompaction is applied only if it saves at least `minMicroSavings` tokens and brings the request below `summaryThreshold`. It emits a `context` event with `action: 'micro'`. Each changed tool message is recorded as a `context_edit` entry (pi's context edit); the original output stays in the session file. Because it changes messages only from the oldest ones forward, most of the cached prompt prefix survives.
 
 ### Summary
 
@@ -76,8 +78,8 @@ When the estimate reaches `summaryThreshold` (and microcompaction wasn't enough)
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
 2. It sends the full current request plus one instruction asking for a JSON summary: the user's goal and lists of completed work, pending work, constraints and key facts. Every item must be a verbatim quote from a removed message; quotes that don't match the original text are rejected.
-3. The removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary and a guide to the tool call history file, so the model can still look up earlier tool calls and outputs.
-4. The new history is saved, and a `context` event with `action: 'summary'` is emitted.
+3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary and a guide to the tool call history file, so the model can still look up earlier tool calls and outputs.
+4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized messages stay in the file. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
 
 If the summary fails (the model returns invalid JSON, tool calls, unverifiable quotes, or the result is still too large), the turn stops with an error and the original history is kept. Nothing is lost; fix the cause (for example switch to a model with a larger window) and try again.
 
@@ -85,7 +87,7 @@ The summary request uses the same model, system prompt and tool definitions as t
 
 ### Manual compaction
 
-`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `action: 'compact'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session: the split must be at a user message that is not the first message, with at least six messages from it to the end and every earlier tool call answered), it fails with `Nothing to compact (session too small)`, as in pi.
+`/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session: the split must be at a user message that is not the first message, with at least six messages from it to the end and every earlier tool call answered), it fails with `Nothing to compact (session too small)`, as in pi.
 
 ### Thresholds and context window
 
@@ -120,10 +122,10 @@ Retryable errors are HTTP 408, 409, 429, 5xx and 529 (as reported by the provide
 
 ## Interrupted and failed turns
 
-When a turn is aborted or fails for good, what it produced stays in the history, so the model knows what already happened. Unlike pi, which keeps an interrupted message in the session but leaves it out of the model's context, Vela sends the partial text to the model too: the history is also what a resumed session shows.
+When a turn is aborted or fails for good, it ends like in pi:
 
-- The text streamed so far and every tool call the model finished writing are kept as the assistant message; half-written reasoning and tool calls are dropped. Its `message_end` has `stopReason: 'aborted'` or `'error'`.
-- Each kept tool call gets a result: its real result if it finished, otherwise an error result (`Operation aborted`, as in pi, or that the call was not executed because the response failed).
+- If the model had finished its message and its tools were running, the message stays in the history and each tool call gets a result: its real result if it finished, otherwise an error result (`Operation aborted`, as in pi), so the model knows what already happened.
+- If the message was cut off while it streamed, it is appended to the session with `stopReason: 'aborted'` or `'error'` (the text and whole tool calls received so far), but it is not part of the history sent to the model, now or after a resume. None of its tools ran: tools run only after the model finishes its message. Its `message_end` has the same `stopReason`.
 
 `agent_end` reports `aborted` or `error`, and `prompt()` rejects, as before.
 
@@ -133,7 +135,7 @@ When the model hits its output token limit (`stopReason: 'length'`) while writin
 
 ## Context overflow
 
-The size estimate can be wrong. When the provider rejects a request because the context is too long (recognized with pi's list of provider error messages, for example Anthropic's `prompt is too long`), Vela summarizes the history like `/compact` (`context` event with `action: 'overflow'`) and sends the same step again, once, like pi. If it overflows again, or there is nothing to summarize, the run fails with the provider's error.
+The size estimate can be wrong. When the provider rejects a request because the context is too long (recognized with pi's list of provider error messages, for example Anthropic's `prompt is too long`), Vela summarizes the history like `/compact` (`compaction_start` / `compaction_end` with `reason: 'overflow'` and `willRetry: true`) and sends the same step again, once, like pi. If it overflows again, or there is nothing to summarize, the run fails with the provider's error.
 
 ## Prompt caching
 

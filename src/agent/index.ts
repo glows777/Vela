@@ -60,6 +60,16 @@ interface AgentLoopParameter {
   takeFollowUp?: () => string[]
   /** Messages already added for this loop (e.g. the user input); agent_end reports them plus the loop's own. */
   newMessages?: ModelMessage[]
+  /** Called for every message the loop adds to `messages` (the session appends it to its log). */
+  onMessage?: (message: ModelMessage) => void
+  /**
+   * Called for an assistant message aborted or failed while it streamed. Like pi, it is kept for the session
+   * record but not added to `messages`, so it is never sent to the model.
+   */
+  onInterrupted?: (
+    message: AssistantModelMessage,
+    stopReason: 'aborted' | 'error',
+  ) => void
 }
 
 // support tools as array or object, if array, convert to object with title as key
@@ -99,6 +109,8 @@ export const agentLoop = async ({
   takeSteering,
   takeFollowUp,
   newMessages = [],
+  onMessage,
+  onInterrupted,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
@@ -112,6 +124,7 @@ export const agentLoop = async ({
     messages.push(message)
     newMessages.push(message)
     tokenTracker.addMessage(message)
+    onMessage?.(message)
     if (announce) {
       emit({ type: 'message_start', message })
       emit({ type: 'message_end', message })
@@ -446,8 +459,11 @@ export const agentLoop = async ({
   }
 
   /**
-   * The step was aborted or failed for good: end its message as interrupted and keep it in history with
-   * whatever streamed (text, whole tool calls), every tool call paired with a result, then end the turn.
+   * The step was aborted or failed for good: end its message as interrupted, answer its open tool calls, then
+   * end the turn. A message the model finished (its tools were running) stays in history with every call
+   * paired with a result. One cut off while streaming goes to the session record only (like pi, which skips
+   * such messages when sending the context): none of its tools ran, since the AI SDK runs tools only after
+   * the model call ends.
    */
   function keepInterrupted(
     step: StepMessage,
@@ -459,8 +475,12 @@ export const agentLoop = async ({
     const assistant = step.snapshot({ complete: step.complete })
     step.closeOpenCalls(openCallResult)
     const toolMessage = step.toolMessage()
-    if (assistant.content.length) add(assistant, false)
-    if (toolMessage) add(toolMessage)
+    if (!step.complete && !step.toolsStarted) {
+      if (assistant.content.length) onInterrupted?.(assistant, stopReason)
+    } else {
+      if (assistant.content.length) add(assistant, false)
+      if (toolMessage) add(toolMessage)
+    }
     emit({
       type: 'turn_end',
       turn,

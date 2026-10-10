@@ -3,7 +3,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createVela,
-  type SessionCheckpoint,
+  type SessionFileEntry,
   type SessionStorage,
   type VelaEvent,
   type VelaLogger,
@@ -123,14 +123,16 @@ test('without a dataDir nothing is persisted: sessions live in memory and scratc
   dir.cleanup()
 })
 
-test('a custom session storage receives every save and serves resume', async () => {
-  const saved = new Map<string, SessionCheckpoint>()
+test('a custom session storage receives every entry as it is appended and serves resume', async () => {
+  const saved = new Map<string, SessionFileEntry[]>()
   const storage: SessionStorage = {
     load: async (id) => saved.get(id),
-    save: async (id, checkpoint) => {
-      saved.set(id, checkpoint)
+    append: async (id, entries) => {
+      saved.set(id, [...(saved.get(id) ?? []), ...entries])
     },
   }
+  const messages = (id: string) =>
+    saved.get(id)?.filter((entry) => entry.type === 'message') ?? []
   // The first instance called a tool: its tool history lived in its temp dir and is gone after dispose, yet resume must still succeed
   const model = createFauxModel({
     responses: [
@@ -142,15 +144,15 @@ test('a custom session storage receives every save and serves resume', async () 
   const first = createVela({ model, sessionStorage: storage })
   await first.session('db').prompt('hello')
   await first.dispose()
-  expect(saved.get('db')?.messages).toHaveLength(4)
-  expect(saved.get('db')?.toolHistorySeq).toBeGreaterThan(0)
+  expect(saved.get('db')?.[0]).toMatchObject({ type: 'session', id: 'db' })
+  expect(messages('db')).toHaveLength(4)
 
   const second = createVela({ model, sessionStorage: storage })
   try {
     const session = second.session('db')
     expect(await session.resume()).toBe(true)
     await session.prompt('again')
-    expect(saved.get('db')?.messages).toHaveLength(6)
+    expect(messages('db')).toHaveLength(6)
   } finally {
     await second.dispose()
   }

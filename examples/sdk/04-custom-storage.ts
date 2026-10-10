@@ -1,53 +1,43 @@
 /**
- * Custom session storage: keep session checkpoints wherever you like (a database, a KV store, ...).
+ * Custom session storage: keep sessions wherever you like (a database, a KV store, ...).
  *
- * A SessionStorage has `load`, `save` and optionally `list`. Every save is a full checkpoint
- * (see docs/session-format.md). Here a Map of JSON strings stands in for a database; a second
- * Vela on the same storage resumes the conversation.
+ * A SessionStorage has `load`, `append` and optionally `list`. A session is an append-only list of
+ * entries (a header, then messages, compactions, setting changes; see docs/session-format.md), so a
+ * table with one row per entry fits. Here a Map of JSON lines stands in for a database; a second Vela
+ * on the same storage resumes the conversation.
  *
  * Run: bun examples/sdk/04-custom-storage.ts
  */
 import {
   createVela,
-  type SessionCheckpoint,
+  type SessionFileEntry,
   type SessionStorage,
-  type SessionSummary,
+  summarizeSession,
 } from '@glows777/vela'
 import { createFauxModel, fauxText } from '@glows777/vela/testing'
 
-const rows = new Map<string, string>()
+const rows = new Map<string, string[]>()
 
 const storage: SessionStorage = {
   async load(id) {
-    const row = rows.get(id)
-    return row === undefined
-      ? undefined
-      : (JSON.parse(row) as SessionCheckpoint)
+    return rows.get(id)?.map((row) => JSON.parse(row) as SessionFileEntry)
   },
-  async save(id, checkpoint) {
-    rows.set(id, JSON.stringify(checkpoint))
+  async append(id, entries) {
+    const list = rows.get(id) ?? []
+    list.push(...entries.map((entry) => JSON.stringify(entry)))
+    rows.set(id, list)
   },
   async list() {
-    const summaries: SessionSummary[] = []
-    for (const [id, row] of rows) {
-      const checkpoint = JSON.parse(row) as SessionCheckpoint
-      const first = checkpoint.messages.find((m) => m.message.role === 'user')
-      summaries.push({
-        id,
-        name: checkpoint.name,
-        updatedAt: checkpoint.timestamp,
-        messageCount: checkpoint.messages.length,
-        firstMessage:
-          typeof first?.message.content === 'string'
-            ? first.message.content
-            : '',
-      })
-    }
-    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    const summaries = [...rows.keys()].map(async (id) =>
+      summarizeSession(id, (await this.load(id)) ?? []),
+    )
+    return (await Promise.all(summaries)).sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt),
+    )
   },
 }
 
-// First process: talk, then shut down. prompt() saves the session when it finishes.
+// First process: talk, then shut down. Each message is appended as it enters the history.
 const first = createVela({
   model: createFauxModel({ responses: [fauxText('Noted: your name is Ada.')] }),
   sessionStorage: storage,

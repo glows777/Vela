@@ -480,6 +480,17 @@ export class InteractiveMode {
         if (event.action === 'summary-required')
           this.setLoader('Compacting context…')
         break
+      case 'compaction_start':
+        this.setLoader('Compacting context…')
+        break
+      case 'compaction_end':
+        if (event.result) this.addNotice(compactionLine(event), 'dim')
+        else if (event.errorMessage)
+          this.addNotice(
+            `[context] Compaction failed: ${event.errorMessage}`,
+            'error',
+          )
+        break
       case 'session_save_failed':
         this.addNotice(
           `Failed to save session: ${errorMessage(event.error)}`,
@@ -748,8 +759,7 @@ export class InteractiveMode {
           return
         }
         this.session.setName(args)
-        // Saving mid-run is unsafe (it would interleave with this turn's save); the turn saves when it ends
-        if (!this.session.isRunning) await this.session.save()
+        await this.session.save()
         this.addNotice(`Session name: ${args}`, 'dim')
         this.tui.requestRender()
         return
@@ -1085,18 +1095,27 @@ function dialogBox(title: string, body: Component, hint: string): Component {
   return box
 }
 
+function compactionLine(
+  event: Extract<VelaEvent, { type: 'compaction_end' }>,
+): string {
+  const result = event.result
+  if (!result) return ''
+  switch (event.reason) {
+    case 'threshold':
+      return `[context] Summarized ${result.tokensBefore} → ${result.tokensAfter} tokens`
+    case 'manual':
+      return `[context] Manually compacted ${result.tokensBefore} → ${result.tokensAfter} tokens`
+    case 'overflow':
+      return `[context] The model said the context is too long; summarized ${result.tokensBefore} → ${result.tokensAfter} tokens and retrying`
+  }
+}
+
 function contextLine(event: Extract<VelaEvent, { type: 'context' }>): string {
   switch (event.action) {
     case 'micro':
       return `[context] Folded old tool results ${event.before} → ${event.after} tokens`
     case 'summary-required':
       return `[context] ${event.before} tokens, summarizing before the next request`
-    case 'summary':
-      return `[context] Summarized ${event.before} → ${event.after} tokens`
-    case 'compact':
-      return `[context] Manually compacted ${event.before} → ${event.after} tokens`
-    case 'overflow':
-      return `[context] The model said the context is too long; summarized ${event.before} → ${event.after} tokens and retrying`
   }
 }
 
