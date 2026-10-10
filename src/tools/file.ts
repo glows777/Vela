@@ -63,7 +63,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   name: 'read_file',
   description: `Reads a text file or a saved tool result file, one page at a time. A page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. Returns the range shown and the offset/column for the next page. The file is fully read only when the result says EOF.`,
   inputSchema: readFileParamSchema,
-  isReadOnly: true,
+  annotations: { readOnlyHint: true },
   // A full page plus the footer must fit, so pages are never saved to a file again
   maxResultChars: READ_MAX_BYTES + 1024,
   execute: async (input: z.infer<typeof readFileParamSchema>) => {
@@ -137,7 +137,7 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
     'Writes content to a file, replacing the whole file. Creates the file and missing parent directories.',
   inputSchema: writeFileToolParamSchema,
 
-  isReadOnly: false,
+  annotations: { destructiveHint: true, idempotentHint: true },
   execute: async ({ path, content }: { path: string; content: string }) => {
     const resolved = resolveIn(cwd, path)
     // Writes to the same file queue up; different files are written in parallel (like pi)
@@ -156,7 +156,7 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   name: 'list_directory',
   description: 'Lists the files and subdirectories in a directory.',
   inputSchema: listDirectoryToolParamSchema,
-  isReadOnly: true,
+  annotations: { readOnlyHint: true },
   execute: async ({ path = '.' }: { path?: string }) => {
     const resolved = resolveIn(cwd, path)
     return readdirSync(resolved, { withFileTypes: true })
@@ -248,7 +248,7 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
   description:
     'Edits a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.',
   inputSchema: editFileToolParamSchema,
-  isReadOnly: false,
+  annotations: { destructiveHint: true },
   execute: async (input: EditInput, context) => {
     const { path, edits } = input
     const resolved = resolveIn(cwd, path)

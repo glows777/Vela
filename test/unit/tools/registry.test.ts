@@ -8,6 +8,7 @@ import {
   type ToolDefinition,
   ToolRegistry,
 } from '../../../src/tools/registry.ts'
+import { registerToolSearchTool } from '../../../src/tools/tool-search.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-registry-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -53,6 +54,78 @@ test('registering a tool with the removed isConcurrencySafe or an unknown execut
   ).toThrow(/executionMode must be 'parallel' or 'sequential'/)
   expect(registry.get('old')).toBeUndefined()
   expect(registry.get('typo')).toBeUndefined()
+})
+
+test('registering a tool with the removed isReadOnly or an unknown exposure throws', () => {
+  const registry = makeRegistry()
+  expect(() =>
+    registry.register({ ...tool('old'), isReadOnly: true } as ToolDefinition),
+  ).toThrow(/isReadOnly was removed. Use annotations/)
+  expect(() =>
+    registry.register(
+      tool('typo', { exposure: 'lazy' as ToolDefinition['exposure'] }),
+    ),
+  ).toThrow(/exposure/)
+  registry.register(tool('ok', { annotations: { readOnlyHint: true } }))
+  expect(registry.get('ok')?.annotations).toEqual({ readOnlyHint: true })
+})
+
+test('exposure decides what the model sees, what tool_search finds and what executeTool can call (like pi)', () => {
+  const registry = makeRegistry()
+  for (const exposure of [
+    'direct',
+    'model-only',
+    'codemode',
+    'deferred',
+    'hidden',
+  ] as const)
+    registry.register(tool(exposure, { exposure }))
+  const active = () => registry.getActiveTools().map((t) => t.name)
+  expect(active()).toEqual(['direct', 'model-only'])
+  expect(
+    ['direct', 'model-only', 'codemode', 'deferred', 'hidden'].filter((n) =>
+      registry.isCallable(n),
+    ),
+  ).toEqual(['direct', 'codemode', 'deferred'])
+  expect(
+    registry.searchTools('codemode,hidden,deferred').map((t) => t.name),
+  ).toEqual(['deferred'])
+  expect(active()).toEqual(['direct', 'model-only', 'deferred'])
+  registry.setPermissions({ direct: 'deny' })
+  expect(registry.isCallable('direct')).toBe(false)
+})
+
+test('the deferred tool summary groups tools by namespace', () => {
+  const registry = makeRegistry()
+  const docs = {
+    name: 'mcp__docs',
+    description: 'Project documentation',
+    instructions: 'Search before reading.',
+  }
+  registry.register(
+    tool('mcp__docs__read', { exposure: 'deferred', namespace: docs }),
+    tool('plain', { exposure: 'deferred' }),
+    tool('mcp__git__log', {
+      exposure: 'deferred',
+      namespace: { name: 'mcp__git' },
+    }),
+    tool('mcp__docs__search', {
+      exposure: 'deferred',
+      namespace: docs,
+      searchHint: 'full text',
+    }),
+  )
+  expect(registry.getDeferredToolSummary()).toBe(
+    [
+      'The tools below are available, but before calling one you must call tool_search to get its full schema:',
+      '- plain',
+      'mcp__docs — Project documentation:',
+      '  - mcp__docs__read',
+      '  - mcp__docs__search — full text',
+      'mcp__git:',
+      '  - mcp__git__log',
+    ].join('\n'),
+  )
 })
 
 test('deferred tools stay hidden until searchTools finds them', () => {
@@ -237,4 +310,25 @@ test('a sequential call in one session does not hold back another session', asyn
   await second
   seq.release('a')
   await first
+})
+
+test('tool_search is model-only and returns the namespace with its instructions', async () => {
+  const registry = makeRegistry()
+  registerToolSearchTool(registry)
+  const namespace = {
+    name: 'mcp__docs',
+    description: 'Project documentation',
+    instructions: 'Search before reading.',
+  }
+  registry.register(
+    tool('mcp__docs__read', { exposure: 'deferred', namespace }),
+  )
+  expect(registry.get('tool_search')?.exposure).toBe('model-only')
+  const result = await registry.toAISDKFormat().tool_search!.execute!(
+    { query: 'mcp__docs__read' },
+    { toolCallId: 'search', messages: [], context: {} },
+  )
+  expect(JSON.parse(String(result))).toMatchObject([
+    { name: 'mcp__docs__read', namespace },
+  ])
 })

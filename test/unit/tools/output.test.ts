@@ -98,26 +98,34 @@ test('real Bash captures large stdout and stderr with exit status and a bounded 
     new ToolResultStore(join(dir, 'bash-results')),
   )
   registry.register(bashTool)
-  const result = await registry.toAISDKFormat().bash!.execute!(
+  // Like pi, a non-zero exit is an error result: the error text is the bounded tail plus the status
+  const error = await registry.toAISDKFormat().bash!.execute!(
     {
       command:
         "printf 'STDERR_EVIDENCE\\n' >&2; for ((i=0;i<15000;i++)); do printf '日志😀-%s\\n' \"$i\"; done; exit 7",
     },
     { toolCallId: 'bash', messages: [], context: {} },
+  ).then(
+    () => {
+      throw new Error('expected an error result')
+    },
+    (error: Error) => error,
   )
-  const stored = getStoredResult({ type: 'json', value: result as never })!
-  const raw = await Bun.file(stored.path).text()
+  const preview = error.message
+  const [, bytes, path] = preview.match(
+    /of (\d+) bytes of output\. Full output: (.+)\]/,
+  )!
+  const raw = await Bun.file(path!).text()
+  expect(Buffer.byteLength(raw)).toBe(Number(bytes))
   expect(raw).toContain('STDERR_EVIDENCE')
   expect(raw).toContain('日志😀-7500')
   expect(raw).toContain('日志😀-14999')
   // Same as pi: the last 2000 lines (here ~34KB, under the 50KB cap), then the status
-  expect(stored.preview.startsWith('日志😀-13000\n')).toBe(true)
-  expect(stored.preview).toContain('日志😀-14999\n')
-  expect(stored.preview).toContain(
-    `[Showing the last 2000 lines of ${stored.bytes} bytes of output. Full output: ${stored.path}]`,
-  )
-  expect(stored.preview.endsWith('Command exited with code 7')).toBe(true)
-  expect(stored.preview.isWellFormed()).toBe(true)
+  expect(preview.startsWith('日志😀-13000\n')).toBe(true)
+  expect(preview).toContain('日志😀-14999\n')
+  expect(preview).toContain('[Showing the last 2000 lines of ')
+  expect(preview.endsWith('Command exited with code 7')).toBe(true)
+  expect(preview.isWellFormed()).toBe(true)
 })
 
 test('small results stay inline and invalid read cursors fail clearly', async () => {

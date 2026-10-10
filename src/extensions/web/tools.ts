@@ -19,7 +19,7 @@ export function tavilySearchTool(apiKey: string): ToolDefinition {
     description:
       'Search the web for up-to-date information. Returns titles, links and content summaries of relevant pages',
     inputSchema: searchInputSchema,
-    isReadOnly: true,
+    annotations: { readOnlyHint: true, openWorldHint: true },
     maxResultChars: 3000,
     execute: async ({ query, max_results = 5 }: SearchInput, context) => {
       const res = await fetch('https://api.tavily.com/search', {
@@ -64,7 +64,7 @@ export function serperSearchTool(apiKey: string): ToolDefinition {
     description:
       'Search the web for up-to-date information. Returns titles, links and snippets of Google search results',
     inputSchema: searchInputSchema,
-    isReadOnly: true,
+    annotations: { readOnlyHint: true, openWorldHint: true },
     maxResultChars: 3000,
     execute: async ({ query, max_results = 5 }: SearchInput, context) => {
       const res = await fetch('https://google.serper.dev/search', {
@@ -111,7 +111,7 @@ export const webFetchTool: ToolDefinition = {
   name: 'fetch',
   description: 'Fetch the web page at a URL and convert it to Markdown',
   inputSchema: fetchInputSchema,
-  isReadOnly: true,
+  annotations: { readOnlyHint: true, openWorldHint: true },
   maxResultChars: 3000,
   execute: async ({ url }: { url: string }, context) => {
     try {

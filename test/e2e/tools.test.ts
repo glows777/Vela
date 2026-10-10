@@ -272,6 +272,97 @@ test('bash has no default timeout; the model can pass one and sees that the comm
   const output = String(t.model.calls[1]!.toolResults[0]!.output)
   expect(output).toContain('started')
   expect(output).toContain('Command timed out after 0.3 seconds')
+  // Like pi, a timed-out (or failed, or aborted) command is an error result
+  expect(t.model.calls[1]!.toolResults[0]!.raw).toMatchObject({
+    type: 'error-text',
+  })
+  expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
+    toolName: 'bash',
+    isError: true,
+  })
+})
+
+test('bash streams its output as tool_execution_update events while it runs', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: "printf 'first\\n'; sleep 0.4; printf 'second\\n'",
+      }),
+      fauxText('ok'),
+    ],
+  })
+
+  await t.run('Run something that prints twice')
+
+  const updates = t.eventsOf('tool_execution_update')
+  expect(updates.length).toBeGreaterThan(0)
+  expect(updates[0]).toMatchObject({
+    toolName: 'bash',
+    partialResult: { content: [{ type: 'text', text: 'first\n' }] },
+  })
+  // Updates come between the call's start and end
+  const types = t
+    .eventTypes()
+    .filter((type) => type.startsWith('tool_execution'))
+  expect(types[0]).toBe('tool_execution_start')
+  expect(types.at(-1)).toBe('tool_execution_end')
+  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain('second')
+})
+
+test('a tool calling another tool through ctx.executeTool goes through permissions, hooks and the bash check', async () => {
+  const t = createTestVela({
+    session: { permissions: { write_file: 'deny' } },
+    responses: [fauxToolCall('runner', {}), fauxText('done')],
+  })
+  const blocked: string[] = []
+  t.internals.hooks.registerPre('block-read', (toolName, _input, context) => {
+    if (toolName !== 'read_file') return { action: 'allow' }
+    blocked.push(context.toolCallId ?? '')
+    return { action: 'block', reason: 'reads are off' }
+  })
+  t.internals.registry.register({
+    name: 'runner',
+    description: 'Runs other tools',
+    inputSchema: z.object({}),
+    execute: async (_input, context) => {
+      const outcomes = []
+      for (const [name, args] of [
+        ['bash', { command: 'echo nested' }],
+        ['bash', { command: 'rm -rf /' }],
+        ['write_file', { path: 'x.txt', content: 'x' }],
+        ['read_file', { path: 'x.txt' }],
+      ] as const)
+        outcomes.push(await context!.executeTool!(name, args))
+      return outcomes.map((o) => `${o.toolName}:${o.isError}`).join(' ')
+    },
+  })
+
+  await t.run('Run the runner')
+
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
+    'bash:false bash:true write_file:true read_file:true',
+  )
+  await expect(t.readFile('x.txt')).rejects.toThrow('ENOENT')
+  const runnerId = t.eventsOf('tool_execution_start')[0]!.toolCallId
+  expect(blocked).toEqual([`${runnerId}/4`])
+  const nested = t
+    .eventsOf('tool_execution_end')
+    .filter((e) => e.parentToolCallId === runnerId)
+  expect(nested.map((e) => [e.toolCallId, e.toolName, e.isError])).toEqual([
+    [`${runnerId}/1`, 'bash', false],
+    [`${runnerId}/2`, 'bash', true],
+    [`${runnerId}/3`, 'write_file', true],
+    [`${runnerId}/4`, 'read_file', true],
+  ])
+  // Nested calls are in the tool history, not in the conversation
+  const history = await Bun.file(t.session.registry.results.indexPath).text()
+  expect(history).toContain(`${runnerId}/2`)
+  expect(t.messages.map((m) => m.role)).toEqual([
+    'user',
+    'assistant',
+    'tool',
+    'assistant',
+  ])
 })
 
 test('a long bash in one session does not hold back file writes in another session', async () => {

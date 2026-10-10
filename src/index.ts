@@ -77,9 +77,14 @@ export {
 } from './session/storage.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export type {
+  ExecuteToolOptions,
+  ToolAnnotations,
+  ToolCallOutcome,
   ToolContext,
   ToolDefinition,
   ToolExecutionMode,
+  ToolExposure,
+  ToolNamespace,
 } from './tools/registry.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'

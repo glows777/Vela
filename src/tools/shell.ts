@@ -11,6 +11,8 @@ import type { ToolDefinition } from './registry.ts'
 export const BASH_MAX_LINES = 2000
 export const BASH_MAX_BYTES = 50 * 1024
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000 // setTimeout's limit
+/** How often a running command's output tail is sent to onUpdate (pi's BASH_UPDATE_THROTTLE_MS) */
+const BASH_UPDATE_INTERVAL_MS = 100
 
 const bashToolParamSchema = z.object({
   command: z.string().describe('Shell command to run'),
@@ -32,7 +34,7 @@ export const createBashTool = (
   name: 'bash',
   description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${BASH_MAX_LINES} lines or ${BASH_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
   inputSchema: bashToolParamSchema,
-  isReadOnly: false,
+  annotations: { destructiveHint: true, openWorldHint: true },
   execute: async (
     { command, timeout }: { command: string; timeout?: number },
     context,
@@ -56,6 +58,9 @@ export const createBashTool = (
     const { path, file } = await results.createFile(context?.callId)
     let status: string | undefined
     const execution: ExecutionMetadata = {}
+    const streaming = context?.onUpdate
+      ? streamTail(path, context.onUpdate)
+      : undefined
     try {
       const proc = spawn(shellPath ?? 'bash', ['-lc', command], {
         cwd,
@@ -120,6 +125,7 @@ export const createBashTool = (
       execution.error = error instanceof Error ? error.message : String(error)
       status = `Command failed: ${error}`
     } finally {
+      await streaming?.stop()
       try {
         await file.sync()
       } finally {
@@ -144,6 +150,42 @@ export const createBashTool = (
 })
 
 export const bashTool = createBashTool()
+
+/**
+ * Sends the output tail to onUpdate while the command runs. Unlike pi, which reads pipes,
+ * the output goes straight to the result file, so the file is polled.
+ */
+function streamTail(
+  path: string,
+  onUpdate: (partialResult: unknown) => void,
+): { stop(): Promise<void> } {
+  let sent = 0
+  let pending: Promise<void> = Promise.resolve()
+  const poll = async () => {
+    const { size } = await stat(path)
+    if (size === sent) return
+    sent = size
+    const { text } = await readTail(path, size)
+    onUpdate({ content: [{ type: 'text', text }] })
+  }
+  let busy = false
+  const timer = setInterval(() => {
+    // Skip a tick while the previous read is still running; a read error only skips an update
+    if (busy) return
+    busy = true
+    pending = poll()
+      .catch(() => {})
+      .finally(() => {
+        busy = false
+      })
+  }, BASH_UPDATE_INTERVAL_MS)
+  return {
+    stop: async () => {
+      clearInterval(timer)
+      await pending
+    },
+  }
+}
 
 /** The last BASH_MAX_LINES lines / BASH_MAX_BYTES bytes of the output file, cut at line starts */
 async function readTail(

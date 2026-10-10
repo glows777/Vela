@@ -132,12 +132,17 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `name` | Tool name before the prefix |
 | `description` | What the model reads to decide when to call the tool |
 | `inputSchema` | Zod schema, or any schema the AI SDK accepts (for example `jsonSchema(...)` from `ai`). Input is validated before `execute` |
-| `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available. Return a string, or any value that is sent as JSON. Throw to report an error to the model |
+| `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available, and so are `ctx.onUpdate` and `ctx.executeTool` (below). Return a string, or any value that is sent as JSON. Throw to report an error to the model |
 | `executionMode` | `parallel` (default) runs calls alongside other tool calls; `sequential` runs the call alone within its session (other sessions are not affected). Same as pi's `executionMode`. A tool that writes files can instead wrap the write in `withFileMutationQueue(path, fn)` (exported from `@glows777/vela`, same as pi) so it queues with `write_file` / `edit_file` on the same file |
-| `isReadOnly` | Marks a tool that does not change anything |
+| `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not decide permissions from them; a permission extension can |
 | `maxResultChars` | Results longer than this (default 3000) are saved to a file and the model gets a preview and the path to read the rest |
-| `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first |
+| `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
+| `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's) in the deferred tool list; `tool_search` returns it with the tool |
 | `searchHint` | Short hint shown next to a deferred tool's name |
+
+`ctx.onUpdate(partialResult)` reports partial output while the tool runs. Each call becomes a `tool_execution_update` event (pi's event and field names), so print, JSON and RPC modes see it; updates after the tool returned are ignored. `bash` sends `{ content: [{ type: 'text', text }] }` with the tail of its output.
+
+`ctx.executeTool(name, args, { signal?, onUpdate? })` runs another tool from inside a tool, same as pi. The call goes through everything a model call goes through: the session's role and permissions, extensions' `tool_call` hooks, the dangerous-command check for `bash`, confirmation for `ask`, the tool history and `tool_result` hooks. It can run the session's `direct` tools and every `deferred` or `codemode` tool the session may use, never `model-only` or `hidden` ones. The call's id is `<parent id>/<n>`, its `tool_execution_*` events carry `parentToolCallId`, and it is recorded in the tool history but not added to the conversation. It does not throw for tool failures: an unknown tool, invalid arguments, a refusal and an error all return `{ toolCallId, toolName, result, isError: true }`, with the reason or error message as `result`. `signal` defaults to the calling tool's signal. A nested call does not wait for the calling tool's `executionMode`.
 
 Tools are shared by all sessions. The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#session-roles)). See [Tools](tools.md) for the built-in tools.
 

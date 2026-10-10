@@ -54,7 +54,7 @@ export function createRagTools(
       'Ingest a document into the knowledge base. path is the file path; the content is chunked, embedded and stored.',
     inputSchema: createRagToolsInputSchema,
     executionMode: 'sequential',
-    isReadOnly: false,
+    annotations: { readOnlyHint: false },
     execute: async ({ path }: { path: string }, context) => {
       try {
         return await ingestDocument(
@@ -75,7 +75,7 @@ export function createRagTools(
     description:
       'Search the knowledge base for relevant information. Returns the most relevant document chunks.',
     inputSchema: ragSearchToolInputSchema,
-    isReadOnly: true,
+    annotations: { readOnlyHint: true },
     execute: async (
       { query, top_k }: { query: string; top_k?: number },
       context,
