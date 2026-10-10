@@ -926,7 +926,17 @@ export class InteractiveMode {
       focus = await this.input('Summary focus', 'what the summary should keep')
       if (focus === undefined) return
     }
-    if (targetId === session.getLeafId()) {
+    const atLeaf =
+      targetId === session.getLeafId() &&
+      !session
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.id === targetId &&
+            entry.type === 'message' &&
+            entry.message.role === 'user',
+        )
+    if (atLeaf) {
       this.addNotice('Already at this point', 'dim')
       return
     }

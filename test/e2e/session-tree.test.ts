@@ -416,3 +416,16 @@ test('a fork holds the run lock: a prompt sent while it copies the branch is ref
     '[{"type":"text","text":"a1"}]',
   ])
 })
+
+test('selecting the leaf when it is a user message still moves before it; clone needs a conversation', async () => {
+  const t = await twoRounds()
+  await expect(
+    t.vela.session('empty').clone({ sessionId: 'empty-copy' }),
+  ).rejects.toThrow('Nothing to clone yet')
+
+  t.session.append({ role: 'user', content: 'q3' })
+  const q3 = t.session.getLeafId()!
+  const result = await t.session.navigateTree(q3)
+  expect(result).toEqual({ editorText: 'q3', cancelled: false })
+  expect(texts(t.session.messages)).not.toContain('q3')
+})

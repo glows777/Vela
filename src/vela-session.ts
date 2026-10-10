@@ -533,7 +533,9 @@ export class VelaSession {
     const target = this.store.getEntry(targetId)
     if (!target) throw new Error(`Entry ${targetId} is not in the session`)
     const oldLeafId = this.store.getLeafId()
-    if (targetId === oldLeafId) return { cancelled: false }
+    const isUser = target.type === 'message' && target.message.role === 'user'
+    // Selecting a user message moves to its parent, so only another entry at the leaf is a no-op
+    if (targetId === oldLeafId && !isUser) return { cancelled: false }
     return this.exclusive('navigate the session tree', async (signal) => {
       await this.start()
       const oldBranch = this.store.getBranch(oldLeafId)
@@ -585,7 +587,7 @@ export class VelaSession {
       }
       let newLeafId: string | null = targetId
       let editorText: string | undefined
-      if (target.type === 'message' && target.message.role === 'user') {
+      if (isUser) {
         newLeafId = target.parentId
         editorText = messageText(target.message.content)
       }
@@ -720,7 +722,16 @@ export class VelaSession {
   /** Copies the current branch into a new session (like pi's /clone, a fork at the leaf). */
   clone(options: Omit<ForkOptions, 'position'> = {}): Promise<ForkResult> {
     const leafId = this.store.getLeafId()
-    if (!leafId) return Promise.reject(new Error('Nothing to clone yet'))
+    // Setup entries (model, thinking level) alone are not a conversation to copy
+    const hasConversation = this.store
+      .getBranch()
+      .some(
+        (entry) =>
+          entry.type === 'message' &&
+          (entry.message.role === 'user' || entry.message.role === 'assistant'),
+      )
+    if (!leafId || !hasConversation)
+      return Promise.reject(new Error('Nothing to clone yet'))
     return this.fork(leafId, { ...options, position: 'at' })
   }
 
