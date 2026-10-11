@@ -13,6 +13,7 @@ import {
 } from '../config/index.ts'
 import { deepMerge } from '../config/interpolate.ts'
 import { feishu } from '../extensions/feishu/index.ts'
+import { mcp } from '../extensions/mcp/index.ts'
 import { memory } from '../extensions/memory/index.ts'
 import { rag } from '../extensions/rag/index.ts'
 import type { VelaExtension } from '../extensions/types.ts'
@@ -32,6 +33,7 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   rag: () => rag(),
   web: () => web(),
   feishu: () => feishu(),
+  mcp: () => mcp(),
 }
 
 export interface CliArgs {
@@ -426,6 +428,31 @@ export function extensionConfigFromEnv(
     string,
     Record<string, unknown>
   >
+}
+
+/**
+ * The mcp extension's config: the servers from mcp.json (with where each came from and the errors
+ * found reading them) override `extensionConfig.mcp.mcpServers` from settings.json.
+ */
+export function withMcpServers(
+  extensionConfig: Record<string, Record<string, unknown>>,
+  config: Pick<VelaConfig, 'mcp'>,
+): Record<string, Record<string, unknown>> {
+  const { servers, sources, errors } = config.mcp
+  const section = extensionConfig.mcp ?? {}
+  const fromSettings =
+    typeof section.mcpServers === 'object' && section.mcpServers !== null
+      ? (section.mcpServers as Record<string, unknown>)
+      : {}
+  return {
+    ...extensionConfig,
+    mcp: {
+      ...section,
+      mcpServers: { ...fromSettings, ...servers },
+      sources,
+      errors,
+    },
+  }
 }
 
 /**

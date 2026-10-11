@@ -99,11 +99,13 @@ The factory's argument (`vela` below) is an `ExtensionAPI`:
 | `vela.dataDir` | Vela's data directory for this project. Keep an extension's own files in `<dataDir>/<extension name>/` |
 | `vela.config` | This extension's config section (see [Configuration](#configuration)); `{}` when none |
 | `vela.logger` | Logger (`debug`, `info`, `warn`, `error`). In the CLI it goes to stderr, or to the chat log in interactive mode |
-| `vela.registerTool(tool)` | Add a tool the model can call |
+| `vela.registerTool(tool)` | Add a tool the model can call. Returns the registered name |
+| `vela.unregisterTool(name)` | Remove a tool this extension registered, by its registered name |
 | `vela.registerCommand(name, command)` | Add a `/name` command |
 | `vela.registerProvider(name, provider)` | Add a model provider |
 | `vela.registerChannel(channel)` | Add a message channel |
 | `vela.on(event, handler)` | Subscribe to an event. Returns a function that unsubscribes |
+| `vela.onShutdown(handler)` | Run once when the Vela is disposed, after all sessions closed: close resources shared by all sessions, such as server connections. Errors are logged |
 
 ### registerTool
 
@@ -125,7 +127,7 @@ const hello: VelaExtension = (vela) => {
 export default hello
 ```
 
-The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts` becomes `hello_greet`, and in `hello-tool.ts` it becomes `hello-tool_greet`. Characters other than letters, digits, `_` and `-` in the extension name become `_`. When the tool name equals the extension name, the prefix is not repeated (the memory extension's `memory` tool is just `memory`). The prefix means an extension cannot replace a built-in tool or another extension's tool; registering a name that already exists throws.
+The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts` becomes `hello_greet`, and in `hello-tool.ts` it becomes `hello-tool_greet`. Characters other than letters, digits, `_` and `-` in the extension name become `_`. When the tool name equals the extension name, or already starts with `<extension name>_`, the prefix is not repeated (the memory extension's `memory` tool is just `memory`, and the mcp extension's tools are `mcp__<server>__<tool>`). The prefix means an extension cannot replace a built-in tool or another extension's tool; registering a name that already exists throws.
 
 | Field | Description |
 |---|---|
@@ -137,14 +139,14 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not decide permissions from them; a permission extension can |
 | `maxResultChars` | Results longer than this (default 3000) are saved to a file and the model gets a preview and the path to read the rest |
 | `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
-| `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's) in the deferred tool list; `tool_search` returns it with the tool |
+| `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
 
 `ctx.onUpdate(partialResult)` reports partial output while the tool runs. Each call becomes a `tool_execution_update` event (pi's event and field names), so print, JSON and RPC modes see it; updates after the tool returned are ignored. `bash` sends `{ content: [{ type: 'text', text }] }` with the tail of its output.
 
 `ctx.executeTool(name, args, { signal?, onUpdate? })` runs another tool from inside a tool, same as pi. The call goes through everything a model call goes through: the session's role and permissions, extensions' `tool_call` hooks, the dangerous-command check for `bash`, confirmation for `ask`, the tool history and `tool_result` hooks. It can run the session's `direct` tools and every `deferred` or `codemode` tool the session may use, never `model-only` or `hidden` ones. The call's id is `<parent id>/<n>`, its `tool_execution_*` events carry `parentToolCallId`, and it is recorded in the tool history but not added to the conversation. It does not throw for tool failures: an unknown tool, invalid arguments, a refusal and an error all return `{ toolCallId, toolName, result, isError: true }`, with the reason or error message as `result`. `signal` defaults to the calling tool's signal. A nested call does not wait for the calling tool's `executionMode`.
 
-Tools are shared by all sessions. The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#session-roles)). See [Tools](tools.md) for the built-in tools.
+Tools are shared by all sessions, and an extension can register and unregister them at any time (the mcp extension does when a server connects or changes its tool list). The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#session-roles)). See [Tools](tools.md) for the built-in tools.
 
 ### registerCommand
 
