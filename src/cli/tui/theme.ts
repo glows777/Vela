@@ -29,6 +29,7 @@ const COLORS = {
   toolSuccessBg: c(158, 46, 25),
   toolErrorBg: c(19, 54, 25),
   selectedBg: c(233, 41, 24),
+  customMessageBg: c(295, 42, 24),
 } satisfies Record<string, Color>
 
 /** Editor border color follows the thinking level (like pi) */
@@ -53,6 +54,7 @@ export const theme = {
   bg: (color: ColorName, text: string) => style(text, { bg: COLORS[color] }),
   bold: (text: string) => style(text, { bold: true }),
   italic: (text: string) => style(text, { italic: true }),
+  inverse: (text: string) => style(text, { inverse: true }),
   thinkingBorder: (level: ThinkingLevel) => (text: string) =>
     style(text, { fg: THINKING_COLORS[level] }),
 }

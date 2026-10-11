@@ -3,7 +3,7 @@ import {
   type ToolResultOutput,
   toolResultOutputToText,
 } from '../context/tool-result-output.ts'
-import type { SessionEntry } from './entries.ts'
+import { messageText, type SessionEntry } from './entries.ts'
 
 /** What `renderSessionHtml()` renders. */
 export interface SessionHtmlInput {
@@ -85,6 +85,10 @@ function renderEntry(entry: SessionEntry): string {
             )
           : '')
       )
+    case 'custom_message':
+      return entry.display
+        ? `<section class="message custom"><div class="role">${escapeHtml(entry.customType)}</div>${text(messageText(entry.content))}</section>`
+        : ''
     case 'compaction':
       return details(
         'Summary of the earlier conversation',

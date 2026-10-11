@@ -53,6 +53,8 @@ Every other line is an entry. All entries have pi's base fields:
 | `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
 | `branch_summary` | `fromId`, `summary` | A summary of the branch the session left with `navigateTree(…, { summarize: true })` (`/tree` → summarize). It is a child of the entry the session moved to, and the model sees it as a user message starting with `[Summary of the conversation branch you left]`. `fromId` is the leaf that was left (`root` if none) |
 | `label` | `targetId`, `label?` | A bookmark on entry `targetId` (`/tree` → label, `session.setLabel()`); no `label` clears it. Not sent to the model |
+| `custom_message` | `customType`, `content`, `display`, `details?` | pi's custom message: an extension's `session.sendMessage()`. The model context gets it as a user message with `content` (a string or AI SDK text / image parts); `display` and `details` are for UIs and the extension, never sent to the model |
+| `custom` | `customType`, `data?` | pi's custom entry: extension state from `session.appendEntry()`. Not part of the model context |
 
 Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
@@ -63,7 +65,7 @@ Entries of other types (from a newer Vela or an extension) are kept and ignored.
 1. Take the current branch: the entries from the leaf back to the root along `parentId`. When a session is loaded, the leaf is the last entry in the file (like pi; moving the leaf without appending anything afterwards is not remembered).
 2. Take the branch's latest `compaction` entry, if any: the context starts with its summary message, then the entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, the whole branch.
 3. Apply the branch's `context_edit` entries to their targets.
-4. Keep `message` entries (leaving out those with a `stopReason`) and `branch_summary` entries (as user messages).
+4. Keep `message` entries (leaving out those with a `stopReason`), and `custom_message` and `branch_summary` entries (as user messages).
 
 The model and thinking level are the latest `model_change` and `thinking_level_change` on the branch; the name is the latest `session_info` in the whole file (like pi, it belongs to the session).
 

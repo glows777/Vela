@@ -1,7 +1,12 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { LanguageModel, ModelMessage } from 'ai'
-import type { VelaEvent, VelaEventListener } from './agent/events.ts'
+import type {
+  CustomMessageInfo,
+  VelaEvent,
+  VelaEventListener,
+} from './agent/events.ts'
 import { agentLoop } from './agent/index.ts'
 import { canSummarize } from './context/compressor.ts'
 import { estimateMessageTokens } from './context/defense.ts'
@@ -10,8 +15,14 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
+import { withProviderHooks } from './extensions/provider-hooks.ts'
 import type {
+  CustomMessage,
+  ExtensionEventName,
   ExtensionUI,
+  InputSource,
+  ProviderStreamEvent,
+  SendMessageOptions,
   SessionBeforeTreeEventResult,
   SessionTreeEvent,
   SessionUI,
@@ -31,7 +42,7 @@ import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
 import {
   type BranchSummaryEntry,
-  messageText,
+  messageText as contentText,
   type NestedToolCalls,
   SESSION_FORMAT_VERSION,
   type SessionContext,
@@ -60,6 +71,8 @@ export interface PromptOptions {
    * task ends. Required while running (throws otherwise); ignored when idle.
    */
   streamingBehavior?: 'steer' | 'followUp'
+  /** Where the input came from, passed to `input` handlers (default `sdk`) */
+  source?: InputSource
 }
 
 /** How queued messages are taken: one at a time (default, like pi) or all at once. */
@@ -120,7 +133,7 @@ export interface SessionExtensionHooks {
   beforeAgentStart(
     session: VelaSession,
     prompt: string,
-  ): Promise<Record<string, string>>
+  ): Promise<{ sections: Record<string, string>; messages: CustomMessage[] }>
   runCommand(
     session: VelaSession,
     text: string,
@@ -138,6 +151,27 @@ export interface SessionExtensionHooks {
     entryId: string,
     position: 'before' | 'at',
   ): Promise<boolean>
+  hasHandlers(event: ExtensionEventName): boolean
+  /** Text after the input handlers; undefined when a handler handled it */
+  input(
+    session: VelaSession,
+    text: string,
+    source: InputSource,
+    streamingBehavior?: 'steer' | 'followUp',
+  ): Promise<string | undefined>
+  transformContext(
+    session: VelaSession,
+    messages: ModelMessage[],
+  ): Promise<ModelMessage[]>
+  beforeProviderRequest(
+    session: VelaSession,
+    params: LanguageModelV4CallOptions,
+  ): Promise<LanguageModelV4CallOptions>
+  afterProviderResponse(
+    session: VelaSession,
+    headers: Record<string, string>,
+  ): Promise<void>
+  providerStreamEvent(session: VelaSession, event: ProviderStreamEvent): void
 }
 
 /** Session ids become file names: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
@@ -223,8 +257,17 @@ export class VelaSession {
   private running?: Promise<void>
   /** Extension sections collected by this turn's before_agent_start */
   private sections: Record<string, string> = {}
-  private readonly steeringQueue: string[] = []
-  private readonly followUpQueue: string[] = []
+  private readonly steeringQueue: ModelMessage[] = []
+  private readonly followUpQueue: ModelMessage[] = []
+  /** Extensions' custom messages in the history or queues, and what they carry (pi's custom message fields) */
+  private readonly customMessages = new WeakMap<
+    ModelMessage,
+    CustomMessageInfo
+  >()
+  /** Custom messages sent while running without triggering a turn: appended once the step's tool results are in (like pi) */
+  private readonly pendingCustom: ModelMessage[] = []
+  /** Custom messages for the next prompt (`deliverAs: 'nextTurn'`) */
+  private readonly nextTurnMessages: ModelMessage[] = []
   /** How steer messages are taken (default one-at-a-time, like pi) */
   steeringMode: QueueMode = 'one-at-a-time'
   /** How followUp messages are taken (default one-at-a-time, like pi) */
@@ -307,12 +350,32 @@ export class VelaSession {
 
   private applyModel(resolved: ResolvedModel): void {
     this.resolved = resolved
+    this.hooked = undefined
     const limits = limitsForModel(resolved.info, this.deps.limitOverrides)
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
     this.tracker.contextWindow = resolved.info.contextWindow ?? CONTEXT_WINDOW
     // Price follows the current model (not keyed by modelId: same-named models from different providers cost differently)
     this.tracker.setPricing(resolved.info.cost)
+  }
+
+  /** The current model wrapped with the extension provider hooks (what requests go through) */
+  private hooked?: LanguageModel
+
+  private requestModel(): LanguageModel {
+    this.hooked ??= withProviderHooks(this.model, {
+      has: (event) => this.deps.extensions.hasHandlers(event),
+      beforeRequest: (params) =>
+        this.deps.extensions.beforeProviderRequest(this, params),
+      afterResponse: (headers) =>
+        this.deps.extensions.afterProviderResponse(this, headers),
+      streamEvent: (event) =>
+        this.deps.extensions.providerStreamEvent(this, {
+          type: 'provider_stream_event',
+          ...event,
+        }),
+    })
+    return this.hooked
   }
 
   /** Current model (AI SDK LanguageModel). Throws if the name cannot be resolved. */
@@ -397,10 +460,21 @@ export class VelaSession {
   }
 
   /** @internal Emits an event to this session's subscribers and Vela's subscribers. */
-  readonly emit = (event: VelaEvent): void => {
+  readonly emit = (raw: VelaEvent): void => {
+    let event = raw
+    if (
+      (event.type === 'message_start' || event.type === 'message_end') &&
+      !event.custom
+    ) {
+      const custom = this.customMessages.get(event.message)
+      if (custom) event = { ...event, custom }
+    }
     this.nestedCalls.observe(event)
     for (const listener of this.listeners) listener(event)
     this.deps.forward(event, this.id)
+    // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
+    // between a tool call and its result
+    if (event.type === 'turn_end') this.flushPendingCustom()
   }
 
   /** @internal `sections` defaults to the sections collected by this turn's before_agent_start */
@@ -428,7 +502,7 @@ export class VelaSession {
    */
   async previewSections(): Promise<Record<string, string>> {
     await this.start()
-    return this.deps.extensions.beforeAgentStart(this, '')
+    return (await this.deps.extensions.beforeAgentStart(this, '')).sections
   }
 
   /** @internal Prepares the context before a request (microcompaction / summary). */
@@ -516,6 +590,7 @@ export class VelaSession {
       if (this.running === running) this.running = undefined
       busy.locked = false
       busy.controller = undefined
+      this.flushPendingCustom()
     }
   }
 
@@ -587,7 +662,7 @@ export class VelaSession {
       let editorText: string | undefined
       if (target.type === 'message' && target.message.role === 'user') {
         newLeafId = target.parentId
-        editorText = messageText(target.message.content)
+        editorText = contentText(target.message.content)
       }
       let summaryEntry: BranchSummaryEntry | undefined
       if (summary) {
@@ -642,6 +717,8 @@ export class VelaSession {
   /** Makes the store's current branch the session's context, model and thinking level. */
   private async loadBranch(context: SessionContext): Promise<void> {
     this.contextManager.restore(context)
+    for (const [message, info] of context.custom)
+      this.customMessages.set(message, info)
     if (
       context.thinkingLevel &&
       THINKING_LEVELS.includes(context.thinkingLevel)
@@ -688,7 +765,7 @@ export class VelaSession {
       if (entry.type !== 'message' || entry.message.role !== 'user')
         throw new Error(`Entry ${entryId} is not a user message to fork from`)
       leafId = entry.parentId
-      selectedText = messageText(entry.message.content)
+      selectedText = contentText(entry.message.content)
     }
     await this.start()
     if (await this.deps.extensions.beforeFork(this, entryId, position))
@@ -815,6 +892,11 @@ export class VelaSession {
   /** Appends a message that entered the history to the session; a tool message carries the nested calls its tools made. */
   private record(message: ModelMessage): void {
     this.timestamps.set(message, Date.now())
+    const custom = this.customMessages.get(message)
+    if (custom && message.role === 'user') {
+      this.store.appendCustomMessage(message, custom)
+      return
+    }
     const nestedCalls: Record<string, NestedToolCalls> = {}
     if (message.role === 'tool')
       for (const part of message.content) {
@@ -831,6 +913,7 @@ export class VelaSession {
    * If the loop fails, queued messages still run, then it rejects.
    * While running, pass `streamingBehavior` (or use steer() / followUp()); it then resolves right after enqueueing.
    * In owner sessions, `/name args` matching an extension command runs the command instead of going to the model (immediately, even while running).
+   * Other input goes through the extensions' `input` handlers first (like pi); a handled input resolves without running.
    */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
     if (this.closed)
@@ -839,9 +922,36 @@ export class VelaSession {
       return (async () => {
         await this.start()
         if (await this.runCommand(input, options.signal)) return
-        return this.promptExpanded(input, options)
+        return this.promptInput(input, options)
       })()
-    return this.promptModel(input, options)
+    return this.promptInput(input, options)
+  }
+
+  /**
+   * Runs the `input` handlers, then expands and prompts (or queues). Without input handlers nothing is awaited
+   * before the run lock is taken or the input queued, so back-to-back calls keep their order.
+   */
+  private promptInput(
+    input: string,
+    options: PromptOptions,
+    expand = true,
+  ): Promise<void> {
+    const next = (text: string) =>
+      expand
+        ? this.promptExpanded(text, options)
+        : this.promptModel(text, options)
+    if (!this.deps.extensions.hasHandlers('input')) return next(input)
+    return (async () => {
+      await this.start()
+      const text = await this.deps.extensions.input(
+        this,
+        input,
+        options.source ?? 'sdk',
+        this.prompting ? options.streamingBehavior : undefined,
+      )
+      if (text === undefined) return
+      return next(text)
+    })()
   }
 
   /**
@@ -877,31 +987,133 @@ export class VelaSession {
   }
 
   /** While running: joins the current task, sent as a user message after this step's tools finish and before the next model request. Same as prompt() when idle. */
-  steer(input: string): Promise<void> {
-    return this.promptExpanded(input, { streamingBehavior: 'steer' })
+  steer(input: string, options: { source?: InputSource } = {}): Promise<void> {
+    return this.promptInput(input, { ...options, streamingBehavior: 'steer' })
   }
 
   /** While running: runs as a user message when the model would otherwise stop (no tool calls, no steer). Same as prompt() when idle. */
-  followUp(input: string): Promise<void> {
-    return this.promptExpanded(input, { streamingBehavior: 'followUp' })
+  followUp(
+    input: string,
+    options: { source?: InputSource } = {},
+  ): Promise<void> {
+    return this.promptInput(input, {
+      ...options,
+      streamingBehavior: 'followUp',
+    })
   }
 
-  /** Clears queued messages and returns them (the TUI puts them back in the input box before aborting). */
-  clearQueue(): { steering: string[]; followUp: string[] } {
-    const cleared = {
-      steering: this.steeringQueue.splice(0),
-      followUp: this.followUpQueue.splice(0),
+  /**
+   * Adds an extension's custom message to the conversation (like pi's `sendMessage`). The model sees it as a
+   * user message; it is saved as a `custom_message` entry and its events carry `custom`.
+   * - `deliverAs: 'nextTurn'`: added after the user message of the next prompt.
+   * - Running (and `triggerTurn` not false): queued like steer() (or followUp() with `deliverAs: 'followUp'`).
+   * - Idle with `triggerTurn`: runs the agent loop with the message as its input; resolves when the run ends.
+   * - Running with `triggerTurn: false`: appended once the current step's tool results are in.
+   * - Otherwise appended right away.
+   */
+  async sendMessage(
+    message: CustomMessage,
+    options: SendMessageOptions = {},
+  ): Promise<void> {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    const entry = this.customMessage(message)
+    if (options.deliverAs === 'nextTurn') {
+      this.nextTurnMessages.push(entry)
+      return
     }
-    if (cleared.steering.length || cleared.followUp.length) this.emitQueue()
-    return cleared
+    if (this.prompting && options.triggerTurn !== false) {
+      ;(options.deliverAs === 'followUp'
+        ? this.followUpQueue
+        : this.steeringQueue
+      ).push(entry)
+      this.emitQueue()
+      return
+    }
+    if (options.triggerTurn) return this.promptMessage(entry, {})
+    if (this.busy.locked) {
+      this.pendingCustom.push(entry)
+      return
+    }
+    this.append(entry)
   }
 
-  /** Currently queued messages (a copy) */
+  /**
+   * Sends a user message as if typed (like pi's `sendUserMessage`): goes through the `input` handlers with
+   * source `extension` but is not expanded as a command, skill or prompt template. While running, pass
+   * `deliverAs` to queue it.
+   */
+  sendUserMessage(
+    text: string,
+    options: { deliverAs?: 'steer' | 'followUp' } = {},
+  ): Promise<void> {
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    return this.promptInput(
+      text,
+      {
+        source: 'extension',
+        ...(options.deliverAs ? { streamingBehavior: options.deliverAs } : {}),
+      },
+      false,
+    )
+  }
+
+  /**
+   * Saves extension state in the session (like pi's `appendEntry`): a `custom` entry that is never sent to the
+   * model. Read it back with `getEntries()` (for example in `session_start` after a resume).
+   */
+  appendEntry(customType: string, data?: unknown): void {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    assertCustomType(customType)
+    this.store.appendCustom(customType, data)
+  }
+
+  /** The custom message fields of a history message an extension sent with sendMessage(); undefined for other messages. */
+  customMessageOf(message: ModelMessage): CustomMessageInfo | undefined {
+    return this.customMessages.get(message)
+  }
+
+  /** Builds the user message a custom message becomes and remembers its fields. */
+  private customMessage(message: CustomMessage): ModelMessage {
+    assertCustomType(message.customType)
+    if (typeof message.content !== 'string' && !Array.isArray(message.content))
+      throw new Error('A custom message needs content (a string or parts)')
+    const entry: ModelMessage = { role: 'user', content: message.content }
+    this.customMessages.set(entry, {
+      customType: message.customType,
+      display: message.display === true,
+      ...(message.details === undefined ? {} : { details: message.details }),
+    })
+    return entry
+  }
+
+  private flushPendingCustom(): void {
+    for (const message of this.pendingCustom.splice(0)) this.append(message)
+  }
+
+  /** Clears queued messages and returns the user inputs among them (the TUI puts them back in the input box before aborting). */
+  clearQueue(): { steering: string[]; followUp: string[] } {
+    const steering = this.steeringQueue.splice(0)
+    const followUp = this.followUpQueue.splice(0)
+    if (steering.length || followUp.length) this.emitQueue()
+    return {
+      steering: this.inputTexts(steering),
+      followUp: this.inputTexts(followUp),
+    }
+  }
+
+  /** Currently queued user inputs (a copy; queued custom messages are not listed) */
   get queue(): { steering: string[]; followUp: string[] } {
     return {
-      steering: [...this.steeringQueue],
-      followUp: [...this.followUpQueue],
+      steering: this.inputTexts(this.steeringQueue),
+      followUp: this.inputTexts(this.followUpQueue),
     }
+  }
+
+  private inputTexts(messages: ModelMessage[]): string[] {
+    return messages
+      .filter((message) => !this.customMessages.has(message))
+      .map(messageText)
   }
 
   /** Whether an agent loop is running (including loops for queued messages and manual compaction) */
@@ -922,7 +1134,7 @@ export class VelaSession {
   }
 
   /** Takes from the queues by mode: steer first, then followUp. */
-  private dequeue(kind: 'steering' | 'followUp'): string[] {
+  private dequeue(kind: 'steering' | 'followUp'): ModelMessage[] {
     const [queue, mode] =
       kind === 'steering'
         ? [this.steeringQueue, this.steeringMode]
@@ -934,6 +1146,13 @@ export class VelaSession {
 
   /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
   private promptModel(input: string, options: PromptOptions): Promise<void> {
+    return this.promptMessage({ role: 'user', content: input }, options)
+  }
+
+  private promptMessage(
+    message: ModelMessage,
+    options: PromptOptions,
+  ): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
     if (this.busy.locked) {
@@ -947,11 +1166,11 @@ export class VelaSession {
       ;(options.streamingBehavior === 'steer'
         ? this.steeringQueue
         : this.followUpQueue
-      ).push(input)
+      ).push(message)
       this.emitQueue()
       return Promise.resolve()
     }
-    const run = this.run(input, options)
+    const run = this.run(message, options)
     const running = run.then(
       () => {
         if (this.running === running) this.running = undefined
@@ -975,7 +1194,10 @@ export class VelaSession {
   /** A prompt() run is in progress (it drains the queue before finishing) */
   private prompting = false
 
-  private async run(input: string, options: PromptOptions): Promise<void> {
+  private async run(
+    input: ModelMessage,
+    options: PromptOptions,
+  ): Promise<void> {
     const busy = this.busy
     busy.locked = true
     this.prompting = true
@@ -1005,6 +1227,7 @@ export class VelaSession {
         inputs = next()
         if (!inputs.length) {
           // Messages may be queued while saving: check again after saving; there is no await between here and unlock
+          this.flushPendingCustom()
           await this.saveOrReport()
           saved = true
           inputs = next()
@@ -1012,10 +1235,13 @@ export class VelaSession {
       }
     } finally {
       options.signal?.removeEventListener('abort', forward)
+      this.flushPendingCustom()
       if (!saved) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
       this.prompting = false
+      // Sent while saving (written with the next entry or when the session closes)
+      this.flushPendingCustom()
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error
@@ -1029,32 +1255,45 @@ export class VelaSession {
     }
   }
 
-  /** One agent loop: inputs are appended in order as user messages. */
-  private async runLoop(inputs: string[], signal: AbortSignal): Promise<void> {
+  /** One agent loop: the inputs are appended in order, then next-turn custom messages and before_agent_start's. */
+  private async runLoop(
+    inputs: ModelMessage[],
+    signal: AbortSignal,
+  ): Promise<void> {
     await this.start()
     signal.throwIfAborted()
-    const { model, info } = this.resolveModel()
+    const { info } = this.resolveModel()
     // Fail here if the model doesn't support the current thinking level, before sending a request or writing history
     const reasoning = reasoningOption(this.thinking, info)
-    const input = inputs.join('\n\n')
-    this.sections = await this.deps.extensions.beforeAgentStart(this, input)
+    const input = inputs.map(messageText).join('\n\n')
+    const started = await this.deps.extensions.beforeAgentStart(this, input)
+    this.sections = started.sections
+    // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
+    const added = started.messages.map((message) => this.customMessage(message))
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
+    this.flushPendingCustom()
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
-    for (const text of inputs) {
-      const message: ModelMessage = { role: 'user', content: text }
+    for (const message of [
+      ...inputs,
+      ...this.nextTurnMessages.splice(0),
+      ...added,
+    ]) {
       this.append(message)
       newMessages.push(message)
     }
     await agentLoop({
-      model,
+      model: this.requestModel(),
       reasoning,
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,
       tokenTracker: this.tracker,
       prepareContext: (request) => this.prepareContext(request),
+      transformContext: this.deps.extensions.hasHandlers('context')
+        ? (messages) => this.deps.extensions.transformContext(this, messages)
+        : undefined,
       // Like pi: with automatic compaction off, a context overflow is reported as is
       compactOnOverflow: this.autoCompaction
         ? (overflowSignal) => this.compactForOverflow(overflowSignal)
@@ -1075,7 +1314,7 @@ export class VelaSession {
   /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
   private async compactForOverflow(signal?: AbortSignal): Promise<void> {
     const request = await createRequestSnapshot(
-      this.model,
+      this.requestModel(),
       this.buildSystem(),
       this.registry.toAISDKFormat(),
       this.messages,
@@ -1095,7 +1334,7 @@ export class VelaSession {
     await this.exclusive('compact', async (signal) => {
       await this.start()
       const request = await createRequestSnapshot(
-        this.model,
+        this.requestModel(),
         this.buildSystem(),
         this.registry.toAISDKFormat(),
         this.messages,
@@ -1173,4 +1412,16 @@ function withDefaults(ui: SessionUI): ExtensionUI {
     setStatus: (key, text) => ui.setStatus?.(key, text),
     setWidget: (key, lines) => ui.setWidget?.(key, lines),
   }
+}
+
+/** Text of a user message (its text parts joined). */
+function messageText(message: ModelMessage): string {
+  const { content } = message
+  if (typeof content === 'string') return content
+  return content.map((part) => (part.type === 'text' ? part.text : '')).join('')
+}
+
+function assertCustomType(customType: unknown): void {
+  if (typeof customType !== 'string' || !customType.trim())
+    throw new Error('customType must be a non-empty string')
 }

@@ -16,8 +16,13 @@ import type {
   ResultRecord,
 } from '../session/tool-history.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
+import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 
-/** Internal tool return envelope: preserve native data separately from model-facing text. */
+/**
+ * What a tool can return to keep structured data apart from the text the model gets (like pi's
+ * `{ content, details }`): the model sees `text`; `value` is kept in the tool history and is the
+ * `details` of `tool_execution_end` (display data for UIs). `execution.isError` makes the call an error result.
+ */
 export class ToolExecutionResult {
   constructor(
     readonly value: unknown,
@@ -257,6 +262,8 @@ export class ToolRegistry {
   }
 
   private persistenceFailure: Error | undefined
+  /** `ToolExecutionResult.value`s by tool call id, until the call's `tool_execution_end` takes them */
+  private readonly details = new Map<string, unknown>()
   private readonly active = new Set<Promise<unknown>>()
 
   private track<T>(run: () => Promise<T>): Promise<T> {
@@ -460,6 +467,9 @@ export class ToolRegistry {
     const hookContext = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
+      ...(options.parentToolCallId === undefined
+        ? {}
+        : { parentToolCallId: options.parentToolCallId }),
       emit: (event: Parameters<VelaEventListener>[0]) => this.onEvent?.(event),
     }
     if (pipeline) {
@@ -579,6 +589,8 @@ export class ToolRegistry {
       settled = true
       // Persist native results before formatting/truncating the model response.
       const value = raw instanceof ToolExecutionResult ? raw.value : raw
+      if (raw instanceof ToolExecutionResult && options.toolCallId)
+        this.details.set(options.toolCallId, raw.value)
       const execution =
         raw instanceof ToolExecutionResult || raw instanceof StoredToolResult
           ? (raw.execution ?? {})
@@ -688,6 +700,7 @@ export class ToolRegistry {
     this.onEvent?.({ type: 'tool_execution_start', ...event, args })
     const started = performance.now()
     const finish = (result: unknown, isError: boolean, ran: boolean) => {
+      const details = this.takeDetails(toolCallId)
       const outcome: ToolCallOutcome = {
         toolCallId,
         toolName: name,
@@ -700,6 +713,7 @@ export class ToolRegistry {
         ...event,
         result,
         isError,
+        ...(details === undefined || isError ? {} : { details }),
         ...(outcome.durationMs === undefined
           ? {}
           : { durationMs: outcome.durationMs }),
@@ -745,6 +759,13 @@ export class ToolRegistry {
     }
   }
 
+  /** Display data (`ToolExecutionResult.value`) of a finished call, for its `tool_execution_end`; removes it. */
+  takeDetails(toolCallId: string): unknown {
+    const details = this.details.get(toolCallId)
+    this.details.delete(toolCallId)
+    return details
+  }
+
   /** Tools declared to the model: allowed, and direct / model-only, or deferred and loaded with tool_search. */
   getActiveTools() {
     return this.getAllTools().filter((tool) => {
@@ -755,63 +776,82 @@ export class ToolRegistry {
     })
   }
 
-  getDeferredToolSummary(): string {
-    const deferred = this.getAllTools().filter((tool) => {
-      return (
+  /** Tools tool_search can load in this session: allowed deferred tools (not yet loaded, unless `loaded`). */
+  private searchableTools(loaded = false): ToolDefinition[] {
+    return this.getAllTools().filter(
+      (tool) =>
         tool.exposure === 'deferred' &&
-        !this.discoveredTools.has(tool.name) &&
-        this.decide(tool.name) !== 'deny'
-      )
-    })
+        tool.name !== 'tool_search' &&
+        (loaded || !this.discoveredTools.has(tool.name)) &&
+        this.decide(tool.name) !== 'deny',
+    )
+  }
 
+  /**
+   * The deferred tools for the system prompt. Like pi, tools of a namespace (an MCP server) are not
+   * listed one by one: the namespace gets one line, and tool_search finds its tools.
+   */
+  getDeferredToolSummary(): string {
+    const deferred = this.searchableTools()
     if (deferred.length === 0) return ''
 
-    const line = (t: ToolDefinition) =>
-      `- ${t.name}${t.searchHint ? ` — ${t.searchHint}` : ''}`
-    // Tools without a namespace first, then one group per namespace (like pi's namespace listing)
-    const groups = new Map<string, ToolDefinition[]>()
+    const lines: string[] = []
+    const namespaces = new Map<string, ToolDefinition[]>()
     for (const tool of deferred) {
-      const key = tool.namespace?.name ?? ''
-      groups.set(key, [...(groups.get(key) ?? []), tool])
+      if (!tool.namespace) {
+        lines.push(
+          `- ${tool.name}${tool.searchHint ? ` — ${tool.searchHint}` : ''}`,
+        )
+        continue
+      }
+      const key = tool.namespace.name
+      namespaces.set(key, [...(namespaces.get(key) ?? []), tool])
     }
-    const lines: string[] = (groups.get('') ?? []).map(line)
-    for (const [key, tools] of groups) {
-      if (!key) continue
+    for (const [key, tools] of namespaces) {
       const description = tools.find((t) => t.namespace?.description)?.namespace
         ?.description
-      lines.push(`${key}${description ? ` — ${description}` : ''}:`)
-      lines.push(...tools.map((t) => `  ${line(t)}`))
+      const count = `${tools.length} tool${tools.length === 1 ? '' : 's'}`
+      lines.push(`- ${key} (${count})${description ? ` — ${description}` : ''}`)
     }
     return [
-      'The tools below are available, but before calling one you must call tool_search to get its full schema:',
+      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
       ...lines,
     ].join('\n')
   }
 
-  searchTools(query: string): ToolDefinition[] {
-    const q = query.trim()
-    const results: ToolDefinition[] = []
-
-    const names = q.includes(',')
-      ? q
-          .split(',')
-          .map((n) => n.trim())
-          .filter(Boolean)
-      : [q]
-
-    for (const name of names) {
-      const tool = this.tools.get(name)
-      if (
-        tool &&
-        tool.name !== 'tool_search' &&
-        tool.exposure !== 'hidden' &&
-        tool.exposure !== 'codemode' &&
-        this.decide(tool.name) !== 'deny'
-      ) {
-        results.push(tool)
-        this.discoveredTools.add(tool.name)
-      }
+  /**
+   * Loads deferred tools for this session (like pi's tool_search). A query of comma-separated exact
+   * tool names loads those tools; any other query loads the `limit` best BM25 matches over names,
+   * descriptions, parameters and namespaces.
+   */
+  async searchTools(query: string, limit = 8): Promise<ToolDefinition[]> {
+    const loadable = this.searchableTools(true)
+    const names = query
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean)
+    // Exact names also return tools loaded earlier, so asking again is harmless
+    const exact = names.map((name) => loadable.find((t) => t.name === name))
+    let results: ToolDefinition[]
+    if (names.length > 0 && exact.every((tool) => tool !== undefined)) {
+      results = exact as ToolDefinition[]
+    } else {
+      const candidates = loadable.filter(
+        (t) => !this.discoveredTools.has(t.name),
+      )
+      const documents = await Promise.all(
+        candidates.map(async (tool) =>
+          createToolSearchDocument({
+            ...tool,
+            jsonSchema: await asSchema(tool.inputSchema).jsonSchema,
+          }),
+        ),
+      )
+      results = rankTools(query, documents, limit).flatMap(
+        (match) => candidates.find((t) => t.name === match.name) ?? [],
+      )
     }
+    for (const tool of results) this.discoveredTools.add(tool.name)
     return results
   }
 

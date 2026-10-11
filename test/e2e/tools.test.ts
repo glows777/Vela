@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import z from 'zod'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { ToolExecutionResult } from '../../src/tools/registry.ts'
 import {
   captureConsole,
   cleanupTestVelas,
@@ -412,4 +413,68 @@ test('a long bash in one session does not hold back file writes in another sessi
   expect(await t.readFile('other.txt')).toBe('written')
   await slow
   expect(t.lastAssistantText()).toBe('slow done')
+})
+
+test('tool_execution_end carries edit_file diff details for display, the model gets only the summary (like pi)', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'one\ntwo\n' },
+    responses: [
+      fauxToolCall('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'two', newText: 'TWO' }],
+      }),
+      fauxToolCall('runner', {}),
+      fauxText('done'),
+    ],
+  })
+  t.internals.registry.register({
+    name: 'runner',
+    description: 'Runs other tools',
+    inputSchema: z.object({}),
+    execute: async (_input, context) => {
+      await context!.executeTool!('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'TWO', newText: 'three' }],
+      })
+      return 'ok'
+    },
+  })
+
+  await t.run('edit')
+
+  const [direct, nested, runner] = t.eventsOf('tool_execution_end')
+  expect(direct!.details).toMatchObject({
+    diff: expect.stringContaining('+2 TWO'),
+    patch: expect.stringContaining('-two'),
+    firstChangedLine: 2,
+  })
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
+    'Successfully replaced 1 block(s) in a.txt.',
+  )
+  expect(nested!.parentToolCallId).toBe(runner!.toolCallId)
+  expect(nested!.details).toMatchObject({
+    diff: expect.stringContaining('+2 three'),
+  })
+  // Tools that return plain values have no details
+  expect('details' in runner!).toBe(false)
+})
+
+test('details of a call cut off by an abort are dropped with the call', async () => {
+  const t = createTestVela({
+    responses: [fauxToolCall('marker', {})],
+  })
+  t.internals.registry.register({
+    name: 'marker',
+    description: 'Returns display data, then the run is aborted',
+    inputSchema: z.object({}),
+    execute: async () => {
+      void t.session.abort()
+      return new ToolExecutionResult({ shown: true }, 'ok')
+    },
+  })
+
+  await t.run('go').catch(() => {})
+
+  const [call] = t.eventsOf('tool_execution_start')
+  expect(t.session.registry.takeDetails(call!.toolCallId)).toBeUndefined()
 })

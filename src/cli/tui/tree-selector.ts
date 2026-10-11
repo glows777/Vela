@@ -24,6 +24,10 @@ function describe(entry: SessionEntry): string | undefined {
       const body = text || (calls.length ? `[${calls.join(', ')}]` : '')
       return `assistant: ${body}${entry.stopReason ? ` (${entry.stopReason})` : ''}`
     }
+    case 'custom_message':
+      return entry.display
+        ? `[${entry.customType}] ${messageText(entry.content)}`
+        : undefined
     case 'compaction':
       return '[summary of earlier messages]'
     case 'branch_summary':

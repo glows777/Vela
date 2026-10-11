@@ -1,6 +1,6 @@
 # Built-in extensions
 
-Vela ships four extensions: `memory`, `rag`, `web` and `feishu`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
+Vela ships five extensions: `memory`, `rag`, `web`, `feishu` and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
 
 | Extension | Adds |
 |---|---|
@@ -8,10 +8,11 @@ Vela ships four extensions: `memory`, `rag`, `web` and `feishu`. They use the sa
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary in the system prompt, `/rag` |
 | `web` | `web_fetch`, and `web_search` when a search API key is set |
 | `feishu` | The Feishu bot channel (see [Channels](channels.md)) |
+| `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
 
 ## Loading
 
-**CLI.** All four load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API, `web` registers only `web_fetch` without a search key, and `feishu` registers its channel but does not connect without an app id and secret.
+**CLI.** All five load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API, `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
 To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. `--no-extensions` skips them, and `-e builtin:<name>` loads a single one for a run. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
@@ -59,9 +60,9 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 
 ## Tool names
 
-Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`. See [Extensions](extensions.md).
+Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
-Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions. See [Security](security.md#session-roles).
+Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions; MCP tools are not. See [Security](security.md#session-roles).
 
 ## Data
 
@@ -170,3 +171,7 @@ Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each sender 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#feishu).
 
 **SDK.** `feishu({ appId, appSecret, owners })`.
+
+## mcp
+
+Connects to [MCP](https://modelcontextprotocol.io) servers configured in `~/.vela/mcp.json` and the trusted project's `.vela/mcp.json`, in the `mcpServers` format of Claude Desktop and Claude Code, and registers their tools as `mcp__<server>__<tool>`. Tools are deferred by default: the system prompt names each server and the model loads its tools with `tool_search`. `/mcp` shows each server's state and `/mcp reconnect <server>` reconnects one. In the SDK, pass the servers: `mcp({ servers: { docs: { url: 'https://example.com/mcp' } } })`. See [MCP servers](mcp.md).

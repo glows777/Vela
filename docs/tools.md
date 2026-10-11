@@ -15,7 +15,7 @@ Every tool runs inside the Vela process with the operating-system permissions of
 | `grep` | Search file contents with ripgrep | read-only |
 | `find` | Find files by glob pattern with fd | read-only |
 | `bash` | Run a shell command | destructive, open world |
-| `tool_search` | Load the schema of a deferred tool | read-only |
+| `tool_search` | Search deferred tools (such as MCP server tools) by keyword and load the matches | read-only |
 
 The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not decide permissions from them; a permission extension can.
 
@@ -176,15 +176,16 @@ A tool definition's `exposure` decides where the tool shows up. The values and t
 
 Vela has no codemode tool yet, so a `codemode` tool can only be run by other tools through `ctx.executeTool()`. A `hidden` tool stays registered but unused, for example while it is turned off.
 
-A deferred tool is not sent to the model as a tool. Instead, the system prompt lists its name, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` first. Tools with the same `namespace` (`{ name, description?, instructions? }`, for example the tools of one MCP server) are listed together under the namespace's name and description.
+A deferred tool is not sent to the model as a tool. Instead, the system prompt names it, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` to load it. Like pi, tools with a `namespace` (`{ name, description?, instructions? }`, for example the tools of one MCP server) are not listed one by one: the namespace gets one line with its tool count and description.
 
-`tool_search` takes one parameter:
+`tool_search` takes these parameters (same as pi):
 
 | Parameter | Type | Description |
 |---|---|---|
-| `query` | string | A tool name, or several separated by commas |
+| `query` | string | Keywords describing the tools needed, or exact tool names separated by commas |
+| `limit` | number | Most tools to load (default 8) |
 
-It matches exact tool names (it is not a fuzzy search), returns each tool's name, description, input schema and `namespace` (with its `instructions` on the namespace's first tool in the result; later tools carry only the namespace name), and makes the tool available to the model for the rest of the session. Discovery is per session.
+A query of exact tool names loads those tools. Any other query ranks the deferred tools that are not loaded yet with BM25 over their names, descriptions, parameter names and descriptions, and namespace, and loads the best `limit` matches. The result lists the loaded tools with the first line of each description, followed by the `instructions` of each namespace involved (for MCP tools, the server instructions), once per namespace. Loaded tools are declared to the model from its next call and stay loaded for the rest of the session. Loading is per session.
 
 All core tools are direct. Deferred exposure is for extensions that register many tools, so their schemas do not fill the context until needed. See [Extensions](extensions.md).
 

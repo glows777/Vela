@@ -22,7 +22,7 @@ import { memorySessionStorage } from '../session/storage.ts'
 import { createMockModel } from '../testing/demo-model.ts'
 import { loadFauxScenario } from '../testing/faux.ts'
 import { recordModel } from '../testing/record.ts'
-import { createVela } from '../vela.ts'
+import { createVela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
@@ -33,13 +33,16 @@ import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
   extensionConfigFromEnv,
+  formatModelList,
   HELP,
   legacyDataHint,
   loadCliExtensions,
   packageVersion,
   parseArgs,
   resolveTrust,
+  selectTools,
   USAGE,
+  withMcpServers,
 } from './setup.ts'
 
 const usageError = (message: string): never => {
@@ -93,7 +96,7 @@ if (mode !== 'interactive' && args.resume)
 
 // Print mode: piped stdin is prepended to the first prompt (like pi: `git diff | vela -p "review"`)
 const messages = [...args.messages]
-if ((mode === 'print' || mode === 'json') && !args.export) {
+if ((mode === 'print' || mode === 'json') && !args.listModels && !args.export) {
   const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
   if (!messages.length)
@@ -154,12 +157,13 @@ async function chooseModel(): Promise<LanguageModel | string | undefined> {
       : undefined)
   )
 }
-const chosenModel = await chooseModel()
+// --list-models needs neither a runnable model nor a recorder
+const chosenModel = args.listModels ? undefined : await chooseModel()
 
 // VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
 // (records the default model only; a model chosen by name is resolved here via models.json / built-in providers, so extension providers can't be recorded)
 let recorder: ReturnType<typeof recordModel> | undefined
-if (env.VELA_RECORD) {
+if (env.VELA_RECORD && !args.listModels) {
   try {
     if (!chosenModel) throw new Error(NO_MODEL)
     const model =
@@ -175,7 +179,7 @@ if (env.VELA_RECORD) {
 
 // Interactive mode logs to the TUI chat log and debug to ~/.vela/debug.log; other modes log to stderr
 const interactiveLogger =
-  mode === 'interactive'
+  mode === 'interactive' && !args.listModels
     ? createInteractiveLogger({
         debugLog:
           env.VELA_DEBUG === '1' ? join(agentDir, 'debug.log') : undefined,
@@ -206,12 +210,56 @@ const vela = createVela({
   offline: ['1', 'true', 'yes'].includes(
     (env.VELA_OFFLINE ?? '').toLowerCase(),
   ),
-  extensionConfig: extensionConfigFromEnv(env, config.extensionConfig),
+  extensionConfig: withMcpServers(
+    extensionConfigFromEnv(env, config.extensionConfig),
+    config,
+  ),
   // Built-in extensions (memory / rag / web / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
   extensions: await loadCliExtensions(config, args, (message) =>
     console.error(message),
   ),
 })
+
+const exitWith = async (code: number, message: string): Promise<never> => {
+  ;(code ? process.stderr : process.stdout).write(message)
+  await vela.dispose()
+  process.exit(code)
+}
+
+// --list-models (like pi): extension providers are listed too, so wait for extensions to load
+if (args.listModels) {
+  await vela
+    .ready()
+    .catch((error) =>
+      console.error(error instanceof Error ? error.message : error),
+    )
+  await exitWith(
+    0,
+    formatModelList(
+      vela.models(),
+      args.listModels === true ? undefined : args.listModels,
+    ),
+  )
+}
+
+// --tools / --no-tools / --exclude-tools: checked once extensions have registered their tools
+let toolSelection: string[] | undefined
+try {
+  if (args.tools || args.noTools || args.excludeTools.length) {
+    await vela.ready().catch(() => {})
+    toolSelection = selectTools(
+      velaInternals(vela)
+        .registry.getAllTools()
+        .map((tool) => tool.name),
+      args,
+    )
+  }
+} catch (error) {
+  await exitWith(
+    2,
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  )
+}
 
 const exit = async (code: number): Promise<never> => {
   await vela.dispose()
@@ -265,12 +313,14 @@ if (recorder)
   })
 
 /**
+ * Applies --tools / --no-tools / --exclude-tools to each session the CLI opens.
  * A resumed session carries its saved model and thinking level. Explicit command-line values win, and so do
  * VELA_MODEL=mock / faux and VELA_RECORD-wrapped models (otherwise --continue would bypass replay / recording
  * and use the saved real model). Returns whether the model is usable.
  */
 function applyModelArgs(target: VelaSession): boolean {
   recordedSession = target.id
+  if (toolSelection) target.setActiveTools(toolSelection)
   if (args.thinking) target.setThinkingLevel(args.thinking)
   // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
   const override =

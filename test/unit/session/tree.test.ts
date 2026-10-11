@@ -132,3 +132,22 @@ test('the HTML export escapes content and has no scripts or external resources',
   expect(html).toContain('&lt;script&gt;')
   expect(html).toContain("default-src 'none'")
 })
+
+test('the HTML export shows custom messages only with display: true', () => {
+  const custom = (id: string, display: boolean): SessionEntry => ({
+    type: 'custom_message',
+    id,
+    parentId: null,
+    timestamp: time,
+    customType: '<note>',
+    content: `${id} text`,
+    display,
+  })
+  const html = renderSessionHtml({
+    id: 's',
+    entries: [custom('shown', true), custom('hidden', false)],
+  })
+  expect(html).toContain('&lt;note&gt;')
+  expect(html).toContain('shown text')
+  expect(html).not.toContain('hidden text')
+})
