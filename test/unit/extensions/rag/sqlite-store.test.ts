@@ -146,3 +146,23 @@ test('vectors with the wrong number of dimensions are refused with a clear error
     'The embedder "small" returned 2-dimension vectors; the knowledge base stores 128 dimensions',
   )
 })
+
+test('two open stores on one file (two processes sharing the data dir) never mix embedders', () => {
+  const path = tempDb()
+  // Both open while the file is empty
+  const a = new SqliteVectorStore(path, { embedder: 'model-a' })
+  const b = new SqliteVectorStore(path, { embedder: 'model-b' })
+  b.add(chunk('b.md', 0, 'beta'), embedding)
+  expect(() => a.add(chunk('a.md', 0, 'alpha'), embedding)).toThrow(
+    /built with the embedder "model-b", but the configured embedder is "model-a"/,
+  )
+  expect(a.storedEmbedder()).toBe('model-b')
+
+  // A clear in one store is seen by the other: the empty file belongs to whoever writes next
+  a.clear()
+  expect(() => b.vectorSearch(embedding, 5)).not.toThrow()
+  a.add(chunk('a.md', 0, 'alpha'), embedding)
+  expect(() => b.vectorSearch(embedding, 5)).toThrow(
+    /built with the embedder "model-a"/,
+  )
+})

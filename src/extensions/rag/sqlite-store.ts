@@ -30,8 +30,6 @@ export class SqliteVectorStore {
   private db: SqliteDatabase
   /** Id of the embedder this store embeds with */
   readonly embedder: string
-  /** The embedder recorded in the file when it differs from `embedder`; vector operations then fail */
-  private recorded?: string
   /** True when the file had chunks but no embedder record (built before Vela 0.2.0) and `embedder` was assumed */
   readonly assumedEmbedder: boolean = false
 
@@ -43,27 +41,34 @@ export class SqliteVectorStore {
     sqliteVec.load(this.db) // vector search extension
     this.createTables()
     this.embedder = options.embedder ?? UNNAMED_EMBEDDER
-    const recorded = this.readMeta('embedder')
-    if (recorded === undefined) {
+    if (this.readMeta('embedder') === undefined) {
       this.assumedEmbedder = this.size() > 0
       this.writeMeta('embedder', this.embedder)
-    } else if (recorded !== this.embedder) {
-      // Nothing stored yet: nothing to mix up, so the new embedder takes over
-      if (this.size() === 0) this.writeMeta('embedder', this.embedder)
-      else this.recorded = recorded
     }
   }
 
-  /** The embedder that made the stored vectors (the file's record) */
+  /** The embedder that made the stored vectors (the file's record); an empty store belongs to the configured one */
   storedEmbedder(): string {
-    return this.recorded ?? this.embedder
+    const recorded = this.readMeta('embedder')
+    return recorded === undefined || this.size() === 0
+      ? this.embedder
+      : recorded
   }
 
-  /** Fails when the stored vectors come from another embedder: their scores can't be compared with this one's */
+  /**
+   * Fails when the stored vectors come from another embedder: their scores can't be compared with this one's.
+   * Read from the file on every call, because another process (another project's settings) may share the data dir.
+   * An empty store is taken over by the configured embedder.
+   */
   private assertEmbedder(): void {
-    if (this.recorded === undefined) return
+    const recorded = this.readMeta('embedder')
+    if (recorded === this.embedder) return
+    if (recorded === undefined || this.size() === 0) {
+      this.writeMeta('embedder', this.embedder)
+      return
+    }
     throw new Error(
-      `The knowledge base was built with the embedder "${this.recorded}", but the configured embedder is "${this.embedder}". Vectors from different models can't be compared: switch back to "${this.recorded}", or run /rag clear and ingest the documents again.`,
+      `The knowledge base was built with the embedder "${recorded}", but the configured embedder is "${this.embedder}". Vectors from different models can't be compared: switch back to "${recorded}", or run /rag clear and ingest the documents again.`,
     )
   }
 
@@ -250,7 +255,6 @@ export class SqliteVectorStore {
       )
       this.writeMeta('embedder', this.embedder)
     })
-    this.recorded = undefined
   }
 
   sources(): string[] {
