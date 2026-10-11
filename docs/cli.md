@@ -118,6 +118,7 @@ Vela's own keys:
 | Esc | Cancel a running `!` command; otherwise interrupt the running task (queued messages go back into the editor), or clear a `!` input. Closes the autocomplete menu first if it is open. |
 | Shift+Tab | Cycle the thinking level. |
 | Ctrl+L | Open the model picker. |
+| Ctrl+P, Shift+Ctrl+P | Switch to the next or previous model in `enabledModels` (all available models when unset). |
 | Ctrl+O | Expand or collapse tool output. |
 | Ctrl+T | Show or hide thinking. |
 | Ctrl+C | Clear the editor; press twice within half a second to exit. |
@@ -166,8 +167,10 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 | `/new` | Start a new session. |
 | `/resume` | Pick a saved session and switch to it. |
 | `/name [name]` | Show or set the session name. |
-| `/model [provider/id]` | Without an argument, open the model picker (models listed in `models.json` or by extension providers). With an argument, switch to that model. |
-| `/thinking [level]` | Without an argument, open the thinking-level picker. With an argument, set it. |
+| `/model [provider/id]` | Without an argument, open the searchable model picker (models of providers that have a credential). With an argument, switch to that model. |
+| `/login [provider]` | Sign in to a provider (Sign in with ChatGPT, OpenRouter, or an API key) and store the credential in `~/.vela/auth.json`. See [Models](models.md#credentials-and-login). |
+| `/logout [provider]` | Remove a provider's stored credential. |
+| `/thinking [level]` | Without an argument, open a picker of the levels the model supports. With an argument, set it (clamped to a supported level). |
 | `/compact [focus]` | Summarize the conversation now, optionally telling the summary what to focus on. |
 | `/tree` | Move to another point in the session tree, optionally summarizing the branch you leave, or label an entry. See [Sessions](sessions.md#session-tree). |
 | `/fork` | Pick one of your earlier messages and continue in a new session from just before it (its text goes into the editor). |

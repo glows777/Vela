@@ -48,6 +48,7 @@ export const KEYS = {
   ctrlD: '\x04',
   ctrlL: '\x0c',
   ctrlO: '\x0f',
+  ctrlP: '\x10',
 }
 
 const started: InteractiveMode[] = []
@@ -68,6 +69,8 @@ export async function startTui(
     pick?: boolean
     newSessionId?: () => string
     copyToClipboard?: (text: string) => Promise<void>
+    openBrowser?: (url: string) => void
+    enabledModels?: string[]
   } = {},
 ) {
   const terminal = new FakeTerminal()
@@ -81,6 +84,8 @@ export async function startTui(
     newSessionId: options.newSessionId ?? (() => `tui-new-${++ids}`),
     configure: () => true,
     copyToClipboard: options.copyToClipboard,
+    openBrowser: options.openBrowser ?? (() => {}),
+    enabledModels: options.enabledModels,
     onExit: async () => {
       exited = true
     },

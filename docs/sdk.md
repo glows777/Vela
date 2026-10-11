@@ -33,8 +33,9 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 
 | Option | Default | Description |
 |---|---|---|
-| `model` | none | Default model: `provider/id` (looked up in `providers` and providers registered by extensions) or an AI SDK `LanguageModel`. Without it, a session must call `setModel()`, or resume a session with a saved model, before it can prompt. |
-| `providers` | `{}` | Model providers by name, `Record<string, ProviderDefinition>`. `loadConfig().providers` gives the built-in `openai` and `anthropic` providers plus those in `models.json`. See [Models](models.md). |
+| `model` | none | Default model: `provider/id` (looked up in `providers` and providers registered by extensions) or an AI SDK `LanguageModel`. Without it, the default model of the first built-in provider with a credential is used (see [Models](models.md#selecting-a-model)); with none, a session must call `setModel()`, or resume a session with a saved model, before it can prompt. |
+| `providers` | `{}` | Model providers by name, `Record<string, ProviderDefinition>`. `loadConfig().providers` gives the built-in `anthropic`, `openai` and `openrouter` providers plus those in `models.json`. See [Models](models.md). |
+| `credentials` | `memoryCredentialStore()` | `CredentialStore` with the keys and OAuth tokens that `/login` and `vela.login()` store and providers read per request. `loadConfig().credentials` is the CLI's `~/.vela/auth.json` (`fileCredentialStore(path)`). |
 | `thinkingLevel` | `medium` | Thinking level for new sessions: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `autoCompaction` | `true` | Automatic compaction for new sessions (pi's `compaction.enabled`). `false`: no microcompaction, threshold summary or compact-and-retry on overflow; `compact()` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `cwd` | `process.cwd()` | Working directory for file, search and bash tools and for skills. |
@@ -60,7 +61,8 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 | `cwd`, `dataDir` | Resolved working and data directories |
 | `model` | Default `LanguageModel`; a name is resolved on first access. Throws if none was given or it cannot be resolved. |
 | `limits` | Limits in effect (defaults plus overrides) |
-| `models()` | Models listed by all providers (`ModelInfo`: `provider`, `id`, `ref`, `name`, `contextWindow`, `reasoning`, `cost`) |
+| `models(options?)` | Available models: those of providers that have a credential, like pi (`ModelInfo`: `provider`, `id`, `ref`, `name`, `contextWindow`, `maxTokens`, `reasoning`, `thinkingLevelMap`, `input`, `cost`). `{ all: true }` returns every listed model. |
+| `loginProviders()`, `login(provider, method, interaction, options?)`, `logout(provider)` | What `/login` and `/logout` do: list the providers that take a sign-in, run one (`method` `oauth` or `api_key`; `interaction` shows links and asks for input) and store the credential, or remove it. See [Models](models.md#credentials-and-login). |
 | `session(id?, options?)` | Opens a session, or returns it if it is already open. `id` defaults to `default`. |
 | `sessions()` | Open sessions |
 | `listSessions()` | Saved sessions, newest first, from `SessionStorage.list()` (empty if the storage has no `list`). The built-in storages leave out sessions without messages; a custom storage's `list()` is passed through as is. |
@@ -122,7 +124,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `resume()` | Replaces the in-memory history with the saved one; returns `false` if nothing was saved. Restores the name, thinking level and (if resolvable) model. Throws while running. |
 | `model`, `modelInfo` | Current `LanguageModel` and its `ModelInfo` |
 | `setModel(model)` | Switches the model from the next prompt. Compaction limits are recomputed from the new context window. Throws, keeping the current model, if the name cannot be resolved. A model chosen by name is saved with the session. |
-| `thinkingLevel`, `setThinkingLevel(level)` | Current level; set it from the next request. `prompt()` throws if the model entry has `reasoning: false` and the level is not `off`. |
+| `thinkingLevel`, `setThinkingLevel(level)` | Current level; set it from the next request. A level the model doesn't support is clamped to the nearest supported one (like pi); the getter returns the level in effect. `availableThinkingLevels()` lists the supported levels. See [Thinking levels](models.md#thinking-levels). |
 | `role` | Get or set the role |
 | `getActiveTools()` | Tool names the model can currently see (after role, selection and deferred loading) |
 | `setActiveTools(names)` | Enable only these tools; `undefined` restores all |
@@ -312,6 +314,7 @@ for (const entry of config.extensions)
 const vela = createVela({
   model: config.settings.defaultModel,
   providers: config.providers,
+  credentials: config.credentials,
   thinkingLevel: config.settings.defaultThinkingLevel,
   cwd: config.cwd,
   dataDir: config.dataDir,
@@ -336,7 +339,7 @@ const vela = createVela({
 | `homeDir` | `os.homedir()` | Home directory for `~/.agents/skills` |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 
-The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
+The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `credentials` (the `~/.vela/auth.json` store), `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
 
 The CLI also fills built-in extension config from environment variables such as `TAVILY_API_KEY`; with the SDK, put those values in `extensionConfig` or pass them to the extension factories.
 

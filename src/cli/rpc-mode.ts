@@ -1,9 +1,10 @@
 import type { SessionUI } from '../extensions/types.ts'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import type { ThinkingLevel } from '../models/index.ts'
 import { messageText } from '../session/entries.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { QueueMode, VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
+import { nextModel, scopedModels } from './model-cycle.ts'
 
 /**
  * RPC mode (like pi's `--mode rpc`): one JSON command per stdin line, one `response` or event per stdout line.
@@ -35,6 +36,8 @@ export interface RpcModeOptions {
   write: (text: string) => Promise<void>
   /** Message for a failed command's `error` (the CLI swaps the SDK's no-model hint for its own); defaults to the error's message */
   describeError?: (error: unknown) => string
+  /** Settings `enabledModels`: the models `cycle_model` goes through */
+  enabledModels?: string[]
 }
 
 const QUEUE_MODES: QueueMode[] = ['one-at-a-time', 'all']
@@ -277,7 +280,35 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     set_thinking_level(command) {
       session.setThinkingLevel(command.level as ThinkingLevel)
     },
-    get_available_thinking_levels: () => ({ levels: THINKING_LEVELS }),
+    get_available_thinking_levels: () => ({
+      levels: session.availableThinkingLevels(),
+    }),
+    // Like pi: null when there is nothing to cycle to
+    cycle_model() {
+      let current: string | undefined
+      try {
+        current = session.modelInfo.ref
+      } catch {}
+      const next = nextModel(
+        scopedModels(vela.models(), options.enabledModels),
+        current,
+      )
+      if (!next) return null
+      session.setModel(next.ref)
+      return {
+        model: session.modelInfo,
+        thinkingLevel: session.thinkingLevel,
+        isScoped: Boolean(options.enabledModels?.length),
+      }
+    },
+    cycle_thinking_level() {
+      const levels = session.availableThinkingLevels()
+      if (levels.length < 2) return null
+      const level =
+        levels[(levels.indexOf(session.thinkingLevel) + 1) % levels.length]
+      session.setThinkingLevel(level as ThinkingLevel)
+      return { level: session.thinkingLevel }
+    },
     set_steering_mode(command) {
       session.steeringMode = queueMode(command.mode)
     },

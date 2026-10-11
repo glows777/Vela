@@ -293,7 +293,15 @@ Either `model` as `provider/id`, or pi's `provider` plus `modelId`. Takes effect
 
 #### get_available_models
 
-Data: `{ "models": ModelInfo[] }`, the models listed by the configured providers (`models.json` and extensions). A provider accepts ids that aren't listed, so this is not the full set of usable models.
+Data: `{ "models": ModelInfo[] }`, the available models: those of providers that have a credential (like pi). A provider accepts ids that aren't listed, so this is not the full set of usable models.
+
+#### cycle_model
+
+```json
+{"id":"14b","type":"cycle_model"}
+```
+
+Switches to the next model in settings `enabledModels` (all available models when unset), like Ctrl+P. Data: `{ "model": ModelInfo, "thinkingLevel", "isScoped" }`, or `null` when there is no other model.
 
 #### set_thinking_level
 
@@ -301,11 +309,15 @@ Data: `{ "models": ModelInfo[] }`, the models listed by the configured providers
 {"id":"15","type":"set_thinking_level","level":"high"}
 ```
 
-`level` is one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. A model that doesn't support thinking fails on the next prompt, not here.
+`level` is one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. A level the model doesn't support is clamped to the nearest supported one, like pi; `get_state` shows the level in effect. See [Thinking levels](models.md#thinking-levels).
 
 #### get_available_thinking_levels
 
-Data: `{ "levels": ["off","minimal","low","medium","high","xhigh","max"] }`.
+Data: `{ "levels": [...] }`, the levels the current model supports, for example `["off","minimal","low","medium","high"]`.
+
+#### cycle_thinking_level
+
+Switches to the next supported level, like Shift+Tab. Data: `{ "level" }`, or `null` when the model supports only one level.
 
 ### Queue modes
 
@@ -507,4 +519,4 @@ process.wait()
 | Extension UI | Also `editor`, `setTitle`, `set_editor_text`, `timeout` | `confirm`, `select`, `input`, `notify`, `setStatus`, `setWidget` |
 | Typed client | `RpcClient` exported | No client export; see [examples/rpc-client.ts](../examples/rpc-client.ts) |
 
-pi commands Vela doesn't have: `cycle_model`, `cycle_thinking_level`, `set_auto_retry`, `abort_retry`, `get_session_stats`, `get_last_assistant_text`. Sending one returns `Unknown command`.
+pi commands Vela doesn't have: `set_auto_retry`, `abort_retry`, `get_session_stats`, `get_last_assistant_text`. Sending one returns `Unknown command`.

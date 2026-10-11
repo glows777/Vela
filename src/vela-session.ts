@@ -31,6 +31,10 @@ import type {
 import type { VelaLimits } from './limits.ts'
 import type { VelaLogger } from './logger.ts'
 import {
+  clampThinkingLevel,
+  supportedThinkingLevels,
+} from './models/catalog.ts'
+import {
   limitsForModel,
   type ModelInfo,
   type ResolvedModel,
@@ -192,8 +196,11 @@ export function assertSessionId(id: string): void {
 export interface SessionDeps {
   /** Default model */
   model: string | LanguageModel | undefined
-  /** Resolves a model by name or object (including the provider registry) */
-  resolveModel: (model: string | LanguageModel | undefined) => ResolvedModel
+  /** Resolves a model by name or object (including the provider registry) for a session */
+  resolveModel: (
+    model: string | LanguageModel | undefined,
+    session: VelaSession,
+  ) => ResolvedModel
   thinkingLevel: ThinkingLevel
   /** Automatic compaction for new sessions */
   autoCompaction: boolean
@@ -358,7 +365,7 @@ export class VelaSession {
 
   private resolveModel(): ResolvedModel {
     if (!this.resolved)
-      this.applyModel(this.deps.resolveModel(this.modelChoice))
+      this.applyModel(this.deps.resolveModel(this.modelChoice, this))
     return this.resolved as ResolvedModel
   }
 
@@ -412,31 +419,61 @@ export class VelaSession {
   }
 
   private selectModel(model: string | LanguageModel, record: boolean): void {
-    const resolved = this.deps.resolveModel(model)
+    const resolved = this.deps.resolveModel(model, this)
+    const thinking = this.thinkingLevel
     this.modelChoice = model
     this.applyModel(resolved)
     if (record && typeof model === 'string')
       this.store.appendModelChange(resolved.info.ref ?? model)
-  }
-
-  /** Thinking level (off … max, default medium). */
-  get thinkingLevel(): ThinkingLevel {
-    return this.thinking
+    // Like pi's setModel: the thinking level is clamped to the new model and saved when that changes it
+    if (record && this.thinkingLevel !== thinking)
+      this.store.appendThinkingLevelChange(this.thinkingLevel)
   }
 
   /**
-   * Sets the thinking level (like pi's setThinkingLevel); effective from the next request and saved with the session.
-   * prompt() throws if the model does not support thinking (model entry has `reasoning: false`, or the provider rejects it).
+   * Thinking level (off … max, default medium), clamped to what the current model supports like pi: a model
+   * without thinking uses `off`, and a level the model lacks moves to the nearest one it has.
+   */
+  get thinkingLevel(): ThinkingLevel {
+    let info: ModelInfo
+    try {
+      info = this.resolveModel().info
+    } catch {
+      return this.thinking
+    }
+    return clampThinkingLevel(this.thinking, info, THINKING_LEVELS)
+  }
+
+  /** Thinking levels the current model supports (all of them when its metadata doesn't say). */
+  availableThinkingLevels(): ThinkingLevel[] {
+    try {
+      return supportedThinkingLevels(this.resolveModel().info, THINKING_LEVELS)
+    } catch {
+      return [...THINKING_LEVELS]
+    }
+  }
+
+  /**
+   * Sets the thinking level (like pi's setThinkingLevel); effective from the next request. The level actually used
+   * is clamped to the model (see `thinkingLevel`) and saved with the session when it changes. Switching to a model
+   * that supports the requested level uses it again.
    */
   setThinkingLevel(level: ThinkingLevel): void {
     if (!THINKING_LEVELS.includes(level))
       throw new Error(
         `Thinking level must be one of ${THINKING_LEVELS.join(' / ')}`,
       )
-    if (level === this.thinking) return
+    const before = this.thinkingLevel
     this.thinking = level
-    this.store.appendThinkingLevelChange(level)
+    const after = this.thinkingLevel
+    if (after !== before) this.store.appendThinkingLevelChange(after)
   }
+
+  /**
+   * The channel this session answers on (e.g. `feishu`), set by the channel gateway on every message; undefined
+   * for local sessions. Providers see it as `ProviderContext.channel()`.
+   */
+  channel?: string
 
   /** Session role (owner / collaborator / guest): decides which tools are available and whether extension commands can run. */
   get role(): Role {
@@ -1412,8 +1449,13 @@ export class VelaSession {
     await this.start()
     signal.throwIfAborted()
     const { info } = this.resolveModel()
-    // Fail here if the model doesn't support the current thinking level, before sending a request or writing history
-    const reasoning = reasoningOption(this.thinking, info)
+    // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
+    // resumed session keeps it even when the credentials change later
+    if (this.modelChoice === undefined) {
+      this.modelChoice = info.ref
+      this.store.appendModelChange(info.ref)
+    }
+    const reasoning = reasoningOption(this.thinkingLevel, info)
     const input = inputs.map(messageText).join('\n\n')
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.sections = started.sections

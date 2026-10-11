@@ -3,6 +3,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 import type { VelaSessionEventListener } from './agent/events.ts'
+import type {
+  AuthInteraction,
+  CredentialStore,
+  LoginOptions,
+} from './auth/types.ts'
 import { ChannelGateway } from './channels/gateway.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
 import type { VelaExtension } from './extensions/types.ts'
@@ -11,6 +16,7 @@ import { silentLogger, type VelaLogger } from './logger.ts'
 import {
   DEFAULT_THINKING_LEVEL,
   describeModel,
+  type LoginProvider,
   type ModelInfo,
   ModelRegistry,
   type ProviderDefinition,
@@ -56,8 +62,13 @@ export interface VelaOptions {
    * saved model) before it can prompt.
    */
   model?: LanguageModel | string
-  /** Model providers (built-in openai / anthropic + models.json from loadConfig(), or your own) */
+  /** Model providers (built-in anthropic / openai / openrouter + models.json from loadConfig(), or your own) */
   providers?: Record<string, ProviderDefinition>
+  /**
+   * Credentials stored by `/login` and `vela.login()`, read by providers per request. Default: in memory only.
+   * The CLI passes `loadConfig().credentials` (`~/.vela/auth.json`).
+   */
+  credentials?: CredentialStore
   /** Thinking level for new sessions, default medium (like pi) */
   thinkingLevel?: ThinkingLevel
   /**
@@ -120,8 +131,25 @@ export interface Vela {
   /** Default model (a name is resolved on first access; throws if none is given or it cannot be resolved) */
   readonly model: LanguageModel
   readonly limits: VelaLimits
-  /** Models listed by providers (`provider/id`, context window, price, ...), used by `/model` */
-  models(): ModelInfo[]
+  /**
+   * Models of the providers that have a credential (`provider/id`, context window, price, ...), used by `/model`
+   * and `--list-models`; `{ all: true }` includes providers without one.
+   */
+  models(options?: { all?: boolean }): ModelInfo[]
+  /** Providers `/login` can sign in to, with their current credential source */
+  loginProviders(): LoginProvider[]
+  /**
+   * Signs in to a provider and stores the credential (pi's `/login`): `oauth` runs the provider's sign-in,
+   * `api_key` asks for a key through `interaction`. Sessions use the new credential from their next request.
+   */
+  login(
+    provider: string,
+    method: 'oauth' | 'api_key',
+    interaction: AuthInteraction,
+    options?: LoginOptions,
+  ): Promise<void>
+  /** Removes a provider's stored credential (`/logout`); returns false when none was stored */
+  logout(provider: string): Promise<boolean>
   /**
    * Opens a session (or returns it if already open); with file storage the id is the file name in `sessions/<id>.jsonl`.
    * options only apply on first open. Call `await session.resume()` to restore history.
@@ -187,16 +215,19 @@ export function createVela(options: VelaOptions = {}): Vela {
       ? memorySessionStorage()
       : fileSessionStorage(join(dataDir, 'sessions'), options.logger))
   const { model } = options
-  const models = new ModelRegistry(options.providers)
+  const models = new ModelRegistry(options.providers, options.credentials)
   const resolveModel = (
-    choice: string | LanguageModel | undefined,
+    requested: string | LanguageModel | undefined,
+    from?: VelaSession,
   ): ResolvedModel => {
+    // Like pi: without a chosen model, the first provider with a credential supplies its default model
+    const choice = requested ?? models.defaultRef()
     if (choice === undefined)
       throw new Error(
         'No model selected: pass model to createVela(), or call session.setModel()',
       )
     return typeof choice === 'string'
-      ? models.resolve(choice)
+      ? models.resolve(choice, { channel: () => from?.channel })
       : { model: choice, info: describeModel(choice) }
   }
   const limits = resolveLimits(options.limits)
@@ -351,7 +382,11 @@ export function createVela(options: VelaOptions = {}): Vela {
       return defaultModel
     },
     limits,
-    models: () => models.list(),
+    models: (opts) => (opts?.all ? models.list() : models.available()),
+    loginProviders: () => models.loginProviders(),
+    login: (provider, method, interaction, loginOptions) =>
+      models.login(provider, method, interaction, loginOptions),
+    logout: (provider) => models.logout(provider),
     session,
     sessions: () => [...sessions.values()],
     listSessions: async () => (await sessionStorage.list?.()) ?? [],

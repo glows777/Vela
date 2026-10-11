@@ -19,8 +19,13 @@ import {
 } from '@earendil-works/pi-tui'
 import type { ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
+import type {
+  AuthInteraction,
+  AuthPrompt,
+  LoginOptions,
+} from '../auth/types.ts'
 import type { SessionUI } from '../extensions/types.ts'
-import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import type { ThinkingLevel } from '../models/index.ts'
 import {
   branchSummaryMessageText,
   contextEntries,
@@ -32,6 +37,8 @@ import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { copyToClipboard } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
+import { openBrowser } from './login.ts'
+import { nextModel, scopedModels } from './model-cycle.ts'
 import {
   AssistantMessage,
   BashExecution,
@@ -42,6 +49,7 @@ import {
   UserMessage,
 } from './tui/components.ts'
 import { VelaEditor } from './tui/editor.ts'
+import { SearchSelect } from './tui/search-select.ts'
 import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
 import { nearestShown, treeItems } from './tui/tree-selector.ts'
 
@@ -67,6 +75,12 @@ export interface InteractiveOptions {
   describeError?: (error: unknown) => string
   /** Clipboard for `/copy`; defaults to the system clipboard (tests pass a fake) */
   copyToClipboard?: (text: string) => Promise<void>
+  /** Passed to `vela.login()` by `/login` (the CLI's installation id for Sign in with ChatGPT) */
+  loginOptions?: LoginOptions
+  /** Opens a sign-in URL; defaults to the system browser (tests pass a fake) */
+  openBrowser?: (url: string) => void
+  /** Settings `enabledModels`: the models Ctrl+P cycles through */
+  enabledModels?: string[]
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
@@ -81,6 +95,8 @@ const TUI_COMMANDS = [
     description: 'Select model (/model provider/id switches directly)',
   },
   { name: 'thinking', description: 'Select thinking level' },
+  { name: 'login', description: 'Sign in to a provider or store its API key' },
+  { name: 'logout', description: "Remove a provider's stored credential" },
   { name: 'tree', description: 'Move to another point in the session tree' },
   {
     name: 'fork',
@@ -115,7 +131,7 @@ const HOTKEYS = [
   'Alt+Up move queued messages back to the editor',
   'Esc interrupt (queued messages go back to the editor), or cancel a ! command',
   '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',
-  'Shift+Tab cycle thinking level · Ctrl+L select model',
+  'Shift+Tab cycle thinking level · Ctrl+L select model · Ctrl+P / Shift+Ctrl+P cycle models',
   'Ctrl+O expand / collapse tool output · Ctrl+T show / hide thinking',
   'Ctrl+C clear editor, twice to exit · Ctrl+D exit when editor is empty',
 ]
@@ -871,7 +887,15 @@ export class InteractiveMode {
     })
     actions.set('exit', () => void this.shutdown())
     actions.set('cycleThinking', () => {
-      const levels = THINKING_LEVELS
+      // Like pi: only the levels the model supports
+      const levels = this.session.availableThinkingLevels()
+      if (levels.length < 2) {
+        this.addNotice(
+          'This model has no thinking levels to cycle through',
+          'dim',
+        )
+        return
+      }
       const next =
         levels[
           (levels.indexOf(this.session.thinkingLevel) + 1) % levels.length
@@ -879,6 +903,8 @@ export class InteractiveMode {
       this.setThinking(next)
     })
     actions.set('selectModel', () => void this.selectModel())
+    actions.set('cycleModelForward', () => this.cycleModel(1))
+    actions.set('cycleModelBackward', () => this.cycleModel(-1))
     actions.set('expandTools', () => {
       this.toolsExpanded = !this.toolsExpanded
       for (const block of [...this.allTools, ...this.allBash])
@@ -994,11 +1020,17 @@ export class InteractiveMode {
           return
         }
         break
+      case '/login':
+        await this.loginCommand(args)
+        return
+      case '/logout':
+        await this.logoutCommand(args)
+        return
       case '/thinking':
         if (!args) {
           const level = await this.select(
             'Thinking level',
-            THINKING_LEVELS.map((l) => ({
+            this.session.availableThinkingLevels().map((l) => ({
               value: l,
               label: l === this.session.thinkingLevel ? `${l} ✓` : l,
             })),
@@ -1269,43 +1301,218 @@ export class InteractiveMode {
     this.updateBorder()
   }
 
-  private async selectModel(): Promise<void> {
-    let current: string | undefined
+  private currentModelRef(): string | undefined {
     try {
-      current = this.session.modelInfo.ref
+      return this.session.modelInfo.ref
     } catch {}
+  }
+
+  /** `/model` and Ctrl+L: pick from the models of providers with a credential, with search (like pi) */
+  private async selectModel(): Promise<void> {
+    const current = this.currentModelRef()
     const models = this.vela.models()
     if (!models.length) {
       this.addNotice(
-        'No configured models to list: switch directly with /model provider/id',
+        'No models available: sign in with /login, set a provider API key (e.g. ANTHROPIC_API_KEY), or switch directly with /model provider/id',
         'dim',
       )
       return
     }
-    const ref = await this.select(
-      'Select Model',
-      models.map((m) => ({
-        value: m.ref,
-        label: m.ref === current ? `${m.ref} ✓` : m.ref,
-        description: [
-          m.name,
-          m.contextWindow && `${Math.round(m.contextWindow / 1000)}k`,
-          m.reasoning === false && 'no thinking',
-        ]
-          .filter(Boolean)
-          .join(' · '),
-      })),
-      current,
-    )
-    if (!ref) return
+    const ref = await this.dialog<string | undefined>((done) => {
+      const list = new SearchSelect(
+        models.map((m) => ({
+          value: m.ref,
+          label: m.ref === current ? `${m.ref} ✓` : m.ref,
+          description: [
+            m.name,
+            m.contextWindow && `${Math.round(m.contextWindow / 1000)}k`,
+            m.reasoning === false && 'no thinking',
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        })),
+        10,
+        selectListTheme,
+        current,
+      )
+      list.onSelect = (item) => done(item.value)
+      list.onCancel = () => done(undefined)
+      return {
+        component: dialogBox(
+          'Select Model',
+          list,
+          'Type to search · ↑↓ navigate · Enter select · Esc cancel',
+        ),
+        focus: list,
+      }
+    })
+    if (ref) this.switchModel(ref)
+  }
+
+  private switchModel(ref: string): void {
     try {
       this.session.setModel(ref)
-      this.addNotice(`Model: ${this.session.modelInfo.ref}`, 'dim')
+      this.addNotice(
+        `Model: ${this.session.modelInfo.ref} · thinking: ${this.session.thinkingLevel}`,
+        'dim',
+      )
       this.renderHeader(true)
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
     }
     this.updateBorder()
+  }
+
+  /** Ctrl+P / Shift+Ctrl+P (like pi): the next model of settings `enabledModels`, or of all available models */
+  private cycleModel(direction: 1 | -1): void {
+    const models = scopedModels(this.vela.models(), this.options.enabledModels)
+    const next = nextModel(models, this.currentModelRef(), direction)
+    if (!next) {
+      this.addNotice(
+        models.length
+          ? 'Only one model to cycle through (see enabledModels in settings)'
+          : 'No models available: sign in with /login or set a provider API key',
+        'dim',
+      )
+      return
+    }
+    this.switchModel(next.ref)
+  }
+
+  /** `/login [provider]` (like pi): pick a provider and a method, then run its sign-in or ask for an API key */
+  private async loginCommand(args: string): Promise<void> {
+    const providers = this.vela.loginProviders()
+    let provider = args.trim() || undefined
+    if (!provider) {
+      if (!providers.length) {
+        this.addNotice('No provider supports /login', 'dim')
+        return
+      }
+      provider = await this.select(
+        'Sign in to',
+        providers.map((p) => ({
+          value: p.provider,
+          label: p.provider,
+          description: [p.oauth, p.source && `using ${p.source}`]
+            .filter(Boolean)
+            .join(' · '),
+        })),
+      )
+      if (!provider) return
+    }
+    const found = providers.find((p) => p.provider === provider)
+    if (!found) {
+      this.addNotice(
+        `Unknown provider ${provider} (can sign in to: ${providers.map((p) => p.provider).join(', ') || 'none'})`,
+        'error',
+      )
+      return
+    }
+    const methods = [
+      ...(found.oauth ? [{ value: 'oauth', label: found.oauth }] : []),
+      ...(found.apiKey
+        ? [{ value: 'api_key', label: 'Enter an API key' }]
+        : []),
+    ]
+    const method =
+      methods.length === 1
+        ? methods[0]?.value
+        : await this.select(`Sign in to ${provider}`, methods)
+    if (method !== 'oauth' && method !== 'api_key') return
+    const controller = new AbortController()
+    const interaction: AuthInteraction = {
+      signal: controller.signal,
+      prompt: (prompt) => this.authPrompt(prompt, controller),
+      notify: (event) => {
+        if (event.type === 'auth_url') {
+          this.addNotice(
+            `${event.instructions ?? 'Open this URL to sign in:'}\n${event.url}`,
+            'info',
+          )
+          ;(this.options.openBrowser ?? openBrowser)(event.url)
+        } else this.addNotice(event.message, 'dim')
+      },
+    }
+    try {
+      await this.vela.login(
+        provider,
+        method,
+        interaction,
+        this.options.loginOptions,
+      )
+      this.addNotice(
+        `Signed in to ${provider}; the credential is saved for later sessions`,
+        'info',
+      )
+    } catch (error) {
+      this.addNotice(
+        controller.signal.aborted
+          ? 'Login cancelled'
+          : `Login to ${provider} failed: ${errorMessage(error)}`,
+        controller.signal.aborted ? 'dim' : 'error',
+      )
+    } finally {
+      controller.abort()
+    }
+    this.renderHeader(true)
+  }
+
+  /** One login question as a dialog; Esc cancels the whole login, the prompt's own signal closes just the dialog */
+  private async authPrompt(
+    prompt: AuthPrompt,
+    login: AbortController,
+  ): Promise<string> {
+    let answer: string | undefined
+    if (prompt.type === 'select')
+      answer = await this.select(
+        prompt.message,
+        prompt.options.map((o) => ({ value: o.id, label: o.label })),
+      )
+    else
+      answer = await this.input(
+        prompt.message,
+        prompt.placeholder,
+        prompt.signal,
+        prompt.type === 'secret',
+      )
+    if (prompt.signal?.aborted) throw new Error('Prompt closed')
+    if (answer === undefined) {
+      login.abort()
+      throw new Error('Login cancelled')
+    }
+    return answer
+  }
+
+  /** `/logout [provider]`: removes the stored credential (environment variables and models.json keys stay) */
+  private async logoutCommand(args: string): Promise<void> {
+    const stored = this.vela
+      .loginProviders()
+      .filter(
+        (p) => p.source === 'auth.json' || p.source === 'OAuth (auth.json)',
+      )
+    const provider =
+      args.trim() ||
+      (stored.length
+        ? await this.select(
+            'Sign out of',
+            stored.map((p) => ({ value: p.provider, label: p.provider })),
+          )
+        : undefined)
+    if (!provider) {
+      if (!stored.length) this.addNotice('No stored credentials', 'dim')
+      return
+    }
+    try {
+      this.addNotice(
+        (await this.vela.logout(provider))
+          ? `Removed the stored credential for ${provider}`
+          : `No stored credential for ${provider}`,
+        'dim',
+      )
+    } catch (error) {
+      this.addNotice(errorMessage(error), 'error')
+    }
+    this.renderHeader(true)
   }
 
   // ---------------------------------------------------------------- Dialogs
@@ -1361,9 +1568,26 @@ export class InteractiveMode {
     })
   }
 
-  input(title: string, placeholder?: string): Promise<string | undefined> {
-    return this.dialog<string | undefined>((done) => {
-      const input = new Input()
+  /** A one-line input dialog; `signal` closes it (resolving undefined) from outside; `secret` masks what is typed */
+  input(
+    title: string,
+    placeholder?: string,
+    signal?: AbortSignal,
+    secret = false,
+  ): Promise<string | undefined> {
+    if (signal?.aborted) return Promise.resolve(undefined)
+    return this.dialog<string | undefined>((close) => {
+      let closed = false
+      const done = (value: string | undefined) => {
+        if (closed) return
+        closed = true
+        close(value)
+      }
+      // A prompt closed while it waited behind another dialog closes as soon as it opens
+      if (signal?.aborted) queueMicrotask(() => done(undefined))
+      else
+        signal?.addEventListener('abort', () => done(undefined), { once: true })
+      const input = secret ? new SecretInput() : new Input()
       input.onSubmit = (value) => done(value.trim() || undefined)
       input.onEscape = () => done(undefined)
       const hint = placeholder
@@ -1597,4 +1821,17 @@ function oneLine(text: string): string {
 
 function compact(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n)
+}
+
+/** An Input that draws `*` for each character (API keys in `/login`); the cursor stays in place since lengths match */
+class SecretInput extends Input {
+  override render(width: number): string[] {
+    const value = this.getValue()
+    this.setValue('*'.repeat(value.length))
+    try {
+      return super.render(width)
+    } finally {
+      this.setValue(value)
+    }
+  }
 }

@@ -406,5 +406,7 @@ test('--list-models prints the configured models sorted, with a fuzzy search (li
   expect(formatModelList(models, 'sonn')).toContain('sonnet')
   expect(formatModelList(models, 'sonn')).not.toContain('haiku')
   expect(formatModelList(models, 'zzz')).toBe('No models matching "zzz"\n')
-  expect(formatModelList([])).toContain('No models configured')
+  expect(formatModelList([])).toContain(
+    'No models available: sign in with /login',
+  )
 })

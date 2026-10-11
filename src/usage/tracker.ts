@@ -3,20 +3,7 @@ import { dirname } from 'node:path'
 import type { LanguageModelUsage, ModelMessage } from 'ai'
 import { toolResultOutputToText } from '../context/tool-result-output.ts'
 
-/**
- * Prompt cache pricing per provider (unit: $ / 1M tokens, data as of 2026-05).
- *
- * Hit discounts are not a uniform 10x; providers differ a lot:
- * - Claude: cache read = 10% of input; write 5min = 125%, 1h = 200%
- * - OpenAI: automatic caching, hit discount varies by model (4o series 50%, GPT-5 / 4.1 series 25%)
- * - Gemini: cache read = 10% of input (explicit mode also charges for storage time, not listed here)
- * - DeepSeek: cache hit = 10% of miss, no write fee, no TTL
- * - Qwen: implicit 20%, explicit 10% (same `cache_control: ephemeral` field as Anthropic)
- * - Kimi: automatic mode 25%
- * - Doubao: explicit cache, hit price = 40% of miss
- *
- * To add a model, extend this table.
- */
+/** Price in $ / 1M tokens (pi's `cost`); models get it from the built-in catalog or models.json. */
 export interface ModelPricing {
   input: number // $ / 1M input tokens (cache miss)
   output: number // $ / 1M output tokens
@@ -24,59 +11,12 @@ export interface ModelPricing {
   cacheRead: number // $ / 1M tokens read from cache (hit)
 }
 
-export const PRICE_TABLE: Record<string, ModelPricing> = {
-  // Anthropic (latest flagship, 4.7 series released in H1 2026)
-  'claude-opus-4-7': {
-    input: 15.0,
-    output: 75.0,
-    cacheWrite: 18.75,
-    cacheRead: 1.5,
-  },
-  'claude-sonnet-4-7': {
-    input: 3.0,
-    output: 15.0,
-    cacheWrite: 3.75,
-    cacheRead: 0.3,
-  },
-  'claude-haiku-4-5': {
-    input: 1.0,
-    output: 5.0,
-    cacheWrite: 1.25,
-    cacheRead: 0.1,
-  },
-  // OpenAI (GPT-5 series; GPT-5.5 defaults to 24h extended cache)
-  'gpt-5-5': { input: 5.0, output: 20.0, cacheWrite: 5.0, cacheRead: 0.5 },
-  'gpt-5': { input: 5.0, output: 15.0, cacheWrite: 5.0, cacheRead: 1.25 },
-  // Google (Gemini 3 series, latest preview)
-  'gemini-3-pro': {
-    input: 2.5,
-    output: 12.0,
-    cacheWrite: 2.5,
-    cacheRead: 0.625,
-  },
-  'gemini-3-flash': {
-    input: 0.3,
-    output: 1.2,
-    cacheWrite: 0.3,
-    cacheRead: 0.075,
-  },
-  // Chinese providers
-  'deepseek-v3-2': {
-    input: 0.27,
-    output: 1.1,
-    cacheWrite: 0.27,
-    cacheRead: 0.027,
-  },
-  'qwen3-6-plus': { input: 0.4, output: 1.2, cacheWrite: 0.4, cacheRead: 0.04 },
-  'kimi-k2-6': { input: 0.6, output: 2.5, cacheWrite: 0.6, cacheRead: 0.15 },
-  'doubao-2-0-pro': {
-    input: 0.3,
-    output: 0.9,
-    cacheWrite: 0.3,
-    cacheRead: 0.12,
-  },
-  // Mock model, priced like Haiku 4.5
-  'mock-model': { input: 1.0, output: 5.0, cacheWrite: 1.25, cacheRead: 0.1 },
+/** The offline demo model (`VELA_MODEL=mock`) is priced like Claude Haiku 4.5 so the demo shows costs */
+const MOCK_PRICING: ModelPricing = {
+  input: 1.0,
+  output: 5.0,
+  cacheWrite: 1.25,
+  cacheRead: 0.1,
 }
 
 export interface StepUsage {
@@ -226,7 +166,8 @@ export class TokenTracker {
       kind: 'main',
     },
   ): StepRecord {
-    const price = this.pricing ?? PRICE_TABLE[model]
+    const price =
+      this.pricing ?? (model === 'mock-model' ? MOCK_PRICING : undefined)
     let cost: number | undefined
     if (price) {
       cost = computeCost(usage, price)

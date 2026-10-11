@@ -241,6 +241,109 @@ test('model and thinking selectors; Shift+Tab cycles thinking', async () => {
   expect(session.thinkingLevel).toBe('xhigh')
 })
 
+test('the model picker filters as you type; Ctrl+P cycles through enabledModels', async () => {
+  const models = ['big', 'plain', 'other'].map((id) =>
+    createFauxModel({ modelId: id }),
+  )
+  const provider: ProviderDefinition = {
+    models: [{ id: 'big' }, { id: 'plain' }, { id: 'other' }],
+    createModel: (id) => models.find((m) => m.modelId === id) as never,
+  }
+  const t = createTestVela({ model: 'fake/big', providers: { fake: provider } })
+  const tui = await startTui(t.vela, { enabledModels: ['fake/big', 'oth*'] })
+  await tui.started
+  const session = t.vela.session('tui')
+
+  tui.terminal.press(KEYS.ctrlL)
+  await tui.until('Select Model')
+  tui.terminal.type('pla')
+  await tui.until(() => !tui.screen().includes('fake/other'))
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Model: fake/plain')
+
+  // plain is not in enabledModels: cycling starts from the first scoped model
+  tui.terminal.press(KEYS.ctrlP)
+  expect(session.modelInfo.ref).toBe('fake/big')
+  tui.terminal.press(KEYS.ctrlP)
+  expect(session.modelInfo.ref).toBe('fake/other')
+  tui.terminal.press(KEYS.ctrlP)
+  expect(session.modelInfo.ref).toBe('fake/big')
+})
+
+test('/login stores an API key or runs an OAuth sign-in; /logout removes it', async () => {
+  const opened: string[] = []
+  const provider: ProviderDefinition = {
+    apiKeyLogin: true,
+    oauth: {
+      name: 'Sign in with Fake',
+      async login(interaction) {
+        interaction.notify({
+          type: 'auth_url',
+          url: 'https://fake.example/auth',
+        })
+        const code = await interaction.prompt({
+          type: 'manual_code',
+          message: 'Paste the code',
+        })
+        return {
+          type: 'oauth',
+          access: code,
+          refresh: 'r',
+          expires: Date.now() + 3_600_000,
+        }
+      },
+    },
+    authSource: (credential) => credential && 'auth.json',
+    createModel: () => createFauxModel(),
+  }
+  const t = createTestVela({ providers: { fake: provider } })
+  const tui = await startTui(t.vela, { openBrowser: (url) => opened.push(url) })
+  await tui.started
+
+  tui.submit('/login fake')
+  await tui.until('Sign in to fake')
+  // Second option: enter an API key
+  tui.terminal.press(KEYS.down)
+  tui.terminal.press(KEYS.enter)
+  await tui.until('API key for fake')
+  // The key is masked while typed
+  tui.terminal.type('sk-test')
+  await tui.until('*******')
+  expect(tui.screen()).not.toContain('sk-test')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Signed in to fake')
+  expect(tui.screen()).not.toContain('sk-test')
+  expect(t.vela.loginProviders()).toEqual([
+    {
+      provider: 'fake',
+      oauth: 'Sign in with Fake',
+      apiKey: true,
+      source: 'auth.json',
+    },
+  ])
+
+  tui.submit('/login fake')
+  await tui.until('Sign in to fake')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Paste the code')
+  expect(opened).toEqual(['https://fake.example/auth'])
+  expect(tui.screen()).toContain('https://fake.example/auth')
+  tui.submit('the-token')
+  await tui.until(() => tui.screen().split('Signed in to fake').length === 3)
+
+  tui.submit('/logout fake')
+  await tui.until('Removed the stored credential for fake')
+  expect(t.vela.loginProviders()[0]?.source).toBeUndefined()
+
+  // Esc cancels a sign-in
+  tui.submit('/login fake')
+  await tui.until('Sign in to fake')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Paste the code')
+  tui.terminal.press(KEYS.escape)
+  await tui.until('Login cancelled')
+})
+
 test('/name, /new and /resume switch between saved sessions', async () => {
   const t = createTestVela({
     responses: [fauxText('answer in the first session')],

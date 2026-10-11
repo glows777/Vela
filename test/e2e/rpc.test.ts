@@ -234,12 +234,12 @@ test.concurrent('rpc: a prompt that fails before the loop starts gets a failed r
   expect(failed).toMatchObject({ type: 'response', command: 'prompt' })
   // The CLI's hint on how to pick a model, not the SDK's createVela() / setModel() hint
   expect(String(failed.error)).toContain(
-    'No model selected. Use --model provider/id',
+    'No model available. Sign in with /login',
   )
   expect(String(failed.error)).not.toContain('createVela')
   const compact = await rpc.call({ type: 'compact' })
   expect(compact).toMatchObject({ success: false })
-  expect(String(compact.error)).toContain('Use --model provider/id')
+  expect(String(compact.error)).toContain('or use --model provider/id')
   // Errors inside the loop are reported once in agent_end, not repeated as a response
   expect(rpc.records.some((r) => r.type === 'agent_start')).toBe(false)
 
