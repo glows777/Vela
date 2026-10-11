@@ -8,6 +8,8 @@ export interface HookContext {
   sessionId?: string
   /** The model's id for this tool call */
   toolCallId?: string
+  /** Set for calls a tool made through ctx.executeTool(): the calling tool's id */
+  parentToolCallId?: string
   emit(event: VelaEvent): void
 }
 

@@ -104,8 +104,12 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `messages` | History (AI SDK `ModelMessage[]`). Treat it as read-only. |
 | `append(message)` | Appends a message without calling the model |
 | `prompt(input, options?)` | Appends a user message and runs the agent loop until it settles, then saves. See [Prompting](#prompting). |
-| `steer(input)`, `followUp(input)` | Queue input while running; same as `prompt()` when idle |
-| `queue`, `clearQueue()` | Copy of the queued messages; remove and return them |
+| `steer(input, options?)`, `followUp(input, options?)` | Queue input while running; same as `prompt()` when idle. `options.source` as in `PromptOptions` |
+| `sendMessage(message, options?)`, `sendUserMessage(text, options?)` | Add an extension's custom message, or input as if typed (like pi). See [Extensions](extensions.md#messages) |
+| `appendEntry(customType, data?)` | Save extension state in the session (a `custom` entry, never sent to the model) |
+| `customMessageOf(message)` | `{ customType, display, details }` for a custom message in `messages`; `undefined` for other messages |
+| `getEntries()` | The session's entries in append order (see [Session format](session-format.md)) |
+| `queue`, `clearQueue()` | Copy of the queued user inputs; remove all queued messages and return the user inputs |
 | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`: how many queued messages are taken at once |
 | `abort(reason?)` | Aborts the running loop and extension commands, and waits until the loop has stopped. Queued messages stay queued. |
 | `waitForIdle()` | Waits for the running loop (including queued messages and manual compaction) without aborting it |
@@ -143,7 +147,7 @@ session.prompt('Then write a changelog entry', { streamingBehavior: 'followUp' }
 - `steer` joins the current task: it is sent as a user message after the current step's tools finish, before the next model request.
 - `followUp` runs when the model would otherwise stop (no tool calls, no steer).
 
-`steer(input)` and `followUp(input)` are shortcuts. While running they resolve as soon as the input is queued. `PromptOptions.signal` aborts the run like `abort()`.
+`steer(input)` and `followUp(input)` are shortcuts. While running they resolve as soon as the input is queued. `PromptOptions.signal` aborts the run like `abort()`. `PromptOptions.source` tells extensions' `input` handlers where the input came from (`interactive`, `rpc`, `extension`, `channel`; default `sdk`).
 
 Input starting with `/` that names an extension command runs the command instead of going to the model, in owner sessions, even while a loop is running. See [Extensions](extensions.md).
 
@@ -176,12 +180,12 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 |---|---|---|
 | `agent_start` | `input` | A loop starts handling user input (queued inputs taken together are joined with a blank line) |
 | `turn_start` | `turn` | Before each model request (1-based within the loop) |
-| `message_start` | `message` (`ModelMessage`) | A message starts: user input, the assistant reply, tool results (`tool-result` parts), loop-detection reminder. Every message except the streaming assistant one gets `message_start` and `message_end` back to back. |
+| `message_start` | `message` (`ModelMessage`), `custom?` | A message starts: user input, the assistant reply, tool results (`tool-result` parts), loop-detection reminder, an extension's custom message (with `custom: { customType, display, details? }`; the message itself is a user message). Every message except the streaming assistant one gets `message_start` and `message_end` back to back. |
 | `message_update` | `message` (the assistant message so far), `assistantMessageEvent` | The assistant message is streaming. `assistantMessageEvent` says what changed, with pi's names: `text_start` / `text_delta` / `text_end`, `thinking_start` / `thinking_delta` / `thinking_end`, `toolcall_start` / `toolcall_delta` / `toolcall_end`; each has `contentIndex` (the part in `message.content`), deltas have `delta`, `toolcall_end` has `toolCall`. |
-| `message_end` | `message`, `stopReason?`, `errorMessage?` | A message is complete. Assistant messages carry `stopReason`: `stop`, `toolUse`, `length` (cut off by the output limit), `aborted` or `error` (with `errorMessage`). The assistant `message_end` is the authoritative final text. |
+| `message_end` | `message`, `stopReason?`, `errorMessage?`, `custom?` | A message is complete. Assistant messages carry `stopReason`: `stop`, `toolUse`, `length` (cut off by the output limit), `aborted` or `error` (with `errorMessage`). The assistant `message_end` is the authoritative final text. |
 | `tool_execution_start` | `toolCallId`, `toolName`, `args`, `parentToolCallId?` | A tool call is about to run (after the assistant `message_end`). `parentToolCallId` is set on a call a tool made with `ctx.executeTool()` (see [Extensions](extensions.md#registertool)); its id is `<parentToolCallId>/<n>` |
 | `tool_execution_update` | `toolCallId`, `toolName`, `args`, `partialResult`, `parentToolCallId?` | Partial output of a running tool, for tools that stream it (`bash` sends the tail of its output as `{ content: [{ type: 'text', text }] }`) |
-| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError`, `details?`, `durationMs?`, `parentToolCallId?` | A tool call finished. `result` is the output, or the error when `isError`. A call blocked by an extension or refused by a role or permission rule ends here with the reason as `result`. The result goes back to the model. `details` is display data the model does not get (pi's `result.details`): set by built-in tools on success, for `edit_file` `{ diff, patch, firstChangedLine }`. Extension tools can't set it yet. |
+| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError`, `details?`, `durationMs?`, `parentToolCallId?` | A tool call finished. `result` is the output, or the error when `isError`. A call blocked by an extension or refused by a role or permission rule ends here with the reason as `result`. The result goes back to the model. `details` is display data the model does not get (pi's `result.details`): set by built-in tools on success, for `edit_file` `{ diff, patch, firstChangedLine }`. Extension tools set it by returning a `ToolExecutionResult` ([extensions](extensions.md#registertool)). |
 | `loop_detected` | `level` (`warning` or `critical`), `detector`, `message` | Repeated tool calls were detected. `warning` adds a reminder to the history; `critical` stops the loop with `agent_end` reason `loop`. |
 | `auto_retry_start` | `attempt`, `maxAttempts`, `delayMs`, `errorMessage` | A retryable model error; the request runs again after `delayMs`. The failed attempt's assistant message ended with `stopReason: 'error'` and is not in the history; the retry streams a new assistant message. See [Sessions](sessions.md#retries). |
 | `auto_retry_end` | `success`, `attempt`, `finalError?` | Retrying ended: the request succeeded, or failed for good |
@@ -191,7 +195,7 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
 | `bash_execution_update` | `id?`, `delta` | New output of a running `executeBash()` command (like pi); the `delta`s add up to all of its output. `id` is the one passed to `executeBash()` |
-| `context` | `action`, `before`, `after?`, `saved?`, `calls?` | Vela-specific context management: `micro` (old tool results folded) or `summary-required` (the summary threshold was reached but this run may not summarize). Token counts are estimates. See [Sessions](sessions.md#compaction). |
+| `context_prepare` | `action`, `before`, `after?`, `saved?`, `calls?` | Vela-specific context management: `micro` (old tool results folded) or `summary-required` (the summary threshold was reached but this run may not summarize). Token counts are estimates. See [Sessions](sessions.md#compaction). |
 | `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |
 | `session_save_failed` | `error` | Writing the session's entries failed (the run itself continued). The entries are kept and written again with the next entry or at the end of the run |
@@ -254,13 +258,13 @@ Long tool output and the tool call history are always written to files under `<d
 
 ```typescript
 import {
-  createVela, feishu, importExtension, loadConfig, memory, rag, web,
+  createVela, feishu, importExtension, loadConfig, mcp, memory, rag, web,
   type VelaExtension,
 } from '@glows777/vela'
 
 const builtins: Record<string, () => VelaExtension> = {
   memory: () => memory(), rag: () => rag(), web: () => web(),
-  feishu: () => feishu(),
+  feishu: () => feishu(), mcp: () => mcp({ servers: config.mcp.servers }),
 }
 const config = loadConfig({ cwd: process.cwd(), env: process.env, builtins: Object.keys(builtins) })
 
@@ -291,11 +295,11 @@ const vela = createVela({
 | `cwd` | `process.cwd()` | Project directory |
 | `agentDir` | `env.VELA_DIR` or `~/.vela` | User-level directory |
 | `env` | `{}` | Environment for `$VAR` / `${VAR}` interpolation, `VELA_DIR` and provider API keys. Core never reads `process.env` itself: pass it explicitly. |
-| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/` and `.vela/APPEND_SYSTEM.md` |
+| `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/mcp.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/` and `.vela/APPEND_SYSTEM.md` |
 | `homeDir` | `os.homedir()` | Home directory for `~/.agents/skills` |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 
-The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers` and `extensionConfig`. `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
+The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
 
 The CLI also fills built-in extension config from environment variables such as `TAVILY_API_KEY`; with the SDK, put those values in `extensionConfig` or pass them to the extension factories.
 
@@ -321,7 +325,7 @@ Extensions get the same logger as `vela.logger`.
 The SDK loads no extensions by default. The CLI's built-in extensions are exported as factories:
 
 ```typescript
-import { createVela, memory, rag, createEmbedder, web, feishu } from '@glows777/vela'
+import { createVela, memory, rag, createEmbedder, web, feishu, mcp } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
@@ -329,6 +333,7 @@ const vela = createVela({
     memory(),
     rag({ embedder: createEmbedder({ modelId, apiKey, url }) }),
     web({ tavilyKey: process.env.TAVILY_API_KEY }),
+    mcp({ servers: { docs: { url: 'https://example.com/mcp' } } }),
   ],
 })
 ```
@@ -337,7 +342,7 @@ Options not passed to a factory are read from its `extensionConfig` section. See
 
 ## Disposal
 
-Call `await vela.dispose()` when you are done. It stops channels, aborts running sessions, waits for them to save, fires `session_shutdown` for extensions and, when there is no `dataDir`, deletes the temp data dir. A disposed Vela throws on `session()`.
+Call `await vela.dispose()` when you are done. It stops channels, aborts running sessions, waits for them to save, fires `session_shutdown` for extensions, runs extensions' `onShutdown` handlers (the mcp extension closes its server connections there) and, when there is no `dataDir`, deletes the temp data dir. A disposed Vela throws on `session()`.
 
 `await session.close()` closes one session the same way and removes it from the Vela; a later `vela.session(id)` opens a fresh object for that id (call `resume()` to reload its history).
 

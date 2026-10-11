@@ -8,6 +8,7 @@ export type {
   AssistantMessageEvent,
   CompactionReason,
   CompactionResult,
+  CustomMessageInfo,
   StopReason,
   VelaEvent,
   VelaEventListener,
@@ -30,12 +31,27 @@ export {
   type VelaSettings,
 } from './config/index.ts'
 export { type FeishuOptions, feishu } from './extensions/feishu/index.ts'
+export {
+  type McpExposure,
+  type McpHttpServerConfig,
+  type McpOptions,
+  type McpServerConfig,
+  type McpServersFile,
+  type McpStdioServerConfig,
+  mcp,
+} from './extensions/mcp/index.ts'
 export { memory } from './extensions/memory/index.ts'
 export { createEmbedder, type EmbeddingFn } from './extensions/rag/embedder.ts'
 export { type RagOptions, rag } from './extensions/rag/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
 export type {
+  AfterProviderResponseEvent,
   BeforeAgentStartEvent,
+  BeforeAgentStartEventResult,
+  BeforeProviderRequestEvent,
+  ContextEvent,
+  ContextEventResult,
+  CustomMessage,
   ExtensionAPI,
   ExtensionCommand,
   ExtensionContext,
@@ -43,6 +59,11 @@ export type {
   ExtensionEvents,
   ExtensionHandler,
   ExtensionUI,
+  InputEvent,
+  InputEventResult,
+  InputSource,
+  ProviderStreamEvent,
+  SendMessageOptions,
   SessionShutdownEvent,
   SessionStartEvent,
   SessionUI,
@@ -75,6 +96,8 @@ export {
   bashExecutionToText,
   type CompactionEntry,
   type ContextEditEntry,
+  type CustomEntry,
+  type CustomMessageEntry,
   type ModelChangeEntry,
   migrateSessionV1,
   type NestedToolCallRecord,
@@ -95,6 +118,7 @@ export {
   memorySessionStorage,
   type SessionStorage,
 } from './session/storage.ts'
+export type { ExecutionMetadata } from './session/tool-history.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export type {
   ExecuteToolOptions,
@@ -106,6 +130,7 @@ export type {
   ToolExposure,
   ToolNamespace,
 } from './tools/registry.ts'
+export { ToolExecutionResult } from './tools/registry.ts'
 export type { BashResult } from './tools/shell.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'

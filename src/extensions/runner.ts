@@ -1,3 +1,5 @@
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import type { ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
@@ -6,11 +8,18 @@ import type { HookPipeline } from '../security/hooks.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type {
+  AfterProviderResponseEvent,
+  BeforeAgentStartEventResult,
+  ContextEventResult,
+  CustomMessage,
   ExtensionAPI,
   ExtensionCommand,
   ExtensionContext,
   ExtensionEventName,
   ExtensionHandler,
+  InputEventResult,
+  InputSource,
+  ProviderStreamEvent,
   ToolCallEventResult,
   ToolResultEventResult,
   VelaExtension,
@@ -57,6 +66,10 @@ export class ExtensionRunner {
     { extension: string; command: ExtensionCommand }
   >()
   private readonly loadedList: LoadedExtension[] = []
+  private readonly shutdownHandlers: {
+    extension: string
+    fn: () => void | Promise<void>
+  }[] = []
   /** Resolves when all extension factories (including async ones) finish; rejects on failure */
   readonly ready: Promise<void>
 
@@ -72,6 +85,7 @@ export class ExtensionRunner {
       const result = await this.toolCall(
         session,
         context.toolCallId,
+        context.parentToolCallId,
         toolName,
         input,
       )
@@ -94,6 +108,7 @@ export class ExtensionRunner {
         const text = await this.toolResult(
           session,
           context.toolCallId,
+          context.parentToolCallId,
           toolName,
           input,
           String(output),
@@ -144,11 +159,24 @@ export class ExtensionRunner {
       },
       registerTool: (tool) => {
         // Prefix tool names with the extension name so they cannot clash with built-in or other
-        // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not memory_memory)
+        // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not
+        // memory_memory) or already carries it (mcp's mcp__docs__search)
         const toolName =
-          tool.name === prefix ? prefix : `${prefix}_${tool.name}`
+          tool.name === prefix || tool.name.startsWith(`${prefix}_`)
+            ? tool.name
+            : `${prefix}_${tool.name}`
         deps.registry.register({ ...tool, name: toolName })
         loaded.tools.push(toolName)
+        return toolName
+      },
+      unregisterTool: (toolName) => {
+        const index = loaded.tools.indexOf(toolName)
+        if (index === -1) return false
+        loaded.tools.splice(index, 1)
+        return deps.registry.unregister(toolName)
+      },
+      onShutdown: (handler) => {
+        this.shutdownHandlers.push({ extension: name, fn: handler })
       },
       registerCommand: (commandName, command) => {
         if (!COMMAND_NAME.test(commandName))
@@ -222,16 +250,24 @@ export class ExtensionRunner {
 
   /** Read-only notification: handlers are not awaited and errors are logged. */
   notify(event: VelaEvent, session: VelaSession): void {
-    const handlers = this.list(event.type)
+    this.dispatch(event.type, event, session)
+  }
+
+  private dispatch(
+    name: ExtensionEventName,
+    event: unknown,
+    session: VelaSession,
+  ): void {
+    const handlers = this.list(name)
     if (!handlers.length) return
     const ctx = this.context(session)
     for (const { extension, fn } of handlers) {
       try {
         const result = fn(event, ctx)
         if (result instanceof Promise)
-          result.catch((error) => this.report(extension, event.type, error))
+          result.catch((error) => this.report(extension, name, error))
       } catch (error) {
-        this.report(extension, event.type, error)
+        this.report(extension, name, error)
       }
     }
   }
@@ -259,21 +295,149 @@ export class ExtensionRunner {
     return this.lifecycle({ type: 'session_shutdown' }, session)
   }
 
-  /** before_agent_start: collect this turn's system prompt sections. */
+  /** vela.dispose(): runs the onShutdown handlers in registration order; errors are logged. */
+  async shutdown(): Promise<void> {
+    for (const { extension, fn } of this.shutdownHandlers.splice(0)) {
+      try {
+        await fn()
+      } catch (error) {
+        this.report(extension, 'shutdown', error)
+      }
+    }
+  }
+
+  /** Whether any extension handles `event` (lets callers skip copying data for nobody, like pi's hasHandlers). */
+  hasHandlers(event: ExtensionEventName): boolean {
+    return (this.handlers.get(event)?.length ?? 0) > 0
+  }
+
+  /**
+   * before_agent_start: collect this turn's system prompt sections and the custom messages handlers return
+   * (added after the user message, like pi).
+   */
   async beforeAgentStart(
     session: VelaSession,
     prompt: string,
-  ): Promise<Record<string, string>> {
+  ): Promise<{ sections: Record<string, string>; messages: CustomMessage[] }> {
     const event = { type: 'before_agent_start' as const, prompt, sections: {} }
+    const messages: CustomMessage[] = []
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('before_agent_start')) {
+      try {
+        const result = (await fn(event, ctx)) as
+          | BeforeAgentStartEventResult
+          | undefined
+        if (result?.message) messages.push(result.message)
+      } catch (error) {
+        this.report(extension, event.type, error)
+      }
+    }
+    return { sections: event.sections, messages }
+  }
+
+  /**
+   * input: transforms chain and `handled` stops (like pi). Returns the text to use, or undefined when a handler
+   * handled the input. A throwing handler is logged and skipped.
+   */
+  async input(
+    session: VelaSession,
+    text: string,
+    source: InputSource,
+    streamingBehavior?: 'steer' | 'followUp',
+  ): Promise<string | undefined> {
+    let current = text
+    const ctx = this.context(session)
+    for (const { extension, fn } of this.list('input')) {
+      try {
+        const result = (await fn(
+          {
+            type: 'input',
+            text: current,
+            source,
+            ...(streamingBehavior ? { streamingBehavior } : {}),
+          },
+          ctx,
+        )) as InputEventResult | undefined
+        if (result?.action === 'handled') return undefined
+        if (result?.action === 'transform') current = result.text
+      } catch (error) {
+        this.report(extension, 'input', error)
+      }
+    }
+    return current
+  }
+
+  /**
+   * context: each handler gets a copy of the messages the request will send, edits it in place or returns new
+   * ones (like pi). Returns `messages` itself when nobody handles the event; a throwing handler is logged and
+   * the previous result kept.
+   */
+  async transformContext(
+    session: VelaSession,
+    messages: ModelMessage[],
+  ): Promise<ModelMessage[]> {
+    const handlers = this.list('context')
+    if (!handlers.length) return messages
+    let current = copyMessages(messages)
+    const ctx = this.context(session)
+    for (const { extension, fn } of handlers) {
+      try {
+        const event = { type: 'context' as const, messages: current }
+        const result = (await fn(event, ctx)) as ContextEventResult | undefined
+        current = result?.messages ?? event.messages
+      } catch (error) {
+        this.report(extension, 'context', error)
+      }
+    }
+    return current
+  }
+
+  /** before_provider_request: handlers edit `params` in place or return replacements; errors are logged. */
+  async beforeProviderRequest(
+    session: VelaSession,
+    params: LanguageModelV4CallOptions,
+  ): Promise<LanguageModelV4CallOptions> {
+    let current = params
+    const ctx = this.context(session)
+    for (const { extension, fn } of this.list('before_provider_request')) {
+      try {
+        const event = {
+          type: 'before_provider_request' as const,
+          params: current,
+        }
+        const result = (await fn(event, ctx)) as
+          | LanguageModelV4CallOptions
+          | undefined
+        current = result ?? event.params
+      } catch (error) {
+        this.report(extension, 'before_provider_request', error)
+      }
+    }
+    return current
+  }
+
+  /** after_provider_response: awaited in order before the response is read; errors are logged. */
+  async afterProviderResponse(
+    session: VelaSession,
+    headers: Record<string, string>,
+  ): Promise<void> {
+    const event: AfterProviderResponseEvent = {
+      type: 'after_provider_response',
+      headers,
+    }
+    const ctx = this.context(session)
+    for (const { extension, fn } of this.list('after_provider_response')) {
       try {
         await fn(event, ctx)
       } catch (error) {
         this.report(extension, event.type, error)
       }
     }
-    return event.sections
+  }
+
+  /** provider_stream_event: a read-only notification like the VelaEvents (not awaited). */
+  providerStreamEvent(session: VelaSession, event: ProviderStreamEvent): void {
+    this.dispatch(event.type, event, session)
   }
 
   /**
@@ -284,6 +448,7 @@ export class ExtensionRunner {
   private async toolCall(
     session: VelaSession,
     toolCallId: string | undefined,
+    parentToolCallId: string | undefined,
     toolName: string,
     input: unknown,
   ): Promise<ToolCallEventResult & { input: unknown }> {
@@ -293,6 +458,7 @@ export class ExtensionRunner {
     const event = {
       type: 'tool_call' as const,
       toolCallId,
+      ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
       toolName,
       input: structuredClone(input) as Record<string, unknown>,
     }
@@ -319,6 +485,7 @@ export class ExtensionRunner {
   private async toolResult(
     session: VelaSession,
     toolCallId: string | undefined,
+    parentToolCallId: string | undefined,
     toolName: string,
     input: unknown,
     output: string,
@@ -326,6 +493,7 @@ export class ExtensionRunner {
     const event = {
       type: 'tool_result' as const,
       toolCallId,
+      ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
       toolName,
       input,
       output,
@@ -365,5 +533,25 @@ export class ExtensionRunner {
       this.context(session, signal),
     )
     return true
+  }
+}
+
+/**
+ * Copies messages for a `context` handler: a deep copy when the content can be cloned, otherwise copies of
+ * each message and its parts (values inside a part, like a tool's JSON output, are then shared).
+ */
+function copyMessages(messages: ModelMessage[]): ModelMessage[] {
+  try {
+    return structuredClone(messages)
+  } catch {
+    return messages.map(
+      (message) =>
+        ({
+          ...message,
+          content: Array.isArray(message.content)
+            ? message.content.map((part) => ({ ...part }))
+            : message.content,
+        }) as ModelMessage,
+    )
   }
 }

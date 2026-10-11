@@ -99,11 +99,13 @@ The factory's argument (`vela` below) is an `ExtensionAPI`:
 | `vela.dataDir` | Vela's data directory for this project. Keep an extension's own files in `<dataDir>/<extension name>/` |
 | `vela.config` | This extension's config section (see [Configuration](#configuration)); `{}` when none |
 | `vela.logger` | Logger (`debug`, `info`, `warn`, `error`). In the CLI it goes to stderr, or to the chat log in interactive mode |
-| `vela.registerTool(tool)` | Add a tool the model can call |
+| `vela.registerTool(tool)` | Add a tool the model can call. Returns the registered name |
+| `vela.unregisterTool(name)` | Remove a tool this extension registered, by its registered name |
 | `vela.registerCommand(name, command)` | Add a `/name` command |
 | `vela.registerProvider(name, provider)` | Add a model provider |
 | `vela.registerChannel(channel)` | Add a message channel |
 | `vela.on(event, handler)` | Subscribe to an event. Returns a function that unsubscribes |
+| `vela.onShutdown(handler)` | Run once when the Vela is disposed, after all sessions closed: close resources shared by all sessions, such as server connections. Errors are logged |
 
 ### registerTool
 
@@ -125,26 +127,26 @@ const hello: VelaExtension = (vela) => {
 export default hello
 ```
 
-The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts` becomes `hello_greet`, and in `hello-tool.ts` it becomes `hello-tool_greet`. Characters other than letters, digits, `_` and `-` in the extension name become `_`. When the tool name equals the extension name, the prefix is not repeated (the memory extension's `memory` tool is just `memory`). The prefix means an extension cannot replace a built-in tool or another extension's tool; registering a name that already exists throws.
+The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts` becomes `hello_greet`, and in `hello-tool.ts` it becomes `hello-tool_greet`. Characters other than letters, digits, `_` and `-` in the extension name become `_`. When the tool name equals the extension name, or already starts with `<extension name>_`, the prefix is not repeated (the memory extension's `memory` tool is just `memory`, and the mcp extension's tools are `mcp__<server>__<tool>`). The prefix means an extension cannot replace a built-in tool or another extension's tool; registering a name that already exists throws.
 
 | Field | Description |
 |---|---|
 | `name` | Tool name before the prefix |
 | `description` | What the model reads to decide when to call the tool |
 | `inputSchema` | Zod schema, or any schema the AI SDK accepts (for example `jsonSchema(...)` from `ai`). Input is validated before `execute` |
-| `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available, and so are `ctx.onUpdate` and `ctx.executeTool` (below). Return a string, or any value that is sent as JSON. Throw to report an error to the model |
+| `execute(input, ctx)` | Runs the tool. `ctx.toolCallId` and `ctx.signal` (aborted when the session is interrupted or closed) are available, and so are `ctx.onUpdate` and `ctx.executeTool` (below). Return a string, or any value that is sent as JSON. Throw to report an error to the model. To keep structured data apart from what the model reads (pi's `{ content, details }`), return `new ToolExecutionResult(details, text)` (exported from `@glows777/vela`): the model gets `text`, `details` is kept in the tool history and is the `details` of `tool_execution_end` for UIs. A third argument `{ isError: true }` makes it an error result |
 | `executionMode` | `parallel` (default) runs calls alongside other tool calls; `sequential` runs the call alone within its session (other sessions are not affected). Same as pi's `executionMode`. A tool that writes files can instead wrap the write in `withFileMutationQueue(path, fn)` (exported from `@glows777/vela`, same as pi) so it queues with `write_file` / `edit_file` on the same file |
 | `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not decide permissions from them; a permission extension can |
 | `maxResultChars` | Results longer than this (default 3000) are saved to a file and the model gets a preview and the path to read the rest |
 | `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
-| `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's) in the deferred tool list; `tool_search` returns it with the tool |
+| `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
 
 `ctx.onUpdate(partialResult)` reports partial output while the tool runs. Each call becomes a `tool_execution_update` event (pi's event and field names), so print, JSON and RPC modes see it; updates after the tool returned are ignored. `bash` sends `{ content: [{ type: 'text', text }] }` with the tail of its output.
 
 `ctx.executeTool(name, args, { signal?, onUpdate? })` runs another tool from inside a tool, same as pi. The call goes through everything a model call goes through: the session's role and permissions, extensions' `tool_call` hooks, the dangerous-command check for `bash`, confirmation for `ask`, the tool history and `tool_result` hooks. It can run the session's `direct` tools and every `deferred` or `codemode` tool the session may use, never `model-only` or `hidden` ones. The call's id is `<parent id>/<n>`, its `tool_execution_*` events carry `parentToolCallId`, and it is recorded in the tool history but not added to the conversation. It does not throw for tool failures: an unknown tool, invalid arguments, a refusal and an error all return `{ toolCallId, toolName, result, isError: true }`, with the reason or error message as `result`. `signal` defaults to the calling tool's signal. A nested call does not wait for the calling tool's `executionMode`.
 
-Tools are shared by all sessions. The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#session-roles)). See [Tools](tools.md) for the built-in tools.
+Tools are shared by all sessions, and an extension can register and unregister them at any time (the mcp extension does when a server connects or changes its tool list). The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#session-roles)). See [Tools](tools.md) for the built-in tools.
 
 ### registerCommand
 
@@ -213,7 +215,11 @@ Some events let a handler change what happens; the rest are notifications.
 | Event | When | What a handler can do |
 |---|---|---|
 | `session_start` | Before a session's first prompt, command or compaction, after its history is restored | Set up per-session state, for example `ctx.session.setActiveTools(...)`. Handlers are awaited in order |
-| `before_agent_start` | At the start of each agent loop (normally once per `prompt()`), before the first model request | Write system prompt sections into `event.sections` (keyed by name). `event.prompt` is the user input |
+| `input` | User input arrives (`prompt()`, `steer()`, `followUp()`, `sendUserMessage()`), after extension commands and before `/skill:` and prompt template expansion | Return `{ action: 'transform', text }` to rewrite it or `{ action: 'handled' }` to drop it |
+| `before_agent_start` | At the start of each agent loop (normally once per `prompt()`), before the first model request | Write system prompt sections into `event.sections` (keyed by name); return `{ message }` to add a custom message after the user message. `event.prompt` is the user input |
+| `context` | Before every model request | Change `event.messages` (a copy) in place or return `{ messages }`: changes what this request sends, not the history |
+| `before_provider_request` | Before a request goes to the provider (summaries too) | Change `event.params` (AI SDK call options) in place or return replacement options |
+| `after_provider_response` | The provider answered, before the response is read | Read `event.headers`. Handlers are awaited in order |
 | `tool_call` | Before a tool runs (any tool, built-in or extension) | Change `event.input` in place, or return `{ block: true, reason }` to block the call |
 | `tool_result` | After a tool runs, before the model sees the result | Return `{ output }` to replace the text the model sees |
 | `session_shutdown` | When a session that has started closes (`session.close()`, `vela.dispose()`, CLI exit); a session never used gets no `session_shutdown` | Release per-session resources. Handlers are awaited in order |
@@ -221,13 +227,43 @@ Some events let a handler change what happens; the rest are notifications.
 Details:
 
 - `before_agent_start`: sections are computed once per agent loop (normally once per `prompt()`) and stay the same for every model request in that turn, which keeps the prompt cache prefix stable. Sections appear in the system prompt in the order they were written. Example: [prompt-section.ts](../examples/extensions/prompt-section.ts).
-- `tool_call`: `event` has `toolName`, `toolCallId` and `input`. A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`. Session permissions set to `ask` are checked after these handlers, on the final input. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
-- `tool_result`: `event` has `toolName`, `toolCallId`, `input` and `output` (the text the model will see; a preview for oversized results). Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
+- `input` (like pi): `event` has `text`, `source` (`interactive` for the TUI and `-p`, `rpc`, `extension` for `sendUserMessage()`, `channel` for channel senders, `sdk` by default; set it with `prompt(text, { source })`) and `streamingBehavior` (`steer` / `followUp` while the session is running). It fires in sessions of every role, so check `ctx.session.role`. Transforms chain; `handled` stops the remaining handlers and `prompt()` resolves without running. Extension commands run before it and never reach it. A throwing handler is logged and skipped.
+- `before_agent_start` messages: like pi, a returned `{ message: { customType, content, display, details? } }` is added as a custom message (see [Messages](#messages)) after the user message and any `nextTurn` messages. Unlike a section it is part of the conversation, so it does not change the cached system prompt.
+- `context` (like pi): `event.messages` is a copy of the messages the request sends, without the system prompt; handlers chain. The history, the session file and later requests are unchanged. After an overflow compaction the request is built again and handlers run again. A throwing handler is logged and the previous result is used.
+- Provider hooks (like pi's, with one difference): pi's providers are its own, so pi passes the provider's JSON body; Vela uses the AI SDK, which builds the body inside the provider, so `before_provider_request` gets the AI SDK call options (`prompt`, `tools`, `providerOptions`, `headers`, `maxOutputTokens`, ...). Add request headers through `event.params.headers`. `after_provider_response` gets the response headers but no status: the AI SDK reports a failed response as the request's error. Errors in either are logged and the request goes on.
+- `tool_call`: `event` has `toolName`, `toolCallId`, `parentToolCallId` and `input`. `parentToolCallId` is set when another tool issued the call through `ctx.executeTool()` (the call's id is then `<parent id>/<n>`, like pi). A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`. Session permissions set to `ask` are checked after these handlers, on the final input. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
+- `tool_result`: `event` has `toolName`, `toolCallId`, `parentToolCallId`, `input` and `output` (the text the model will see; a preview for oversized results). Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
 - `session_start` / `session_shutdown`: errors are logged and the next handler runs. Example: [read-only-session.ts](../examples/extensions/read-only-session.ts).
 
 #### Notification events
 
-Every other session event (`agent_start`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`, `usage`, `agent_end`, `context`, `channel_reply`, ...) is delivered to handlers as a notification: return values are ignored, async handlers are not awaited, and errors are logged. The `tool_call` and `tool_result` names refer to the intercepting events above. The event types and their fields are listed in [SDK](sdk.md#events).
+`provider_stream_event` is a notification with the raw provider stream chunks (`provider`, `model`, `data`) before the AI SDK normalizes them (like pi). Vela asks the provider for raw chunks only while a handler is subscribed.
+
+Every other session event (`agent_start`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`, `usage`, `agent_end`, `context_prepare`, `channel_reply`, ...) is delivered to handlers as a notification: return values are ignored, async handlers are not awaited, and errors are logged. The `tool_call` and `tool_result` names refer to the intercepting events above. The event types and their fields are listed in [SDK](sdk.md#events).
+
+## Messages
+
+Like pi's `sendMessage`, `sendUserMessage` and `appendEntry`, but on the session rather than on the API: one Vela serves many sessions at once (a channel opens one per chat), so there is no "current session". Use `ctx.session` in a handler, or keep the session from `session_start` for background work.
+
+```ts
+vela.on('session_start', (_event, ctx) => {
+  watcher.onDone((job) =>
+    ctx.session.sendMessage(
+      { customType: 'job', content: `Job ${job.id} finished`, display: true, details: job },
+      { triggerTurn: true },
+    ),
+  )
+})
+```
+
+- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or AI SDK text / image parts) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
+  - `deliverAs: 'nextTurn'`: held until the next prompt and added after its user message.
+  - While running, unless `triggerTurn: false`: queued like `steer()` (or `followUp()` with `deliverAs: 'followUp'`). Queued custom messages are not listed in `session.queue`.
+  - Idle with `triggerTurn: true`: runs the agent loop with the message as its input; resolves when the run ends.
+  - While running with `triggerTurn: false`: appended once the current step's tool results are in, so it never lands between a tool call and its result.
+  - Otherwise: appended right away, without calling the model.
+- `session.sendUserMessage(text, { deliverAs? })` sends input as if the user typed it: it goes through `input` handlers with source `extension`, but is not run as a command or expanded as a skill or prompt template. While running, pass `deliverAs` (`steer` / `followUp`), as with `prompt()`.
+- `session.appendEntry(customType, data?)` saves extension state as a `custom` entry, never sent to the model. Read it back from `session.getEntries()`, for example in `session_start` after a resume. Like pi, entries added before the session has any conversation are written once the first message is (a session that never gets one is not saved).
 
 ## Context
 

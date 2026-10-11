@@ -1,11 +1,14 @@
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
+import type { CustomMessageInfo } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
   type BashExecutionEntry,
   buildSessionContext,
   type CompactionEntry,
+  type CustomEntry,
+  type CustomMessageEntry,
   createEntryId,
   type NestedToolCalls,
   type NewEntry,
@@ -89,9 +92,10 @@ export class SessionStore {
 
   private persist(entry: SessionEntry): void {
     if (!this.started) {
-      // Like pi: setup entries (model, thinking level, name) stay in memory until there is a conversation
-      // A `!` command starts the session like a user message
+      // Like pi: setup entries (model, thinking level, name) and extension state stay in memory until there is
+      // a conversation; an extension's custom message and a `!` command are part of the conversation
       if (
+        entry.type !== 'custom_message' &&
         entry.type !== 'bash_execution' &&
         (entry.type !== 'message' ||
           (entry.message.role !== 'user' && entry.message.role !== 'assistant'))
@@ -189,6 +193,31 @@ export class SessionStore {
     const entry = this.append<BashExecutionEntry>(execution)
     if (message) this.ids.set(message, entry.id)
     return entry
+  }
+
+  /** Appends an extension's custom message (pi's `custom_message`); `message` is the user message the model sees. */
+  appendCustomMessage(
+    message: ModelMessage & { role: 'user' },
+    info: CustomMessageInfo,
+  ): CustomMessageEntry {
+    const entry = this.append<CustomMessageEntry>({
+      type: 'custom_message',
+      customType: info.customType,
+      content: message.content,
+      display: info.display,
+      ...(info.details === undefined ? {} : { details: info.details }),
+    })
+    this.ids.set(message, entry.id)
+    return entry
+  }
+
+  /** Appends extension state (pi's `custom` entry); not part of the model context. */
+  appendCustom(customType: string, data?: unknown): CustomEntry {
+    return this.append<CustomEntry>({
+      type: 'custom',
+      customType,
+      ...(data === undefined ? {} : { data }),
+    })
   }
 
   appendModelChange(model: string): void {

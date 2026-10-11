@@ -73,7 +73,8 @@ export async function runPrintMode(options: {
   }
   let exitCode = 0
   try {
-    for (const message of messages) await session.prompt(message)
+    for (const message of messages)
+      await session.prompt(message, { source: 'interactive' })
     if (mode === 'text') {
       const text = answer ? lastAssistantText([answer]) : ''
       if (text) await writeStdout(`${text}\n`)

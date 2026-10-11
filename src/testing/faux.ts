@@ -78,6 +78,8 @@ export interface FauxRequest {
   responseFormat?: LanguageModelV4CallOptions['responseFormat']
   /** The request's reasoning setting (mapped from the thinking level) */
   reasoning?: LanguageModelV4CallOptions['reasoning']
+  /** Extra HTTP headers the request asked for */
+  headers?: LanguageModelV4CallOptions['headers']
   abortSignal?: AbortSignal
 }
 
@@ -265,6 +267,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
         finishReason: finishReason(response),
         usage: usageFor(req, response),
         warnings: [],
+        response: { headers: fauxHeaders(req) },
       }
     },
 
@@ -272,7 +275,11 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
       opts.abortSignal?.throwIfAborted()
       const { req, response } = next('stream', opts)
       if (response.error) throw toError(response.error)
-      const parts = streamParts(req.index, response, chunkSize)
+      const normalized = streamParts(req.index, response, chunkSize)
+      // With includeRawChunks, each part is preceded by a `raw` part carrying it (as a provider's raw chunk would)
+      const parts: LanguageModelV4StreamPart[] = opts.includeRawChunks
+        ? normalized.flatMap((part) => [{ type: 'raw', rawValue: part }, part])
+        : normalized
       const signal = opts.abortSignal
       let i = 0
       const stream = new ReadableStream<LanguageModelV4StreamPart>({
@@ -308,9 +315,14 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
           i++
         },
       })
-      return { stream }
+      return { stream, response: { headers: fauxHeaders(req) } }
     },
   }
+}
+
+/** Response headers of a faux request: `x-faux-request` is the request's index. */
+function fauxHeaders(req: FauxRequest): Record<string, string> {
+  return { 'x-faux-request': String(req.index) }
 }
 
 function mergeResponses(step: FauxResponse | FauxResponse[]): FauxResponse {
@@ -453,6 +465,7 @@ function describeRequest(
     responseFormat: opts.responseFormat,
     reasoning: opts.reasoning,
     abortSignal: opts.abortSignal,
+    ...(opts.headers ? { headers: opts.headers } : {}),
   }
 }
 

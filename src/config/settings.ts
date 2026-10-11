@@ -1,6 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
+import {
+  loadMcpServers,
+  type McpServersFile,
+} from '../extensions/mcp/config.ts'
 import { assertLimitKeys, type VelaLimits } from '../limits.ts'
 import {
   type ProviderDefinition,
@@ -79,6 +83,8 @@ export interface VelaConfig {
   providers: Record<string, ProviderDefinition>
   /** Per-extension config sections (`$VAR` already interpolated) */
   extensionConfig: Record<string, Record<string, unknown>>
+  /** MCP servers from `<agentDir>/mcp.json` and the trusted project's `.vela/mcp.json`, for the mcp extension */
+  mcp: McpServersFile
 }
 
 const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
@@ -175,12 +181,14 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       : {}),
     providers: loadModels({ agentDir, env }),
     extensionConfig: interpolateDeep(settings.extensionConfig ?? {}, env),
+    mcp: loadMcpServers({ agentDir, projectDir, trusted, env }),
   }
 }
 
 /** Project resources in `.vela/` that need trust (same list as pi's, minus what Vela doesn't have) */
 const TRUSTED_PROJECT_RESOURCES = [
   'settings.json',
+  'mcp.json',
   'extensions',
   'skills',
   'prompts',

@@ -2,7 +2,7 @@
 
 Vela is an AI agent you can run in your terminal or embed in a TypeScript app.
 
-Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. The same agent is a small SDK: open as many sessions as you need in one process, subscribe to their events, and connect them to chat apps through channels. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels.
+Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. The same agent is a small SDK: open as many sessions as you need in one process, subscribe to their events, and connect them to chat apps through channels. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels, or connect [MCP servers](docs/mcp.md).
 
 Vela's design follows [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). It adds concurrent sessions, session roles for untrusted senders, and built-in memory and knowledge base extensions.
 
@@ -61,7 +61,7 @@ The SDK reads no environment variables and persists nothing unless you pass `dat
 - [Quickstart](docs/quickstart.md)
 - Using the CLI: [CLI](docs/cli.md), [settings](docs/settings.md), [models](docs/models.md), [tools](docs/tools.md), [sessions](docs/sessions.md)
 - Automating: [JSON mode](docs/json.md), [RPC mode](docs/rpc.md)
-- Building on Vela: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [built-in extensions](docs/built-in-extensions.md), [channels](docs/channels.md), [testing](docs/testing.md), [session format](docs/session-format.md)
+- Building on Vela: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [built-in extensions](docs/built-in-extensions.md), [MCP servers](docs/mcp.md), [channels](docs/channels.md), [testing](docs/testing.md), [session format](docs/session-format.md)
 - [Security](docs/security.md): Vela runs tools with your permissions and has no sandbox. Read this before running it on untrusted input.
 
 ## Development
