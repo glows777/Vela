@@ -41,6 +41,7 @@ export const KEYS = {
   escape: '\x1b',
   altEnter: '\x1b\r',
   altUp: '\x1b[1;3A',
+  up: '\x1b[A',
   down: '\x1b[B',
   shiftTab: '\x1b[Z',
   ctrlC: '\x03',

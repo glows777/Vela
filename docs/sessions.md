@@ -29,6 +29,10 @@ In interactive mode:
 | `/new` | Close this session and start a new one |
 | `/resume` | Pick a saved session and switch to it |
 | `/name [name]` | Show or set the session's display name, shown in the picker |
+| `/tree` | Move to another point in the session (see [Session tree](#session-tree)) |
+| `/fork` | Start a new session from before an earlier message of this one |
+| `/clone` | Copy the current branch into a new session |
+| `/export [path]` | Write the current branch as HTML, or as JSONL when the path ends in `.jsonl` |
 | `/compact [focus]` | Compact the context now (see [Compaction](#compaction)) |
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
@@ -36,6 +40,34 @@ In interactive mode:
 In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in one file; messages added with `session.append()` to such a session are not written either (`session_save_failed`).
 
 The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed.
+
+## Session tree
+
+Like pi, a session is a tree: moving back to an earlier entry does not erase the branch you leave. The model sees only the current branch.
+
+| Action | Result | Use it when |
+|---|---|---|
+| `/tree` | Moves within the same session file | Related alternatives should stay together |
+| `/fork` | Creates a new session from before an earlier user message | The alternative should become separate work |
+| `/clone` | Copies the current branch into a new session | You want a separate copy of the current state |
+
+`/tree` lists the session's messages as a tree (indented where the conversation branches), with the current branch marked `•`, the current position `← current` and labels in brackets. Pick an entry, then:
+
+- **No summary**: move there. Picking one of your messages puts its text back in the editor and moves to just before it; edit and send it to start a new branch. Picking any other entry continues after it with an empty editor.
+- **Summarize the branch I leave** (or **with a focus**): the same, after summarizing the part of the current branch the move leaves (below the shared entry) with the [summary](#summary) model call. The summary is attached where you move and the model sees it as `[Summary of the conversation branch you left]`, so what was tried there is not lost.
+- **Set a label**: bookmark the entry; an empty label clears it.
+
+`/fork` lists every user message of the session; the new session holds the branch up to just before the one you pick, and its text goes into the editor. `/clone` copies the current branch. Both switch to the new session (with a new id) and record the original as its `parentSession`; the original is kept as it was. `--fork <id>` does the same before interactive (or print) mode starts, copying a saved session.
+
+Moving in the tree only changes what the model sees. Files the abandoned branch changed and commands it ran are not undone (pi doesn't either), and its tool calls stay in the session's tool call history.
+
+In the SDK these are `session.navigateTree(entryId, { summarize, focus, label })`, `session.fork(entryId, { position, sessionId })`, `session.clone()`, `session.setLabel()`, `session.getTree()`, `session.getBranch()` and `session.getLeafId()`. Unlike pi, whose fork replaces its one session, `fork()` and `clone()` open the copy as another session in the same Vela and leave the original open. See [SDK](sdk.md#session-tree). All of them refuse while the session is running.
+
+## Export
+
+`/export [path]` (`session.exportHtml(path)`, the `export_html` RPC command, `vela --export <id or file> [output]`) writes the current branch as a self-contained HTML page: user and assistant messages, thinking, tool calls and results (collapsed), summaries. It has no scripts and loads nothing; all session content is escaped. A path ending in `.jsonl` (`session.exportJsonl(path)`) writes the branch in the [session file format](session-format.md#forks-and-clones) instead. Relative paths resolve against the working directory; the default name is `vela-session-<id>-<time>`.
+
+Review an export before you share it: it can contain your prompts, the model's answers, tool arguments, command output and file contents. Vela has no `/share` upload (pi's `/share` uploads to a gist).
 
 ## Multiple sessions
 
@@ -88,6 +120,10 @@ The summary request uses the same model, system prompt and tool definitions as t
 ### Manual compaction
 
 `/compact [focus]` in interactive mode, `session.compact(focus)` in the SDK and the `compact` RPC command summarize now, whatever the thresholds. `focus` tells the summary which quotes to prefer. It emits `compaction_start` / `compaction_end` with `reason: 'manual'`. It can't run while the session is running. When there is no earlier turn to summarize (an empty or short session: the split must be at a user message that is not the first message, with at least six messages from it to the end and every earlier tool call answered), it fails with `Nothing to compact (session too small)`, as in pi.
+
+### Turning automatic compaction off
+
+Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, set `session.autoCompaction = false`, or send the `set_auto_compaction` RPC command. Then nothing changes the context on its own: no microcompaction, no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works, and a request above `maxInputTokens` still stops the turn with an error.
 
 ### Thresholds and context window
 

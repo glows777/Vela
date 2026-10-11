@@ -7,6 +7,7 @@ import {
   createFauxModel,
   fauxHang,
   fauxStreamError,
+  fauxSummary,
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
@@ -321,6 +322,47 @@ test('/ suggests prompt templates (with their argument hint) and skills as skill
   await tui.until('skill:reviewer')
 })
 
+test('/tree moves to an earlier message and puts it back in the editor; /fork and /clone switch to a copy', async () => {
+  const t = createTestVela({
+    responses: [fauxText('first answer'), fauxText('second answer')],
+  })
+  const tui = await startTui(t.vela, { sessionId: 'tree' })
+  await tui.started
+  tui.submit('first question')
+  await tui.until('first answer')
+  await tui.until(() => !t.vela.session('tree').isRunning)
+  tui.submit('second question')
+  await tui.until('second answer')
+  await tui.until(() => !t.vela.session('tree').isRunning)
+
+  tui.submit('/tree')
+  await tui.until('Session Tree')
+  expect(tui.screen()).toContain('← current')
+  // Up from the leaf (second answer) to the second question
+  tui.terminal.press(KEYS.up)
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Move here')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Moved in the session tree')
+  expect(tui.screen()).not.toContain('second answer')
+  expect(t.vela.session('tree').messages).toHaveLength(2)
+  expect(tui.screen()).toContain('second question')
+
+  tui.terminal.press(KEYS.ctrlC)
+  tui.submit('/clone')
+  await tui.until('Cloned to a new session')
+  expect(tui.screen()).toContain('session tui-new-1')
+  expect(tui.screen()).toContain('first answer')
+  expect(t.vela.session('tui-new-1').parentSession).toBe('tree')
+
+  tui.submit('/fork')
+  await tui.until('Fork from before')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Forked to a new session')
+  expect(tui.screen()).toContain('session tui-new-2')
+  expect(t.vela.session('tui-new-2').messages).toEqual([])
+})
+
 test('custom messages show as a labeled block only with display: true (like pi)', async () => {
   function notes(vela: import('../../src/extensions/types.ts').ExtensionAPI) {
     vela.registerCommand('note', {
@@ -560,4 +602,31 @@ test('a resumed session shows edit diffs, nested calls and ! commands again', as
   expect(screen).toMatch(/↳ ✓ read_file a\.txt/)
   expect(screen).toContain('$ echo from-bang')
   expect(screen).toContain('from-bang')
+})
+
+test('a resumed session shows only the current branch of the tree, with its ! commands and branch summary', async () => {
+  const t = createTestVela({
+    responses: [fauxText('first answer'), fauxText('left answer')],
+    generate: [fauxSummary()],
+  })
+  const session = t.vela.session('saved')
+  await session.prompt('first question')
+  await session.prompt('left question')
+  const first = session
+    .getBranch()
+    .find(
+      (entry) => entry.type === 'message' && entry.message.role === 'assistant',
+    )!
+  await session.navigateTree(first.id, { summarize: true })
+  await session.executeBash('echo on-branch')
+  await session.close()
+
+  const tui = await startTui(t.vela, { sessionId: 'saved', resume: true })
+  await tui.started
+  await tui.until('Resumed session')
+  const screen = tui.screen()
+  expect(screen).toContain('first answer')
+  expect(screen).toContain('Summary of the conversation branch you left')
+  expect(screen).toContain('$ echo on-branch')
+  expect(screen).not.toContain('left answer')
 })

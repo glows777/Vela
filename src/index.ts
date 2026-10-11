@@ -64,13 +64,19 @@ export type {
   InputSource,
   ProviderStreamEvent,
   SendMessageOptions,
+  SessionBeforeForkEvent,
+  SessionBeforeForkEventResult,
+  SessionBeforeTreeEvent,
+  SessionBeforeTreeEventResult,
   SessionShutdownEvent,
   SessionStartEvent,
+  SessionTreeEvent,
   SessionUI,
   ToolCallEvent,
   ToolCallEventResult,
   ToolResultEvent,
   ToolResultEventResult,
+  TreePreparation,
   VelaExtension,
 } from './extensions/types.ts'
 export { type WebOptions, web } from './extensions/web/index.ts'
@@ -93,11 +99,13 @@ export type {
 } from './security/roles.ts'
 export {
   type BashExecutionEntry,
+  type BranchSummaryEntry,
   bashExecutionToText,
   type CompactionEntry,
   type ContextEditEntry,
   type CustomEntry,
   type CustomMessageEntry,
+  type LabelEntry,
   type ModelChangeEntry,
   migrateSessionV1,
   type NestedToolCallRecord,
@@ -110,6 +118,7 @@ export {
   type SessionInfoEntry,
   type SessionMessageEntry,
   type SessionSummary,
+  type SessionTreeNode,
   summarizeSession,
   type ThinkingLevelChangeEntry,
 } from './session/entries.ts'
@@ -135,6 +144,9 @@ export type { BashResult } from './tools/shell.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'
 export {
+  type ForkOptions,
+  type ForkResult,
+  type NavigateTreeOptions,
   type PromptOptions,
   type QueueMode,
   type SessionOptions,

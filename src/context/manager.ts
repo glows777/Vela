@@ -31,6 +31,13 @@ export class ContextManager {
 
   readonly limits: VelaLimits
 
+  /**
+   * Automatic compaction (like pi's compaction.enabled). When off, nothing changes the context on its own:
+   * no microcompaction, no threshold summary (the session also skips compact-and-retry on overflow).
+   * Manual compact() still works.
+   */
+  autoCompaction = true
+
   restore(state: SessionState): void {
     this.state.messages.splice(0, this.state.messages.length, ...state.messages)
     this.state.timestamps.clear()
@@ -50,6 +57,26 @@ export class ContextManager {
     const previous = this.state.messages.slice()
     this.restore({ messages, timestamps, summary })
     this.tracker.replaceMessages(previous, this.state.messages)
+  }
+
+  /**
+   * Summarizes the part of the context from `start` on (a branch the session is leaving) and returns the
+   * summary text; the context itself is not changed.
+   */
+  async summarizeBranch(
+    request: RequestSnapshot,
+    start: number,
+    focus?: string,
+  ): Promise<string> {
+    const result = await summarize(
+      request,
+      this.store.results,
+      this.tracker,
+      this.limits.maxInputTokens,
+      focus,
+      start,
+    )
+    return result.summary
   }
 
   /** Waits until the session's entries are written; rejects if some could not be. */
@@ -153,6 +180,14 @@ export class ContextManager {
   ): Promise<void> {
     request.abortSignal?.throwIfAborted()
     const before = estimateRequestTokens(request)
+    if (!this.autoCompaction) {
+      if (before > this.limits.maxInputTokens)
+        throw new Error(
+          'Context exceeds the safe input size and automatic compaction is off; compact manually or start a new session.',
+        )
+      this.tracker.setEstimatedTokens(before)
+      return
+    }
     const micro =
       before >= this.limits.microcompactThreshold
         ? planMicrocompact(request.messages, this.store.results)

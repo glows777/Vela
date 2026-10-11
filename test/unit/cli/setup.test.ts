@@ -74,7 +74,7 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     '--mode must be text, json or rpc',
   )
   expect(() => parseArgs(['-c', '--session', 'x'])).toThrow(
-    'Use only one of -c, -r and --session',
+    'Use only one of -c, -r, --session and --fork',
   )
   expect(() => parseArgs(['--model'])).toThrow('--model requires a value')
   expect(() => parseArgs(['--wat'])).toThrow('Unknown option --wat')
@@ -318,6 +318,18 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
       builtins: Object.keys(BUILTIN_EXTENSIONS),
     }),
   ).toThrow('Unknown built-in extension builtin:supabase')
+})
+
+test('parseArgs reads --fork and --export, and --fork excludes -c / -r / --session', () => {
+  expect(parseArgs(['--fork', 'work'])).toMatchObject({ fork: 'work' })
+  expect(parseArgs(['--export', 'work', 'out.html'])).toMatchObject({
+    export: 'work',
+    messages: ['out.html'],
+  })
+  expect(() => parseArgs(['--fork', 'a', '-c'])).toThrow(
+    'Use only one of -c, -r, --session and --fork',
+  )
+  expect(() => parseArgs(['--fork', '../x'])).toThrow('Invalid session id')
 })
 
 test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (like pi)', () => {

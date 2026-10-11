@@ -10,7 +10,10 @@ import {
 } from 'ai'
 import z from 'zod'
 import { DEFAULT_LIMITS } from '../limits.ts'
-import { summaryMessageText } from '../session/entries.ts'
+import {
+  branchSummaryMessageText,
+  summaryMessageText,
+} from '../session/entries.ts'
 import {
   archiveToolResults,
   getStoredResult,
@@ -237,10 +240,19 @@ export async function summarize(
   maxInputTokens = MAX_INPUT_TOKENS,
   /** Focus given by the user for a manual compaction (like pi's /compact instructions); only affects which quotes are picked */
   focus?: string,
+  /**
+   * Summarize the messages from this index to the end (a branch the session is leaving, like pi's branch
+   * summary) instead of the earlier history; the messages before it are the retained context.
+   */
+  branchStart?: number,
 ): Promise<CompactionResult> {
-  const index = summaryBoundary(request.messages)
+  const [start, end] =
+    branchStart === undefined
+      ? [0, summaryBoundary(request.messages)]
+      : [branchStart, request.messages.length]
+  const index = end - start
   request.abortSignal?.throwIfAborted()
-  const removed = request.messages.slice(0, index)
+  const removed = request.messages.slice(start, end)
   const sources = removed.map((message) =>
     normalizeEvidence(sourceText(message)),
   )
@@ -368,9 +380,12 @@ export async function summarize(
     messages: [
       {
         role: 'user',
-        content: summaryMessageText(summary),
+        content:
+          branchStart === undefined
+            ? summaryMessageText(summary)
+            : branchSummaryMessageText(summary),
       },
-      ...request.messages.slice(index),
+      ...request.messages.slice(end),
     ],
     summary,
     compressedCount: index,

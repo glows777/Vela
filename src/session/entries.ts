@@ -20,9 +20,14 @@ export interface SessionHeader {
   cwd?: string
   /** @internal Tool call history the session's tool results belong to */
   toolHistoryId?: string
+  /** Id of the session this one was forked or cloned from (pi stores the parent's file path) */
+  parentSession?: string
 }
 
-/** Fields every entry has (like pi): entries form a tree through `parentId`; Vela writes a single branch for now. */
+/**
+ * Fields every entry has (like pi): entries form a tree through `parentId`. A new entry's parent is the
+ * session's current leaf, so moving the leaf to an earlier entry and appending starts a new branch.
+ */
 export interface SessionEntryBase {
   type: string
   /** 8 hex characters, unique within the session */
@@ -132,6 +137,24 @@ export interface ContextEditEntry extends SessionEntryBase {
   replacement: { content: ModelMessage['content'] } | null
 }
 
+/**
+ * Summary of a branch the session left through `navigateTree(…, { summarize: true })` (like pi). It is a
+ * child of the navigation target and enters the model context as a user message.
+ */
+export interface BranchSummaryEntry extends SessionEntryBase {
+  type: 'branch_summary'
+  /** The leaf the session navigated away from ('root' when it had none) */
+  fromId: string
+  summary: string
+}
+
+/** A user-defined bookmark on an entry (like pi); an undefined label clears it. Not sent to the model. */
+export interface LabelEntry extends SessionEntryBase {
+  type: 'label'
+  targetId: string
+  label: string | undefined
+}
+
 /** Extension state saved with `session.appendEntry()` (pi's `custom` entry); never sent to the model. */
 export interface CustomEntry extends SessionEntryBase {
   type: 'custom'
@@ -159,9 +182,11 @@ export type SessionEntry =
   | SessionInfoEntry
   | CompactionEntry
   | ContextEditEntry
-  | BashExecutionEntry
+  | BranchSummaryEntry
+  | LabelEntry
   | CustomEntry
   | CustomMessageEntry
+  | BashExecutionEntry
 
 /** An entry before it gets its place in the log (`id`, `parentId`, `timestamp`); keeps each type's own fields. */
 export type NewEntry<T> = T extends SessionEntry
@@ -174,6 +199,11 @@ export type SessionFileEntry = SessionHeader | SessionEntry
 /** Text of the user message that stands for a summary in the model context. */
 export function summaryMessageText(summary: string): string {
   return `[Summary of the earlier conversation]\n${summary}`
+}
+
+/** Text of the user message that stands for a branch summary in the model context. */
+export function branchSummaryMessageText(summary: string): string {
+  return `[Summary of the conversation branch you left]\n${summary}`
 }
 
 /** What the model sees of a `!` command (pi's `bashExecutionToText`). */
@@ -217,11 +247,11 @@ export interface SessionContext {
   timestamps: Map<ModelMessage, number>
   /** Context messages that are extensions' custom messages (from `custom_message` entries) */
   custom: Map<ModelMessage, CustomMessageInfo>
-  /** Latest `model_change` */
+  /** Latest `model_change` on the branch */
   model?: string
-  /** Latest `thinking_level_change` */
+  /** Latest `thinking_level_change` on the branch */
   thinkingLevel?: ThinkingLevel
-  /** Latest `session_info` name */
+  /** Latest `session_info` name in the whole session */
   name?: string
   /** Latest compaction summary ('' if never compacted) */
   summary: string
@@ -234,23 +264,49 @@ function parseTime(value: string): number {
 }
 
 /**
- * The entries the context is built from (like the path pi's `buildSessionContext` walks): with a compaction,
- * the latest one and the entries it keeps plus everything after it; otherwise all entries.
- * The TUI renders a resumed session from these.
+ * The entries from the root to `leafId` (like pi's `buildSessionPath`). An undefined leaf means the last
+ * entry; null means before the first entry (an empty path).
  */
-export function contextEntries(entries: SessionEntry[]): {
+export function buildSessionPath(
+  entries: SessionEntry[],
+  leafId?: string | null,
+  byId?: Map<string, SessionEntry>,
+): SessionEntry[] {
+  if (leafId === null) return []
+  const index = byId ?? new Map(entries.map((entry) => [entry.id, entry]))
+  let current = leafId === undefined ? entries.at(-1) : index.get(leafId)
+  if (leafId !== undefined && !current)
+    throw new Error(`Entry ${leafId} is not in the session`)
+  const path: SessionEntry[] = []
+  const seen = new Set<string>()
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    path.push(current)
+    current =
+      current.parentId === null ? undefined : index.get(current.parentId)
+  }
+  return path.reverse()
+}
+
+/**
+ * The entries of a branch (root first) the context is built from (like the path pi's `buildSessionContext`
+ * walks): with a compaction, the branch's latest one and the entries it keeps plus everything after it;
+ * otherwise the whole branch. The TUI renders a resumed session from these.
+ */
+export function contextEntries(path: SessionEntry[]): {
   compaction?: CompactionEntry
   entries: SessionEntry[]
 } {
   let compactionIndex = -1
-  entries.forEach((entry, index) => {
+  path.forEach((entry, index) => {
     if (entry.type === 'compaction') compactionIndex = index
   })
-  if (compactionIndex < 0) return { entries }
-  const compaction = entries[compactionIndex] as CompactionEntry
-  const firstKept = entries.findIndex(
-    (entry) => entry.id === compaction.firstKeptEntryId,
-  )
+  if (compactionIndex < 0) return { entries: path }
+  const compaction = path[compactionIndex] as CompactionEntry
+  const firstKept =
+    compaction.firstKeptEntryId === compaction.id
+      ? compactionIndex
+      : path.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
   if (firstKept < 0 || firstKept > compactionIndex)
     throw new Error(
       `Compaction entry ${compaction.id} keeps entry ${compaction.firstKeptEntryId}, which is not before it in the session`,
@@ -258,18 +314,24 @@ export function contextEntries(entries: SessionEntry[]): {
   return {
     compaction,
     entries: [
-      ...entries.slice(firstKept, compactionIndex),
-      ...entries.slice(compactionIndex + 1),
+      ...path.slice(firstKept, compactionIndex),
+      ...path.slice(compactionIndex + 1),
     ],
   }
 }
 
 /**
- * Rebuilds the model context and settings from a session's entries (like pi's `buildSessionContext`):
- * the latest compaction's summary, then the kept and later messages, with context edits applied.
- * Aborted / failed assistant messages and `!!` commands are left out (like pi's transform-messages).
+ * Rebuilds the model context and settings of the branch ending at `leafId` (default: the last entry), like
+ * pi's `buildSessionContext`: the branch's latest compaction summary, then the kept and later entries, with
+ * context edits applied. Branch summaries enter as user messages; aborted / failed assistant messages are
+ * left out, and so are `!!` commands (like pi's transform-messages).
  */
-export function buildSessionContext(entries: SessionEntry[]): SessionContext {
+export function buildSessionContext(
+  entries: SessionEntry[],
+  leafId?: string | null,
+  byId?: Map<string, SessionEntry>,
+): SessionContext {
+  const path = buildSessionPath(entries, leafId, byId)
   const context: SessionContext = {
     messages: [],
     ids: new Map(),
@@ -277,35 +339,58 @@ export function buildSessionContext(entries: SessionEntry[]): SessionContext {
     custom: new Map(),
     summary: '',
   }
-  for (const entry of entries) {
+  for (const entry of path) {
     if (entry.type === 'model_change') context.model = entry.model
     else if (entry.type === 'thinking_level_change')
       context.thinkingLevel = entry.thinkingLevel
-    else if (entry.type === 'session_info')
-      context.name = entry.name?.trim() || undefined
   }
-  const { compaction, entries: selected } = contextEntries(entries)
+  // Like pi: the name belongs to the session, not a branch (the latest session_info anywhere)
+  for (const entry of entries)
+    if (entry.type === 'session_info')
+      context.name = entry.name?.trim() || undefined
+  const push = (message: ModelMessage, entry: SessionEntry) => {
+    context.messages.push(message)
+    context.ids.set(message, entry.id)
+    context.timestamps.set(message, parseTime(entry.timestamp))
+  }
+  const { compaction, entries: selected } = contextEntries(path)
   if (compaction) {
     context.summary = compaction.summary
     context.toolHistoryViewSeq = compaction.toolHistoryViewSeq
-    const summary: ModelMessage = {
-      role: 'user',
-      content: summaryMessageText(compaction.summary),
-    }
-    context.messages.push(summary)
-    context.ids.set(summary, compaction.id)
-    context.timestamps.set(summary, parseTime(compaction.timestamp))
+    push(
+      { role: 'user', content: summaryMessageText(compaction.summary) },
+      compaction,
+    )
   }
   const edits = new Map<string, ContextEditEntry>()
   for (const entry of selected)
     if (entry.type === 'context_edit') edits.set(entry.targetId, entry)
   for (const entry of selected) {
-    const original = contextMessage(entry)
-    if (!original) continue
+    if (entry.type === 'branch_summary') {
+      if (entry.summary)
+        push(
+          { role: 'user', content: branchSummaryMessageText(entry.summary) },
+          entry,
+        )
+      continue
+    }
+    let original: ModelMessage
+    if (entry.type === 'message') {
+      if (entry.stopReason) continue
+      original = entry.message
+    } else if (entry.type === 'custom_message')
+      // Like pi's convertToLlm: the model sees a custom message as a user message
+      original = { role: 'user', content: entry.content }
+    else if (entry.type === 'bash_execution' && !entry.excludeFromContext)
+      original = { role: 'user', content: bashExecutionToText(entry) }
+    else continue
     const edit = edits.get(entry.id)
     if (edit?.replacement === null) continue
     const message = edit
-      ? ({ ...original, content: edit.replacement.content } as ModelMessage)
+      ? ({
+          ...original,
+          content: edit.replacement.content,
+        } as ModelMessage)
       : original
     if (entry.type === 'custom_message')
       context.custom.set(message, {
@@ -313,23 +398,102 @@ export function buildSessionContext(entries: SessionEntry[]): SessionContext {
         display: entry.display,
         ...(entry.details === undefined ? {} : { details: entry.details }),
       })
-    context.messages.push(message)
-    context.ids.set(message, entry.id)
-    context.timestamps.set(message, parseTime(entry.timestamp))
+    push(message, entry)
   }
   return context
 }
 
-/** The message an entry puts in the model context, if any. */
-function contextMessage(entry: SessionEntry): ModelMessage | undefined {
-  if (entry.type === 'message')
-    return entry.stopReason ? undefined : entry.message
-  // Like pi's convertToLlm: the model sees a custom message as a user message
-  if (entry.type === 'custom_message')
-    return { role: 'user', content: entry.content }
-  if (entry.type === 'bash_execution' && !entry.excludeFromContext)
-    return { role: 'user', content: bashExecutionToText(entry) }
-  return undefined
+/** A node of `getTree()` (like pi's `SessionTreeNode`). */
+export interface SessionTreeNode {
+  entry: SessionEntry
+  /** Children, oldest first */
+  children: SessionTreeNode[]
+  /** The entry's current label, if any */
+  label?: string
+}
+
+/** Current label of each entry (the latest `label` entry for it wins). */
+export function resolveLabels(entries: SessionEntry[]): Map<string, string> {
+  const labels = new Map<string, string>()
+  for (const entry of entries) {
+    if (entry.type !== 'label') continue
+    if (entry.label) labels.set(entry.targetId, entry.label)
+    else labels.delete(entry.targetId)
+  }
+  return labels
+}
+
+/**
+ * The entries as a tree (like pi's `getTree`). Normally there is one root; an entry whose parent is
+ * missing is also returned as a root.
+ */
+export function buildSessionTree(entries: SessionEntry[]): SessionTreeNode[] {
+  const labels = resolveLabels(entries)
+  const nodes = new Map<string, SessionTreeNode>()
+  for (const entry of entries) {
+    const label = labels.get(entry.id)
+    nodes.set(entry.id, { entry, children: [], ...(label ? { label } : {}) })
+  }
+  const roots: SessionTreeNode[] = []
+  for (const entry of entries) {
+    const node = nodes.get(entry.id) as SessionTreeNode
+    const parent =
+      entry.parentId === null || entry.parentId === entry.id
+        ? undefined
+        : nodes.get(entry.parentId)
+    if (parent) parent.children.push(node)
+    else roots.push(node)
+  }
+  // Append order is already oldest first, which is pi's timestamp order
+  return roots
+}
+
+/**
+ * Copies a branch for a new session (like pi's `createBranchedSession`): the path re-chained without
+ * label entries, followed by the labels of entries on the path.
+ */
+export function copyBranch(path: SessionEntry[]): SessionEntry[] {
+  const labels = resolveLabels(path)
+  const copied: SessionEntry[] = []
+  const replacement = new Map<string, string>()
+  const pendingLabels: string[] = []
+  let parentId: string | null = null
+  for (const entry of path) {
+    if (entry.type === 'label') {
+      pendingLabels.push(entry.id)
+      continue
+    }
+    for (const id of pendingLabels) replacement.set(id, entry.id)
+    pendingLabels.length = 0
+    copied.push(
+      entry.type === 'compaction'
+        ? {
+            ...entry,
+            parentId,
+            firstKeptEntryId:
+              replacement.get(entry.firstKeptEntryId) ?? entry.firstKeptEntryId,
+          }
+        : { ...entry, parentId },
+    )
+    parentId = entry.id
+  }
+  const ids = new Set(copied.map((entry) => entry.id))
+  const timestamp = new Date().toISOString()
+  for (const [targetId, label] of labels) {
+    if (!ids.has(targetId)) continue
+    const id = createEntryId(ids)
+    ids.add(id)
+    copied.push({ type: 'label', id, parentId, timestamp, targetId, label })
+    parentId = id
+  }
+  return copied
+}
+
+/** Text of a message's content (text parts only). */
+export function messageText(content: ModelMessage['content']): string {
+  return typeof content === 'string'
+    ? content
+    : content.map((part) => ('text' in part ? String(part.text) : '')).join('')
 }
 
 /** One `SessionStorage.list()` entry, used by the session picker and `vela.listSessions()`. */
@@ -370,13 +534,7 @@ export function summarizeSession(
     messageCount++
     if (firstMessage || entry.message.role !== 'user') continue
     const content = entry.message.content
-    firstMessage = (
-      typeof content === 'string'
-        ? content
-        : content
-            .map((part) => ('text' in part ? String(part.text) : ''))
-            .join('')
-    )
+    firstMessage = messageText(content)
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 120)

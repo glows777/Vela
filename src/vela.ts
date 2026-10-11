@@ -60,6 +60,11 @@ export interface VelaOptions {
   providers?: Record<string, ProviderDefinition>
   /** Thinking level for new sessions, default medium (like pi) */
   thinkingLevel?: ThinkingLevel
+  /**
+   * Automatic compaction for new sessions, default on (like pi's `compaction.enabled`). Off: the context is never
+   * compacted on its own (no microcompaction, no threshold summary, no compact-and-retry on overflow); `compact()` still works.
+   */
+  autoCompaction?: boolean
   /** Working directory for file, search and bash tools and skills; default process.cwd(). */
   cwd?: string
   /**
@@ -277,6 +282,12 @@ export function createVela(options: VelaOptions = {}): Vela {
         model,
         resolveModel,
         thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+        autoCompaction: options.autoCompaction ?? true,
+        openSession: (newId, newOptions) => {
+          if (sessions.has(newId))
+            throw new Error(`Session ${newId} is already open`)
+          return session(newId, newOptions)
+        },
         limitOverrides: options.limits ?? {},
         logger,
         dataDir,
