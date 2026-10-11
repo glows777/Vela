@@ -302,7 +302,7 @@ export class StepMessage {
   /** A tool call's outcome: emits `tool_execution_end` and records the result part for history. */
   result(
     call: { toolCallId: string; toolName: string; input?: unknown },
-    outcome: { output: unknown } | { error: unknown },
+    outcome: { output: unknown; details?: unknown } | { error: unknown },
   ): void {
     if (this.results.has(call.toolCallId)) return
     const known = this.toolCalls.find((c) => c.toolCallId === call.toolCallId)
@@ -318,6 +318,9 @@ export class StepMessage {
       toolName: call.toolName,
       result,
       isError,
+      ...('details' in outcome && outcome.details !== undefined
+        ? { details: outcome.details }
+        : {}),
       ...(startedAt === undefined
         ? {}
         : { durationMs: Math.round(performance.now() - startedAt) }),

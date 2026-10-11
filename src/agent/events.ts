@@ -100,6 +100,11 @@ export type VelaEvent =
       toolName: string
       result: unknown
       isError: boolean
+      /**
+       * Structured data for display that the model does not get (like pi's `result.details`), e.g. edit_file's
+       * `{ diff, patch, firstChangedLine }`: the `value` of a `ToolExecutionResult`
+       */
+      details?: unknown
       /** How long the tool ran; absent when it did not run */
       durationMs?: number
       /** Set on a call made by another tool through `ctx.executeTool()`: the calling tool's id */

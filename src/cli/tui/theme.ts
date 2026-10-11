@@ -53,6 +53,7 @@ export const theme = {
   bg: (color: ColorName, text: string) => style(text, { bg: COLORS[color] }),
   bold: (text: string) => style(text, { bold: true }),
   italic: (text: string) => style(text, { italic: true }),
+  inverse: (text: string) => style(text, { inverse: true }),
   thinkingBorder: (level: ThinkingLevel) => (text: string) =>
     style(text, { fg: THINKING_COLORS[level] }),
 }

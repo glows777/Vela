@@ -257,6 +257,8 @@ export class ToolRegistry {
   }
 
   private persistenceFailure: Error | undefined
+  /** `ToolExecutionResult.value`s by tool call id, until the call's `tool_execution_end` takes them */
+  private readonly details = new Map<string, unknown>()
   private readonly active = new Set<Promise<unknown>>()
 
   private track<T>(run: () => Promise<T>): Promise<T> {
@@ -579,6 +581,8 @@ export class ToolRegistry {
       settled = true
       // Persist native results before formatting/truncating the model response.
       const value = raw instanceof ToolExecutionResult ? raw.value : raw
+      if (raw instanceof ToolExecutionResult && options.toolCallId)
+        this.details.set(options.toolCallId, raw.value)
       const execution =
         raw instanceof ToolExecutionResult || raw instanceof StoredToolResult
           ? (raw.execution ?? {})
@@ -688,6 +692,7 @@ export class ToolRegistry {
     this.onEvent?.({ type: 'tool_execution_start', ...event, args })
     const started = performance.now()
     const finish = (result: unknown, isError: boolean, ran: boolean) => {
+      const details = this.takeDetails(toolCallId)
       const outcome: ToolCallOutcome = {
         toolCallId,
         toolName: name,
@@ -700,6 +705,7 @@ export class ToolRegistry {
         ...event,
         result,
         isError,
+        ...(details === undefined || isError ? {} : { details }),
         ...(outcome.durationMs === undefined
           ? {}
           : { durationMs: outcome.durationMs }),
@@ -743,6 +749,13 @@ export class ToolRegistry {
         true,
       )
     }
+  }
+
+  /** Display data (`ToolExecutionResult.value`) of a finished call, for its `tool_execution_end`; removes it. */
+  takeDetails(toolCallId: string): unknown {
+    const details = this.details.get(toolCallId)
+    this.details.delete(toolCallId)
+    return details
   }
 
   /** Tools declared to the model: allowed, and direct / model-only, or deferred and loaded with tool_search. */
