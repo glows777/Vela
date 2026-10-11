@@ -122,6 +122,31 @@ test('abortBash() cancels the command, which is still recorded as cancelled', as
   expect(userTexts(t.messages).at(-1)).toContain('(command cancelled)')
 })
 
+test('closing the session during a command cancels it and still saves it', async () => {
+  const t = createTestVela()
+  const running = t.session.executeBash('echo started; sleep 10')
+  let settled = false
+  void running.then(() => {
+    settled = true
+  })
+  await Bun.sleep(200)
+  await t.session.close()
+  // close() waited for the command, so its entry was saved before close() returned
+  expect(settled).toBe(true)
+  expect(await running).toMatchObject({ cancelled: true })
+  expect(
+    (await entries(t)).filter((entry) => entry.type === 'bash_execution'),
+  ).toMatchObject([{ command: 'echo started; sleep 10', cancelled: true }])
+})
+
+test('a session with only `!` commands is listed for resuming', async () => {
+  const t = createTestVela()
+  await t.session.executeBash('echo hi', { excludeFromContext: true })
+  expect(await t.vela.listSessions()).toMatchObject([
+    { id: 'default', messageCount: 1, firstMessage: '!!echo hi' },
+  ])
+})
+
 test('long output keeps its end and points to the full output file; events stream all of it', async () => {
   const t = createTestVela()
   const result = await t.session.executeBash('seq 1 3000', { id: 'seq' })

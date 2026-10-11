@@ -322,6 +322,16 @@ export function summarizeSession(
   for (const entry of entries) {
     if (entry.timestamp > updatedAt) updatedAt = entry.timestamp
     if (entry.type === 'session_info') name = entry.name?.trim() || undefined
+    // A `!` command counts like a message: a session with only commands can be resumed
+    if (entry.type === 'bash_execution') {
+      messageCount++
+      firstMessage ||=
+        `${entry.excludeFromContext ? '!!' : '!'}${entry.command}`
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 120)
+      continue
+    }
     if (entry.type !== 'message') continue
     messageCount++
     if (firstMessage || entry.message.role !== 'user') continue

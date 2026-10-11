@@ -163,6 +163,8 @@ export class VelaSession {
   private readonly toolDetails = new Map<string, unknown>()
   /** The running `executeBash()` command */
   private bashController?: AbortController
+  /** The running `executeBash()` call, which close() waits for so its result is saved */
+  private bashRun?: Promise<unknown>
   /** `!` commands that finished while the agent ran, recorded when it stops (like pi) */
   private readonly pendingBash: NewEntry<BashExecutionEntry>[] = []
   private readonly builder: PromptPipeline
@@ -489,6 +491,20 @@ export class VelaSession {
       )
     const controller = new AbortController()
     this.bashController = controller
+    const run = this.runUserBash(command, controller, options)
+    this.bashRun = run
+    return run
+  }
+
+  private async runUserBash(
+    command: string,
+    controller: AbortController,
+    options: {
+      excludeFromContext?: boolean
+      onUpdate?: (output: string) => void
+      id?: string
+    },
+  ): Promise<BashResult> {
     try {
       // Appending to a saved session that was not resumed would mix two conversations in one log
       await this.store.assertNew()
@@ -521,6 +537,7 @@ export class VelaSession {
       return result
     } finally {
       this.bashController = undefined
+      this.bashRun = undefined
     }
   }
 
@@ -882,6 +899,8 @@ export class VelaSession {
     // Let extension commands finish first (commands like /dream wait on the prompt they started)
     await Promise.allSettled(this.commands.values())
     await this.running
+    // A cancelled `!` command still records itself; wait for that before the final save
+    await this.bashRun?.catch(() => {})
     await this.registry.waitForIdle().catch(() => {})
     // Only sessions that fired session_start emit session_shutdown
     if (this.started) {

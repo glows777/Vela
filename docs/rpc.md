@@ -229,7 +229,7 @@ Closes the active session and opens a saved one, restoring its history, model an
 {"id":"11","type":"list_sessions"}
 ```
 
-Data: `{ "sessions": [{ "id", "name"?, "updatedAt", "messageCount", "firstMessage" }] }`, newest first. Sessions without messages are not listed. With `--no-session` only sessions of this process are listed.
+Data: `{ "sessions": [{ "id", "name"?, "updatedAt", "messageCount", "firstMessage" }] }`, newest first. Sessions without messages or `!` commands are not listed (a `!` command counts as a message). With `--no-session` only sessions of this process are listed.
 
 #### set_session_name
 
