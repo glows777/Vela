@@ -73,6 +73,8 @@ export interface ProviderContext {
    * change them while the model is in use. Throws when a refresh fails.
    */
   credential(): Promise<Credential | undefined>
+  /** The channel the requesting session answers on (e.g. `feishu`), undefined for local sessions; read per request */
+  channel(): string | undefined
 }
 
 /**
@@ -240,7 +242,10 @@ export class ModelRegistry {
   }
 
   /** `provider/id` → model; the id may contain more `/` (e.g. `openrouter/anthropic/claude`). */
-  resolve(ref: string): ResolvedModel {
+  resolve(
+    ref: string,
+    options: { channel?: () => string | undefined } = {},
+  ): ResolvedModel {
     const slash = ref.indexOf('/')
     if (slash <= 0 || slash === ref.length - 1)
       throw new Error(`Model must be provider/id, got "${ref}"`)
@@ -258,6 +263,7 @@ export class ModelRegistry {
         provider,
         credential: () =>
           resolveCredential(this.credentials, provider, def.oauth),
+        channel: () => options.channel?.(),
       }),
       info: { ...spec, provider, ref: `${provider}/${id}` },
     }

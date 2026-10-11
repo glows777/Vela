@@ -248,3 +248,34 @@ test('mistakes in models.json are reported with the file name', () => {
     'providers.x is missing api',
   )
 })
+
+test('a ChatGPT sign-in is used by local sessions but refused in channel sessions', async () => {
+  const requests = captureRequests()
+  const registry = registryOf(loadModels({ agentDir: agentDir(), env: {} }), {
+    openai: {
+      type: 'oauth',
+      access: 'chatgpt-token',
+      refresh: 'r',
+      expires: Date.now() + 3_600_000,
+      clientId: 'oaiapp_1',
+    },
+  })
+  const doGenerate = (model: unknown) =>
+    (model as { doGenerate(options: unknown): Promise<unknown> })
+      .doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      })
+      .catch((e: unknown) => e)
+
+  await doGenerate(registry.resolve('openai/gpt-5.5').model)
+  expect(requests.at(-1)?.url).toBe('https://api.openai.com/v1/responses')
+  expect(requests.at(-1)?.headers.get('authorization')).toBe(
+    'Bearer chatgpt-token',
+  )
+
+  const error = await doGenerate(
+    registry.resolve('openai/gpt-5.5', { channel: () => 'feishu' }).model,
+  )
+  expect(String(error)).toContain('only for the local terminal, not for feishu')
+  expect(requests).toHaveLength(1)
+})

@@ -1,5 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
-import { openaiChatGPTLogin } from '../../../src/auth/oauth/openai-chatgpt.ts'
+import {
+  chatGPTRequests,
+  openaiChatGPTLogin,
+} from '../../../src/auth/oauth/openai-chatgpt.ts'
 import { openRouterLogin } from '../../../src/auth/oauth/openrouter.ts'
 import type { AuthInteraction, AuthPrompt } from '../../../src/auth/types.ts'
 
@@ -149,8 +152,8 @@ test('ChatGPT requests are made stored-less and streamed; a non-streamed call ge
       'event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"id":"r1","output":[]}}\n\n',
     )
   }
-  const fetch = openaiChatGPTLogin.wrapFetch?.(base)
-  const response = await fetch?.('https://api.openai.com/v1/responses', {
+  const fetch = chatGPTRequests.wrapFetch(base)
+  const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     body: JSON.stringify({
       model: 'gpt-5.5',
@@ -160,21 +163,36 @@ test('ChatGPT requests are made stored-less and streamed; a non-streamed call ge
     }),
   })
   expect(sent[0]).toEqual({ model: 'gpt-5.5', store: false, stream: true })
-  expect(await response?.json()).toEqual({ id: 'r1', output: [] })
+  expect(await response.json()).toEqual({ id: 'r1', output: [] })
 
-  const params = openaiChatGPTLogin.transformParams?.({
+  const params = chatGPTRequests.transformParams({
     prompt: [],
     maxOutputTokens: 100,
     temperature: 1,
     providerOptions: { openai: { include: ['x'] } },
   })
-  expect(params?.maxOutputTokens).toBeUndefined()
-  expect(params?.temperature).toBeUndefined()
-  expect(params?.providerOptions?.openai).toEqual({
+  expect(params.maxOutputTokens).toBeUndefined()
+  expect(params.temperature).toBeUndefined()
+  expect(params.providerOptions?.openai).toEqual({
     include: ['x', 'reasoning.encrypted_content'],
     store: false,
     systemMessageMode: 'developer',
   })
+})
+
+test('the ChatGPT token is never sent to a base URL other than OpenAI', async () => {
+  const sent: string[] = []
+  const fetch = chatGPTRequests.wrapFetch(async (input) => {
+    sent.push(String(input))
+    return new Response('{}')
+  })
+  await expect(
+    fetch('https://proxy.example.com/v1/responses', {
+      method: 'POST',
+      body: '{}',
+    }),
+  ).rejects.toThrow('unset OPENAI_API_BASE_URL')
+  expect(sent).toEqual([])
 })
 
 test('ChatGPT refresh keeps the client id and asks for the same resource', async () => {

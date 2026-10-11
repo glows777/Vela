@@ -114,6 +114,7 @@ export class ChannelGateway {
   ): Promise<void> {
     if (this.stopped) return
     const session = this.options.session(id)
+    session.channel = channelName
     // Re-evaluate the role on every message (the allowlist may change); defaults to guest
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
     if (!this.resumed.has(session)) {

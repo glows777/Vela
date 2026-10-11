@@ -212,6 +212,8 @@ vela.registerProvider('corp', {
 
 Credentials are stored like the built-in ones, in `~/.vela/auth.json` for the CLI.
 
+`ctx.channel()` names the channel the requesting session answers on (for example `feishu`), or returns undefined for local sessions. Read it per request too; a sign-in meant only for the person at the terminal can refuse channel sessions with it, as Sign in with ChatGPT does.
+
 If you only need a different base URL or key for an OpenAI- or Anthropic-compatible service, edit `~/.vela/models.json` instead. See [Models](models.md).
 
 ### registerChannel

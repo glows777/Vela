@@ -196,8 +196,11 @@ export function assertSessionId(id: string): void {
 export interface SessionDeps {
   /** Default model */
   model: string | LanguageModel | undefined
-  /** Resolves a model by name or object (including the provider registry) */
-  resolveModel: (model: string | LanguageModel | undefined) => ResolvedModel
+  /** Resolves a model by name or object (including the provider registry) for a session */
+  resolveModel: (
+    model: string | LanguageModel | undefined,
+    session: VelaSession,
+  ) => ResolvedModel
   thinkingLevel: ThinkingLevel
   /** Automatic compaction for new sessions */
   autoCompaction: boolean
@@ -362,7 +365,7 @@ export class VelaSession {
 
   private resolveModel(): ResolvedModel {
     if (!this.resolved)
-      this.applyModel(this.deps.resolveModel(this.modelChoice))
+      this.applyModel(this.deps.resolveModel(this.modelChoice, this))
     return this.resolved as ResolvedModel
   }
 
@@ -416,7 +419,7 @@ export class VelaSession {
   }
 
   private selectModel(model: string | LanguageModel, record: boolean): void {
-    const resolved = this.deps.resolveModel(model)
+    const resolved = this.deps.resolveModel(model, this)
     const thinking = this.thinkingLevel
     this.modelChoice = model
     this.applyModel(resolved)
@@ -465,6 +468,12 @@ export class VelaSession {
     const after = this.thinkingLevel
     if (after !== before) this.store.appendThinkingLevelChange(after)
   }
+
+  /**
+   * The channel this session answers on (e.g. `feishu`), set by the channel gateway on every message; undefined
+   * for local sessions. Providers see it as `ProviderContext.channel()`.
+   */
+  channel?: string
 
   /** Session role (owner / collaborator / guest): decides which tools are available and whether extension commands can run. */
   get role(): Role {

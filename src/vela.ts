@@ -218,6 +218,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   const models = new ModelRegistry(options.providers, options.credentials)
   const resolveModel = (
     requested: string | LanguageModel | undefined,
+    from?: VelaSession,
   ): ResolvedModel => {
     // Like pi: without a chosen model, the first provider with a credential supplies its default model
     const choice = requested ?? models.defaultRef()
@@ -226,7 +227,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         'No model selected: pass model to createVela(), or call session.setModel()',
       )
     return typeof choice === 'string'
-      ? models.resolve(choice)
+      ? models.resolve(choice, { channel: () => from?.channel })
       : { model: choice, info: describeModel(choice) }
   }
   const limits = resolveLimits(options.limits)

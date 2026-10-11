@@ -1,5 +1,3 @@
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-
 /** An API key stored with `/login` (pi's `api_key` credential). */
 export interface ApiKeyCredential {
   type: 'api_key'
@@ -90,15 +88,6 @@ export interface OAuthLogin {
     credential: OAuthCredential,
     signal: AbortSignal,
   ): Promise<OAuthCredential>
-  /** Adjusts each model call while this OAuth credential is used (for endpoints with their own request rules) */
-  transformParams?(
-    params: LanguageModelV4CallOptions,
-  ): LanguageModelV4CallOptions
-  /**
-   * Wraps the provider's fetch while this OAuth credential is used, for endpoints that need requests
-   * shaped differently than with an API key (Sign in with ChatGPT).
-   */
-  wrapFetch?(fetch: FetchFunction): FetchFunction
 }
 
 /** A fetch function (what AI SDK providers accept as `fetch`) */

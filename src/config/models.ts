@@ -2,8 +2,12 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
-import { openaiChatGPTLogin } from '../auth/oauth/openai-chatgpt.ts'
+import {
+  chatGPTRequests,
+  openaiChatGPTLogin,
+} from '../auth/oauth/openai-chatgpt.ts'
 import { openRouterLogin } from '../auth/oauth/openrouter.ts'
 import type { Credential, FetchFunction, OAuthLogin } from '../auth/types.ts'
 import { catalogLookup, catalogModels } from '../models/catalog.ts'
@@ -44,6 +48,15 @@ interface BuiltinProvider {
   envKey: string
   defaultModel: string
   oauth?: OAuthLogin
+  /** Request rules while the OAuth credential is used (an endpoint with its own rules, like Sign in with ChatGPT) */
+  oauthRequests?: {
+    /** Refuse the OAuth credential in channel sessions (it is for the local terminal only) */
+    localOnly?: boolean
+    transformParams?(
+      params: LanguageModelV4CallOptions,
+    ): LanguageModelV4CallOptions
+    wrapFetch?(fetch: FetchFunction): FetchFunction
+  }
   /** Rewrites the JSON request body for provider-specific fields the AI SDK doesn't send */
   prepareBody?: (body: Record<string, unknown>) => void
 }
@@ -77,6 +90,7 @@ const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
     envKey: 'OPENAI_API_KEY',
     defaultModel: 'gpt-5.5',
     oauth: openaiChatGPTLogin,
+    oauthRequests: chatGPTRequests,
   },
   openrouter: {
     config: {
@@ -202,6 +216,7 @@ function createProvider(
       )
     : undefined
   const oauth = builtin?.oauth
+  const oauthRequests = builtin?.oauthRequests
   const envKey = builtin?.envKey
   const configured = () => read(config.apiKey)
 
@@ -226,6 +241,11 @@ function createProvider(
       if (!oauth)
         throw new Error(
           `auth.json has an OAuth credential for ${name}, but Vela has no OAuth sign-in for this provider; run /logout ${name}`,
+        )
+      const channel = ctx.channel()
+      if (oauthRequests?.localOnly && channel)
+        throw new Error(
+          `${oauth.name} is only for the local terminal, not for ${channel}; give ${name} an API key (/login ${name} → Enter an API key, or the ${envKey} environment variable) or have this channel use another model`,
         )
       return { key: credential.access, oauth: true }
     }
@@ -269,7 +289,10 @@ function createProvider(
           body = JSON.stringify(json)
         }
         const base: FetchFunction = (i, o) => globalThis.fetch(i, o)
-        const send = isOAuth && oauth?.wrapFetch ? oauth.wrapFetch(base) : base
+        const send =
+          isOAuth && oauthRequests?.wrapFetch
+            ? oauthRequests.wrapFetch(base)
+            : base
         return send(input, { ...init, headers: requestHeaders, body })
       }
       const settings = {
@@ -291,7 +314,7 @@ function createProvider(
           model = createAnthropic(settings)(id)
           break
       }
-      const transform = oauth?.transformParams?.bind(oauth)
+      const transform = oauthRequests?.transformParams
       if (!transform || typeof model === 'string') return model
       return wrapLanguageModel({
         model,

@@ -348,8 +348,6 @@
     login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; }) => Promise<Credential>
     name: string
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
-    transformParams?: ((params: LanguageModelV4CallOptions) => LanguageModelV4CallOptions) | undefined
-    wrapFetch?: ((fetch: FetchFunction) => FetchFunction) | undefined
   interface OutgoingMessage
     channelId: string
     recipientId: string
@@ -370,6 +368,7 @@
     headers?: Record<string, string> | undefined
     models?: ModelSpec[] | undefined
   interface ProviderContext
+    channel: () => string | undefined
     credential: () => Promise<Credential | undefined>
     provider: string
   interface ProviderDefinition
@@ -784,6 +783,7 @@
     appendEntry: (customType: string, data?: unknown) => void
     autoCompaction: boolean
     availableThinkingLevels: () => ThinkingLevel[]
+    channel?: string | undefined
     clearQueue: () => { steering: string[]; followUp: string[]; }
     clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
     close: () => Promise<void>

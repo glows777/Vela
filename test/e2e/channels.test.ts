@@ -6,7 +6,8 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '../../src/channels/types.ts'
-import { fauxHang, fauxText } from '../../src/testing/faux.ts'
+import type { ProviderContext } from '../../src/models/index.ts'
+import { createFauxModel, fauxHang, fauxText } from '../../src/testing/faux.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -238,4 +239,26 @@ test('an input handled by an extension sends no reply (not the previous answer a
   await deliver('u1', 'hello')
   await deliver('u1', 'skip')
   expect(sent.map((m) => m.text)).toEqual(['First answer'])
+})
+
+test('providers see which channel a session answers on (so a local-only sign-in can refuse it)', async () => {
+  const contexts: ProviderContext[] = []
+  const faux = createFauxModel({
+    responses: [fauxText('from channel'), fauxText('from terminal')],
+  })
+  const t = createTestVela({
+    model: 'p/m',
+    providers: {
+      p: {
+        createModel: (_id, ctx) => {
+          contexts.push(ctx)
+          return faux
+        },
+      },
+    },
+  })
+  const { deliver } = fakeChannel(t)
+  await deliver('u1', 'hi')
+  await t.session.prompt('hi')
+  expect(contexts.map((ctx) => ctx.channel())).toEqual(['fake', undefined])
 })

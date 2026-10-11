@@ -189,6 +189,11 @@ function transformParams(
 function wrapFetch(base: FetchFunction): FetchFunction {
   return async (input, init) => {
     const url = input instanceof Request ? input.url : String(input)
+    // The token is the user's ChatGPT plan: never send it anywhere but OpenAI (OPENAI_API_BASE_URL may point elsewhere)
+    if (new URL(url).origin !== new URL(RESOURCE).origin)
+      throw new Error(
+        `Sign in with ChatGPT only works with ${RESOURCE}, but the openai provider's base URL is ${new URL(url).origin}; unset OPENAI_API_BASE_URL (or the openai baseUrl in models.json), or use an API key`,
+      )
     if (
       !url.endsWith('/responses') ||
       init?.method !== 'POST' ||
@@ -331,6 +336,14 @@ export const openaiChatGPTLogin: OAuthLogin = {
     )
     return credentialFrom(token, clientId)
   },
+}
+
+/**
+ * How the openai provider sends requests while a ChatGPT sign-in is used. OpenAI documents the sign-in for local
+ * agents the signed-in person runs, so channel sessions (a Feishu bot) cannot use it.
+ */
+export const chatGPTRequests = {
+  localOnly: true,
   transformParams,
   wrapFetch,
 }
