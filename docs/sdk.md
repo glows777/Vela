@@ -116,6 +116,8 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `abort(reason?)` | Aborts the running loop and extension commands, and waits until the loop has stopped. Queued messages stay queued. |
 | `waitForIdle()` | Waits for the running loop (including queued messages and manual compaction) without aborting it |
 | `isRunning` | Whether an agent loop or compaction holds the run lock |
+| `executeBash(command, options?)` | Runs a shell command for the user, like the TUI's `!cmd` (pi's `executeBash`): in the working directory with the `shellPath` shell, without tool permissions or hooks, owner sessions only, one at a time. Resolves to `{ output, exitCode, cancelled, truncated, fullOutputPath? }` (`output` is the last 2,000 lines or 50 KB; `exitCode` is undefined when cancelled) and rejects if the command can't start. The result is saved as a `bash_execution` entry and reaches the model as a user message with the next prompt; `excludeFromContext: true` (`!!cmd`) saves it without sending it. While the agent runs, it is recorded when the run ends. `onUpdate(output)` gets the output's tail while it runs, and `bash_execution_update` events carry each new piece of output with the `id` option. |
+| `isBashRunning`, `abortBash()` | Whether an `executeBash()` command is running; cancel it (it is still recorded, as cancelled) |
 | `compact(focus?)` | Summarizes earlier history now and saves. `focus` says what the summary should prefer to keep. Throws while running. |
 | `resume()` | Replaces the in-memory history with the saved one; returns `false` if nothing was saved. Restores the name, thinking level and (if resolvable) model. Throws while running. |
 | `model`, `modelInfo` | Current `LanguageModel` and its `ModelInfo` |
@@ -229,6 +231,7 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `loop`, `aborted`, `error`), `error?` | The loop ended. Queued messages may still start another loop. |
 | `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
+| `bash_execution_update` | `id?`, `delta` | New output of a running `executeBash()` command (like pi); the `delta`s add up to all of its output. `id` is the one passed to `executeBash()` |
 | `context_prepare` | `action`, `before`, `after?`, `saved?`, `calls?` | Vela-specific context management: `micro` (old tool results folded) or `summary-required` (the summary threshold was reached but this run may not summarize). Token counts are estimates. See [Sessions](sessions.md#compaction). |
 | `compaction_start` | `reason` (`threshold`, `manual`, `overflow`) | Summarizing earlier history starts (like pi): before a request that is too large, from `session.compact()`, or after the provider said the context is too long |
 | `compaction_end` | `reason`, `result?` (`summary`, `firstKeptEntryId`, `tokensBefore`, `tokensAfter`, `messages`), `aborted`, `willRetry`, `errorMessage?` | Summarizing ended (like pi). `result` is set when it succeeded, `aborted` when it was interrupted, otherwise `errorMessage` says why it failed. `willRetry`: the request that overflowed is sent again |

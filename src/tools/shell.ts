@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
+import { type FileHandle, open, stat } from 'node:fs/promises'
 import { constants } from 'node:os'
 import z from 'zod'
 import type { ExecutionMetadata } from '../session/tool-history.ts'
@@ -58,79 +58,28 @@ export const createBashTool = (
     const { path, file } = await results.createFile(context?.callId)
     let status: string | undefined
     const execution: ExecutionMetadata = {}
-    const streaming = context?.onUpdate
-      ? streamTail(path, context.onUpdate)
-      : undefined
     try {
-      const proc = spawn(shellPath ?? 'bash', ['-lc', command], {
+      const run = await runShell(command, file, path, {
         cwd,
-        stdio: ['ignore', file.fd, file.fd],
-        // POSIX process group lets timeout/cancellation stop pipelines and descendants.
-        detached: process.platform !== 'win32',
+        shellPath,
+        timeout,
+        signal: context?.signal,
+        onUpdate: context?.onUpdate
+          ? (text) => context.onUpdate?.({ content: [{ type: 'text', text }] })
+          : undefined,
       })
-      const exited = new Promise<{
-        code: number | null
-        signal: NodeJS.Signals | null
-      }>((resolve, reject) => {
-        proc.once('error', reject)
-        proc.once('exit', (code, signal) => resolve({ code, signal }))
-      })
-      const terminate = () => {
-        try {
-          if (process.platform === 'win32') proc.kill('SIGKILL')
-          else if (proc.pid !== undefined) process.kill(-proc.pid, 'SIGKILL')
-        } catch (error) {
-          if (
-            !(
-              error &&
-              typeof error === 'object' &&
-              'code' in error &&
-              error.code === 'ESRCH'
-            )
-          )
-            throw error
-        }
-      }
-      const timer =
-        timeout === undefined
-          ? undefined
-          : setTimeout(() => {
-              execution.timedOut = true
-              terminate()
-            }, timeout * 1000)
-      context?.signal?.addEventListener('abort', terminate, { once: true })
-      if (context?.signal?.aborted) terminate()
-      let exitCode: number
-      let signal: NodeJS.Signals | null
-      try {
-        const result = await exited
-        signal = result.signal
-        // Killed by a signal: 128 + signal number, as shells report it
-        exitCode =
-          result.code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0)
-      } finally {
-        clearTimeout(timer)
-        context?.signal?.removeEventListener('abort', terminate)
-      }
-      execution.exitCode = exitCode
-      execution.signal = signal
-      execution.isError = exitCode !== 0 || !!execution.timedOut
-      if (execution.timedOut)
-        status = `Command timed out after ${timeout} seconds`
-      else if (context?.signal?.aborted) status = 'Command aborted'
-      else if (exitCode !== 0)
-        status = `Command exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`
+      execution.exitCode = run.exitCode
+      execution.signal = run.signal
+      execution.timedOut = run.timedOut || undefined
+      execution.isError = run.exitCode !== 0 || run.timedOut
+      if (run.timedOut) status = `Command timed out after ${timeout} seconds`
+      else if (run.cancelled) status = 'Command aborted'
+      else if (run.exitCode !== 0)
+        status = `Command exited with code ${run.exitCode}${run.signal ? ` (signal ${run.signal})` : ''}`
     } catch (error) {
       execution.isError = true
       execution.error = error instanceof Error ? error.message : String(error)
       status = `Command failed: ${error}`
-    } finally {
-      await streaming?.stop()
-      try {
-        await file.sync()
-      } finally {
-        await file.close()
-      }
     }
     const { size } = await stat(path)
     const tail = await readTail(path, size)
@@ -151,22 +100,180 @@ export const createBashTool = (
 
 export const bashTool = createBashTool()
 
+/** How a command run by `runShell` ended. */
+interface ShellRun {
+  /** The exit code, or 128 + the signal number when a signal killed it */
+  exitCode: number
+  signal: NodeJS.Signals | null
+  timedOut: boolean
+  /** `signal` aborted the command */
+  cancelled: boolean
+}
+
 /**
- * Sends the output tail to onUpdate while the command runs. Unlike pi, which reads pipes,
- * the output goes straight to the result file, so the file is polled.
+ * Runs a command with stdout and stderr going to `file`, which it closes. The process group is
+ * killed on timeout or abort. Throws if the command cannot start.
  */
-function streamTail(
+async function runShell(
+  command: string,
+  file: FileHandle,
   path: string,
-  onUpdate: (partialResult: unknown) => void,
+  options: {
+    cwd?: string
+    shellPath?: string
+    timeout?: number
+    signal?: AbortSignal
+    /** The output tail while the command runs */
+    onUpdate?: (text: string) => void
+    /** Each new piece of output, all of it, in order */
+    onDelta?: (delta: string) => void
+  },
+): Promise<ShellRun> {
+  const { signal: abortSignal } = options
+  const streaming =
+    options.onUpdate || options.onDelta
+      ? streamOutput(path, options.onUpdate, options.onDelta)
+      : undefined
+  try {
+    const proc = spawn(options.shellPath ?? 'bash', ['-lc', command], {
+      cwd: options.cwd,
+      stdio: ['ignore', file.fd, file.fd],
+      // POSIX process group lets timeout/cancellation stop pipelines and descendants.
+      detached: process.platform !== 'win32',
+    })
+    const exited = new Promise<{
+      code: number | null
+      signal: NodeJS.Signals | null
+    }>((resolve, reject) => {
+      proc.once('error', reject)
+      proc.once('exit', (code, signal) => resolve({ code, signal }))
+    })
+    const terminate = () => {
+      try {
+        if (process.platform === 'win32') proc.kill('SIGKILL')
+        else if (proc.pid !== undefined) process.kill(-proc.pid, 'SIGKILL')
+      } catch (error) {
+        if (
+          !(
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'ESRCH'
+          )
+        )
+          throw error
+      }
+    }
+    let timedOut = false
+    const timer =
+      options.timeout === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true
+            terminate()
+          }, options.timeout * 1000)
+    abortSignal?.addEventListener('abort', terminate, { once: true })
+    if (abortSignal?.aborted) terminate()
+    try {
+      const result = await exited
+      return {
+        // Killed by a signal: 128 + signal number, as shells report it
+        exitCode:
+          result.code ??
+          128 + (result.signal ? (constants.signals[result.signal] ?? 0) : 0),
+        signal: result.signal,
+        timedOut,
+        cancelled: !!abortSignal?.aborted,
+      }
+    } finally {
+      clearTimeout(timer)
+      abortSignal?.removeEventListener('abort', terminate)
+    }
+  } finally {
+    await streaming?.stop()
+    try {
+      await file.sync()
+    } finally {
+      await file.close()
+    }
+  }
+}
+
+/** A command the user ran themselves (`!cmd`), shaped like pi's `BashResult`. */
+export interface BashResult {
+  /** The output's last BASH_MAX_LINES lines / BASH_MAX_BYTES bytes (stdout and stderr combined) */
+  output: string
+  /** Undefined when the command was cancelled */
+  exitCode: number | undefined
+  cancelled: boolean
+  /** Whether `output` is only the end of the output */
+  truncated: boolean
+  /** File with the whole output, set when `output` is truncated */
+  fullOutputPath?: string
+}
+
+/**
+ * Runs a command for the user (pi's `executeBash`), not as a tool: no permissions, hooks or tool
+ * history. The whole output goes to a file from `results`; the result holds its tail.
+ */
+export async function runBash(
+  command: string,
+  options: {
+    results: ToolResultStore
+    cwd?: string
+    shellPath?: string
+    signal?: AbortSignal
+    /** The output tail while the command runs */
+    onUpdate?: (output: string) => void
+    /** Each new piece of output, all of it, in order */
+    onDelta?: (delta: string) => void
+  },
+): Promise<BashResult> {
+  if (options.shellPath && !existsSync(options.shellPath))
+    throw new Error(
+      `Shell not found: ${options.shellPath}. Fix or remove shellPath in settings.json.`,
+    )
+  const { path, file } = await options.results.createFile()
+  const run = await runShell(command, file, path, options)
+  const { size } = await stat(path)
+  const tail = await readTail(path, size)
+  return {
+    output: tail.text.replace(/\n$/, ''),
+    exitCode: run.cancelled ? undefined : run.exitCode,
+    cancelled: run.cancelled,
+    truncated: tail.truncated,
+    ...(tail.truncated ? { fullOutputPath: path } : {}),
+  }
+}
+
+/**
+ * Sends the output tail to onUpdate and each new piece of output to onDelta while the command runs.
+ * Unlike pi, which reads pipes, the output goes straight to the result file, so the file is polled;
+ * stop() reads once more so onDelta gets everything.
+ */
+function streamOutput(
+  path: string,
+  onUpdate?: (text: string) => void,
+  onDelta?: (delta: string) => void,
 ): { stop(): Promise<void> } {
   let sent = 0
+  const decoder = new TextDecoder()
   let pending: Promise<void> = Promise.resolve()
-  const poll = async () => {
+  const poll = async (final = false) => {
     const { size } = await stat(path)
+    if (size > sent && onDelta) {
+      const delta = decoder.decode(await readRange(path, sent, size - sent), {
+        stream: !final,
+      })
+      if (delta) onDelta(delta)
+    } else if (final && onDelta) {
+      const rest = decoder.decode()
+      if (rest) onDelta(rest)
+    }
     if (size === sent) return
     sent = size
-    const { text } = await readTail(path, size)
-    onUpdate({ content: [{ type: 'text', text }] })
+    // The final read is only for onDelta: the caller gets the tail from the result
+    if (onUpdate && !final) onUpdate((await readTail(path, size)).text)
   }
   let busy = false
   const timer = setInterval(() => {
@@ -183,6 +290,7 @@ function streamTail(
     stop: async () => {
       clearInterval(timer)
       await pending
+      if (onDelta) await poll(true).catch(() => {})
     },
   }
 }

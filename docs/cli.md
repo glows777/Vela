@@ -102,6 +102,8 @@ The screen has, from top to bottom: a header with the session id and loaded exte
 
 Text you send while the agent is running is a steering message: it is inserted after the current step. Alt+Enter queues a follow-up instead, which runs after the task finishes. Slash commands run immediately even while the agent is running.
 
+`!command` runs a shell command yourself, like pi: the output streams into a green block, and the command and its output go to the model as part of your next message. `!!command` runs it without sending it to the model (the block is dim). Both are saved in the session and work while the agent runs (the result is recorded when the run ends, so it never lands between a tool call and its result). Esc cancels the command. These commands don't go through tool permissions: they are yours. The editor border turns green while the input starts with `!`. RPC clients have the same through the `bash` command.
+
 When a project has untrusted configuration, Vela asks once at startup whether to trust it. See [Project trust](settings.md#project-trust).
 
 ### Keybindings
@@ -113,7 +115,7 @@ Vela's own keys:
 | Enter | Send. While running: steer (insert after the current step). |
 | Alt+Enter | While running: queue a follow-up for after the task. When idle: send. |
 | Alt+Up | Move queued messages back into the editor. |
-| Esc | Interrupt the running task; queued messages go back into the editor. Closes the autocomplete menu first if it is open. |
+| Esc | Cancel a running `!` command; otherwise interrupt the running task (queued messages go back into the editor), or clear a `!` input. Closes the autocomplete menu first if it is open. |
 | Shift+Tab | Cycle the thinking level. |
 | Ctrl+L | Open the model picker. |
 | Ctrl+O | Expand or collapse tool output. |
@@ -143,7 +145,7 @@ In pickers and dialogs: Up and Down move, Enter selects, Esc cancels. Keybinding
 
 ### Tool output
 
-Each tool call is a block showing the tool and its key argument, like pi. While `bash` runs, its output streams into the block with the elapsed time; collapsed, the block keeps the last 5 lines and shows how long the command took. `edit_file` shows the diff of its change. Other tools show the first 10 lines of their result. Ctrl+O expands every block. Calls a tool makes through `ctx.executeTool()` are listed inside its block, one line each with ✓ or ✗ and the time taken.
+Each tool call is a block showing the tool and its key argument, like pi. While `bash` runs, its output streams into the block with the elapsed time; collapsed, the block keeps the last 5 lines and shows how long the command took. `edit_file` shows the diff of its change. Other tools show the first 10 lines of their result. Ctrl+O expands every block (and `!` command output, which keeps the last 20 lines collapsed). A resumed session draws its tool blocks again with diffs and nested calls. Calls a tool makes through `ctx.executeTool()` are listed inside its block, one line each with ✓ or ✗ and the time taken.
 
 If the terminal goes away (the window is closed or the SSH connection drops), Vela exits: on SIGHUP it saves and closes the sessions first, and when reading or writing the terminal fails it exits at once with code 129.
 

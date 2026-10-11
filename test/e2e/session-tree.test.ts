@@ -388,3 +388,26 @@ test('navigateTree and fork refuse while a task runs', async () => {
     'not in the session',
   )
 })
+
+test('a `!` command after moving in the tree joins the current branch, and resume() keeps it there', async () => {
+  const t = await twoRounds()
+  const a1 = entryOf(t.session.getEntries(), 'a1')
+  await t.session.navigateTree(a1.id)
+
+  await t.session.executeBash('echo here')
+  expect(t.session.getBranch().at(-1)).toMatchObject({
+    type: 'bash_execution',
+    command: 'echo here',
+    parentId: a1.id,
+  })
+  expect(texts(t.session.messages).at(-1)).toStartWith('Ran `echo here`')
+
+  await t.session.close()
+  const reopened = t.vela.session('default')
+  expect(await reopened.resume()).toBe(true)
+  expect(texts(reopened.messages)).toEqual([
+    'q1',
+    '[{"type":"text","text":"a1"}]',
+    'Ran `echo here`\n```\nhere\n```',
+  ])
+})

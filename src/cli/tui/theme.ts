@@ -55,6 +55,8 @@ export const theme = {
   bold: (text: string) => style(text, { bold: true }),
   italic: (text: string) => style(text, { italic: true }),
   inverse: (text: string) => style(text, { inverse: true }),
+  /** Editor border in bash mode (input starting with `!`), like pi's bashMode color */
+  bashBorder: (text: string) => style(text, { fg: COLORS.green }),
   thinkingBorder: (level: ThinkingLevel) => (text: string) =>
     style(text, { fg: THINKING_COLORS[level] }),
 }

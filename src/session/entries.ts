@@ -71,6 +71,27 @@ export interface SessionMessageEntry extends SessionEntryBase {
   stopReason?: 'aborted' | 'error'
   /** On a tool message: calls each of its tools made through `ctx.executeTool()`, by tool call id. Not sent to the model. */
   nestedCalls?: Record<string, NestedToolCalls>
+  /** On a tool message: each tool's display data (`tool_execution_end`'s `details`), by tool call id. Not sent to the model. */
+  details?: Record<string, unknown>
+}
+
+/**
+ * A command the user ran with `!` / `!!` (pi's `bashExecution` message). It reaches the model as a user
+ * message (`bashExecutionToText`) unless `excludeFromContext` (`!!`).
+ */
+export interface BashExecutionEntry extends SessionEntryBase {
+  type: 'bash_execution'
+  command: string
+  /** The end of the output (see `truncated`) */
+  output: string
+  /** Undefined when the command was cancelled */
+  exitCode?: number
+  cancelled: boolean
+  truncated: boolean
+  /** File with the whole output, when truncated */
+  fullOutputPath?: string
+  /** `!!`: kept in the session, never sent to the model */
+  excludeFromContext?: boolean
 }
 
 /** The session's model changed (`session.setModel()` with a name). */
@@ -165,6 +186,7 @@ export type SessionEntry =
   | LabelEntry
   | CustomEntry
   | CustomMessageEntry
+  | BashExecutionEntry
 
 /** An entry before it gets its place in the log (`id`, `parentId`, `timestamp`); keeps each type's own fields. */
 export type NewEntry<T> = T extends SessionEntry
@@ -182,6 +204,28 @@ export function summaryMessageText(summary: string): string {
 /** Text of the user message that stands for a branch summary in the model context. */
 export function branchSummaryMessageText(summary: string): string {
   return `[Summary of the conversation branch you left]\n${summary}`
+}
+
+/** What the model sees of a `!` command (pi's `bashExecutionToText`). */
+export function bashExecutionToText(
+  entry: Pick<
+    BashExecutionEntry,
+    | 'command'
+    | 'output'
+    | 'exitCode'
+    | 'cancelled'
+    | 'truncated'
+    | 'fullOutputPath'
+  >,
+): string {
+  let text = `Ran \`${entry.command}\`\n`
+  text += entry.output ? `\`\`\`\n${entry.output}\n\`\`\`` : '(no output)'
+  if (entry.cancelled) text += '\n\n(command cancelled)'
+  else if (entry.exitCode !== undefined && entry.exitCode !== 0)
+    text += `\n\nCommand exited with code ${entry.exitCode}`
+  if (entry.truncated && entry.fullOutputPath)
+    text += `\n\n[Output truncated. Full output: ${entry.fullOutputPath}]`
+  return text
 }
 
 /** A unique short entry id (like pi's generateId: 8 hex characters, collision-checked). */
@@ -245,10 +289,42 @@ export function buildSessionPath(
 }
 
 /**
+ * The entries of a branch (root first) the context is built from (like the path pi's `buildSessionContext`
+ * walks): with a compaction, the branch's latest one and the entries it keeps plus everything after it;
+ * otherwise the whole branch. The TUI renders a resumed session from these.
+ */
+export function contextEntries(path: SessionEntry[]): {
+  compaction?: CompactionEntry
+  entries: SessionEntry[]
+} {
+  let compactionIndex = -1
+  path.forEach((entry, index) => {
+    if (entry.type === 'compaction') compactionIndex = index
+  })
+  if (compactionIndex < 0) return { entries: path }
+  const compaction = path[compactionIndex] as CompactionEntry
+  const firstKept =
+    compaction.firstKeptEntryId === compaction.id
+      ? compactionIndex
+      : path.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
+  if (firstKept < 0 || firstKept > compactionIndex)
+    throw new Error(
+      `Compaction entry ${compaction.id} keeps entry ${compaction.firstKeptEntryId}, which is not before it in the session`,
+    )
+  return {
+    compaction,
+    entries: [
+      ...path.slice(firstKept, compactionIndex),
+      ...path.slice(compactionIndex + 1),
+    ],
+  }
+}
+
+/**
  * Rebuilds the model context and settings of the branch ending at `leafId` (default: the last entry), like
  * pi's `buildSessionContext`: the branch's latest compaction summary, then the kept and later entries, with
  * context edits applied. Branch summaries enter as user messages; aborted / failed assistant messages are
- * left out (like pi's transform-messages).
+ * left out, and so are `!!` commands (like pi's transform-messages).
  */
 export function buildSessionContext(
   entries: SessionEntry[],
@@ -263,13 +339,11 @@ export function buildSessionContext(
     custom: new Map(),
     summary: '',
   }
-  let compactionIndex = -1
-  path.forEach((entry, index) => {
+  for (const entry of path) {
     if (entry.type === 'model_change') context.model = entry.model
     else if (entry.type === 'thinking_level_change')
       context.thinkingLevel = entry.thinkingLevel
-    else if (entry.type === 'compaction') compactionIndex = index
-  })
+  }
   // Like pi: the name belongs to the session, not a branch (the latest session_info anywhere)
   for (const entry of entries)
     if (entry.type === 'session_info')
@@ -279,27 +353,14 @@ export function buildSessionContext(
     context.ids.set(message, entry.id)
     context.timestamps.set(message, parseTime(entry.timestamp))
   }
-  let selected: SessionEntry[] = path
-  if (compactionIndex >= 0) {
-    const compaction = path[compactionIndex] as CompactionEntry
+  const { compaction, entries: selected } = contextEntries(path)
+  if (compaction) {
     context.summary = compaction.summary
     context.toolHistoryViewSeq = compaction.toolHistoryViewSeq
-    const firstKept =
-      compaction.firstKeptEntryId === compaction.id
-        ? compactionIndex
-        : path.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
-    if (firstKept < 0 || firstKept > compactionIndex)
-      throw new Error(
-        `Compaction entry ${compaction.id} keeps entry ${compaction.firstKeptEntryId}, which is not before it in the session`,
-      )
     push(
       { role: 'user', content: summaryMessageText(compaction.summary) },
       compaction,
     )
-    selected = [
-      ...path.slice(firstKept, compactionIndex),
-      ...path.slice(compactionIndex + 1),
-    ]
   }
   const edits = new Map<string, ContextEditEntry>()
   for (const entry of selected)
@@ -320,6 +381,8 @@ export function buildSessionContext(
     } else if (entry.type === 'custom_message')
       // Like pi's convertToLlm: the model sees a custom message as a user message
       original = { role: 'user', content: entry.content }
+    else if (entry.type === 'bash_execution' && !entry.excludeFromContext)
+      original = { role: 'user', content: bashExecutionToText(entry) }
     else continue
     const edit = edits.get(entry.id)
     if (edit?.replacement === null) continue
@@ -457,6 +520,16 @@ export function summarizeSession(
   for (const entry of entries) {
     if (entry.timestamp > updatedAt) updatedAt = entry.timestamp
     if (entry.type === 'session_info') name = entry.name?.trim() || undefined
+    // A `!` command counts like a message: a session with only commands can be resumed
+    if (entry.type === 'bash_execution') {
+      messageCount++
+      firstMessage ||=
+        `${entry.excludeFromContext ? '!!' : '!'}${entry.command}`
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 120)
+      continue
+    }
     if (entry.type !== 'message') continue
     messageCount++
     if (firstMessage || entry.message.role !== 'user') continue

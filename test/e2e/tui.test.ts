@@ -7,6 +7,7 @@ import {
   createFauxModel,
   fauxHang,
   fauxStreamError,
+  fauxSummary,
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
@@ -390,6 +391,30 @@ test('custom messages show as a labeled block only with display: true (like pi)'
   expect(screen).not.toContain('Hidden context')
 })
 
+test('a resumed session shows custom messages the same way', async () => {
+  const t = createTestVela()
+  const session = t.vela.session('saved')
+  await session.sendMessage({
+    customType: 'reminder',
+    content: 'Shown reminder',
+    display: true,
+  })
+  await session.sendMessage({
+    customType: 'hidden',
+    content: 'Hidden context',
+    display: false,
+  })
+  await session.close()
+
+  const tui = await startTui(t.vela, { sessionId: 'saved', resume: true })
+  await tui.started
+  await tui.until('Resumed session')
+  const screen = tui.screen()
+  expect(screen).toContain('[reminder]')
+  expect(screen).toContain('Shown reminder')
+  expect(screen).not.toContain('Hidden context')
+})
+
 test('bash output streams into its block while it runs; the block keeps the last lines and the time taken (like pi)', async () => {
   const t = createTestVela({
     responses: [
@@ -503,4 +528,105 @@ test('/copy copies the last answer to the clipboard (like pi)', async () => {
   tui.submit('/copy')
   await tui.until('Copied the last answer to the clipboard')
   expect(copied).toEqual(['The **answer**'])
+})
+
+test('!cmd runs a shell command in its own block and sends the output with the next message; !!cmd does not send it (like pi)', async () => {
+  const t = createTestVela({
+    responses: [(req) => fauxText(`model saw: ${JSON.stringify(req.prompt)}`)],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('!echo vis$((1+1))')
+  await tui.until('vis2')
+  tui.submit('!!echo hid$((2+2)); exit 4')
+  await tui.until('(exit 4)')
+  const screen = tui.screen()
+  expect(screen).toContain('$ echo vis$((1+1))')
+  expect(screen).toContain('hid4')
+
+  tui.submit('hello')
+  await tui.until('model saw')
+  await tui.until(() => !t.vela.session('tui').isRunning)
+  const answer = t.vela.session('tui').messages.at(-1)
+  expect(JSON.stringify(answer)).toContain('vis2')
+  expect(JSON.stringify(answer)).not.toContain('hid4')
+})
+
+test('Esc cancels a running ! command', async () => {
+  const t = createTestVela()
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  tui.submit('!echo waiting; sleep 10')
+  await tui.until('waiting')
+  expect(tui.screen()).toContain('Esc to cancel')
+  tui.terminal.press(KEYS.escape)
+  await tui.until('(cancelled)')
+  expect(t.vela.session('tui').isBashRunning).toBe(false)
+})
+
+test('a resumed session shows edit diffs, nested calls and ! commands again', async () => {
+  const t = createTestVela({
+    files: { 'a.txt': 'one\ntwo\n' },
+    responses: [
+      fauxToolCall('edit_file', {
+        path: 'a.txt',
+        edits: [{ oldText: 'two', newText: 'TWO' }],
+      }),
+      fauxText('edited'),
+      fauxToolCall('runner', {}),
+      fauxText('ran'),
+    ],
+  })
+  t.internals.registry.register({
+    name: 'runner',
+    description: 'Runs other tools',
+    inputSchema: z.object({}),
+    execute: async (_input, context) => {
+      await context!.executeTool!('read_file', { path: 'a.txt' })
+      return 'ok'
+    },
+  })
+  const session = t.vela.session('saved')
+  await session.prompt('edit it')
+  await session.executeBash('echo from-bang')
+  await session.prompt('run')
+  await session.close()
+
+  const tui = await startTui(t.vela, { sessionId: 'saved', resume: true })
+  await tui.started
+  await tui.until('Resumed session')
+  const screen = tui.screen()
+  expect(screen).toContain('+2 TWO')
+  expect(screen).toMatch(/↳ ✓ read_file a\.txt/)
+  expect(screen).toContain('$ echo from-bang')
+  expect(screen).toContain('from-bang')
+})
+
+test('a resumed session shows only the current branch of the tree, with its ! commands and branch summary', async () => {
+  const t = createTestVela({
+    responses: [fauxText('first answer'), fauxText('left answer')],
+    generate: [fauxSummary()],
+  })
+  const session = t.vela.session('saved')
+  await session.prompt('first question')
+  await session.prompt('left question')
+  const first = session
+    .getBranch()
+    .find(
+      (entry) => entry.type === 'message' && entry.message.role === 'assistant',
+    )!
+  await session.navigateTree(first.id, { summarize: true })
+  await session.executeBash('echo on-branch')
+  await session.close()
+
+  const tui = await startTui(t.vela, { sessionId: 'saved', resume: true })
+  await tui.started
+  await tui.until('Resumed session')
+  const screen = tui.screen()
+  expect(screen).toContain('first answer')
+  expect(screen).toContain('Summary of the conversation branch you left')
+  expect(screen).toContain('$ echo on-branch')
+  expect(screen).not.toContain('left answer')
 })
