@@ -189,6 +189,8 @@ const interactiveLogger =
 const logger =
   interactiveLogger?.logger ??
   createConsoleLogger({ debug: env.VELA_DEBUG === '1', stderr: true })
+// Extensions that failed to load (already reported on stderr); --list-models exits 1 when there are any
+const extensionErrors: string[] = []
 const vela = createVela({
   model: recorder?.model ?? chosenModel,
   providers: config.providers,
@@ -217,9 +219,10 @@ const vela = createVela({
     config,
   ),
   // Built-in extensions (memory / rag / web / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
-  extensions: await loadCliExtensions(config, args, (message) =>
-    console.error(message),
-  ),
+  extensions: await loadCliExtensions(config, args, (message) => {
+    extensionErrors.push(message)
+    console.error(message)
+  }),
 })
 
 const exitWith = async (code: number, message: string): Promise<never> => {
@@ -228,19 +231,20 @@ const exitWith = async (code: number, message: string): Promise<never> => {
   process.exit(code)
 }
 
-// --list-models (like pi): extension providers are listed too, so wait for extensions to load
+// --list-models (like pi): extension providers are listed too, so wait for extensions to load.
+// pi exits 0 even when an extension failed to load; Vela still lists the models that did load,
+// but exits 1 so scripts notice (the errors are already on stderr)
 if (args.listModels) {
-  await vela
-    .ready()
-    .catch((error) =>
-      console.error(error instanceof Error ? error.message : error),
-    )
+  await vela.ready().catch(() => {})
+  const list = formatModelList(
+    vela.models(),
+    args.listModels === true ? undefined : args.listModels,
+  )
+  if (!extensionErrors.length) await exitWith(0, list)
+  process.stdout.write(list)
   await exitWith(
-    0,
-    formatModelList(
-      vela.models(),
-      args.listModels === true ? undefined : args.listModels,
-    ),
+    1,
+    `${extensionErrors.length} extension(s) failed to load; the list above may be incomplete\n`,
   )
 }
 

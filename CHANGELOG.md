@@ -29,6 +29,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **`ProviderDefinition.createModel(id, ctx)`** gets a second argument with `ctx.credential()`; providers that ignore it keep working. `ModelRegistry` takes a `CredentialStore` as its second argument.
 - **Without `--model`, `defaultModel` or `OPENAI_API_MODEL_NAME`, Vela picks pi's default model** of the first built-in provider that has a credential (Anthropic, then OpenAI, then OpenRouter), and `createVela()` without `model` does the same, instead of reporting that no model is selected. The picked model is saved with the session (like pi), so resuming it keeps that model.
 - The built-in price table (`PRICE_TABLE`) is gone: prices come from the model catalog or `cost` in `models.json`.
+- **`--list-models` exits with code 1 when an extension failed to load.** The models that did load are still listed and the load errors go to stderr. pi exits 0 here; Vela fails loudly so scripts notice an incomplete list.
 
 ### Fixed
 
@@ -37,6 +38,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - A request that already started running tools is no longer sent again after an error, so tools don't run twice.
 - Interactive mode no longer stays running and spins a CPU after its terminal closes: on SIGHUP it saves and exits even though restoring the terminal fails, and a read or write error on a dead terminal exits at once with code 129, like pi.
 - When a request is retried, the interactive mode keeps the failed attempt's text marked `(response failed)` and shows the retry as a new message, instead of appending the retry to the old text.
+- **The knowledge base no longer mixes vectors from different embedding models.** It records the embedder that built it, and when the configured one differs, ingesting and searching fail with an error naming both instead of returning meaningless scores. Switch back, or run `/rag clear` and ingest again. A knowledge base from 0.1.0 has no record: the configured embedder is assumed, recorded and a warning logged. See [rag](docs/built-in-extensions.md#rag).
 
 ### New Features
 
@@ -64,25 +66,26 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **Extension messages, like pi**: `session.sendMessage({ customType, content, display, details }, { triggerTurn, deliverAs })` adds a custom message the model sees as a user message (`steer`, `followUp` and `nextTurn` delivery as in pi), `session.sendUserMessage(text)` sends input as if typed, and `session.appendEntry(customType, data)` saves extension state. They are on the session because one Vela serves many sessions. Custom messages are saved as `custom_message` entries, carry `custom` on their `message_start` / `message_end` events, and show in the TUI as a `[customType]` block when `display` is true. `before_agent_start` handlers can return `{ message }`. See [Extensions](docs/extensions.md#messages).
 - **New extension events from pi**: `input` (rewrite or handle user input; `PromptOptions.source` says where it came from), `context` (change the messages of each request without touching the history), `before_provider_request` (change the AI SDK call options, including headers), `after_provider_response` (response headers) and `provider_stream_event` (raw provider chunks). `tool_call` and `tool_result` carry `parentToolCallId` for calls made through `ctx.executeTool()`. See [Extensions](docs/extensions.md#intercepting-events).
 - **Tool metadata from pi**: `exposure` adds `model-only`, `codemode` and `hidden` to `direct` and `deferred`; `namespace` groups deferred tools (and is returned by `tool_search` with its `instructions`); `annotations` describe what a tool does. See [Tools](docs/tools.md#deferred-tools-and-tool_search).
-
 - **Interactive mode tool blocks like pi's**: `bash` output streams into its block while it runs, with the elapsed time, and the collapsed block keeps the last 5 lines; `edit_file` shows a colored diff with changed words highlighted; other tools show the first 10 lines; calls made through `ctx.executeTool()` are listed inside the calling tool's block. See [CLI](docs/cli.md#tool-output).
 - `tool_execution_end` has `details`: display data the model doesn't get, such as `edit_file`'s diff (pi's `result.details`). Extension tools set it by returning `new ToolExecutionResult(details, text)` (now exported) instead of a string.
 - **`/copy`** copies the last answer to the clipboard, like pi (system clipboard tools, or OSC 52 over SSH).
 - **`!command` and `!!command`** in interactive mode run a shell command yourself, like pi: `!` sends the command and its output to the model with your next message, `!!` keeps it out; Esc cancels. The SDK has `session.executeBash()` / `abortBash()` and RPC the `bash` / `abort_bash` commands; results are saved as `bash_execution` session entries, and output streams as `bash_execution_update` events. See [CLI](docs/cli.md#interactive-mode).
 - A resumed session in interactive mode shows tool blocks as they were, with `edit_file` diffs and nested calls: tool messages in the session keep each tool's `details`.
 - **`--tools` / `--no-tools` / `--exclude-tools`** (`-t` / `-nt` / `-xt`) choose the tools by name or `*` pattern, like pi; an entry that matches no tool is an error. **`--list-models [search]`** lists the configured models.
-
-### Changed
-
-- Tools no longer share one lock across all sessions: `write_file` / `edit_file` queue per file, `bash` takes no lock, and a `sequential` tool only waits for calls in its own session. A long `bash` in one session no longer holds back other sessions (including channel senders).
-- `bash` returns the last 2,000 lines or 50KB of output (was the last 3,000 characters) and ends with `Command exited with code N`, `Command timed out after N seconds` or `Command aborted` instead of `exit=N`.
-- `read_file` pages default to 2,000 lines and at most 50KB (was 200 lines and 8,000 characters).
 - **Built-in model catalog** generated from pi's (`@earendil-works/pi-ai`, MIT): the built-in providers list their models, and any known model id, built-in or from `models.json`, gets its context window, output limit, price, image input and thinking levels. `bun scripts/update-models.ts` regenerates it. See [Models](docs/models.md#the-model-catalog).
 - **`openrouter` is a built-in provider** (`OPENROUTER_API_KEY`), with reasoning sent as OpenRouter's `reasoning: { effort }`.
 - **`/login` and `/logout`** (like pi): store an API key, or sign in with **Sign in with ChatGPT** (use a ChatGPT Plus/Pro plan in the local terminal, through OpenAI's token sharing for open-source agents) or **OpenRouter** (creates a key). Credentials live in `~/.vela/auth.json` (pi's format, mode 0600) and take precedence over `models.json` and environment variables. OAuth tokens are refreshed before they expire, once across processes. Sign in with ChatGPT is for your own local use: channel sessions (Feishu) refuse it, and its token is only sent to api.openai.com. See [Credentials and /login](docs/models.md#credentials-and-login).
 - Extensions can offer `/login` for their providers (`oauth`, `apiKeyLogin`) and read the credential per request with `ctx.credential()`. The SDK has `createVela({ credentials })`, `fileCredentialStore()`, `memoryCredentialStore()`, `vela.login()`, `vela.logout()` and `vela.loginProviders()`. See [Extensions](docs/extensions.md#registerprovider).
 - **Model switching like pi**: the `/model` picker filters as you type, Ctrl+P / Shift+Ctrl+P cycle through the models in the new `enabledModels` setting (all available models when unset), and RPC gains `cycle_model` and `cycle_thinking_level`. See [Enabled models](docs/settings.md#enabled-models).
 - `session.availableThinkingLevels()` lists the levels the current model supports.
+- **`/rag clear`** deletes every chunk of the knowledge base, and `/rag` shows which embedder built it.
+- `EmbeddingFn` has an optional `id` naming its model (set by `createEmbedder()`), and `createFauxEmbedder()` takes an `id` option.
+
+### Changed
+
+- Tools no longer share one lock across all sessions: `write_file` / `edit_file` queue per file, `bash` takes no lock, and a `sequential` tool only waits for calls in its own session. A long `bash` in one session no longer holds back other sessions (including channel senders).
+- `bash` returns the last 2,000 lines or 50KB of output (was the last 3,000 characters) and ends with `Command exited with code N`, `Command timed out after N seconds` or `Command aborted` instead of `exit=N`.
+- `read_file` pages default to 2,000 lines and at most 50KB (was 200 lines and 8,000 characters).
 
 ## [0.1.0] - 2026-10-09
 

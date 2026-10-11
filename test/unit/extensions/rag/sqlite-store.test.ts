@@ -1,4 +1,8 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { openSqlite } from '../../../../src/extensions/rag/sqlite.ts'
 import { SqliteVectorStore } from '../../../../src/extensions/rag/sqlite-store.ts'
 
 const embedding = Array.from({ length: 128 }, (_, index) => index / 128)
@@ -72,4 +76,93 @@ test('adding a chunk with an existing id replaces it in every table', () => {
   expect(store.keywordSearch('old', 10)).toEqual([])
   expect(store.keywordSearch('new', 10)).toHaveLength(1)
   expect(store.vectorSearch(embedding, 10)).toHaveLength(1)
+})
+
+const tempDirs: string[] = []
+afterAll(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
+})
+const tempDb = () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-rag-'))
+  tempDirs.push(dir)
+  return join(dir, 'knowledge.db')
+}
+
+test('the store records its embedder and refuses vectors from another one', () => {
+  const path = tempDb()
+  const first = new SqliteVectorStore(path, { embedder: 'model-a' })
+  first.add(chunk('a.md', 0, 'alpha'), embedding)
+
+  const other = new SqliteVectorStore(path, { embedder: 'model-b' })
+  expect(other.storedEmbedder()).toBe('model-a')
+  const mismatch =
+    /built with the embedder "model-a", but the configured embedder is "model-b"/
+  expect(() => other.vectorSearch(embedding, 5)).toThrow(mismatch)
+  expect(() => other.add(chunk('b.md', 0, 'beta'), embedding)).toThrow(mismatch)
+  expect(() => other.replaceSource('b.md', [])).toThrow(mismatch)
+  // Keyword search needs no vectors
+  expect(other.keywordSearch('alpha', 5)).toHaveLength(1)
+
+  // Clearing hands the store to the configured embedder, also for later opens
+  other.clear()
+  other.add(chunk('b.md', 0, 'beta'), embedding)
+  expect(new SqliteVectorStore(path, { embedder: 'model-b' }).size()).toBe(1)
+  expect(() =>
+    new SqliteVectorStore(path, { embedder: 'model-a' }).vectorSearch(
+      embedding,
+      5,
+    ),
+  ).toThrow(/built with the embedder "model-b"/)
+})
+
+test('an empty store takes the configured embedder', () => {
+  const path = tempDb()
+  new SqliteVectorStore(path, { embedder: 'model-a' })
+  const store = new SqliteVectorStore(path, { embedder: 'model-b' })
+  expect(store.storedEmbedder()).toBe('model-b')
+  store.add(chunk('a.md', 0, 'alpha'), embedding)
+  expect(store.assumedEmbedder).toBe(false)
+})
+
+test('a store without an embedder record (Vela 0.1.0) assumes the configured one and says so', () => {
+  const path = tempDb()
+  new SqliteVectorStore(path, { embedder: 'model-a' }).add(
+    chunk('a.md', 0, 'alpha'),
+    embedding,
+  )
+  openSqlite(path).exec('DROP TABLE meta')
+  const store = new SqliteVectorStore(path, { embedder: 'model-b' })
+  expect(store.assumedEmbedder).toBe(true)
+  expect(store.storedEmbedder()).toBe('model-b')
+  expect(store.vectorSearch(embedding, 5)).toHaveLength(1)
+  expect(
+    new SqliteVectorStore(path, { embedder: 'model-b' }).assumedEmbedder,
+  ).toBe(false)
+})
+
+test('vectors with the wrong number of dimensions are refused with a clear error', () => {
+  const store = new SqliteVectorStore(':memory:', { embedder: 'small' })
+  expect(() => store.add(chunk('a.md', 0, 'alpha'), [0.1, 0.2])).toThrow(
+    'The embedder "small" returned 2-dimension vectors; the knowledge base stores 128 dimensions',
+  )
+})
+
+test('two open stores on one file (two processes sharing the data dir) never mix embedders', () => {
+  const path = tempDb()
+  // Both open while the file is empty
+  const a = new SqliteVectorStore(path, { embedder: 'model-a' })
+  const b = new SqliteVectorStore(path, { embedder: 'model-b' })
+  b.add(chunk('b.md', 0, 'beta'), embedding)
+  expect(() => a.add(chunk('a.md', 0, 'alpha'), embedding)).toThrow(
+    /built with the embedder "model-b", but the configured embedder is "model-a"/,
+  )
+  expect(a.storedEmbedder()).toBe('model-b')
+
+  // A clear in one store is seen by the other: the empty file belongs to whoever writes next
+  a.clear()
+  expect(() => b.vectorSearch(embedding, 5)).not.toThrow()
+  a.add(chunk('a.md', 0, 'alpha'), embedding)
+  expect(() => b.vectorSearch(embedding, 5)).toThrow(
+    /built with the embedder "model-a"/,
+  )
 })

@@ -120,11 +120,13 @@ A local knowledge base with hybrid search, stored in SQLite.
 
 **Prompt section.** When the knowledge base is not empty, the system prompt says how many chunks it holds, lists the sources, and points the model to `rag_search`.
 
-**Commands.** `/rag` shows the number of chunks and the sources. `/rag ingest <path>` ingests a file.
+**Commands.** `/rag` shows the number of chunks, the sources and the embedder. `/rag ingest <path>` ingests a file. `/rag clear` deletes every chunk.
 
 **Embeddings.** rag needs an embedding function. With the CLI, set `extensionConfig.rag.embedding` with `baseUrl`, `model` and `apiKey` (or `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL` and `EMBEDDING_MODEL_KEY`); any OpenAI-compatible embeddings API works. Vectors have 128 dimensions, so the model must support the `dimensions` parameter. If any of the three values is missing, rag logs a message and registers nothing.
 
 With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, apiKey }) })`. An embedder is any function `(texts: string[], signal?: AbortSignal) => Promise<number[][]>` that returns 128-dimension vectors. For offline tests, use `createFauxEmbedder()` from `@glows777/vela/testing`.
+
+**Changing the embedder.** Vectors from different embedding models can't be compared, so the knowledge base records which embedder built it: the function's `id` property. `createEmbedder()` sets it to `<model> at <baseUrl>`, `createFauxEmbedder()` to `faux` (or its `id` option), and a function without one is recorded as `custom`. When the configured embedder differs from the recorded one, `rag_ingest`, `rag_search` and `/rag ingest` fail with an error naming both, and `/rag` shows the mismatch. Switch back, or run `/rag clear` and ingest the documents again. An empty knowledge base takes whichever embedder is configured. A knowledge base built before Vela 0.2.0 has no record: Vela assumes the configured embedder, records it and logs a warning.
 
 **How it works.**
 

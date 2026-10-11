@@ -3,10 +3,14 @@ import { embedMany } from 'ai'
 
 const DIMS = 128
 
-export type EmbeddingFn = (
+/**
+ * Turns texts into 128-dimension vectors. `id` names the model behind it (`createEmbedder` sets it):
+ * the knowledge base records it and refuses to mix vectors from different embedders.
+ */
+export type EmbeddingFn = ((
   texts: string[],
   signal?: AbortSignal,
-) => Promise<number[][]>
+) => Promise<number[][]>) & { readonly id?: string }
 
 export function createEmbedder({
   modelId,
@@ -17,7 +21,7 @@ export function createEmbedder({
   apiKey: string
   url: string
 }): EmbeddingFn {
-  return async (texts: string[], signal?: AbortSignal) => {
+  const fn = async (texts: string[], signal?: AbortSignal) => {
     const model = createOpenAI({
       baseURL: url,
       apiKey,
@@ -30,6 +34,7 @@ export function createEmbedder({
     })
     return embeddings
   }
+  return Object.assign(fn, { id: `${modelId} at ${url}` })
 }
 
 // Cached vectors are only valid for the embedder that produced them, so each

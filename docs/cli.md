@@ -35,7 +35,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--tools`, `-t <tools>` | Enable only these tools: a comma-separated list of names or `*` patterns (`read_*`), repeatable. Every other tool, built-in or from an extension, is off. |
 | `--no-tools`, `-nt` | Start with no tools; `--tools` still enables the ones it names. |
 | `--exclude-tools`, `-xt <tools>` | Turn these tools off (names or `*` patterns), after `--tools`. |
-| `--list-models [search]` | Print the models listed in `models.json` and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. |
+| `--list-models [search]` | Print the models listed in `models.json` and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. If an extension failed to load, the models that did load are still listed, but the exit code is 1. |
 | `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
 | `--no-approve` | Do not trust them for this run, without saving the decision. |
 | `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
@@ -207,6 +207,7 @@ Two more kinds of `/` input are expanded by the session itself, so they also wor
 | `/dream` | `memory` | Ask the model to clean up the memory store (merge duplicates, delete stale entries). |
 | `/rag` | `rag` | Show the knowledge base size and sources. |
 | `/rag ingest <path>` | `rag` | Ingest a document into the knowledge base. |
+| `/rag clear` | `rag` | Delete every chunk, for example after changing the embedding model. |
 
 Extension commands run only in sessions with the `owner` role. Other extensions add their own; `/extensions` lists them. See [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md).
 
