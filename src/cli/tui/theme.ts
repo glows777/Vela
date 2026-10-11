@@ -29,6 +29,7 @@ const COLORS = {
   toolSuccessBg: c(158, 46, 25),
   toolErrorBg: c(19, 54, 25),
   selectedBg: c(233, 41, 24),
+  customMessageBg: c(295, 42, 24),
 } satisfies Record<string, Color>
 
 /** Editor border color follows the thinking level (like pi) */

@@ -17,7 +17,11 @@ import type {
 } from '../session/tool-history.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 
-/** Internal tool return envelope: preserve native data separately from model-facing text. */
+/**
+ * What a tool can return to keep structured data apart from the text the model gets (like pi's
+ * `{ content, details }`): the model sees `text`; `value` is kept in the tool history and is the
+ * `details` of `tool_execution_end` (display data for UIs). `execution.isError` makes the call an error result.
+ */
 export class ToolExecutionResult {
   constructor(
     readonly value: unknown,
@@ -462,6 +466,9 @@ export class ToolRegistry {
     const hookContext = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
+      ...(options.parentToolCallId === undefined
+        ? {}
+        : { parentToolCallId: options.parentToolCallId }),
       emit: (event: Parameters<VelaEventListener>[0]) => this.onEvent?.(event),
     }
     if (pipeline) {
