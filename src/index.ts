@@ -107,6 +107,7 @@ export {
   memorySessionStorage,
   type SessionStorage,
 } from './session/storage.ts'
+export type { ExecutionMetadata } from './session/tool-history.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export type {
   ExecuteToolOptions,
@@ -118,6 +119,7 @@ export type {
   ToolExposure,
   ToolNamespace,
 } from './tools/registry.ts'
+export { ToolExecutionResult } from './tools/registry.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'
 export {

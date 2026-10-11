@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { ExtensionAPI, VelaSession } from '@glows777/vela'
 import { z } from 'zod'
+import { ToolExecutionResult } from '../../src/index.ts'
 import {
   type FauxRequest,
   fauxText,
@@ -442,4 +443,40 @@ test('tool_call and tool_result carry parentToolCallId for calls made through ct
     ['result', 'read_file', outerId],
     ['result', 'ext_outer', undefined],
   ])
+})
+
+test('an extension tool returning ToolExecutionResult gives the model its text and UIs its details', async () => {
+  function ext(vela: ExtensionAPI) {
+    vela.registerTool({
+      name: 'count',
+      description: 'Counts',
+      inputSchema: z.object({ fail: z.boolean() }),
+      execute: async ({ fail }: { fail: boolean }) =>
+        fail
+          ? new ToolExecutionResult({ n: 0 }, 'Nothing to count', {
+              isError: true,
+            })
+          : new ToolExecutionResult({ n: 3 }, 'Counted 3'),
+    })
+  }
+  const t = createTestVela({
+    extensions: [ext],
+    responses: [
+      fauxToolCall('ext_count', { fail: false }),
+      fauxToolCall('ext_count', { fail: true }),
+      fauxText('done'),
+    ],
+  })
+  await t.run('Count')
+  const [ok, failed] = t.eventsOf('tool_execution_end')
+  expect(ok).toMatchObject({
+    isError: false,
+    result: 'Counted 3',
+    details: { n: 3 },
+  })
+  // An error result carries no details (like the built-in tools)
+  expect(failed).toMatchObject({ isError: true })
+  expect(failed!.details).toBeUndefined()
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('Counted 3')
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain('"n":3')
 })

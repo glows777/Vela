@@ -4,12 +4,14 @@ import { join } from 'node:path'
 import {
   BUILTIN_EXTENSIONS,
   extensionConfigFromEnv,
+  formatModelList,
   HELP,
   legacyDataHint,
   loadCliExtensions,
   packageVersion,
   parseArgs,
   resolveTrust,
+  selectTools,
 } from '../../../src/cli/setup.ts'
 import { loadConfig } from '../../../src/config/index.ts'
 import { createFauxModel, fauxText } from '../../../src/testing/faux.ts'
@@ -46,6 +48,8 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     approve: true,
     appendSystemPrompt: [],
     noContextFiles: false,
+    noTools: false,
+    excludeTools: [],
   })
   expect(
     parseArgs([
@@ -313,4 +317,81 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
       builtins: Object.keys(BUILTIN_EXTENSIONS),
     }),
   ).toThrow('Unknown built-in extension builtin:supabase')
+})
+
+test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (like pi)', () => {
+  const args = parseArgs([
+    '-t',
+    'read_file, grep',
+    '--tools',
+    'edit_*',
+    '-xt',
+    'grep',
+    '--list-models',
+    'son',
+  ])
+  expect(args).toMatchObject({
+    tools: ['read_file', 'grep', 'edit_*'],
+    excludeTools: ['grep'],
+    listModels: 'son',
+    messages: [],
+  })
+  expect(parseArgs(['--list-models', '-p']).listModels).toBe(true)
+  expect(parseArgs(['-nt']).noTools).toBe(true)
+
+  const all = [
+    'read_file',
+    'write_file',
+    'edit_file',
+    'bash',
+    'grep',
+    'web_search',
+  ]
+  expect(selectTools(all, args)).toEqual(['read_file', 'edit_file'])
+  expect(
+    selectTools(all, { noTools: false, excludeTools: ['bash', 'web_*'] }),
+  ).toEqual(['read_file', 'write_file', 'edit_file', 'grep'])
+  expect(selectTools(all, { noTools: true, excludeTools: [] })).toEqual([])
+  expect(selectTools(all, { noTools: false, excludeTools: [] })).toBeUndefined()
+  // A typo fails loudly instead of leaving a tool on or off
+  expect(() =>
+    selectTools(all, {
+      tools: ['read'],
+      noTools: false,
+      excludeTools: ['nope*'],
+    }),
+  ).toThrow('Unknown tools: read, nope*. Available: read_file')
+})
+
+test('--list-models prints the configured models sorted, with a fuzzy search (like pi)', () => {
+  const models = [
+    {
+      provider: 'openai',
+      id: 'gpt-x',
+      ref: 'openai/gpt-x',
+      contextWindow: 400_000,
+      reasoning: true,
+    },
+    {
+      provider: 'anthropic',
+      id: 'sonnet',
+      ref: 'anthropic/sonnet',
+      contextWindow: 1_000_000,
+      reasoning: false,
+    },
+    { provider: 'anthropic', id: 'haiku', ref: 'anthropic/haiku' },
+  ]
+  expect(formatModelList(models)).toBe(
+    [
+      'provider   model   context  thinking',
+      'anthropic  haiku   -        -',
+      'anthropic  sonnet  1M       no',
+      'openai     gpt-x   400K     yes',
+      '',
+    ].join('\n'),
+  )
+  expect(formatModelList(models, 'sonn')).toContain('sonnet')
+  expect(formatModelList(models, 'sonn')).not.toContain('haiku')
+  expect(formatModelList(models, 'zzz')).toBe('No models matching "zzz"\n')
+  expect(formatModelList([])).toContain('No models configured')
 })

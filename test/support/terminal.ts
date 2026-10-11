@@ -66,6 +66,7 @@ export async function startTui(
     resume?: boolean
     pick?: boolean
     newSessionId?: () => string
+    copyToClipboard?: (text: string) => Promise<void>
   } = {},
 ) {
   const terminal = new FakeTerminal()
@@ -78,6 +79,7 @@ export async function startTui(
     pick: options.pick ?? false,
     newSessionId: options.newSessionId ?? (() => `tui-new-${++ids}`),
     configure: () => true,
+    copyToClipboard: options.copyToClipboard,
     onExit: async () => {
       exited = true
     },
