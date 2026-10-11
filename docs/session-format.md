@@ -50,6 +50,8 @@ Every other line is an entry. All entries have pi's base fields:
 | `session_info` | `name?` | The display name (`session.setName()`, `/name`); no `name` clears it |
 | `compaction` | `summary`, `firstKeptEntryId`, `tokensBefore`, `toolHistoryViewSeq?` | Earlier history was summarized. The model context becomes the summary followed by the messages from `firstKeptEntryId` on (that entry is before the compaction; when it is the compaction itself, nothing was kept) and everything after the compaction. `tokensBefore` is the estimated context size before the summary |
 | `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
+| `custom_message` | `customType`, `content`, `display`, `details?` | pi's custom message: an extension's `session.sendMessage()`. The model context gets it as a user message with `content` (a string or AI SDK text / image parts); `display` and `details` are for UIs and the extension, never sent to the model |
+| `custom` | `customType`, `data?` | pi's custom entry: extension state from `session.appendEntry()`. Not part of the model context |
 
 Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
@@ -57,7 +59,7 @@ Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
 `resume()` rebuilds the model context like pi's `buildSessionContext`:
 
-1. Take the latest `compaction` entry, if any: the context starts with its summary message, then the `message` entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, all `message` entries.
+1. Take the latest `compaction` entry, if any: the context starts with its summary message, then the `message` and `custom_message` entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, all of them. A `custom_message` becomes a user message.
 2. Apply the `context_edit` entries to their targets.
 3. Leave out messages with a `stopReason`.
 

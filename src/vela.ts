@@ -290,13 +290,7 @@ export function createVela(options: VelaOptions = {}): Vela {
           skillLoader.expand(text) ??
           expandPromptTemplate(text, promptTemplates) ??
           text,
-        extensions: {
-          ready: runner.ready,
-          sessionStart: (s) => runner.sessionStart(s),
-          sessionShutdown: (s) => runner.sessionShutdown(s),
-          beforeAgentStart: (s, prompt) => runner.beforeAgentStart(s, prompt),
-          runCommand: (s, text, signal) => runner.runCommand(s, text, signal),
-        },
+        extensions: runner,
         forward: (event, sessionId) => {
           for (const listener of listeners) listener(event, sessionId)
           const source = sessions.get(sessionId)

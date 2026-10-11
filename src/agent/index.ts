@@ -36,6 +36,11 @@ interface AgentLoopParameter {
   tokenTracker: TokenTracker
   prepareContext?: (request: RequestSnapshot) => Promise<void>
   /**
+   * Called before every model request, after `prepareContext` (the extension `context` event, like pi): returns
+   * the messages this request sends. The history in `messages` is not changed.
+   */
+  transformContext?: (messages: ModelMessage[]) => Promise<ModelMessage[]>
+  /**
    * Called once per step when the provider rejects the request because the context is too long (like pi's
    * overflow recovery): compacts the history, then the step is sent again. A second overflow fails the loop.
    */
@@ -49,15 +54,15 @@ interface AgentLoopParameter {
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   /**
    * Takes queued steer messages (like pi's getSteeringMessages): called once after each step's tools
-   * finish and before the next model request; results are appended as user messages. If the model
+   * finish and before the next model request; the messages are appended to the history. If the model
    * was about to stop and steer messages arrive, the loop keeps going.
    */
-  takeSteering?: () => string[]
+  takeSteering?: () => ModelMessage[]
   /**
    * Takes queued followUp messages (like pi's getFollowUpMessages): called when the model is about to
-   * stop (no tool calls, no steer); results run as user messages in the same loop.
+   * stop (no tool calls, no steer); the messages run in the same loop.
    */
-  takeFollowUp?: () => string[]
+  takeFollowUp?: () => ModelMessage[]
   /** Messages already added for this loop (e.g. the user input); agent_end reports them plus the loop's own. */
   newMessages?: ModelMessage[]
   /** Called for every message the loop adds to `messages` (the session appends it to its log). */
@@ -101,6 +106,7 @@ export const agentLoop = async ({
   messages,
   tokenTracker,
   prepareContext,
+  transformContext,
   compactOnOverflow,
   abortSignal,
   onEvent,
@@ -153,10 +159,14 @@ export const agentLoop = async ({
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
+      let requestMessages = transformContext
+        ? await transformContext(messages)
+        : messages
+      abortSignal?.throwIfAborted()
       if (
         estimateRequestTokens(
           { ...request, systemPrompt: inferenceSystem },
-          messages,
+          requestMessages,
         ) > limits.maxInputTokens
       )
         throw new Error(
@@ -186,7 +196,7 @@ export const agentLoop = async ({
             ...withPromptCache({
               system: inferenceSystem,
               tools: request.tools,
-              messages,
+              messages: requestMessages,
             }),
             maxRetries: 0, // No retries inside streamText; the loop below handles retries
             ...(reasoning ? { reasoning } : {}),
@@ -258,6 +268,7 @@ export const agentLoop = async ({
               }
               case 'tool-error': {
                 step.endBeforeResults()
+                toolRegistry.takeDetails(part.toolCallId)
                 step.result(part, { error: part.error })
                 await toolRegistry.recordRejection(
                   part.toolName,
@@ -270,7 +281,10 @@ export const agentLoop = async ({
               }
               case 'tool-result': {
                 step.endBeforeResults()
-                step.result(part, { output: part.output })
+                step.result(part, {
+                  output: part.output,
+                  details: toolRegistry.takeDetails(part.toolCallId),
+                })
                 break
               }
               case 'finish-step':
@@ -312,6 +326,10 @@ export const agentLoop = async ({
             compactedForOverflow = true
             try {
               await compactOnOverflow(abortSignal)
+              // The compacted history is sent again through the context handlers
+              requestMessages = transformContext
+                ? await transformContext(messages)
+                : messages
             } catch (compactError) {
               endTurnEmpty()
               abortSignal?.throwIfAborted()
@@ -423,7 +441,7 @@ export const agentLoop = async ({
       // followUp is checked only when the loop would otherwise end (like pi)
       let queued = takeSteering?.() ?? []
       if (!needToolCall && queued.length === 0) queued = takeFollowUp?.() ?? []
-      for (const text of queued) add({ role: 'user', content: text })
+      for (const message of queued) add(message)
       if (!needToolCall && queued.length === 0) {
         endReason = 'done'
         break
@@ -474,6 +492,8 @@ export const agentLoop = async ({
     step.endInterrupted(stopReason, errorMessage)
     const assistant = step.snapshot({ complete: step.complete })
     step.closeOpenCalls(openCallResult)
+    // A call that finished after the stream stopped never reached its tool-result: drop its details
+    for (const call of step.toolCalls) toolRegistry.takeDetails(call.toolCallId)
     const toolMessage = step.toolMessage()
     if (!step.complete && !step.toolsStarted) {
       if (assistant.content.length) onInterrupted?.(assistant, stopReason)

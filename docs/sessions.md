@@ -70,7 +70,7 @@ When the estimate reaches `microcompactThreshold`, Vela folds old tool results: 
 - The five most recent tool calls are kept as they are.
 - Failed or timed-out results, and failed bash commands, are kept. A folded successful `bash` result keeps its `exit=0` line.
 
-Microcompaction is applied only if it saves at least `minMicroSavings` tokens and brings the request below `summaryThreshold`. It emits a `context` event with `action: 'micro'`. Each changed tool message is recorded as a `context_edit` entry (pi's context edit); the original output stays in the session file. Because it changes messages only from the oldest ones forward, most of the cached prompt prefix survives.
+Microcompaction is applied only if it saves at least `minMicroSavings` tokens and brings the request below `summaryThreshold`. It emits a `context_prepare` event with `action: 'micro'`. Each changed tool message is recorded as a `context_edit` entry (pi's context edit); the original output stays in the session file. Because it changes messages only from the oldest ones forward, most of the cached prompt prefix survives.
 
 ### Summary
 
