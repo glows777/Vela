@@ -629,7 +629,9 @@ export class VelaSession {
     const target = this.store.getEntry(targetId)
     if (!target) throw new Error(`Entry ${targetId} is not in the session`)
     const oldLeafId = this.store.getLeafId()
-    if (targetId === oldLeafId) return { cancelled: false }
+    const isUser = target.type === 'message' && target.message.role === 'user'
+    // Selecting a user message moves to its parent, so only another entry at the leaf is a no-op
+    if (targetId === oldLeafId && !isUser) return { cancelled: false }
     return this.exclusive('navigate the session tree', async (signal) => {
       await this.start()
       const oldBranch = this.store.getBranch(oldLeafId)
@@ -681,7 +683,7 @@ export class VelaSession {
       }
       let newLeafId: string | null = targetId
       let editorText: string | undefined
-      if (target.type === 'message' && target.message.role === 'user') {
+      if (isUser) {
         newLeafId = target.parentId
         editorText = contentText(target.message.content)
       }
@@ -774,9 +776,6 @@ export class VelaSession {
    * The new session records this one as `parentSession`. Throws while running.
    */
   async fork(entryId: string, options: ForkOptions = {}): Promise<ForkResult> {
-    if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    if (this.busy.locked)
-      throw new Error('A task is already running; fork after it finishes')
     const position = options.position ?? 'before'
     const entry = this.store.getEntry(entryId)
     if (!entry) throw new Error(`Entry ${entryId} is not in the session`)
@@ -788,34 +787,52 @@ export class VelaSession {
       leafId = entry.parentId
       selectedText = contentText(entry.message.content)
     }
-    await this.start()
-    if (await this.deps.extensions.beforeFork(this, entryId, position))
-      return { cancelled: true }
-    const branch = leafId === null ? [] : this.store.getBranch(leafId)
-    const session = this.deps.openSession(options.sessionId ?? newSessionId(), {
-      ...this.options,
-      role: this.role,
-      model: this.modelChoice,
-      thinkingLevel: this.thinking,
-      autoCompaction: this.autoCompaction,
+    // Holds the run lock so no prompt appends to this session (or its tool history) while it is copied
+    return this.exclusive('fork', async () => {
+      await this.start()
+      if (await this.deps.extensions.beforeFork(this, entryId, position))
+        return { cancelled: true }
+      const branch = leafId === null ? [] : this.store.getBranch(leafId)
+      const session = this.deps.openSession(
+        options.sessionId ?? newSessionId(),
+        {
+          ...this.options,
+          role: this.role,
+          model: this.modelChoice,
+          thinkingLevel: this.thinking,
+          autoCompaction: this.autoCompaction,
+        },
+      )
+      try {
+        await session.seedFrom(this, branch)
+      } catch (error) {
+        await session.close()
+        throw error
+      }
+      return {
+        cancelled: false,
+        session,
+        ...(selectedText === undefined ? {} : { selectedText }),
+      }
     })
-    try {
-      await session.seedFrom(this, branch)
-    } catch (error) {
-      await session.close()
-      throw error
-    }
-    return {
-      cancelled: false,
-      session,
-      ...(selectedText === undefined ? {} : { selectedText }),
-    }
   }
 
   /** Copies the current branch into a new session (like pi's /clone, a fork at the leaf). */
   clone(options: Omit<ForkOptions, 'position'> = {}): Promise<ForkResult> {
     const leafId = this.store.getLeafId()
-    if (!leafId) return Promise.reject(new Error('Nothing to clone yet'))
+    // Setup entries (model, thinking level) alone are not a conversation to copy
+    const hasConversation = this.store
+      .getBranch()
+      .some(
+        (entry) =>
+          entry.type === 'custom_message' ||
+          entry.type === 'bash_execution' ||
+          (entry.type === 'message' &&
+            (entry.message.role === 'user' ||
+              entry.message.role === 'assistant')),
+      )
+    if (!leafId || !hasConversation)
+      return Promise.reject(new Error('Nothing to clone yet'))
     return this.fork(leafId, { ...options, position: 'at' })
   }
 

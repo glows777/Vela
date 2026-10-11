@@ -411,3 +411,44 @@ test('a `!` command after moving in the tree joins the current branch, and resum
     'Ran `echo here`\n```\nhere\n```',
   ])
 })
+
+test('a fork holds the run lock: a prompt sent while it copies the branch is refused', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const slowFork: VelaExtension = (vela) => {
+    vela.on('session_before_fork', async () => {
+      await gate
+    })
+  }
+  const t = await twoRounds({ extensions: [slowFork] })
+  const q2 = entryOf(t.session.getEntries(), 'q2')
+
+  const forking = t.session.fork(q2.id, { sessionId: 'locked' })
+  await Bun.sleep(10)
+  expect(t.session.isRunning).toBe(true)
+  await expect(t.session.prompt('meanwhile')).rejects.toThrow(
+    'A task is already running',
+  )
+  release()
+  const { session } = await forking
+  expect(t.session.isRunning).toBe(false)
+  expect(texts(session!.messages)).toEqual([
+    'q1',
+    '[{"type":"text","text":"a1"}]',
+  ])
+})
+
+test('selecting the leaf when it is a user message still moves before it; clone needs a conversation', async () => {
+  const t = await twoRounds()
+  await expect(
+    t.vela.session('empty').clone({ sessionId: 'empty-copy' }),
+  ).rejects.toThrow('Nothing to clone yet')
+
+  t.session.append({ role: 'user', content: 'q3' })
+  const q3 = t.session.getLeafId()!
+  const result = await t.session.navigateTree(q3)
+  expect(result).toEqual({ editorText: 'q3', cancelled: false })
+  expect(texts(t.session.messages)).not.toContain('q3')
+})
