@@ -21,12 +21,15 @@ import type { ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type { SessionUI } from '../extensions/types.ts'
 import { THINKING_LEVELS, type ThinkingLevel } from '../models/index.ts'
+import type { SessionEntry } from '../session/entries.ts'
+import { contextEntries, summaryMessageText } from '../session/entries.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { copyToClipboard } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
 import {
   AssistantMessage,
+  BashExecution,
   CustomMessageBlock,
   notice,
   sanitize,
@@ -94,7 +97,8 @@ const HOTKEYS = [
   'Enter send; while running, Enter = steer (inserted after the current step)',
   'Alt+Enter while running, queue a follow-up (after the task finishes)',
   'Alt+Up move queued messages back to the editor',
-  'Esc interrupt (queued messages go back to the editor)',
+  'Esc interrupt (queued messages go back to the editor), or cancel a ! command',
+  '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',
   'Shift+Tab cycle thinking level · Ctrl+L select model',
   'Ctrl+O expand / collapse tool output · Ctrl+T show / hide thinking',
   'Ctrl+C clear editor, twice to exit · Ctrl+D exit when editor is empty',
@@ -122,6 +126,8 @@ export class InteractiveMode {
 
   private readonly header = new Container()
   private readonly chat = new Container()
+  /** `!` commands run while the agent works; they move to the chat when it stops, where they are recorded (like pi) */
+  private readonly pendingBash = new Container()
   private readonly pending = new Container()
   private readonly status = new Container()
   private readonly widgets = new Container()
@@ -135,6 +141,7 @@ export class InteractiveMode {
   private readonly tools = new Map<string, ToolBlock>()
   private readonly allTools: ToolBlock[] = []
   private readonly allAssistant: AssistantMessage[] = []
+  private readonly allBash: BashExecution[] = []
   private toolsExpanded = false
   private hideThinking = false
   private lastCtrlC = 0
@@ -184,6 +191,7 @@ export class InteractiveMode {
     for (const child of [
       this.header,
       this.chat,
+      this.pendingBash,
       this.pending,
       this.status,
       this.widgets,
@@ -291,7 +299,7 @@ export class InteractiveMode {
     const modelOk = this.options.configure(session)
     this.renderHeader(modelOk)
     if (resumed) {
-      this.renderHistory(session.messages)
+      this.renderHistory(session.getEntries())
       this.addNotice(
         `Resumed session ${session.name ?? session.id}, ${session.messages.length} messages`,
         'dim',
@@ -347,9 +355,11 @@ export class InteractiveMode {
   private resetChat(): void {
     for (const block of this.allTools) block.stop()
     this.chat.clear()
+    this.pendingBash.clear()
     this.tools.clear()
     this.allTools.length = 0
     this.allAssistant.length = 0
+    this.allBash.length = 0
     this.current = undefined
     this.stopLoader()
   }
@@ -377,9 +387,56 @@ export class InteractiveMode {
     this.header.addChild(new Text(lines.join('\n'), 1, 0))
   }
 
-  /** Render history when resuming a session */
-  private renderHistory(messages: ModelMessage[]): void {
-    for (const message of messages) this.renderMessage(message, true)
+  /**
+   * Render history when resuming a session (like pi, from the session's entries): the summary and what
+   * the model still sees, with the original tool output, edit diffs, nested calls, `!` commands and custom messages.
+   */
+  private renderHistory(entries: SessionEntry[]): void {
+    const { compaction, entries: shown } = contextEntries(entries)
+    if (compaction)
+      this.renderMessage({
+        role: 'user',
+        content: summaryMessageText(compaction.summary),
+      })
+    for (const entry of shown) {
+      if (entry.type === 'bash_execution') {
+        this.addBash(entry.command, !!entry.excludeFromContext).setResult(entry)
+        this.current = undefined
+        continue
+      }
+      if (entry.type === 'custom_message') {
+        this.renderMessage({ role: 'user', content: entry.content }, true, {
+          customType: entry.customType,
+          display: entry.display,
+        })
+        continue
+      }
+      if (entry.type !== 'message' || entry.stopReason) continue
+      const { message } = entry
+      if (message.role !== 'tool') {
+        this.renderMessage(message, true)
+        continue
+      }
+      for (const part of message.content) {
+        if (part.type !== 'tool-result') continue
+        const block = this.tools.get(part.toolCallId)
+        if (!block) continue
+        for (const call of entry.nestedCalls?.[part.toolCallId]?.calls ?? []) {
+          block.addNested(call.id, call.name, call.arguments)
+          if (call.status !== 'unfinished')
+            block.setNestedResult(
+              call.id,
+              call.status === 'error',
+              call.durationMs,
+            )
+        }
+        block.setResult(
+          part.output,
+          part.output.type.startsWith('error'),
+          entry.details?.[part.toolCallId],
+        )
+      }
+    }
     this.current = undefined
   }
 
@@ -510,6 +567,7 @@ export class InteractiveMode {
         break
       case 'agent_settled':
         this.stopLoader()
+        this.movePendingBash()
         break
       case 'queue_update':
         this.updatePending()
@@ -584,12 +642,6 @@ export class InteractiveMode {
           this.addTool(part.toolCallId, part.toolName, part.input)
         }
       }
-    } else if (message.role === 'tool') {
-      for (const part of message.content)
-        if (part.type === 'tool-result')
-          this.tools
-            .get(part.toolCallId)
-            ?.setResult(part.output, part.output.type.startsWith('error'))
     }
   }
 
@@ -609,6 +661,54 @@ export class InteractiveMode {
     this.tools.set(id, block)
     this.allTools.push(block)
     this.chat.addChild(block)
+  }
+
+  private addBash(
+    command: string,
+    excludeFromContext: boolean,
+    container: Container = this.chat,
+  ): BashExecution {
+    const block = new BashExecution(
+      command,
+      excludeFromContext,
+      this.toolsExpanded,
+    )
+    this.allBash.push(block)
+    container.addChild(block)
+    return block
+  }
+
+  /** The agent stopped: `!` blocks run meanwhile go to the chat, where their results are now recorded */
+  private movePendingBash(): void {
+    for (const child of [...this.pendingBash.children])
+      this.chat.addChild(child)
+    this.pendingBash.clear()
+  }
+
+  /** `!cmd` / `!!cmd` (like pi): runs the command; its output goes to the model with the next message unless `!!` */
+  private async runBash(command: string, excludeFromContext: boolean) {
+    const session = this.session
+    const block = this.addBash(
+      command,
+      excludeFromContext,
+      session.isRunning ? this.pendingBash : this.chat,
+    )
+    this.current = undefined
+    this.tui.requestRender()
+    try {
+      const result = await session.executeBash(command, {
+        excludeFromContext,
+        onUpdate: (output) => {
+          block.update(output)
+          this.tui.requestRender()
+        },
+      })
+      block.setResult(result)
+    } catch (error) {
+      block.setFailed()
+      this.addNotice(`Shell command failed: ${errorMessage(error)}`, 'error')
+    }
+    this.tui.requestRender()
   }
 
   /** The top-level block a nested call belongs to: nested ids are `<parent>/<n>`, at any depth */
@@ -688,7 +788,10 @@ export class InteractiveMode {
   }
 
   private updateBorder(): void {
-    this.editor.borderColor = theme.thinkingBorder(this.session.thinkingLevel)
+    // Bash mode (input starts with `!`) has its own border color, like pi
+    this.editor.borderColor = this.editor.getText().trimStart().startsWith('!')
+      ? theme.bashBorder
+      : theme.thinkingBorder(this.session.thinkingLevel)
     this.tui.requestRender()
   }
 
@@ -697,9 +800,19 @@ export class InteractiveMode {
   private setupKeys(): void {
     const { editor } = this
     editor.onSubmit = (text) => void this.submit(text)
+    let bashMode = false
+    editor.onChange = (text) => {
+      const next = text.trimStart().startsWith('!')
+      if (next === bashMode) return
+      bashMode = next
+      this.updateBorder()
+    }
     const actions = editor.actions
     actions.set('interrupt', () => {
-      if (this.session.isRunning) this.restoreQueue({ abort: true })
+      // Like pi: a running `!` command first, then the agent, then leave bash mode
+      if (this.session.isBashRunning) this.session.abortBash()
+      else if (this.session.isRunning) this.restoreQueue({ abort: true })
+      else if (editor.getText().trimStart().startsWith('!')) editor.setText('')
     })
     actions.set('dequeue', () => {
       if (!this.restoreQueue()) this.addNotice('No queued messages', 'dim')
@@ -736,7 +849,8 @@ export class InteractiveMode {
     actions.set('selectModel', () => void this.selectModel())
     actions.set('expandTools', () => {
       this.toolsExpanded = !this.toolsExpanded
-      for (const block of this.allTools) block.setExpanded(this.toolsExpanded)
+      for (const block of [...this.allTools, ...this.allBash])
+        block.setExpanded(this.toolsExpanded)
       this.chat.invalidate()
       this.tui.requestRender()
     })
@@ -788,6 +902,22 @@ export class InteractiveMode {
     if (!text) return
     this.editor.addToHistory(text)
     this.editor.setText('')
+    if (text.startsWith('!')) {
+      const excluded = text.startsWith('!!')
+      const command = text.slice(excluded ? 2 : 1).trim()
+      if (command) {
+        if (this.session.isBashRunning) {
+          this.addNotice(
+            'A shell command is already running; press Esc to cancel it first',
+            'warning',
+          )
+          this.editor.setText(text)
+          return
+        }
+        await this.runBash(command, excluded)
+        return
+      }
+    }
     const name = text.split(/\s+/, 1)[0] ?? ''
     const args = text.slice(name.length).trim()
     switch (name) {

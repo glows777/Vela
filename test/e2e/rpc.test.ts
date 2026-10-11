@@ -320,3 +320,55 @@ test.concurrent('rpc: get_commands lists extension commands, prompt templates an
   )
   await rpc.close()
 })
+
+test.concurrent('rpc: bash runs a command for the user and answers with its result; abort_bash cancels it (like pi)', async () => {
+  const rpc = startRpc(`faux:${scenario('hello')}`)
+
+  rpc.send({ id: 'b1', type: 'bash', command: 'echo hi; exit 2' })
+  expect(
+    await rpc.waitFor((r) => r.type === 'response' && r.id === 'b1'),
+  ).toMatchObject({
+    command: 'bash',
+    success: true,
+    data: { output: 'hi', exitCode: 2, cancelled: false, truncated: false },
+  })
+  // The output also streamed as events carrying the command's id
+  expect(
+    rpc.records
+      .filter((r) => r.type === 'bash_execution_update' && r.id === 'b1')
+      .map((r) => r.delta)
+      .join(''),
+  ).toBe('hi\n')
+  // It is in the context the next prompt sends
+  const messages = await rpc.call({ type: 'get_messages' })
+  expect((messages.data as { messages: unknown[] }).messages).toEqual([
+    {
+      role: 'user',
+      content:
+        'Ran `echo hi; exit 2`\n```\nhi\n```\n\nCommand exited with code 2',
+    },
+  ])
+
+  const id = 'long'
+  rpc.send({
+    id,
+    type: 'bash',
+    command: 'echo started; sleep 10',
+    excludeFromContext: true,
+  })
+  // Output arrives while the command runs
+  expect(
+    await rpc.waitFor((r) => r.type === 'bash_execution_update' && r.id === id),
+  ).toMatchObject({ delta: 'started\n' })
+  expect(await rpc.call({ type: 'abort_bash' })).toMatchObject({
+    success: true,
+  })
+  expect(
+    await rpc.waitFor((r) => r.type === 'response' && r.id === id),
+  ).toMatchObject({ success: true, data: { cancelled: true } })
+  expect(
+    ((await rpc.call({ type: 'get_messages' })).data as { messages: unknown[] })
+      .messages,
+  ).toHaveLength(1)
+  expect(await rpc.close()).toBe(0)
+})

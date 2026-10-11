@@ -36,11 +36,18 @@ import {
 } from './models/index.ts'
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
-import type { NestedToolCalls, SessionEntry } from './session/entries.ts'
+import {
+  type BashExecutionEntry,
+  bashExecutionToText,
+  type NestedToolCalls,
+  type NewEntry,
+  type SessionEntry,
+} from './session/entries.ts'
 import { SessionStore } from './session/index.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
 import type { SessionStorage } from './session/storage.ts'
 import type { ToolRegistry } from './tools/registry.ts'
+import { type BashResult, runBash } from './tools/shell.ts'
 import {
   CONTEXT_WINDOW,
   type TokenStatus,
@@ -138,8 +145,10 @@ export interface SessionDeps {
   limitOverrides: Partial<VelaLimits>
   logger: VelaLogger
   dataDir: string
-  /** Working directory, recorded in new session files */
+  /** Working directory, recorded in new session files; `executeBash()` runs commands here */
   cwd?: string
+  /** Shell for `executeBash()` (settings `shellPath`); default bash on PATH */
+  shellPath?: string
   /** Where session history is stored (file / memory / custom) */
   sessionStorage: SessionStorage
   /** dataDir is a temp dir that dispose() deletes (no dataDir given): tool history may be gone on resume */
@@ -187,6 +196,14 @@ export class VelaSession {
   private readonly listeners = new Set<VelaEventListener>()
   /** Calls tools made through ctx.executeTool(), recorded on their caller's tool result (like pi's nestedCalls) */
   private readonly nestedCalls = new NestedCallLog()
+  /** Tools' display data from `tool_execution_end`, recorded on their tool message like nestedCalls */
+  private readonly toolDetails = new Map<string, unknown>()
+  /** The running `executeBash()` command */
+  private bashController?: AbortController
+  /** The running `executeBash()` call, which close() waits for so its result is saved */
+  private bashRun?: Promise<unknown>
+  /** `!` commands that finished while the agent ran, recorded when it stops (like pi) */
+  private readonly pendingBash: NewEntry<BashExecutionEntry>[] = []
   private readonly builder: PromptPipeline
   private readonly deps: SessionDeps
   private closed = false
@@ -404,6 +421,12 @@ export class VelaSession {
       if (custom) event = { ...event, custom }
     }
     this.nestedCalls.observe(event)
+    if (
+      event.type === 'tool_execution_end' &&
+      !event.parentToolCallId &&
+      event.details !== undefined
+    )
+      this.toolDetails.set(event.toolCallId, event.details)
     for (const listener of this.listeners) listener(event)
     this.deps.forward(event, this.id)
     // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
@@ -498,7 +521,7 @@ export class VelaSession {
     this.emit({ type: 'message_end', message })
   }
 
-  /** Appends a message that entered the history to the session; a tool message carries the nested calls its tools made. */
+  /** Appends a message that entered the history to the session; a tool message carries its tools' nested calls and details. */
   private record(message: ModelMessage): void {
     this.timestamps.set(message, Date.now())
     const custom = this.customMessages.get(message)
@@ -507,13 +530,121 @@ export class VelaSession {
       return
     }
     const nestedCalls: Record<string, NestedToolCalls> = {}
+    const details: Record<string, unknown> = {}
     if (message.role === 'tool')
       for (const part of message.content) {
         if (part.type !== 'tool-result') continue
         const calls = this.nestedCalls.take(part.toolCallId)
         if (calls) nestedCalls[part.toolCallId] = calls
+        if (this.toolDetails.has(part.toolCallId)) {
+          details[part.toolCallId] = this.toolDetails.get(part.toolCallId)
+          this.toolDetails.delete(part.toolCallId)
+        }
       }
-    this.store.appendMessage(message, { nestedCalls })
+    this.store.appendMessage(message, { nestedCalls, details })
+  }
+
+  /** Whether an `executeBash()` command is running */
+  get isBashRunning(): boolean {
+    return this.bashController !== undefined
+  }
+
+  /**
+   * Runs a shell command for the user (pi's `executeBash`, the TUI's `!cmd`) in the working directory,
+   * without tool permissions or hooks; owner sessions only, one command at a time. The result is recorded
+   * in the session and reaches the model as a user message with the next prompt; `excludeFromContext`
+   * (`!!cmd`) records it without sending it. While the agent runs, recording waits until it stops.
+   * `onUpdate` gets the output's tail while the command runs; `bash_execution_update` events carry each new
+   * piece of output, with `id` (like pi). Rejects if the command cannot start.
+   */
+  async executeBash(
+    command: string,
+    options: {
+      excludeFromContext?: boolean
+      onUpdate?: (output: string) => void
+      /** Set on this command's `bash_execution_update` events */
+      id?: string
+    } = {},
+  ): Promise<BashResult> {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (this.role !== 'owner')
+      throw new Error('Only the session owner can run shell commands')
+    if (this.bashController)
+      throw new Error(
+        'A shell command is already running: wait for it or call abortBash()',
+      )
+    const controller = new AbortController()
+    this.bashController = controller
+    const run = this.runUserBash(command, controller, options)
+    this.bashRun = run
+    return run
+  }
+
+  private async runUserBash(
+    command: string,
+    controller: AbortController,
+    options: {
+      excludeFromContext?: boolean
+      onUpdate?: (output: string) => void
+      id?: string
+    },
+  ): Promise<BashResult> {
+    try {
+      // Appending to a saved session that was not resumed would mix two conversations in one log
+      await this.store.assertNew()
+      const result = await runBash(command, {
+        results: this.store.results,
+        cwd: this.deps.cwd,
+        shellPath: this.deps.shellPath,
+        signal: controller.signal,
+        onUpdate: options.onUpdate,
+        onDelta: (delta) =>
+          this.emit({
+            type: 'bash_execution_update',
+            ...(options.id === undefined ? {} : { id: options.id }),
+            delta,
+          }),
+      })
+      this.pendingBash.push({
+        type: 'bash_execution',
+        command,
+        output: result.output,
+        ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
+        cancelled: result.cancelled,
+        truncated: result.truncated,
+        ...(result.fullOutputPath
+          ? { fullOutputPath: result.fullOutputPath }
+          : {}),
+        ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
+      })
+      if (!this.busy.locked && this.flushBash()) await this.saveOrReport()
+      return result
+    } finally {
+      this.bashController = undefined
+      this.bashRun = undefined
+    }
+  }
+
+  /** Cancels the running `executeBash()` command (pi's abortBash); it is still recorded, as cancelled. */
+  abortBash(): void {
+    this.bashController?.abort()
+  }
+
+  /** Records `!` commands that finished while the agent ran; returns whether there were any. */
+  private flushBash(): boolean {
+    const pending = this.pendingBash.splice(0)
+    for (const execution of pending) {
+      const message: ModelMessage | undefined = execution.excludeFromContext
+        ? undefined
+        : { role: 'user', content: bashExecutionToText(execution) }
+      if (message) {
+        this.messages.push(message)
+        this.tracker.addMessage(message)
+        this.timestamps.set(message, Date.now())
+      }
+      this.store.appendBashExecution(execution, message)
+    }
+    return pending.length > 0
   }
 
   /**
@@ -844,8 +975,11 @@ export class VelaSession {
       }
     } finally {
       options.signal?.removeEventListener('abort', forward)
+      this.toolDetails.clear()
       this.flushPendingCustom()
       if (!saved) await this.saveOrReport()
+      // Until the last flush finds nothing there is no await before unlocking: a later `!` command records itself
+      while (this.flushBash()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
       this.prompting = false
@@ -881,6 +1015,8 @@ export class VelaSession {
     const added = started.messages.map((message) => this.customMessage(message))
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
+    // `!` commands that finished during an earlier loop of this run come before the new input
+    this.flushBash()
     this.flushPendingCustom()
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
@@ -969,6 +1105,7 @@ export class VelaSession {
       await run
     } finally {
       if (this.running === running) this.running = undefined
+      while (this.flushBash()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
       this.flushPendingCustom()
@@ -999,10 +1136,13 @@ export class VelaSession {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.abortBash()
     this.abort(new DOMException('Session closed', 'AbortError'))
     // Let extension commands finish first (commands like /dream wait on the prompt they started)
     await Promise.allSettled(this.commands.values())
     await this.running
+    // A cancelled `!` command still records itself; wait for that before the final save
+    await this.bashRun?.catch(() => {})
     await this.registry.waitForIdle().catch(() => {})
     // Only sessions that fired session_start emit session_shutdown
     if (this.started) {

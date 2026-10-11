@@ -308,6 +308,100 @@ export class ToolBlock implements Component {
   }
 }
 
+/** Collapsed `!` output keeps the last lines (pi's BashExecutionComponent PREVIEW_LINES) */
+const USER_BASH_PREVIEW_LINES = 20
+
+/**
+ * A command the user ran with `!` / `!!` (like pi's BashExecutionComponent): `$ command` between two rules,
+ * green when its result goes to the model and dim when it doesn't (`!!`), the output's last lines while
+ * it runs and after, then how it ended.
+ */
+export class BashExecution implements Component {
+  private output = ''
+  private status: 'running' | 'done' | 'error' = 'running'
+  private exitCode?: number
+  private cancelled = false
+  private fullOutputPath?: string
+  private expanded: boolean
+
+  constructor(
+    private readonly command: string,
+    private readonly excludeFromContext: boolean,
+    expanded: boolean,
+  ) {
+    this.expanded = expanded
+  }
+
+  update(output: string): void {
+    if (this.status === 'running') this.output = sanitize(output).trimEnd()
+  }
+
+  setResult(result: {
+    output: string
+    exitCode?: number
+    cancelled: boolean
+    fullOutputPath?: string
+  }): void {
+    this.status = 'done'
+    this.output = sanitize(result.output).trimEnd()
+    this.exitCode = result.exitCode
+    this.cancelled = result.cancelled
+    this.fullOutputPath = result.fullOutputPath
+  }
+
+  /** The command could not run (the error is shown as a notice) */
+  setFailed(): void {
+    this.status = 'error'
+  }
+
+  setExpanded(expanded: boolean): void {
+    this.expanded = expanded
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const color = this.excludeFromContext ? 'dim' : 'green'
+    const inner = Math.max(1, width - 2)
+    const rule = theme.fg(color, '─'.repeat(width))
+    const lines = [
+      theme.fg(color, theme.bold(`$ ${oneLine(sanitize(this.command))}`)),
+    ]
+    if (this.output) {
+      const all = this.output.split('\n')
+      const hidden = this.expanded
+        ? 0
+        : Math.max(0, all.length - USER_BASH_PREVIEW_LINES)
+      lines.push('')
+      if (hidden)
+        lines.push(
+          theme.fg('dim', `… ${hidden} earlier lines (Ctrl+O to expand)`),
+        )
+      for (const line of all.slice(hidden)) lines.push(theme.fg('muted', line))
+    }
+    if (this.status === 'running')
+      lines.push('', theme.fg('muted', 'Running… (Esc to cancel)'))
+    else if (this.cancelled) lines.push('', theme.fg('yellow', '(cancelled)'))
+    else if (this.status === 'error')
+      lines.push('', theme.fg('red', '(failed)'))
+    else if (this.exitCode !== undefined && this.exitCode !== 0)
+      lines.push('', theme.fg('red', `(exit ${this.exitCode})`))
+    if (this.fullOutputPath)
+      lines.push(
+        theme.fg(
+          'yellow',
+          `Output truncated. Full output: ${sanitize(this.fullOutputPath)}`,
+        ),
+      )
+    return [
+      '',
+      rule,
+      ...lines.map((line) => ` ${truncateToWidth(line, inner)}`),
+      rule,
+    ]
+  }
+}
+
 function nestedLine(call: NestedCall): string {
   const icon =
     call.status === 'running'

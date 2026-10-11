@@ -92,6 +92,8 @@ export type {
   Role,
 } from './security/roles.ts'
 export {
+  type BashExecutionEntry,
+  bashExecutionToText,
   type CompactionEntry,
   type ContextEditEntry,
   type CustomEntry,
@@ -129,6 +131,7 @@ export type {
   ToolNamespace,
 } from './tools/registry.ts'
 export { ToolExecutionResult } from './tools/registry.ts'
+export type { BashResult } from './tools/shell.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'
 export {

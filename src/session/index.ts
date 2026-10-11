@@ -4,6 +4,7 @@ import type { CustomMessageInfo } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
+  type BashExecutionEntry,
   buildSessionContext,
   type CompactionEntry,
   type CustomEntry,
@@ -92,9 +93,10 @@ export class SessionStore {
   private persist(entry: SessionEntry): void {
     if (!this.started) {
       // Like pi: setup entries (model, thinking level, name) and extension state stay in memory until there is
-      // a conversation; an extension's custom message is part of the conversation (the model sees it)
+      // a conversation; an extension's custom message and a `!` command are part of the conversation
       if (
         entry.type !== 'custom_message' &&
+        entry.type !== 'bash_execution' &&
         (entry.type !== 'message' ||
           (entry.message.role !== 'user' && entry.message.role !== 'assistant'))
       )
@@ -159,12 +161,13 @@ export class SessionStore {
     this.checked = true
   }
 
-  /** Appends a message (with the stop reason of an aborted / failed assistant message, or a tool message's nested calls). */
+  /** Appends a message (with the stop reason of an aborted / failed assistant message, or a tool message's nested calls and details). */
   appendMessage(
     message: ModelMessage,
     extra: {
       stopReason?: 'aborted' | 'error'
       nestedCalls?: Record<string, NestedToolCalls>
+      details?: Record<string, unknown>
     } = {},
   ): SessionMessageEntry {
     const entry = this.append<SessionMessageEntry>({
@@ -174,8 +177,21 @@ export class SessionStore {
       ...(extra.nestedCalls && Object.keys(extra.nestedCalls).length
         ? { nestedCalls: extra.nestedCalls }
         : {}),
+      ...(extra.details && Object.keys(extra.details).length
+        ? { details: extra.details }
+        : {}),
     })
     if (!extra.stopReason) this.ids.set(message, entry.id)
+    return entry
+  }
+
+  /** Appends a `!` command; `message` is what it put in the context (none for `!!`). */
+  appendBashExecution(
+    execution: NewEntry<BashExecutionEntry>,
+    message?: ModelMessage,
+  ): BashExecutionEntry {
+    const entry = this.append<BashExecutionEntry>(execution)
+    if (message) this.ids.set(message, entry.id)
     return entry
   }
 

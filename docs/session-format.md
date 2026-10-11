@@ -44,7 +44,8 @@ Every other line is an entry. All entries have pi's base fields:
 
 | `type` | Fields | Description |
 |---|---|---|
-| `message` | `message`, `stopReason?`, `nestedCalls?` | A message entered the conversation (user input, assistant reply, tool results, loop-detection reminders). `message` is an AI SDK `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `nestedCalls` is on a tool message whose tools called other tools through `ctx.executeTool()`: by tool call id, `{ calls: [{ id, name, arguments?, argumentsBytes?, status, durationMs?, error? }], complete }` (pi's `nestedCalls`, with pi's limits: 256 calls, 8 KB of arguments per call and 32 KB in total, 500 characters of error); not sent to the model |
+| `message` | `message`, `stopReason?`, `nestedCalls?`, `details?` | A message entered the conversation (user input, assistant reply, tool results, loop-detection reminders). `message` is an AI SDK `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `nestedCalls` is on a tool message whose tools called other tools through `ctx.executeTool()`: by tool call id, `{ calls: [{ id, name, arguments?, argumentsBytes?, status, durationMs?, error? }], complete }` (pi's `nestedCalls`, with pi's limits: 256 calls, 8 KB of arguments per call and 32 KB in total, 500 characters of error); not sent to the model. `details` is on a tool message whose tools returned display data (`tool_execution_end`'s `details`, such as `edit_file`'s diff), by tool call id (pi's `ToolResultMessage.details`); not sent to the model. The TUI uses both to draw a resumed session |
+| `bash_execution` | `command`, `output`, `exitCode?`, `cancelled`, `truncated`, `fullOutputPath?`, `excludeFromContext?` | A command the user ran with `!` / `!!` or `session.executeBash()` (pi's `bashExecution` message). `output` is the last 2,000 lines or 50 KB; when `truncated`, `fullOutputPath` has the whole output. `exitCode` is missing when the command was cancelled. The model gets it as a user message (`bashExecutionToText()`, pi's text: ``Ran `command` `` and the output in a code block, then `(command cancelled)`, `Command exited with code N` or the full-output path); `excludeFromContext` (`!!`) keeps it out of the context |
 | `model_change` | `model` | The session's model, as `provider/id`. Written when a session starts with a model given by name and on `setModel()` with a name; `resume()` restores the latest |
 | `thinking_level_change` | `thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Written when a session starts and on `setThinkingLevel()`; `resume()` restores the latest |
 | `session_info` | `name?` | The display name (`session.setName()`, `/name`); no `name` clears it |
@@ -59,9 +60,10 @@ Entries of other types (from a newer Vela or an extension) are kept and ignored.
 
 `resume()` rebuilds the model context like pi's `buildSessionContext`:
 
-1. Take the latest `compaction` entry, if any: the context starts with its summary message, then the `message` and `custom_message` entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, all of them. A `custom_message` becomes a user message.
-2. Apply the `context_edit` entries to their targets.
-3. Leave out messages with a `stopReason`.
+1. Take the latest `compaction` entry, if any: the context starts with its summary message, then the `message`, `custom_message` and `bash_execution` entries from `firstKeptEntryId` up to the compaction, then those after it. Without a compaction, all of them. A `custom_message` becomes a user message.
+2. Turn each `bash_execution` entry into a user message, leaving out those with `excludeFromContext`.
+3. Apply the `context_edit` entries to their targets.
+4. Leave out messages with a `stopReason`.
 
 The model, thinking level and name are the latest `model_change`, `thinking_level_change` and `session_info`.
 

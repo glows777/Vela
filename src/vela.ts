@@ -94,7 +94,7 @@ export interface VelaOptions {
    * PATH; a missing program is downloaded here (same as pi). Without it only PATH is searched.
    */
   binDir?: string
-  /** Shell the bash tool runs commands with (settings `shellPath`, like pi). Default: bash on PATH */
+  /** Shell the bash tool and `session.executeBash()` run commands with (settings `shellPath`, like pi). Default: bash on PATH */
   shellPath?: string
   /** Don't download ripgrep / fd into `binDir` (the CLI sets this from `VELA_OFFLINE=1`). */
   offline?: boolean
@@ -283,6 +283,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         temporaryDataDir: ephemeral,
         sessionStorage,
         cwd,
+        shellPath: options.shellPath,
         registry,
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
