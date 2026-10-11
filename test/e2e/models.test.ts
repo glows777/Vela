@@ -323,6 +323,13 @@ test('without a chosen model, the first provider with a credential supplies the 
     await session.prompt('hi')
     expect(session.modelInfo.ref).toBe('fake/big')
     expect(big.calls).toHaveLength(1)
+    // Saved like a chosen model, so a resumed session keeps it when credentials change later
+    expect(
+      session
+        .getEntries()
+        .filter((e) => e.type === 'model_change')
+        .map((e) => (e as { model: string }).model),
+    ).toEqual(['fake/big'])
   } finally {
     await none.dispose()
     await vela.dispose()

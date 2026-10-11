@@ -28,19 +28,24 @@ export interface CallbackServer<T> {
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
+/** Sends a small HTML page; resolves once it is flushed, so closing the server afterwards cannot cut it off */
 function sendPage(
   response: ServerResponse,
   status: number,
   title: string,
   detail = '',
-) {
+): Promise<void> {
   response.writeHead(status, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store',
   })
-  response.end(
-    `<!doctype html><meta charset="utf-8"><title>Vela</title><body style="font-family:system-ui;margin:3em"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(detail)}</p></body>`,
-  )
+  return new Promise((resolve) => {
+    response.end(
+      `<!doctype html><meta charset="utf-8"><title>Vela</title><body style="font-family:system-ui;margin:3em"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(detail)}</p></body>`,
+      () => resolve(),
+    )
+    response.once('close', () => resolve())
+  })
 }
 
 export async function startCallbackServer<T>(
@@ -78,7 +83,8 @@ export async function startCallbackServer<T>(
       const error = url.searchParams.get('error')
       if (error) {
         const description = url.searchParams.get('error_description') ?? error
-        sendPage(
+        claimed = true
+        await sendPage(
           response,
           400,
           `${providerName} authorization failed.`,
@@ -100,7 +106,7 @@ export async function startCallbackServer<T>(
       claimed = true
       try {
         const value = await options.complete(url.searchParams)
-        sendPage(
+        await sendPage(
           response,
           200,
           `Signed in to ${providerName}. You can close this page.`,
@@ -109,7 +115,7 @@ export async function startCallbackServer<T>(
       } catch (error) {
         const failure =
           error instanceof Error ? error : new Error(String(error))
-        sendPage(
+        await sendPage(
           response,
           502,
           `${providerName} sign-in failed.`,

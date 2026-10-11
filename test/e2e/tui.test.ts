@@ -306,8 +306,13 @@ test('/login stores an API key or runs an OAuth sign-in; /logout removes it', as
   tui.terminal.press(KEYS.down)
   tui.terminal.press(KEYS.enter)
   await tui.until('API key for fake')
-  tui.submit('sk-test')
+  // The key is masked while typed
+  tui.terminal.type('sk-test')
+  await tui.until('*******')
+  expect(tui.screen()).not.toContain('sk-test')
+  tui.terminal.press(KEYS.enter)
   await tui.until('Signed in to fake')
+  expect(tui.screen()).not.toContain('sk-test')
   expect(t.vela.loginProviders()).toEqual([
     {
       provider: 'fake',

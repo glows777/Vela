@@ -1449,6 +1449,12 @@ export class VelaSession {
     await this.start()
     signal.throwIfAborted()
     const { info } = this.resolveModel()
+    // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
+    // resumed session keeps it even when the credentials change later
+    if (this.modelChoice === undefined) {
+      this.modelChoice = info.ref
+      this.store.appendModelChange(info.ref)
+    }
     const reasoning = reasoningOption(this.thinkingLevel, info)
     const input = inputs.map(messageText).join('\n\n')
     const started = await this.deps.extensions.beforeAgentStart(this, input)

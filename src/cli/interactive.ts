@@ -1473,6 +1473,7 @@ export class InteractiveMode {
         prompt.message,
         prompt.placeholder,
         prompt.signal,
+        prompt.type === 'secret',
       )
     if (prompt.signal?.aborted) throw new Error('Prompt closed')
     if (answer === undefined) {
@@ -1567,11 +1568,12 @@ export class InteractiveMode {
     })
   }
 
-  /** A one-line input dialog; `signal` closes it (resolving undefined) from outside */
+  /** A one-line input dialog; `signal` closes it (resolving undefined) from outside; `secret` masks what is typed */
   input(
     title: string,
     placeholder?: string,
     signal?: AbortSignal,
+    secret = false,
   ): Promise<string | undefined> {
     if (signal?.aborted) return Promise.resolve(undefined)
     return this.dialog<string | undefined>((close) => {
@@ -1585,7 +1587,7 @@ export class InteractiveMode {
       if (signal?.aborted) queueMicrotask(() => done(undefined))
       else
         signal?.addEventListener('abort', () => done(undefined), { once: true })
-      const input = new Input()
+      const input = secret ? new SecretInput() : new Input()
       input.onSubmit = (value) => done(value.trim() || undefined)
       input.onEscape = () => done(undefined)
       const hint = placeholder
@@ -1819,4 +1821,17 @@ function oneLine(text: string): string {
 
 function compact(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n)
+}
+
+/** An Input that draws `*` for each character (API keys in `/login`); the cursor stays in place since lengths match */
+class SecretInput extends Input {
+  override render(width: number): string[] {
+    const value = this.getValue()
+    this.setValue('*'.repeat(value.length))
+    try {
+      return super.render(width)
+    } finally {
+      this.setValue(value)
+    }
+  }
 }

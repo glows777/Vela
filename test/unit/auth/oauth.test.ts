@@ -35,6 +35,7 @@ function fakeProvider(
 function browserUser(callback: (authorizeUrl: URL) => URL) {
   const prompts: AuthPrompt[] = []
   const pages: string[] = []
+  let page: Promise<string> | undefined
   const interaction: AuthInteraction = {
     signal: new AbortController().signal,
     prompt: (prompt) => {
@@ -48,12 +49,22 @@ function browserUser(callback: (authorizeUrl: URL) => URL) {
     },
     notify: (event) => {
       if (event.type !== 'auth_url') return
-      void realFetch(callback(new URL(event.url))).then(async (r) =>
-        pages.push(await r.text()),
-      )
+      page = realFetch(callback(new URL(event.url))).then(async (r) => {
+        const text = await r.text()
+        pages.push(text)
+        return text
+      })
     },
   }
-  return { interaction, prompts, pages }
+  // The browser's page, which must arrive in full although the login closes the server right after it
+  const browserPage = () =>
+    Promise.race([
+      page,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('no callback page')), 2000),
+      ),
+    ])
+  return { interaction, prompts, pages, browserPage }
 }
 
 test('Sign in with ChatGPT registers with dynamic_agent_client, then keeps the issued client id', async () => {
@@ -103,8 +114,7 @@ test('Sign in with ChatGPT registers with dynamic_agent_client, then keeps the i
   expect(exchange.get('code')).toBe('the-code')
   expect(exchange.get('resource')).toBe('https://api.openai.com/v1')
   expect(exchange.get('code_verifier')).toBeTruthy()
-  while (!user.pages.length) await new Promise((r) => setTimeout(r, 5))
-  expect(user.pages[0]).toContain('Signed in to ChatGPT')
+  expect(await user.browserPage()).toContain('Signed in to ChatGPT')
 
   // Signing in again reuses the issued client id and drops the name hint (OpenAI's reauthorization)
   const again = browserUser((url) => {
