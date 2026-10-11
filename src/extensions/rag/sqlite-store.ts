@@ -1,6 +1,6 @@
 import * as sqliteVec from 'sqlite-vec'
 import type { Chunk } from './chunker.ts'
-import { type EmbeddingFn, embed } from './embedder.ts'
+import { DIMS, type EmbeddingFn, embed } from './embedder.ts'
 import {
   mmrSelect,
   normalizeFtsQuery,
@@ -23,13 +23,68 @@ interface ChunkRow {
   embedding: string
 }
 
+/** Embedder id used when the embedding function has none */
+export const UNNAMED_EMBEDDER = 'custom'
+
 export class SqliteVectorStore {
   private db: SqliteDatabase
+  /** Id of the embedder this store embeds with */
+  readonly embedder: string
+  /** The embedder recorded in the file when it differs from `embedder`; vector operations then fail */
+  private recorded?: string
+  /** True when the file had chunks but no embedder record (built before Vela 0.2.0) and `embedder` was assumed */
+  readonly assumedEmbedder: boolean = false
 
-  constructor(dbPath: string = 'knowledge.db') {
+  constructor(
+    dbPath: string = 'knowledge.db',
+    options: { embedder?: string } = {},
+  ) {
     this.db = openSqlite(dbPath)
     sqliteVec.load(this.db) // vector search extension
     this.createTables()
+    this.embedder = options.embedder ?? UNNAMED_EMBEDDER
+    const recorded = this.readMeta('embedder')
+    if (recorded === undefined) {
+      this.assumedEmbedder = this.size() > 0
+      this.writeMeta('embedder', this.embedder)
+    } else if (recorded !== this.embedder) {
+      // Nothing stored yet: nothing to mix up, so the new embedder takes over
+      if (this.size() === 0) this.writeMeta('embedder', this.embedder)
+      else this.recorded = recorded
+    }
+  }
+
+  /** The embedder that made the stored vectors (the file's record) */
+  storedEmbedder(): string {
+    return this.recorded ?? this.embedder
+  }
+
+  /** Fails when the stored vectors come from another embedder: their scores can't be compared with this one's */
+  private assertEmbedder(): void {
+    if (this.recorded === undefined) return
+    throw new Error(
+      `The knowledge base was built with the embedder "${this.recorded}", but the configured embedder is "${this.embedder}". Vectors from different models can't be compared: switch back to "${this.recorded}", or run /rag clear and ingest the documents again.`,
+    )
+  }
+
+  private assertDimensions(vector: number[]): void {
+    if (vector.length !== DIMS)
+      throw new Error(
+        `The embedder "${this.embedder}" returned ${vector.length}-dimension vectors; the knowledge base stores ${DIMS} dimensions`,
+      )
+  }
+
+  private readMeta(key: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get(key) as { value: string } | undefined
+    return row?.value
+  }
+
+  private writeMeta(key: string, value: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+      .run(key, value)
   }
 
   private createTables() {
@@ -40,8 +95,12 @@ export class SqliteVectorStore {
         source TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
         embedding TEXT NOT NULL,
-        model TEXT NOT NULL DEFAULT 'text-embedding-v3',
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
@@ -57,6 +116,8 @@ export class SqliteVectorStore {
 
   /** Adds a chunk; a chunk with the same id is replaced in all three tables. */
   add(chunk: Chunk, embedding: number[]): void {
+    this.assertEmbedder()
+    this.assertDimensions(embedding)
     const now = Date.now()
     // vec0 rejects INSERT OR REPLACE and chunks_fts has no primary key, so delete first
     this.deleteId(chunk.id)
@@ -90,6 +151,7 @@ export class SqliteVectorStore {
     source: string,
     items: Array<{ chunk: Chunk; embedding: number[] }>,
   ): void {
+    this.assertEmbedder()
     transaction(this.db, () => {
       this.deleteSource(source)
       for (const { chunk, embedding } of items) this.add(chunk, embedding)
@@ -115,6 +177,8 @@ export class SqliteVectorStore {
     queryEmbedding: number[],
     topK: number,
   ): Array<{ chunk: StoredChunk; score: number }> {
+    this.assertEmbedder()
+    this.assertDimensions(queryEmbedding)
     const buf = new Uint8Array(new Float32Array(queryEmbedding).buffer)
     const rows = this.db
       .prepare(`
@@ -178,10 +242,15 @@ export class SqliteVectorStore {
     ).n
   }
 
+  /** Deletes every chunk; the store then belongs to the configured embedder. */
   clear(): void {
-    this.db.exec(
-      'DELETE FROM chunks; DELETE FROM chunks_vec; DELETE FROM chunks_fts;',
-    )
+    transaction(this.db, () => {
+      this.db.exec(
+        'DELETE FROM chunks; DELETE FROM chunks_vec; DELETE FROM chunks_fts;',
+      )
+      this.writeMeta('embedder', this.embedder)
+    })
+    this.recorded = undefined
   }
 
   sources(): string[] {
@@ -200,6 +269,7 @@ export class SqliteVectorStore {
   ): Promise<SearchResult[]> {
     const candidateCount = Math.min(topK * 4, this.size())
     if (candidateCount === 0) return []
+    this.assertEmbedder()
 
     const [queryVec] = await embed(embedFn, [query])
 

@@ -184,3 +184,38 @@ test('the embedding cache is shared by every session of one Vela', async () => {
   await t.vela.session('other').prompt('/rag ingest docs/guide.md')
   expect(calls).toHaveLength(1)
 })
+
+test('switching embedders fails loudly until /rag clear', async () => {
+  const t = createTestVela({
+    embedder: createFauxEmbedder({ id: 'model-a' }),
+    files: { 'docs/guide.md': GUIDE },
+  })
+  await t.run('/rag ingest docs/guide.md')
+
+  const switched = createTestVela({
+    cwd: t.cwd,
+    sessionId: 'switched',
+    embedder: createFauxEmbedder({ id: 'model-b' }),
+    responses: [
+      fauxToolCall('rag_search', { query: 'roll back' }),
+      fauxText('The embedder changed'),
+    ],
+  })
+  await switched.run('Search for it')
+  const result = switched.model.calls[1]!.toolResults[0]!
+  expect((result.raw as { type: string }).type).toBe('error-text')
+  expect(result.output).toContain(
+    'The knowledge base was built with the embedder "model-a", but the configured embedder is "model-b"',
+  )
+  await switched.run('/rag')
+  expect(notes(switched)).toContain(
+    'Embedder: model-a, but the configured embedder is model-b',
+  )
+
+  await switched.run('/rag clear')
+  expect(notes(switched)).toMatch(
+    /Deleted [1-9]\d* chunks; new documents are embedded with "model-b"/,
+  )
+  await switched.run('/rag ingest docs/guide.md')
+  expect(notes(switched)).toContain('Ingested')
+})

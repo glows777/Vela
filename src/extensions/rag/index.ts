@@ -9,7 +9,8 @@ export interface RagOptions {
   /**
    * Text embedding function, e.g. `createEmbedder({ apiKey })`; in tests, createFauxEmbedder() from vela/testing.
    * When omitted, one is created from the config section `embedding: { baseUrl, model, apiKey }`
-   * (an OpenAI-compatible embedding API).
+   * (an OpenAI-compatible embedding API). The knowledge base records the embedder's `id` and refuses
+   * vectors from another one; a function without `id` is recorded as `custom`.
    */
   embedder?: EmbeddingFn
 }
@@ -30,7 +31,13 @@ export function rag(options: RagOptions = {}): VelaExtension {
     }
     const dir = join(vela.dataDir, 'rag')
     mkdirSync(dir, { recursive: true })
-    const store = new SqliteVectorStore(join(dir, 'knowledge.db'))
+    const store = new SqliteVectorStore(join(dir, 'knowledge.db'), {
+      embedder: embedder.id,
+    })
+    if (store.assumedEmbedder)
+      vela.logger.warn(
+        `[rag] The knowledge base has no record of the embedder that built it (it predates Vela 0.2.0); assuming the configured one, "${store.embedder}". If it was built with another model, run /rag clear and ingest the documents again.`,
+      )
     for (const tool of createRagTools(store, embedder, vela.cwd))
       vela.registerTool(tool)
 
@@ -42,8 +49,16 @@ export function rag(options: RagOptions = {}): VelaExtension {
 
     vela.registerCommand('rag', {
       description:
-        'Show the knowledge base; /rag ingest <path> to ingest a document',
+        'Show the knowledge base; /rag ingest <path> to ingest a document, /rag clear to empty it',
       handler: async (args, ctx) => {
+        if (args.trim() === 'clear') {
+          const size = store.size()
+          store.clear()
+          ctx.ui.notify(
+            `[knowledge base] Deleted ${size} chunks; new documents are embedded with "${store.embedder}"`,
+          )
+          return
+        }
         if (args.startsWith('ingest ')) {
           const path = args.slice('ingest '.length).trim()
           ctx.ui.notify(`[ingest] Processing ${path}...`)
@@ -60,8 +75,14 @@ export function rag(options: RagOptions = {}): VelaExtension {
           return
         }
         const sources = store.sources()
+        const stored = store.storedEmbedder()
+        const embedderLine =
+          stored === store.embedder
+            ? `Embedder: ${stored}`
+            : `Embedder: ${stored}, but the configured embedder is ${store.embedder}: run /rag clear and ingest again, or switch back`
         ctx.ui.notify(
-          `[knowledge base] ${store.size()} chunks${sources.length ? `\n  Sources: ${sources.join(', ')}` : ''}`,
+          `[knowledge base] ${store.size()} chunks${sources.length ? `\n  Sources: ${sources.join(', ')}` : ''}\n  ${embedderLine}`,
+          stored === store.embedder ? undefined : 'error',
         )
       },
     })

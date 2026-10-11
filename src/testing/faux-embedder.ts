@@ -7,14 +7,20 @@ import type { EmbeddingFn } from '../extensions/rag/embedder.ts'
  * enough for RAG ingest/search to produce meaningful rankings in tests.
  */
 export function createFauxEmbedder(
-  options: { dims?: number; onCall?: (texts: string[]) => void } = {},
+  options: {
+    dims?: number
+    /** Embedder id recorded by the knowledge base (default `faux`) */
+    id?: string
+    onCall?: (texts: string[]) => void
+  } = {},
 ): EmbeddingFn {
   const dims = options.dims ?? 128
-  return async (texts, signal) => {
+  const fn = async (texts: string[], signal?: AbortSignal) => {
     signal?.throwIfAborted()
     options.onCall?.(texts)
     return texts.map((text) => embedText(text, dims))
   }
+  return Object.assign(fn, { id: options.id ?? 'faux' })
 }
 
 function embedText(text: string, dims: number): number[] {

@@ -326,6 +326,20 @@ test.concurrent('--list-models lists the models of providers with a credential a
     agentDir: home.path,
   })
   expect(stored.stdout).toContain('openrouter  moonshotai/kimi-k2.6')
+  // An extension that fails to load: the models that did load are listed, the error goes to stderr
+  // and the exit code is 1 (pi exits 0 here; Vela fails loudly, like a normal start)
+  const broken = join(home.path, 'broken.ts')
+  await Bun.write(
+    broken,
+    "export default () => { throw new Error('broken extension') }",
+  )
+  const failed = await cli(['--list-models', 'sma', '-e', broken], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+  })
+  expect(failed.code).toBe(1)
+  expect(failed.stdout).toMatch(/^local +small/m)
+  expect(failed.stderr).toContain('broken extension')
 })
 
 test.concurrent('--session opens a named session id; -r needs interactive mode', async () => {
