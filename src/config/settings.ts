@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
+import { fileCredentialStore } from '../auth/store.ts'
+import type { CredentialStore } from '../auth/types.ts'
 import {
   loadMcpServers,
   type McpServersFile,
@@ -24,6 +26,11 @@ export interface VelaSettings {
   defaultModel?: string
   /** Default thinking level; medium when unset (like pi) */
   defaultThinkingLevel?: ThinkingLevel
+  /**
+   * Models Ctrl+P cycles through (pi's `enabledModels`): `provider/id` patterns where `*` matches anything,
+   * or a bare id / pattern matched against every provider. Unset: all available models.
+   */
+  enabledModels?: string[]
   /** Project data directory, relative to cwd; default `<agentDir>/projects/<encoded cwd>` */
   dataDir?: string
   /** Shell the bash tool runs commands with (like pi); default bash on PATH */
@@ -81,8 +88,10 @@ export interface VelaConfig {
   contextFiles: ContextFile[]
   /** Contents of `.vela/APPEND_SYSTEM.md` (trusted) or `<agentDir>/APPEND_SYSTEM.md`, like pi */
   appendSystemPrompt?: string
-  /** Built-in providers (openai / anthropic) plus those in `<agentDir>/models.json`, for createVela's `providers` */
+  /** Built-in providers (anthropic / openai / openrouter) plus those in `<agentDir>/models.json`, for createVela's `providers` */
   providers: Record<string, ProviderDefinition>
+  /** Credentials stored by `/login` in `<agentDir>/auth.json` (mode 0600), for createVela's `credentials` */
+  credentials: CredentialStore
   /** Per-extension config sections (`$VAR` already interpolated) */
   extensionConfig: Record<string, Record<string, unknown>>
   /** MCP servers from `<agentDir>/mcp.json` and the trusted project's `.vela/mcp.json`, for the mcp extension */
@@ -182,6 +191,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       ? { appendSystemPrompt: readFileSync(appendFile, 'utf-8') }
       : {}),
     providers: loadModels({ agentDir, env }),
+    credentials: fileCredentialStore(join(agentDir, 'auth.json')),
     extensionConfig: interpolateDeep(settings.extensionConfig ?? {}, env),
     mcp: loadMcpServers({ agentDir, projectDir, trusted, env }),
   }
@@ -287,6 +297,12 @@ function readSettings(file: string): VelaSettings | undefined {
       !settings.defaultModel.includes('/'))
   )
     throw new Error(`${file}: defaultModel must be "provider/id"`)
+  if (
+    settings.enabledModels !== undefined &&
+    (!Array.isArray(settings.enabledModels) ||
+      settings.enabledModels.some((item) => typeof item !== 'string'))
+  )
+    throw new Error(`${file}: enabledModels must be an array of strings`)
   if (
     settings.defaultThinkingLevel !== undefined &&
     !THINKING_LEVELS.includes(settings.defaultThinkingLevel)

@@ -9,6 +9,8 @@ export type AppAction =
   | 'dequeue'
   | 'cycleThinking'
   | 'selectModel'
+  | 'cycleModelForward'
+  | 'cycleModelBackward'
   | 'expandTools'
   | 'toggleThinking'
 
@@ -20,6 +22,8 @@ export const APP_KEYS: Record<AppAction, KeyId> = {
   dequeue: 'alt+up',
   cycleThinking: 'shift+tab',
   selectModel: 'ctrl+l',
+  cycleModelForward: 'ctrl+p',
+  cycleModelBackward: 'shift+ctrl+p',
   expandTools: 'ctrl+o',
   toggleThinking: 'ctrl+t',
 }

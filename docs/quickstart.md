@@ -1,6 +1,6 @@
 # Quickstart
 
-Vela runs in your terminal and works with the files in the folder you start it from. It needs a model: an OpenAI-compatible API, the Anthropic API, or any provider you add in `~/.vela/models.json`. Without a key you can try it offline with the built-in demo model.
+Vela runs in your terminal and works with the files in the folder you start it from. It needs a model: Anthropic, OpenAI (an API key or your ChatGPT plan), OpenRouter, or any provider you add in `~/.vela/models.json`. Without a key you can try it offline with the built-in demo model.
 
 Vela runs on Node.js 22.18 or newer and on Bun 1.4 or newer.
 
@@ -39,34 +39,30 @@ npm link
 
 `bun run start` in the clone starts Vela with the clone itself as the working folder.
 
-## 2. Set an API key
+## 2. Sign in or set an API key
 
-The two built-in providers read their keys from environment variables:
+Three providers are built in. Give Vela a key for one of them, and it picks that provider's default model:
 
-| Provider | Variables | Model reference |
+| Provider | Variable | Default model |
 |---|---|---|
-| `openai` | `OPENAI_API_KEY`, optional `OPENAI_API_BASE_URL` for a proxy or any OpenAI-compatible service | `openai/<model-id>` |
-| `anthropic` | `ANTHROPIC_API_KEY` | `anthropic/<model-id>` |
-
-Vela has no built-in model list, so you also choose the model id. Either set it once in the environment:
-
-```bash
-export OPENAI_API_KEY=sk-...
-export OPENAI_API_MODEL_NAME=<model-id>   # used as openai/<model-id>
-```
-
-or pass it on the command line, or save it as `defaultModel` in `~/.vela/settings.json`:
+| `anthropic` | `ANTHROPIC_API_KEY` | `anthropic/claude-opus-4-8` |
+| `openai` | `OPENAI_API_KEY`, optional `OPENAI_API_BASE_URL` for a proxy | `openai/gpt-5.5` |
+| `openrouter` | `OPENROUTER_API_KEY` | `openrouter/moonshotai/kimi-k2.6` |
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-vela --model anthropic/<model-id>
+vela
 ```
+
+Or start `vela` without a key and run `/login`: it stores an API key, signs in with your ChatGPT Plus/Pro plan (Sign in with ChatGPT, for use on your own machine), or signs in to OpenRouter. See [Credentials and /login](models.md#credentials-and-login).
+
+To use another model, pass `--model provider/id`, pick one with `/model`, or save it as `defaultModel` in `~/.vela/settings.json`:
 
 ```json
-{ "defaultModel": "anthropic/<model-id>" }
+{ "defaultModel": "anthropic/claude-sonnet-4-6" }
 ```
 
-Other providers (OpenRouter, Ollama, vLLM, a company gateway) go in `~/.vela/models.json`. See [Models](models.md).
+Other providers (Ollama, vLLM, a company gateway, an OpenAI-compatible service) go in `~/.vela/models.json`. See [Models](models.md).
 
 The installed `vela` command does not read `.env` files. When you run the source with Bun, Bun loads `.env` from the current folder, so `cp .env.example .env` works for runs started in the clone.
 

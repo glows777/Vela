@@ -27,6 +27,7 @@ import type { VelaSession } from '../vela-session.ts'
 import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
 import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
+import { installationId } from './login.ts'
 import { runPrintMode } from './print-mode.ts'
 import { runRpcMode } from './rpc-mode.ts'
 import {
@@ -133,7 +134,7 @@ if (legacyHint) console.error(legacyHint)
  * defaultModel → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
  */
 const NO_MODEL =
-  'No model selected. Use --model provider/id, set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json; built-in openai / anthropic read OPENAI_API_KEY / ANTHROPIC_API_KEY), or set OPENAI_API_KEY + OPENAI_API_MODEL_NAME. For an offline demo use VELA_MODEL=mock.'
+  'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.'
 
 /** Error text for the user: the core's "No model selected" names SDK calls (createVela / setModel); the CLI says how to pick a model. */
 function cliErrorMessage(error: unknown): string {
@@ -165,11 +166,11 @@ const chosenModel = args.listModels ? undefined : await chooseModel()
 let recorder: ReturnType<typeof recordModel> | undefined
 if (env.VELA_RECORD && !args.listModels) {
   try {
-    if (!chosenModel) throw new Error(NO_MODEL)
+    const registry = new ModelRegistry(config.providers, config.credentials)
+    const choice = chosenModel ?? registry.defaultRef()
+    if (!choice) throw new Error(NO_MODEL)
     const model =
-      typeof chosenModel === 'string'
-        ? new ModelRegistry(config.providers).resolve(chosenModel).model
-        : chosenModel
+      typeof choice === 'string' ? registry.resolve(choice).model : choice
     recorder = recordModel(model, { path: env.VELA_RECORD })
   } catch (error) {
     console.error(`[record] ${error instanceof Error ? error.message : error}`)
@@ -191,6 +192,7 @@ const logger =
 const vela = createVela({
   model: recorder?.model ?? chosenModel,
   providers: config.providers,
+  credentials: config.credentials,
   thinkingLevel: args.thinking ?? config.settings.defaultThinkingLevel,
   cwd,
   dataDir: config.dataDir,
@@ -377,6 +379,7 @@ if (mode === 'print' || mode === 'json') {
     input: process.stdin,
     write: writeStdout,
     describeError: cliErrorMessage,
+    enabledModels: config.settings.enabledModels,
   })
   await exit(0)
 } else {
@@ -388,6 +391,8 @@ if (mode === 'print' || mode === 'json') {
     newSessionId,
     configure: applyModelArgs,
     describeError: cliErrorMessage,
+    enabledModels: config.settings.enabledModels,
+    loginOptions: { getDeviceId: () => installationId(agentDir) },
     attachLogger: interactiveLogger?.attach,
     onExit: async () => {
       await vela.dispose()

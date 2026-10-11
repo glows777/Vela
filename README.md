@@ -14,12 +14,12 @@ Vela needs Node.js 22.18 or newer, or Bun 1.4 or newer.
 npm install -g @glows777/vela
 ```
 
-Set an API key for an OpenAI-compatible or Anthropic model, then start Vela in the folder you want it to work in:
+Set an API key for Anthropic, OpenAI or OpenRouter (or run `/login` inside Vela), then start Vela in the folder you want it to work in:
 
 ```bash
 export ANTHROPIC_API_KEY=...
 cd /path/to/project
-vela --model anthropic/<model-id>
+vela
 ```
 
 No API key yet? `VELA_MODEL=mock vela` runs a built-in offline demo model. See the [quickstart](docs/quickstart.md) for the full setup.
@@ -40,10 +40,10 @@ npm install @glows777/vela
 ```ts
 import { createVela, loadConfig } from '@glows777/vela'
 
-// Built-in openai / anthropic providers plus ~/.vela/models.json, keys from the environment
-const { providers } = loadConfig({ env: process.env })
+// Built-in anthropic / openai / openrouter providers plus ~/.vela/models.json, keys from ~/.vela/auth.json and the environment
+const { providers, credentials } = loadConfig({ env: process.env })
 
-const vela = createVela({ model: 'anthropic/<model-id>', providers, cwd: process.cwd() })
+const vela = createVela({ model: 'anthropic/claude-opus-4-8', providers, credentials, cwd: process.cwd() })
 const session = vela.session('main')
 
 session.subscribe((event) => {

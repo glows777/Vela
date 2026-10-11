@@ -180,7 +180,37 @@ vela.registerProvider('local', {
 })
 ```
 
-After this, `local/qwen3:8b` works with `--model`, `/model`, `defaultModel` in settings, `createVela({ model })` and `session.setModel()`. `createModel(id)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window, and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `openai` and `anthropic`, and providers from `models.json`) throws.
+After this, `local/qwen3:8b` works with `--model`, `/model`, `defaultModel` in settings, `createVela({ model })` and `session.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai` and `openrouter`, and providers from `models.json`) throws.
+
+A provider can take part in `/login`:
+
+- `apiKeyLogin: true` lets `/login` ask for an API key and store it.
+- `oauth` is an `OAuthLogin`: `name` (shown in `/login`), `login(interaction, options)` that returns a credential, and `refresh(credential, signal)` that returns a new one. `interaction.notify({ type: 'auth_url', url })` shows the sign-in link, `interaction.prompt()` asks the user for text, and `interaction.signal` is aborted when the user cancels.
+- `authSource(credential)` says where the provider's key comes from (shown in `/login`), or returns undefined when it has none; such a provider's models are left out of `/model`.
+
+`await ctx.credential()` returns the stored credential, refreshing an OAuth token that has less than 5 minutes left first. Call it per request, for example in a custom `fetch`, since tokens change:
+
+```ts
+vela.registerProvider('corp', {
+  models: [{ id: 'corp-large' }],
+  oauth: { name: 'Corp SSO', login: corpLogin, refresh: corpRefresh },
+  authSource: (credential) => (credential ? 'auth.json' : undefined),
+  createModel: (id, ctx) =>
+    createOpenAI({
+      baseURL: 'https://llm.corp.example/v1',
+      apiKey: 'unused',
+      fetch: async (input, init) => {
+        const credential = await ctx.credential()
+        if (credential?.type !== 'oauth') throw new Error('Run /login corp')
+        const headers = new Headers(init?.headers)
+        headers.set('authorization', `Bearer ${credential.access}`)
+        return fetch(input, { ...init, headers })
+      },
+    }).chat(id),
+})
+```
+
+Credentials are stored like the built-in ones, in `~/.vela/auth.json` for the CLI.
 
 If you only need a different base URL or key for an OpenAI- or Anthropic-compatible service, edit `~/.vela/models.json` instead. See [Models](models.md).
 

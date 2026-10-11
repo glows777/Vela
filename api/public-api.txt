@@ -3,6 +3,9 @@
   interface AfterProviderResponseEvent
     headers: Record<string, string>
     type: "after_provider_response"
+  interface ApiKeyCredential
+    key: string
+    type: "api_key"
   type AssistantMessageEvent = | { type: 'text_start'; contentIndex: number }
       | { type: 'text_delta'; contentIndex: number; delta: string }
       | { type: 'text_end'; contentIndex: number; content: string }
@@ -12,6 +15,24 @@
       | { type: 'toolcall_start'; contentIndex: number }
       | { type: 'toolcall_delta'; contentIndex: number; delta: string }
       | { type: 'toolcall_end'; contentIndex: number; toolCall: ToolCallPart }
+  type AuthEvent = | { type: 'info' | 'progress'; message: string }
+      | { type: 'auth_url'; url: string; instructions?: string }
+  interface AuthInteraction
+    notify: (event: AuthEvent) => void
+    prompt: (prompt: AuthPrompt) => Promise<string>
+    signal: AbortSignal
+  type AuthPrompt = { signal?: AbortSignal } & (
+      | {
+      type: 'text' | 'secret' | 'manual_code'
+      message: string
+      placeholder?: string
+      }
+      | {
+      type: 'select'
+      message: string
+      options: readonly { id: string; label: string }[]
+      }
+      )
   interface BashExecutionEntry
     cancelled: boolean
     command: string
@@ -87,6 +108,12 @@
     path: string
   function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
   function createVela: (options?: VelaOptions) => Vela
+  type Credential = ApiKeyCredential | OAuthCredential
+  interface CredentialStore
+    delete: (provider: string) => Promise<void>
+    get: (provider: string) => Credential | undefined
+    list: () => string[]
+    modify: (provider: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>) => Promise<Credential | undefined>
   interface CustomEntry
     customType: string
     data?: unknown
@@ -169,6 +196,11 @@
     appId?: string | undefined
     appSecret?: string | undefined
     owners?: string[] | undefined
+  type FetchFunction = (
+      input: string | URL | Request,
+      init?: RequestInit,
+      ) => Promise<Response>
+  function fileCredentialStore: (path: string) => CredentialStore
   function fileSessionStorage: (dir: string, logger?: VelaLogger) => SessionStorage
   interface ForkOptions
     position?: "before" | "at" | undefined
@@ -220,6 +252,14 @@
     providers: string[]
     tools: string[]
   function loadModels: (options: { agentDir: string; env?: Env; }) => Record<string, ProviderDefinition>
+  interface LoginOptions
+    agentName?: string | undefined
+    getDeviceId?: (() => string) | undefined
+  interface LoginProvider
+    apiKey: boolean
+    oauth?: string | undefined
+    provider: string
+    source?: string | undefined
   function mcp: (options?: McpOptions) => VelaExtension
   type McpExposure = 'direct' | 'deferred' | 'hidden'
   interface McpHttpServerConfig
@@ -250,6 +290,7 @@
     toolExposure?: Record<string, McpExposure> | undefined
     type?: "stdio" | undefined
   function memory: () => VelaExtension
+  function memoryCredentialStore: (initial?: Record<string, Credential>) => CredentialStore
   function memorySessionStorage: () => SessionStorage
   function migrateSessionV1: (id: string, lines: unknown[]) => SessionFileEntry[]
   interface ModelChangeEntry
@@ -262,10 +303,13 @@
     contextWindow?: number | undefined
     cost?: ModelPricing | undefined
     id: string
+    input?: string[] | undefined
+    maxTokens?: number | undefined
     name?: string | undefined
     provider: string
     reasoning?: boolean | undefined
     ref: string
+    thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>> | undefined
   interface ModelPricing
     cacheRead: number
     cacheWrite: number
@@ -275,8 +319,11 @@
     contextWindow?: number | undefined
     cost?: ModelPricing | undefined
     id: string
+    input?: string[] | undefined
+    maxTokens?: number | undefined
     name?: string | undefined
     reasoning?: boolean | undefined
+    thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>> | undefined
   interface NavigateTreeOptions
     focus?: string | undefined
     label?: string | undefined
@@ -292,6 +339,17 @@
   interface NestedToolCalls
     calls: NestedToolCallRecord[]
     complete: boolean
+  interface OAuthCredential
+    access: string
+    expires: number
+    refresh: string
+    type: "oauth"
+  interface OAuthLogin
+    login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; }) => Promise<Credential>
+    name: string
+    refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
+    transformParams?: ((params: LanguageModelV4CallOptions) => LanguageModelV4CallOptions) | undefined
+    wrapFetch?: ((fetch: FetchFunction) => FetchFunction) | undefined
   interface OutgoingMessage
     channelId: string
     recipientId: string
@@ -311,9 +369,16 @@
     baseUrl?: string | undefined
     headers?: Record<string, string> | undefined
     models?: ModelSpec[] | undefined
+  interface ProviderContext
+    credential: () => Promise<Credential | undefined>
+    provider: string
   interface ProviderDefinition
-    createModel: (id: string) => LanguageModel
+    apiKeyLogin?: boolean | undefined
+    authSource?: ((credential: Credential | undefined) => string | undefined) | undefined
+    createModel: (id: string, ctx: ProviderContext) => LanguageModel
+    defaultModel?: string | undefined
     models?: ModelSpec[] | undefined
+    oauth?: OAuthLogin | undefined
   interface ProviderStreamEvent
     data: unknown
     model: string
@@ -519,7 +584,10 @@
     dispose: () => Promise<void>
     extensions: () => LoadedExtension[]
     listSessions: () => Promise<SessionSummary[]>
-    models: () => ModelInfo[]
+    login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
+    loginProviders: () => LoginProvider[]
+    logout: (provider: string) => Promise<boolean>
+    models: (options?: { all?: boolean; }) => ModelInfo[]
     readonly cwd: string
     readonly dataDir: string
     readonly limits: VelaLimits
@@ -533,6 +601,7 @@
     agentDir: string
     appendSystemPrompt?: string | undefined
     contextFiles: ContextFile[]
+    credentials: CredentialStore
     cwd: string
     dataDir: string
     extensionConfig: Record<string, Record<string, unknown>>
@@ -693,6 +762,7 @@
     autoCompaction?: boolean | undefined
     binDir?: string | undefined
     contextFiles?: false | ContextFile[] | undefined
+    credentials?: CredentialStore | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
@@ -713,6 +783,7 @@
     append: (message: ModelMessage) => void
     appendEntry: (customType: string, data?: unknown) => void
     autoCompaction: boolean
+    availableThinkingLevels: () => ThinkingLevel[]
     clearQueue: () => { steering: string[]; followUp: string[]; }
     clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
     close: () => Promise<void>
@@ -765,6 +836,7 @@
     dataDir?: string | undefined
     defaultModel?: string | undefined
     defaultThinkingLevel?: ThinkingLevel | undefined
+    enabledModels?: string[] | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: string[] | undefined
     limits?: Partial<VelaLimits> | undefined

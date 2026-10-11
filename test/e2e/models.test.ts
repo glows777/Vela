@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { wrapLanguageModel } from 'ai'
 import type { VelaEvent } from '../../src/agent/events.ts'
 import { DEFAULT_LIMITS } from '../../src/limits.ts'
 import type { VelaLogger } from '../../src/logger.ts'
@@ -168,7 +169,7 @@ test('thinking levels map to the reasoning call option', async () => {
   expect(big.calls.map((c) => c.reasoning)).toEqual([
     'medium',
     'high',
-    'xhigh',
+    'max',
     'none',
   ])
   expect(plain.calls[0]!.reasoning).toBeUndefined()
@@ -223,21 +224,52 @@ test('a resumed session restores its model and thinking level', async () => {
   }
 })
 
-test('a thinking level the model does not support fails the prompt with a clear error', async () => {
-  const { plain, providers } = fakeProvider()
-  const started: VelaEvent[] = []
+test('the thinking level is clamped to what the model supports, like pi', async () => {
+  const { big, plain, providers } = fakeProvider()
+  plain.push(fauxText('plain'))
+  big.push(fauxText('big'))
   const t = createTestVela({ model: 'fake/plain', providers })
-  expect(t.session.thinkingLevel).toBe('medium')
-  t.vela.subscribe((event) => {
-    if (event.type === 'agent_start') started.push(event)
+  // A model without thinking: the level is off, and no reasoning option is sent
+  expect(t.session.thinkingLevel).toBe('off')
+  expect(t.session.availableThinkingLevels()).toEqual(['off'])
+  t.session.setThinkingLevel('high')
+  expect(t.session.thinkingLevel).toBe('off')
+  await t.run('Hello')
+  expect(plain.calls[0]!.reasoning).toBeUndefined()
+  // A model with thinking uses the requested level again
+  t.session.setModel('fake/big')
+  expect(t.session.thinkingLevel).toBe('high')
+  await t.run('Again')
+  expect(big.calls[0]!.reasoning).toBe('high')
+})
+
+test('levels missing from a thinkingLevelMap move to the nearest supported one', async () => {
+  const model = createFauxModel({ modelId: 'mapped' })
+  const t = createTestVela({
+    model: 'fake/mapped',
+    providers: {
+      fake: {
+        models: [
+          {
+            id: 'mapped',
+            reasoning: true,
+            thinkingLevelMap: { off: null, minimal: null, xhigh: 'xhigh' },
+          },
+        ],
+        createModel: () => model,
+      },
+    },
   })
-  await expect(t.session.prompt('Hello')).rejects.toThrow(
-    'Model fake/plain does not support thinking',
-  )
-  // No request was sent and the prompt was not added to history
-  expect(plain.calls).toHaveLength(0)
-  expect(started).toHaveLength(0)
-  expect(t.session.messages).toHaveLength(0)
+  expect(t.session.availableThinkingLevels()).toEqual([
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+  ])
+  t.session.setThinkingLevel('off')
+  expect(t.session.thinkingLevel).toBe('low')
+  t.session.setThinkingLevel('max')
+  expect(t.session.thinkingLevel).toBe('xhigh')
 })
 
 test('a saved model that no longer resolves warns and keeps the current one', async () => {
@@ -278,17 +310,21 @@ test('a model passed as an object is not saved with the session', async () => {
   }
 })
 
-test('without a default model a session must pick one before prompting', async () => {
+test('without a chosen model, the first provider with a credential supplies the model (like pi)', async () => {
   const { big, providers } = fakeProvider()
   big.push(fauxText('ok'))
+  const none = createVela({ extensions: [] })
   const vela = createVela({ providers, extensions: [] })
   try {
+    await expect(none.session().prompt('hi')).rejects.toThrow(
+      'No model selected',
+    )
     const session = vela.session()
-    await expect(session.prompt('hi')).rejects.toThrow('No model selected')
-    session.setModel('fake/big')
     await session.prompt('hi')
+    expect(session.modelInfo.ref).toBe('fake/big')
     expect(big.calls).toHaveLength(1)
   } finally {
+    await none.dispose()
     await vela.dispose()
   }
 })
@@ -307,10 +343,68 @@ test('/model lists and switches models; /thinking sets the level for the session
   await captureConsole(() => t.command('/model fake/plain'))
   expect(t.session.modelInfo.ref).toBe('fake/plain')
 
-  await captureConsole(() => t.command('/thinking high'))
+  const clamped = await captureConsole(() => t.command('/thinking high'))
+  expect(clamped.output).toContain(
+    'fake/plain does not support high; using off',
+  )
+  await captureConsole(() => t.command('/model fake/big'))
   expect(t.session.thinkingLevel).toBe('high')
   const wrong = await captureConsole(() => t.command('/thinking huge'))
   expect(wrong.output).toContain('Must be one of')
   expect(t.session.thinkingLevel).toBe('high')
   expect(wrong.output).not.toContain('default')
+})
+
+test('an extension provider reads its /login credential per request, and an expiring OAuth token is refreshed once', async () => {
+  const model = createFauxModel({ modelId: 'm' })
+  model.push(fauxText('one'), fauxText('two'))
+  const tokens: (string | undefined)[] = []
+  let refreshes = 0
+  const provider: ProviderDefinition = {
+    oauth: {
+      name: 'Sign in with Fake',
+      login: async () => ({
+        type: 'oauth',
+        access: 'a1',
+        refresh: 'r1',
+        expires: Date.now() + 1000,
+      }),
+      async refresh(credential) {
+        refreshes++
+        return { ...credential, access: 'a2', expires: Date.now() + 3_600_000 }
+      },
+    },
+    authSource: (credential) => credential && 'auth.json',
+    createModel: (_id, ctx) =>
+      wrapLanguageModel({
+        model: model as never,
+        middleware: {
+          specificationVersion: 'v4',
+          transformParams: async ({ params }) => {
+            const credential = await ctx.credential()
+            tokens.push(
+              credential?.type === 'oauth' ? credential.access : undefined,
+            )
+            return params
+          },
+        },
+      }),
+  }
+  const t = createTestVela({ providers: { fake: provider } })
+  // Nothing is available before signing in
+  expect(t.vela.models()).toEqual([])
+  expect(t.vela.models({ all: true })).toEqual([])
+  await t.vela.login('fake', 'oauth', {
+    signal: new AbortController().signal,
+    prompt: async () => '',
+    notify: () => {},
+  })
+  t.session.setModel('fake/m')
+  await t.run('first')
+  await t.run('second')
+  // The stored token expired within 5 minutes: refreshed before the first request, then reused
+  expect(tokens).toEqual(['a2', 'a2'])
+  expect(refreshes).toBe(1)
+  expect(await t.vela.logout('fake')).toBe(true)
+  expect(await t.vela.logout('fake')).toBe(false)
 })

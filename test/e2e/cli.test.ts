@@ -283,7 +283,7 @@ test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stop
   expect(typo.stderr).toContain('Unknown tool: read. Available: read_file')
 })
 
-test.concurrent('--list-models lists configured models and exits', async () => {
+test.concurrent('--list-models lists the models of providers with a credential and exits', async () => {
   const home = tempDir('vela-home-')
   dirs.push(home)
   await Bun.write(
@@ -293,6 +293,7 @@ test.concurrent('--list-models lists configured models and exits', async () => {
         local: {
           baseUrl: 'http://localhost:1/v1',
           api: 'openai-completions',
+          apiKey: 'none',
           models: [{ id: 'small', contextWindow: 32000 }, { id: 'big' }],
         },
       },
@@ -314,6 +315,17 @@ test.concurrent('--list-models lists configured models and exits', async () => {
   })
   expect(unusable.code).toBe(0)
   expect(unusable.stdout).toContain('local     big')
+  // Built-in providers without a key are left out; a key stored by /login in auth.json makes them available
+  expect(unusable.stdout).not.toContain('openrouter')
+  await Bun.write(
+    join(home.path, 'auth.json'),
+    JSON.stringify({ openrouter: { type: 'api_key', key: 'sk-or' } }),
+  )
+  const stored = await cli(['--list-models', 'kimi-k2.6'], {
+    model: `faux:${scenario('hello')}`,
+    agentDir: home.path,
+  })
+  expect(stored.stdout).toContain('openrouter  moonshotai/kimi-k2.6')
 })
 
 test.concurrent('--session opens a named session id; -r needs interactive mode', async () => {
@@ -696,7 +708,7 @@ test.concurrent('an unknown --model or no model at all stops with a clear messag
 
   const none = await cli(['-p', 'hello'], { model: '' })
   expect(none.code).toBe(1)
-  expect(none.stderr).toContain('No model selected')
+  expect(none.stderr).toContain('No model available. Sign in with /login')
 
   const missingKey = await cli(
     ['-p', 'hello', '--model', 'anthropic/claude-x'],

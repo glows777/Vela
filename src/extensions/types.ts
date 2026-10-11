@@ -336,6 +336,8 @@ export interface ExtensionAPI {
    * Registers a model provider (like pi's registerProvider, but only the "return an AI SDK model" form).
    * Afterwards `provider/id` works in createVela's model, `session.setModel()`, and the CLI's
    * `--model` / `/model`. Provider names are not prefixed; a name that already exists throws.
+   * With `oauth` (or `apiKeyLogin`) the provider appears in `/login`; `createModel(id, ctx)` reads the stored
+   * credential with `ctx.credential()` on each request.
    */
   registerProvider(name: string, provider: ProviderDefinition): void
   /** Registers a `/name` command: in owner sessions, `session.prompt('/name args')` runs it instead of sending it to the model. */

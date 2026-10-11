@@ -27,7 +27,7 @@ export const modelCommands: CommandHandler[] = [
     const models = vela.models()
     if (models.length) {
       lines.push(
-        '  Configured models (switch with /model <provider/id>; unlisted ids work too):',
+        '  Available models (switch with /model <provider/id>; unlisted ids work too):',
       )
       for (const m of models) {
         const meta = [
@@ -40,7 +40,7 @@ export const modelCommands: CommandHandler[] = [
       }
     } else
       lines.push(
-        '  Switch with /model <provider/id>, e.g. /model anthropic/<model id>',
+        '  No provider has a credential: sign in with /login or set an API key; or switch with /model <provider/id>',
       )
     print(lines.join('\n'))
     return true
@@ -50,7 +50,7 @@ export const modelCommands: CommandHandler[] = [
     const level = cmd.slice('/thinking'.length).trim()
     if (!level) {
       print(
-        `\n[thinking] Current: ${session.thinkingLevel}; options: ${THINKING_LEVELS.join(' / ')}`,
+        `\n[thinking] Current: ${session.thinkingLevel}; this model supports: ${session.availableThinkingLevels().join(' / ')}`,
       )
       return true
     }
@@ -59,7 +59,12 @@ export const modelCommands: CommandHandler[] = [
       return true
     }
     session.setThinkingLevel(level as ThinkingLevel)
-    print(`\n[thinking] Session now uses: ${session.thinkingLevel}`)
+    // Like pi, a level the model doesn't support is clamped; say so rather than pretend it applies
+    print(
+      session.thinkingLevel === level
+        ? `\n[thinking] Session now uses: ${level}`
+        : `\n[thinking] ${session.modelInfo.ref} does not support ${level}; using ${session.thinkingLevel} (switching to a model that supports ${level} uses it)`,
+    )
     return true
   },
 ]

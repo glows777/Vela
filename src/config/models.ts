@@ -2,7 +2,16 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
-import type { ModelSpec, ProviderDefinition } from '../models/index.ts'
+import { type LanguageModel, wrapLanguageModel } from 'ai'
+import { openaiChatGPTLogin } from '../auth/oauth/openai-chatgpt.ts'
+import { openRouterLogin } from '../auth/oauth/openrouter.ts'
+import type { Credential, FetchFunction, OAuthLogin } from '../auth/types.ts'
+import { catalogLookup, catalogModels } from '../models/catalog.ts'
+import type {
+  ModelSpec,
+  ProviderContext,
+  ProviderDefinition,
+} from '../models/index.ts'
 import { interpolate, isPlainObject } from './interpolate.ts'
 
 type Env = Record<string, string | undefined>
@@ -29,18 +38,56 @@ export interface ProviderConfig {
   models?: ModelSpec[]
 }
 
+interface BuiltinProvider {
+  config: ProviderConfig
+  /** Environment variable with the API key (checked after auth.json and models.json, like pi) */
+  envKey: string
+  defaultModel: string
+  oauth?: OAuthLogin
+  /** Rewrites the JSON request body for provider-specific fields the AI SDK doesn't send */
+  prepareBody?: (body: Record<string, unknown>) => void
+}
+
 /**
- * Built-in providers; keys come from environment variables. A models.json provider
- * with the same name overrides these fields (e.g. only `models`, to add contextWindow / cost to openai).
- * openai uses Chat Completions (existing behavior; works with any OpenAI-compatible service).
+ * OpenRouter takes reasoning effort as `reasoning: { effort }` (pi's `thinkingFormat: 'openrouter'`), and the
+ * system role rather than `developer` for every model it routes to.
  */
-const BUILTIN_PROVIDERS: Record<string, ProviderConfig> = {
-  openai: {
-    api: 'openai-completions',
-    apiKey: '$OPENAI_API_KEY',
-    baseUrl: '$OPENAI_API_BASE_URL',
+function openRouterBody(body: Record<string, unknown>): void {
+  if (typeof body.reasoning_effort === 'string') {
+    body.reasoning = { effort: body.reasoning_effort }
+    delete body.reasoning_effort
+  }
+  if (Array.isArray(body.messages))
+    for (const message of body.messages as { role?: string }[])
+      if (message.role === 'developer') message.role = 'system'
+}
+
+/**
+ * Built-in providers (pi's ids, defaults and environment variables). Their models come from the built-in
+ * catalog; a models.json provider with the same name overrides fields (e.g. `api`, `baseUrl`) and adds models.
+ */
+const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
+  anthropic: {
+    config: { api: 'anthropic-messages' },
+    envKey: 'ANTHROPIC_API_KEY',
+    defaultModel: 'claude-opus-4-8',
   },
-  anthropic: { api: 'anthropic-messages', apiKey: '$ANTHROPIC_API_KEY' },
+  openai: {
+    config: { api: 'openai-responses', baseUrl: '$OPENAI_API_BASE_URL' },
+    envKey: 'OPENAI_API_KEY',
+    defaultModel: 'gpt-5.5',
+    oauth: openaiChatGPTLogin,
+  },
+  openrouter: {
+    config: {
+      api: 'openai-completions',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    },
+    envKey: 'OPENROUTER_API_KEY',
+    defaultModel: 'moonshotai/kimi-k2.6',
+    oauth: openRouterLogin,
+    prepareBody: openRouterBody,
+  },
 }
 
 /**
@@ -59,14 +106,47 @@ export function loadModels(options: {
     ...Object.keys(fromFile),
   ])
   const providers: Record<string, ProviderDefinition> = {}
-  for (const name of names)
+  for (const name of names) {
+    const builtin = BUILTIN_PROVIDERS[name]
+    const own = fromFile[name] ?? {}
     providers[name] = createProvider(
       name,
-      { ...BUILTIN_PROVIDERS[name], ...fromFile[name] },
+      {
+        ...builtin?.config,
+        ...own,
+        models: mergeModels(
+          name,
+          builtin ? catalogModels(name) : [],
+          own.models,
+        ),
+      },
+      builtin,
       env,
       file,
     )
+  }
   return providers
+}
+
+/** Catalog models, then models.json entries (a listed id overrides the catalog entry field by field) */
+function mergeModels(
+  provider: string,
+  catalog: ModelSpec[],
+  listed: ModelSpec[] = [],
+): ModelSpec[] {
+  const byId = new Map<string, ModelSpec>()
+  for (const model of catalog) {
+    const { api: _, ...spec } = model as ModelSpec & { api?: string }
+    byId.set(spec.id, spec)
+  }
+  for (const model of listed) {
+    const { api: _, ...known } = (byId.get(model.id) ??
+      catalogLookup(provider, model.id) ?? { id: model.id }) as ModelSpec & {
+      api?: string
+    }
+    byId.set(model.id, { ...known, ...model })
+  }
+  return [...byId.values()]
 }
 
 function readModelsFile(file: string): Record<string, ProviderConfig> {
@@ -101,9 +181,13 @@ function readModelsFile(file: string): Record<string, ProviderConfig> {
   return providers as Record<string, ProviderConfig>
 }
 
+/** Placeholder the AI SDK sends until the auth fetch replaces it with the key of this request */
+const MANAGED_KEY = 'vela-managed-key'
+
 function createProvider(
   name: string,
   config: ProviderConfig,
+  builtin: BuiltinProvider | undefined,
   env: Env,
   file: string,
 ): ProviderDefinition {
@@ -117,25 +201,108 @@ function createProvider(
         ]),
       )
     : undefined
+  const oauth = builtin?.oauth
+  const envKey = builtin?.envKey
+  const configured = () => read(config.apiKey)
+
+  // Like pi: a stored credential first, then models.json's apiKey, then the environment variable
+  const authSource = (credential: Credential | undefined) => {
+    if (credential)
+      return credential.type === 'oauth' ? 'OAuth (auth.json)' : 'auth.json'
+    if (configured())
+      return config.apiKey?.startsWith('$')
+        ? config.apiKey.replace(/[${}]/g, '')
+        : 'models.json'
+    if (envKey && env[envKey]) return envKey
+  }
+
+  const requestKey = async (
+    ctx: ProviderContext,
+  ): Promise<{ key: string; oauth: boolean }> => {
+    const credential = await ctx.credential()
+    if (credential?.type === 'api_key')
+      return { key: credential.key, oauth: false }
+    if (credential?.type === 'oauth') {
+      if (!oauth)
+        throw new Error(
+          `auth.json has an OAuth credential for ${name}, but Vela has no OAuth sign-in for this provider; run /logout ${name}`,
+        )
+      return { key: credential.access, oauth: true }
+    }
+    const key = configured() ?? (envKey ? env[envKey] : undefined)
+    if (key) return { key, oauth: false }
+    const ways = [
+      ...(oauth || builtin ? [`run /login ${name}`] : []),
+      ...(config.apiKey?.startsWith('$')
+        ? [
+            `set the ${config.apiKey.replace(/[${}]/g, '')} environment variable`,
+          ]
+        : envKey
+          ? [`set the ${envKey} environment variable`]
+          : []),
+      `set apiKey in ${file}`,
+    ]
+    throw new Error(`Provider ${name} has no API key (${ways.join(', or ')})`)
+  }
+
   return {
     models: config.models,
-    createModel(id) {
+    ...(builtin
+      ? { defaultModel: builtin.defaultModel, apiKeyLogin: true }
+      : {}),
+    ...(oauth ? { oauth } : {}),
+    authSource,
+    createModel(id, ctx) {
       if (!config.api)
         throw new Error(`${file}: providers.${name} is missing api`)
-      const apiKey = read(config.apiKey)
-      if (!apiKey)
-        throw new Error(
-          `Provider ${name} has no API key (${config.apiKey?.startsWith('$') ? `set the ${config.apiKey.replace(/[${}]/g, '')} environment variable, or ` : ''}set apiKey in ${file})`,
-        )
-      const baseURL = read(config.baseUrl)
-      switch (config.api) {
-        case 'openai-completions':
-          return createOpenAI({ apiKey, baseURL, headers, name }).chat(id)
-        case 'openai-responses':
-          return createOpenAI({ apiKey, baseURL, headers, name }).responses(id)
-        case 'anthropic-messages':
-          return createAnthropic({ apiKey, baseURL, headers, name })(id)
+      const api = config.api
+      // Each request asks for the current key (OAuth tokens expire and are refreshed, /login can switch accounts)
+      const fetchWithAuth: FetchFunction = async (input, init) => {
+        const { key, oauth: isOAuth } = await requestKey(ctx)
+        const requestHeaders = new Headers(init?.headers)
+        if (api === 'anthropic-messages') requestHeaders.set('x-api-key', key)
+        else requestHeaders.set('authorization', `Bearer ${key}`)
+        let body = init?.body
+        if (builtin?.prepareBody && typeof body === 'string') {
+          const json = JSON.parse(body) as Record<string, unknown>
+          builtin.prepareBody(json)
+          body = JSON.stringify(json)
+        }
+        const base: FetchFunction = (i, o) => globalThis.fetch(i, o)
+        const send = isOAuth && oauth?.wrapFetch ? oauth.wrapFetch(base) : base
+        return send(input, { ...init, headers: requestHeaders, body })
       }
+      const settings = {
+        apiKey: MANAGED_KEY,
+        baseURL: read(config.baseUrl),
+        headers,
+        name,
+        fetch: fetchWithAuth as typeof globalThis.fetch,
+      }
+      let model: LanguageModel
+      switch (api) {
+        case 'openai-completions':
+          model = createOpenAI(settings).chat(id)
+          break
+        case 'openai-responses':
+          model = createOpenAI(settings).responses(id)
+          break
+        case 'anthropic-messages':
+          model = createAnthropic(settings)(id)
+          break
+      }
+      const transform = oauth?.transformParams?.bind(oauth)
+      if (!transform || typeof model === 'string') return model
+      return wrapLanguageModel({
+        model,
+        middleware: {
+          specificationVersion: 'v4',
+          transformParams: async ({ params }) =>
+            (await ctx.credential())?.type === 'oauth'
+              ? transform(params)
+              : params,
+        },
+      })
     },
   }
 }

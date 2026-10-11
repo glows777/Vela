@@ -53,6 +53,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `defaultModel` | `"provider/id"` | none | Model for new sessions. See [Models](models.md#selecting-a-model). |
+| `enabledModels` | string[] | none | Models Ctrl+P (and RPC `cycle_model`) cycles through, like pi's `enabledModels`. See [Enabled models](#enabled-models). |
 | `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. |
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
 | `shellPath` | string | `bash` on `PATH` | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. A path that does not exist makes every `bash` call fail with an error. |
@@ -62,6 +63,16 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 | `skills` | string[] | `[]` | Extra skill directories or files. |
 | `prompts` | string[] | `[]` | Extra prompt template directories or files. |
 | `extensionConfig` | object | `{}` | Per-extension configuration, keyed by extension name. |
+
+### Enabled models
+
+`enabledModels` lists patterns in the order Ctrl+P should visit them. A pattern with `/` matches `provider/id`; one without matches the model id under any provider. `*` matches anything, and matching ignores case. Only available models (providers with a credential) are included.
+
+```json
+{ "enabledModels": ["anthropic/claude-opus-4-8", "gpt-5.5", "openrouter/moonshotai/*"] }
+```
+
+Without the setting, or when no pattern matches, Ctrl+P cycles through all available models.
 
 ### limits
 

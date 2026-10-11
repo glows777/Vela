@@ -51,16 +51,9 @@ test('thinking levels map to the AI SDK reasoning option', () => {
   const m = { id: 'm', provider: 'p', ref: 'p/m' }
   expect(reasoningOption('off', m)).toBe('none')
   expect(reasoningOption('high', m)).toBe('high')
-  expect(reasoningOption('max', m)).toBe('xhigh')
-  // A model declared without thinking support: off sends no option; other levels throw instead of being silently ignored
+  expect(reasoningOption('max', m)).toBe('max')
+  // A model declared without thinking support: off sends no option (other levels are clamped to off before this)
   expect(reasoningOption('off', { ...m, reasoning: false })).toBeUndefined()
-  expect(() => reasoningOption('medium', { ...m, reasoning: false })).toThrow(
-    'Model p/m does not support thinking',
-  )
-  // Core doesn't know the mode: the hint names the interactive, command-line and SDK ways to turn thinking off
-  expect(() => reasoningOption('medium', { ...m, reasoning: false })).toThrow(
-    "set the thinking level to off (/thinking off, --thinking off, or setThinkingLevel('off'))",
-  )
 })
 
 test('context limits follow the model window; explicit limits win', () => {

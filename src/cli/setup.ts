@@ -304,15 +304,14 @@ function toolMatcher(entry: string): (name: string) => boolean {
 
 /**
  * `--list-models` output (like pi's): provider, model, context window and thinking support, sorted by
- * provider and id. Vela has no built-in model catalog, so only models listed in models.json, settings
- * or by extensions appear.
+ * provider and id. Only providers with a credential (auth.json, models.json or an environment variable) appear.
  */
 export function formatModelList(
   models: readonly ModelInfo[],
   search?: string,
 ): string {
   if (!models.length)
-    return 'No models configured. List them in ~/.vela/models.json (or in an extension provider); any provider/id still works with --model.\n'
+    return 'No models available: sign in with /login, or set a provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY) or a provider in ~/.vela/models.json.\n'
   const found = (
     search
       ? fuzzyFilter([...models], search, (m) => `${m.provider} ${m.id}`)

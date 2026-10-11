@@ -14,6 +14,22 @@ export type {
   VelaEventListener,
   VelaSessionEventListener,
 } from './agent/events.ts'
+export {
+  fileCredentialStore,
+  memoryCredentialStore,
+} from './auth/store.ts'
+export type {
+  ApiKeyCredential,
+  AuthEvent,
+  AuthInteraction,
+  AuthPrompt,
+  Credential,
+  CredentialStore,
+  FetchFunction,
+  LoginOptions,
+  OAuthCredential,
+  OAuthLogin,
+} from './auth/types.ts'
 export type {
   ChannelDefinition,
   IncomingMessage,
@@ -83,8 +99,10 @@ export { type WebOptions, web } from './extensions/web/index.ts'
 export type { VelaLimits } from './limits.ts'
 export { silentLogger, type VelaLogger } from './logger.ts'
 export type {
+  LoginProvider,
   ModelInfo,
   ModelSpec,
+  ProviderContext,
   ProviderDefinition,
   ThinkingLevel,
 } from './models/index.ts'

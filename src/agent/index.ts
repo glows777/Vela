@@ -51,7 +51,7 @@ interface AgentLoopParameter {
   /** Retry, context and other limits; missing fields use defaults. */
   limits?: Partial<VelaLimits>
   /** AI SDK reasoning option (mapped from the thinking level); not sent when omitted */
-  reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /**
    * Takes queued steer messages (like pi's getSteeringMessages): called once after each step's tools
    * finish and before the next model request; the messages are appended to the history. If the model
