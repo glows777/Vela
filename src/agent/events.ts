@@ -162,6 +162,11 @@ export type VelaEvent =
    */
   | { type: 'agent_settled' }
   /**
+   * Output of a running `session.executeBash()` command (`!cmd`, RPC `bash`), chunk by chunk (like pi). `id` is
+   * the `id` passed to `executeBash()` (the RPC command's id).
+   */
+  | { type: 'bash_execution_update'; id?: string; delta: string }
+  /**
    * Old tool output was folded into file references (`micro`), or the context needs a summary that this
    * request may not run (`summary-required`). Vela-specific; summaries are compaction_start / compaction_end.
    */

@@ -125,12 +125,15 @@ async function runShell(
     signal?: AbortSignal
     /** The output tail while the command runs */
     onUpdate?: (text: string) => void
+    /** Each new piece of output, all of it, in order */
+    onDelta?: (delta: string) => void
   },
 ): Promise<ShellRun> {
   const { signal: abortSignal } = options
-  const streaming = options.onUpdate
-    ? streamTail(path, options.onUpdate)
-    : undefined
+  const streaming =
+    options.onUpdate || options.onDelta
+      ? streamOutput(path, options.onUpdate, options.onDelta)
+      : undefined
   try {
     const proc = spawn(options.shellPath ?? 'bash', ['-lc', command], {
       cwd: options.cwd,
@@ -222,6 +225,8 @@ export async function runBash(
     signal?: AbortSignal
     /** The output tail while the command runs */
     onUpdate?: (output: string) => void
+    /** Each new piece of output, all of it, in order */
+    onDelta?: (delta: string) => void
   },
 ): Promise<BashResult> {
   if (options.shellPath && !existsSync(options.shellPath))
@@ -242,21 +247,33 @@ export async function runBash(
 }
 
 /**
- * Sends the output tail to onUpdate while the command runs. Unlike pi, which reads pipes,
- * the output goes straight to the result file, so the file is polled.
+ * Sends the output tail to onUpdate and each new piece of output to onDelta while the command runs.
+ * Unlike pi, which reads pipes, the output goes straight to the result file, so the file is polled;
+ * stop() reads once more so onDelta gets everything.
  */
-function streamTail(
+function streamOutput(
   path: string,
-  onUpdate: (text: string) => void,
+  onUpdate?: (text: string) => void,
+  onDelta?: (delta: string) => void,
 ): { stop(): Promise<void> } {
   let sent = 0
+  const decoder = new TextDecoder()
   let pending: Promise<void> = Promise.resolve()
-  const poll = async () => {
+  const poll = async (final = false) => {
     const { size } = await stat(path)
+    if (size > sent && onDelta) {
+      const delta = decoder.decode(await readRange(path, sent, size - sent), {
+        stream: !final,
+      })
+      if (delta) onDelta(delta)
+    } else if (final && onDelta) {
+      const rest = decoder.decode()
+      if (rest) onDelta(rest)
+    }
     if (size === sent) return
     sent = size
-    const { text } = await readTail(path, size)
-    onUpdate(text)
+    // The final read is only for onDelta: the caller gets the tail from the result
+    if (onUpdate && !final) onUpdate((await readTail(path, size)).text)
   }
   let busy = false
   const timer = setInterval(() => {
@@ -273,6 +290,7 @@ function streamTail(
     stop: async () => {
       clearInterval(timer)
       await pending
+      if (onDelta) await poll(true).catch(() => {})
     },
   }
 }

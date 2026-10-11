@@ -170,6 +170,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         throw new Error('command must be a non-empty string')
       return session.executeBash(command.command, {
         excludeFromContext: command.excludeFromContext === true,
+        ...(command.id === undefined ? {} : { id: command.id }),
       })
     },
     abort_bash() {

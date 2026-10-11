@@ -160,10 +160,11 @@ Removes all queued messages and returns them: `{ "steering": string[], "followUp
 ```
 
 ```json
+{"type":"bash_execution_update","id":"6b","delta":" M src/a.ts\n","sessionId":"20261008-105115-a006"}
 {"id":"6b","type":"response","command":"bash","success":true,"data":{"output":" M src/a.ts","exitCode":0,"cancelled":false,"truncated":false}}
 ```
 
-Runs a shell command for the user, like the TUI's `!command` (see `session.executeBash()` in [SDK](sdk.md#session-members)), and responds when it finishes. `output` is the last 2,000 lines or 50 KB of combined stdout and stderr; when `truncated`, `fullOutputPath` names the file with all of it. `exitCode` is missing when the command was cancelled. The command and output go to the model as a user message with the next prompt; `"excludeFromContext": true` (the TUI's `!!`) saves it without sending it. While the agent runs, the result is recorded when the run ends. Only one command runs at a time.
+Runs a shell command for the user, like the TUI's `!command` (see `session.executeBash()` in [SDK](sdk.md#session-members)), and responds when it finishes. While it runs, its output streams as `bash_execution_update` events (like pi) whose `id` is the command's `id` and whose `delta`s add up to all of the output. `output` is the last 2,000 lines or 50 KB of combined stdout and stderr; when `truncated`, `fullOutputPath` names the file with all of it. `exitCode` is missing when the command was cancelled. The command and output go to the model as a user message with the next prompt; `"excludeFromContext": true` (the TUI's `!!`) saves it without sending it. While the agent runs, the result is recorded when the run ends. Only one command runs at a time.
 
 #### abort_bash
 

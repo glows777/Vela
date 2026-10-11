@@ -468,13 +468,16 @@ export class VelaSession {
    * without tool permissions or hooks; owner sessions only, one command at a time. The result is recorded
    * in the session and reaches the model as a user message with the next prompt; `excludeFromContext`
    * (`!!cmd`) records it without sending it. While the agent runs, recording waits until it stops.
-   * `onUpdate` gets the output's tail while the command runs. Rejects if the command cannot start.
+   * `onUpdate` gets the output's tail while the command runs; `bash_execution_update` events carry each new
+   * piece of output, with `id` (like pi). Rejects if the command cannot start.
    */
   async executeBash(
     command: string,
     options: {
       excludeFromContext?: boolean
       onUpdate?: (output: string) => void
+      /** Set on this command's `bash_execution_update` events */
+      id?: string
     } = {},
   ): Promise<BashResult> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
@@ -495,6 +498,12 @@ export class VelaSession {
         shellPath: this.deps.shellPath,
         signal: controller.signal,
         onUpdate: options.onUpdate,
+        onDelta: (delta) =>
+          this.emit({
+            type: 'bash_execution_update',
+            ...(options.id === undefined ? {} : { id: options.id }),
+            delta,
+          }),
       })
       this.pendingBash.push({
         type: 'bash_execution',

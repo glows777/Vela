@@ -122,10 +122,20 @@ test('abortBash() cancels the command, which is still recorded as cancelled', as
   expect(userTexts(t.messages).at(-1)).toContain('(command cancelled)')
 })
 
-test('long output keeps its end and points to the full output file', async () => {
+test('long output keeps its end and points to the full output file; events stream all of it', async () => {
   const t = createTestVela()
-  const result = await t.session.executeBash('seq 1 3000')
+  const result = await t.session.executeBash('seq 1 3000', { id: 'seq' })
   expect(result.truncated).toBe(true)
+  // Events carry all of the output, not only the kept end (like pi)
+  const streamed = t.events
+    .map((event) =>
+      event.type === 'bash_execution_update' && event.id === 'seq'
+        ? event.delta
+        : '',
+    )
+    .join('')
+  expect(streamed.split('\n')).toHaveLength(3001)
+  expect(streamed.endsWith('2999\n3000\n')).toBe(true)
   expect(result.output.split('\n')).toHaveLength(2000)
   expect(result.output.endsWith('3000')).toBe(true)
   expect(result.fullOutputPath).toBeString()
