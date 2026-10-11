@@ -4,18 +4,16 @@
  *
  * 1. Checks the working tree is clean, on main and up to date with origin/main
  * 2. Checks CHANGELOG.md has entries under ## [Unreleased]
- * 3. Sets the version in package.json and turns ## [Unreleased] into ## [x.y.z] - date
+ * 3. Sets the version and stamps its changelog entries, keeping an empty ## [Unreleased]
  * 4. Runs the same checks as CI
  * 5. Commits "Release vx.y.z" and tags it vx.y.z
- * 6. Adds an empty ## [Unreleased] section and commits it
- * 7. Pushes main and the tag; the tag starts .github/workflows/release.yml, which
+ * 6. Pushes main and the tag; the tag starts .github/workflows/release.yml, which
  *    publishes to npm and creates the GitHub release
  */
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
 import {
-  addUnreleased,
   nextVersion,
   stampRelease,
   UNRELEASED,
@@ -76,10 +74,6 @@ await $`bun run smoke:consumer`
 await $`git add package.json CHANGELOG.md`
 await $`git commit -m ${`Release ${tag}`}`
 await $`git tag -a ${tag} -m ${tag}`
-
-await writeFile(CHANGELOG, addUnreleased(await readFile(CHANGELOG, 'utf8')))
-await $`git add CHANGELOG.md`
-await $`git commit -m ${'Add [Unreleased] section for the next release'}`
 
 await $`git push --atomic origin main ${tag}`
 console.log(

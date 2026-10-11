@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -87,7 +88,8 @@ const live = new Set<{ cleanup(): Promise<void> }>()
  */
 export function createTestVela(options: TestVelaOptions = {}) {
   const ownsDir = !options.cwd
-  const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), 'vela-test-'))
+  const cwd =
+    options.cwd ?? realpathSync(mkdtempSync(join(tmpdir(), 'vela-test-')))
   for (const [path, content] of Object.entries(options.files ?? {}))
     writeFile(join(cwd, path), content)
   for (const skill of options.skills ?? []) writeSkill(cwd, skill)
@@ -215,7 +217,7 @@ export function tempDir(prefix = 'vela-test-'): {
   path: string
   cleanup(): void
 } {
-  const path = mkdtempSync(join(tmpdir(), prefix))
+  const path = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
   return { path, cleanup: () => rmSync(path, { recursive: true, force: true }) }
 }
 

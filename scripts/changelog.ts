@@ -31,21 +31,17 @@ export function unreleasedEntries(changelog: string): string {
   return body
 }
 
-/** Turns `## [Unreleased]` into `## [version] - date`. */
+/** Moves unreleased entries into a release, keeping an empty section for the next one. */
 export function stampRelease(
   changelog: string,
   version: string,
   date: string,
 ): string {
   unreleasedEntries(changelog)
-  return changelog.replace(UNRELEASED, `## [${version}] - ${date}`)
-}
-
-/** Adds an empty `## [Unreleased]` section above the newest release. */
-export function addUnreleased(changelog: string): string {
-  const at = changelog.indexOf('\n## [')
-  if (at === -1) throw new Error('CHANGELOG.md has no release sections')
-  return `${changelog.slice(0, at + 1)}${UNRELEASED}\n\n${changelog.slice(at + 1)}`
+  return changelog.replace(
+    UNRELEASED,
+    `${UNRELEASED}\n\n## [${version}] - ${date}`,
+  )
 }
 
 /**

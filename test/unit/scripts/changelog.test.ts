@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import {
-  addUnreleased,
   nextVersion,
   releaseNotes,
   stampRelease,
@@ -24,14 +23,19 @@ First public release.
 `
 
 describe('changelog', () => {
-  test('stamps [Unreleased] as the release and adds a fresh [Unreleased] above it', () => {
+  test('stamps release notes while keeping an empty [Unreleased] for local and tag CI', () => {
     const stamped = stampRelease(CHANGELOG, '0.1.1', '2026-10-10')
     expect(stamped).toContain('## [0.1.1] - 2026-10-10\n\n### Fixed')
-    expect(stamped).not.toContain('[Unreleased]')
-    expect(unreleasedEntries(addUnreleased(stamped))).toBe('')
-    expect(addUnreleased(stamped)).toContain(
-      '## [Unreleased]\n\n## [0.1.1] - 2026-10-10',
-    )
+    expect(unreleasedEntries(stamped)).toBe('')
+    expect(stamped).toContain('## [Unreleased]\n\n## [0.1.1] - 2026-10-10')
+    expect(releaseNotes(stamped, '0.1.1')).toContain('### Fixed')
+    expect(() =>
+      stampRelease(
+        CHANGELOG.replace('## [Unreleased]', ''),
+        '0.1.1',
+        '2026-10-10',
+      ),
+    ).toThrow('no "## [Unreleased]" section')
   })
 
   test('reads the [Unreleased] entries and fails loudly without the section', () => {
