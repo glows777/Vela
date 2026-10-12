@@ -19,6 +19,8 @@ interface GatewayOptions {
 }
 
 export const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
+/** With `idleMs` 0, how often a session that is busy at its deadline is checked again */
+const BUSY_RECHECK_MS = 1000
 
 const PLAIN = /^[A-Za-z0-9_]+$/
 
@@ -129,15 +131,20 @@ export class ChannelGateway {
    * conversation and sender. Once a sender's queue is empty, the session is closed after `idleMs`; its history
    * is saved, and the next message reopens and resumes it.
    */
-  private closeWhenIdle(id: string): void {
+  private closeWhenIdle(id: string, delay?: number): void {
     if (this.stopped) return
+    const idleMs = this.options.idleMs ?? DEFAULT_CHANNEL_IDLE_MS
     const timer = setTimeout(() => {
       this.idleTimers.delete(id)
       const session = this.options.find(id)
-      // Running, or opened with a UI (the terminal resumed it): someone else is using it; the next channel
-      // message rearms the timer
-      if (!session || session.isRunning || session.hasUI || this.queues.has(id))
+      // A queued message rearms the timer once its reply is sent
+      if (!session || this.queues.has(id)) return
+      // Running (an extension or SDK caller is using it), or opened with a UI (the terminal resumed it): check
+      // again later, so it is still closed once that use ends without another channel message
+      if (session.isRunning || session.hasUI) {
+        this.closeWhenIdle(id, idleMs || BUSY_RECHECK_MS)
         return
+      }
       const closed = session
         .close()
         .catch((error) =>
@@ -149,7 +156,7 @@ export class ChannelGateway {
           if (this.closing.get(id) === closed) this.closing.delete(id)
         })
       this.closing.set(id, closed)
-    }, this.options.idleMs ?? DEFAULT_CHANNEL_IDLE_MS)
+    }, delay ?? idleMs)
     // An idle timer alone doesn't keep the process alive
     timer.unref?.()
     this.idleTimers.set(id, timer)

@@ -226,6 +226,23 @@ test('channelIdleMs that a timer cannot wait for is rejected instead of closing 
     )
 })
 
+test('a channel session busy at its idle deadline is closed once that run ends, without another message', async () => {
+  const t = createTestVela({
+    responses: [fauxText('hi'), fauxHang()],
+    channelIdleMs: 50,
+  })
+  const { deliver } = fakeChannel(t)
+  await deliver('u1', 'hello')
+  // An SDK caller (or extension) uses the same session past its deadline
+  const session = t.vela.session('fake-c1-u1')
+  const run = session.prompt('long task').catch(() => {})
+  await Bun.sleep(150)
+  expect(t.vela.sessions().map((s) => s.id)).toContain('fake-c1-u1')
+  session.abort()
+  await run
+  await waitFor(() => !t.vela.sessions().some((s) => s.id === 'fake-c1-u1'))
+})
+
 test('a session is not closed while its sender has messages queued', async () => {
   const t = createTestVela({
     responses: [fauxText('one'), fauxText('two')],

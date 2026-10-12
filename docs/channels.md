@@ -109,7 +109,7 @@ await vela.dispose()
 
 ## Running channels
 
-A channel session that gets no new message for 10 minutes is closed: its history is already saved, and the sender's next message reopens and resumes it. This keeps a long-running bot from holding every conversation it ever had in memory. `createVela({ channelIdleMs })` changes the wait (`0` closes the session right after each reply). A session that is running, or has messages queued, is not closed. Extensions see `session_shutdown` when it closes and `session_start` when it reopens.
+A channel session that gets no new message for 10 minutes is closed: its history is already saved, and the sender's next message reopens and resumes it. This keeps a long-running bot from holding every conversation it ever had in memory. `createVela({ channelIdleMs })` changes the wait (`0` closes the session right after each reply). A session that is running or has messages queued is not closed then; one that is busy (an SDK caller or the terminal is using it) is checked again later. Extensions see `session_shutdown` when it closes and `session_start` when it reopens.
 
 **SDK.** Call `await vela.startChannels()` after `vela.ready()`. `vela.channels()` lists the registered channels. `vela.dispose()` aborts running channel sessions, waits for them, and stops the channels.
 
