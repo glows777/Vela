@@ -16,6 +16,14 @@ import {
 
 afterEach(cleanupTestVelas)
 
+async function waitFor(condition: () => boolean) {
+  const deadline = Date.now() + 2000
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 /** Register a fake channel; returns a function that delivers messages and the replies sent */
 function fakeChannel(t: TestVela, name = 'fake') {
   const sent: OutgoingMessage[] = []
@@ -182,6 +190,45 @@ test('a channel session closed while idle resumes its history when reopened', as
   await deliver('u1', 'What color do I like?')
   expect(sent.at(-1)?.text).toBe('blue')
   expect(await t.readData('sessions/fake-c1-u1.jsonl')).toContain('I like blue')
+})
+
+test('idle channel sessions are closed, so many senders do not stay in memory; the next message resumes', async () => {
+  const answer = (req: { lastUserText: string; prompt: unknown }) =>
+    fauxText(
+      JSON.stringify(req.prompt).includes('I like blue')
+        ? `blue (${req.lastUserText})`
+        : `ok (${req.lastUserText})`,
+    )
+  const t = createTestVela({
+    responses: Array.from({ length: 21 }, () => answer),
+    channelIdleMs: 0,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  const channelSessions = () =>
+    t.vela.sessions().filter((s) => s.id.startsWith('fake-'))
+
+  await Promise.all(
+    Array.from({ length: 20 }, (_, i) => deliver(`u${i}`, `hi ${i}`)),
+  )
+  expect(sent).toHaveLength(20)
+  // The gateway closes each session once its sender's queue is empty
+  await waitFor(() => channelSessions().length === 0)
+
+  await deliver('u1', 'I like blue')
+  await waitFor(() => channelSessions().length === 0)
+  expect(sent.at(-1)?.text).toBe('blue (I like blue)')
+})
+
+test('a session is not closed while its sender has messages queued', async () => {
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two')],
+    channelIdleMs: 0,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await Promise.all([deliver('u1', 'first'), deliver('u1', 'second')])
+  expect(sent.map((m) => m.text)).toEqual(['one', 'two'])
+  // Both turns ran in the same session: the second request still saw the first exchange
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('first')
 })
 
 test('sessions are keyed by conversation and sender: chats and group members stay apart', async () => {

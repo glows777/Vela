@@ -802,3 +802,67 @@ test.concurrent('a reader that closes stdout early makes the CLI exit quietly', 
   expect(print.stdout).toStartWith('line 0\nline 1\n')
   expect(print.stderr).not.toContain('EPIPE')
 })
+
+test('-p: SIGTERM stops a running bash command with its process group, then exits with 143', async () => {
+  const dir = tempDir('vela-cli-')
+  const home = tempDir('vela-home-')
+  dirs.push(dir, home)
+  const scenarioFile = join(dir.path, 'scenario.json')
+  await Bun.write(
+    scenarioFile,
+    JSON.stringify({
+      responses: [
+        {
+          toolCalls: [
+            {
+              name: 'bash',
+              input: { command: 'echo $$ > shell.pid; sleep 30; echo done' },
+            },
+          ],
+        },
+        { text: 'finished' },
+      ],
+    }),
+  )
+  const proc = Bun.spawn(['bun', ENTRY, '-p', 'run it'], {
+    cwd: dir.path,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: home.path,
+      VELA_DIR: home.path,
+      VELA_MODEL: `faux:${scenarioFile}`,
+    },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const pidFile = join(dir.path, 'shell.pid')
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  let pid = 0
+  try {
+    for (let i = 0; i < 1000 && !pid; i++) {
+      await Bun.sleep(10)
+      pid = Number(
+        (await Bun.file(pidFile).exists())
+          ? (await Bun.file(pidFile).text()).trim()
+          : 0,
+      )
+    }
+    expect(pid).toBeGreaterThan(0)
+    proc.kill('SIGTERM')
+    expect(await proc.exited).toBe(143)
+    // The command's process group was killed with Vela, not left running
+    for (let i = 0; i < 100 && alive(pid); i++) await Bun.sleep(10)
+    expect(alive(pid)).toBe(false)
+  } finally {
+    proc.kill('SIGKILL')
+    // Don't leave the command running if the assertion failed
+    if (pid && alive(pid)) process.kill(-pid, 'SIGKILL')
+  }
+})

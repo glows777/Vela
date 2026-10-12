@@ -141,3 +141,45 @@ test('an existing store with default permissions is tightened when it opens', ()
   expect(mode('MEMORY.md')).toBe(0o600)
   expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
 })
+
+test('read and delete only accept file names inside the memory directory', () => {
+  const store = makeTempStore()
+  const memoryDir = tempDirs.at(-1) as string
+  const outside = path.join(
+    path.dirname(memoryDir),
+    `${path.basename(memoryDir)}-outside.md`,
+  )
+  tempDirs.push(outside)
+  fs.writeFileSync(outside, '---\nkey: value\n', { mode: 0o644 })
+  const name = path.basename(outside)
+
+  for (const filename of [
+    `../${name}`,
+    outside,
+    'MEMORY.md',
+    'sub/x.md',
+    'x.txt',
+  ])
+    expect(() => store.loadFile(filename)).toThrow('Invalid memory filename')
+  expect(() => store.delete(`../${name}`)).toThrow('Invalid memory filename')
+  expect(() => store.delete('MEMORY.md')).toThrow('Invalid memory filename')
+
+  // The file outside is neither changed nor removed
+  expect(fs.readFileSync(outside, 'utf-8')).toBe('---\nkey: value\n')
+  expect(fs.statSync(outside).mode & 0o777).toBe(0o644)
+})
+
+test('read and delete work on a saved memory by its file name', () => {
+  const store = makeTempStore()
+  const filename = store.save({
+    name: 'favorite language',
+    description: 'Language',
+    type: 'user',
+    content: 'TypeScript',
+  })
+  expect(store.loadFile(filename)).toContain('TypeScript')
+  expect(store.loadFile('user_missing.md')).toBeNull()
+  expect(store.delete(filename)).toBe(true)
+  expect(store.list()).toHaveLength(0)
+  expect(store.loadIndex()).not.toContain(filename)
+})

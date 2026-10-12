@@ -46,6 +46,10 @@ export {
   type VelaConfig,
   type VelaSettings,
 } from './config/index.ts'
+export type {
+  FeishuMessageEvent,
+  FeishuTransport,
+} from './extensions/feishu/channel.ts'
 export { type FeishuOptions, feishu } from './extensions/feishu/index.ts'
 export {
   type McpExposure,

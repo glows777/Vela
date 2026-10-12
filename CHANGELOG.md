@@ -4,6 +4,20 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `memory` tool's `read` and `delete` accepted paths.** A file name such as `../../x` reached files outside the memory directory: `read` rewrote the file it read (adding a `lastReadAt` line and setting mode `0600`) and `delete` removed it, even in sessions whose permissions denied `bash` and file writes. Both now accept only a memory file name from the index.
+- **Channel sessions were never closed**, so a long-running bot kept one session per conversation and sender in memory for as long as it ran. An idle channel session is now closed after 10 minutes (`createVela({ channelIdleMs })`) and resumed on the next message.
+- **Guest system prompts included the tool call history guide**, with absolute paths of the data directory (which reveal the home directory and the project path) and instructions for tools a guest doesn't have. Guests no longer get it.
+- **Print, JSON and RPC modes left commands running when stopped by a signal.** `bash` runs commands in their own process group, which outlived a `vela -p` killed with SIGTERM or Ctrl+C. These modes now abort the run, kill the commands, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
+- **Feishu**: a message delivered twice is handled once; rich-text (`post`) messages are read as text instead of being dropped; images, files and other messages get a reply asking for text.
+- **`web_fetch` read the whole response into memory.** It now reads at most 5 MB and says when the page was cut.
+
+### Added
+
+- `createVela({ channelIdleMs })`, and `channelIdleMs` in `createTestVela()`.
+- `feishu({ transport })` and the `FeishuTransport` / `FeishuMessageEvent` types, so the Feishu channel can be tested without a Feishu app.
+
 ## [0.2.0] - 2026-10-11
 
 ### Breaking Changes

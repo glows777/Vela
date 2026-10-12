@@ -101,6 +101,12 @@ export interface VelaOptions {
   contextFiles?: false | ContextFile[]
   /** Text appended to the system prompt (pi's `--append-system-prompt`) */
   appendSystemPrompt?: string
+  /**
+   * A channel session (one per conversation and sender) with no new message for this long is closed, so a
+   * long-running bot doesn't keep every conversation in memory; the next message reopens and resumes it.
+   * Default 10 minutes; 0 closes it right after each reply.
+   */
+  channelIdleMs?: number
   /** Config section per extension; each extension reads its own section from `vela.config` (by extension name) */
   extensionConfig?: Record<string, Record<string, unknown>>
   /** Retry, compaction threshold and other limits; missing fields use defaults (see src/limits.ts). */
@@ -349,7 +355,12 @@ export function createVela(options: VelaOptions = {}): Vela {
     return created
   }
 
-  const gateway: ChannelGateway = new ChannelGateway({ session, logger })
+  const gateway: ChannelGateway = new ChannelGateway({
+    session,
+    find: (id) => sessions.get(id),
+    idleMs: options.channelIdleMs,
+    logger,
+  })
   const runner: ExtensionRunner = new ExtensionRunner(
     {
       cwd,

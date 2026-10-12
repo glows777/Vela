@@ -143,18 +143,35 @@ export class MemoryStore {
       : raw
   }
 
+  /**
+   * Path of a memory file named by the model. Only a plain `*.md` file name directly in the memory directory
+   * (not the index) is accepted: `../`, separators and absolute paths would reach files outside the store.
+   */
+  private memoryFile(filename: string): string {
+    if (
+      filename !== path.basename(filename) ||
+      filename.includes('\\') ||
+      !filename.endsWith('.md') ||
+      filename === INDEX_FILE ||
+      filename.startsWith('.')
+    )
+      throw new Error(
+        `Invalid memory filename "${filename}": use a file name from the memory index, such as user_example.md`,
+      )
+    return path.join(this.memoryDir, filename)
+  }
+
   loadFile(filename: string): string | null {
-    const filePath = path.join(this.memoryDir, filename)
+    const filePath = this.memoryFile(filename)
     if (!fs.existsSync(filePath)) return null
-    this.touchReadAt(filename)
+    this.touchReadAt(filePath)
     const raw = fs.readFileSync(filePath, 'utf-8')
     return raw.length > MAX_FILE_CHARS
       ? raw.slice(0, MAX_FILE_CHARS) + '\n...(truncated)'
       : raw
   }
 
-  private touchReadAt(filename: string): void {
-    const filePath = path.join(this.memoryDir, filename)
+  private touchReadAt(filePath: string): void {
     const raw = fs.readFileSync(filePath, 'utf-8')
     const now = Date.now()
     let updated: string
@@ -167,7 +184,7 @@ export class MemoryStore {
   }
 
   delete(filename: string): boolean {
-    const filePath = path.join(this.memoryDir, filename)
+    const filePath = this.memoryFile(filename)
     if (!fs.existsSync(filePath)) return false
     fs.unlinkSync(filePath)
 

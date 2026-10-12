@@ -103,6 +103,34 @@ const turndown = new TurndownService({
 })
 turndown.remove(['script', 'style', 'nav', 'footer', 'header', 'iframe'])
 
+/** web_fetch reads at most this much of a response, so a huge download can't fill the process's memory */
+export const MAX_FETCH_BYTES = 5 * 1024 * 1024
+
+/** The body's text, cut at `limit` bytes */
+async function readLimited(
+  res: Response,
+  limit: number,
+): Promise<{ text: string; truncated: boolean }> {
+  if (!res.body) return { text: '', truncated: false }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return { text: text + decoder.decode(), truncated: false }
+    if (size + value.byteLength > limit) {
+      await reader.cancel()
+      return {
+        text: text + decoder.decode(value.subarray(0, limit - size)),
+        truncated: true,
+      }
+    }
+    text += decoder.decode(value, { stream: true })
+    size += value.byteLength
+  }
+}
+
 const fetchInputSchema = z.object({
   url: z.string().describe('Full URL'),
 })
@@ -123,7 +151,11 @@ export const webFetchTool: ToolDefinition = {
         ]),
       })
       if (!res.ok) return `Fetch failed: HTTP ${res.status}`
-      return turndown.turndown(await res.text())
+      const { text, truncated } = await readLimited(res, MAX_FETCH_BYTES)
+      const markdown = turndown.turndown(text)
+      return truncated
+        ? `${markdown}\n\n[Truncated: the page is larger than ${MAX_FETCH_BYTES / 1024 / 1024} MB; only the start was read]`
+        : markdown
     } catch (err) {
       return `Fetch failed: ${err instanceof Error ? err.message : String(err)}`
     }

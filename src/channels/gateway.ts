@@ -11,8 +11,14 @@ import type {
 interface GatewayOptions {
   /** Opens (or returns) a session by id; one session per channel, conversation and sender */
   session: (id: string) => VelaSession
+  /** The open session with this id, without opening one */
+  find: (id: string) => VelaSession | undefined
+  /** A channel session with no message for this long is closed; the next message resumes it. Default 10 minutes */
+  idleMs?: number
   logger?: VelaLogger
 }
+
+export const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
 
 const PLAIN = /^[A-Za-z0-9_]+$/
 
@@ -49,6 +55,10 @@ export class ChannelGateway {
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
   private active = new Set<VelaSession>()
+  /** Idle sessions waiting to be closed, by session id */
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Sessions being closed: a new message for the id waits until the close is done, then reopens it */
+  private closing = new Map<string, Promise<void>>()
   private stopped = false
   private readonly logger: VelaLogger
 
@@ -80,9 +90,12 @@ export class ChannelGateway {
 
   async stopAll(): Promise<void> {
     this.stopped = true
+    for (const timer of this.idleTimers.values()) clearTimeout(timer)
+    this.idleTimers.clear()
     // Abort channel sessions that are still running before stopping the channels
     for (const session of this.active) session.abort()
     await Promise.all(this.queues.values())
+    await Promise.all(this.closing.values())
 
     for (const [, ch] of this.channels) {
       await ch.stop()
@@ -92,6 +105,8 @@ export class ChannelGateway {
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
     const id = channelSessionId(channelName, msg.channelId, msg.senderId)
+    clearTimeout(this.idleTimers.get(id))
+    this.idleTimers.delete(id)
     const previous = this.queues.get(id) ?? Promise.resolve()
     const next = previous
       .then(() => this.process(id, channelName, msg))
@@ -102,9 +117,42 @@ export class ChannelGateway {
       )
     this.queues.set(id, next)
     void next.then(() => {
-      if (this.queues.get(id) === next) this.queues.delete(id)
+      if (this.queues.get(id) !== next) return
+      this.queues.delete(id)
+      this.closeWhenIdle(id)
     })
     return next
+  }
+
+  /**
+   * Channel sessions would otherwise stay open (and in memory) for as long as the process runs, one per
+   * conversation and sender. Once a sender's queue is empty, the session is closed after `idleMs`; its history
+   * is saved, and the next message reopens and resumes it.
+   */
+  private closeWhenIdle(id: string): void {
+    if (this.stopped) return
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(id)
+      const session = this.options.find(id)
+      // Running, or opened with a UI (the terminal resumed it): someone else is using it; the next channel
+      // message rearms the timer
+      if (!session || session.isRunning || session.hasUI || this.queues.has(id))
+        return
+      const closed = session
+        .close()
+        .catch((error) =>
+          this.logger.error(
+            `[gateway] Failed to close idle session ${id}: ${errorMessage(error)}`,
+          ),
+        )
+        .finally(() => {
+          if (this.closing.get(id) === closed) this.closing.delete(id)
+        })
+      this.closing.set(id, closed)
+    }, this.options.idleMs ?? DEFAULT_CHANNEL_IDLE_MS)
+    // An idle timer alone doesn't keep the process alive
+    timer.unref?.()
+    this.idleTimers.set(id, timer)
   }
 
   private async process(
@@ -113,6 +161,7 @@ export class ChannelGateway {
     msg: IncomingMessage,
   ): Promise<void> {
     if (this.stopped) return
+    await this.closing.get(id)
     const session = this.options.session(id)
     session.channel = channelName
     // Re-evaluate the role on every message (the allowlist may change); defaults to guest
