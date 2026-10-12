@@ -860,6 +860,17 @@ test('-p: SIGTERM stops a running bash command with its process group, then exit
     // The command's process group was killed with Vela, not left running
     for (let i = 0; i < 100 && alive(pid); i++) await Bun.sleep(10)
     expect(alive(pid)).toBe(false)
+    // The session was closed before exiting: the cancelled bash call is saved with its result
+    const saved = await Array.fromAsync(
+      new Bun.Glob('projects/*/sessions/*.jsonl').scan({
+        cwd: home.path,
+        absolute: true,
+      }),
+    )
+    expect(saved).toHaveLength(1)
+    const records = await Bun.file(saved[0]!).text()
+    expect(records).toContain('run it')
+    expect(records).toContain('"tool-result"')
   } finally {
     proc.kill('SIGKILL')
     // Don't leave the command running if the assertion failed

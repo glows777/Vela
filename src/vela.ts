@@ -237,6 +237,20 @@ export function createVela(options: VelaOptions = {}): Vela {
       : { model: choice, info: describeModel(choice) }
   }
   const limits = resolveLimits(options.limits)
+  // setTimeout fires at once for a delay above 2^31 - 1 ms (or Infinity): every channel session would close
+  // right after its reply instead of staying open
+  const { channelIdleMs } = options
+  if (
+    channelIdleMs !== undefined &&
+    !(
+      Number.isInteger(channelIdleMs) &&
+      channelIdleMs >= 0 &&
+      channelIdleMs <= 2 ** 31 - 1
+    )
+  )
+    throw new Error(
+      `channelIdleMs must be a whole number of milliseconds from 0 to ${2 ** 31 - 1}; got ${channelIdleMs}`,
+    )
   const logger = options.logger ?? silentLogger
 
   // The Vela-level registry only holds shared tool definitions; tools run in each session's forked registry.
@@ -305,6 +319,8 @@ export function createVela(options: VelaOptions = {}): Vela {
   const listeners = new Set<VelaSessionEventListener>()
   const sessions = new Map<string, VelaSession>()
   let disposed = false
+  /** The one dispose in progress: a second caller (a signal racing the CLI's exit) waits for it to finish */
+  let disposing: Promise<void> | undefined
 
   const session = (
     id = 'default',
@@ -358,7 +374,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   const gateway: ChannelGateway = new ChannelGateway({
     session,
     find: (id) => sessions.get(id),
-    idleMs: options.channelIdleMs,
+    idleMs: channelIdleMs,
     logger,
   })
   const runner: ExtensionRunner = new ExtensionRunner(
@@ -410,14 +426,16 @@ export function createVela(options: VelaOptions = {}): Vela {
     commands: () => runner.commands(),
     channels: () => gateway.list(),
     startChannels: () => gateway.startAll(),
-    async dispose() {
-      if (disposed) return
+    dispose() {
       disposed = true
-      await gateway.stopAll()
-      await Promise.all([...sessions.values()].map((s) => s.close()))
-      await runner.shutdown()
-      listeners.clear()
-      if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
+      disposing ??= (async () => {
+        await gateway.stopAll()
+        await Promise.all([...sessions.values()].map((s) => s.close()))
+        await runner.shutdown()
+        listeners.clear()
+        if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
+      })()
+      return disposing
     },
   }
   internals.set(vela, {

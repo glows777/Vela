@@ -11,6 +11,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **Guest system prompts included the tool call history guide**, with absolute paths of the data directory (which reveal the home directory and the project path) and instructions for tools a guest doesn't have. Guests no longer get it.
 - **Print, JSON and RPC modes left commands running when stopped by a signal.** `bash` runs commands in their own process group, which outlived a `vela -p` killed with SIGTERM or Ctrl+C. These modes now abort the run, kill the commands, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
 - **Feishu**: a message delivered twice is handled once; rich-text (`post`) messages are read as text instead of being dropped; images, files and other messages get a reply asking for text.
+- **A second `vela.dispose()` or `session.close()` returned before the first one finished**, so a caller could exit before extensions' shutdown handlers and the final save ran. It now waits for the close in progress.
 - **`web_fetch` read the whole response into memory.** It now reads at most 5 MB and says when the page was cut.
 
 ### Added

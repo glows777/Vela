@@ -219,6 +219,13 @@ test('idle channel sessions are closed, so many senders do not stay in memory; t
   expect(sent.at(-1)?.text).toBe('blue (I like blue)')
 })
 
+test('channelIdleMs that a timer cannot wait for is rejected instead of closing every session at once', () => {
+  for (const channelIdleMs of [-1, 1.5, Number.POSITIVE_INFINITY, 2 ** 31])
+    expect(() => createTestVela({ responses: [], channelIdleMs })).toThrow(
+      'channelIdleMs must be a whole number',
+    )
+})
+
 test('a session is not closed while its sender has messages queued', async () => {
   const t = createTestVela({
     responses: [fauxText('one'), fauxText('two')],

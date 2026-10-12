@@ -86,9 +86,9 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 | `search` | `query` | BM25 search, top 5 |
 | `read` | `filename` | Read one memory by file name (for example `user_favorite-language.md`) |
 | `delete` | `filename` | Delete one memory |
+| `lint` | | Report problems |
 
 `read` and `delete` accept only a memory's file name as listed in the index: a path (`../`, `/`), the index itself or a name not ending in `.md` is an error.
-| `lint` | | Report problems |
 
 `type` is one of `user`, `feedback`, `project` or `reference`. Memory content returned to the model is cut at 4,000 characters.
 
