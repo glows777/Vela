@@ -16,6 +16,14 @@ import {
 
 afterEach(cleanupTestVelas)
 
+async function waitFor(condition: () => boolean) {
+  const deadline = Date.now() + 2000
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 /** Register a fake channel; returns a function that delivers messages and the replies sent */
 function fakeChannel(t: TestVela, name = 'fake') {
   const sent: OutgoingMessage[] = []
@@ -182,6 +190,69 @@ test('a channel session closed while idle resumes its history when reopened', as
   await deliver('u1', 'What color do I like?')
   expect(sent.at(-1)?.text).toBe('blue')
   expect(await t.readData('sessions/fake-c1-u1.jsonl')).toContain('I like blue')
+})
+
+test('idle channel sessions are closed, so many senders do not stay in memory; the next message resumes', async () => {
+  const answer = (req: { lastUserText: string; prompt: unknown }) =>
+    fauxText(
+      JSON.stringify(req.prompt).includes('I like blue')
+        ? `blue (${req.lastUserText})`
+        : `ok (${req.lastUserText})`,
+    )
+  const t = createTestVela({
+    responses: Array.from({ length: 21 }, () => answer),
+    channelIdleMs: 0,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  const channelSessions = () =>
+    t.vela.sessions().filter((s) => s.id.startsWith('fake-'))
+
+  await Promise.all(
+    Array.from({ length: 20 }, (_, i) => deliver(`u${i}`, `hi ${i}`)),
+  )
+  expect(sent).toHaveLength(20)
+  // The gateway closes each session once its sender's queue is empty
+  await waitFor(() => channelSessions().length === 0)
+
+  await deliver('u1', 'I like blue')
+  await waitFor(() => channelSessions().length === 0)
+  expect(sent.at(-1)?.text).toBe('blue (I like blue)')
+})
+
+test('channelIdleMs that a timer cannot wait for is rejected instead of closing every session at once', () => {
+  for (const channelIdleMs of [-1, 1.5, Number.POSITIVE_INFINITY, 2 ** 31])
+    expect(() => createTestVela({ responses: [], channelIdleMs })).toThrow(
+      'channelIdleMs must be a whole number',
+    )
+})
+
+test('a channel session busy at its idle deadline is closed once that run ends, without another message', async () => {
+  const t = createTestVela({
+    responses: [fauxText('hi'), fauxHang()],
+    channelIdleMs: 50,
+  })
+  const { deliver } = fakeChannel(t)
+  await deliver('u1', 'hello')
+  // An SDK caller (or extension) uses the same session past its deadline
+  const session = t.vela.session('fake-c1-u1')
+  const run = session.prompt('long task').catch(() => {})
+  await Bun.sleep(150)
+  expect(t.vela.sessions().map((s) => s.id)).toContain('fake-c1-u1')
+  session.abort()
+  await run
+  await waitFor(() => !t.vela.sessions().some((s) => s.id === 'fake-c1-u1'))
+})
+
+test('a session is not closed while its sender has messages queued', async () => {
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two')],
+    channelIdleMs: 0,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await Promise.all([deliver('u1', 'first'), deliver('u1', 'second')])
+  expect(sent.map((m) => m.text)).toEqual(['one', 'two'])
+  // Both turns ran in the same session: the second request still saw the first exchange
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).toContain('first')
 })
 
 test('sessions are keyed by conversation and sender: chats and group members stay apart', async () => {

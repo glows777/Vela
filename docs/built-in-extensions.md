@@ -88,6 +88,8 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 | `delete` | `filename` | Delete one memory |
 | `lint` | | Report problems |
 
+`read` and `delete` accept only a memory's file name as listed in the index: a path (`../`, `/`), the index itself or a name not ending in `.md` is an error.
+
 `type` is one of `user`, `feedback`, `project` or `reference`. Memory content returned to the model is cut at 4,000 characters.
 
 `lint` reports paths mentioned in a memory that no longer exist, memories not read within their type's shelf life, and duplicate names.
@@ -151,7 +153,7 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 
 | Tool | Parameters | Description |
 |---|---|---|
-| `web_fetch` | `url` | Fetch a page and convert it to Markdown (scripts, styles, navigation, headers, footers and iframes removed); 15-second timeout |
+| `web_fetch` | `url` | Fetch a page and convert it to Markdown (scripts, styles, navigation, headers, footers and iframes removed); 15-second timeout; reads at most 5 MB of the response and notes when it cut the page |
 | `web_search` | `query`, `max_results` (default 5) | Search the web |
 
 `web_search` is registered only when a key is set. With a Tavily key it uses [Tavily](https://tavily.com) and returns an answer summary plus page content; with a Serper key it uses [Serper](https://serper.dev) and returns Google result snippets. If both are set, Tavily is used.
@@ -169,6 +171,7 @@ Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each sender 
 | `appId` | `extensionConfig.feishu.appId` | Feishu app id |
 | `appSecret` | `extensionConfig.feishu.appSecret` | Feishu app secret |
 | `owners` | `extensionConfig.feishu.owners` | `open_id`s of owners; an array, or a comma-separated string |
+| `transport` | | SDK only: the connection to Feishu (`FeishuTransport`); default Feishu's long connection. Tests pass a fake |
 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#feishu).
 

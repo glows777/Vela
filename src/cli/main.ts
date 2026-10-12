@@ -267,10 +267,12 @@ try {
   )
 }
 
+/** Set once a signal stops the CLI: its code wins over the one of the run it interrupted */
+let signalCode: number | undefined
 const exit = async (code: number): Promise<never> => {
   await vela.dispose()
   await recorder?.flush()
-  process.exit(code)
+  process.exit(signalCode ?? code)
 }
 
 // --export <id or .jsonl file> [output]: write the session as HTML and exit (like pi)
@@ -350,6 +352,25 @@ function readPromptInput(input: string): string {
   return existsSync(input) && statSync(input).isFile()
     ? readFileSync(input, 'utf-8')
     : input
+}
+
+// Print, JSON and RPC modes (interactive mode handles its own): on a signal, abort the running turn so the
+// commands the model started are killed (bash runs them in their own process group, which would outlive
+// Vela), save the sessions and exit with the signal's code. A second signal exits right away.
+if (mode !== 'interactive') {
+  const signals: [NodeJS.Signals, number][] = [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+    ...(process.platform === 'win32'
+      ? []
+      : ([['SIGHUP', 129]] as [NodeJS.Signals, number][])),
+  ]
+  for (const [signal, code] of signals)
+    process.on(signal, () => {
+      if (signalCode !== undefined) process.exit(code)
+      signalCode = code
+      void exit(code)
+    })
 }
 
 if (mode === 'print' || mode === 'json') {

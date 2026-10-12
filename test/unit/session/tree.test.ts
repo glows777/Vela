@@ -151,3 +151,65 @@ test('the HTML export shows custom messages only with display: true', () => {
   expect(html).toContain('shown text')
   expect(html).not.toContain('hidden text')
 })
+
+test('the HTML export escapes every kind of entry: thinking, tool calls and results, summaries, model changes', () => {
+  const evil = '<img src=x onerror=alert(1)>'
+  const base = (id: string, parentId: string | null) => ({
+    id,
+    parentId,
+    timestamp: time,
+  })
+  const html = renderSessionHtml({
+    id: 's',
+    name: evil,
+    model: evil,
+    entries: [
+      {
+        ...base('a', null),
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: evil },
+            {
+              type: 'tool-call',
+              toolCallId: 't1',
+              toolName: evil,
+              input: { command: evil },
+            },
+          ],
+        },
+        stopReason: 'aborted',
+      },
+      {
+        ...base('b', 'a'),
+        type: 'message',
+        message: {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 't1',
+              toolName: 'bash',
+              output: { type: 'text', value: evil },
+            },
+          ],
+        },
+      },
+      {
+        ...base('c', 'b'),
+        type: 'compaction',
+        summary: evil,
+        firstKeptEntryId: 'b',
+        tokensBefore: 1,
+      },
+      { ...base('d', 'c'), type: 'branch_summary', fromId: 'b', summary: evil },
+      { ...base('e', 'd'), type: 'model_change', model: evil },
+    ] as SessionEntry[],
+  })
+  expect(html).not.toContain('<img')
+  expect(html.match(/&lt;img src=x onerror=alert\(1\)&gt;/g)?.length).toBe(10)
+  expect(html).toContain('Thinking')
+  expect(html).toContain('Summary of the earlier conversation')
+  expect(html).toContain('(aborted while streaming)')
+})

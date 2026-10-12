@@ -192,10 +192,18 @@
     setStatus: (key: string, text?: string) => void
     setWidget: (key: string, lines?: string[]) => void
   function feishu: (options?: FeishuOptions) => VelaExtension
+  interface FeishuMessageEvent
+    message: { message_id?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; }[]; }
+    sender: { sender_id?: { open_id?: string; }; }
   interface FeishuOptions
     appId?: string | undefined
     appSecret?: string | undefined
     owners?: string[] | undefined
+    transport?: FeishuTransport | undefined
+  interface FeishuTransport
+    send: (chatId: string, text: string) => Promise<void>
+    start: (onMessage: (event: FeishuMessageEvent) => void) => Promise<void>
+    stop: () => void
   type FetchFunction = (
       input: string | URL | Request,
       init?: RequestInit,
@@ -760,6 +768,7 @@
     appendSystemPrompt?: string | undefined
     autoCompaction?: boolean | undefined
     binDir?: string | undefined
+    channelIdleMs?: number | undefined
     contextFiles?: false | ContextFile[] | undefined
     credentials?: CredentialStore | undefined
     cwd?: string | undefined
@@ -942,6 +951,7 @@
   type TestVela = ReturnType<typeof createTestVela>
   interface TestVelaOptions
     allowPendingResponses?: boolean | undefined
+    channelIdleMs?: number | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
     embedder?: boolean | EmbeddingFn | undefined

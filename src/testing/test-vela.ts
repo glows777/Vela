@@ -74,6 +74,8 @@ export interface TestVelaOptions {
   extensions?: VelaExtension[]
   /** Options for the default session (role, permissions, tool selection, ui) */
   session?: SessionOptions
+  /** Same as createVela's `channelIdleMs` */
+  channelIdleMs?: number
   /** Skip checking on cleanup that the faux script was fully used */
   allowPendingResponses?: boolean
 }
@@ -115,6 +117,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
     limits: { retryBaseMs: 0, ...options.limits },
     logger: options.logger,
     extensionConfig: options.extensionConfig,
+    channelIdleMs: options.channelIdleMs,
     // Include the built-in memory and knowledge-base extensions like the CLI (web tools need the network, so not here)
     extensions: [
       memory(),

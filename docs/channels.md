@@ -109,6 +109,8 @@ await vela.dispose()
 
 ## Running channels
 
+A channel session that gets no new message for 10 minutes is closed: its history is already saved, and the sender's next message reopens and resumes it. This keeps a long-running bot from holding every conversation it ever had in memory. `createVela({ channelIdleMs })` changes the wait (`0` closes the session right after each reply). A session that is running or has messages queued is not closed then; one that is busy (an SDK caller or the terminal is using it) is checked again later. Extensions see `session_shutdown` when it closes and `session_start` when it reopens.
+
 **SDK.** Call `await vela.startChannels()` after `vela.ready()`. `vela.channels()` lists the registered channels. `vela.dispose()` aborts running channel sessions, waits for them, and stops the channels.
 
 **CLI.** Channels start when interactive mode starts, and stop when it exits. Each incoming message, reply (first 80 characters) and error is shown as one line in the terminal; the channel session's tool calls are not shown. Print, JSON and RPC modes do not start channels. `/channel` lists the registered channels.
@@ -145,7 +147,8 @@ The built-in `feishu` extension connects a Feishu (Lark) bot through Feishu's lo
 
 Behavior:
 
-- Only text messages are handled. `@` mentions of the bot are removed from the text.
+- Text and rich-text (`post`) messages are handled; a rich-text message becomes plain text (title, then each line's text and links). `@` mentions are removed from the text. Other messages (images, files, stickers, ...) get a short reply asking for text, in a group chat only when they mention the bot.
+- Feishu can deliver the same event more than once; the channel remembers the last 1000 message ids and handles each message once.
 - The chat's `chat_id` is the conversation and the sender's `open_id` is the sender id, so each person has one session per chat: a direct chat and each group chat are separate, and group members don't share a session. The reply goes to the chat the message came from. Sessions from older versions were keyed `feishu-<open_id>` and are not picked up again.
 - Senders in `owners` are `owner`; everyone else is `guest`.
 - Without an app id or secret the channel logs a warning and does not connect.

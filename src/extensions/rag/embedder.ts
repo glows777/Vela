@@ -40,7 +40,10 @@ export function createEmbedder({
 // Cached vectors are only valid for the embedder that produced them, so each
 // EmbeddingFn gets its own cache. Keyed by the function itself: a different
 // model or endpoint means a different function, and its cache goes with it.
+// Bounded: every ingested chunk passes through here, and its vector is already stored in the knowledge base.
 const embedCaches = new WeakMap<EmbeddingFn, Map<string, number[]>>()
+/** Most recently used texts kept per embedder */
+export const EMBED_CACHE_SIZE = 1000
 
 export async function embed(
   fn: EmbeddingFn,
@@ -56,12 +59,15 @@ export async function embed(
   const results: number[][] = new Array(texts.length)
   const uncached: { idx: number; text: string }[] = []
 
-  for (let i = 0; i < texts.length; i++) {
-    const cached = embedCache.get(texts[i]!)
+  for (const [i, text] of texts.entries()) {
+    const cached = embedCache.get(text)
     if (cached) {
       results[i] = cached
+      // Move to the end: the oldest entry is the least recently used
+      embedCache.delete(text)
+      embedCache.set(text, cached)
     } else {
-      uncached.push({ idx: i, text: texts[i]! })
+      uncached.push({ idx: i, text })
     }
   }
 
@@ -74,6 +80,10 @@ export async function embed(
     for (let i = 0; i < uncached.length; i++) {
       results[uncached[i]!.idx] = vectors[i]!
       embedCache.set(uncached[i]!.text, vectors[i]!)
+    }
+    for (const text of embedCache.keys()) {
+      if (embedCache.size <= EMBED_CACHE_SIZE) break
+      embedCache.delete(text)
     }
   }
 

@@ -572,7 +572,8 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
           calls.push('first')
           throw new Error('logged, not thrown')
         })
-        vela.onShutdown(() => {
+        vela.onShutdown(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20))
           calls.push('second')
         })
       },
@@ -585,7 +586,10 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
   ])
   expect(t.internals.registry.get('read_file')).toBeDefined()
   expect(t.internals.registry.get('demo_plain')).toBeUndefined()
+  // A second dispose() (the CLI's signal handler racing its normal exit) waits for the first to finish
+  void t.vela.dispose()
   await t.vela.dispose()
+  expect(calls).toEqual(['first', 'second'])
   await t.vela.dispose()
   expect(calls).toEqual(['first', 'second'])
 })

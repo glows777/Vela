@@ -67,7 +67,7 @@ vela --mode rpc                              # driven by another program
 
 Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes. If the reader closes the pipe early (`vela -p "..." | head -2`), Vela stops and exits quietly with code 0.
 
-If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1.
+If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1. Stopped by a signal, print, JSON and RPC modes abort the turn, kill the commands the model started, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
 
 Print mode has no UI: confirmation dialogs from extensions answer "no". Extension commands work (`vela -p /memory`), but the CLI's own slash commands such as `/context` or `/model` do not; they are sent to the model as plain text.
 

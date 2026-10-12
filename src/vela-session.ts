@@ -274,6 +274,8 @@ export class VelaSession {
   /** Options the session was opened with (a fork opens with the same) */
   private readonly options: SessionOptions
   private closed = false
+  /** The close in progress: a second caller waits for the final save instead of returning early */
+  private closing?: Promise<void>
   private started?: Promise<void>
   private running?: Promise<void>
   /** Extension sections collected by this turn's before_agent_start */
@@ -1562,9 +1564,13 @@ export class VelaSession {
   }
 
   /** Aborts the running task, waits for it to finish and save, then removes the session from Vela. */
-  async close(): Promise<void> {
-    if (this.closed) return
+  close(): Promise<void> {
     this.closed = true
+    this.closing ??= this.shutdown()
+    return this.closing
+  }
+
+  private async shutdown(): Promise<void> {
     this.abortBash()
     this.abort(new DOMException('Session closed', 'AbortError'))
     // Let extension commands finish first (commands like /dream wait on the prompt they started)
