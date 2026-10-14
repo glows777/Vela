@@ -18,11 +18,11 @@ A user types a request in the interactive TUI; the agent calls a tool (edit, rea
 
 ## Driving it with vela-verify.sh (tmux)
 
-Needs tmux for this interactive path only. `$H launch` / `$H doctor` call `ensure_tmux` (install if missing); if that fails, skip this feature and use print/pipe/SDK instead.
+Needs tmux on PATH for this interactive path only. `$H launch` detects (never installs); `$H doctor` only reports `MISSING`. If tmux is absent, skip this feature and use print/pipe/SDK instead.
 
 Preconditions:
 
-- `$H launch $RUN` and `$H doctor $RUN` print `READY` / `DOCTOR OK` (tmux present or successfully installed).
+- `$H launch $RUN` and `$H doctor $RUN` print `READY` / `DOCTOR OK` (tmux already on PATH).
 - `work/sample-data.txt` starts with `1. Tool registration` (fresh launch).
 
 - **Before.** Run `$H snap $RUN tool-edit-before`. The footer shows `mock/mock-model` and an empty conversation.

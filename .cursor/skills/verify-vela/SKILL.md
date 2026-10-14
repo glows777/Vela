@@ -20,7 +20,7 @@ Provider boundary: `VELA_MODEL=mock` (keyword-driven offline demo model, `src/te
 
 Prerequisites (once per box): `bun --version` ≥ 1.4 (repo default runtime; system Node here may be < 22.18, so the helper runs `bun src/cli/main.ts`, no build needed), `tmux` **for interactive TUI verification only** (not a product dependency), and `bun install` in the repo. Optional for grep/find tools and `@` file completion: `rg` and `fd` on PATH (`apt install ripgrep fd-find`; `ln -s $(which fdfind) ~/.local/bin/fd`).
 
-**tmux and interactive TUI:** `launch` / `doctor` call `ensure_tmux`: if `tmux` is already on PATH, continue; if missing, attempt a non-interactive install (`apt-get` / `brew` / `dnf` / `yum` / `pacman` / `apk` as appropriate — no prompts; root or passwordless `sudo -n` when the package manager needs privilege). If install fails (no package manager, sudo unavailable, or still not on PATH), skip interactive journeys (`launch` / `send` / `keys` / `wait` / `snap` / TUI `doctor`) and fall back to `print`, `pipe`, and the SDK — they never need tmux. Do not substitute `screen`/`expect` unless you are extending the harness; print-mode + SDK is the supported fallback when tmux cannot be installed.
+**tmux and interactive TUI:** Interactive journeys need `tmux` already on PATH (verification only — not a product dependency). `launch` calls `ensure_tmux` which **detects only** (never installs packages). If missing, `launch` exits soft with manual install hints (`apt install tmux` / `brew install tmux` / `dnf install tmux` / `pacman -S tmux` / `apk add tmux`) and you fall back to `print`, `pipe`, and the SDK — they never need tmux. `doctor` is read-only: it only runs `command -v tmux` and reports `MISSING`; it never installs. Do not substitute `screen`/`expect` unless you are extending the harness.
 
 ```bash
 $H launch $RUN            # extra args go to vela, e.g. $H launch $RUN --no-extensions
@@ -36,7 +36,7 @@ Instances are isolated by run id (own tmux socket, VELA_DIR, HOME and cwd), so p
 $H doctor $RUN
 ```
 
-Read-only. Checks: the run's tmux session exists, the pane PID is alive, prints bun / vela version (`0.2.0`) / git sha, the footer says `mock/mock-model`, the footer path is the run's `work/` dir, vela has not exited (`[vela exited] <code>` would show), and the live child environ has no `FEISHU_*` / out-of-tree `VELA_RECORD`. Prints `DOCTOR OK` or `DOCTOR FAIL` (exit 1). Run it first and whenever output looks wrong.
+Read-only (never installs packages). Checks: `tmux` on PATH (`MISSING` if not — no auto-install), the run's tmux session exists, the pane PID is alive, prints bun / vela version (`0.2.0`) / git sha, the footer says `mock/mock-model`, the footer path is the run's `work/` dir, vela has not exited (`[vela exited] <code>` would show), and the live child environ has no `FEISHU_*` / out-of-tree `VELA_RECORD`. Prints `DOCTOR OK` or `DOCTOR FAIL` (exit 1). Run it first and whenever output looks wrong.
 
 ## Drive
 
