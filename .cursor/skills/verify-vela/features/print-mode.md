@@ -20,15 +20,16 @@ Non-interactive use: `vela -p "<prompt>"`, `echo "<prompt>" | vela`, or `vela --
 
 Preconditions:
 
-- No launch needed; `print` seeds `/tmp/vela-verify/$RUN/work` itself.
+- No launch needed; `print` / `pipe` seed `/tmp/vela-verify/$RUN/work` themselves.
+- Spawns use an `env -i` allowlist (no inherited `FEISHU_*` / `VELA_RECORD`).
 
 - **-p.** Run `$H print $RUN p-list -p "list files"`. `p-list.exit` is `0`; `p-list.stdout` is `Files in the current directory:` followed by `[FILE] a.txt` and `[FILE] sample-data.txt`; `p-list.stderr` holds only the `[rag]` notice.
 - **JSON.** Run `$H print $RUN p-json --mode json "list files"`. First stdout line is `{"type":"session",…,"model":"mock/mock-model",…}`; a `tool_execution_end` event for `list_directory` follows.
-- **Piped.** Run `cd /tmp/vela-verify/$RUN/work && echo "list files" | env VELA_DIR=/tmp/vela-verify/$RUN/home VELA_MODEL=mock VELA_OFFLINE=1 bun <repo>/src/cli/main.ts > /tmp/vela-evidence/$RUN/p-pipe.stdout; echo $?`. Same answer, exit 0.
+- **Piped.** Run `echo "list files" | $H pipe $RUN p-pipe`. Same answer as `-p`, exit 0; artifacts at `p-pipe.{cmd,stdout,stderr,exit}`.
 - **Version.** Run `$H print $RUN p-version --version`. stdout `0.2.0`.
 
 ## Gotchas
 
-- `vela -p` from a non-TTY shell **with stdin left open** waits for stdin forever (it treats redirected stdin as input). Always `</dev/null` or pipe something; the helper does this.
+- `vela -p` from a non-TTY shell **with stdin left open** waits for stdin forever (it treats redirected stdin as input). Always `</dev/null` or pipe something; the helper `print` closes stdin for you; `pipe` feeds the helper's stdin through.
 - The SIGTERM e2e test (`test/e2e/cli.test.ts` "-p: SIGTERM stops a running bash command…") fails on this box: the killed child stays visible to `kill -0` after exit. Likely a zombie under the container's `tini` init rather than a Vela bug; unverified.
 - Run `$H cleanup $RUN` afterwards to remove `/tmp/vela-verify/$RUN`.
