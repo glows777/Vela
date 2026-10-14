@@ -121,8 +121,8 @@ Options:
   -h, --help                    Show this help
   -v, --version                 Show the version number
 
-Prompts are sent in order. In interactive mode, text starting with / is a command (/hotkeys, /context,
-/usage, /skill, /model, ...), /skill:<name> sends a skill and /<template> expands a prompt template;
+Prompts are sent in order. In interactive mode, text starting with / is a command (/hotkeys, /status,
+/context, /usage, /skill, /model, ...), /skill:<name> sends a skill and /<template> expands a prompt template;
 anything else goes to the model.
 
 Examples:

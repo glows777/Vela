@@ -1,12 +1,19 @@
 import { afterEach, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { z } from 'zod'
 import type {
   IncomingMessage,
   OutgoingMessage,
 } from '../../src/channels/types.ts'
+import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import type { ProviderDefinition } from '../../src/models/index.ts'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 import {
   captureConsole,
@@ -15,6 +22,124 @@ import {
 } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
+
+test('/status reports the session, model and context usage', async () => {
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
+  })
+  t.session.setName('refactor')
+  await t.run('hi')
+
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+    expect(t.dispatch('/status extra')).toBe(false)
+  })
+  const plain = stripTerminalSequences(output)
+  expect(plain).toContain('[status]')
+  expect(plain).toContain(`Session: refactor (${t.session.id})`)
+  expect(plain).toContain(
+    `Path: ${join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)}`,
+  )
+  expect(plain).toContain(`Cwd: ${t.vela.cwd}`)
+  expect(plain).toContain(`Model: ${t.session.modelInfo.ref}`)
+  expect(plain).toContain(`Thinking: ${t.session.thinkingLevel}`)
+  expect(plain).toContain('Role: owner')
+  expect(plain).toContain('Messages: 2')
+  expect(plain).toMatch(
+    new RegExp(`Context: .+ tokens \\(${t.session.usage.percent}% of .+\\)`),
+  )
+  expect(plain).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
+  expect(plain).not.toMatch(/Usage:.*\$/)
+})
+
+test('/status on a fresh session shows identity and omits usage totals', async () => {
+  const t = createTestVela({ thinkingLevel: 'low' })
+  t.session.channel = 'feishu'
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(`Session: ${t.session.id}\n`)
+  expect(output).toContain('Thinking: low')
+  expect(output).toContain('Role: owner')
+  expect(output).toContain('Channel: feishu')
+  expect(output).toContain('Messages: 0')
+  expect(output).toContain('Context:')
+  expect(output).not.toContain('Usage:')
+  expect(output).not.toContain('Forked from:')
+})
+
+test('/status names a forked session and includes the cost of a priced model', async () => {
+  const faux = createFauxModel({
+    modelId: 'priced',
+    responses: [fauxText('ok', { usage: { input: 1_000_000, output: 1000 } })],
+  })
+  const provider: ProviderDefinition = {
+    models: [
+      {
+        id: 'priced',
+        contextWindow: 200_000,
+        cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+      },
+    ],
+    createModel: () => faux,
+  }
+  const t = createTestVela({
+    model: 'fake/priced',
+    providers: { fake: provider },
+  })
+  await t.run('hi')
+  const user = t.session
+    .getEntries()
+    .find((entry) => entry.type === 'message' && entry.message.role === 'user')
+  if (!user) throw new Error('missing user entry')
+  const forked = (await t.session.fork(user.id, { sessionId: 'copy' })).session
+  if (!forked) throw new Error('fork failed')
+
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+    expect(
+      createCliDispatcher(t.vela)('/status', { ...t.ctx, session: forked }),
+    ).toBe(true)
+  })
+  expect(output).toContain('Model: fake/priced')
+  expect(output).toContain('Usage: ↑1.0M ↓1.0k $1.0050 (1 step)')
+  expect(output).toContain('Session: copy')
+  expect(output).toContain('Forked from: default')
+  expect(output).toContain(`(${t.session.usage.percent}% of 200.0k)`)
+})
+
+test('/status reports an unavailable model instead of failing', async () => {
+  const t = createTestVela({ model: 'missing/nope', providers: {} })
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(
+    'Model: (unavailable: No provider named missing (available: none))',
+  )
+  expect(output).toContain('Context:')
+  expect(output).toContain('Thinking:')
+})
+
+test('in the TUI, /status prints the session overview into the chat', async () => {
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
+  })
+  await t.run('hi')
+  const tui = await startTui(t.vela, { sessionId: t.session.id })
+  try {
+    await tui.started
+    tui.submit('/status')
+    await tui.until('[status]')
+    const screen = tui.screen()
+    expect(screen).toContain(`Session: ${t.session.id}`)
+    expect(screen).toContain('Model: faux/faux')
+    expect(screen).toContain('Context:')
+    expect(screen).toContain('Usage:')
+    expect(screen).toContain('1 step')
+  } finally {
+    await stopTuis()
+  }
+})
 
 test('/context and /usage report the conversation after a run', async () => {
   const t = createTestVela({

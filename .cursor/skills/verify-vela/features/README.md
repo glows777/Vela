@@ -27,6 +27,6 @@ The maintained source for verifying Vela's user-facing behavior. Read this index
 
 - [Tool use in the TUI](./tui-tool-use.md): prompt → tool call → rendered diff/result → file side effect.
 - [Print and piped mode](./print-mode.md): `-p`, piped stdin, `--mode json`, exit codes.
-- [Slash commands](./slash-commands.md): `/usage`, `/context`, `/cache`, `/hotkeys`.
+- [Slash commands](./slash-commands.md): `/status`, `/usage`, `/context`, `/cache`, `/hotkeys`.
 - [Sessions](./sessions.md): persistence to JSONL, `--continue`, `--session`, `--export`.
 - [SDK createVela](./sdk.md): embedding with the faux model.
