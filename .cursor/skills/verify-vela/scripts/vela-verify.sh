@@ -61,75 +61,15 @@ run_isolated() {
   fi
 }
 
-# Ensure tmux is available for interactive TUI verification.
-# If missing, best-effort non-interactive install (no prompts). Soft-fails when
-# root/sudo is required but unavailable, or no known package manager exists.
-# Print/pipe/SDK paths never call this.
+# Require tmux on PATH for interactive TUI verification. Detect-only: never
+# installs packages (no apt/brew/dnf/yum/pacman/apk). Print/pipe/SDK never call this.
 ensure_tmux() {
   if command -v tmux >/dev/null 2>&1; then
     return 0
   fi
-  echo "tmux not found; attempting non-interactive install for interactive TUI verification..." >&2
-
-  local rc=1
-  if command -v apt-get >/dev/null 2>&1; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      DEBIAN_FRONTEND=noninteractive apt-get install -y tmux </dev/null && rc=0 || rc=$?
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-      sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y tmux </dev/null && rc=0 || rc=$?
-    else
-      echo "tmux: apt-get present but install needs root/sudo without a password prompt (unavailable)" >&2
-      return 1
-    fi
-  elif command -v brew >/dev/null 2>&1; then
-    HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1 brew install tmux </dev/null && rc=0 || rc=$?
-  elif command -v dnf >/dev/null 2>&1; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      dnf install -y tmux </dev/null && rc=0 || rc=$?
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-      sudo -n dnf install -y tmux </dev/null && rc=0 || rc=$?
-    else
-      echo "tmux: dnf present but install needs root/sudo without a password prompt (unavailable)" >&2
-      return 1
-    fi
-  elif command -v yum >/dev/null 2>&1; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      yum install -y tmux </dev/null && rc=0 || rc=$?
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-      sudo -n yum install -y tmux </dev/null && rc=0 || rc=$?
-    else
-      echo "tmux: yum present but install needs root/sudo without a password prompt (unavailable)" >&2
-      return 1
-    fi
-  elif command -v pacman >/dev/null 2>&1; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      pacman -Sy --noconfirm tmux </dev/null && rc=0 || rc=$?
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-      sudo -n pacman -Sy --noconfirm tmux </dev/null && rc=0 || rc=$?
-    else
-      echo "tmux: pacman present but install needs root/sudo without a password prompt (unavailable)" >&2
-      return 1
-    fi
-  elif command -v apk >/dev/null 2>&1; then
-    if [[ "$(id -u)" -eq 0 ]]; then
-      apk add --no-cache tmux </dev/null && rc=0 || rc=$?
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-      sudo -n apk add --no-cache tmux </dev/null && rc=0 || rc=$?
-    else
-      echo "tmux: apk present but install needs root/sudo without a password prompt (unavailable)" >&2
-      return 1
-    fi
-  else
-    echo "tmux: no supported package manager (apt-get/brew/dnf/yum/pacman/apk)" >&2
-    return 1
-  fi
-
-  hash -r 2>/dev/null || true
-  if command -v tmux >/dev/null 2>&1; then
-    echo "tmux: installed at $(command -v tmux)" >&2
-    return 0
-  fi
-  echo "tmux: install attempted (exit $rc) but still not on PATH; use print/pipe/SDK or install tmux manually" >&2
+  echo "tmux not found on PATH (required for interactive TUI verification only)." >&2
+  echo "Install manually, then re-run launch — e.g. apt install tmux | brew install tmux | dnf install tmux | pacman -S tmux | apk add tmux" >&2
+  echo "Or skip interactive journeys and use print/pipe/SDK (see SKILL.md)." >&2
   return 1
 }
 
@@ -184,7 +124,7 @@ check_child_env_isolation() {
 case "$CMD" in
   launch)
     if ! ensure_tmux; then
-      echo "tmux is required for interactive TUI journeys; install failed — skip interactive paths and use print/pipe/SDK (see SKILL.md)" >&2
+      echo "tmux is required for interactive TUI journeys — skip interactive paths and use print/pipe/SDK (see SKILL.md)" >&2
       exit 1
     fi
     if T has-session -t vela 2>/dev/null; then echo "run $RUN already live; cleanup first" >&2; exit 1; fi
@@ -200,8 +140,9 @@ case "$CMD" in
     echo "NOT READY after 30s; pane:" >&2; pane >&2; exit 1 ;;
   doctor)
     ok=1
-    if ! ensure_tmux; then
-      echo "tmux: MISSING (install failed; interactive paths unavailable; print/pipe/SDK still ok)"
+    # Read-only: never call ensure_tmux / never install. Only report PATH presence.
+    if ! command -v tmux >/dev/null 2>&1; then
+      echo "tmux: MISSING (interactive paths unavailable; print/pipe/SDK still ok — install tmux manually if you need TUI)"
       ok=0
     else
       echo "tmux: $(command -v tmux) ($(tmux -V 2>/dev/null || echo ok))"

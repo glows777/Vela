@@ -43,6 +43,14 @@ How tests are organized, how to verify a change and how to add tests: see [test/
 - Unit tests live in `test/unit/`, mirroring `src/`; end-to-end flows live in `test/e2e/` and use `createTestVela()` from `test/support/vela.ts` and the scripted faux model from `src/testing/faux.ts`.
 - Fix a bug by first writing a faux scenario that reproduces it; when you change events, the faux interface or test conventions, update test/README.md.
 
+## Product verification (verify-vela)
+
+After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.cursor/skills/verify-vela/SKILL.md`](.cursor/skills/verify-vela/SKILL.md) before claiming done.
+
+- Prefer the skill harness (`scripts/vela-verify.sh`, `VELA_MODEL=mock`, feature journeys) over unit/e2e alone when the change maps to a listed feature. e2e supplements the skill; it does not replace it for those features.
+- Feature map: [`.cursor/skills/verify-vela/features/`](.cursor/skills/verify-vela/features/).
+- Interactive TUI journeys need `tmux` on PATH (install manually if missing; the harness does not auto-install). Print/pipe/SDK paths do not need tmux.
+
 ## Frontend
 
 Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
