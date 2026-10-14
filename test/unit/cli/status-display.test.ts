@@ -116,6 +116,57 @@ test('a saved session outside home shortens VELA_DIR and fits 80 and 120 columns
   expect(narrow).toContain(`${ID}.jsonl`)
 })
 
+test('a trailing separator on the configured directory stays between the alias and the next segment', () => {
+  const saved = `projects/${PROJECT}/sessions/${ID}.jsonl`
+  const path = `${AGENT}/${saved}`
+  const shown = `$VELA_DIR/${saved}`
+
+  const trailing = formatStatusPath({
+    persistence: { type: 'file', path },
+    homeDir: HOME,
+    agentDir: `${AGENT}/`,
+    isFile: () => true,
+  })
+  expect(trailing).toBe(shown)
+  expect(trailing.startsWith('$VELA_DIR/')).toBe(true)
+  expect(trailing).not.toContain('$VELA_DIRprojects')
+
+  const plain = formatStatusPath({
+    persistence: { type: 'file', path },
+    homeDir: HOME,
+    agentDir: AGENT,
+    isFile: () => true,
+  })
+  expect(plain).toBe(shown)
+
+  const atRoot = formatStatusPath({
+    persistence: { type: 'file', path: `/${saved}` },
+    homeDir: HOME,
+    agentDir: '/',
+    isFile: () => true,
+  })
+  expect(atRoot).toBe(shown)
+  expect(atRoot).not.toContain('$VELA_DIRprojects')
+
+  const underHome = formatStatusPath({
+    persistence: { type: 'file', path: `${HOME}/${saved}` },
+    homeDir: `${HOME}/`,
+    agentDir: AGENT,
+    isFile: () => true,
+  })
+  expect(underHome).toBe(`~/${saved}`)
+  expect(underHome).not.toContain('~projects')
+
+  for (const value of [trailing, plain, atRoot]) {
+    const wide = pathLine(value, 120)
+    expect(wide).toContain('$VELA_DIR/projects/')
+    expect(wide).not.toContain('$VELA_DIRprojects')
+  }
+  const homeLine = pathLine(underHome, 120)
+  expect(homeLine).toContain('~/projects/')
+  expect(homeLine).not.toContain('~projects')
+})
+
 test('a saved session under home shortens like the footer cwd', () => {
   const path = `${HOME}/.vela/projects/${PROJECT}/sessions/${ID}.jsonl`
   const value = formatStatusPath({
