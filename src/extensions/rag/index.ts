@@ -34,6 +34,8 @@ export function rag(options: RagOptions = {}): VelaExtension {
     const store = new SqliteVectorStore(join(dir, 'knowledge.db'), {
       embedder: embedder.id,
     })
+    // Session shutdown drains running tools and commands before shared resources close.
+    vela.onShutdown(() => store.close())
     if (store.assumedEmbedder)
       vela.logger.warn(
         `[rag] The knowledge base has no record of the embedder that built it (it predates Vela 0.2.0); assuming the configured one, "${store.embedder}". If it was built with another model, run /rag clear and ingest the documents again.`,

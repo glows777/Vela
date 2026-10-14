@@ -94,14 +94,25 @@ export class ChannelGateway {
     this.stopped = true
     for (const timer of this.idleTimers.values()) clearTimeout(timer)
     this.idleTimers.clear()
-    // Abort channel sessions that are still running before stopping the channels
-    for (const session of this.active) session.abort()
-    await Promise.all(this.queues.values())
-    await Promise.all(this.closing.values())
+    // Drain all active work before stopping its channels, even if an independent close fails.
+    const errors: unknown[] = []
+    const drained = await Promise.allSettled([
+      ...[...this.active].map((session) => session.abort()),
+      ...this.queues.values(),
+      ...this.closing.values(),
+    ])
+    for (const result of drained)
+      if (result.status === 'rejected') errors.push(result.reason)
 
     for (const [, ch] of this.channels) {
-      await ch.stop()
+      try {
+        await ch.stop()
+      } catch (error) {
+        errors.push(error)
+      }
     }
+    if (errors.length)
+      throw new AggregateError(errors, 'Channel shutdown failed')
   }
 
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */

@@ -54,6 +54,12 @@ export function openSqlite(path: string): SqliteDatabase {
   return new DatabaseSync(path, { allowExtension: true })
 }
 
+/** Releases native resources now, including Bun's uncached prepared statements. */
+export function closeSqlite(db: SqliteDatabase): void {
+  if (isBun) (db as { close(throwOnError: boolean): void }).close(true)
+  else db.close()
+}
+
 /** Runs fn in a transaction (the two runtimes' transaction APIs differ, so use BEGIN / COMMIT). */
 export function transaction(db: SqliteDatabase, fn: () => void): void {
   db.exec('BEGIN')

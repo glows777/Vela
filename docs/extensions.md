@@ -105,7 +105,7 @@ The factory's argument (`vela` below) is an `ExtensionAPI`:
 | `vela.registerProvider(name, provider)` | Add a model provider |
 | `vela.registerChannel(channel)` | Add a message channel |
 | `vela.on(event, handler)` | Subscribe to an event. Returns a function that unsubscribes |
-| `vela.onShutdown(handler)` | Run once when the Vela is disposed, after all sessions closed: close resources shared by all sessions, such as server connections. Errors are logged |
+| `vela.onShutdown(handler)` | Run once when the Vela is disposed, after all sessions closed: close resources shared by all sessions, such as server connections. Errors are logged and collected by `dispose()` after all handlers run |
 
 ### registerTool
 
@@ -269,7 +269,8 @@ Details:
 - `tool_call`: `event` has `toolName`, `toolCallId`, `parentToolCallId` and `input`. `parentToolCallId` is set when another tool issued the call through `ctx.executeTool()` (the call's id is then `<parent id>/<n>`, like pi). A changed input is validated against the tool's schema again; invalid input rejects the call. A handler that throws blocks the call (fail-safe). The first handler that blocks wins and later handlers do not run. The model sees `[Blocked by hook] <reason>`. Session permissions set to `ask` are checked after these handlers, on the final input. Example: [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts).
 - `tool_result`: `event` has `toolName`, `toolCallId`, `parentToolCallId`, `input` and `output` (the text the model will see; a preview for oversized results). Handlers chain: each sees the previous handler's output. A throwing handler is logged and skipped. Only the model's view changes; the tool history and saved full output keep the original. Example: [redact-secrets.ts](../examples/extensions/redact-secrets.ts).
 - `session_before_tree` / `session_before_fork` (pi's events of the same names): handlers run in order; the first `cancel` wins and stops the rest, other returned fields are merged (later handlers override). `session_tree` handlers are awaited in order. A throwing handler is logged and skipped.
-- `session_start` / `session_shutdown`: errors are logged and the next handler runs. Example: [read-only-session.ts](../examples/extensions/read-only-session.ts).
+- `session_start`: errors are logged and the next handler runs.
+- `session_shutdown`: errors are logged and the next handler runs; `close()` reports an `AggregateError` after saving and detaching the session. Example: [read-only-session.ts](../examples/extensions/read-only-session.ts).
 
 #### Notification events
 

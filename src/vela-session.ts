@@ -1106,6 +1106,7 @@ export class VelaSession {
     if (input.startsWith('/'))
       return (async () => {
         await this.start()
+        if (this.closed) throw new Error(`Session ${this.id} is closed`)
         if (await this.runCommand(input, options.signal)) return
         return this.promptInput(input, options)
       })()
@@ -1579,15 +1580,27 @@ export class VelaSession {
     // A cancelled `!` command still records itself; wait for that before the final save
     await this.bashRun?.catch(() => {})
     await this.registry.waitForIdle().catch(() => {})
-    // Only sessions that fired session_start emit session_shutdown
+    const errors: unknown[] = []
+    // Only sessions that fired session_start emit session_shutdown.
     if (this.started) {
       await this.started.catch(() => {})
-      await this.deps.extensions.sessionShutdown(this)
+      try {
+        await this.deps.extensions.sessionShutdown(this)
+      } catch (error) {
+        errors.push(error)
+      }
     }
-    // Entries appended while idle (setName, setModel) are written here at the latest
-    await this.saveOrReport()
-    this.listeners.clear()
-    this.deps.onClose(this)
+    // A failing shutdown hook must not skip saving or detaching this session.
+    try {
+      await this.saveOrReport()
+    } catch (error) {
+      errors.push(error)
+    } finally {
+      this.listeners.clear()
+      this.deps.onClose(this)
+    }
+    if (errors.length)
+      throw new AggregateError(errors, 'Session shutdown failed')
   }
 }
 
