@@ -24,7 +24,7 @@ export const statusCommands: CommandHandler[] = [
       '\n[status]',
       `  Session: ${name ? `${name} (${session.id})` : session.id}`,
       `  Path: ${sessionPath(session)}`,
-      `  Cwd: ${vela.cwd}`,
+      `  Cwd: ${plain(vela.cwd)}`,
       `  Model: ${plain(model)}`,
       `  Thinking: ${session.thinkingLevel}`,
       `  Role: ${session.role}`,
@@ -43,10 +43,15 @@ export const statusCommands: CommandHandler[] = [
   },
 ]
 
-/** The jsonl path when history is a file; memory sessions have no file to show. */
+/**
+ * Where history is kept, as one display line. Only a reported memory storage is "not saved".
+ * A storage that does not say is custom: it may still be durable, and its path is unknown.
+ */
 function sessionPath(session: VelaSession): string {
   const where = session.persistence
-  return where.type === 'file' ? where.path : 'in-memory (not saved)'
+  if (where.type === 'file') return plain(where.path)
+  if (where.type === 'memory') return 'in-memory (not saved)'
+  return 'custom storage (path unknown)'
 }
 
 /**

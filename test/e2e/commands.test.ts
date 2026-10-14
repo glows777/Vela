@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { z } from 'zod'
@@ -9,7 +10,11 @@ import type {
 import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
-import { memorySessionStorage } from '../../src/session/storage.ts'
+import {
+  fileSessionStorage,
+  memorySessionStorage,
+  type SessionStorage,
+} from '../../src/session/storage.ts'
 import {
   createFauxModel,
   fauxText,
@@ -20,6 +25,7 @@ import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
+  tempDir,
 } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -130,6 +136,78 @@ test('/status says a memory session is not saved instead of inventing a file pat
   expect(output).toContain('Messages: 2')
   expect(output).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
   expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
+})
+
+test('/status strips control sequences from the working directory and session path', async () => {
+  const root = tempDir()
+  const cwd = join(root.path, 'work-\u001b[31mPATH_REPRO\u001b[0m')
+  mkdirSync(cwd)
+  const t = createTestVela({ cwd, dataDir: 'data-\u001b[32mDIR\u001b[0m' })
+  try {
+    const where = t.session.persistence
+    expect(where.type).toBe('file')
+    if (where.type !== 'file') return
+    expect(where.path).toContain('\u001b[32mDIR\u001b[0m')
+    expect(t.vela.cwd).toContain('\u001b[31mPATH_REPRO\u001b[0m')
+    const { output } = await captureConsole(() => {
+      expect(t.dispatch('/status')).toBe(true)
+    })
+    const shownCwd = t.vela.cwd
+      .replaceAll('\u001b[31m', '')
+      .replaceAll('\u001b[0m', '')
+    expect(output).toContain(`Cwd: ${shownCwd}`)
+    expect(output).toContain(`data-DIR/sessions/${t.session.id}.jsonl`)
+    expect(output).not.toContain('\u001b')
+    expect(output).not.toContain('in-memory')
+  } finally {
+    await t.cleanup()
+    root.cleanup()
+  }
+})
+
+test('a durable custom storage that omits persistence() is not called in-memory', async () => {
+  const root = tempDir()
+  const files = fileSessionStorage(join(root.path, 'sessions'))
+  const storage: SessionStorage = {
+    load: (id) => files.load(id),
+    append: (id, entries) => files.append(id, entries),
+    list: () => files.list?.() ?? Promise.resolve([]),
+  }
+  const t = createTestVela({
+    cwd: root.path,
+    sessionStorage: storage,
+    responses: [fauxText('ok')],
+  })
+  try {
+    expect(t.session.persistence).toEqual({ type: 'unknown' })
+    await t.run('hi')
+    expect(t.session.persistence).toEqual({ type: 'unknown' })
+    const { output } = await captureConsole(() => {
+      expect(t.dispatch('/status')).toBe(true)
+    })
+    expect(output).toContain('Path: custom storage (path unknown)')
+    expect(output).not.toContain('in-memory (not saved)')
+    expect(output).not.toContain('.jsonl')
+    expect(
+      existsSync(join(root.path, 'sessions', `${t.session.id}.jsonl`)),
+    ).toBe(true)
+    await t.cleanup()
+
+    const again = createTestVela({
+      cwd: root.path,
+      sessionStorage: storage,
+    })
+    try {
+      expect(again.session.persistence).toEqual({ type: 'unknown' })
+      expect(await again.session.resume()).toBe(true)
+      expect(again.session.messages).toHaveLength(2)
+      expect(again.session.persistence).toEqual({ type: 'unknown' })
+    } finally {
+      await again.cleanup()
+    }
+  } finally {
+    root.cleanup()
+  }
 })
 
 test('/status strips control and ANSI sequences from session metadata', async () => {
