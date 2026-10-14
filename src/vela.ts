@@ -177,7 +177,10 @@ export interface Vela {
   channels(): { name: string; description: string }[]
   /** Starts all channels (begins receiving messages) */
   startChannels(): Promise<void>
-  /** Stops channels and closes all sessions (aborting running tasks and saving) */
+  /**
+   * Attempts all cleanup, then rejects with AggregateError if any step failed.
+   * Concurrent/repeated calls share the same result; failed cleanup is not retried.
+   */
   dispose(): Promise<void>
 }
 
@@ -429,11 +432,38 @@ export function createVela(options: VelaOptions = {}): Vela {
     dispose() {
       disposed = true
       disposing ??= (async () => {
-        await gateway.stopAll()
-        await Promise.all([...sessions.values()].map((s) => s.close()))
-        await runner.shutdown()
+        // A factory may still be registering resources. Initialization failures remain on ready().
+        await runner.settled
+        const errors: unknown[] = []
+        try {
+          await gateway.stopAll()
+        } catch (error) {
+          errors.push(error)
+        }
+        // Do not tear down shared dependencies until every session-close attempt settles.
+        // Defer each call so a synchronous close() throw becomes a rejection, not an interrupted map.
+        const closed = await Promise.allSettled(
+          [...sessions.values()].map((s) =>
+            Promise.resolve().then(() => s.close()),
+          ),
+        )
+        for (const result of closed)
+          if (result.status === 'rejected') errors.push(result.reason)
+        try {
+          await runner.shutdown()
+        } catch (error) {
+          errors.push(error)
+        }
         listeners.clear()
-        if (ephemeral) rmSync(dataDir, { recursive: true, force: true })
+        if (ephemeral) {
+          try {
+            rmSync(dataDir, { recursive: true, force: true })
+          } catch (error) {
+            errors.push(error)
+          }
+        }
+        if (errors.length)
+          throw new AggregateError(errors, 'Vela disposal failed')
       })()
       return disposing
     },

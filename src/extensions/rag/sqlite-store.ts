@@ -7,7 +7,12 @@ import {
   normalizeMinMax,
   type SearchResult,
 } from './search.ts'
-import { openSqlite, type SqliteDatabase, transaction } from './sqlite.ts'
+import {
+  closeSqlite,
+  openSqlite,
+  type SqliteDatabase,
+  transaction,
+} from './sqlite.ts'
 
 export interface StoredChunk extends Chunk {
   embedding: number[]
@@ -28,6 +33,7 @@ export const UNNAMED_EMBEDDER = 'custom'
 
 export class SqliteVectorStore {
   private db: SqliteDatabase
+  private closed = false
   /** Id of the embedder this store embeds with */
   readonly embedder: string
   /** True when the file had chunks but no embedder record (built before Vela 0.2.0) and `embedder` was assumed */
@@ -47,8 +53,20 @@ export class SqliteVectorStore {
     }
   }
 
+  /** Releases the native database immediately; repeated calls are harmless. */
+  close(): void {
+    if (this.closed) return
+    closeSqlite(this.db)
+    this.closed = true
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error('The knowledge base is closed')
+  }
+
   /** The embedder that made the stored vectors (the file's record); an empty store belongs to the configured one */
   storedEmbedder(): string {
+    this.assertOpen()
     const recorded = this.readMeta('embedder')
     return recorded === undefined || this.size() === 0
       ? this.embedder
@@ -61,6 +79,7 @@ export class SqliteVectorStore {
    * An empty store is taken over by the configured embedder.
    */
   private assertEmbedder(): void {
+    this.assertOpen()
     const recorded = this.readMeta('embedder')
     if (recorded === this.embedder) return
     if (recorded === undefined || this.size() === 0) {
@@ -213,6 +232,7 @@ export class SqliteVectorStore {
     query: string,
     topK: number,
   ): Array<{ chunk: StoredChunk; score: number }> {
+    this.assertOpen()
     const ftsQuery = normalizeFtsQuery(query)
     if (!ftsQuery) return []
 
@@ -242,6 +262,7 @@ export class SqliteVectorStore {
   }
 
   size(): number {
+    this.assertOpen()
     return (
       this.db.prepare('SELECT COUNT(*) as n FROM chunks').get() as { n: number }
     ).n
@@ -249,6 +270,7 @@ export class SqliteVectorStore {
 
   /** Deletes every chunk; the store then belongs to the configured embedder. */
   clear(): void {
+    this.assertOpen()
     transaction(this.db, () => {
       this.db.exec(
         'DELETE FROM chunks; DELETE FROM chunks_vec; DELETE FROM chunks_fts;',
@@ -258,6 +280,7 @@ export class SqliteVectorStore {
   }
 
   sources(): string[] {
+    this.assertOpen()
     return (
       this.db.prepare('SELECT DISTINCT source FROM chunks').all() as {
         source: string

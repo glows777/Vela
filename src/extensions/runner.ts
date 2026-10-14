@@ -76,6 +76,8 @@ export class ExtensionRunner {
   }[] = []
   /** Resolves when all extension factories (including async ones) finish; rejects on failure */
   readonly ready: Promise<void>
+  /** All factories have settled, including those still running after another factory failed. */
+  readonly settled: Promise<void>
 
   constructor(
     private readonly deps: RunnerDeps,
@@ -137,6 +139,7 @@ export class ExtensionRunner {
         )
     })
     this.ready = Promise.all(pending).then(() => {})
+    this.settled = Promise.allSettled(pending).then(() => {})
     // Avoid an unhandled rejection when nobody awaits it; prompt() awaits it and reports the error
     this.ready.catch(() => {})
   }
@@ -276,19 +279,23 @@ export class ExtensionRunner {
     }
   }
 
-  /** Lifecycle events: await each handler in order; log errors and continue. */
+  /** Lifecycle events: await each handler in order; shutdown failures are reported after all handlers. */
   private async lifecycle(
     event: { type: 'session_start' | 'session_shutdown' },
     session: VelaSession,
   ) {
     const ctx = this.context(session)
+    const errors: unknown[] = []
     for (const { extension, fn } of this.list(event.type)) {
       try {
         await fn(event, ctx)
       } catch (error) {
+        errors.push(error)
         this.report(extension, event.type, error)
       }
     }
+    if (event.type === 'session_shutdown' && errors.length)
+      throw new AggregateError(errors, 'Session shutdown handlers failed')
   }
 
   sessionStart(session: VelaSession) {
@@ -358,15 +365,19 @@ export class ExtensionRunner {
     return false
   }
 
-  /** vela.dispose(): runs the onShutdown handlers in registration order; errors are logged. */
+  /** vela.dispose(): attempts every onShutdown handler in order, then reports failures. */
   async shutdown(): Promise<void> {
+    const errors: unknown[] = []
     for (const { extension, fn } of this.shutdownHandlers.splice(0)) {
       try {
         await fn()
       } catch (error) {
+        errors.push(error)
         this.report(extension, 'shutdown', error)
       }
     }
+    if (errors.length)
+      throw new AggregateError(errors, 'Extension shutdown failed')
   }
 
   /** Whether any extension handles `event` (lets callers skip copying data for nobody, like pi's hasHandlers). */

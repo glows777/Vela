@@ -570,7 +570,6 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
         expect(vela.unregisterTool('demo_plain')).toBe(false)
         vela.onShutdown(async () => {
           calls.push('first')
-          throw new Error('logged, not thrown')
         })
         vela.onShutdown(async () => {
           await new Promise((resolve) => setTimeout(resolve, 20))

@@ -385,6 +385,8 @@ Options not passed to a factory are read from its `extensionConfig` section. See
 
 Call `await vela.dispose()` when you are done. It stops channels, aborts running sessions, waits for them to save, fires `session_shutdown` for extensions, runs extensions' `onShutdown` handlers (the mcp extension closes its server connections there) and, when there is no `dataDir`, deletes the temp data dir. A disposed Vela throws on `session()`.
 
+Disposal waits for extension factories to settle, then attempts channel shutdown, all session closes, extension shutdown handlers, listener cleanup and temporary-directory removal in that order. Independent cleanup still runs after a failure; all session-close attempts settle before shared extension resources are closed. Failures reject with an `AggregateError` after cleanup attempts finish; its `errors` can contain nested lifecycle aggregates. Concurrent and repeated calls return the same promise/result, including the same rejection; they do not retry failed cleanup or rerun completed hooks. Cleanup waits for existing work and handlers to settle, so an uncooperative factory, tool or shutdown handler can still prevent completion; no timeout or forced termination is implied.
+
 `await session.close()` closes one session the same way and removes it from the Vela; a later `vela.session(id)` opens a fresh object for that id (call `resume()` to reload its history).
 
 ## Testing

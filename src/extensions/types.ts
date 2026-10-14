@@ -329,7 +329,7 @@ export interface ExtensionAPI {
   unregisterTool(name: string): boolean
   /**
    * Runs once when the Vela is disposed, after all sessions closed (for resources shared by all
-   * sessions, such as MCP server connections). Errors are logged.
+   * sessions, such as MCP server connections). Errors are logged and collected by dispose().
    */
   onShutdown(handler: () => void | Promise<void>): void
   /**
