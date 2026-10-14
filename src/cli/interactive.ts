@@ -33,6 +33,7 @@ import {
   type SessionEntry,
   summaryMessageText,
 } from '../session/entries.ts'
+import { formatUsd } from '../usage/format.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { copyToClipboard } from './clipboard.ts'
@@ -81,6 +82,8 @@ export interface InteractiveOptions {
   openBrowser?: (url: string) => void
   /** Settings `enabledModels`: the models Ctrl+P cycles through */
   enabledModels?: string[]
+  /** Configured agent directory (`VELA_DIR` or `~/.vela`), for `/status` path shortening */
+  agentDir?: string
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
@@ -1087,6 +1090,7 @@ export class InteractiveMode {
         internals: velaInternals(this.vela),
         session: this.session,
         print: this.commandOutput(),
+        agentDir: this.options.agentDir,
       })
       if (handled instanceof Promise)
         await handled.catch((error) =>
@@ -1720,7 +1724,7 @@ class Footer implements Component {
     const left = [
       `↑${compact(totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens)}`,
       `↓${compact(totals.outputTokens)}`,
-      totals.cost ? `$${totals.cost.toFixed(3)}` : undefined,
+      typeof totals.cost === 'number' ? formatUsd(totals.cost) : undefined,
       `${usage.percent}%`,
     ]
       .filter(Boolean)

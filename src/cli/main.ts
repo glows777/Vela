@@ -418,6 +418,7 @@ if (mode === 'print' || mode === 'json') {
     describeError: cliErrorMessage,
     enabledModels: config.settings.enabledModels,
     loginOptions: { getDeviceId: () => installationId(agentDir) },
+    agentDir,
     attachLogger: interactiveLogger?.attach,
     onExit: async () => {
       await vela.dispose()
