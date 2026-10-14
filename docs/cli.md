@@ -186,6 +186,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 
 | Command | Description |
 |---|---|
+| `/status` | Short session status: id/path, cwd, model, thinking level, message count and context token estimate. |
 | `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
 | `/skill`, `/skills` | List skills. |

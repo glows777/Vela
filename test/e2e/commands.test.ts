@@ -16,6 +16,27 @@ import {
 
 afterEach(cleanupTestVelas)
 
+test('/status reports session id, model and context usage', async () => {
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 100, output: 20 } })],
+  })
+  await t.run('hi')
+
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain('[status]')
+  expect(output).toContain(`Session: ${t.session.id}`)
+  expect(output).toContain(
+    `Path: ${t.vela.dataDir}/sessions/${t.session.id}.jsonl`,
+  )
+  expect(output).toContain('Model:')
+  expect(output).toContain('Thinking:')
+  expect(output).toContain('Messages: ')
+  expect(output).toContain('Context:')
+  expect(output).toMatch(/Usage:.*1 steps/)
+})
+
 test('/context and /usage report the conversation after a run', async () => {
   const t = createTestVela({
     responses: [fauxText('ok', { usage: { input: 1234, output: 56 } })],
