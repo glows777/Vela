@@ -18,9 +18,9 @@ Provider boundary: `VELA_MODEL=mock` (keyword-driven offline demo model, `src/te
 
 ## Launch
 
-Prerequisites (once per box): `bun --version` ≥ 1.4 (repo default runtime; system Node here may be < 22.18, so the helper runs `bun src/cli/main.ts`, no build needed), `tmux` **for interactive TUI journeys**, and `bun install` in the repo. Optional for grep/find tools and `@` file completion: `rg` and `fd` on PATH (`apt install ripgrep fd-find`; `ln -s $(which fdfind) ~/.local/bin/fd`).
+Prerequisites (once per box): `bun --version` ≥ 1.4 (repo default runtime; system Node here may be < 22.18, so the helper runs `bun src/cli/main.ts`, no build needed), `tmux` **for interactive TUI verification only** (not a product dependency), and `bun install` in the repo. Optional for grep/find tools and `@` file completion: `rg` and `fd` on PATH (`apt install ripgrep fd-find`; `ln -s $(which fdfind) ~/.local/bin/fd`).
 
-**Without tmux:** interactive paths (`launch` / `send` / `keys` / `wait` / `snap` / TUI `doctor`) are unavailable. Use `print`, `pipe`, and the SDK examples instead — they cover `-p`, piped stdin, `--mode json`, and `createVela()` without a terminal multiplexer. Do not substitute `screen`/`expect` unless you are extending the harness; print-mode + SDK is the supported fallback.
+**tmux and interactive TUI:** `launch` / `doctor` call `ensure_tmux`: if `tmux` is already on PATH, continue; if missing, attempt a non-interactive install (`apt-get` / `brew` / `dnf` / `yum` / `pacman` / `apk` as appropriate — no prompts; root or passwordless `sudo -n` when the package manager needs privilege). If install fails (no package manager, sudo unavailable, or still not on PATH), skip interactive journeys (`launch` / `send` / `keys` / `wait` / `snap` / TUI `doctor`) and fall back to `print`, `pipe`, and the SDK — they never need tmux. Do not substitute `screen`/`expect` unless you are extending the harness; print-mode + SDK is the supported fallback when tmux cannot be installed.
 
 ```bash
 $H launch $RUN            # extra args go to vela, e.g. $H launch $RUN --no-extensions

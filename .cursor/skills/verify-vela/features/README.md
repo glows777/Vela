@@ -4,7 +4,7 @@ The maintained source for verifying Vela's user-facing behavior. Read this index
 
 ## Baseline preconditions
 
-- `bun` ≥ 1.4, `bun install` done. `tmux` required for TUI journeys; without it use `print`/`pipe`/SDK. `rg`/`fd` on PATH for search tools.
+- `bun` ≥ 1.4, `bun install` done. Interactive TUI journeys need `tmux` (verification only): `launch`/`doctor` run `ensure_tmux` and attempt a non-interactive install if missing; if install fails, skip TUI and use `print`/`pipe`/SDK (those never need tmux). `rg`/`fd` on PATH for search tools.
 - `RUN=verify-$(date +%s)`; `$H launch $RUN` creates a disposable `VELA_DIR`, `HOME` and `work/` with `sample-data.txt` and `a.txt`.
 - `$H doctor $RUN` prints `DOCTOR OK` with `mock/mock-model` before you drive anything.
 - Never drive an instance that this run did not start.
