@@ -4,7 +4,7 @@ The maintained source for verifying Vela's user-facing behavior. Read this index
 
 ## Baseline preconditions
 
-- `bun` ≥ 1.4, `tmux`, `bun install` done. `rg`/`fd` on PATH for search tools.
+- `bun` ≥ 1.4, `bun install` done. `tmux` required for TUI journeys; without it use `print`/`pipe`/SDK. `rg`/`fd` on PATH for search tools.
 - `RUN=verify-$(date +%s)`; `$H launch $RUN` creates a disposable `VELA_DIR`, `HOME` and `work/` with `sample-data.txt` and `a.txt`.
 - `$H doctor $RUN` prints `DOCTOR OK` with `mock/mock-model` before you drive anything.
 - Never drive an instance that this run did not start.
@@ -12,7 +12,7 @@ The maintained source for verifying Vela's user-facing behavior. Read this index
 ## Driving conventions
 
 - TUI actions: `$H send $RUN "<text>"`, then `$H wait $RUN '<regex>'`. Never fixed sleeps.
-- Print-mode actions: `$H print $RUN <name> <vela args>` (stdin is closed for you).
+- Print-mode actions: `$H print $RUN <name> <vela args>` (stdin closed) or `echo … | $H pipe $RUN <name>` (piped stdin). Both use `env -i` isolation.
 - Prompts are literal. The mock model matches keywords (`test edit`, `list files`, …).
 - Run `$H cleanup $RUN` at the end and after every failure.
 
