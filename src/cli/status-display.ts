@@ -45,10 +45,28 @@ function presentPath(
   homeDir: string,
   agentDir: string | undefined,
 ): string {
-  if (isUnder(path, homeDir)) return `~${path.slice(homeDir.length)}`
+  if (isUnder(path, homeDir)) return `~${suffixUnder(path, homeDir)}`
   if (agentDir && isUnder(path, agentDir))
-    return `$VELA_DIR${path.slice(agentDir.length)}`
+    return `$VELA_DIR${suffixUnder(path, agentDir)}`
   return path
+}
+
+/**
+ * The part of `path` under `root`. A child keeps its leading separator, so a
+ * configured directory of `/tmp/home/` or `/` renders as `$VELA_DIR/projects/…`
+ * (and `~/…`) rather than gluing the next segment on (`$VELA_DIRprojects`).
+ * The directory itself has no suffix.
+ */
+function suffixUnder(path: string, root: string): string {
+  if (path === root) return ''
+  // Filesystem root is only `sep`. Stripping it leaves nothing to slice from,
+  // and the child path already begins with `sep`.
+  if (root === sep) return path
+  const base = root.endsWith(sep) ? root.slice(0, -1) : root
+  if (path === base) return ''
+  const rest = path.slice(base.length)
+  if (rest === '' || rest.startsWith(sep)) return rest
+  return sep + rest
 }
 
 function isUnder(path: string, root: string): boolean {
