@@ -441,6 +441,7 @@ export function createVela(options: VelaOptions = {}): Vela {
           errors.push(error)
         }
         // Do not tear down shared dependencies until every session-close attempt settles.
+        // Defer each call so a synchronous close() throw becomes a rejection, not an interrupted map.
         const closed = await Promise.allSettled(
           [...sessions.values()].map((s) =>
             Promise.resolve().then(() => s.close()),

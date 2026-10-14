@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **Shutdown failures no longer skip independent cleanup.** `vela.dispose()` and `session.close()` now reject with an `AggregateError` after their remaining cleanup attempts settle, including failures from shutdown hooks that were previously only logged. Callers should handle the rejection; repeated calls return the same result without retrying cleanup.
+- **`vela.dispose()` now waits for asynchronous extension factories to settle** before tearing down their resources. A factory that never settles can therefore keep disposal pending indefinitely; no timeout or forced termination is implied.
 - **The `memory` tool's `read` and `delete` accepted paths.** A file name such as `../../x` reached files outside the memory directory: `read` rewrote the file it read (adding a `lastReadAt` line and setting mode `0600`) and `delete` removed it, even in sessions whose permissions denied `bash` and file writes. Both now accept only a memory file name from the index.
 - **Channel sessions were never closed**, so a long-running bot kept one session per conversation and sender in memory for as long as it ran. An idle channel session is now closed after 10 minutes (`createVela({ channelIdleMs })`) and resumed on the next message.
 - **Guest system prompts included the tool call history guide**, with absolute paths of the data directory (which reveal the home directory and the project path) and instructions for tools a guest doesn't have. Guests no longer get it.
