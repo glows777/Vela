@@ -15,9 +15,11 @@ In the TUI, lines starting with `/` run built-in commands: `/usage` (token usage
 
 ## Driving it with vela-verify.sh (tmux)
 
+Interactive path; needs tmux (`ensure_tmux` on launch/doctor). If install fails, skip and use non-interactive features instead.
+
 Preconditions:
 
-- `$H launch $RUN`, `$H doctor $RUN` → `DOCTOR OK`.
+- `$H launch $RUN`, `$H doctor $RUN` → `DOCTOR OK` (tmux present or installed).
 
 - **Empty usage.** Run `$H send $RUN "/usage"` and `$H wait $RUN 'Cache hit rate'`. Shows `No cacheable input yet`.
 - **After turns.** Send `list files` twice (waiting for `\[FILE\] a.txt` each time), then `/usage` again. `Cache read` is non-zero and the hit rate rises.
