@@ -34,7 +34,7 @@ In interactive mode:
 | `/clone` | Copy the current branch into a new session |
 | `/export [path]` | Write the current branch as HTML, or as JSONL when the path ends in `.jsonl` |
 | `/compact [focus]` | Compact the context now (see [Compaction](#compaction)) |
-| `/status` | Show this session: id, where it is saved, model, context and token usage |
+| `/status` | Show this session: id, where it is saved (or that it is not written yet), model, context and token usage |
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
 
@@ -182,7 +182,7 @@ With Anthropic models, Vela marks the system prompt, the last tool definition an
 
 Every model request records input, output, cache-read and cache-write tokens and, when the price is known, a cost. The price comes from the model entry's `cost` in `models.json`, otherwise from a small built-in table of common models; a model in neither has no cost, so Vela shows its tokens without a dollar amount. Set `cost` for such a model to see its cost (see [Models](models.md#model-fields)).
 
-- `/status` shows a short overview: session id and file (in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, the context estimate and this session's token usage. A channel session also shows its channel, and a fork shows the session it was copied from.
+- `/status` shows a short overview: session id and file (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, the context estimate and this session's token usage. The dollar amount matches the footer. A channel session also shows its channel, and a fork shows the session it was copied from. Paths under your home directory are shown with `~`, and paths under `VELA_DIR` with `$VELA_DIR`, so a long session id is not broken across lines.
 - `/usage` shows the session's totals, cache hit rate, the cost and what it would have cost without caching. The cost lines only appear when at least one request had a known price.
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.

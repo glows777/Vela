@@ -57,6 +57,7 @@ test('/status reports the session, model and context usage', async () => {
   )
   expect(plain).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
   expect(plain).not.toMatch(/Usage:.*\$/)
+  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(true)
 })
 
 test('/status on a fresh session shows identity and omits usage totals', async () => {
@@ -66,9 +67,11 @@ test('/status on a fresh session shows identity and omits usage totals', async (
     expect(t.dispatch('/status')).toBe(true)
   })
   expect(output).toContain(`Session: ${t.session.id}\n`)
+  const destination = join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)
   expect(output).toContain(
-    `Path: ${join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)}`,
+    `Path: not written yet (will save to ${destination})`,
   )
+  expect(output).not.toContain(`Path: ${destination}`)
   expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
   expect(output).toContain('Thinking: low')
   expect(output).toContain('Role: owner')
@@ -156,6 +159,7 @@ test('/status strips control sequences from the working directory and session pa
       .replaceAll('\u001b[31m', '')
       .replaceAll('\u001b[0m', '')
     expect(output).toContain(`Cwd: ${shownCwd}`)
+    expect(output).toContain('Path: not written yet (will save to ')
     expect(output).toContain(`data-DIR/sessions/${t.session.id}.jsonl`)
     expect(output).not.toContain('\u001b')
     expect(output).not.toContain('in-memory')
@@ -237,6 +241,41 @@ test('/status reports an unavailable model instead of failing', async () => {
   )
   expect(output).toContain('Context:')
   expect(output).toContain('Thinking:')
+})
+
+test('in the TUI, /status cost matches the footer for the same session', async () => {
+  const faux = createFauxModel({
+    modelId: 'priced',
+    responses: [fauxText('ok', { usage: { input: 1_000_000, output: 1000 } })],
+  })
+  const provider: ProviderDefinition = {
+    models: [
+      {
+        id: 'priced',
+        contextWindow: 200_000,
+        cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+      },
+    ],
+    createModel: () => faux,
+  }
+  const t = createTestVela({
+    model: 'fake/priced',
+    providers: { fake: provider },
+  })
+  await t.run('hi')
+  const tui = await startTui(t.vela, { sessionId: t.session.id })
+  try {
+    await tui.started
+    tui.submit('/status')
+    await tui.until('[status]')
+    const screen = tui.screen()
+    expect(screen).toContain('Usage: ↑1.0M ↓1.0k $1.0050 (1 step)')
+    expect(screen).toContain('$1.0050')
+    expect(screen.match(/\$1\.0050/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(screen).not.toMatch(/\$1\.005(?!0)/)
+  } finally {
+    await stopTuis()
+  }
 })
 
 test('in the TUI, /status prints the session overview into the chat', async () => {
