@@ -1,20 +1,264 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { z } from 'zod'
 import type {
   IncomingMessage,
   OutgoingMessage,
 } from '../../src/channels/types.ts'
+import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import type { ProviderDefinition } from '../../src/models/index.ts'
+import {
+  fileSessionStorage,
+  memorySessionStorage,
+  type SessionStorage,
+} from '../../src/session/storage.ts'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 import {
   captureConsole,
   cleanupTestVelas,
   createTestVela,
+  tempDir,
 } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
+
+test('/status reports the session, model and context usage', async () => {
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
+  })
+  t.session.setName('refactor')
+  await t.run('hi')
+
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+    expect(t.dispatch('/status extra')).toBe(false)
+  })
+  const plain = stripTerminalSequences(output)
+  expect(plain).toContain('[status]')
+  expect(plain).toContain(`Session: refactor (${t.session.id})`)
+  expect(plain).toContain(
+    `Path: ${join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)}`,
+  )
+  expect(plain).toContain(`Cwd: ${t.vela.cwd}`)
+  expect(plain).toContain(`Model: ${t.session.modelInfo.ref}`)
+  expect(plain).toContain(`Thinking: ${t.session.thinkingLevel}`)
+  expect(plain).toContain('Role: owner')
+  expect(plain).toContain('Messages: 2')
+  expect(plain).toMatch(
+    new RegExp(`Context: .+ tokens \\(${t.session.usage.percent}% of .+\\)`),
+  )
+  expect(plain).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
+  expect(plain).not.toMatch(/Usage:.*\$/)
+})
+
+test('/status on a fresh session shows identity and omits usage totals', async () => {
+  const t = createTestVela({ thinkingLevel: 'low' })
+  t.session.channel = 'feishu'
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(`Session: ${t.session.id}\n`)
+  expect(output).toContain(
+    `Path: ${join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)}`,
+  )
+  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
+  expect(output).toContain('Thinking: low')
+  expect(output).toContain('Role: owner')
+  expect(output).toContain('Channel: feishu')
+  expect(output).toContain('Messages: 0')
+  expect(output).toContain('Context:')
+  expect(output).not.toContain('Usage:')
+  expect(output).not.toContain('Forked from:')
+})
+
+test('/status names a forked session and includes the cost of a priced model', async () => {
+  const faux = createFauxModel({
+    modelId: 'priced',
+    responses: [fauxText('ok', { usage: { input: 1_000_000, output: 1000 } })],
+  })
+  const provider: ProviderDefinition = {
+    models: [
+      {
+        id: 'priced',
+        contextWindow: 200_000,
+        cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+      },
+    ],
+    createModel: () => faux,
+  }
+  const t = createTestVela({
+    model: 'fake/priced',
+    providers: { fake: provider },
+  })
+  await t.run('hi')
+  const user = t.session
+    .getEntries()
+    .find((entry) => entry.type === 'message' && entry.message.role === 'user')
+  if (!user) throw new Error('missing user entry')
+  const forked = (await t.session.fork(user.id, { sessionId: 'copy' })).session
+  if (!forked) throw new Error('fork failed')
+
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+    expect(
+      createCliDispatcher(t.vela)('/status', { ...t.ctx, session: forked }),
+    ).toBe(true)
+  })
+  expect(output).toContain('Model: fake/priced')
+  expect(output).toContain('Usage: ↑1.0M ↓1.0k $1.0050 (1 step)')
+  expect(output).toContain('Session: copy')
+  expect(output).toContain('Forked from: default')
+  expect(output).toContain(`(${t.session.usage.percent}% of 200.0k)`)
+})
+
+test('/status says a memory session is not saved instead of inventing a file path', async () => {
+  const t = createTestVela({
+    sessionStorage: memorySessionStorage(),
+    responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
+  })
+  await t.run('hi')
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain('Path: in-memory (not saved)')
+  expect(output).not.toContain('.jsonl')
+  expect(output).not.toContain(
+    join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`),
+  )
+  expect(output).toContain('Messages: 2')
+  expect(output).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
+  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
+})
+
+test('/status strips control sequences from the working directory and session path', async () => {
+  const root = tempDir()
+  const cwd = join(root.path, 'work-\u001b[31mPATH_REPRO\u001b[0m')
+  mkdirSync(cwd)
+  const t = createTestVela({ cwd, dataDir: 'data-\u001b[32mDIR\u001b[0m' })
+  try {
+    const where = t.session.persistence
+    expect(where.type).toBe('file')
+    if (where.type !== 'file') return
+    expect(where.path).toContain('\u001b[32mDIR\u001b[0m')
+    expect(t.vela.cwd).toContain('\u001b[31mPATH_REPRO\u001b[0m')
+    const { output } = await captureConsole(() => {
+      expect(t.dispatch('/status')).toBe(true)
+    })
+    const shownCwd = t.vela.cwd
+      .replaceAll('\u001b[31m', '')
+      .replaceAll('\u001b[0m', '')
+    expect(output).toContain(`Cwd: ${shownCwd}`)
+    expect(output).toContain(`data-DIR/sessions/${t.session.id}.jsonl`)
+    expect(output).not.toContain('\u001b')
+    expect(output).not.toContain('in-memory')
+  } finally {
+    await t.cleanup()
+    root.cleanup()
+  }
+})
+
+test('a durable custom storage that omits persistence() is not called in-memory', async () => {
+  const root = tempDir()
+  const files = fileSessionStorage(join(root.path, 'sessions'))
+  const storage: SessionStorage = {
+    load: (id) => files.load(id),
+    append: (id, entries) => files.append(id, entries),
+    list: () => files.list?.() ?? Promise.resolve([]),
+  }
+  const t = createTestVela({
+    cwd: root.path,
+    sessionStorage: storage,
+    responses: [fauxText('ok')],
+  })
+  try {
+    expect(t.session.persistence).toEqual({ type: 'unknown' })
+    await t.run('hi')
+    expect(t.session.persistence).toEqual({ type: 'unknown' })
+    const { output } = await captureConsole(() => {
+      expect(t.dispatch('/status')).toBe(true)
+    })
+    expect(output).toContain('Path: custom storage (path unknown)')
+    expect(output).not.toContain('in-memory (not saved)')
+    expect(output).not.toContain('.jsonl')
+    expect(
+      existsSync(join(root.path, 'sessions', `${t.session.id}.jsonl`)),
+    ).toBe(true)
+    await t.cleanup()
+
+    const again = createTestVela({
+      cwd: root.path,
+      sessionStorage: storage,
+    })
+    try {
+      expect(again.session.persistence).toEqual({ type: 'unknown' })
+      expect(await again.session.resume()).toBe(true)
+      expect(again.session.messages).toHaveLength(2)
+      expect(again.session.persistence).toEqual({ type: 'unknown' })
+    } finally {
+      await again.cleanup()
+    }
+  } finally {
+    root.cleanup()
+  }
+})
+
+test('/status strips control and ANSI sequences from session metadata', async () => {
+  const t = createTestVela({ model: 'bad\u001b[31mx' })
+  t.session.setName('na\u001b[32mme\u0007\u001b]52;c;AQID\u0007')
+  t.session.channel = 'ch\u001b[33mannel'
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(`Session: name (${t.session.id})`)
+  expect(output).toContain('Channel: channel')
+  expect(output).toContain(
+    'Model: (unavailable: Model must be provider/id, got "badx")',
+  )
+  expect(output).toContain('[status]')
+  expect(output).not.toContain('\u001b')
+  expect(output).not.toContain('\u0007')
+})
+
+test('/status reports an unavailable model instead of failing', async () => {
+  const t = createTestVela({ model: 'missing/nope', providers: {} })
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(
+    'Model: (unavailable: No provider named missing (available: none))',
+  )
+  expect(output).toContain('Context:')
+  expect(output).toContain('Thinking:')
+})
+
+test('in the TUI, /status prints the session overview into the chat', async () => {
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
+  })
+  await t.run('hi')
+  const tui = await startTui(t.vela, { sessionId: t.session.id })
+  try {
+    await tui.started
+    tui.submit('/status')
+    await tui.until('[status]')
+    const screen = tui.screen()
+    expect(screen).toContain(`Session: ${t.session.id}`)
+    expect(screen).toContain('Model: faux/faux')
+    expect(screen).toContain('Context:')
+    expect(screen).toContain('Usage:')
+    expect(screen).toContain('1 step')
+  } finally {
+    await stopTuis()
+  }
+})
 
 test('/context and /usage report the conversation after a run', async () => {
   const t = createTestVela({

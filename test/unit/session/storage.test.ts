@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   SessionFileEntry,
@@ -42,6 +42,7 @@ const contents = (entries: SessionFileEntry[] | undefined) =>
 
 test('memory storage appends per id and hands out copies', async () => {
   const storage = memorySessionStorage()
+  expect(storage.persistence?.('a')).toEqual({ type: 'memory' })
   expect(await storage.load('a')).toBeUndefined()
   const first = [header('a'), message('hi')]
   await storage.append('a', first)
@@ -58,9 +59,11 @@ test('file storage appends lines to <dir>/<id>.jsonl; corrupt lines are skipped 
   const dir = tempDir()
   dirs.push(dir)
   const storage = fileSessionStorage(join(dir.path, 'sessions'))
+  const path = join(dir.path, 'sessions/a.jsonl')
+  expect(storage.persistence?.('a')).toEqual({ type: 'file', path })
+  expect(existsSync(path)).toBe(false)
   await storage.append('a', [header('a'), message('hi')])
   await storage.append('a', [message('again')])
-  const path = join(dir.path, 'sessions/a.jsonl')
   expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(3)
   expect(contents(await storage.load('a'))).toEqual(['hi', 'again'])
 
