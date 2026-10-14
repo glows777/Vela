@@ -607,10 +607,13 @@ export class VelaSession {
 
   /**
    * Where this session's history is kept. `file` is the jsonl path (the file may not exist until
-   * the first user or assistant message). `memory` is not saved and cannot be resumed.
+   * the first user or assistant message). `memory` is not saved and cannot be resumed. `unknown`
+   * means the storage did not report a location; the session may still be persisted.
    */
   get persistence(): SessionPersistence {
-    return this.deps.sessionStorage.persistence?.(this.id) ?? { type: 'memory' }
+    return (
+      this.deps.sessionStorage.persistence?.(this.id) ?? { type: 'unknown' }
+    )
   }
 
   /** Sets (or clears, with undefined / empty) a label on an entry, like pi's `/tree` labels. */

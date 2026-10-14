@@ -464,6 +464,7 @@
     ui?: SessionUI | undefined
   type SessionPersistence = | { readonly type: 'file'; readonly path: string }
       | { readonly type: 'memory' }
+      | { readonly type: 'unknown' }
   interface SessionShutdownEvent
     type: "session_shutdown"
   interface SessionStartEvent

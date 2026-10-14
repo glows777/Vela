@@ -28,10 +28,12 @@ export {
  * Where a session's history is kept.
  * `file`: one jsonl file. It may not exist until the first user or assistant message is persisted.
  * `memory`: process memory only; nothing is written and the session cannot be resumed.
+ * `unknown`: the storage did not say. It may still be durable; there is no path to show.
  */
 export type SessionPersistence =
   | { readonly type: 'file'; readonly path: string }
   | { readonly type: 'memory' }
+  | { readonly type: 'unknown' }
 
 /**
  * Session storage (injectable, like pi's SessionManager): file and memory are built in, or plug in a database.
@@ -41,7 +43,8 @@ export type SessionPersistence =
 export interface SessionStorage {
   /**
    * Where this session is kept. File storage returns the jsonl path; memory storage returns
-   * `{ type: 'memory' }`. Custom storage may omit this; that is treated as memory (no session file).
+   * `{ type: 'memory' }`. Custom storage may omit this. Omitting it means the location is
+   * unknown, not that the session is unsaved.
    */
   persistence?(id: string): SessionPersistence
   /** The session's header and entries in append order, or undefined if nothing was ever appended. */

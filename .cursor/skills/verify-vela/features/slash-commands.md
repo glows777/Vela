@@ -4,7 +4,7 @@ In the TUI, lines starting with `/` run built-in commands: `/usage` (token usage
 
 ## Sub-features
 
-- `cmd-status` `/status` shows the session id, file path (or in-memory when the session is not saved), model, context estimate and token usage.
+- `cmd-status` `/status` shows the session id, file path (in-memory when the session is not saved; custom storage when the location is not reported), model, context estimate and token usage.
 - `cmd-usage` `/usage` shows Input / Cache write / Cache read / Output and a `Cache hit rate` bar.
 - `cmd-context` `/context` shows context usage.
 - `cmd-cache` `/cache off` then `/usage` shows cache reads stop growing.
