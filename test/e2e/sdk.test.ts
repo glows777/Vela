@@ -142,7 +142,9 @@ test('a custom session storage receives every entry as it is appended and serves
     ],
   })
   const first = createVela({ model, sessionStorage: storage })
-  await first.session('db').prompt('hello')
+  const opened = first.session('db')
+  expect(opened.persistence).toEqual({ type: 'unknown' })
+  await opened.prompt('hello')
   await first.dispose()
   expect(saved.get('db')?.[0]).toMatchObject({ type: 'session', id: 'db' })
   expect(messages('db')).toHaveLength(4)
@@ -150,7 +152,9 @@ test('a custom session storage receives every entry as it is appended and serves
   const second = createVela({ model, sessionStorage: storage })
   try {
     const session = second.session('db')
+    expect(session.persistence).toEqual({ type: 'unknown' })
     expect(await session.resume()).toBe(true)
+    expect(session.persistence).toEqual({ type: 'unknown' })
     await session.prompt('again')
     expect(messages('db')).toHaveLength(6)
   } finally {

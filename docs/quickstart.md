@@ -99,7 +99,7 @@ VELA_MODEL=mock vela
 VELA_MODEL=mock bun src/cli/main.ts     # from a clone
 ```
 
-Try `hello`, `list files`, `read package.json`, `test bash`, then `/usage` and `/context`. `/cache off` turns the cache simulation off so you can compare costs.
+Try `hello`, `list files`, `read package.json`, `test bash`, then `/status`, `/usage` and `/context`. `/cache off` turns the cache simulation off so you can compare costs.
 
 ## Where things are stored
 

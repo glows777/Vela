@@ -130,6 +130,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `getActiveTools()` | Tool names the model can currently see (after role, selection and deferred loading) |
 | `setActiveTools(names)` | Enable only these tools; `undefined` restores all |
 | `name`, `setName(name)` | Display name, saved with the next save and shown in session lists |
+| `persistence` | Where history is kept: `{ type: 'file', path }` (the jsonl path; the file may not exist until the first message), `{ type: 'memory' }` when it is not saved, or `{ type: 'unknown' }` when a custom storage does not say |
 | `autoCompaction` | Get or set automatic compaction (pi's `autoCompactionEnabled` / `setAutoCompactionEnabled`) |
 | `getEntries()` | Copies of all the session's entries in append order, every branch included |
 | `getTree()`, `getBranch(fromId?)`, `getLeafId()`, `parentSession` | The session tree; see [Session tree](#session-tree) |
@@ -283,8 +284,11 @@ interface SessionStorage {
   load(id: string): Promise<SessionFileEntry[] | undefined> // header first, then entries, in append order
   append(id: string, entries: SessionFileEntry[]): Promise<void>
   list?(): Promise<SessionSummary[]> // optional, newest first
+  persistence?(id: string): SessionPersistence // optional; file, memory, or omit
 }
 ```
+
+`persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or omitted. The built-in file and memory storages set it. A custom storage that omits it is not treated as memory: `session.persistence` is `{ type: 'unknown' }`, because a `load` / `append` / `list` adapter can still be durable and there is no path to show. Return `{ type: 'memory' }` only when nothing is written. A file path may not exist until the first user or assistant message is persisted.
 
 A session is an append-only list of entries in pi's format: a header, then one entry per message, compaction, context edit or setting change (see [Session format](session-format.md)). Vela calls `append` as entries happen (the first call of a new session starts with the header) and never rewrites them; `load` returns everything appended, in order. Store entries as given. `summarizeSession(id, entries)` builds a `list()` row, and `migrateSessionV1(id, lines)` converts data saved by Vela 0.1's checkpoint storage. See [04-custom-storage.ts](../examples/sdk/04-custom-storage.ts).
 

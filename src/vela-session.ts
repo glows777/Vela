@@ -61,7 +61,7 @@ import { renderSessionHtml } from './session/export-html.ts'
 import { SessionStore } from './session/index.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
 import { newSessionId } from './session/session-id.ts'
-import type { SessionStorage } from './session/storage.ts'
+import type { SessionPersistence, SessionStorage } from './session/storage.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import { type BashResult, runBash } from './tools/shell.ts'
 import {
@@ -603,6 +603,17 @@ export class VelaSession {
   /** Id of the session this one was forked or cloned from. */
   get parentSession(): string | undefined {
     return this.store.parentSession
+  }
+
+  /**
+   * Where this session's history is kept. `file` is the jsonl path (the file may not exist until
+   * the first user or assistant message). `memory` is not saved and cannot be resumed. `unknown`
+   * means the storage did not report a location; the session may still be persisted.
+   */
+  get persistence(): SessionPersistence {
+    return (
+      this.deps.sessionStorage.persistence?.(this.id) ?? { type: 'unknown' }
+    )
   }
 
   /** Sets (or clears, with undefined / empty) a label on an entry, like pi's `/tree` labels. */

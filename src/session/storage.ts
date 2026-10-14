@@ -25,11 +25,28 @@ export {
 } from './entries.ts'
 
 /**
+ * Where a session's history is kept.
+ * `file`: one jsonl file. It may not exist until the first user or assistant message is persisted.
+ * `memory`: process memory only; nothing is written and the session cannot be resumed.
+ * `unknown`: the storage did not say. It may still be durable; there is no path to show.
+ */
+export type SessionPersistence =
+  | { readonly type: 'file'; readonly path: string }
+  | { readonly type: 'memory' }
+  | { readonly type: 'unknown' }
+
+/**
  * Session storage (injectable, like pi's SessionManager): file and memory are built in, or plug in a database.
  * A session is an append-only list of entries (pi's format): a header, then one entry per message,
  * compaction, setting change, … Entries are never rewritten.
  */
 export interface SessionStorage {
+  /**
+   * Where this session is kept. File storage returns the jsonl path; memory storage returns
+   * `{ type: 'memory' }`. Custom storage may omit this. Omitting it means the location is
+   * unknown, not that the session is unsaved.
+   */
+  persistence?(id: string): SessionPersistence
   /** The session's header and entries in append order, or undefined if nothing was ever appended. */
   load(id: string): Promise<SessionFileEntry[] | undefined>
   /** Appends entries in order. The first append of a new session starts with its header. */
@@ -45,10 +62,16 @@ function newestFirst(summaries: SessionSummary[]): SessionSummary[] {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
+/** Storage that says whether a session is a file or only in memory. */
+type ReportingStorage = SessionStorage & {
+  persistence(id: string): SessionPersistence
+}
+
 /** Memory storage: gone when the process exits (the CLI's --no-session; the SDK default without dataDir). */
 export function memorySessionStorage(): SessionStorage {
   const sessions = new Map<string, SessionFileEntry[]>()
-  return {
+  const storage: ReportingStorage = {
+    persistence: () => ({ type: 'memory' }),
     load: async (id) => {
       const found = sessions.get(id)
       return found && structuredClone(found)
@@ -63,6 +86,7 @@ export function memorySessionStorage(): SessionStorage {
         [...sessions].map(([id, entries]) => summarizeSession(id, entries)),
       ),
   }
+  return storage
 }
 
 /**
@@ -85,7 +109,8 @@ export function fileSessionStorage(
     }
     return { path, text, lines: parseLines(text, path, logger) }
   }
-  return {
+  const storage: ReportingStorage = {
+    persistence: (id) => ({ type: 'file', path: pathOf(id) }),
     async load(id) {
       const file = await read(id)
       if (!file?.lines.length) return
@@ -133,6 +158,7 @@ export function fileSessionStorage(
       return newestFirst(summaries)
     },
   }
+  return storage
 }
 
 /** Parses JSONL; lines that are not valid JSON are skipped and logged. */
