@@ -1,8 +1,9 @@
-import { join } from 'node:path'
 import type { UsageTotals } from '../../usage/tracker.ts'
+import type { VelaSession } from '../../vela-session.ts'
+import { sanitize } from '../tui/components.ts'
 import type { CommandHandler } from './index.ts'
 
-/** `/status`: session overview (model, id and path, context and token usage). */
+/** `/status`: session overview (model, id and where it is saved, context and token usage). */
 export const statusCommands: CommandHandler[] = [
   (cmd, { print, vela, session }) => {
     if (cmd !== '/status') return false
@@ -18,18 +19,20 @@ export const statusCommands: CommandHandler[] = [
     }
 
     const usage = session.usage
+    const name = session.name ? plain(session.name) : ''
     const lines = [
       '\n[status]',
-      `  Session: ${session.name ? `${session.name} (${session.id})` : session.id}`,
-      `  Path: ${join(vela.dataDir, 'sessions', `${session.id}.jsonl`)}`,
+      `  Session: ${name ? `${name} (${session.id})` : session.id}`,
+      `  Path: ${sessionPath(session)}`,
       `  Cwd: ${vela.cwd}`,
-      `  Model: ${model}`,
+      `  Model: ${plain(model)}`,
       `  Thinking: ${session.thinkingLevel}`,
       `  Role: ${session.role}`,
     ]
-    if (session.channel) lines.push(`  Channel: ${session.channel}`)
-    if (session.parentSession)
-      lines.push(`  Forked from: ${session.parentSession}`)
+    const channel = session.channel ? plain(session.channel) : ''
+    if (channel) lines.push(`  Channel: ${channel}`)
+    const parent = session.parentSession ? plain(session.parentSession) : ''
+    if (parent) lines.push(`  Forked from: ${parent}`)
     lines.push(
       `  Messages: ${session.messages.length}`,
       `  Context: ${formatCount(usage.tokens)} tokens (${usage.percent}% of ${formatCount(windowTokens)})`,
@@ -39,6 +42,20 @@ export const statusCommands: CommandHandler[] = [
     return true
   },
 ]
+
+/** The jsonl path when history is a file; memory sessions have no file to show. */
+function sessionPath(session: VelaSession): string {
+  const where = session.persistence
+  return where.type === 'file' ? where.path : 'in-memory (not saved)'
+}
+
+/**
+ * One line of external text for raw command output: terminal sequences and control bytes are
+ * removed (the TUI prints this with `raw: true`), and line breaks cannot split the overview.
+ */
+function plain(value: string): string {
+  return sanitize(value).replace(/\n+/g, ' ').trim()
+}
 
 /** Same rounding as /usage: one decimal from 1k, and millions from 1M. */
 function formatCount(n: number): string {
