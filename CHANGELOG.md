@@ -19,6 +19,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **`/status`**: interactive session overview (id and path, working directory, model, thinking level, role, message count, context estimate and token usage). See [CLI](docs/cli.md).
 - `createVela({ channelIdleMs })`, and `channelIdleMs` in `createTestVela()`.
 - `feishu({ transport })` and the `FeishuTransport` / `FeishuMessageEvent` types, so the Feishu channel can be tested without a Feishu app.
 

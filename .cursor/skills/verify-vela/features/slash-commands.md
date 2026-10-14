@@ -1,9 +1,10 @@
 # Slash commands
 
-In the TUI, lines starting with `/` run built-in commands: `/usage` (token usage and cache hit rate), `/context` (context window breakdown), `/cache on|off` (mock-model cache simulation), `/hotkeys`, `/login`, and others.
+In the TUI, lines starting with `/` run built-in commands: `/status` (session overview), `/usage` (token usage and cache hit rate), `/context` (context window breakdown), `/cache on|off` (mock-model cache simulation), `/hotkeys`, `/login`, and others.
 
 ## Sub-features
 
+- `cmd-status` `/status` shows session id, path, cwd, model, thinking level, role, message count and context usage. After a turn it also shows token usage.
 - `cmd-usage` `/usage` shows Input / Cache write / Cache read / Output and a `Cache hit rate` bar.
 - `cmd-context` `/context` shows context usage.
 - `cmd-cache` `/cache off` then `/usage` shows cache reads stop growing.
@@ -21,6 +22,7 @@ Preconditions:
 
 - `$H launch $RUN`, `$H doctor $RUN` → `DOCTOR OK` (tmux already on PATH).
 
+- **Status.** Run `$H send $RUN "/status"` and `$H wait $RUN '\[status\]'`. Shows `Session:`, `Model: mock/mock-model` and `Messages: 0`, with no `Usage:` line yet.
 - **Empty usage.** Run `$H send $RUN "/usage"` and `$H wait $RUN 'Cache hit rate'`. Shows `No cacheable input yet`.
 - **After turns.** Send `list files` twice (waiting for `\[FILE\] a.txt` each time), then `/usage` again. `Cache read` is non-zero and the hit rate rises.
 - **Context.** Run `$H send $RUN "/context"` and `$H snap $RUN cmd-context`.

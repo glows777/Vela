@@ -116,6 +116,7 @@ const TUI_COMMANDS = [
   { name: 'quit', description: 'Quit Vela' },
 ]
 const CLI_COMMANDS = [
+  { name: 'status', description: 'Session status' },
   { name: 'context', description: 'Context usage' },
   { name: 'usage', description: 'Token usage and cost' },
   { name: 'skill', description: 'List skills (run one with /skill:<name>)' },

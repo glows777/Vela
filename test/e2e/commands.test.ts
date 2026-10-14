@@ -16,6 +16,53 @@ import {
 
 afterEach(cleanupTestVelas)
 
+test('/status reports session id, model and context usage', async () => {
+  const t = createTestVela({
+    responses: [fauxText('ok', { usage: { input: 100, output: 20 } })],
+  })
+  // Pricing applies to later requests; resolve the model first so the run records a cost
+  t.session.modelInfo
+  t.session.tracker.setPricing({
+    input: 1,
+    output: 2,
+    cacheRead: 0.1,
+    cacheWrite: 0.5,
+  })
+  t.session.setName('review')
+  await t.run('hi')
+
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain('[status]')
+  expect(output).toContain(`Session: review (${t.session.id})`)
+  expect(output).toContain(
+    `Path: ${t.vela.dataDir}/sessions/${t.session.id}.jsonl`,
+  )
+  expect(output).toContain(`Cwd: ${t.vela.cwd}`)
+  expect(output).toContain('Model: faux/faux')
+  expect(output).toContain('Thinking: medium')
+  expect(output).toContain('Role: owner')
+  expect(output).toContain('Messages: 2')
+  expect(output).toMatch(/Context: \d+ tokens \(\d+%\)/)
+  // 100 input × $1/M + 20 output × $2/M
+  expect(output).toContain('Usage: ↑100 ↓20 $0.0001 (1 step)')
+  expect(t.dispatch('/status extra')).toBe(false)
+})
+
+test('/status before any turn omits the usage line', async () => {
+  const t = createTestVela()
+  t.session.role = 'guest'
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(`Session: ${t.session.id}`)
+  expect(output).toContain('Role: guest')
+  expect(output).toContain('Messages: 0')
+  expect(output).toMatch(/Context: \d+ tokens \(\d+%\)/)
+  expect(output).not.toContain('Usage:')
+})
+
 test('/context and /usage report the conversation after a run', async () => {
   const t = createTestVela({
     responses: [fauxText('ok', { usage: { input: 1234, output: 56 } })],

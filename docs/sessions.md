@@ -34,6 +34,7 @@ In interactive mode:
 | `/clone` | Copy the current branch into a new session |
 | `/export [path]` | Write the current branch as HTML, or as JSONL when the path ends in `.jsonl` |
 | `/compact [focus]` | Compact the context now (see [Compaction](#compaction)) |
+| `/status` | Show a short overview: session id and path, model, thinking level, role and context usage |
 | `/context` | Show what fills the context window |
 | `/usage` | Show this session's token usage, cache hit rate and cost |
 

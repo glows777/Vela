@@ -11,6 +11,7 @@ import {
 import { modelCommands } from './commands/model.ts'
 import { securityCommands } from './commands/security.ts'
 import { createSkillCommands } from './commands/skill.ts'
+import { statusCommands } from './commands/status.ts'
 
 /**
  * The CLI's own slash commands. Tests use the same dispatcher so commands behave as in the real entry point.
@@ -23,6 +24,7 @@ export function createCliDispatcher(vela: Vela): CommandHandler {
     ...debugCommands,
     ...contextCommands,
     ...modelCommands,
+    ...statusCommands,
     ...createSkillCommands(velaInternals(vela).skillLoader),
     ...extensionCommands,
     ...channelCommands,

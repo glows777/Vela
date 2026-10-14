@@ -145,6 +145,10 @@ test('slash commands: CLI command output, extension commands and /hotkeys go to 
   const tui = await startTui(t.vela)
   await tui.started
 
+  tui.submit('/status')
+  await tui.until('[status]')
+  expect(tui.screen()).toContain('Session: tui')
+  expect(tui.screen()).toContain('Model: faux/faux')
   tui.submit('/extensions')
   // Output a command prints line by line is joined into one block without blank lines
   await tui.until('[extensions]\n   memory\n     Tools: memory')
