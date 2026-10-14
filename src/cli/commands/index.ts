@@ -15,6 +15,8 @@ export interface CommandContext {
   session: VelaSession
   /** Print text (may be multi-line) */
   print: (text: string) => void
+  /** Configured agent directory (`VELA_DIR` or `~/.vela`). `/status` substitutes `$VELA_DIR` only for files under it. */
+  agentDir?: string
 }
 
 /** false: not this command; true: handled; Promise: handled and still running. */

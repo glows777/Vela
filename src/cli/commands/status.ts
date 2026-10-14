@@ -9,7 +9,7 @@ import type { CommandHandler } from './index.ts'
 
 /** `/status`: session overview (model, id and where it is saved, context and token usage). */
 export const statusCommands: CommandHandler[] = [
-  (cmd, { print, vela, session }) => {
+  (cmd, { print, vela, session, agentDir }) => {
     if (cmd !== '/status') return false
 
     let model: string
@@ -27,7 +27,7 @@ export const statusCommands: CommandHandler[] = [
     const lines = [
       '\n[status]',
       `  Session: ${name ? `${name} (${session.id})` : session.id}`,
-      `  Path: ${sessionPath(session, vela.dataDir)}`,
+      `  Path: ${sessionPath(session, agentDir)}`,
       `  Cwd: ${plain(vela.cwd)}`,
       `  Model: ${plain(model)}`,
       `  Thinking: ${session.thinkingLevel}`,
@@ -52,13 +52,18 @@ export const statusCommands: CommandHandler[] = [
  * A file storage that has not been written yet says so: the path is a destination, not a file.
  * A storage that does not say is custom: it may still be durable, and its path is unknown.
  */
-function sessionPath(session: VelaSession, dataDir: string): string {
-  return formatStatusPath({
-    persistence: session.persistence,
-    dataDir,
-    homeDir: homedir(),
-    isFile: isSessionFile,
-  })
+function sessionPath(
+  session: VelaSession,
+  agentDir: string | undefined,
+): string {
+  return plain(
+    formatStatusPath({
+      persistence: session.persistence,
+      homeDir: homedir(),
+      agentDir,
+      isFile: isSessionFile,
+    }),
+  )
 }
 
 /** True when this path is a file. A missing file is not a saved session; other errors are not "missing". */

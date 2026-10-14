@@ -82,6 +82,8 @@ export interface InteractiveOptions {
   openBrowser?: (url: string) => void
   /** Settings `enabledModels`: the models Ctrl+P cycles through */
   enabledModels?: string[]
+  /** Configured agent directory (`VELA_DIR` or `~/.vela`), for `/status` path shortening */
+  agentDir?: string
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
@@ -1088,6 +1090,7 @@ export class InteractiveMode {
         internals: velaInternals(this.vela),
         session: this.session,
         print: this.commandOutput(),
+        agentDir: this.options.agentDir,
       })
       if (handled instanceof Promise)
         await handled.catch((error) =>

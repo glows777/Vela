@@ -9,6 +9,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
+import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
 
@@ -461,10 +462,26 @@ export function notice(
           : 'muted'
   const container = new Container()
   container.addChild(new Spacer(1))
-  container.addChild(
-    new Text(theme.fg(color, raw ? text : sanitize(text)), 1, 0),
-  )
+  container.addChild(new NoticeText(raw ? text : sanitize(text), color))
   return container
+}
+
+/**
+ * Command and notice text. A `/status` Path line is fitted to `render`'s width
+ * before pi-tui wraps it, so an 80-column terminal does not crack the session id.
+ */
+class NoticeText implements Component {
+  constructor(
+    private readonly text: string,
+    private readonly color: 'red' | 'yellow' | 'dim' | 'muted',
+  ) {}
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const fitted = fitStatusLines(this.text, noticeContentWidth(width))
+    return new Text(theme.fg(this.color, fitted), 1, 0).render(width)
+  }
 }
 
 /** A tool's key argument: bash command, file path, search pattern; other tools show compact JSON. */
