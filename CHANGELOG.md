@@ -6,6 +6,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **`/status` disagreed with the footer and named a session file that did not exist yet.** The dollar amount now uses the same four-decimal rounding as the footer and `/usage` (`$0.0016`, not `$0.002` in one place and `$0.0016` in the other). A session that has not been saved says `not written yet (will save to …)` instead of a missing `.jsonl` path. Long paths shorten `~` under the home directory and `$VELA_DIR` only when the file is under the configured agent directory. The Path line is fitted to the terminal's display columns, so a session id is not broken across lines at 80 or 120 columns, and an unsaved session keeps `not written yet` even when the destination does not fit.
 - **Shutdown failures no longer skip independent cleanup.** `vela.dispose()` and `session.close()` now reject with an `AggregateError` after their remaining cleanup attempts settle, including failures from shutdown hooks that were previously only logged. Callers should handle the rejection; repeated calls return the same result without retrying cleanup.
 - **`vela.dispose()` now waits for asynchronous extension factories to settle** before tearing down their resources. A factory that never settles can therefore keep disposal pending indefinitely; no timeout or forced termination is implied.
 - **The `memory` tool's `read` and `delete` accepted paths.** A file name such as `../../x` reached files outside the memory directory: `read` rewrote the file it read (adding a `lastReadAt` line and setting mode `0600`) and `delete` removed it, even in sessions whose permissions denied `bash` and file writes. Both now accept only a memory file name from the index.
@@ -19,7 +20,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
-- `/status` in interactive mode: a session overview with the id, file path (in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, context estimate and token usage. `session.persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or `{ type: 'unknown' }` when a custom storage does not say.
+- `/status` in interactive mode: a session overview with the id, file path (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, context estimate and token usage. `session.persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or `{ type: 'unknown' }` when a custom storage does not say. The dollar amount matches the footer.
 - `createVela({ channelIdleMs })`, and `channelIdleMs` in `createTestVela()`.
 - `feishu({ transport })` and the `FeishuTransport` / `FeishuMessageEvent` types, so the Feishu channel can be tested without a Feishu app.
 
