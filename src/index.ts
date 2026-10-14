@@ -147,6 +147,7 @@ export {
 export {
   fileSessionStorage,
   memorySessionStorage,
+  type SessionPersistence,
   type SessionStorage,
 } from './session/storage.ts'
 export type { ExecutionMetadata } from './session/tool-history.ts'

@@ -18,6 +18,7 @@ import type { VelaExtension } from '../extensions/types.ts'
 import type { VelaLimits } from '../limits.ts'
 import type { VelaLogger } from '../logger.ts'
 import type { ProviderDefinition, ThinkingLevel } from '../models/index.ts'
+import type { SessionStorage } from '../session/storage.ts'
 import { createVela, type Vela } from '../vela.ts'
 import type {
   PromptOptions,
@@ -57,6 +58,8 @@ export interface TestVelaOptions {
   cwd?: string
   /** Data directory relative to cwd, default `.vela-data` (persistent: a new TestVela on the same cwd resumes sessions) */
   dataDir?: string
+  /** Where session history is stored; default is files under `dataDir` (same as createVela) */
+  sessionStorage?: SessionStorage
   /** Id of the default session (`t.session`), default 'default' */
   sessionId?: string
   /** Files to create in cwd: relative path → content */
@@ -112,6 +115,7 @@ export function createTestVela(options: TestVelaOptions = {}) {
     model: options.model ?? (faux as FauxModel),
     cwd,
     dataDir: options.dataDir ?? '.vela-data',
+    sessionStorage: options.sessionStorage,
     providers: options.providers,
     thinkingLevel: options.thinkingLevel,
     limits: { retryBaseMs: 0, ...options.limits },

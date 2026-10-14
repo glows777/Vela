@@ -462,6 +462,8 @@
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
     ui?: SessionUI | undefined
+  type SessionPersistence = | { readonly type: 'file'; readonly path: string }
+      | { readonly type: 'memory' }
   interface SessionShutdownEvent
     type: "session_shutdown"
   interface SessionStartEvent
@@ -470,6 +472,7 @@
     append: (id: string, entries: SessionFileEntry[]) => Promise<void>
     list?: (() => Promise<SessionSummary[]>) | undefined
     load: (id: string) => Promise<SessionFileEntry[] | undefined>
+    persistence?: ((id: string) => SessionPersistence) | undefined
   interface SessionSummary
     firstMessage: string
     id: string
@@ -810,6 +813,7 @@
     get modelInfo: ModelInfo
     get name: string | undefined
     get parentSession: string | undefined
+    get persistence: SessionPersistence
     get queue: { steering: string[]; followUp: string[]; }
     get thinkingLevel: ThinkingLevel
     get usage: TokenStatus & { totals: UsageTotals; }
@@ -967,5 +971,6 @@
     responses?: FauxStep[] | undefined
     session?: SessionOptions | undefined
     sessionId?: string | undefined
+    sessionStorage?: SessionStorage | undefined
     skills?: FixtureSkill[] | undefined
     thinkingLevel?: ThinkingLevel | undefined

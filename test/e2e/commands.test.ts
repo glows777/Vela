@@ -9,6 +9,7 @@ import type {
 import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
+import { memorySessionStorage } from '../../src/session/storage.ts'
 import {
   createFauxModel,
   fauxText,
@@ -59,6 +60,10 @@ test('/status on a fresh session shows identity and omits usage totals', async (
     expect(t.dispatch('/status')).toBe(true)
   })
   expect(output).toContain(`Session: ${t.session.id}\n`)
+  expect(output).toContain(
+    `Path: ${join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)}`,
+  )
+  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
   expect(output).toContain('Thinking: low')
   expect(output).toContain('Role: owner')
   expect(output).toContain('Channel: feishu')
@@ -106,6 +111,42 @@ test('/status names a forked session and includes the cost of a priced model', a
   expect(output).toContain('Session: copy')
   expect(output).toContain('Forked from: default')
   expect(output).toContain(`(${t.session.usage.percent}% of 200.0k)`)
+})
+
+test('/status says a memory session is not saved instead of inventing a file path', async () => {
+  const t = createTestVela({
+    sessionStorage: memorySessionStorage(),
+    responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
+  })
+  await t.run('hi')
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain('Path: in-memory (not saved)')
+  expect(output).not.toContain('.jsonl')
+  expect(output).not.toContain(
+    join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`),
+  )
+  expect(output).toContain('Messages: 2')
+  expect(output).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
+  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
+})
+
+test('/status strips control and ANSI sequences from session metadata', async () => {
+  const t = createTestVela({ model: 'bad\u001b[31mx' })
+  t.session.setName('na\u001b[32mme\u0007\u001b]52;c;AQID\u0007')
+  t.session.channel = 'ch\u001b[33mannel'
+  const { output } = await captureConsole(() => {
+    expect(t.dispatch('/status')).toBe(true)
+  })
+  expect(output).toContain(`Session: name (${t.session.id})`)
+  expect(output).toContain('Channel: channel')
+  expect(output).toContain(
+    'Model: (unavailable: Model must be provider/id, got "badx")',
+  )
+  expect(output).toContain('[status]')
+  expect(output).not.toContain('\u001b')
+  expect(output).not.toContain('\u0007')
 })
 
 test('/status reports an unavailable model instead of failing', async () => {
