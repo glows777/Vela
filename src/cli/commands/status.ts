@@ -1,5 +1,9 @@
+import { statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { formatUsd } from '../../usage/format.ts'
 import type { UsageTotals } from '../../usage/tracker.ts'
 import type { VelaSession } from '../../vela-session.ts'
+import { formatStatusPath } from '../status-display.ts'
 import { sanitize } from '../tui/components.ts'
 import type { CommandHandler } from './index.ts'
 
@@ -23,7 +27,7 @@ export const statusCommands: CommandHandler[] = [
     const lines = [
       '\n[status]',
       `  Session: ${name ? `${name} (${session.id})` : session.id}`,
-      `  Path: ${sessionPath(session)}`,
+      `  Path: ${sessionPath(session, vela.dataDir)}`,
       `  Cwd: ${plain(vela.cwd)}`,
       `  Model: ${plain(model)}`,
       `  Thinking: ${session.thinkingLevel}`,
@@ -45,13 +49,25 @@ export const statusCommands: CommandHandler[] = [
 
 /**
  * Where history is kept, as one display line. Only a reported memory storage is "not saved".
+ * A file storage that has not been written yet says so: the path is a destination, not a file.
  * A storage that does not say is custom: it may still be durable, and its path is unknown.
  */
-function sessionPath(session: VelaSession): string {
-  const where = session.persistence
-  if (where.type === 'file') return plain(where.path)
-  if (where.type === 'memory') return 'in-memory (not saved)'
-  return 'custom storage (path unknown)'
+function sessionPath(session: VelaSession, dataDir: string): string {
+  return formatStatusPath({
+    persistence: session.persistence,
+    dataDir,
+    homeDir: homedir(),
+    isFile: isSessionFile,
+  })
+}
+
+/** True when this path is a file. A missing file is not a saved session; other errors are not "missing". */
+function isSessionFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
 }
 
 /**
@@ -72,7 +88,8 @@ function formatCount(n: number): string {
 function usageLine(totals: UsageTotals): string {
   const input =
     totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens
-  const cost = totals.cost != null ? ` $${totals.cost.toFixed(4)}` : ''
+  const cost =
+    typeof totals.cost === 'number' ? ` ${formatUsd(totals.cost)}` : ''
   const steps = `${totals.steps} ${totals.steps === 1 ? 'step' : 'steps'}`
   return `  Usage: ↑${formatCount(input)} ↓${formatCount(totals.outputTokens)}${cost} (${steps})`
 }

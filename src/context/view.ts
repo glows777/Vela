@@ -5,6 +5,7 @@
  * Each category gets its own color (ANSI 256) so you can see at a glance what is eating the context.
  */
 import type { ModelMessage } from 'ai'
+import { formatUsd } from '../usage/format.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
 
 export interface ContextSlice {
@@ -278,17 +279,15 @@ export function renderUsageView(tracker: TokenTracker): string {
     t.baselineCost !== undefined &&
     t.savedCost !== undefined
   ) {
+    lines.push(`  ${bold('Cost')}            ${C(220, formatUsd(t.cost))}`)
     lines.push(
-      `  ${bold('Cost')}            ${C(220, '$' + t.cost.toFixed(4))}`,
-    )
-    lines.push(
-      `  ${C(244, 'Without cache')}   ${C(244, '$' + t.baselineCost.toFixed(4))}`,
+      `  ${C(244, 'Without cache')}   ${C(244, formatUsd(t.baselineCost))}`,
     )
     const savedPct =
       t.baselineCost > 0 ? (t.savedCost / t.baselineCost) * 100 : 0
     if (t.savedCost > 0) {
       lines.push(
-        `  ${bold(C(36, 'Saved'))}           ${C(36, '$' + t.savedCost.toFixed(4))} (${savedPct.toFixed(1)}% off)`,
+        `  ${bold(C(36, 'Saved'))}           ${C(36, formatUsd(t.savedCost))} (${savedPct.toFixed(1)}% off)`,
       )
     }
   }

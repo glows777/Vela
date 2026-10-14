@@ -33,6 +33,7 @@ import {
   type SessionEntry,
   summaryMessageText,
 } from '../session/entries.ts'
+import { formatUsd } from '../usage/format.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { copyToClipboard } from './clipboard.ts'
@@ -1720,7 +1721,7 @@ class Footer implements Component {
     const left = [
       `↑${compact(totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens)}`,
       `↓${compact(totals.outputTokens)}`,
-      totals.cost ? `$${totals.cost.toFixed(3)}` : undefined,
+      typeof totals.cost === 'number' ? formatUsd(totals.cost) : undefined,
       `${usage.percent}%`,
     ]
       .filter(Boolean)
