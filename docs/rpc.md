@@ -461,7 +461,7 @@ An extension dialog, captured with the [confirm-dangerous](../examples/extension
 < {"type":"tool_execution_start","toolCallId":"call-1","toolName":"bash","args":{"command":"rm build.log"},"sessionId":"20261008-105126-f165"}
 < {"type":"extension_ui_request","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","method":"confirm","title":"Delete files?","message":"rm build.log"}
 > {"type":"extension_ui_response","id":"d424a52c-ad36-4985-94a8-1bb4603e9dc8","confirmed":false}
-< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] User did not allow the deletion","isError":false,"durationMs":3912,"sessionId":"20261008-105126-f165"}
+< {"type":"tool_execution_end","toolCallId":"call-1","toolName":"bash","result":"[Blocked by hook] User did not allow the deletion","isError":true,"durationMs":3912,"sessionId":"20261008-105126-f165"}
 ...
 < {"type":"agent_settled","sessionId":"20261008-105126-f165"}
 ```
