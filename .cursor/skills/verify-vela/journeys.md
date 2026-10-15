@@ -2,7 +2,7 @@
 
 One row per user-facing feature: how a user reaches it, how to drive it here, and what to check. Expected behavior lives in `docs/` (linked per section). Every row was driven on 2026-10-15. Add a row when you add a feature.
 
-`H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`.
+`REPO`, `H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`.
 
 ## Tools and the TUI ([tools](../../../docs/tools.md), [cli](../../../docs/cli.md))
 
