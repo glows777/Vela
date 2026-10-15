@@ -80,7 +80,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Feature | Drive | Check |
 |---|---|---|
 | Examples | `exec $RUN ex bun $PWD/examples/sdk/01-minimal.ts` (01–04) | Each exits 0 |
-| Your own script | `work/consumer.ts` importing `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, run with `exec` | Whatever the change promises, with its edge cases |
+| Your own script | `work/consumer.ts` importing `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, run with `exec`; recipes in [core.md](core.md) | Whatever the change promises, with its edge cases |
 | Channels and guests | `echoChannel({ owners: ['boss'] })` from `examples/extensions/echo-channel.ts`; `receive('stranger', …)` and `receive('boss', …)` | The guest's model sees only `tool_search`; the owner's read works |
 | Packaging | `bun run build && bun run smoke:consumer` | Passes in empty Node and Bun projects (needs `fd`) |
 

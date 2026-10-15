@@ -1,6 +1,6 @@
 ---
 name: verify-vela
-description: Use Vela as a real user would (the TUI in tmux, -p / --mode json / rpc, a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK behavior and for feature acceptance.
+description: Use Vela as a real user would (the TUI in tmux, -p / --mode json / rpc, a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK or core behavior, for feature acceptance, and to learn the SDK.
 ---
 
 # verify-vela
@@ -72,7 +72,7 @@ $H cleanup $RUN
 - A project with `.vela/` or `.skills/` stops at the trust question: `send y`, or launch with `--approve`.
 - For the SDK, write a short script in `work/` that imports `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, and run it with `$H exec $RUN sdk bun consumer.ts`.
 
-What to drive for each feature: [journeys.md](journeys.md).
+What to drive for each feature: [journeys.md](journeys.md). Using the SDK and checking core behavior (agent loop, sessions, context, extensions API): [core.md](core.md).
 
 ## Report
 
