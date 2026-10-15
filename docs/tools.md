@@ -32,7 +32,7 @@ Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `l
 | `limit` | integer >= 1 | `2000` | Maximum number of lines |
 | `column` | integer >= 0 | `0` | UTF-16 offset within the start line, for continuing a very long line |
 
-One call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. The result ends with a footer naming the range shown and either `EOF: no more content.` or the exact `offset`, `column` and `limit` for the next call. The file is read as a stream, so large files are not loaded into memory.
+One call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. When more content remains, the result ends with a footer naming the range shown and the exact `path`, `offset`, `column` and `limit` for the next call. At EOF, the result is only the page's file content, preserving any existing trailing newline and adding no footer or separator. The file is read as a stream, so large files are not loaded into memory.
 
 ### write_file
 
@@ -149,7 +149,7 @@ Each tool has a result limit in characters:
 
 | Tool | Limit |
 |---|---|
-| `read_file` | one page (50KB) plus its footer, so a page is never saved again |
+| `read_file` | one page (50KB) plus its continuation footer when needed, so a page is never saved again |
 | `grep`, `find` | 12,000 |
 | `bash` | its own tail preview, see above |
 | everything else | 3,000 (default) |

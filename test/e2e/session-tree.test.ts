@@ -510,9 +510,7 @@ test('a clone of an in-memory session still reads a long tool result after the s
   expect(outputPath).toBe(inherited)
   expect(await Bun.file(inherited).text()).toBe(ZEROS)
   await copy.prompt('read the saved output')
-  expect(latestToolText(copy.messages)).toBe(
-    `${ZEROS}\n\n[read_file: lines 1-1, starting column=0; 4000 UTF-16 code units shown. EOF: no more content.]`,
-  )
+  expect(latestToolText(copy.messages)).toBe(ZEROS)
   expect(
     fileNames(t.dataDir).filter(
       (name) => name === 'tool-history.jsonl' || name === 'today.jsonl',

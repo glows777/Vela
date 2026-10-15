@@ -10,6 +10,64 @@ import {
 
 afterEach(cleanupTestVelas)
 
+test.each(['Hello, Vela!!!', 'hello\n', 'hello\r\n', ''])(
+  'read_file sends the exact EOF body to the model: %j',
+  async (body) => {
+    const t = createTestVela({
+      files: { 'notes.txt': body },
+      responses: [
+        fauxToolCall('read_file', { path: 'notes.txt' }),
+        fauxText('Done'),
+      ],
+    })
+    await t.run('Read notes.txt')
+    expect(t.model.calls[1]!.toolResults[0]!.output).toBe(body)
+  },
+)
+
+test('read_file keeps line-limit continuation guidance and sends only the final page body', async () => {
+  const t = createTestVela({
+    files: { 'notes.txt': 'first\nsecond\n' },
+    responses: [
+      fauxToolCall('read_file', { path: 'notes.txt', limit: 1 }),
+      fauxToolCall('read_file', {
+        path: 'notes.txt',
+        offset: 2,
+        column: 0,
+        limit: 1,
+      }),
+      fauxText('Done'),
+    ],
+  })
+  await t.run('Read every page of notes.txt')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
+    'first\n\n\n[read_file: lines 1-1, starting column=0; 6 UTF-16 code units shown. More content exists. Continue read_file with path="notes.txt", offset=2, column=0, limit=1.]',
+  )
+  expect(t.model.calls[2]!.toolResults.at(-1)!.output).toBe('second\n')
+})
+
+test('read_file keeps byte-cap continuation within a Unicode line and sends only the final page body', async () => {
+  const firstPage = '😀'.repeat(12800)
+  const t = createTestVela({
+    files: { 'wide.txt': `${firstPage}tail\n` },
+    responses: [
+      fauxToolCall('read_file', { path: 'wide.txt' }),
+      fauxToolCall('read_file', {
+        path: 'wide.txt',
+        offset: 1,
+        column: 25600,
+        limit: 2000,
+      }),
+      fauxText('Done'),
+    ],
+  })
+  await t.run('Read every page of wide.txt')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
+    `${firstPage}\n\n[read_file: lines 1-1, starting column=0; 25600 UTF-16 code units shown. More content exists. Continue read_file with path="wide.txt", offset=1, column=25600, limit=2000.]`,
+  )
+  expect(t.model.calls[2]!.toolResults.at(-1)!.output).toBe('tail\n')
+})
+
 test('several tool calls in one response all run and all results go back together', async () => {
   const t = createTestVela({
     files: {
