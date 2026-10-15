@@ -14,7 +14,7 @@ Needs `bun install`, `tmux` for the TUI only, and `rg` / `fd` on PATH for the gr
 ## Helper
 
 ```bash
-H=.cursor/skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date +%s)   # from the repo root
+REPO=$PWD; H=$REPO/.cursor/skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date +%s)   # from the repo root
 ```
 
 | Command | Does |

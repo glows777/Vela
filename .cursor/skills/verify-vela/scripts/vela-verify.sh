@@ -84,6 +84,6 @@ case "$CMD" in
       mkdir -p "$EVID/vela-dir"; cp -r "$STATE/home/." "$EVID/vela-dir/"
     fi
     rm -rf "$STATE"
-    echo "cleaned $STATE; evidence at $EVID:"; ls -1 "$EVID" ;;
+    echo "cleaned $STATE; evidence at $EVID:"; ls -1 "$EVID" 2>/dev/null || true ;;
   *) echo "unknown command $CMD" >&2; exit 2 ;;
 esac
