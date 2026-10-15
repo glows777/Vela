@@ -1522,6 +1522,12 @@ export class VelaSession {
       takeSteering: () => this.dequeue('steering'),
       takeFollowUp: () => this.dequeue('followUp'),
       onMessage: (message) => this.record(message),
+      injectNotice: (content) =>
+        this.customMessage({
+          customType: 'loop',
+          content,
+          display: true,
+        }),
       // Like pi: kept in the session, never sent to the model again
       onInterrupted: (message, stopReason) =>
         this.store.appendMessage(message, { stopReason }),
