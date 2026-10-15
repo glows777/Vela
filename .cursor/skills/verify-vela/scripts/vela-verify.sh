@@ -1,222 +1,89 @@
 #!/usr/bin/env bash
-# Verification harness for the Vela CLI/TUI: isolated tmux session + disposable VELA_DIR + mock model.
-# Usage: vela-verify.sh <launch|doctor|send|keys|wait|snap|grab|print|pipe|cleanup> <run-id> [args...]
+# Drive the real Vela CLI/TUI offline: private tmux server, disposable VELA_DIR/HOME/cwd, mock or faux model.
+# Usage: vela-verify.sh <launch|doctor|send|keys|wait|snap|grab|run|exec|cleanup> <run-id> [args...]
+#   model: VERIFY_MODEL=mock (default) | faux:/abs/scenario.json
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 CMD="${1:-}"; RUN="${2:-}"
-[[ -n "$CMD" && -n "$RUN" ]] || { sed -n '2,3p' "$0"; exit 2; }
-[[ "$RUN" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "run-id must be [A-Za-z0-9_-]+" >&2; exit 2; }
+[[ -n "$CMD" && -n "$RUN" ]] || { sed -n '2,4p' "$0"; exit 2; }
+[[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo "run-id must be [A-Za-z0-9][A-Za-z0-9_-]*" >&2; exit 2; }
 shift 2
 
-STATE="/tmp/vela-verify/$RUN"                       # scratch: removed by cleanup
+STATE="/tmp/vela-verify/$RUN"                         # scratch: removed by cleanup
 EVID="${VELA_EVIDENCE_ROOT:-/tmp/vela-evidence}/$RUN" # proof: survives cleanup
-SOCK="vela-verify-$RUN"                             # private tmux server per run
-T() { tmux -L "$SOCK" "$@"; }
-export PATH="$HOME/.local/bin:$PATH"
+T() { tmux -L "vela-verify-$RUN" "$@"; }             # private tmux server per run
+pane() { T capture-pane -p -t vela -S -; }           # screen + all scrollback
 
-# Explicit allowlist for child Vela processes. Uses env -i so FEISHU_*, VELA_RECORD,
-# and any other inherited channel creds / secrets never reach the child.
-# Prints a single line: env -i KEY=val KEY=val ... (values shell-quoted).
-vela_env() {
-  local out
-  out="env -i PATH=$(printf '%q' "$PATH")"
-  out+=" TERM=$(printf '%q' "${TERM:-xterm-256color}")"
-  out+=" LANG=$(printf '%q' "${LANG:-C.UTF-8}")"
-  [[ -n "${LC_ALL:-}" ]] && out+=" LC_ALL=$(printf '%q' "$LC_ALL")"
-  [[ -n "${LC_CTYPE:-}" ]] && out+=" LC_CTYPE=$(printf '%q' "$LC_CTYPE")"
-  [[ -n "${LC_MESSAGES:-}" ]] && out+=" LC_MESSAGES=$(printf '%q' "$LC_MESSAGES")"
-  out+=" VELA_DIR=$(printf '%q' "$STATE/home")"
-  out+=" VELA_MODEL=mock"
-  out+=" VELA_OFFLINE=1"
-  out+=" HOME=$(printf '%q' "$STATE/userhome")"
-  # Deliberately omit VELA_RECORD and FEISHU_* even if set in the parent.
-  printf '%s' "$out"
-}
+MODEL="${VERIFY_MODEL:-mock}"
 
-# Run a command under the isolated allowlist (array-safe; no eval).
-# Usage: run_isolated [--stdin-null] cmd [args...]
-run_isolated() {
-  local stdin_null=0
-  if [[ "${1:-}" == --stdin-null ]]; then stdin_null=1; shift; fi
-  local -a e=(
-    env -i
-    "PATH=$PATH"
-    "TERM=${TERM:-xterm-256color}"
-    "LANG=${LANG:-C.UTF-8}"
-  )
-  [[ -n "${LC_ALL:-}" ]] && e+=("LC_ALL=$LC_ALL")
-  [[ -n "${LC_CTYPE:-}" ]] && e+=("LC_CTYPE=$LC_CTYPE")
-  [[ -n "${LC_MESSAGES:-}" ]] && e+=("LC_MESSAGES=$LC_MESSAGES")
-  e+=(
-    "VELA_DIR=$STATE/home"
-    "VELA_MODEL=mock"
-    "VELA_OFFLINE=1"
-    "HOME=$STATE/userhome"
-  )
-  if [[ $stdin_null -eq 1 ]]; then
-    "${e[@]}" "$@" </dev/null
-  else
-    "${e[@]}" "$@"
-  fi
-}
+# Everything runs under env -i with this allowlist only: no API keys, FEISHU_* or the user's ~/.vela.
+ENV=(env -i "PATH=$PATH" "TERM=${TERM:-xterm-256color}" "LANG=${LANG:-C.UTF-8}"
+  "HOME=$STATE/userhome" "VELA_DIR=$STATE/home" "VELA_OFFLINE=1" "VELA_MODEL=$MODEL")
+VELA=(bun "$REPO/src/cli/main.ts")
 
-# Require tmux on PATH for interactive TUI verification. Detect-only: never
-# installs packages (no apt/brew/dnf/yum/pacman/apk). Print/pipe/SDK never call this.
-ensure_tmux() {
-  if command -v tmux >/dev/null 2>&1; then
-    return 0
-  fi
-  echo "tmux not found on PATH (required for interactive TUI verification only)." >&2
-  echo "Install manually, then re-run launch — e.g. apt install tmux | brew install tmux | dnf install tmux | pacman -S tmux | apk add tmux" >&2
-  echo "Or skip interactive journeys and use print/pipe/SDK (see SKILL.md)." >&2
-  return 1
-}
-
+# Fixture, created once per run (later run/launch calls keep edits and sessions)
 seed() {
-  mkdir -p "$STATE/home" "$STATE/userhome" "$STATE/work" "$EVID"
+  mkdir -p "$EVID"
+  [[ -d "$STATE/work" ]] && return
+  mkdir -p "$STATE/home" "$STATE/userhome" "$STATE/work"
   printf '1. Tool registration\n2. Agent loop\n3. Sessions\n' > "$STATE/work/sample-data.txt"
   echo "hello from the verify-vela fixture" > "$STATE/work/a.txt"
 }
 
-pane() { T capture-pane -p -t vela -S -200; }
-
-# Find bun/vela PIDs under the tmux pane shell (for environ checks).
-child_vela_pids() {
-  local pane_pid bun_pids=""
-  [[ -f "$STATE/pane.pid" ]] || return 0
-  pane_pid="$(cat "$STATE/pane.pid")"
-  # Descendants of the pane shell that look like bun running main.ts
-  bun_pids="$(pgrep -P "$pane_pid" -a 2>/dev/null | awk '/bun/ {print $1}')"
-  # Also check grandchildren (env may be the direct child if shell runs env -i bun)
-  local c
-  for c in $(pgrep -P "$pane_pid" 2>/dev/null || true); do
-    bun_pids+=" $(pgrep -P "$c" -a 2>/dev/null | awk '/bun/ {print $1}')"
-  done
-  echo "$bun_pids" | tr ' ' '\n' | awk 'NF' | sort -u
-}
-
-# Refuse if a live child still has FEISHU_* or an out-of-tree VELA_RECORD.
-check_child_env_isolation() {
-  local pid environ leaked=0
-  for pid in $(child_vela_pids); do
-    [[ -r "/proc/$pid/environ" ]] || continue
-    environ="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)"
-    if grep -qE '^FEISHU_' <<<"$environ"; then
-      echo "env leak: FEISHU_* present in child pid $pid" >&2
-      leaked=1
-    fi
-    local rec
-    rec="$(grep -E '^VELA_RECORD=' <<<"$environ" | head -1 | cut -d= -f2- || true)"
-    if [[ -n "$rec" ]]; then
-      case "$rec" in
-        "$STATE"/*|"$EVID"/*) ;;
-        *)
-          echo "env leak: VELA_RECORD=$rec is outside \$STATE/\$EVID (pid $pid)" >&2
-          leaked=1
-          ;;
-      esac
-    fi
-  done
-  return $leaked
-}
-
 case "$CMD" in
-  launch)
-    if ! ensure_tmux; then
-      echo "tmux is required for interactive TUI journeys — skip interactive paths and use print/pipe/SDK (see SKILL.md)" >&2
-      exit 1
-    fi
-    if T has-session -t vela 2>/dev/null; then echo "run $RUN already live; cleanup first" >&2; exit 1; fi
+  launch)   # launch [vela args]: start the TUI in tmux (120x40), wait until it shows the footer or a question
+    command -v tmux >/dev/null || { echo "tmux not on PATH: install it, or verify through run/SDK only" >&2; exit 1; }
+    T has-session -t vela 2>/dev/null && { echo "run $RUN already live; cleanup first" >&2; exit 1; }
     seed
-    # shellcheck disable=SC2046,SC2086
     T new-session -d -s vela -x 120 -y 40 -c "$STATE/work" \
-      "$(vela_env) bun $REPO/src/cli/main.ts $*; echo '[vela exited]' \$?; sleep 600"
-    T display -p -t vela '#{pane_pid}' > "$STATE/pane.pid"
+      "$(printf '%q ' "${ENV[@]}" "${VELA[@]}" "$@"); echo '[vela exited]' \$?; sleep 600"
     for _ in $(seq 1 60); do
-      if pane | grep -q 'mock/mock-model'; then echo "READY run=$RUN state=$STATE evidence=$EVID"; exit 0; fi
+      # The footer ("<cwd> · <session>"), the project trust question (send y) or a picker such as -r's (keys Enter)
+      grep -Eq "$STATE/work · |\(y/N\)|Esc cancel" <<<"$(T capture-pane -p -t vela)" && { echo "READY run=$RUN state=$STATE evidence=$EVID"; exit 0; }
       sleep 0.5
     done
     echo "NOT READY after 30s; pane:" >&2; pane >&2; exit 1 ;;
-  doctor)
-    ok=1
-    # Read-only: never call ensure_tmux / never install. Only report PATH presence.
-    if ! command -v tmux >/dev/null 2>&1; then
-      echo "tmux: MISSING (interactive paths unavailable; print/pipe/SDK still ok — install tmux manually if you need TUI)"
-      ok=0
-    else
-      echo "tmux: $(command -v tmux) ($(tmux -V 2>/dev/null || echo ok))"
-      T has-session -t vela 2>/dev/null && echo "tmux session: up (socket $SOCK)" || { echo "tmux session: MISSING"; ok=0; }
-    fi
-    [[ -f "$STATE/pane.pid" ]] && kill -0 "$(cat "$STATE/pane.pid")" 2>/dev/null && echo "pane pid: $(cat "$STATE/pane.pid") alive" || { echo "pane pid: dead"; ok=0; }
-    echo "bun: $(bun --version 2>/dev/null || echo missing)  vela: $(cd "$STATE/work" 2>/dev/null && run_isolated --stdin-null bun "$REPO/src/cli/main.ts" --version 2>/dev/null || echo '?')  git: $(git -C "$REPO" rev-parse --short HEAD)"
-    if [[ $ok == 1 ]]; then
-      p="$(pane)"
-      grep -q 'mock/mock-model' <<<"$p" && echo "model: mock/mock-model" || { echo "model: NOT mock (refuse to drive)"; ok=0; }
-      grep -q "$STATE/work" <<<"$p" && echo "cwd: $STATE/work" || { echo "cwd: not the run's work dir"; ok=0; }
-      grep -q '\[vela exited\]' <<<"$p" && { echo "vela: EXITED"; ok=0; } || true
-      if ! check_child_env_isolation; then
-        echo "env isolation: LEAK (FEISHU_* or out-of-tree VELA_RECORD in child)"
-        ok=0
-      else
-        echo "env isolation: ok (no FEISHU_*/out-of-tree VELA_RECORD in child)"
-      fi
-    fi
-    # Warn if the parent shell currently has values that older helpers would have leaked
-    if env | grep -qE '^FEISHU_'; then
-      echo "note: parent has FEISHU_*; child spawn uses env -i allowlist so they are not passed"
-    fi
-    if [[ -n "${VELA_RECORD:-}" ]]; then
-      case "$VELA_RECORD" in
-        "$STATE"/*|"$EVID"/*)
-          echo "note: parent VELA_RECORD=$VELA_RECORD is under STATE/EVID but is still NOT passed to children"
-          ;;
-        *)
-          echo "note: parent VELA_RECORD=$VELA_RECORD is out-of-tree; children do not inherit it (env -i allowlist)"
-          ;;
-      esac
-    fi
-    [[ $ok == 1 ]] && echo "DOCTOR OK" || { echo "DOCTOR FAIL"; exit 1; } ;;
-  send)   # type a line and submit it
-    T send-keys -t vela -l "$*"; T send-keys -t vela Enter ;;
-  keys)   # raw tmux key names, e.g. Escape C-c C-d
-    T send-keys -t vela "$@" ;;
-  wait)   # wait <regex> [timeout_s]: until regex is on screen and the agent is idle
+  doctor)   # versions, and whether the TUI is still up
+    T has-session -t vela 2>/dev/null || { echo "DOCTOR FAIL: no TUI for run $RUN (launch first)"; exit 1; }
+    echo "bun $(bun --version)  vela $("${ENV[@]}" "${VELA[@]}" --version </dev/null)  git $(git -C "$REPO" rev-parse --short HEAD)  model $MODEL"
+    grep -q '\[vela exited\]' <<<"$(pane)" && { echo "DOCTOR FAIL: vela exited"; pane | tail -20; exit 1; }
+    echo "DOCTOR OK" ;;
+  send)     # send <text>: type a line literally and press Enter (wait counts matches from the typed screen on)
+    T send-keys -t vela -l "$*"; sleep 0.2; pane > "$STATE/before.txt"; T send-keys -t vela Enter ;;
+  keys)     # keys <tmux key names>: Escape, C-c, C-d, M-Enter, Up, Tab…
+    pane > "$STATE/before.txt"; T send-keys -t vela "$@"; sleep 0.3 ;;  # pause: Escape followed at once by a key reads as Alt+key
+  wait)     # wait <regex> [timeout_s]: regex matches more lines than before the last send/keys, and nothing is running
+            # (match newly printed lines: a line redrawn in place, like the footer, never adds a match)
     re="$1"; to="${2:-20}"
+    base=$(grep -Ec -- "$re" "$STATE/before.txt" 2>/dev/null || true)
     for _ in $(seq 1 $((to*4))); do
       p="$(pane)"
-      if grep -Eq "$re" <<<"$p" && ! grep -q 'Answering…' <<<"$p"; then echo "MATCHED: $re"; exit 0; fi
+      if (( $(grep -Ec -- "$re" <<<"$p" || true) > ${base:-0} )) && ! grep -Eq 'Esc to (interrupt|cancel)\)' <<<"$p"; then
+        echo "MATCHED: $re"; exit 0
+      fi
       sleep 0.25
     done
-    echo "TIMEOUT waiting for: $re" >&2; pane >&2; exit 1 ;;
-  snap)   # snap <name>: save the visible pane + scrollback to evidence
+    echo "TIMEOUT waiting for: $re" >&2; pane | tail -40 >&2; exit 1 ;;
+  snap)     # snap <name>: screen + scrollback → evidence/<name>.txt
     mkdir -p "$EVID"; pane > "$EVID/$1.txt"; echo "$EVID/$1.txt" ;;
-  grab)   # grab <path-relative-to-work-dir>: copy a side-effect file into evidence
-    mkdir -p "$EVID"; cp "$STATE/work/$1" "$EVID/work-$(echo "$1" | tr / _)"; echo "$EVID/work-$(echo "$1" | tr / _)" ;;
-  print)  # print <name> <vela args...>: one-shot non-interactive run, stdin closed
+  grab)     # grab <path in work/>: copy a side-effect file → evidence/work-<path>
+    mkdir -p "$EVID"; out="$EVID/work-${1//\//_}"; cp "$STATE/work/$1" "$out"; echo "$out" ;;
+  run|exec) # run [--stdin] <name> [vela args] | exec [--stdin] <name> <command…>: one run in work/, captured
+            # to evidence/<name>.{cmd,stdout,stderr,exit}; stdin is closed unless --stdin
+    if [[ "${1:-}" == --stdin ]]; then shift; else exec </dev/null; fi
     name="$1"; shift; seed
-    set +e
-    (cd "$STATE/work" && run_isolated --stdin-null bun "$REPO/src/cli/main.ts" "$@" >"$EVID/$name.stdout" 2>"$EVID/$name.stderr")
-    code=$?; set -e
-    echo "$code" > "$EVID/$name.exit"; printf '%q ' "$@" > "$EVID/$name.cmd"
+    [[ "$CMD" == run ]] && set -- "${VELA[@]}" "$@"
+    printf '%q ' "$@" > "$EVID/$name.cmd"
+    set +e; (cd "$STATE/work" && "${ENV[@]}" "$@" >"$EVID/$name.stdout" 2>"$EVID/$name.stderr"); code=$?; set -e
+    echo "$code" > "$EVID/$name.exit"
     echo "exit=$code stdout=$EVID/$name.stdout"; exit "$code" ;;
-  pipe)   # pipe <name> [vela args...]: feed helper stdin to vela under isolated env; capture like print
-    name="$1"; shift; seed
-    set +e
-    (cd "$STATE/work" && run_isolated bun "$REPO/src/cli/main.ts" "$@" >"$EVID/$name.stdout" 2>"$EVID/$name.stderr")
-    code=$?; set -e
-    echo "$code" > "$EVID/$name.exit"; printf '%q ' "$@" > "$EVID/$name.cmd"
-    echo "exit=$code stdout=$EVID/$name.stdout"; exit "$code" ;;
-  cleanup)
-    T kill-server 2>/dev/null || true   # kills only this run's private tmux server and its children
-    if [[ -d "$STATE" ]]; then
-      mkdir -p "$EVID/sessions"
-      if [[ -d "$STATE/home" ]]; then
-        # Preserve relative paths so nested tool-history.jsonl files do not collide
-        (cd "$STATE/home" && find . -path '*sessions*' -name '*.jsonl' -exec cp --parents {} "$EVID/sessions/" \;) 2>/dev/null || true
-      fi
-      rm -rf "$STATE"
+  cleanup)  # kill this run's tmux server, keep session files as evidence, delete the scratch dir
+    T kill-server 2>/dev/null || true
+    if [[ -d "$STATE/home" ]]; then
+      mkdir -p "$EVID/vela-dir"; cp -r "$STATE/home/." "$EVID/vela-dir/"
     fi
-    echo "cleaned $STATE; evidence kept at $EVID"; ls -1R "$EVID" 2>/dev/null || true ;;
+    rm -rf "$STATE"
+    echo "cleaned $STATE; evidence at $EVID:"; ls -1 "$EVID" ;;
   *) echo "unknown command $CMD" >&2; exit 2 ;;
 esac
