@@ -68,6 +68,11 @@ interface AgentLoopParameter {
   /** Called for every message the loop adds to `messages` (the session appends it to its log). */
   onMessage?: (message: ModelMessage) => void
   /**
+   * Turns a loop-detection warning into the message appended after that step (pi's custom notice).
+   * The model sees the returned message. Absent, the warning is only an event.
+   */
+  injectNotice?: (content: string) => ModelMessage
+  /**
    * Called for an assistant message aborted or failed while it streamed. Like pi, it is kept for the session
    * record but not added to `messages`, so it is never sent to the model.
    */
@@ -117,6 +122,7 @@ export const agentLoop = async ({
   newMessages = [],
   onMessage,
   onInterrupted,
+  injectNotice,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
   let turn = 0
@@ -259,8 +265,8 @@ export const agentLoop = async ({
                   if (detectResult.level === 'critical') {
                     shouldBreak = true
                   } else if (detectResult.level === 'warning') {
-                    // Append after this step's assistant/tool messages so the reminder follows the call that triggered it
-                    loopWarning = `[system message] ${detectResult.message}.\n Please change your idea and try again.Don't repeat the same tool call again.`
+                    // Appended after this step's assistant and tool messages, once the call that triggered it has a result
+                    loopWarning = detectResult.message
                   }
                 }
                 loopDetector.record(part.toolCallId, part.toolName, part.input)
@@ -433,7 +439,10 @@ export const agentLoop = async ({
         break
       }
 
-      if (loopWarning) add({ role: 'user', content: loopWarning })
+      if (loopWarning) {
+        const notice = injectNotice?.(loopWarning)
+        if (notice) add(notice)
+      }
 
       // Every turn_start has a matching turn_end; the following agent_end gives the stop reason
       emit({ type: 'turn_end', turn, message: assistant, toolResults })

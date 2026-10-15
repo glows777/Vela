@@ -380,13 +380,15 @@ test('the loop warning fires on the 10th identical call and is stored as a notic
     customType: 'loop',
     display: true,
   })
+  await resumed.run('more')
+  expect(resumed.lastAssistantText()).toBe('again')
+  expect(JSON.stringify(resumed.model.calls[0]?.prompt)).toContain(LOOP_NOTICE)
 })
 
 test('repeating the same tool call trips the loop detector: warning, then critical stop', async () => {
   const same = () => fauxToolCall('list_directory', { path: '.' })
   const t = createTestVela({
-    // Detection runs before recording: the 11th identical call sees 10 earlier ones → warning; the 21st → critical
-    responses: Array.from({ length: 21 }, same),
+    responses: Array.from({ length: 20 }, same),
   })
 
   await t.run('Keep listing the directory')
@@ -395,38 +397,35 @@ test('repeating the same tool call trips the loop detector: warning, then critic
   expect(detections[0]).toMatchObject({
     level: 'warning',
     detector: 'generic_repeat',
+    message: LOOP_NOTICE,
   })
   expect(detections.at(-1)).toMatchObject({ level: 'critical' })
   expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'loop',
   })
-  // The warning reaches the model as a system message, placed after the call and result that triggered it
   const firstWarning = t.messages.findIndex(
-    (m) =>
-      m.role === 'user' &&
-      String(m.content).includes("Don't repeat the same tool call again"),
+    (message) => t.session.customMessageOf(message)?.customType === 'loop',
   )
-  expect(firstWarning).toBeGreaterThan(0)
   expect(
     t.messages.slice(firstWarning - 2, firstWarning).map((m) => m.role),
   ).toEqual(['assistant', 'tool'])
-  expect(JSON.stringify(t.messages[firstWarning - 2]!.content)).toContain(
-    'faux-call-11-1',
+  expect(JSON.stringify(t.messages[firstWarning - 2]?.content)).toContain(
+    'faux-call-10-1',
   )
-  expect(t.model.calls).toHaveLength(21)
+  expect(t.model.calls).toHaveLength(20)
 })
 
 test('a critical loop stop keeps the stopping step in the history: the tool that ran has its call and result', async () => {
   const same = () => fauxToolCall('list_directory', { path: '.' })
-  const t = createTestVela({ responses: Array.from({ length: 21 }, same) })
+  const t = createTestVela({ responses: Array.from({ length: 20 }, same) })
 
   await t.run('Keep listing the directory')
 
   expect(t.eventsOf('agent_end').at(-1)).toMatchObject({ reason: 'loop' })
-  // The 21st call trips the critical stop, but its tool already ran
+  // The 20th call trips the critical stop, but its tool already ran
   const ran = t.eventsOf('tool_execution_end').map((e) => e.toolCallId)
-  expect(ran).toContain('faux-call-21-1')
+  expect(ran).toContain('faux-call-20-1')
   // Every tool that ran has its assistant call and tool result in the session messages
   const json = (role: string) =>
     JSON.stringify(t.messages.filter((m) => m.role === role))

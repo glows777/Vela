@@ -116,7 +116,7 @@ function detectLoopIn(
       level: 'critical',
       detector: 'ping_pong',
       count: pingPong,
-      message: `[critical] detect ping pong loop with ${pingPong} alternations, force stop and suggest checking the logic`,
+      message: `Tool calls have alternated between the same two sets of arguments ${pingPong} times. Stopping.`,
     }
   }
   if (pingPong >= WARNING_THRESHOLD) {
@@ -125,20 +125,20 @@ function detectLoopIn(
       level: 'warning',
       detector: 'ping_pong',
       count: pingPong,
-      message: `[warning] detect ping pong loop with ${pingPong} alternations, suggest changing the logic`,
+      message: `Tool calls have alternated between the same two sets of arguments ${pingPong} times. Change your approach instead of repeating them.`,
     }
   }
 
-  const recentCount = callHistory.filter(
-    (h) => h.name === name && h.argsHash === argsHash,
-  ).length
+  const recentCount =
+    callHistory.filter((h) => h.name === name && h.argsHash === argsHash)
+      .length + 1
   if (recentCount >= CRITICAL_THRESHOLD) {
     return {
       stuck: true,
       level: 'critical',
       detector: 'generic_repeat',
       count: recentCount,
-      message: `[critical] detect there has been ${recentCount} calls with same parameters, force stop and suggest checking the logic`,
+      message: `The same tool has been called ${recentCount} times with the same arguments. Stopping.`,
     }
   }
   if (recentCount >= WARNING_THRESHOLD) {
@@ -147,7 +147,7 @@ function detectLoopIn(
       level: 'warning',
       detector: 'generic_repeat',
       count: recentCount,
-      message: `[warning] detect there has been ${recentCount} calls with same parameters, suggest checking if there is a loop in the logic`,
+      message: `The same tool has been called ${recentCount} times with the same arguments. Change your approach instead of repeating it.`,
     }
   }
 
