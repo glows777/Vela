@@ -246,6 +246,25 @@ test('a second overflow in the same step fails the run with the provider error',
   expect(t.eventsOf('agent_end').at(-1)).toMatchObject({ reason: 'error' })
 })
 
+test('a message above the summary threshold is sent when nothing can be summarized', async () => {
+  const text = `one big message ${'z'.repeat(12000)}`
+  const t = createTestVela({
+    limits: {
+      summaryThreshold: 6000,
+      microcompactThreshold: 5900,
+      maxInputTokens: 100000,
+    },
+    responses: [fauxText('fits')],
+  })
+
+  await t.run(text)
+
+  expect(t.lastAssistantText()).toBe('fits')
+  expect(t.eventsOf('compaction_start')).toEqual([])
+  expect(t.eventsOf('compaction_end')).toEqual([])
+  expect(t.model.calls.map((call) => call.lastUserText)).toEqual([text])
+})
+
 test('an overflow with nothing to compact fails and says why', async () => {
   const t = createTestVela({
     responses: [

@@ -69,7 +69,7 @@ export type VelaEvent =
   | {
       type: 'message_start'
       message: ModelMessage
-      /** Set when the message is an extension's custom message (`session.sendMessage()`) */
+      /** Set when the message is a custom message (an extension's `session.sendMessage()`, or a loop notice) */
       custom?: CustomMessageInfo
     }
   /** The assistant message so far (`message`) and what just changed (`assistantMessageEvent`). */
@@ -88,7 +88,7 @@ export type VelaEvent =
       message: ModelMessage
       stopReason?: StopReason
       errorMessage?: string
-      /** Set when the message is an extension's custom message (`session.sendMessage()`) */
+      /** Set when the message is a custom message (an extension's `session.sendMessage()`, or a loop notice) */
       custom?: CustomMessageInfo
     }
   /** A tool call is about to run (after the assistant message's `message_end`). */

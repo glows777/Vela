@@ -4,6 +4,7 @@ import { resolveLimits, type VelaLimits } from '../limits.ts'
 import type { SessionState, SessionStore } from '../session/index.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
 import {
+  canSummarize,
   persistMicrocompact,
   planMicrocompact,
   summarize,
@@ -215,7 +216,10 @@ export class ContextManager {
       })
       return
     }
-    if (before >= this.limits.summaryThreshold) {
+    if (
+      before >= this.limits.summaryThreshold &&
+      canSummarize(request.messages)
+    ) {
       if (options.allowSummary === false) {
         this.onEvent?.({
           type: 'context_prepare',

@@ -107,12 +107,14 @@ Microcompaction is applied only if it saves at least `minMicroSavings` tokens an
 
 ### Summary
 
-When the estimate reaches `summaryThreshold` (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
+When the estimate reaches `summaryThreshold` and there is an earlier turn to summarize (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
 2. It sends the full current request plus one instruction asking for a JSON summary: the user's goal and lists of completed work, pending work, constraints and key facts. Every item must be a verbatim quote from a removed message; quotes that don't match the original text are rejected.
 3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary and a guide to the tool call history file, so the model can still look up earlier tool calls and outputs.
 4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized messages stay in the file. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
+
+If there is no earlier turn to summarize, the request is sent as long as it is within `maxInputTokens`.
 
 If the summary fails (the model returns invalid JSON, tool calls, unverifiable quotes, or the result is still too large), the turn stops with an error and the original history is kept. Nothing is lost; fix the cause (for example switch to a model with a larger window) and try again.
 
@@ -149,7 +151,7 @@ Vela watches the last 30 tool calls of a run for repetition:
 | `generic_repeat`: the same tool with the same arguments | 10 calls | 20 calls |
 | `ping_pong`: alternating between two calls | 10 alternations | 20 alternations |
 
-A warning emits `loop_detected` and adds a user message after that step telling the model to change approach. A critical detection emits `loop_detected` and ends the run with `agent_end` reason `loop`. The window starts fresh with each prompt.
+A warning emits `loop_detected` and appends a custom message (`customType: loop`, `display: true`) after that step. The text names the count from the table. The model sees it as a user message. The session stores it as a notice, so a resumed session does not show it as something you typed. A critical detection emits `loop_detected` and ends the run with `agent_end` reason `loop`. The window starts fresh with each prompt.
 
 ## Retries
 

@@ -254,7 +254,7 @@ test('summary cannot execute tools and rejected summary leaves original history'
   expect(m.calls).toHaveLength(1)
 })
 
-test('debug never generates a paid summary; oversized input and missing boundary stop safely', async () => {
+test('a request with nothing to summarize is kept under the input cap and stopped above it', async () => {
   const m = summaryModel()
   const messages: ModelMessage[] = [
     { role: 'user', content: 'x'.repeat(520000) },
@@ -265,9 +265,12 @@ test('debug never generates a paid summary; oversized input and missing boundary
     { messages, timestamps: new Map(), summary: '' },
   )
   const request = await createRequestSnapshot(m, 'stable', {}, messages)
+  const before = JSON.stringify(messages)
   await manager.prepare(request, { allowSummary: false })
   expect(m.calls).toHaveLength(0)
-  await expect(manager.prepare(request)).rejects.toThrow('split point')
+  await manager.prepare(request)
+  expect(m.calls).toHaveLength(0)
+  expect(JSON.stringify(messages)).toBe(before)
   messages[0] = { role: 'user', content: 'x'.repeat(650000) }
   messages.push(
     ...Array.from(
