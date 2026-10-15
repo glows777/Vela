@@ -40,6 +40,7 @@ import { copyToClipboard } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
 import { openBrowser } from './login.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'
+import { formatContextFileList } from './status-display.ts'
 import {
   AssistantMessage,
   BashExecution,
@@ -263,6 +264,15 @@ export class InteractiveMode {
       this.addNotice(errorMessage(error), 'error')
     }
     await this.openSession(sessionId, resume)
+    const contextFiles = formatContextFileList(
+      velaInternals(vela).loadedContextFiles,
+      {
+        cwd: vela.cwd,
+        homeDir: homedir(),
+        agentDir: options.agentDir,
+      },
+    )
+    if (contextFiles) this.addNotice(`[context] ${contextFiles}`)
     this.setAutocomplete()
     // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
     velaInternals(vela)

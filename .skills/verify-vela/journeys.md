@@ -63,7 +63,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | `--no-extensions` | The same faux run with `--no-extensions` | The tool is unavailable; built-ins (memory, web, mcp) are gone |
 | Project trust | Put `.vela/extensions/x.ts` or `.skills/<name>/SKILL.md` in `work/` | `-p` skips it with a `[trust]` note on stderr; `--approve` loads it; the TUI asks `(y/N)` |
 | Skills | Trusted `.skills/demo/SKILL.md`, then `/skill` and `/skill:demo` | Listed with its description; `/context` counts skill tokens |
-| Context files | `AGENTS.md` in `work/` | Not shown anywhere in the CLI; check with an SDK script: `loadConfig({ cwd }).contextFiles` |
+| Context files | `AGENTS.md` in `work/` and `home/AGENTS.md` | Startup shows `[context]` with `AGENTS.md` and `$VELA_DIR/AGENTS.md`. `/status` lists the same paths after `Context files:`. `--no-context-files` shows neither. |
 
 ## Built-in extensions ([built-in-extensions](../../docs/built-in-extensions.md), [mcp](../../docs/mcp.md))
 
