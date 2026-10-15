@@ -53,7 +53,7 @@ export interface CliArgs {
   extensions: string[]
   /** `--no-extensions`: skip built-in and discovered extensions (`-e` still loads), like pi */
   noExtensions: boolean
-  /** `--no-session`: keep the session in memory only, not on disk (memory and knowledge base work as usual) */
+  /** `--no-session`: keep the session in memory only, not on disk (tool history and usage stay out of the data directory; memory and the knowledge base work as usual) */
   noSession: boolean
   /** `--fork <id>`: start in a new session copied from this saved one (like pi) */
   fork?: string

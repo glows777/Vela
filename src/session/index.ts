@@ -1,5 +1,7 @@
-import { copyFile, mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { ModelMessage } from 'ai'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
@@ -25,7 +27,11 @@ import {
   type SessionMessageEntry,
   type SessionTreeNode,
 } from './entries.ts'
-import { fileSessionStorage, type SessionStorage } from './storage.ts'
+import {
+  fileSessionStorage,
+  type SessionStorage,
+  sessionArtifactsUseDataDir,
+} from './storage.ts'
 import { ToolResultStore } from './tool-results.ts'
 
 export interface SessionState {
@@ -40,10 +46,14 @@ const SESSION_DIR = 'sessions'
  * One session's append-only entry log (like pi's SessionManager). Entries are kept in memory and appended
  * to SessionStorage (file / memory / custom) in order. Like pi, nothing is written until the session has
  * a user or assistant message; then the header and everything so far go out together.
- * Long tool output and tool call history are always written under `<dir>/<id>/` (the model reads them with read_file).
+ * Long tool output and tool call history are written under `<dir>/<id>/` so the model can read them,
+ * except for an in-memory session on a durable data directory (`--no-session`): those go to a temporary
+ * directory removed by `releaseTransient()` when the session closes.
  */
 export class SessionStore {
   readonly results: ToolResultStore
+  /** Tool history and long output for `--no-session`, outside the data directory. */
+  private transientDir?: string
   private readonly storage: SessionStorage
   private header?: SessionHeader
   private readonly entries: SessionEntry[] = []
@@ -72,7 +82,27 @@ export class SessionStore {
     private readonly cwd?: string,
   ) {
     this.storage = storage ?? fileSessionStorage(dir, logger)
-    this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'))
+    // --no-session keeps the transcript in memory but still has a real data directory.
+    // Tool history and long output must not appear there; a temp dir is removed on close.
+    if (sessionArtifactsUseDataDir(this.storage, sessionId, temporaryResults)) {
+      this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'))
+    } else {
+      this.transientDir = join(
+        tmpdir(),
+        `vela-nosession-${crypto.randomUUID()}`,
+      )
+      this.results = new ToolResultStore(
+        join(this.transientDir, 'tool-results'),
+      )
+    }
+  }
+
+  /** Deletes tool history and long output kept outside the data directory. */
+  releaseTransient(): void {
+    const dir = this.transientDir
+    if (!dir) return
+    this.transientDir = undefined
+    rmSync(dir, { recursive: true, force: true })
   }
 
   /** A copy of the session's entries in append order (header excluded). */
@@ -164,13 +194,23 @@ export class SessionStore {
       this.results.historyId,
       'tool-history.jsonl',
     )
+    let copiedHistory: string | undefined
     try {
       await mkdir(join(target, '..'), { recursive: true, mode: 0o700 })
       await copyFile(source, target)
+      copiedHistory = await readFile(target, 'utf8')
     } catch (error) {
       // The parent has not run a tool yet: nothing to copy
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
+    const inherited = await inheritToolResultPaths(
+      entries,
+      parent.results,
+      this.results.dir,
+      resolve(target),
+      copiedHistory,
+      target,
+    )
     await this.results.resumeHistory(
       this.results.historyId,
       0,
@@ -185,8 +225,8 @@ export class SessionStore {
       toolHistoryId: this.results.historyId,
       parentSession: parent.id,
     }
-    this.replaceEntries(entries)
-    if (entries.some(startsConversation)) {
+    this.replaceEntries(inherited)
+    if (inherited.some(startsConversation)) {
       this.started = true
       this.pending.push(this.header, ...this.entries)
       this.writing = this.writing.then(() => this.write())
@@ -447,6 +487,77 @@ export class SessionStore {
     this.pending.length = 0
     return context
   }
+}
+
+const RESULT_FILE =
+  /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.txt/i
+
+function replacePaths(text: string, pairs: [string, string][]): string {
+  return pairs.reduce(
+    (out, [from, to]) => (from && from !== to ? out.replaceAll(from, to) : out),
+    text,
+  )
+}
+
+function rewritePaths<T>(value: T, pairs: [string, string][]): T {
+  if (typeof value === 'string') return replacePaths(value, pairs) as T
+  if (Array.isArray(value))
+    return value.map((item) => rewritePaths(item, pairs)) as T
+  if (value && typeof value === 'object') {
+    const copy: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value))
+      copy[key] = rewritePaths(item, pairs)
+    return copy as T
+  }
+  return value
+}
+
+function referencedResultFiles(text: string, dir: string): string[] {
+  const prefix = dir.endsWith(sep) ? dir : `${dir}${sep}`
+  const found = new Set<string>()
+  let from = 0
+  while (from < text.length) {
+    const at = text.indexOf(prefix, from)
+    if (at < 0) break
+    const match = RESULT_FILE.exec(text.slice(at + prefix.length))
+    if (match) found.add(prefix + match[0])
+    from = at + prefix.length
+  }
+  return [...found]
+}
+
+async function inheritToolResultPaths(
+  entries: SessionEntry[],
+  parent: ToolResultStore,
+  childDir: string,
+  childHistoryPath: string,
+  historyText: string | undefined,
+  historyFile: string,
+): Promise<SessionEntry[]> {
+  const blob = `${JSON.stringify(entries)}\n${historyText ?? ''}`
+  const files = referencedResultFiles(blob, parent.dir)
+  if (files.length) await mkdir(childDir, { recursive: true, mode: 0o700 })
+  for (const file of files) {
+    try {
+      await copyFile(file, join(childDir, basename(file)))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+  const pairs: [string, string][] = [
+    [parent.history.path, childHistoryPath],
+    [
+      join(dirname(parent.history.path), 'snapshots'),
+      join(dirname(childHistoryPath), 'snapshots'),
+    ],
+    [parent.dir, childDir],
+  ]
+  if (historyText !== undefined) {
+    const rewritten = replacePaths(historyText, pairs)
+    if (rewritten !== historyText)
+      await writeFile(historyFile, rewritten, { mode: 0o600 })
+  }
+  return rewritePaths(entries, pairs)
 }
 
 /** Whether an entry is conversation: a user or assistant message, or what enters the context like one (an extension's custom message, a `!` command). */
