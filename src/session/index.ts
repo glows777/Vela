@@ -1,4 +1,6 @@
+import { rmSync } from 'node:fs'
 import { copyFile, mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import type { CustomMessageInfo } from '../agent/events.ts'
@@ -25,7 +27,11 @@ import {
   type SessionMessageEntry,
   type SessionTreeNode,
 } from './entries.ts'
-import { fileSessionStorage, type SessionStorage } from './storage.ts'
+import {
+  fileSessionStorage,
+  type SessionStorage,
+  sessionArtifactsUseDataDir,
+} from './storage.ts'
 import { ToolResultStore } from './tool-results.ts'
 
 export interface SessionState {
@@ -40,10 +46,14 @@ const SESSION_DIR = 'sessions'
  * One session's append-only entry log (like pi's SessionManager). Entries are kept in memory and appended
  * to SessionStorage (file / memory / custom) in order. Like pi, nothing is written until the session has
  * a user or assistant message; then the header and everything so far go out together.
- * Long tool output and tool call history are always written under `<dir>/<id>/` (the model reads them with read_file).
+ * Long tool output and tool call history are written under `<dir>/<id>/` so the model can read them,
+ * except for an in-memory session on a durable data directory (`--no-session`): those go to a temporary
+ * directory removed by `releaseTransient()` when the session closes.
  */
 export class SessionStore {
   readonly results: ToolResultStore
+  /** Tool history and long output for `--no-session`, outside the data directory. */
+  private transientDir?: string
   private readonly storage: SessionStorage
   private header?: SessionHeader
   private readonly entries: SessionEntry[] = []
@@ -72,7 +82,27 @@ export class SessionStore {
     private readonly cwd?: string,
   ) {
     this.storage = storage ?? fileSessionStorage(dir, logger)
-    this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'))
+    // --no-session keeps the transcript in memory but still has a real data directory.
+    // Tool history and long output must not appear there; a temp dir is removed on close.
+    if (sessionArtifactsUseDataDir(this.storage, sessionId, temporaryResults)) {
+      this.results = new ToolResultStore(join(dir, sessionId, 'tool-results'))
+    } else {
+      this.transientDir = join(
+        tmpdir(),
+        `vela-nosession-${crypto.randomUUID()}`,
+      )
+      this.results = new ToolResultStore(
+        join(this.transientDir, 'tool-results'),
+      )
+    }
+  }
+
+  /** Deletes tool history and long output kept outside the data directory. */
+  releaseTransient(): void {
+    const dir = this.transientDir
+    if (!dir) return
+    this.transientDir = undefined
+    rmSync(dir, { recursive: true, force: true })
   }
 
   /** A copy of the session's entries in append order (header excluded). */

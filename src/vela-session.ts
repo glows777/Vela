@@ -61,7 +61,11 @@ import { renderSessionHtml } from './session/export-html.ts'
 import { SessionStore } from './session/index.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
 import { newSessionId } from './session/session-id.ts'
-import type { SessionPersistence, SessionStorage } from './session/storage.ts'
+import {
+  type SessionPersistence,
+  type SessionStorage,
+  sessionArtifactsUseDataDir,
+} from './session/storage.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import { type BashResult, runBash } from './tools/shell.ts'
 import {
@@ -328,7 +332,13 @@ export class VelaSession {
     this.registry.setRole(options.role ?? 'owner')
     this.registry.setPermissions(options.permissions)
     this.registry.setSelection(options.tools)
-    this.tracker = new TokenTracker(join(deps.dataDir, 'usage', 'today.jsonl'))
+    // --no-session keeps usage in memory. /usage and /status still read the tracker;
+    // they must not append usage/today.jsonl under the data directory.
+    this.tracker = new TokenTracker(
+      sessionArtifactsUseDataDir(deps.sessionStorage, id, deps.temporaryDataDir)
+        ? join(deps.dataDir, 'usage', 'today.jsonl')
+        : undefined,
+    )
     this.contextManager = new ContextManager(
       this.store,
       this.tracker,
@@ -1607,6 +1617,7 @@ export class VelaSession {
     } catch (error) {
       errors.push(error)
     } finally {
+      this.store.releaseTransient()
       this.listeners.clear()
       this.deps.onClose(this)
     }

@@ -12,7 +12,7 @@ Every session has an id, which is also its file name. Ids use letters, digits, `
 - Channel sessions get `<channel>-<conversationId>-<senderId>`, one per chat and sender (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
-The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session's entries (messages, compactions, setting changes) and `sessions/<id>/` the long tool output and tool call history.
+The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session's entries (messages, compactions, setting changes) and `sessions/<id>/` the long tool output and tool call history. `--no-session` keeps the transcript, tool history and usage log out of that directory; tool history and long output go to a temporary directory removed when the session closes. Memory and the knowledge base are unchanged.
 
 To delete a session, delete `<id>.jsonl` and the `<id>/` directory.
 
@@ -187,6 +187,6 @@ Every model request records input, output, cache-read and cache-write tokens and
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
-- Each request is appended to `<dataDir>/usage/today.jsonl`.
+- Each request is appended to `<dataDir>/usage/today.jsonl`. `--no-session` keeps the same totals in memory and does not write that file.
 
 `usage` events carry the same numbers per request. See [SDK](sdk.md#events).
