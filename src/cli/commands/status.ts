@@ -2,8 +2,9 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { formatUsd } from '../../usage/format.ts'
 import type { UsageTotals } from '../../usage/tracker.ts'
+import { velaInternals } from '../../vela.ts'
 import type { VelaSession } from '../../vela-session.ts'
-import { formatStatusPath } from '../status-display.ts'
+import { formatContextFileList, formatStatusPath } from '../status-display.ts'
 import { sanitize } from '../tui/components.ts'
 import type { CommandHandler } from './index.ts'
 
@@ -29,10 +30,20 @@ export const statusCommands: CommandHandler[] = [
       `  Session: ${name ? `${name} (${session.id})` : session.id}`,
       `  Path: ${sessionPath(session, agentDir)}`,
       `  Cwd: ${plain(vela.cwd)}`,
+    ]
+    const contextFiles = plain(
+      formatContextFileList(velaInternals(vela).loadedContextFiles, {
+        cwd: vela.cwd,
+        homeDir: homedir(),
+        agentDir,
+      }),
+    )
+    if (contextFiles) lines.push(`  Context files: ${contextFiles}`)
+    lines.push(
       `  Model: ${plain(model)}`,
       `  Thinking: ${session.thinkingLevel}`,
       `  Role: ${session.role}`,
-    ]
+    )
     const channel = session.channel ? plain(session.channel) : ''
     if (channel) lines.push(`  Channel: ${channel}`)
     const parent = session.parentSession ? plain(session.parentSession) : ''

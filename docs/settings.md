@@ -180,6 +180,8 @@ Like pi, Vela puts project instructions from `AGENTS.md` or `CLAUDE.md` into the
 
 The files are read at startup and are not gated by project trust (same as pi): they are text for the model, which would read them anyway when it reads the project. Treat a folder's instructions as untrusted input even when you decline trust. `--no-context-files` turns them off. Guest sessions (channel senders) never get them. In the SDK, pass `contextFiles` to `createVela()`; see [SDK](sdk.md#createvela-options).
 
+The CLI prints the paths it loaded. Print, JSON and RPC mode write one `[context]` line to stderr. Interactive mode writes that line into the chat log at startup, and `/status` lists the same paths after `Context files:`. A file in the working folder is shown relative to that folder (`AGENTS.md`). A file under the home directory is shown with `~`. A file under the agent directory that is outside the home directory is shown with `$VELA_DIR`. With `--no-context-files`, or when no file was found, there is no line.
+
 ## Skills
 
 Skills follow the [Agent Skills](https://agentskills.io) format, like pi. A skill is a directory with a `SKILL.md`:
