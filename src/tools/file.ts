@@ -61,7 +61,7 @@ export const readFileParamSchema = z.object({
 })
 export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   name: 'read_file',
-  description: `Reads a text file or a saved tool result file, one page at a time. A page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. Returns the range shown and the offset/column for the next page. The file is fully read only when the result says EOF.`,
+  description: `Reads a text file or a saved tool result file, one page at a time. A page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. When more content remains, appends a footer with the range shown and the offset/column for the next page. At EOF, returns only the file content with no added footer.`,
   inputSchema: readFileParamSchema,
   annotations: { readOnlyHint: true },
   // A full page plus the footer must fit, so pages are never saved to a file again
@@ -118,9 +118,8 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     if (!more) consume(decoder.decode())
     if (!reachedStart && !(line === offset && col === column))
       throw new Error('offset/column is past the end of the file')
-    const next = more
-      ? `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
-      : 'EOF: no more content.'
+    if (!more) return body
+    const next = `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
     return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
   },
 })
