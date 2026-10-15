@@ -2,7 +2,7 @@ import type {
   LanguageModelV3Prompt,
   LanguageModelV3StreamPart,
 } from '@ai-sdk/provider'
-import type { LanguageModel } from 'ai'
+import { type LanguageModel, simulateReadableStream } from 'ai'
 import { getStoredResult } from '../session/tool-results.ts'
 
 /**
@@ -185,9 +185,9 @@ function wasToolSearchCalled(prompt: Prompt): boolean {
 function detectParallelIntent(text: string): ToolCallIntent[] | null {
   if (text.includes('测试并发') || text.includes('test parallel')) {
     return [
-      { toolName: 'get_weather', args: { city: 'Beijing' } },
-      { toolName: 'get_weather', args: { city: 'Shanghai' } },
       { toolName: 'list_directory', args: { path: '.' } },
+      { toolName: 'bash', args: { command: 'echo parallel-1' } },
+      { toolName: 'bash', args: { command: 'echo parallel-2' } },
     ]
   }
   return null
@@ -197,8 +197,9 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
   const text = extractUserText(prompt)
   const toolResults = getToolResultContent(prompt)
 
+  // Calls a tool on every step and never answers: something to interrupt with Esc
   if (text.includes('测试死循环') || text.includes('test loop')) {
-    return { toolName: 'get_weather', args: { city: 'Beijing' } }
+    return { toolName: 'list_directory', args: { path: '.' } }
   }
 
   // tool_search just returned: call the tool it found
@@ -324,7 +325,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
     text.includes('文件列表') ||
     text.includes('directory') ||
     text.includes('list files') ||
-    text.includes('ls')
+    /\bls\b/.test(text)
   ) {
     return { toolName: 'list_directory', args: { path: '.' } }
   }
@@ -345,49 +346,6 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
     return { toolName: 'read_file', args: { path: fileMatch[1] } }
   }
 
-  const weatherKeywords = [
-    'weather',
-    'temperature',
-    'hot',
-    'cold',
-    '天气',
-    '温度',
-    '热',
-    '冷',
-    '气温',
-  ]
-  const hasWeatherIntent = weatherKeywords.some((kw) => text.includes(kw))
-  const cities = text.match(
-    /(北京|上海|深圳|广州|杭州|成都|beijing|shanghai|shenzhen|guangzhou|hangzhou|chengdu)/g,
-  )
-  if (hasWeatherIntent && cities && cities.length > 0) {
-    const city = cities[0] as string
-    return {
-      toolName: 'get_weather',
-      args: { city: city.charAt(0).toUpperCase() + city.slice(1) },
-    }
-  }
-
-  const calcMatch = text.match(
-    /(\d+)\s*(?:[+\-*/加减乘除]|plus|minus|times|divided by)\s*(\d+)/,
-  )
-  if (calcMatch) {
-    const op =
-      text.match(/[+*/]|加|减|乘|除|plus|minus|times|divided by|-/)?.[0] || '+'
-    const opMap: Record<string, string> = {
-      加: '+',
-      减: '-',
-      乘: '*',
-      除: '/',
-      plus: '+',
-      minus: '-',
-      times: '*',
-      'divided by': '/',
-    }
-    const expression = `${calcMatch[1]} ${opMap[op] || op} ${calcMatch[2]}`
-    return { toolName: 'calculator', args: { expression } }
-  }
-
   return null
 }
 
@@ -397,13 +355,6 @@ function pickTextResponse(prompt: Prompt): string {
 
     if (combined.includes('[DIR]') || combined.includes('[FILE]')) {
       return `Files in the current directory:\n${combined}`
-    }
-    if (
-      combined.includes('°C') ||
-      combined.includes('weather') ||
-      combined.includes('天气')
-    ) {
-      return `According to the lookup: ${combined}`
     }
     if (
       combined.includes('Sent') ||
@@ -473,27 +424,6 @@ function groundedSummary(prompt: Prompt): string | undefined {
     pending: [],
     constraints: [],
     details: rest.length ? rest : [fact(goal)],
-  })
-}
-
-function createDelayedStream(
-  chunks: LanguageModelV3StreamPart[],
-  delayMs = 30,
-): ReadableStream<LanguageModelV3StreamPart> {
-  return new ReadableStream({
-    start(controller) {
-      let i = 0
-      function next() {
-        const chunk = chunks[i++]
-        if (chunk) {
-          controller.enqueue(chunk)
-          setTimeout(next, delayMs)
-        } else {
-          controller.close()
-        }
-      }
-      next()
-    },
   })
 }
 
@@ -640,26 +570,31 @@ export function createMockModel(): DemoModel {
             usage: makeUsage(state, prompt),
           },
         ]
-        return { stream: createDelayedStream(chunks, 30) }
+        return {
+          stream: simulateReadableStream({
+            chunks: chunks,
+            chunkDelayInMs: 30,
+          }),
+        }
       }
 
       const parallelIntents = detectParallelIntent(text)
       if (parallelIntents && !hasToolResults(prompt)) {
         return {
-          stream: createDelayedStream(
-            makeToolCallChunks(state, parallelIntents, prompt),
-            15,
-          ),
+          stream: simulateReadableStream({
+            chunks: makeToolCallChunks(state, parallelIntents, prompt),
+            chunkDelayInMs: 15,
+          }),
         }
       }
 
       const intent = detectToolIntent(prompt)
       if (intent) {
         return {
-          stream: createDelayedStream(
-            makeToolCallChunks(state, [intent], prompt),
-            20,
-          ),
+          stream: simulateReadableStream({
+            chunks: makeToolCallChunks(state, [intent], prompt),
+            chunkDelayInMs: 20,
+          }),
         }
       }
 
@@ -681,7 +616,9 @@ export function createMockModel(): DemoModel {
           usage: makeUsage(state, prompt),
         },
       ]
-      return { stream: createDelayedStream(chunks, 30) }
+      return {
+        stream: simulateReadableStream({ chunks: chunks, chunkDelayInMs: 30 }),
+      }
     },
   }
 }

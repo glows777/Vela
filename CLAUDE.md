@@ -45,11 +45,7 @@ How tests are organized, how to verify a change and how to add tests: see [test/
 
 ## Product verification (verify-vela)
 
-After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.cursor/skills/verify-vela/SKILL.md`](.cursor/skills/verify-vela/SKILL.md) before claiming done.
-
-- Prefer the skill harness (`scripts/vela-verify.sh`, `VELA_MODEL=mock`, feature journeys) over unit/e2e alone when the change maps to a listed feature. e2e supplements the skill; it does not replace it for those features.
-- Feature map: [`.cursor/skills/verify-vela/features/`](.cursor/skills/verify-vela/features/).
-- Interactive TUI journeys need `tmux` on PATH (install manually if missing; the harness does not auto-install). Print/pipe/SDK paths do not need tmux.
+After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.skills/verify-vela/SKILL.md`](.skills/verify-vela/SKILL.md) before claiming done: use the change as a user would, through the real CLI or an SDK script, with the mock or a faux scenario model. Tests don't replace this. What to drive per feature: [`journeys.md`](.skills/verify-vela/journeys.md); SDK onboarding and core checks: [`core.md`](.skills/verify-vela/core.md).
 
 ## Frontend
 
