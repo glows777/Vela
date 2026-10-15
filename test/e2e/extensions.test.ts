@@ -592,3 +592,159 @@ test('registerTool keeps a name that already carries the prefix; unregisterTool 
   await t.vela.dispose()
   expect(calls).toEqual(['first', 'second'])
 })
+
+test('ask with no UI is an error result, and the model still reads the reason', async () => {
+  const t = createTestVela({
+    session: { permissions: { bash: 'ask' } },
+    responses: [
+      fauxToolCall('bash', { command: 'echo hi' }),
+      (req) => fauxText(req.toolResults[0]!.output),
+    ],
+  })
+  await t.run('echo')
+  expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
+    toolName: 'bash',
+    isError: true,
+    result: '[Rejected] bash was not approved',
+  })
+  expect(t.model.calls[1]!.toolResults[0]).toMatchObject({
+    output: '[Rejected] bash was not approved',
+    raw: { type: 'error-text', value: '[Rejected] bash was not approved' },
+  })
+  expect(t.lastAssistantText()).toBe('[Rejected] bash was not approved')
+  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('done')
+  const history = await Bun.file(t.session.registry.results.indexPath).text()
+  expect(history).toContain('"status":"rejected"')
+  expect(history).toContain('[Rejected] bash was not approved')
+})
+
+test('deny and a role rule are error results, and the tool does not run', async () => {
+  const denied = createTestVela({
+    session: { permissions: { write_file: 'deny' } },
+    responses: [
+      fauxToolCall('write_file', { path: 'x.txt', content: 'no' }),
+      (req) => fauxText(req.toolResults[0]!.output),
+    ],
+  })
+  await denied.run('write')
+  expect(denied.eventsOf('tool_execution_end')[0]).toMatchObject({
+    toolName: 'write_file',
+    isError: true,
+    result:
+      "AI_NoSuchToolError: Model tried to call unavailable tool 'write_file'. Available tools: read_file, edit_file, list_directory, grep, find, bash, tool_search, memory.",
+  })
+  expect(denied.model.calls[1]!.toolResults[0]!.raw).toMatchObject({
+    type: 'error-text',
+  })
+  expect(denied.lastAssistantText()).toContain("unavailable tool 'write_file'")
+  await expect(denied.readFile('x.txt')).rejects.toThrow('ENOENT')
+  expect(denied.eventsOf('agent_end').at(-1)?.reason).toBe('done')
+
+  const guest = createTestVela({
+    session: { role: 'guest' },
+    responses: [
+      fauxToolCall('bash', { command: 'echo hi' }),
+      (req) => fauxText(req.toolResults[0]!.output),
+    ],
+  })
+  await guest.run('echo')
+  expect(guest.eventsOf('tool_execution_end')[0]).toMatchObject({
+    toolName: 'bash',
+    isError: true,
+    result:
+      "AI_NoSuchToolError: Model tried to call unavailable tool 'bash'. Available tools: tool_search.",
+  })
+  expect(guest.model.calls[0]!.tools).not.toContain('bash')
+  expect(guest.eventsOf('agent_end').at(-1)?.reason).toBe('done')
+})
+
+test('a tool_call hook block is an error result, and the model still reads the reason', async () => {
+  const block: VelaExtension = (vela) => {
+    vela.on('tool_call', () => ({ block: true, reason: 'nope' }))
+  }
+  const t = createTestVela({
+    extensions: [block],
+    responses: [
+      fauxToolCall('bash', { command: 'echo hi' }),
+      (req) => fauxText(req.toolResults[0]!.output),
+    ],
+  })
+  await t.run('echo')
+  expect(t.eventsOf('tool_execution_end')[0]).toMatchObject({
+    toolName: 'bash',
+    isError: true,
+    result: '[Blocked by hook] nope',
+  })
+  expect(t.model.calls[1]!.toolResults[0]).toMatchObject({
+    output: '[Blocked by hook] nope',
+    raw: { type: 'error-text', value: '[Blocked by hook] nope' },
+  })
+  expect(t.lastAssistantText()).toBe('[Blocked by hook] nope')
+  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('done')
+})
+
+test('ctx.executeTool reports ask, deny, and a hook block as isError with the reason', async () => {
+  const block: VelaExtension = (vela) => {
+    vela.on('tool_call', (event) => {
+      if (event.toolName === 'read_file')
+        return { block: true, reason: 'hooked' }
+    })
+  }
+  function relay(vela: Parameters<VelaExtension>[0]) {
+    vela.registerTool({
+      name: 'run',
+      description: 'Runs other tools',
+      inputSchema: z.object({}),
+      execute: async (_input, ctx) => {
+        const lines = []
+        for (const [name, args] of [
+          ['bash', { command: 'echo hi' }],
+          ['write_file', { path: 'x.txt', content: 'no' }],
+          ['read_file', { path: 'a.txt' }],
+        ] as const)
+          lines.push(await ctx!.executeTool!(name, args))
+        return lines
+          .map(
+            (outcome) =>
+              `${outcome.toolName}:${outcome.isError}:${outcome.result}`,
+          )
+          .join('\n')
+      },
+    })
+  }
+  const t = createTestVela({
+    extensions: [relay, block],
+    session: { permissions: { bash: 'ask', write_file: 'deny' } },
+    files: { 'a.txt': 'A' },
+    responses: [
+      fauxToolCall('relay_run', {}),
+      (req) => fauxText(req.toolResults[0]!.output),
+    ],
+  })
+  await t.run('go')
+  const relayId = t.eventsOf('tool_execution_start')[0]!.toolCallId
+  expect(
+    t
+      .eventsOf('tool_execution_end')
+      .filter((event) => event.parentToolCallId === relayId)
+      .map((event) => [event.toolName, event.isError, event.result]),
+  ).toEqual([
+    ['bash', true, '[Rejected] bash was not approved'],
+    [
+      'write_file',
+      true,
+      '[Rejected] write_file cannot be called from a tool in this session',
+    ],
+    ['read_file', true, '[Blocked by hook] hooked'],
+  ])
+  expect(t.lastAssistantText()).toBe(
+    [
+      'bash:true:[Rejected] bash was not approved',
+      'write_file:true:[Rejected] write_file cannot be called from a tool in this session',
+      'read_file:true:[Blocked by hook] hooked',
+    ].join('\n'),
+  )
+  expect(await t.readFile('a.txt')).toBe('A')
+  await expect(t.readFile('x.txt')).rejects.toThrow('ENOENT')
+  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('done')
+})
