@@ -446,7 +446,6 @@ test('a fork holds the run lock: a prompt sent while it copies the branch is ref
 
 const ZEROS = '0'.repeat(4000)
 
-/** File names under `dir` (the data directory must not gain tool history or the usage log). */
 function fileNames(dir: string): string[] {
   if (!existsSync(dir)) return []
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -454,7 +453,6 @@ function fileNames(dir: string): string[] {
     .map((entry) => entry.name)
 }
 
-/** Absolute path of the first stored tool result in the session the model can see. */
 function storedToolPath(messages: ModelMessage[]): string {
   for (const message of messages) {
     if (message.role !== 'tool') continue
@@ -467,7 +465,6 @@ function storedToolPath(messages: ModelMessage[]): string {
   throw new Error('no stored tool result')
 }
 
-/** Text the model was given for the latest tool result, including a read error. */
 function latestToolText(messages: ModelMessage[]): string {
   for (const message of messages.toReversed()) {
     if (message.role !== 'tool') continue
