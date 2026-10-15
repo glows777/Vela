@@ -123,6 +123,8 @@ Next to the session file, each session has a directory:
   <historyId>/snapshots/through-<seq>.jsonl  fixed views of the history at a summary
 ```
 
+`--no-session` does not write this tree under the data directory. The same files live in a temporary directory for the life of the process and are removed when the session closes.
+
 `tool-history.jsonl` has one record per line, numbered by `seq`:
 
 ```json

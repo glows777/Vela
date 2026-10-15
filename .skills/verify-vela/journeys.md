@@ -37,7 +37,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | `--session <id>` | Existing id, then a new id | Appends to it; a new id creates `<id>.jsonl` |
 | `--fork <id>` | `run … --fork <id> -p hi` | A second session file; the original is unchanged |
 | `--export <id> <out.html>` | `run …` | exit 0, the HTML holds the conversation |
-| `--no-session` | `run … --no-session -p "list files"` | No new `<id>.jsonl` |
+| `--no-session` | `run … --no-session -p "list files"` | No new `<id>.jsonl`, no `tool-history.jsonl`, no `usage/today.jsonl` under `VELA_DIR`. `/status` says `in-memory (not saved)`. |
 | `-r` picker | `launch $RUN -r`, `keys Down Enter` | The list shows names, ids, message counts; Enter opens that session |
 | `/tree`, `/fork`, `/clone`, `/new`, `/name x` | In the TUI | `/tree` marks `← current`; `/fork` puts the chosen message back in the editor in a new session; `/name` changes the footer |
 | `/compact` | Several turns, then `send "/compact"`, `wait 'compacted'` | `[context] Manually compacted …`; too small a session says so |

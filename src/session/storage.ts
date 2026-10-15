@@ -90,6 +90,19 @@ export function memorySessionStorage(): SessionStorage {
 }
 
 /**
+ * Whether tool history, long tool output and the usage log belong under the data directory.
+ * `--no-session` is memory storage on a real data directory: those must not land there.
+ * With no `dataDir`, the SDK's temporary directory is removed by `dispose()`, so writing there is fine.
+ */
+export function sessionArtifactsUseDataDir(
+  storage: SessionStorage,
+  id: string,
+  temporaryDataDir = false,
+): boolean {
+  return temporaryDataDir || storage.persistence?.(id)?.type !== 'memory'
+}
+
+/**
  * File storage: `<dir>/<id>.jsonl`, one entry per line, appended (like pi), mode 0600.
  * A version-1 file (one checkpoint) is converted and rewritten by atomic replace when loaded.
  */

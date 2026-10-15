@@ -1,10 +1,14 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync, readdirSync } from 'node:fs'
+import type { ModelMessage } from 'ai'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import type {
   SessionEntry,
   SessionMessageEntry,
   SessionTreeNode,
 } from '../../src/session/entries.ts'
+import { memorySessionStorage } from '../../src/session/storage.ts'
+import { getStoredResult } from '../../src/session/tool-results.ts'
 import {
   fauxError,
   fauxSummary,
@@ -438,6 +442,82 @@ test('a fork holds the run lock: a prompt sent while it copies the branch is ref
     'q1',
     '[{"type":"text","text":"a1"}]',
   ])
+})
+
+const ZEROS = '0'.repeat(4000)
+
+function fileNames(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+}
+
+function storedToolPath(messages: ModelMessage[]): string {
+  for (const message of messages) {
+    if (message.role !== 'tool') continue
+    for (const part of message.content) {
+      if (part.type !== 'tool-result') continue
+      const stored = getStoredResult(part.output)
+      if (stored) return stored.path
+    }
+  }
+  throw new Error('no stored tool result')
+}
+
+function latestToolText(messages: ModelMessage[]): string {
+  for (const message of messages.toReversed()) {
+    if (message.role !== 'tool') continue
+    for (const part of message.content) {
+      if (part.type !== 'tool-result') continue
+      const { output } = part
+      if (output.type === 'text' || output.type === 'error-text')
+        return output.value
+      return JSON.stringify(output)
+    }
+  }
+  throw new Error('no tool result')
+}
+
+test('a clone of an in-memory session still reads a long tool result after the source closes', async () => {
+  let inherited = ''
+  const t = createTestVela({
+    sessionStorage: memorySessionStorage(),
+    responses: [
+      fauxToolCall('bash', { command: "printf '%04000d' 0" }),
+      fauxText('saved'),
+      () => fauxToolCall('read_file', { path: inherited }),
+      fauxText('read'),
+    ],
+  })
+  await t.run('print zeros')
+  const sourcePath = storedToolPath(t.session.messages)
+  expect(await Bun.file(sourcePath).text()).toBe(ZEROS)
+
+  const { session: copy } = await t.session.clone({ sessionId: 'copy' })
+  if (!copy) throw new Error('clone failed')
+  inherited = storedToolPath(copy.messages)
+  const historyPath = copy.store.results.history.path
+  const outputPath = (await Bun.file(historyPath).text())
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { type?: string; outputPath?: string })
+    .find((record) => record.type === 'tool_result')?.outputPath
+
+  await t.session.close()
+
+  expect(await Bun.file(sourcePath).exists()).toBe(false)
+  expect(outputPath).toBe(inherited)
+  expect(await Bun.file(inherited).text()).toBe(ZEROS)
+  await copy.prompt('read the saved output')
+  expect(latestToolText(copy.messages)).toBe(
+    `${ZEROS}\n\n[read_file: lines 1-1, starting column=0; 4000 UTF-16 code units shown. EOF: no more content.]`,
+  )
+  expect(
+    fileNames(t.dataDir).filter(
+      (name) => name === 'tool-history.jsonl' || name === 'today.jsonl',
+    ),
+  ).toEqual([])
 })
 
 test('selecting the leaf when it is a user message still moves before it; clone needs a conversation', async () => {
