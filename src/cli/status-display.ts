@@ -1,6 +1,7 @@
-import { sep } from 'node:path'
+import { isAbsolute, relative, sep } from 'node:path'
 import {
   sliceByColumn,
+  stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
@@ -67,6 +68,53 @@ function suffixUnder(path: string, root: string): string {
   const rest = path.slice(base.length)
   if (rest === '' || rest.startsWith(sep)) return rest
   return sep + rest
+}
+
+export function formatContextFileList(
+  files: readonly { path: string }[],
+  options: { cwd: string; homeDir: string; agentDir?: string },
+): string {
+  const labels: string[] = []
+  for (const file of files) {
+    const label = displayContextPath(file.path, options)
+    if (label) labels.push(label)
+  }
+  return labels.join(', ')
+}
+
+function displayContextPath(
+  filePath: string,
+  options: { cwd: string; homeDir: string; agentDir?: string },
+): string {
+  const fromCwd = relative(options.cwd, filePath)
+  const insideCwd =
+    fromCwd !== '' &&
+    !isAbsolute(fromCwd) &&
+    fromCwd !== '..' &&
+    !fromCwd.startsWith(`..${sep}`)
+  const label = insideCwd
+    ? fromCwd
+    : presentPath(filePath, options.homeDir, options.agentDir)
+  return sanitizeDisplayPath(label)
+}
+
+function sanitizeDisplayPath(path: string): string {
+  let out = ''
+  for (const char of stripTerminalSequences(path)) {
+    const code = char.codePointAt(0) ?? 0
+    if (code === 10 || code === 13) {
+      out += ' '
+      continue
+    }
+    if (
+      code < 32 ||
+      (code >= 127 && code <= 159) ||
+      (code >= 0xfff9 && code <= 0xfffb)
+    )
+      continue
+    out += char
+  }
+  return out.trim()
 }
 
 function isUnder(path: string, root: string): boolean {

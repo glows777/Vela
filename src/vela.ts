@@ -192,6 +192,7 @@ export interface VelaInternals {
   builder: PromptPipeline
   skillLoader: SkillLoader
   promptTemplates: PromptTemplate[]
+  loadedContextFiles: readonly ContextFile[]
   gateway: ChannelGateway
   /** Finds (or downloads) rg / fd, shared with the grep and find tools */
   resolveBinary: BinaryResolver
@@ -475,6 +476,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     builder,
     skillLoader,
     promptTemplates,
+    loadedContextFiles: contextFiles,
     gateway,
     resolveBinary,
   })

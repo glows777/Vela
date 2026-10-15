@@ -1,5 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { projectDataDir } from '../../src/config/index.ts'
@@ -503,6 +503,42 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   expect(stderr).not.toContain('[rag]')
 })
 
+test.concurrent('loaded context files are named at startup', async () => {
+  const root = tempDir('vela-proj-')
+  dirs.push(root)
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  const pkg = join(root.path, 'pkg')
+  mkdirSync(pkg)
+  const parent = join(root.path, 'CLAUDE.md')
+  await Bun.write(parent, 'from the parent\n')
+  await Bun.write(join(home.path, 'AGENTS.md'), 'from the user\n')
+  const loaded = `[context] ~/AGENTS.md, ${parent}, AGENTS.md`
+  const shown = await cli(['-p', 'hello'], {
+    model: `faux:${scenario('hello')}`,
+    cwd: pkg,
+    agentDir: home.path,
+    files: {
+      'AGENTS.md': 'from the project\n',
+      'CLAUDE.md': 'same directory, not loaded\n',
+    },
+  })
+  expect(shown.code).toBe(0)
+  expect(shown.stdout).toBe('Hello, this is Vela (faux replay).\n')
+  expect(shown.stderr).toContain(`  ${loaded}`)
+  expect(shown.stderr).not.toContain(join(pkg, 'CLAUDE.md'))
+
+  const hidden = await cli(['-p', '--no-context-files', 'hello'], {
+    model: `faux:${scenario('hello')}`,
+    cwd: pkg,
+    agentDir: home.path,
+  })
+  expect(hidden.code).toBe(0)
+  expect(hidden.stdout).toBe('Hello, this is Vela (faux replay).\n')
+  expect(hidden.stderr).not.toContain('[context]')
+  expect(hidden.stderr).not.toContain(parent)
+})
+
 test.concurrent('--no-session keeps the session in memory', async () => {
   const { code, dataDir } = await cli(['-p', 'hello', '--no-session'], {
     model: `faux:${scenario('hello')}`,
@@ -551,6 +587,40 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
 // TUI behavior itself is tested with a fake terminal in e2e/tui; here we only check that it starts, chats and exits in a real terminal
 const hasScript =
   process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
+
+test.if(hasScript)(
+  'interactive mode shows loaded context files at startup and in /status',
+  async () => {
+    const root = tempDir('vela-proj-')
+    dirs.push(root)
+    const home = tempDir('vela-home-')
+    dirs.push(home)
+    const pkg = join(root.path, 'pkg')
+    mkdirSync(pkg)
+    const parent = join(root.path, 'CLAUDE.md')
+    await Bun.write(parent, 'from the parent\n')
+    await Bun.write(join(home.path, 'AGENTS.md'), 'from the user\n')
+    const { stdout, code } = await cli([], {
+      model: `faux:${scenario('hello')}`,
+      cwd: pkg,
+      agentDir: home.path,
+      files: {
+        'AGENTS.md': 'from the project\n',
+        'CLAUDE.md': 'same directory, not loaded\n',
+      },
+      terminal: [
+        ['Extensions:', '/status\r'],
+        ['[status]', '\x04'],
+      ],
+    })
+    expect(code).toBe(0)
+    const screen = stdout.replace(/\n/g, '')
+    expect(screen).toContain('[context] ~/AGENTS.md,')
+    expect(screen).toContain(`${parent}, AGENTS.md`)
+    expect(screen).toContain('Context files: ~/AGENTS.md,')
+    expect(screen).not.toContain(join(pkg, 'CLAUDE.md'))
+  },
+)
 
 test.if(hasScript)(
   'interactive mode in a real terminal: a turn, then Ctrl+D exits and the session is saved',

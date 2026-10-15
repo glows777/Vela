@@ -65,7 +65,7 @@ vela --mode rpc                              # driven by another program
 
 ### Print mode
 
-Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes. If the reader closes the pipe early (`vela -p "..." | head -2`), Vela stops and exits quietly with code 0.
+Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes. When context files were loaded, stderr also has one `[context]` line with their paths. See [Context files](settings.md#context-files). If the reader closes the pipe early (`vela -p "..." | head -2`), Vela stops and exits quietly with code 0.
 
 If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1. Stopped by a signal, print, JSON and RPC modes abort the turn, kill the commands the model started, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
 
@@ -98,7 +98,7 @@ A resumed session restores its history, name, thinking level and model (if the m
 
 ## Interactive mode
 
-The screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
+The screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
 
 Text you send while the agent is running is a steering message: it is inserted after the current step. Alt+Enter queues a follow-up instead, which runs after the task finishes. Slash commands run immediately even while the agent is running.
 
@@ -186,7 +186,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 
 | Command | Description |
 |---|---|
-| `/status` | Session overview: id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
+| `/status` | Session overview: id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, loaded context files, model, thinking level, role, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
 | `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
 | `/skill`, `/skills` | List skills. |

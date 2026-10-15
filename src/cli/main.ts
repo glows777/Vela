@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 import {
@@ -45,6 +46,7 @@ import {
   USAGE,
   withMcpServers,
 } from './setup.ts'
+import { formatContextFileList } from './status-display.ts'
 
 const usageError = (message: string): never => {
   console.error(message)
@@ -347,6 +349,15 @@ function applyModelArgs(target: VelaSession): boolean {
   }
 }
 
+function reportContextFiles(): void {
+  const line = formatContextFileList(velaInternals(vela).loadedContextFiles, {
+    cwd,
+    homeDir: homedir(),
+    agentDir,
+  })
+  if (line) logger.info(`[context] ${line}`)
+}
+
 /** `--append-system-prompt` takes text or a file path (like pi: an existing file is read). */
 function readPromptInput(input: string): string {
   return existsSync(input) && statSync(input).isFile()
@@ -374,6 +385,7 @@ if (mode !== 'interactive') {
 }
 
 if (mode === 'print' || mode === 'json') {
+  reportContextFiles()
   // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
   const session = vela.session(sessionId)
   if (resume) await session.resume()
@@ -389,6 +401,7 @@ if (mode === 'print' || mode === 'json') {
     }),
   )
 } else if (mode === 'rpc') {
+  reportContextFiles()
   await vela
     .ready()
     .catch((error) =>
