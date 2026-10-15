@@ -23,7 +23,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `-c`, `--continue` | Continue the most recent saved session of this project, or start a new one if there is none. |
 | `-r`, `--resume` | Pick a saved session at startup. Interactive mode only. |
 | `--session <id>` | Open the session with this id, creating it if it does not exist. Ids use letters, digits, `.`, `_` and `-`, do not start with `.`, and are at most 128 characters; an invalid id is a usage error (exit code 2). |
-| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Memory, the knowledge base, usage records and long tool output are still written to the data directory. |
+| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage records and long tool output are not written to the data directory (tool history and long output use a temporary directory removed when the session closes). Memory and the knowledge base are still written. |
 | `--fork <id>` | Copy the saved session `<id>` into a new session (with a new id) and start there, like pi. The original is not changed. |
 | `--export <id or file> [output]` | Write a saved session (by id, or a session `.jsonl` file) as HTML and exit, like pi. `output` defaults to `vela-session-<id>…html` in the current folder. |
 | `--model <provider/id>` | Use this model. See [Models](models.md). |
@@ -85,7 +85,7 @@ Each launch starts a new session with an id like `20261008-081430-df22` (local d
 | `-c`, `--continue` | Continue the most recently saved session of this project, or start a new one if there is none. |
 | `-r`, `--resume` | Show a picker of saved sessions (interactive mode only; use `-c` or `--session` in the other modes). |
 | `--session <id>` | Open the session with that id, creating it if it does not exist. |
-| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Long tool output, memory, the knowledge base and usage logs are still written to the data directory. |
+| `--no-session` | Keep the conversation in memory only; it is not saved and cannot be resumed. Tool call history, usage logs and long tool output are not written to the data directory; tool history and long output use a temporary directory removed when the session closes. Memory and the knowledge base are still written. |
 | `--fork <id>` | Copy that saved session into a new one and start there. |
 
 ```bash

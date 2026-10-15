@@ -157,7 +157,7 @@ const EXPOSURES: readonly ToolExposure[] = [
   'hidden',
 ]
 
-/** A permission check, hook or the user turned the call down; the model gets `reason` as the result. */
+/** A permission check, hook or the user turned the call down; the model gets `reason` as an error result. */
 class ToolRejection {
   constructor(readonly reason: string) {}
 }
@@ -427,8 +427,11 @@ export class ToolRegistry {
               toolCallId: options?.toolCallId,
               abortSignal: options?.abortSignal,
             })
-            // A rejection is a normal result the model reads (it can change its approach)
-            return output instanceof ToolRejection ? output.reason : output
+            // Throw the reason string. An Error would prefix "Error: " on the text the
+            // model reads, and the event result would be that Error instead of the string
+            // ctx.executeTool already returns. The model still reads the reason and can continue.
+            if (output instanceof ToolRejection) throw output.reason
+            return output
           }),
       })
     }
