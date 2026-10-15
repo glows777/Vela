@@ -4,7 +4,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 
 `REPO`, `H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`.
 
-## Tools and the TUI ([tools](../../../docs/tools.md), [cli](../../../docs/cli.md))
+## Tools and the TUI ([tools](../../docs/tools.md), [cli](../../docs/cli.md))
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -18,7 +18,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Tool selection | `run $RUN t -t read_file -p "read a.txt"`; `-p "list files"` with the same flag | The read works; the list fails because the tool is off |
 | grep / find | `test grep`, `test find` | Need `rg` / `fd` on PATH, otherwise a clear "not installed" error |
 
-## Non-interactive modes ([cli](../../../docs/cli.md), [json](../../../docs/json.md), [rpc](../../../docs/rpc.md))
+## Non-interactive modes ([cli](../../docs/cli.md), [json](../../docs/json.md), [rpc](../../docs/rpc.md))
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -29,7 +29,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | RPC usage error | `run $RUN r --mode rpc hi` | exit 2 with a usage line |
 | `--version`, `--help` | `run $RUN v --version` | stdout, exit 0 |
 
-## Sessions ([sessions](../../../docs/sessions.md))
+## Sessions ([sessions](../../docs/sessions.md))
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -43,7 +43,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | `/compact` | Several turns, then `send "/compact"`, `wait 'compacted'` | `[context] Manually compacted …`; too small a session says so |
 | Exit | `keys C-d` with an empty editor | `doctor` reports `vela exited`; the session file is complete |
 
-## Commands ([cli](../../../docs/cli.md))
+## Commands ([cli](../../docs/cli.md))
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -54,7 +54,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | `/model`, `/login` | `send "/model"`; `send "/login"` | Offline `/model` explains there are no models; `/login` lists anthropic / openai / openrouter (Esc to leave) |
 | Unknown flags | `run … --thinking huge -p hi`; `run … --model nope/x -p hi` | exit 2 with usage; exit 1 naming the available providers |
 
-## Extensions, project trust, skills ([extensions](../../../docs/extensions.md), [settings](../../../docs/settings.md))
+## Extensions, project trust, skills ([extensions](../../docs/extensions.md), [settings](../../docs/settings.md))
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -65,7 +65,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Skills | Trusted `.skills/demo/SKILL.md`, then `/skill` and `/skill:demo` | Listed with its description; `/context` counts skill tokens |
 | Context files | `AGENTS.md` in `work/` | Not shown anywhere in the CLI; check with an SDK script: `loadConfig({ cwd }).contextFiles` |
 
-## Built-in extensions ([built-in-extensions](../../../docs/built-in-extensions.md), [mcp](../../../docs/mcp.md))
+## Built-in extensions ([built-in-extensions](../../docs/built-in-extensions.md), [mcp](../../docs/mcp.md))
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -75,7 +75,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Retry | `-p "test retry"` | `Retry succeeded!` after two 429s |
 | Provider error | faux `{"error":"400 Bad Request: …"}` | exit 1, the error on stderr |
 
-## SDK ([sdk](../../../docs/sdk.md), [channels](../../../docs/channels.md))
+## SDK ([sdk](../../docs/sdk.md), [channels](../../docs/channels.md))
 
 | Feature | Drive | Check |
 |---|---|---|

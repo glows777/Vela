@@ -14,7 +14,7 @@ Needs `bun install`, `tmux` for the TUI only, and `rg` / `fd` on PATH for the gr
 ## Helper
 
 ```bash
-REPO=$PWD; H=$REPO/.cursor/skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date +%s)   # from the repo root
+REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date +%s)   # from the repo root
 ```
 
 | Command | Does |
@@ -56,7 +56,7 @@ For anything else (extension or MCP tools, memory, web, errors, hangs, exact rep
 ] }
 ```
 
-The fields (`text`, `toolCalls`, `error`, `streamError`, `hang`, `usage`, …) are in [test/README.md](../../../test/README.md). A scenario that shows a bug belongs in `test/fixtures/scenarios/` with a case in `test/e2e/cli.test.ts`.
+The fields (`text`, `toolCalls`, `error`, `streamError`, `hang`, `usage`, …) are in [test/README.md](../../test/README.md). A scenario that shows a bug belongs in `test/fixtures/scenarios/` with a case in `test/e2e/cli.test.ts`.
 
 ## Drive
 

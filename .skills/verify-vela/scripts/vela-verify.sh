@@ -4,7 +4,7 @@
 #   model: VERIFY_MODEL=mock (default) | faux:/abs/scenario.json
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CMD="${1:-}"; RUN="${2:-}"
 [[ -n "$CMD" && -n "$RUN" ]] || { sed -n '2,4p' "$0"; exit 2; }
 [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo "run-id must be [A-Za-z0-9][A-Za-z0-9_-]*" >&2; exit 2; }
