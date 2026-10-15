@@ -1,110 +1,82 @@
 ---
 name: verify-vela
-description: Drive the real Vela terminal agent (interactive TUI via tmux, `-p`/piped/`--mode json` print modes, and the `createVela()` SDK) offline with VELA_MODEL=mock, and capture transcripts plus file side effects as proof. Use when you must show that a Vela CLI/TUI or SDK behavior actually works end to end, not just that unit tests pass.
+description: Use Vela as a real user would (the TUI in tmux, -p / --mode json / rpc, a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK behavior and for feature acceptance.
 ---
 
 # verify-vela
 
-Vela is a TypeScript agent. Primary surface: the `vela` TUI (`src/cli/main.ts`, pi-tui). Secondary: print mode (`-p`, piped stdin, `--mode json|rpc`) and the SDK `createVela()` (`src/index.ts`, faux model in `src/testing`). There is no server; every drive is a fresh, short-lived process.
+Tests prove the code; this proves the product. Drive the real CLI and SDK the way a user does, try the edge cases, judge what the user sees, and keep evidence. Only the model is fake, so model wording is never verified: tools, sessions, extensions and the TUI are.
 
-Everything below goes through one helper, run from the repo root:
+Everything runs under `env -i` with its own `VELA_DIR`, `HOME` and working directory (`/tmp/vela-verify/<run>/work`, seeded with `a.txt` and `sample-data.txt`). No API key or `~/.vela` reaches Vela, and nothing touches other runs.
 
-```bash
-H=.cursor/skills/verify-vela/scripts/vela-verify.sh   # bash, executable
-RUN=verify-$(date +%s)                                  # one id per verification run
-```
+Needs `bun install`, `tmux` for the TUI only, and `rg` / `fd` on PATH for the grep / find tools and `@` completion (`VELA_OFFLINE=1` blocks their download).
 
-Provider boundary: `VELA_MODEL=mock` (keyword-driven offline demo model, `src/testing/demo-model.ts`) replaces the LLM only. Tools, sessions, extensions and the TUI are the real code. Never point a verification run at a real API key.
-
-## Launch
-
-Prerequisites (once per box): `bun --version` ≥ 1.4 (repo default runtime; system Node here may be < 22.18, so the helper runs `bun src/cli/main.ts`, no build needed), `tmux` **for interactive TUI verification only** (not a product dependency), and `bun install` in the repo. Optional for grep/find tools and `@` file completion: `rg` and `fd` on PATH (`apt install ripgrep fd-find`; `ln -s $(which fdfind) ~/.local/bin/fd`).
-
-**tmux and interactive TUI:** Interactive journeys need `tmux` already on PATH (verification only — not a product dependency). `launch` calls `ensure_tmux` which **detects only** (never installs packages). If missing, `launch` exits soft with manual install hints (`apt install tmux` / `brew install tmux` / `dnf install tmux` / `pacman -S tmux` / `apk add tmux`) and you fall back to `print`, `pipe`, and the SDK — they never need tmux. `doctor` is read-only: it only runs `command -v tmux` and reports `MISSING`; it never installs. Do not substitute `screen`/`expect` unless you are extending the harness.
+## Helper
 
 ```bash
-$H launch $RUN            # extra args go to vela, e.g. $H launch $RUN --no-extensions
+H=.cursor/skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date +%s)   # from the repo root
 ```
 
-What it does: creates `/tmp/vela-verify/$RUN/{home,userhome,work}`, seeds `work/sample-data.txt` (`1. Tool registration` / `2. Agent loop` / `3. Sessions`) and `work/a.txt`, then starts `bun src/cli/main.ts` in a private tmux server (`tmux -L vela-verify-$RUN`, session `vela`, 120x40) under an `env -i` allowlist (`PATH`, `TERM`, `LANG`/`LC_*`, `VELA_DIR=…/home`, `VELA_MODEL=mock`, `VELA_OFFLINE=1`, `HOME=…/userhome`), cwd `work/`. Channel creds (`FEISHU_*`) and `VELA_RECORD` are never inherited. Ready = footer shows `mock/mock-model` (printed as `READY run=…`). It fails after 30 s and dumps the pane. Teardown is `$H cleanup $RUN`.
+| Command | Does |
+|---|---|
+| `$H launch $RUN [vela args]` | Start the TUI in a private tmux server; returns at the footer, the project trust question or a picker |
+| `$H send $RUN "<text>"` | Type a line and press Enter (prompts and `/commands`) |
+| `$H keys $RUN Escape` | Raw tmux keys: `Escape`, `C-c`, `C-d`, `M-Enter`, `BTab`, `Up`, `Enter` |
+| `$H wait $RUN '<regex>' [s]` | Until the regex matches more lines than before the last `send` / `keys` and nothing is running |
+| `$H snap $RUN <name>` / `grab $RUN <file>` | Save the screen with scrollback / copy a file from `work/` into the evidence dir |
+| `$H run $RUN [--stdin] <name> [vela args]` | One non-interactive Vela run; saves `<name>.{cmd,stdout,stderr,exit}` |
+| `$H exec $RUN [--stdin] <name> <cmd…>` | The same for any command (SDK scripts, `examples/rpc-client.ts`) |
+| `$H doctor $RUN` | Versions, and whether the TUI is still up |
+| `$H cleanup $RUN` | Stop the run, copy `VELA_DIR` into the evidence, delete the scratch dir |
 
-Instances are isolated by run id (own tmux socket, VELA_DIR, HOME and cwd), so parallel runs are safe. Never drive the user's own `~/.vela` or a tmux session you did not start.
+`run` / `exec` close stdin unless you pass `--stdin` (Vela waits for an open stdin forever). Calls with the same run id share the fixture, so sessions and edits carry over. Evidence lives in `/tmp/vela-evidence/$RUN/` (root: `VELA_EVIDENCE_ROOT`) and survives `cleanup`.
 
-## Doctor
+## Choose the model
 
-```bash
-$H doctor $RUN
+`VERIFY_MODEL=mock` (default) is the keyword demo model in `src/testing/demo-model.ts`:
+
+| Prompt | Model does |
+|---|---|
+| `list files`, `ls` | `list_directory .` |
+| `read a.txt` | `read_file` |
+| `test edit` | `edit_file` on `sample-data.txt` (once per fixture) |
+| `test bash` / `test grep` / `test find` | `bash` echo / `grep` / `find` |
+| `test parallel` | three tools in one step |
+| `test loop` | a tool call every step, never answers: for Esc and steering |
+| `test retry` | two 429 errors, then an answer |
+| anything else | a canned greeting, streamed slowly |
+
+For anything else (extension or MCP tools, memory, web, errors, hangs, exact replies) write a faux scenario and pass `VERIFY_MODEL=faux:/abs/path.json`. Each response is used once, in order:
+
+```json
+{ "responses": [
+  { "toolCalls": [{ "name": "hello-tool_greet", "input": { "name": "Liam" } }] },
+  { "text": "done" },
+  { "error": "429 Too Many Requests" }
+] }
 ```
 
-Read-only (never installs packages). Checks: `tmux` on PATH (`MISSING` if not — no auto-install), the run's tmux session exists, the pane PID is alive, prints bun / vela version (`0.2.0`) / git sha, the footer says `mock/mock-model`, the footer path is the run's `work/` dir, vela has not exited (`[vela exited] <code>` would show), and the live child environ has no `FEISHU_*` / out-of-tree `VELA_RECORD`. Prints `DOCTOR OK` or `DOCTOR FAIL` (exit 1). Run it first and whenever output looks wrong.
+The fields (`text`, `toolCalls`, `error`, `streamError`, `hang`, `usage`, …) are in [test/README.md](../../../test/README.md). A scenario that shows a bug belongs in `test/fixtures/scenarios/` with a case in `test/e2e/cli.test.ts`.
 
 ## Drive
 
-TUI (stable handles are text on screen: footer `mock/mock-model`, spinner `Answering… (Esc to interrupt)`, tool blocks like `edit_file sample-data.txt`, `[audit] <tool> → <path>`):
-
 ```bash
-$H send $RUN "test edit"              # types the line literally, then Enter
-$H wait $RUN 'Successfully replaced' 20  # regex on screen AND spinner gone; dumps pane on timeout
-$H keys $RUN Escape                   # raw tmux keys: Escape (interrupt), C-c (clear), C-d (exit)
-$H send $RUN "/usage"                 # slash commands are typed the same way
-```
-
-Mock-model prompts that trigger real tools (`src/testing/demo-model.ts`): `list files` → `list_directory`; `read a.txt` → `read_file`; `test edit` → `edit_file` on `sample-data.txt`; `test bash` → `bash` echo; `test grep` / `test find` (need rg/fd); `test parallel` → several tools in one turn; anything else → a canned greeting.
-
-Print mode (stdin closed for you, stdout/stderr/exit captured; same `env -i` allowlist as launch):
-
-```bash
-$H print $RUN p-list -p "list files"            # → evidence/p-list.{cmd,stdout,stderr,exit}
-$H print $RUN p-json --mode json "list files"   # one JSON event per line
-```
-
-Piped stdin (isolated env, captures like print):
-
-```bash
-echo "list files" | $H pipe $RUN p-pipe
-```
-
-SDK: `bun examples/sdk/01-minimal.ts </dev/null` (faux model, prints `Hello! I am a scripted faux model.` and `messages: 2`).
-
-Feature recipes: [features/README.md](features/README.md).
-
-## Evidence
-
-Location: `/tmp/vela-evidence/$RUN/` (override root with `VELA_EVIDENCE_ROOT`). Cleanup never deletes it.
-
-```bash
-$H snap $RUN 01-after-edit        # pane + 200 lines scrollback → 01-after-edit.txt
-$H grab $RUN sample-data.txt      # copy a side-effect file from work/ → work-sample-data.txt
-```
-
-`cleanup` also copies session JSONL under `evidence/$RUN/sessions/`, preserving paths relative to `VELA_DIR` (e.g. `sessions/projects/<project>/sessions/<id>.jsonl` and `…/sessions/<id>/<uuid>/tool-history.jsonl`) so nested `tool-history.jsonl` files from multiple sessions do not collide.
-
-Proof standards:
-- Drive the user path (typed prompts, CLI flags), not internal setters or test helpers.
-- Snap before and after the action, so the evidence shows the action and its result.
-- Check side effects (edited file contents, session JSONL entries, exit code), not just the screen.
-- The mock model is the only mock. It stands in for the LLM provider, which is already a separate boundary in the code. Say so in reports: model *wording* is not verified, tool/TUI/session behavior is.
-
-## Cleanup
-
-```bash
+$H launch $RUN && $H snap $RUN edit-before
+$H send $RUN "test edit" && $H wait $RUN 'Successfully replaced'
+$H snap $RUN edit-after && $H grab $RUN sample-data.txt      # line 1 now ends with "(updated)"
+$H run $RUN json --mode json "list files"                    # one JSON event per line
 $H cleanup $RUN
 ```
 
-Kills only this run's private tmux server (`tmux -L vela-verify-$RUN kill-server`) and everything under it, copies session logs into evidence (path-preserving under `sessions/`), and removes `/tmp/vela-verify/$RUN`. Prints what is left in the evidence dir. Run it after every failed iteration too. Never `pkill bun`/`pkill -f vela`: other agents share this box.
+- `wait` regexes should match only the result, not the typed text or a `/command` name.
+- A project with `.vela/` or `.skills/` stops at the trust question: `send y`, or launch with `--approve`.
+- For the SDK, write a short script in `work/` that imports `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, and run it with `$H exec $RUN sdk bun consumer.ts`.
 
-## Helpers
+What to drive for each feature: [journeys.md](journeys.md).
 
-`scripts/vela-verify.sh <cmd> <run-id> [args]`. Commands: `launch [vela args]`, `doctor`, `send <text>`, `keys <tmux keys…>`, `wait <regex> [timeout_s]`, `snap <name>`, `grab <relpath>`, `print <name> <vela args…>`, `pipe <name> [vela args…]` (stdin → vela), `cleanup`. Run without args for usage.
+## Report
 
-Full proven example (edit tool through the TUI):
-
-```bash
-H=.cursor/skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date +%s)
-$H launch $RUN && $H doctor $RUN
-$H snap $RUN 00-ready
-$H send $RUN "test edit" && $H wait $RUN 'Successfully replaced' 20
-$H snap $RUN 01-after-edit && $H grab $RUN sample-data.txt
-$H cleanup $RUN
-grep -q '(updated)' /tmp/vela-evidence/$RUN/work-sample-data.txt && echo PROOF-OK
-```
+- What you drove (commands), what you saw (evidence paths), and the side effects you checked: edited files, session JSONL under `evidence/vela-dir/`, exit codes.
+- Problems found, including rough edges in what the user sees, not only failures.
+- What you could not reach offline and why. Never count it as verified through another path.
+- Run `cleanup` after every run, failed ones too. Never `pkill bun`: other agents share the box.

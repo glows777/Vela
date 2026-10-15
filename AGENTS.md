@@ -9,7 +9,7 @@ alwaysApply: false
 - The user's current instructions take precedence over this file, skills and earlier context. Read only the source, config, tests and docs relevant to the task; small changes don't require walking the whole repo.
 - Define an observable done condition first. Authorized, reversible implementation, checks and fixes are carried through to completion, not handed back after the first patch; pause only for unknowns that change scope or outcome, or for irreversible or external writes.
 - Pick verification by risk: run the affected Bun tests for targeted regressions; widen to the full `bun test`, typecheck or build for cross-module, runtime or protocol changes. Don't run unrelated full suites for low-risk changes.
-- `.skills/<name>/SKILL.md` is an on-demand workflow entry point. Keep a skill's trigger description short and precise; put multi-flow content behind references or scripts (progressive disclosure), don't preload unrelated text, and don't write one task's temporary steps into shared rules.
+- `.cursor/skills/<name>/SKILL.md` is an on-demand workflow entry point. Keep a skill's trigger description short and precise; put multi-flow content behind references or scripts (progressive disclosure), don't preload unrelated text, and don't write one task's temporary steps into shared rules.
 
 Default to using Bun instead of Node.js.
 
@@ -45,11 +45,7 @@ How tests are organized, how to verify a change and how to add tests: see [test/
 
 ## Product verification (verify-vela)
 
-After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.cursor/skills/verify-vela/SKILL.md`](.cursor/skills/verify-vela/SKILL.md) before claiming done.
-
-- Prefer the skill harness (`scripts/vela-verify.sh`, `VELA_MODEL=mock`, feature journeys) over unit/e2e alone when the change maps to a listed feature. e2e supplements the skill; it does not replace it for those features.
-- Feature map: [`.cursor/skills/verify-vela/features/`](.cursor/skills/verify-vela/features/).
-- Interactive TUI journeys need `tmux` on PATH (install manually if missing; the harness does not auto-install). Print/pipe/SDK paths do not need tmux.
+After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.cursor/skills/verify-vela/SKILL.md`](.cursor/skills/verify-vela/SKILL.md) before claiming done: use the change as a user would, through the real CLI or an SDK script, with the mock or a faux scenario model. Tests don't replace this. What to drive per feature: [`journeys.md`](.cursor/skills/verify-vela/journeys.md).
 
 ## Frontend
 
