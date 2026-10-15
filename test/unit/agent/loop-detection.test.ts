@@ -4,19 +4,22 @@ import { LoopDetector } from '../../../src/agent/loop-detection.ts'
 test('generic repeat: warning at 10 identical calls, critical at 20', () => {
   const detector = new LoopDetector()
   const levels: string[] = []
+  let warning = ''
   for (let i = 0; i < 21; i++) {
     const result = detector.detect('grep', { pattern: 'x' })
     levels.push(result.stuck ? result.level : 'ok')
+    if (i === 9 && result.stuck) warning = result.message
     detector.record(`c${i}`, 'grep', { pattern: 'x' })
   }
-  expect(levels.slice(0, 10).every((l) => l === 'ok')).toBe(true)
-  expect(levels[10]).toBe('warning')
-  expect(levels[20]).toBe('critical')
+  expect(levels.slice(0, 9).every((l) => l === 'ok')).toBe(true)
+  expect(levels[9]).toBe('warning')
+  expect(warning).toBe(
+    'The same tool has been called 10 times with the same arguments. Change your approach instead of repeating it.',
+  )
+  expect(levels[19]).toBe('critical')
 })
 
 test('the first critical for any repetition is at most the 21st call, well inside the 30-call window', () => {
-  // Identical calls (whatever their results) and two-call ping-pong both stop at the 21st call,
-  // so no detector needs a full window of 30 identical calls
   for (const argsAt of [
     () => ({ p: 'x' }),
     (i: number) => ({ p: i % 2 ? 'a' : 'b' }),
