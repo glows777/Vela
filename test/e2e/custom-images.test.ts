@@ -217,3 +217,121 @@ for (const timing of ['synchronous', 'late image'] as const) {
     expect(JSON.stringify(entries)).not.toContain('invalid-image')
   })
 }
+
+for (const state of ['idle', 'busy'] as const) {
+  test(`concurrent append-only image and text messages keep invocation order while ${state}`, async () => {
+    const send = async () => {
+      const first = t.session.sendMessage(custom('first'), {
+        triggerTurn: false,
+      })
+      const second = t.session.sendMessage(
+        {
+          customType: 'second',
+          content: 'SECOND',
+          display: false,
+          details: { order: 2 },
+        },
+        { triggerTurn: false },
+      )
+      const third = t.session.sendMessage(
+        {
+          customType: 'third',
+          content: [
+            { type: 'image', data: 'invalid-image', mimeType: 'image/png' },
+          ],
+          display: true,
+        },
+        { triggerTurn: false },
+      )
+      await Promise.all([first, second, third])
+    }
+    const t = createTestVela({
+      responses:
+        state === 'busy'
+          ? [fauxToolCall('ordered_send', {}), fauxText('seen')]
+          : [fauxText('seen')],
+      extensions: [
+        function ordered(v) {
+          v.registerTool({
+            name: 'send',
+            description: 'Send concurrent custom messages',
+            inputSchema: z.object({}),
+            execute: async () => {
+              await send()
+              return 'sent'
+            },
+          })
+        },
+      ],
+    })
+    if (state === 'idle') await send()
+    await t.run('Read the custom notes in order')
+    const customEntries = t.session
+      .getEntries()
+      .filter((e) => e.type === 'custom_message')
+    expect(customEntries.map((e) => e.customType)).toEqual([
+      'first',
+      'second',
+      'third',
+    ])
+    expect(
+      t
+        .eventsOf('message_end')
+        .filter((e) => e.custom)
+        .map((e) => e.custom?.customType),
+    ).toEqual(['first', 'second', 'third'])
+    expect(
+      t.messages
+        .filter((m) => t.session.customMessageOf(m))
+        .map((m) => t.session.customMessageOf(m)?.customType),
+    ).toEqual(['first', 'second', 'third'])
+    const saved = (await t.readData('sessions/default.jsonl'))
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+    expect(
+      saved.filter((e) => e.type === 'custom_message').map((e) => e.customType),
+    ).toEqual(['first', 'second', 'third'])
+    expect(JSON.stringify(customEntries)).not.toContain(oversized().data)
+    expect(JSON.stringify(customEntries)).not.toContain('invalid-image')
+    expect(customEntries[1]).toMatchObject({
+      display: false,
+      details: { order: 2 },
+    })
+    const synchronous = t.session.sendMessage({
+      customType: 'after',
+      content: 'after',
+      display: false,
+    })
+    expect(
+      t.session
+        .getEntries()
+        .filter((e) => e.type === 'custom_message')
+        .at(-1),
+    ).toMatchObject({ customType: 'after' })
+    await synchronous
+  })
+}
+
+test('close rejects both a pending append-only image and the text waiting behind it', async () => {
+  const t = createTestVela({ responses: [] })
+  const sends = [
+    t.session.sendMessage(custom('first')),
+    t.session.sendMessage({
+      customType: 'second',
+      content: 'SECOND',
+      display: true,
+    }),
+  ]
+  const settled = Promise.allSettled(sends)
+  await t.session.close()
+  const results = await settled
+  expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected'])
+  for (const result of results) {
+    if (result.status === 'rejected')
+      expect(result.reason.message).toMatch(/closed/)
+  }
+  expect(
+    t.session.getEntries().filter((e) => e.type === 'custom_message'),
+  ).toHaveLength(0)
+})
