@@ -295,7 +295,10 @@ test('failed image-only tools keep error status and move the retained image into
   })
   await t.run('Get a failure screenshot')
   expect(t.eventsOf('tool_execution_end')[0]?.isError).toBe(true)
-  expect(t.model.calls[1]!.toolResults[0]?.raw).toMatchObject({
+  const errorResult = t.model.calls[1]!.prompt.flatMap((message) =>
+    message.role === 'tool' ? message.content : [],
+  ).find((part) => part.type === 'tool-result')
+  expect(errorResult?.output).toMatchObject({
     type: 'error-text',
     value: 'Tool reported an error',
   })
@@ -338,4 +341,74 @@ test('oversized image captions retain native tool details separately from the fu
   expect(typeof result.modelTextPath).toBe('string')
   expect(readFileSync(result.modelTextPath, 'utf8')).toBe(caption)
   expect(readFileSync(result.modelTextPath, 'utf8')).not.toContain(image().data)
+})
+
+test('nested failed image results can be relayed without losing their screenshot', async () => {
+  let nestedResult: unknown
+  const t = createTestVela({
+    extensions: [
+      function pictures(v) {
+        const child = v.registerTool({
+          ...pictureTool('child'),
+          execute: async () =>
+            new ToolExecutionResult({}, [image()], { isError: true }),
+        })
+        v.registerTool({
+          ...pictureTool('relay'),
+          execute: async (_input, ctx) => {
+            const outcome = await ctx!.executeTool!(child, {})
+            nestedResult = outcome.result
+            return new ToolExecutionResult(
+              {},
+              Array.isArray(outcome.result)
+                ? outcome.result
+                : String(outcome.result),
+              { isError: outcome.isError },
+            )
+          },
+        })
+      },
+    ],
+    responses: [
+      fauxToolCall('pictures_relay', {}),
+      fauxText('received screenshot'),
+    ],
+  })
+  await t.run('Relay the child failure screenshot')
+  expect(nestedResult).toEqual([image()])
+  expect(
+    t.model.calls[1]!.prompt.flatMap((message) =>
+      message.role === 'user'
+        ? message.content.filter((part) => part.type === 'file')
+        : [],
+    ),
+  ).toHaveLength(1)
+})
+
+test('failed native-result persistence labels a saved caption as model text, not the full native output', async () => {
+  const t = createTestVela({
+    extensions: [
+      function pictures(v) {
+        v.registerTool({
+          ...pictureTool(),
+          maxResultChars: 100,
+          execute: async () =>
+            new ToolExecutionResult({ importantNativeValue: 42 }, [
+              { type: 'text', text: 'Caption '.repeat(500) },
+              image(),
+            ]),
+        })
+      },
+    ],
+    responses: [fauxToolCall('pictures_picture', {})],
+  })
+  const history = t.session.store.results.history
+  const original = history.append.bind(history)
+  Object.defineProperty(history, 'append', {
+    value: (record: { type: string }) =>
+      record.type === 'tool_result'
+        ? Promise.reject(new Error('Simulated disk full'))
+        : original(record as never),
+  })
+  await expect(t.run('Get picture')).rejects.toThrow('full model text saved at')
 })
