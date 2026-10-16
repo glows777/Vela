@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import z from 'zod'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { ToolExecutionResult } from '../../src/tools/registry.ts'
@@ -10,7 +12,7 @@ import {
 
 afterEach(cleanupTestVelas)
 
-test.each(['Hello, Vela!!!', 'hello\n', 'hello\r\n', ''])(
+test.each(['Hello, Vela!!!', '中文 😀\n', 'hello\n', 'hello\r\n', ''])(
   'read_file sends the exact EOF body to the model: %j',
   async (body) => {
     const t = createTestVela({
@@ -22,6 +24,73 @@ test.each(['Hello, Vela!!!', 'hello\n', 'hello\r\n', ''])(
     })
     await t.run('Read notes.txt')
     expect(t.model.calls[1]!.toolResults[0]!.output).toBe(body)
+  },
+)
+
+test.each([8191, 65535])(
+  'read_file preserves UTF-8 split across byte %i while seeking a line',
+  async (padding) => {
+    const t = createTestVela({
+      files: { 'notes.txt': 'x'.repeat(padding - 1) + '\n中文 😀' },
+      responses: [
+        fauxToolCall('read_file', { path: 'notes.txt', offset: 2 }),
+        fauxText('Done'),
+      ],
+    })
+    await t.run('Read the second line')
+    expect(t.model.calls[1]!.toolResults[0]!.output).toBe('中文 😀')
+  },
+)
+
+test.each([0, 8191, 8192])(
+  'read_file rejects a NUL at byte %i before pagination',
+  async (nulOffset) => {
+    const t = createTestVela({
+      files: { 'document.pdf': 'x'.repeat(nulOffset) + '\0binary payload' },
+      responses: [
+        fauxToolCall('read_file', { path: 'document.pdf' }),
+        fauxText('Use bash to inspect the document'),
+      ],
+    })
+    await t.run('Read document.pdf')
+    expect(t.eventsOf('tool_execution_end')[0]!.isError).toBe(true)
+    const output = String(t.model.calls[1]!.toolResults[0]!.output)
+    expect(output).toContain('binary file')
+    expect(output).toContain('pdftotext')
+    expect(output).toContain('unzip -l')
+    expect(output).not.toContain('binary payload')
+    expect(output).not.toContain('More content exists')
+  },
+)
+
+test.each([
+  [
+    'ASCII PDF',
+    readFileSync(join(import.meta.dir, '../fixtures/files/ascii.pdf')),
+  ],
+  ['invalid UTF-8', Buffer.from([0x62, 0x69, 0x6e, 0xff, 0xfe])],
+  [
+    'late invalid UTF-8',
+    Buffer.concat([Buffer.alloc(8192, 0x78), Buffer.from([0xff])]),
+  ],
+  ['truncated UTF-8', Buffer.from([0x61, 0xe4, 0xb8])],
+])(
+  'read_file rejects %s instead of sending bytes to the model',
+  async (_name, bytes) => {
+    const t = createTestVela({
+      responses: [
+        fauxToolCall('read_file', { path: 'document.bin' }),
+        fauxText('Use bash to inspect the document'),
+      ],
+    })
+    writeFileSync(join(t.cwd, 'document.bin'), bytes)
+    await t.run('Read document.bin')
+    expect(t.eventsOf('tool_execution_end')[0]!.isError).toBe(true)
+    const output = String(t.model.calls[1]!.toolResults[0]!.output)
+    expect(output).toContain('binary file')
+    expect(output).toContain('pdftotext')
+    expect(output).not.toContain('\ufffd')
+    expect(output).not.toContain('%PDF-')
   },
 )
 

@@ -245,7 +245,7 @@ test.concurrent('@file inlines UTF-8 text even with an image suffix, preserving 
     {
       model: 'faux:replies.json',
       files: {
-        'notes.png': 'héllo\nBMX is ordinary text\n',
+        'notes.png': 'héllo 中文 😀\nBMX is ordinary text\n',
         'replies.json': JSON.stringify({
           responses: [{ text: 'First' }, { text: 'Second' }],
         }),
@@ -263,7 +263,7 @@ test.concurrent('@file inlines UTF-8 text even with an image suffix, preserving 
     )
     .map((event) => event.message.content)
   expect(users).toEqual([
-    `<file name="${join(result.cwd, 'notes.png')}">\nhéllo\nBMX is ordinary text\n\n</file>\n\nAdditional context\n\nSummarize`,
+    `<file name="${join(result.cwd, 'notes.png')}">\nhéllo 中文 😀\nBMX is ordinary text\n\n</file>\n\nAdditional context\n\nSummarize`,
     'Then explain',
   ])
 })
@@ -343,6 +343,43 @@ test.concurrent('@file with a slash skill reports ignored attachments and still 
     )
   expect(user.message.content).toContain('Demo skill body')
   expect(JSON.stringify(user.message.content)).not.toContain('"type":"image"')
+})
+
+test.each([
+  ['NUL', Buffer.from('%PDF-1.4\n\0binary payload')],
+  ['ASCII PDF', readFileSync(join(ROOT, 'test/fixtures/files/ascii.pdf'))],
+  ['late NUL', Buffer.from('x'.repeat(8192) + '\0binary payload')],
+  ['invalid UTF-8', Buffer.from([0x62, 0x69, 0x6e, 0xff, 0xfe])],
+  [
+    'late invalid UTF-8',
+    Buffer.concat([Buffer.alloc(8192, 0x78), Buffer.from([0xff])]),
+  ],
+])('@file binary %s exits 1 before any model request', async (_name, bytes) => {
+  const result = await cli(
+    ['-e', './request-marker.ts', '-p', '@document.pdf', 'Describe this'],
+    {
+      model: 'faux:binary-attachment.json',
+      files: {
+        'document.pdf': bytes,
+        'binary-attachment.json': readFileSync(scenario('binary-attachment')),
+        'request-marker.ts': `
+        import { writeFileSync } from 'node:fs'
+        export default (api: any) => {
+          api.on('before_provider_request', () => {
+            writeFileSync('model-requested', 'yes')
+          })
+        }
+      `,
+      },
+    },
+  )
+  expect(readdirSync(result.cwd)).not.toContain('model-requested')
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain(
+    'Cannot attach document.pdf: binary file (only text and images are supported)',
+  )
+  expect(result.stdout).toBe('')
+  expect(sessionFiles(result.dataDir)).toHaveLength(0)
 })
 
 test.concurrent('@file missing exits 1 before any model request', async () => {

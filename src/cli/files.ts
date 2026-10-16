@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { imageMimeType } from '../images/metadata.ts'
+import { imageMimeType, isBinaryFile } from '../images/metadata.ts'
 import type { ImageContent } from '../messages.ts'
 
 /** Command-line attachments are added to the first prompt, like pi. Core normalizes images once. */
@@ -27,6 +27,8 @@ export async function readAttachments(paths: string[]): Promise<{
         text.push(`<file name="${name}"></file>`)
         images.push({ type: 'image', data: bytes.toString('base64'), mimeType })
       } else {
+        if (isBinaryFile(bytes))
+          throw new Error('binary file (only text and images are supported)')
         const content = bytes.toString('utf8').replace(/^\ufeff/, '')
         if (content) text.push(`<file name="${name}">\n${content}\n</file>`)
       }

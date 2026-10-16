@@ -34,6 +34,8 @@ Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `l
 
 JPEG, PNG, GIF, WebP and BMP images are detected by their header and returned whole as image content. The `offset`, `limit` and `column` parameters are ignored for images; they only paginate text.
 
+Non-image PDFs (identified by `%PDF-`), NUL bytes and invalid UTF-8 are rejected with guidance to use bash tools such as `pdftotext` or `unzip -l`. The text pager checks the header and each chunk it reads, including bytes skipped to reach an offset; it does not scan the unread remainder of a large file. UTF-16 and other non-UTF-8 encodings must be converted to UTF-8 first. This is a text guard, not a general file-format detector or native document reader.
+
 For text files, one call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. When more content remains, the result ends with a footer naming the range shown and the exact `path`, `offset`, `column` and `limit` for the next call. At EOF, the result is only the page's file content, preserving any existing trailing newline and adding no footer or separator. The file is read as a stream, so large files are not loaded into memory.
 
 ### write_file
