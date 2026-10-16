@@ -182,6 +182,35 @@ test('resume, clone and a fork including the user entry keep image content', asy
   expect(imagesIn(resumed.model.calls[0]!.prompt)).toHaveLength(1)
 })
 
+test('saved and appended images are sent as stored, without decoding them again (like pi)', async () => {
+  const image = fixture()
+  // PNG signature plus a complete IHDR and no pixel data: the decoder would reject it
+  const headerOnly = {
+    type: 'image' as const,
+    data: Buffer.from(image.data, 'base64').subarray(0, 33).toString('base64'),
+    mimeType: 'image/png',
+  }
+  const t = createTestVela({ responses: [fauxText('seen')] })
+  t.session.append({
+    role: 'user',
+    content: [{ type: 'text', text: 'appended by an extension' }, headerOnly],
+  })
+  await t.session.prompt('Remember this picture', { images: [image] })
+  const sent = (prompt: LanguageModelV4Prompt) =>
+    imagesIn(prompt).map((part) => encoded(part.data))
+  expect(sent(t.model.calls[0]!.prompt)).toEqual([headerOnly.data, image.data])
+  const resumed = createTestVela({
+    cwd: t.cwd,
+    responses: [fauxText('remembered')],
+  })
+  expect(await resumed.session.resume()).toBe(true)
+  await resumed.session.prompt('What did I send?')
+  expect(sent(resumed.model.calls[0]!.prompt)).toEqual([
+    headerOnly.data,
+    image.data,
+  ])
+})
+
 test('input hooks receive and replace images, including extension content arrays', async () => {
   const seen: unknown[] = []
   const replacement = fixture('wide.png')

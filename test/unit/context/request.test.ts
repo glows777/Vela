@@ -121,7 +121,7 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
     model,
     instructions: system(8),
     tools: registry.toAISDKFormat(),
-    messages: await toModelMessages(restored),
+    messages: toModelMessages(restored),
   })
   const snapshot = await createRequestSnapshot(
     model,

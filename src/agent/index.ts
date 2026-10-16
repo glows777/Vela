@@ -205,7 +205,7 @@ export const agentLoop = async ({
             ...withPromptCache({
               system: inferenceSystem,
               tools: request.tools,
-              messages: await toModelMessages(
+              messages: toModelMessages(
                 requestMessages,
                 supportsImages,
                 typeof model !== 'string' && model.provider.endsWith('.chat'),
