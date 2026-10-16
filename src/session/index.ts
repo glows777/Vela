@@ -80,6 +80,8 @@ export class SessionStore {
     /** Tool history lives in a temp dir (custom storage without dataDir): if it is gone on resume, start over instead of failing */
     private readonly temporaryResults = false,
     private readonly cwd?: string,
+    /** Internal notification after an actual storage write (not an empty flush). */
+    private readonly onSaved?: () => void,
   ) {
     this.storage = storage ?? fileSessionStorage(dir, logger)
     // --no-session keeps the transcript in memory but still has a real data directory.
@@ -293,6 +295,7 @@ export class SessionStore {
       if (batch[0]?.type === 'session') await this.checkNew()
       await this.storage.append(this.sessionId, batch)
       this.lastError = undefined
+      this.onSaved?.()
     } catch (error) {
       this.pending.unshift(...batch)
       this.lastError = error
