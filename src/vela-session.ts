@@ -1395,6 +1395,8 @@ export class VelaSession {
   ): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
+    // Input hooks can finish after cancellation, while the aborted loop is still cleaning up.
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason)
     if (this.busy.locked) {
       // Only the prompt loop drains the queue; nothing can be queued while /defend, a skill or compact holds the lock
       if (!this.prompting || !options.streamingBehavior)

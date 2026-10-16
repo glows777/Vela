@@ -25,6 +25,13 @@ const MAX_SAVE_FAILURES = 3
 
 const PLAIN = /^[A-Za-z0-9_]+$/
 
+interface ChannelRun {
+  session: VelaSession
+  trigger: IncomingMessage
+  lifetime: AbortController
+  stopped: boolean
+}
+
 /**
  * Shared session id for a chat, e.g. `feishu-oc_456`. Non-plain or long ids get a
  * hash suffix so different (channel, conversation) pairs cannot share history.
@@ -51,6 +58,7 @@ export class ChannelGateway {
   private subscribed = new WeakSet<VelaSession>()
   private saveFailures = new Map<string, number>()
   private active = new Set<VelaSession>()
+  private runs = new Map<string, ChannelRun>()
   /** Idle sessions waiting to be closed, by session id */
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Sessions being closed: a new message for the id waits until the close is done, then reopens it */
@@ -121,8 +129,51 @@ export class ChannelGateway {
     clearTimeout(this.idleTimers.get(id))
     this.idleTimers.delete(id)
     const previous = this.queues.get(id) ?? Promise.resolve()
+    const channel = this.channels.get(channelName)
+    const run = this.runs.get(id)
+    let consumed = false
+    let chosen = false
+    let decision: Promise<void> | undefined
+    let card: Promise<void> | undefined
+    if (run && this.runIsLive(run) && channel?.showRunControls) {
+      card = channel
+        .showRunControls(msg, {
+          signal: run.lifetime.signal,
+          choose: (action) => {
+            if (chosen || !this.runIsLive(run)) return false
+            chosen = true
+            if (action === 'queue') return true
+            decision = this.applyRunChoice(channel, msg, run, action)
+              .then((handled) => {
+                consumed = handled
+              })
+              .catch((error) => {
+                run.session.emit({
+                  type: 'channel_error',
+                  channel: channelName,
+                  senderId: msg.senderId,
+                  error,
+                  aborted: this.stopped || isAbort(error),
+                })
+              })
+              .finally(() => {
+                if (run.stopped) consumed = true
+              })
+            return true
+          },
+        })
+        .catch((error) =>
+          this.logger.warn(
+            `[${channelName}] Failed to send run controls: ${errorMessage(error)}`,
+          ),
+        )
+    }
     const next = previous
-      .then(() => this.process(id, channelName, msg))
+      .then(async () => {
+        await card
+        await decision
+        if (!consumed) await this.process(id, channelName, msg)
+      })
       .catch((error) =>
         this.logger.error(
           `[${channelName}] Failed to handle message: ${errorMessage(error)}`,
@@ -135,6 +186,57 @@ export class ChannelGateway {
       this.closeWhenIdle(id)
     })
     return next
+  }
+
+  private runIsLive(run: ChannelRun): boolean {
+    return (
+      !this.stopped &&
+      !run.stopped &&
+      !run.lifetime.signal.aborted &&
+      this.runs.get(run.session.id) === run &&
+      run.session.isRunning
+    )
+  }
+
+  /** Apply one reserved card choice; true consumes its gateway input. */
+  private async applyRunChoice(
+    channel: ChannelDefinition,
+    msg: IncomingMessage,
+    run: ChannelRun,
+    action: 'steer' | 'stop',
+  ): Promise<boolean> {
+    if (action === 'stop') {
+      run.stopped = true
+      run.lifetime.abort()
+      // These inputs belong to the cancelled run; the gateway's default queue stays intact.
+      run.session.clearQueue()
+      await run.session.abort()
+      await this.sendReply(
+        run.session,
+        channel.name,
+        msg,
+        'Stopped the current run.',
+      )
+      return true
+    }
+    const prepared = channel.prepareMessage
+      ? await channel.prepareMessage(msg, run.trigger)
+      : msg
+    // History/name lookups can outlast the run. Leave the default queue intact.
+    if (!prepared || !this.runIsLive(run)) return false
+    run.session.emit({
+      type: 'channel_message',
+      channel: channel.name,
+      senderId: prepared.senderId,
+      senderName: prepared.senderName,
+      text: prepared.text,
+    })
+    await run.session.prompt(prepared.text, {
+      source: 'channel',
+      streamingBehavior: 'steer',
+      signal: run.lifetime.signal,
+    })
+    return true
   }
 
   /**
@@ -205,6 +307,12 @@ export class ChannelGateway {
   ): Promise<void> {
     if (this.stopped) return
     await this.closing.get(id)
+    const channel = this.channels.get(channelName)
+    const prepared = channel?.prepareMessage
+      ? await channel.prepareMessage(msg)
+      : msg
+    if (!prepared || this.stopped) return
+    msg = prepared
     const session = this.options.session(id)
     session.channel = channelName
     // Channels admit only trusted chats; custom channels can still choose an SDK role.
@@ -255,6 +363,16 @@ export class ChannelGateway {
     }
 
     this.active.add(session)
+    const run: ChannelRun = {
+      session,
+      trigger: msg,
+      lifetime: new AbortController(),
+      stopped: false,
+    }
+    this.runs.set(id, run)
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === 'agent_settled') run.lifetime.abort()
+    })
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
@@ -269,9 +387,13 @@ export class ChannelGateway {
       })
       return
     } finally {
+      unsubscribe()
+      run.lifetime.abort()
+      this.runs.delete(id)
       this.active.delete(session)
     }
 
+    if (run.stopped) return
     if (session.messages.at(-1) === previous) return
     await this.sendReply(
       session,

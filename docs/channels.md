@@ -1,6 +1,6 @@
 # Channels
 
-A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `feishu-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history and messages run in order, with one reply per triggering message.
+A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `feishu-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history. Messages queue in order by default; Feishu also offers Steer and Stop during a run.
 
 **Enabling a chat means trusting everyone in it with this machine.** Feishu gives every member of an enabled chat the `owner` role, including bash, files, memory and extension tools. There is no sandbox or per-member guest boundary. See [Security](security.md#channel-senders) before enabling a group.
 
@@ -9,7 +9,7 @@ A channel connects a chat service to Vela. The gateway keeps **one shared sessio
 The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no public URL is needed. It is loaded by default in the CLI.
 
 1. Create and publish a Feishu custom app with bot capability enabled.
-2. Choose long-connection mode and subscribe to `im.message.receive_v1`.
+2. In **Events & Callbacks**, choose long-connection mode, subscribe to the event `im.message.receive_v1`, and add the callback subscription **Card action trigger** (`card.action.trigger`). Use the callback subscription, not the older card request-URL setting; this integration dispatches v2 callbacks over the same long connection.
 3. Grant the API permissions below and add the bot to groups you intend to enable.
 4. Configure the app credentials, owner open_ids and enabled chat_ids in [settings](settings.md):
 
@@ -38,9 +38,21 @@ The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no
 - Empty `chats` produces one startup notice: only owners' direct chats are enabled.
 - In enabled groups, only messages that **@ this bot** trigger a run. A message without a mention, or mentioning another person/bot, does not. Vela resolves its bot open_id at startup; if that fails it logs a warning and ignores group messages until a successful restart. Owner DMs still work.
 - Group answers use `im.message.reply` on the triggering message id. DMs use `im.message.create`. Feishu controls whether an already-threaded trigger receives a threaded reply.
-- A second @ waits for the previous turn and reply. It gets its own answer to its own message; it is not steering. Other chats can still run concurrently.
+- A second @ during a run receives a Queue / Steer / Stop card. Queue is the default if nobody clicks. See [Run controls](#run-controls). Other chats can still run concurrently.
 - Text and rich-text (`post`) messages become plain text, with mention markers removed. Unsupported images/files get a short request for text, only in an enabled DM or when this bot is mentioned in an enabled group. Image/file processing is not implemented.
 - The last 1000 incoming message ids are remembered to suppress duplicate event delivery.
+
+### Run controls
+
+When a new text/post message arrives during the chat's run, Vela sends an interactive Card 2.0 (`schema: "2.0"`) in reply to that message (a normal send for DMs). Its buttons use `column_set` / `column` / `button` and `behaviors: [{ type: "callback", value }]`, matching the subscribed `card.action.trigger` event. The [Lark SDK's card troubleshooting notes](https://github.com/larksuite/node-sdk/blob/main/docs/channel.md#common-issues) describe the v1-payload mismatch that can prevent clicks from reaching that callback.
+
+- **Queue (default)**: wait for the current run and reply, then answer the new message separately. Doing nothing has the same behavior; there is no extra waiting period.
+- **Steer**: prepare the new message with its sender name and group context, then pass it to the current task with `streamingBehavior: 'steer'`. History excludes the active trigger and messages older than its `create_time`, since the session already has that context. Other messages at the same millisecond are retained; timestamps alone cannot order them. The current run sends one final reply to its original trigger, covering the original and steered inputs. The steered message does not start its own answer.
+- **Stop**: abort the current run, discard this card's queued input and pending SDK inputs belonging to that run, and send `Stopped the current run.` to this card's triggering message. Other messages waiting in the gateway's default queue remain queued.
+
+Any member of an enabled chat may use its controls, matching the shared owner session. In a DM enabled only through `owners`, the operator must be one of those owners. A callback must include the matching chat, an operator open_id, a recognized action and the opaque token issued for that card. The first valid choice wins. Repeated clicks and controls from a completed run or a previous process are ignored with an informational toast; they cannot affect a later run. Cards expire when Stop is accepted or the run settles.
+
+The callback reserves the choice and returns its toast immediately; it does not wait for name/history APIs, model work or abort cleanup. If the run finishes during Steer preparation, the message remains in its default queue. A failed card send is logged and also leaves the message queued. Control cards do not count as answers when selecting the group-history boundary.
 
 ### Names and group context
 
@@ -68,7 +80,7 @@ Use application (`tenant_access_token`) permissions. The bot must be enabled/pub
 - Receive owner DMs: `im:message.p2p_msg:readonly`; receive group @ events: `im:message.group_at_msg:readonly`. The broader all-group-message permission can also deliver ordinary group events; Vela still enforces its own bot-mention gate.
 - [Read group history](https://open.feishu.cn/document/server-docs/im-v1/message/list): `im:message.group_msg` **plus** one of `im:message` or `im:message:readonly` (legacy `im:message.history:readonly` also works). Mention-only event permission does not provide this history access.
 - [Resolve display names](https://open.feishu.cn/document/server-docs/contact-v3/user/get): `contact:contact.base:readonly` for the contact API **and** `contact:user.base:readonly` for name fields. Include the relevant people in the app's contact data scope. No email/phone access is needed. Existing broader legacy contact permissions may already cover these fields.
-- [Send replies](https://open.feishu.cn/document/server-docs/im-v1/message/reply): `im:message:send_as_bot` or `im:message` (legacy `im:message:send` also works).
+- [Send replies](https://open.feishu.cn/document/server-docs/im-v1/message/reply), including interactive control cards (`msg_type: interactive`): `im:message:send_as_bot` or `im:message` (legacy `im:message:send` also works). No CardKit API or additional card-management permission is used. The separate `card.action.trigger` callback subscription above is required for buttons to work; message reception alone does not deliver clicks.
 - [Identify this bot](https://open.feishu.cn/document/client-docs/bot-v3/obtain-bot-info): no additional API permission beyond enabled bot capability and the app's tenant token.
 
 ### Migration
@@ -79,12 +91,14 @@ Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id
 
 Custom `FeishuTransport` implementations must add `getBotId`, `getSenderName`, `listMessages` and `reply`. `listMessages` returns newest-first history with millisecond `create_time`; `reply` returns `{ messageId, createTime }` from the service's successful reply receipt. Sends/replies and API errors must reject, so the gateway reports failure instead of a successful reply.
 
+For run controls, implement `sendCard(chatId, card, replyToId?)` and accept the second handler in `start(onMessage, onAction)`. Send the Card 2.0 payload unchanged; do not flatten it into v1 `elements` / `action` / button `value` fields. Deliver the v2 callback body unchanged to `onAction` and return its `{ toast }` response to Feishu. Group cards use `replyToId`; DM cards use `chatId`. Card delivery must not be recorded as an ordinary text answer.
+
 ## Gateway lifecycle
 
 On receiving a message, the gateway:
 
 1. Selects the shared session from `(channel name, channelId)`. Non-plain or long ids get a hash suffix to prevent collisions.
-2. Waits for the earlier message/reply in that chat. Feishu also serializes its preprocessing and unsupported-message replies, so a later reply cannot change the context boundary of an earlier question.
+2. Queues behind the earlier message/reply in that chat, offering controls immediately if the channel supports them and a run is active. Queued preparation and unsupported-message replies stay serialized, so a later reply cannot change the context boundary of an earlier question.
 3. Opens/resumes that chat's persisted session and sets its role from `roleFor(message)`, defaulting to `owner`. A channel must reject untrusted chats **before** delivering them.
 4. Emits `channel_message`, prompts the session, and sends the last assistant text through `send({ channelId, recipientId, text, replyToId? })`. It emits `channel_reply` after success or `channel_error` after a failed turn/send. Empty answers and input handled by an extension do not resend an earlier answer.
 
@@ -101,6 +115,8 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 ## Writing a channel
 
 Register a `ChannelDefinition` with `vela.registerChannel()` from an extension. It has `name`, `description`, `start()`, `stop()`, `send(message)`, optional `onMessage(handler)` and optional `roleFor(message)`. The incoming handler returns `void | Promise<void>`; await it when preprocessing must wait until that message and its reply finish.
+
+Optional `prepareMessage(message, activeMessage?)` performs asynchronous preprocessing when the gateway is ready to run the input; return `undefined` for input handled without a prompt. On Steer, the optional second argument is the active trigger already in the shared session, so a channel can exclude previously supplied context. Ordinary queued messages receive no active trigger. Existing one-argument implementations remain valid. Optional `showRunControls(message, { signal, choose })` can present the queued input's choices. `choose('queue' | 'steer' | 'stop')` synchronously reserves a choice and returns false after expiry or a prior choice. The signal aborts with the original run's lifetime; remove any stored controls then. Do not serialize incoming delivery behind the preceding handler if the channel needs to offer controls during that run.
 
 Incoming messages contain `channelId`, `senderId`, `senderName`, `text`, optional `replyToId` and optional `raw`. The sender identifies the speaker, not a separate session. Outgoing `replyToId` identifies the service message to answer; a custom transport decides how to use it.
 
