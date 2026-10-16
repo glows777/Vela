@@ -76,7 +76,7 @@ test('read_file explains that image reads ignore text pagination parameters', as
   const t = createTestVela({
     model: {
       ...faux,
-      async doStream(options) {
+      async doStream(options: Parameters<typeof faux.doStream>[0]) {
         const tool = options.tools?.find((tool) => tool.name === 'read_file')
         if (tool?.type === 'function') description = tool.description ?? ''
         return faux.doStream(options)
