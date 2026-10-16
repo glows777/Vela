@@ -16,6 +16,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | Option | Description |
 |---|---|
 | `prompt...` | Every argument that is not an option is a prompt. Several prompts are sent one after another. |
+| `@file` | Attach a file to the first prompt: images are detected by header; text is inlined as `<file name="…">…</file>`. A missing or unreadable file exits 1. |
 | `-p`, `--print` | Run the prompts, write the last assistant answer to stdout, then exit. |
 | `--mode text` | Same as `-p`. |
 | `--mode json` | Run the prompts and write one JSON line per event to stdout, then exit. See [JSON mode](json.md). |
@@ -114,6 +115,7 @@ Vela's own keys:
 |---|---|
 | Enter | Send. While running: steer (insert after the current step). |
 | Alt+Enter | While running: queue a follow-up for after the task. When idle: send. |
+| Ctrl+V (Windows: Alt+V) | Paste a clipboard image as a temporary file path for the model to read with `read_file`. |
 | Alt+Up | Move queued messages back into the editor. |
 | Esc | Cancel a running `!` command; otherwise interrupt the running task (queued messages go back into the editor), or clear a `!` input. Closes the autocomplete menu first if it is open. |
 | Shift+Tab | Cycle the thinking level. |
@@ -154,7 +156,13 @@ If the terminal goes away (the window is closed or the SSH connection drops), Ve
 
 Typing `/` at the start of the editor lists commands: the TUI's own, the CLI's, prompt templates, skills (as `skill:<name>`), and commands registered by extensions, filtered as you type. Tab completes file and directory paths relative to the working folder.
 
-`@` starts fuzzy file completion over the working directory, as in pi. It uses `fd`, found or downloaded the same way as for the `find` tool (see [Tools](tools.md)); until `fd` is ready, or if it can't be found (for example with `VELA_OFFLINE=1` and no `fd` installed), `@` shows no suggestions and a notice says so. Vela does not expand `@path` into the file's contents: the text is sent as written and the model reads the file with its tools.
+`@` starts fuzzy file completion over the working directory, as in pi. It uses `fd`, found or downloaded the same way as for the `find` tool (see [Tools](tools.md)); until `fd` is ready, or if it can't be found (for example with `VELA_OFFLINE=1` and no `fd` installed), `@` shows no suggestions and a notice says so. Within the TUI editor, `@path` is sent as written and the model reads the file with its tools.
+
+### Image and text attachments
+
+On the command line, pass each attachment as its own `@file` argument: `vela @shot.png "What is this?"` or `vela -p @notes.txt "Summarize this"`. Home paths such as `@~/shot.png` and macOS screenshot narrow-space filenames are resolved before reading. PNG, JPEG, GIF, WebP and BMP are identified by their bytes, even with a different filename extension. Images use the core's existing input normalization. Each image includes an empty `<file name="/absolute/path"></file>` reference in attachment order, so the model can identify its source. Text wrappers also use escaped absolute filenames; a leading UTF-8 BOM is stripped and empty text files are skipped. Attachments and inlined text go to the first prompt only; other prompt arguments still run in order. An attachment alone also works. Piped stdin is included in the first prompt. Attachments used with a slash command are ignored with a notice.
+
+In the TUI, Ctrl+V (Alt+V on Windows) reads an image from the local system clipboard. Vela writes it to a private temporary file and inserts its path at the cursor; submit a prompt asking the model to read it with `read_file`. When there is no image, the shortcut inserts clipboard text at the cursor. Clipboard reading only inserts content: Enter and Alt+Enter keep their normal behavior and do not wait for the read. Clipboard reads use pi-tui's native clipboard on macOS, Windows and X11, or `wl-paste` from `wl-clipboard` on Wayland. Ordinary terminal text paste works as before. Temporary clipboard files are removed when Vela exits normally. Live and resumed history show short placeholders such as `[image png 340KB]` for user and tool images.
 
 ## Slash commands
 

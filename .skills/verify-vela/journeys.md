@@ -17,6 +17,9 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Thinking level | `keys BTab` | The footer level changes (`medium` → `high`) |
 | Tool selection | `run $RUN t -t read_file -p "read a.txt"`; `-p "list files"` with the same flag | The read works; the list fails because the tool is off |
 | grep / find | `test grep`, `test find` | Need `rg` / `fd` on PATH, otherwise a clear "not installed" error |
+| CLI image / text attachments | `run $RUN image --mode json @/abs/shot.png "Describe this"`; repeat with `@~/shot.png`, screenshot narrow-space names, two images, BOM/empty text, a slash command, image-only input, and a missing path | Image content by header (also with a misleading extension), escaped absolute filename references in attachment order, BOM stripped and empty text skipped, attachments on the first prompt only; slash commands show an ignored-attachment notice; missing file exits 1 before a model request |
+| TUI clipboard image / text | Copy a fixture image to an isolated system clipboard, `launch $RUN`, type a request, `keys $RUN C-v` (Windows: Alt+V), wait for the inserted path, then submit; faux model calls `read_file`. Repeat with multiline clipboard text and delayed reads | Private temp file contains the image, request carries tool image content, history shows `[image …]` without base64; text fallback inserts at the cursor without submitting; Enter/Alt+Enter remain independent of a pending read; ordinary bracketed text paste works; temp file removed on exit. Report mocked clipboard separately when a system clipboard is unavailable |
+| TUI image history | `launch $RUN @/abs/shot.png "Describe this"`, then quit and `launch $RUN -c` | Initial and resumed user history shows a short image placeholder, including image-only prompts; tool images also use placeholders; no base64 on screen |
 
 ## Non-interactive modes ([cli](../../docs/cli.md), [json](../../docs/json.md), [rpc](../../docs/rpc.md))
 
