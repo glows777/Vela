@@ -97,12 +97,6 @@ export function toAIToolOutput(
 /** Pi's conservative image estimate, independent of the encoded file's byte length. */
 export const IMAGE_CHARS = 4800
 
-// Avoid decoding a saved image on every turn; field checks keep deliberate history edits observable.
-const normalizedImages = new WeakMap<
-  ImageContent,
-  { data: string; mimeType: string }
->()
-
 /** Canonical images plus image shapes the existing AI SDK message API accepts. */
 export function isImageContentPart(part: {
   type: string
@@ -115,7 +109,10 @@ export function isImageContentPart(part: {
   )
 }
 
-/** Normalize new user content after input hooks, before recording or requesting it. */
+/**
+ * Normalize new user content once, after input hooks and before recording it (like pi). History and
+ * extension-supplied messages are sent as stored: the request edge never decodes images again.
+ */
 export async function normalizeUserMessage(
   message: ModelMessage,
 ): Promise<ModelMessage> {
@@ -127,19 +124,9 @@ export async function normalizeUserMessage(
       content.push(part)
       continue
     }
-    const cached = normalizedImages.get(part)
-    if (cached?.data === part.data && cached.mimeType === part.mimeType) {
-      content.push(part)
-      continue
-    }
     const result = await normalizeImage(part)
-    if (result.image) {
-      normalizedImages.set(result.image, {
-        data: result.image.data,
-        mimeType: result.image.mimeType,
-      })
-      content.push(result.image)
-    } else
+    if (result.image) content.push(result.image)
+    else
       content.push({
         type: 'text',
         text: `(image omitted: ${result.reason ?? 'could not process image'})`,
@@ -149,70 +136,60 @@ export async function normalizeUserMessage(
 }
 
 /** Request-only conversion: fallback never removes images from the saved history. */
-export async function toModelMessages(
+export function toModelMessages(
   messages: ModelMessage[],
   supportsImages = true,
   toolImagesAsUser = false,
-): Promise<AIModelMessage[]> {
-  const converted = await Promise.all(
-    messages.map(async (message): Promise<AIModelMessage> => {
-      if (message.role === 'user' && typeof message.content !== 'string') {
-        const normalized = supportsImages
-          ? await normalizeUserMessage(message)
-          : message
-        if (
-          normalized.role !== 'user' ||
-          typeof normalized.content === 'string'
-        )
-          return normalized as AIModelMessage
-        return {
-          ...normalized,
-          content: normalized.content.map((part) => {
-            if (part.type !== 'image' && !isImageContentPart(part)) return part
-            if (!supportsImages)
-              return {
-                type: 'text' as const,
-                text: '(image omitted: model does not support images)',
+): AIModelMessage[] {
+  const converted = messages.map((message): AIModelMessage => {
+    if (message.role === 'user' && typeof message.content !== 'string') {
+      return {
+        ...message,
+        content: message.content.map((part) => {
+          if (part.type !== 'image' && !isImageContentPart(part)) return part
+          if (!supportsImages)
+            return {
+              type: 'text' as const,
+              text: '(image omitted: model does not support images)',
+            }
+          return part.type === 'image' && 'data' in part
+            ? {
+                type: 'file' as const,
+                data: part.data,
+                mediaType: part.mimeType,
               }
-            return part.type === 'image' && 'data' in part
-              ? {
-                  type: 'file' as const,
-                  data: part.data,
-                  mediaType: part.mimeType,
-                }
-              : part
-          }),
-        }
+            : part
+        }),
       }
-      if (message.role === 'tool')
-        return {
-          ...message,
-          content: message.content.map((part) =>
-            part.type !== 'tool-result'
-              ? part
-              : {
-                  ...part,
-                  output: toAIToolOutput(
-                    part.output.type === 'content' && !supportsImages
-                      ? {
-                          ...part.output,
-                          value: part.output.value.map((item) =>
-                            isImageContentPart(item)
-                              ? {
-                                  type: 'text' as const,
-                                  text: '(tool image omitted: model does not support images)',
-                                }
-                              : item,
-                          ),
-                        }
-                      : part.output,
-                  ),
-                },
-          ),
-        }
-      return message as AIModelMessage
-    }),
-  )
+    }
+    if (message.role === 'tool')
+      return {
+        ...message,
+        content: message.content.map((part) =>
+          part.type !== 'tool-result'
+            ? part
+            : {
+                ...part,
+                output: toAIToolOutput(
+                  part.output.type === 'content' && !supportsImages
+                    ? {
+                        ...part.output,
+                        value: part.output.value.map((item) =>
+                          isImageContentPart(item)
+                            ? {
+                                type: 'text' as const,
+                                text: '(tool image omitted: model does not support images)',
+                              }
+                            : item,
+                        ),
+                      }
+                    : part.output,
+                ),
+              },
+        ),
+      }
+    return message as AIModelMessage
+  })
   // Chat-compatible adapters serialize tool content as JSON text. Lift images after the
   // complete consecutive tool-result group, so all outstanding calls stay answered first.
   const result: AIModelMessage[] = []
