@@ -23,6 +23,9 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
       push = onMessage
     },
     stop: () => {},
+    getResource: async () => {
+      throw new Error('No resources in this fixture')
+    },
     getBotId: async () => 'ou_bot',
     getSenderName: async () => undefined,
     listMessages: async () => [],
@@ -63,6 +66,7 @@ async function startedChannel(fake = fakeTransport()) {
   const channel = new FeishuChannel({
     appId: '',
     appSecret: '',
+    dataDir: '/tmp',
     owners: ['ou_owner'],
     chats: ['oc_1', 'oc_group', 'oc_g', 'oc_g2'],
     logger: silentLogger,
@@ -110,7 +114,7 @@ test('text and rich-text (post) messages become plain text without @ mentions', 
   ).toBe('Plan\n step one link\nstep two')
   expect(
     messageText({ chat_id: 'c', message_type: 'image', content: '{}' }),
-  ).toBeUndefined()
+  ).toBe('')
   expect(
     messageText({ chat_id: 'c', message_type: 'text', content: 'not json' }),
   ).toBe('')
@@ -143,14 +147,14 @@ test('a message delivered twice is handled once; chat and open_id pick the conve
 
 test('an unsupported message gets a short reply instead of silence; in a group only when the bot is mentioned', async () => {
   const { received, sent, deliver } = await startedChannel()
-  deliver(event({ message_type: 'image', content: '{"image_key":"x"}' }))
-  deliver(event({ message_type: 'image', chat_type: 'group', chat_id: 'oc_g' }))
+  deliver(event({ message_type: 'audio', content: '{}' }))
+  deliver(event({ message_type: 'audio', chat_type: 'group', chat_id: 'oc_g' }))
   deliver(
     event({
-      message_type: 'file',
+      message_type: 'audio',
       chat_type: 'group',
       chat_id: 'oc_g2',
-      message_id: 'file_trigger',
+      message_id: 'audio_trigger',
       mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
     }),
   )
@@ -158,7 +162,7 @@ test('an unsupported message gets a short reply instead of silence; in a group o
   expect(received).toHaveLength(0)
   expect(sent).toEqual([
     { chatId: 'oc_1', text: UNSUPPORTED_MESSAGE },
-    { messageId: 'file_trigger', text: UNSUPPORTED_MESSAGE },
+    { messageId: 'audio_trigger', text: UNSUPPORTED_MESSAGE },
   ])
 })
 
@@ -186,6 +190,7 @@ test('without app id, secret or a transport the channel does not connect', async
   const channel = new FeishuChannel({
     appId: '',
     appSecret: '',
+    dataDir: '/tmp',
     owners: [],
     logger: { ...silentLogger, warn: (message) => warnings.push(message) },
   })

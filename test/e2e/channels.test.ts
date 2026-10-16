@@ -543,8 +543,8 @@ test('Feishu unsupported replies wait for earlier context preparation and cannot
   await preparing
   f.deliver(
     feishuEvent({
-      message_id: 'image',
-      message_type: 'image',
+      message_id: 'audio',
+      message_type: 'audio',
       create_time: '3000',
     }),
   )
@@ -555,7 +555,7 @@ test('Feishu unsupported replies wait for earlier context preparation and cannot
   }
   await waitFor(() => f.sent.length === 2)
   expect(f.t.model.calls[0]?.lastUserText).toContain('Bob: keep this detail')
-  expect(f.sent.map((reply) => reply.messageId)).toEqual(['text', 'image'])
+  expect(f.sent.map((reply) => reply.messageId)).toEqual(['text', 'audio'])
 })
 
 function failingStorage() {
