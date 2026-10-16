@@ -9,7 +9,7 @@ import type {
 } from './types.ts'
 
 interface GatewayOptions {
-  /** Opens (or returns) a session by id; one session per channel, conversation and sender */
+  /** Opens (or returns) a session by id; one shared session per channel and conversation */
   session: (id: string) => VelaSession
   /** The open session with this id, without opening one */
   find: (id: string) => VelaSession | undefined
@@ -26,20 +26,11 @@ const MAX_SAVE_FAILURES = 3
 const PLAIN = /^[A-Za-z0-9_]+$/
 
 /**
- * Session id for a sender in one conversation, e.g. `feishu-oc_456-ou_123`: the channel name,
- * the conversation (`channelId`: a group chat or a direct chat) and the sender id. One person
- * gets separate sessions in different chats, and each member of a group chat has their own.
- * Different (channel, conversation, sender) triples must map to different sessions (or they
- * would see each other's history). If all three contain only letters, digits and `_`, they are
- * joined with `-`; otherwise they are sanitized and suffixed with `.` plus a hash of the
- * originals. Directly joined ids never contain `.`, so the two forms never collide.
+ * Shared session id for a chat, e.g. `feishu-oc_456`. Non-plain or long ids get a
+ * hash suffix so different (channel, conversation) pairs cannot share history.
  */
-export const channelSessionId = (
-  channel: string,
-  conversationId: string,
-  senderId: string,
-) => {
-  const parts = [channel, conversationId, senderId]
+export const channelSessionId = (channel: string, conversationId: string) => {
+  const parts = [channel, conversationId]
   const plain = parts.join('-')
   if (parts.every((part) => PLAIN.test(part)) && plain.length <= 128)
     return plain
@@ -53,7 +44,7 @@ export const channelSessionId = (
 
 export class ChannelGateway {
   private channels = new Map<string, ChannelDefinition>()
-  /** Messages are processed serially per session: a sender's second message in a conversation waits for the first */
+  /** Messages are processed serially per session: the next message in a chat waits for the previous reply */
   private queues = new Map<string, Promise<void>>()
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
@@ -80,7 +71,7 @@ export class ChannelGateway {
     this.channels.set(channel.name, channel)
 
     channel.onMessage?.((msg: IncomingMessage) => {
-      void this.handleIncoming(channel.name, msg)
+      return this.handleIncoming(channel.name, msg)
     })
   }
 
@@ -126,7 +117,7 @@ export class ChannelGateway {
 
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
-    const id = channelSessionId(channelName, msg.channelId, msg.senderId)
+    const id = channelSessionId(channelName, msg.channelId)
     clearTimeout(this.idleTimers.get(id))
     this.idleTimers.delete(id)
     const previous = this.queues.get(id) ?? Promise.resolve()
@@ -148,7 +139,7 @@ export class ChannelGateway {
 
   /**
    * Channel sessions would otherwise stay open (and in memory) for as long as the process runs, one per
-   * conversation and sender. Once a sender's queue is empty, the session is closed after `idleMs`; its history
+   * conversation. Once a chat's queue is empty, the session is closed after `idleMs`; its history
    * is saved, and the next message reopens and resumes it.
    */
   private closeWhenIdle(id: string, delay?: number): void {
@@ -216,8 +207,8 @@ export class ChannelGateway {
     await this.closing.get(id)
     const session = this.options.session(id)
     session.channel = channelName
-    // Re-evaluate the role on every message (the allowlist may change); defaults to guest
-    session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
+    // Channels admit only trusted chats; custom channels can still choose an SDK role.
+    session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'owner'
     if (!this.subscribed.has(session)) {
       this.subscribed.add(session)
       session.subscribe((event) => {
@@ -302,6 +293,7 @@ export class ChannelGateway {
       channelId: msg.channelId,
       recipientId: msg.senderId,
       text: replyText,
+      ...(msg.replyToId ? { replyToId: msg.replyToId } : {}),
     }
     try {
       await channel.send(reply)

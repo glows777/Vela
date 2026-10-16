@@ -92,7 +92,7 @@ export type QueueMode = 'one-at-a-time' | 'all'
 
 /** Options for `vela.session(id, options)`; only apply when the session is first opened. */
 export interface SessionOptions {
-  /** Session role, default owner (for channel senders the channel decides, default guest) */
+  /** Session role, default owner (custom channels can choose a role for their shared chat) */
   role?: Role
   /** Tool permissions layered on top of the role, e.g. `{ bash: 'ask' }` */
   permissions?: PermissionRules

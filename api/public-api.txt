@@ -71,7 +71,7 @@
   interface ChannelDefinition
     description: string
     name: string
-    onMessage?: ((handler: (msg: IncomingMessage) => void) => void) | undefined
+    onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     start: () => Promise<void> | void
@@ -192,15 +192,31 @@
     setStatus: (key: string, text?: string) => void
     setWidget: (key: string, lines?: string[]) => void
   function feishu: (options?: FeishuOptions) => VelaExtension
+  interface FeishuHistoryMessage
+    body?: { content?: string; } | undefined
+    create_time?: string | undefined
+    deleted?: boolean | undefined
+    mentions?: { key: string; }[] | undefined
+    message_id?: string | undefined
+    msg_type?: string | undefined
+    sender?: { id?: string; sender_type?: string; } | undefined
   interface FeishuMessageEvent
-    message: { message_id?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; }[]; }
+    message: { message_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
     sender: { sender_id?: { open_id?: string; }; }
   interface FeishuOptions
     appId?: string | undefined
     appSecret?: string | undefined
+    chats?: string[] | undefined
     owners?: string[] | undefined
     transport?: FeishuTransport | undefined
+  interface FeishuSentMessage
+    createTime: string
+    messageId: string
   interface FeishuTransport
+    getBotId: () => Promise<string>
+    getSenderName: (openId: string) => Promise<string | undefined>
+    listMessages: (chatId: string, options: { before?: string; limit: number; }) => Promise<FeishuHistoryMessage[]>
+    reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
     send: (chatId: string, text: string) => Promise<void>
     start: (onMessage: (event: FeishuMessageEvent) => void) => Promise<void>
     stop: () => void
@@ -221,6 +237,7 @@
   interface IncomingMessage
     channelId: string
     raw?: unknown
+    replyToId?: string | undefined
     senderId: string
     senderName: string
     text: string
@@ -359,6 +376,7 @@
   interface OutgoingMessage
     channelId: string
     recipientId: string
+    replyToId?: string | undefined
     text: string
   type PermissionDecision = 'allow' | 'deny' | 'ask'
   type PermissionRules = Record<string, PermissionDecision>

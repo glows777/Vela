@@ -6,15 +6,16 @@ export interface FeishuOptions {
   appId?: string
   appSecret?: string
   /**
-   * open_ids of senders who get the owner role. All other senders are guests: no file reads or
-   * writes, no commands, and no access to the owner's memory.
+   * open_ids whose direct chats are always enabled. This does not enable their group chats.
    */
   owners?: string[]
+  /** Enabled chat_ids. Every member has owner access to this machine and shares one session. */
+  chats?: string[]
   /** The connection to Feishu; default lark's long connection with appId / appSecret (tests pass a fake) */
   transport?: FeishuTransport
 }
 
-/** Feishu bot channel (long-connection mode), one session per chat and sender. Options not passed are read from the config section (`extensionConfig.feishu`). */
+/** Feishu bot channel (long-connection mode), one shared owner session per enabled chat. Options not passed are read from the config section (`extensionConfig.feishu`). */
 export function feishu(options: FeishuOptions = {}): VelaExtension {
   return function feishu(vela) {
     vela.registerChannel(
@@ -23,6 +24,7 @@ export function feishu(options: FeishuOptions = {}): VelaExtension {
         appSecret:
           options.appSecret ?? configString(vela.config, 'appSecret') ?? '',
         owners: options.owners ?? configStrings(vela.config, 'owners') ?? [],
+        chats: options.chats ?? configStrings(vela.config, 'chats') ?? [],
         logger: vela.logger,
         transport: options.transport,
       }),
