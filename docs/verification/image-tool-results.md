@@ -28,7 +28,7 @@ bun run build
 bun run smoke:consumer
 ```
 
-The final local suite passed **758 tests, 0 failures, 5588 assertions across 92 files**. Typecheck, lint (existing warnings only), build and the packed-package consumer smoke passed. The consumer smoke installs the tarball into empty Node and Bun projects; both printed `tool image sdk ok` after calling the real `read_file` on an oversized image with a misleading extension and forcing Photon from `dist/`.
+The final local suite passed **761 tests, 0 failures, 5611 assertions across 92 files**. Typecheck, lint (existing warnings only), build and the packed-package consumer smoke passed. The consumer smoke installs the tarball into empty Node and Bun projects; both printed `tool image sdk ok` after calling the real `read_file` on an oversized image with a misleading extension and forcing Photon from `dist/`.
 
 Independent review passed 100 focused tests and typecheck. Separate practical probes verified all three adapters' failed-image/call-order behavior, interrupted parallel tools followed by resume, native-result recovery and summary safety. No remaining PR 2 blocker was found.
 
@@ -73,7 +73,7 @@ The real CLI process exited 0 and emitted 27 events. Its saved tool message cont
 
 All model replies were faux, and adapter HTTP responses were offline fixtures. These runs prove real SDK/CLI, provider serialization, normalization and persistence behavior; they do not prove live-provider visual recognition. No credentials or live provider calls were used.
 
-The late core custom-message normalization regression is fixed separately in [PR #67](https://github.com/glows777/Vela/pull/67) and should land before this tools PR. Existing core follow-ups remain separate: [transparent-image conversion #68](https://github.com/glows777/Vela/issues/68), [history normalization cost #69](https://github.com/glows777/Vela/issues/69), and [ModelMessage migration documentation #70](https://github.com/glows777/Vela/issues/70). This PR does not claim to resolve those issues or complete the CLI/TUI stage of #61.
+The late core custom-message normalization regression is fixed separately in [PR #67](https://github.com/glows777/Vela/pull/67) and should land before this tools PR. Core history-normalization cost remains tracked separately in [#69](https://github.com/glows777/Vela/issues/69). Transparency (#68/#72) and ModelMessage migration documentation (#70/#71) were subsequently incorporated from main. This PR does not claim to resolve those issues or complete the CLI/TUI stage of #61.
 
 ## Automatic review corrections
 
@@ -89,3 +89,10 @@ The final independent re-review passed 100 affected/neighboring tests (416 asser
 Forge's non-blocking pagination clarification is covered by a further failing-first faux E2E: the model sees an explicit description that `offset`, `limit` and `column` are ignored for images, and a call supplying those parameters still receives the complete image. The 13 targeted file/image tests, typecheck and lint passed. This follow-up changes guidance only, not image or text read behavior.
 
 After merging main `b834bc2` (#66 and #71 documentation), the full 758-test suite, typecheck, lint, build and packed Node/Bun consumer smoke passed. Independent merge review confirmed both changelog entries and the migration notice were retained, with identical emitted JavaScript for all seven TypeScript files touched by the merge. Session-format documentation also names canonical tool images as an exception to AI SDK-compatible saved shapes.
+
+
+## Transparent-image main integration
+
+Main `0b8b68c` incorporates #72's alpha-preserving normalizer. Before integrating it, an added faux `read_file` transparency scenario failed on the previous tool branch (JPEG instead of PNG). After integration, the tool request and saved image retain transparent pixels and dark lines, within the existing size limits. The full suite passes 761 tests and 5611 assertions.
+
+The public SDK example was run through the verification helper with `test/fixtures/images/transparent-lines.png`. It exited 0, reported a resized PNG with 27656 base64 bytes, and verified the post-tool hook, text-only fallback and resumed image request. Evidence: `/tmp/vela-evidence/issue61-tool-alpha/sdk-transparent.{cmd,stdout,stderr,exit}`. The normalizer implementation is unchanged from merged #72; this PR adds only the tool-path integration scenario. Responses remain offline faux.
