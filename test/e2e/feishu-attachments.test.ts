@@ -8,7 +8,7 @@ import type {
 import { z } from 'zod'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import type { VelaExtension } from '../../src/index.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { fauxError, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -264,4 +264,266 @@ test('Feishu file prepared by expired Steer is reused when the gateway processes
   expect(queued?.text).toContain('saved at')
   expect(f.resourceCalls).toHaveLength(1)
   await channel.stop()
+})
+
+for (const type of ['image', 'file']) {
+  test(`Feishu ${type} download failure replies with the error and resource permission hint`, async () => {
+    const f = await setup()
+    f.transport.getResource = async () => {
+      throw new Error('99991672: Access denied; im:resource required')
+    }
+    f.deliver(
+      dm(type, { image_key: 'img', file_key: 'file', file_name: 'notes.txt' }),
+    )
+    f.deliver(dm('text', { text: 'barrier' }, 'barrier'))
+    await until(() => f.t.model.calls.length === 1 && f.sent.length > 0)
+    expect(f.sent[0]?.text).toContain(`Couldn't download the ${type}`)
+    expect(f.sent[0]?.text).toContain('99991672')
+    expect(f.sent[0]?.text).toContain('im:resource')
+  })
+}
+
+test('Feishu interrupted file stream reports failure and leaves no reusable partial file', async () => {
+  const f = await setup()
+  const { Readable } = await import('node:stream')
+  f.transport.getResource = async () =>
+    Readable.from(
+      (async function* () {
+        yield Buffer.from('partial')
+        throw new Error('connection reset')
+      })(),
+    )
+  f.deliver(dm('file', { file_key: 'file', file_name: 'notes.txt' }))
+  f.deliver(dm('text', { text: 'barrier' }, 'barrier'))
+  await until(() => f.t.model.calls.length === 1 && f.sent.length > 0)
+  expect(f.sent[0]?.text).toContain('connection reset')
+  expect(readdirSync(f.t.dataPath('channels/feishu-oc_dm/files'))).toEqual([])
+})
+
+test('Feishu redelivery after process restart reuses the completed regular file', async () => {
+  const f = await setup()
+  f.resources.set('file', [Buffer.from('complete')])
+  const event = dm('file', { file_key: 'file', file_name: 'notes.txt' })
+  f.deliver(event)
+  await until(() => f.sent.length === 1)
+  await f.t.vela.dispose()
+  const next = createTestVela({
+    cwd: f.t.cwd,
+    dataDir: f.t.vela.dataDir,
+    responses: [fauxText('replayed')],
+    extensions: [feishu({ owners: ['ou_alice'], transport: f.transport })],
+  })
+  await next.vela.startChannels()
+  f.deliver(event)
+  await until(() => f.sent.length === 2)
+  expect(next.model.calls[0]?.lastUserText).toContain('attachment-notes.txt')
+  expect(f.resourceCalls).toHaveLength(1)
+  expect(
+    readFileSync(
+      f.t.dataPath('channels/feishu-oc_dm/files/attachment-notes.txt'),
+      'utf8',
+    ),
+  ).toBe('complete')
+})
+
+for (const name of [
+  `${'a'.repeat(230)}.pdf`,
+  `${'报'.repeat(80)}.pdf`,
+  'report: Q3?*"<>|.pdf. ',
+]) {
+  test(`Feishu saves a portable bounded filename for ${name.slice(0, 25)}`, async () => {
+    const f = await setup()
+    f.resources.set('file', [Buffer.from('report')])
+    f.deliver(
+      dm(
+        'file',
+        { file_key: 'file', file_name: name },
+        'om_12345678901234567890123456789012',
+      ),
+    )
+    await until(() => f.sent.length === 1)
+    expect(f.t.model.calls).toHaveLength(1)
+    const directory = f.t.dataPath('channels/feishu-oc_dm/files')
+    const saved = readdirSync(directory)[0]!
+    expect(Buffer.byteLength(saved)).toBeLessThanOrEqual(255)
+    expect(saved).not.toMatch(/[:?*"<>|]|[. ]$/)
+    expect(saved).toEndWith('.pdf')
+    expect(readFileSync(join(directory, saved), 'utf8')).toBe('report')
+    expect(f.t.model.calls[0]?.lastUserText).toContain(join(directory, saved))
+  })
+}
+
+test('Feishu exposes the reusable file only after the stream completes', async () => {
+  const f = await setup()
+  const { Readable } = await import('node:stream')
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const streaming = new Promise<void>((r) => {
+    entered = r
+  })
+  f.transport.getResource = async () =>
+    Readable.from(
+      (async function* () {
+        yield Buffer.from('first')
+        entered()
+        await gate
+        yield Buffer.from('last')
+      })(),
+    )
+  f.deliver(dm('file', { file_key: 'file', file_name: 'notes.txt' }))
+  await streaming
+  try {
+    expect(f.t.exists('channels/feishu-oc_dm/files/attachment-notes.txt')).toBe(
+      false,
+    )
+  } finally {
+    release()
+  }
+  await until(() => f.sent.length === 1)
+  expect(
+    readFileSync(
+      f.t.dataPath('channels/feishu-oc_dm/files/attachment-notes.txt'),
+      'utf8',
+    ),
+  ).toBe('firstlast')
+})
+
+test('Feishu expired Steer reuses downloaded images when the default queue runs', async () => {
+  let finish!: () => void
+  const held = new Promise<void>((r) => {
+    finish = r
+  })
+  const f = await setup(
+    [
+      fauxToolCall('hold_pause', {}),
+      fauxText('first answer'),
+      fauxText('image answer'),
+    ],
+    [
+      function hold(api) {
+        api.registerTool({
+          name: 'pause',
+          description: 'Wait',
+          inputSchema: z.object({}),
+          execute: async () => {
+            await held
+            return 'done'
+          },
+        })
+      },
+    ],
+  )
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const downloading = new Promise<void>((r) => {
+    entered = r
+  })
+  const resource = f.transport.getResource
+  f.transport.getResource = async (...args) => {
+    entered()
+    await gate
+    return resource(...args)
+  }
+  try {
+    f.deliver(dm('text', { text: 'start' }, 'start'))
+    await until(() => f.t.model.calls.length === 1)
+    f.deliver(dm('image', { image_key: 'img' }))
+    await until(() => f.cards.length === 1)
+    f.click(0, 'steer', { operator: { open_id: 'ou_alice' } })
+    await downloading
+    finish()
+    await until(() => f.sent.length === 1)
+    release()
+    await until(() => f.sent.length === 2)
+    expect(f.resourceCalls).toHaveLength(1)
+    expect(imageParts(f.t.model.calls[2]!.prompt)).toHaveLength(1)
+  } finally {
+    finish()
+    release()
+  }
+})
+
+test('Feishu filename truncation does not expose a trailing space', async () => {
+  const f = await setup()
+  f.resources.set('file', [Buffer.from('report')])
+  f.deliver(
+    dm('file', {
+      file_key: 'file',
+      file_name: `${'a'.repeat(243)} ${'b'.repeat(10)}`,
+    }),
+  )
+  await until(() => f.sent.length === 1)
+  expect(
+    readdirSync(f.t.dataPath('channels/feishu-oc_dm/files'))[0],
+  ).not.toMatch(/[. ]$/)
+})
+
+test('Feishu expired group Steer reuses history images after the active run fails without a reply', async () => {
+  let finish!: () => void
+  const held = new Promise<void>((r) => {
+    finish = r
+  })
+  const f = await setup(
+    [
+      fauxToolCall('hold_pause', {}),
+      fauxError('400 provider unavailable'),
+      fauxText('image answer'),
+    ],
+    [
+      function hold(api) {
+        api.registerTool({
+          name: 'pause',
+          description: 'Wait',
+          inputSchema: z.object({}),
+          execute: async () => {
+            await held
+            return 'done'
+          },
+        })
+      },
+    ],
+  )
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const downloading = new Promise<void>((r) => {
+    entered = r
+  })
+  const resource = f.transport.getResource
+  f.transport.getResource = async (...args) => {
+    entered()
+    await gate
+    return resource(...args)
+  }
+  try {
+    f.deliver(feishuEvent({ message_id: 'start', create_time: '3000' }))
+    await until(() => f.t.model.calls.length === 1)
+    f.history.push({
+      ...historyMessage('image', 'ou_bob', '', '4000'),
+      msg_type: 'image',
+      body: { content: '{"image_key":"img"}' },
+    })
+    f.deliver(feishuEvent({ message_id: 'question', create_time: '5000' }))
+    await until(() => f.cards.length === 1)
+    f.click(0, 'steer')
+    await downloading
+    finish()
+    await until(() => !f.t.vela.session('feishu-oc_group').isRunning)
+    expect(f.sent).toHaveLength(0)
+    release()
+    await until(() => f.sent.length === 1)
+    expect(f.resourceCalls).toHaveLength(1)
+    expect(imageParts(f.t.model.calls[2]!.prompt)).toHaveLength(1)
+  } finally {
+    finish()
+    release()
+  }
 })
