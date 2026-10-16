@@ -9,7 +9,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import { isImageContentPart, isToolContent } from '../../messages.ts'
+import { isToolContent } from '../../messages.ts'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
@@ -19,40 +19,24 @@ export function imagePlaceholder(image: unknown): string | undefined {
   if (!image || typeof image !== 'object') return undefined
   const part = image as Record<string, unknown>
   const mimeType =
-    typeof part.mimeType === 'string'
+    part.type === 'image' && typeof part.mimeType === 'string'
       ? part.mimeType
-      : typeof part.mediaType === 'string'
+      : part.type === 'file' && typeof part.mediaType === 'string'
         ? part.mediaType
         : ''
-  if (
-    typeof part.type !== 'string' ||
-    !isImageContentPart({ type: part.type, mediaType: mimeType })
-  )
-    return undefined
-  const source = part.data ?? part.image
+  if (!/^image\//i.test(mimeType)) return undefined
+  const source = part.data
   const data =
-    source && typeof source === 'object' && 'data' in source
+    part.type === 'file' &&
+    source &&
+    typeof source === 'object' &&
+    'type' in source &&
+    source.type === 'data' &&
+    'data' in source
       ? source.data
-      : source && typeof source === 'object' && 'url' in source
-        ? source.url
-        : source
-  // A domain JSON discriminator alone is not image content.
-  if (
-    (!('image' in part) && !/^image\//i.test(mimeType)) ||
-    !(
-      typeof data === 'string' ||
-      data instanceof Uint8Array ||
-      data instanceof ArrayBuffer ||
-      data instanceof URL
-    )
-  )
-    return undefined
-  const bytes =
-    typeof data === 'string'
-      ? Buffer.byteLength(data, 'base64')
-      : data instanceof Uint8Array
-        ? data.byteLength
-        : 0
+      : source
+  if (typeof data !== 'string') return undefined
+  const bytes = Buffer.byteLength(data, 'base64')
   const size = bytes
     ? ` ${bytes < 1024 ? `${bytes}B` : `${Math.round(bytes / 1024)}KB`}`
     : ''

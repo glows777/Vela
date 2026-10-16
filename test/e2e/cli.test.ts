@@ -286,6 +286,65 @@ test.concurrent('@file alone sends an image-only prompt', async () => {
   )
 })
 
+test.concurrent('@file skips empty text files and strips a leading BOM', async () => {
+  const result = await cli(
+    [
+      '--mode',
+      'json',
+      '@empty.txt',
+      '@bom-only.txt',
+      '@notes.txt',
+      'Summarize',
+    ],
+    {
+      model: `faux:${scenario('hello')}`,
+      files: {
+        'empty.txt': '',
+        'bom-only.txt': '\ufeff',
+        'notes.txt': '\ufeffhéllo',
+      },
+    },
+  )
+  expect(result.code).toBe(0)
+  const user = result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find(
+      (event) => event.type === 'message_end' && event.message.role === 'user',
+    )
+  expect(user.message.content).toBe(
+    `<file name="${join(result.cwd, 'notes.txt')}">\nhéllo\n</file>\n\nSummarize`,
+  )
+})
+
+test.concurrent('@file with a slash skill reports ignored attachments and still expands the skill', async () => {
+  const result = await cli(
+    ['--approve', '--mode', 'json', '@picture.png', '/skill:demo'],
+    {
+      model: `faux:${scenario('hello')}`,
+      files: {
+        'picture.png': readFileSync(
+          join(ROOT, 'test/fixtures/images/blue.png'),
+        ),
+        '.skills/demo/SKILL.md':
+          '---\nname: demo\ndescription: Demo verification\n---\nDemo skill body',
+      },
+    },
+  )
+  expect(result.code).toBe(0)
+  expect(result.stderr).toContain('Attachments are ignored by slash commands')
+  const user = result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find(
+      (event) => event.type === 'message_end' && event.message.role === 'user',
+    )
+  expect(user.message.content).toContain('Demo skill body')
+  expect(JSON.stringify(user.message.content)).not.toContain('"type":"image"')
+})
+
 test.concurrent('@file missing exits 1 before any model request', async () => {
   const result = await cli(['-p', '@missing.png', 'Describe this'], {
     model: `faux:${scenario('hello')}`,

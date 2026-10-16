@@ -120,6 +120,13 @@ if (mode !== 'rpc' && !args.listModels && !args.export) {
     process.exit(1)
   }
 }
+if (
+  messages[0]?.trimStart().startsWith('/') &&
+  (attachments.text || attachments.images.length)
+) {
+  console.error('[attachments] Attachments are ignored by slash commands')
+  attachments = { text: '', images: [] }
+}
 if ((mode === 'print' || mode === 'json') && !args.listModels && !args.export) {
   const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped

@@ -209,8 +209,6 @@ export class InteractiveMode {
   private readonly cleanups: (() => void)[] = []
   private shuttingDown = false
   private clipboardDir?: string
-  private pendingPaste?: Promise<void>
-  private pasteCancelled = 0
   private resolveExit!: () => void
   readonly exited = new Promise<void>((resolve) => {
     this.resolveExit = resolve
@@ -888,20 +886,7 @@ export class InteractiveMode {
 
   private setupKeys(): void {
     const { editor } = this
-    editor.onBeforeSubmit = () => {
-      if (!this.pendingPaste) return false
-      void this.submitEditor()
-      return true
-    }
-    editor.onSubmit = (text) => {
-      if (!this.pendingPaste) {
-        void this.submit(text)
-        return
-      }
-      // Autocomplete can submit a completed slash command directly through pi's editor.
-      editor.setText(text)
-      void this.submitEditor()
-    }
+    editor.onSubmit = (text) => void this.submit(text)
     let bashMode = false
     editor.onChange = (text) => {
       const next = text.trimStart().startsWith('!')
@@ -919,9 +904,19 @@ export class InteractiveMode {
     actions.set('dequeue', () => {
       if (!this.restoreQueue()) this.addNotice('No queued messages', 'dim')
     })
-    actions.set('followUp', () => void this.submitEditor(true))
+    actions.set('followUp', () => {
+      const text = editor.getExpandedText().trim()
+      if (!text) return
+      if (!this.session.isRunning) {
+        editor.setText('')
+        void this.submit(text)
+        return
+      }
+      editor.addToHistory(text)
+      editor.setText('')
+      void this.queue(text, 'followUp')
+    })
     actions.set('clear', () => {
-      this.pasteCancelled++
       const now = Date.now()
       if (now - this.lastCtrlC < 500) void this.shutdown()
       else {
@@ -930,12 +925,7 @@ export class InteractiveMode {
       }
     })
     actions.set('exit', () => void this.shutdown())
-    actions.set('pasteImage', () => {
-      if (this.pendingPaste || this.shuttingDown) return
-      this.pendingPaste = this.pasteClipboard().finally(() => {
-        this.pendingPaste = undefined
-      })
-    })
+    actions.set('pasteImage', () => void this.pasteClipboard())
     actions.set('cycleThinking', () => {
       // Like pi: only the levels the model supports
       const levels = this.session.availableThinkingLevels()
@@ -1006,8 +996,6 @@ export class InteractiveMode {
   }
 
   private async pasteClipboard(): Promise<void> {
-    const session = this.session
-    const cancelled = this.pasteCancelled
     try {
       const bytes = await (
         this.options.readClipboardImage ?? readClipboardImage
@@ -1015,12 +1003,6 @@ export class InteractiveMode {
       const text = bytes?.length
         ? undefined
         : await (this.options.readClipboardText ?? readClipboardText)()
-      if (
-        this.shuttingDown ||
-        session !== this.session ||
-        cancelled !== this.pasteCancelled
-      )
-        return
       if (!bytes?.length) {
         if (text) {
           this.editor.insertTextAtCursor(text)
@@ -1049,34 +1031,6 @@ export class InteractiveMode {
         'warning',
       )
     }
-  }
-
-  /** Share pending-paste handling for Enter and Alt+Enter, including cancellation. */
-  private async submitEditor(followUp = false): Promise<void> {
-    const { editor } = this
-    const cancelled = this.pasteCancelled
-    const session = this.session
-    if (editor.disableSubmit) return
-    if (this.pendingPaste) {
-      editor.disableSubmit = true
-      await this.pendingPaste
-      editor.disableSubmit = false
-    }
-    if (
-      this.shuttingDown ||
-      cancelled !== this.pasteCancelled ||
-      session !== this.session
-    )
-      return
-    const text = editor.getExpandedText().trim()
-    if (!text) return
-    if (!followUp || !this.session.isRunning) {
-      await this.submit(text)
-      return
-    }
-    editor.addToHistory(text)
-    editor.setText('')
-    await this.queue(text, 'followUp')
   }
 
   async submit(raw: string, images?: ImageContent[]): Promise<void> {
