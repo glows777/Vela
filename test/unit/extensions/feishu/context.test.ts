@@ -45,8 +45,11 @@ test.each([{ chats: ['oc_group'] }, { chats: ' oc_group , oc_other ' }])(
       }
     ).channels.get('feishu')!
     const received: IncomingMessage[] = []
-    channel.onMessage?.((message) => {
-      received.push(message)
+    channel.onMessage?.(async (message) => {
+      const prepared = channel.prepareMessage
+        ? await channel.prepareMessage(message)
+        : message
+      if (prepared) received.push(prepared)
     })
     await t.vela.startChannels()
     fake.deliver(
