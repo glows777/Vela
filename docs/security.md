@@ -12,10 +12,10 @@ This page describes what Vela protects and what it does not. To report a vulnera
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
 | Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
 | `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt of owner and collaborator sessions |
-| Channel senders (people messaging a channel) | No, unless listed as owners | What their session role allows |
+| Members of an enabled Feishu chat | Yes, all members | Full owner access: bash, files, memory and extension tools |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
 
-The boundary Vela enforces is between the owner and other people who talk to the agent through a channel. It is not a boundary against extensions or against the model acting for the owner.
+Feishu enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with owner access. This is not a sandbox, a per-member boundary, or protection against extensions or the model acting for an owner.
 
 ## Tools run as you
 
@@ -43,7 +43,7 @@ Interactive mode asks once per project and saves the answer in `~/.vela/trust.js
 
 Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model.
 
-## Session roles
+## Core SDK session roles
 
 Every session has a role. The role decides which tools the session's model can call.
 
@@ -59,15 +59,19 @@ Note what each role can still reach:
 
 - A `collaborator` can read and write any file the Vela process can, sees the owner's memory index in its system prompt and can read and change memories with the `memory` tool, and can call extension tools, MCP server tools included.
 - A `guest` cannot use MCP server tools: they are extension tools (`mcp__<server>__<tool>`), and `tool_search` does not find tools the role denies.
-- A `guest` can search the knowledge base with `rag_search`. Do not index private documents if untrusted people can message a channel.
+- A `guest` can search the knowledge base with `rag_search`. Do not index private documents if untrusted SDK guests can use it.
 
-The terminal session is `owner`. In the SDK, `vela.session(id, { role })` sets the role (default `owner`). In interactive mode, `/role [owner|collaborator|guest]` shows or changes the current session's role, which is useful for trying out what a channel sender sees.
+The terminal session is `owner`. In the SDK, `vela.session(id, { role })` sets the role (default `owner`). In interactive mode, `/role [owner|collaborator|guest]` shows or changes the current session's role, which is useful for testing the SDK role restrictions.
 
 ### Channel senders
 
-Each sender gets their own session in each conversation (a group chat or a direct chat), so one person's chats don't share history and members of a group don't see each other's turns. The channel's `roleFor(message)` picks the role and is checked on every message; a channel without `roleFor` makes every sender a `guest`. The built-in Feishu channel makes senders listed in `extensionConfig.feishu.owners` (or `FEISHU_OWNERS`, comma-separated) owners and everyone else a guest. See [Channels](channels.md).
+Feishu accepts only chats listed in `extensionConfig.feishu.chats`, plus direct chats from the open_ids in `owners` (or `FEISHU_OWNERS`). Unlisted groups and DMs are ignored, even when an owner speaks in an unlisted group. Empty `chats` means owners' DMs only.
 
-An owner on a channel has full access, including `bash`. Only list identities that you control, and remember that the security of that session is the security of the chat account.
+**Everyone in an enabled chat is an owner.** They share one session and its history, and can ask the agent to read/write files, run bash, access memory and use extension/MCP tools. Group members added later inherit this access. Enable only chats whose entire membership you trust, and restrict what the operating-system account can reach. Group @-mention gating controls when the bot runs; it is not a tool-permission boundary. Earlier group messages are sent to the model as context when someone mentions the bot.
+
+Channel ids now omit the sender id. Old per-sender sessions are not automatically combined into shared sessions; see [migration](channels.md#migration). Different chats have separate transcripts but still share the same machine, tools, memory and extensions.
+
+The core SDK role system remains available through `vela.session(id, { role })`; the built-in Feishu channel no longer creates guests. Custom channels default to owner and must enforce their boundary before delivering messages. A custom `roleFor` can restrict tools but cannot hide earlier turns in a shared chat transcript.
 
 ### Per-session permissions
 
@@ -89,7 +93,7 @@ Keys are tool names, or `*` for all other tools; an exact name beats `*`. `ask` 
 
 The model reads text from many places: files, command output, web pages from the `web` extension, knowledge base results, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
 
-Roles limit the damage for channel guests, because a guest's model has no tools that touch the machine. For the owner's own sessions nothing limits it: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts)).
+SDK guest roles limit direct tool access because a guest model has no tools that touch the machine. Enabled Feishu chats have owner access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts)).
 
 ## Secrets on disk
 
@@ -114,7 +118,7 @@ Review sessions and recordings before you share them. Keep API keys out of confi
 - Use version control or backups before larger changes.
 - Give Vela only the credentials it needs, and prefer short-lived, narrowly scoped ones.
 - Review extensions before loading them and trust only projects you know.
-- Give channel senders the `guest` role unless they need more, and keep private data out of the knowledge base when guests can reach it.
+- Enable only Feishu chats whose entire membership you trust with bash and files. Use separate restricted SDK sessions when serving untrusted people, and keep private data out of the knowledge base when guests can reach it.
 - Use `permissions: { bash: 'ask' }` or a confirming extension for sessions where a person should approve commands.
 
 ## Reporting a vulnerability

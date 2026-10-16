@@ -9,7 +9,7 @@ For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session for
 Every session has an id, which is also its file name. Ids use letters, digits, `.`, `_` and `-`, don't start with `.`, and are at most 128 characters.
 
 - The CLI starts a new session on every launch with an id made from the local time and four random characters, such as `20261008-081441-da14`.
-- Channel sessions get `<channel>-<conversationId>-<senderId>`, one per chat and sender (hashed when the ids have other characters). See [Channels](channels.md).
+- Channel sessions get `<channel>-<conversationId>`, one shared session per chat (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
 The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session's entries (messages, compactions, setting changes) and `sessions/<id>/` the long tool output and tool call history. `--no-session` keeps the transcript, tool history and usage log out of that directory; tool history and long output go to a temporary directory removed when the session closes. Memory and the knowledge base are unchanged.
@@ -72,7 +72,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 ## Multiple sessions
 
-One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results, role and run lock. This is a difference from pi, where one process holds one active session. A channel like Feishu needs it: every sender gets their own session, and one slow conversation doesn't block the others. Messages from one sender are handled in order.
+One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results, role and run lock. This is a difference from pi, where one process holds one active session. A channel like Feishu needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
 The CLI shows one session at a time, but channels started from it run their own sessions in the same process. In the SDK, open as many as you need with `vela.session(id)`; see [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 

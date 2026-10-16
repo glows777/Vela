@@ -1,8 +1,8 @@
 /**
  * registerChannel (Vela-specific): bring outside messages into Vela, one session per
- * conversation and sender, and send the replies back.
- * roleFor decides each sender's role. Without it every sender is a guest (no file reads or
- * writes, no commands, no access to the owner's memory).
+ * conversation, and send the replies back.
+ * roleFor demonstrates SDK roles; channels otherwise default to owner. Roles do not
+ * isolate earlier messages in a shared chat, so never use this demo as a trust boundary.
  * This example sends and receives in memory instead of over a real IM connection;
  * `receive()` simulates an incoming message.
  */

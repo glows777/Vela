@@ -428,7 +428,7 @@ test('a message from a channel runs through the same model and tools, and the re
           onMessage: (handler) => {
             deliver = handler
           },
-          // This sender is the owner and can read files; the default (no roleFor) is guest
+          // This sender is the owner and can read files; enabled chats also default to owner
           roleFor: () => 'owner',
         }),
     ],
