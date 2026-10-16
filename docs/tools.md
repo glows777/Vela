@@ -209,3 +209,9 @@ const session = vela.session('review', {
 - `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`. The role is the upper bound: session rules can only make a tool stricter (`allow` → `ask` → `deny`), never allow a tool the role forbids. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
 
 See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session.ts](../examples/extensions/read-only-session.ts) for an extension that sets the selection per session.
+
+## Image results
+
+`read_file` detects JPEG, PNG, GIF, WebP and BMP by file headers, including images with a text extension. Image reads are bounded at 96 MiB before base64 allocation; normal text pagination is unchanged. Images use the shared 2000px / 4.5 MiB base64 normalizer after tool-result hooks. Invalid images produce an omission reason. A text-only model receives a tool-image omission note while history retains the image for later vision use.
+
+Multimodal results are not folded into base64 text by microcompaction. Large text captions may be previewed with a separate full-caption path; native result details are still recorded in tool history.

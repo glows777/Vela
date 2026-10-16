@@ -1,5 +1,5 @@
 import { constants, createReadStream, readdirSync } from 'node:fs'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import z from 'zod'
 import {
@@ -17,6 +17,93 @@ import { type ToolDefinition, ToolExecutionResult } from './registry.ts'
 /** Default page of read_file, same as pi: 2000 lines or 50KB, whichever comes first */
 export const READ_MAX_LINES = 2000
 export const READ_MAX_BYTES = 50 * 1024
+
+// 96 MiB of bytes encode to the normalizer's 128 MiB base64 input limit.
+const READ_MAX_IMAGE_BYTES = 96 * 1024 * 1024
+const IMAGE_HEADER_BYTES = 18
+
+/** Recognize image signatures without trying to decode possibly incomplete bytes. */
+function imageMimeType(header: Buffer): string | undefined {
+  if (
+    header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  )
+    return 'image/png'
+  if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff)
+    return 'image/jpeg'
+  if (['GIF87a', 'GIF89a'].includes(header.toString('ascii', 0, 6)))
+    return 'image/gif'
+  if (
+    header.toString('ascii', 0, 4) === 'RIFF' &&
+    header.toString('ascii', 8, 12) === 'WEBP'
+  )
+    return 'image/webp'
+  // "BM" also starts ordinary prose. Require the binary BMP file header and a
+  // recognized DIB header size before treating text as an image.
+  if (
+    header.length >= 18 &&
+    header.toString('ascii', 0, 2) === 'BM' &&
+    header.readUInt32LE(6) === 0
+  ) {
+    const dibSize = header.readUInt32LE(14)
+    const pixelOffset = header.readUInt32LE(10)
+    if (
+      [12, 16, 40, 52, 56, 64, 108, 124].includes(dibSize) &&
+      pixelOffset >= 14 + dibSize &&
+      header.readUInt32LE(2) >= pixelOffset
+    )
+      return 'image/bmp'
+  }
+  return undefined
+}
+
+/** Bound image reads before allocating base64; text files still use the existing pager. */
+async function readImage(
+  file: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<ToolExecutionResult | undefined> {
+  const handle = await open(file, 'r')
+  try {
+    const header = Buffer.alloc(IMAGE_HEADER_BYTES)
+    let headerLength = 0
+    while (headerLength < header.length) {
+      const { bytesRead } = await handle.read(
+        header,
+        headerLength,
+        header.length - headerLength,
+        headerLength,
+      )
+      if (!bytesRead) break
+      headerLength += bytesRead
+    }
+    const mimeType = imageMimeType(header.subarray(0, headerLength))
+    if (!mimeType) return undefined
+    const tooLarge = () =>
+      new Error('Cannot read image: image exceeds the safe decoding size limit')
+    if ((await handle.stat()).size > READ_MAX_IMAGE_BYTES) throw tooLarge()
+    const chunks: Buffer[] = []
+    let length = 0
+    for await (const chunk of handle.createReadStream({
+      start: 0,
+      autoClose: false,
+      signal,
+    })) {
+      length += chunk.length
+      // Also bound a file that grows after stat, or a stream with an unknown size.
+      if (length > READ_MAX_IMAGE_BYTES) throw tooLarge()
+      chunks.push(chunk)
+    }
+    return new ToolExecutionResult({ path, mimeType, bytes: length }, [
+      {
+        type: 'image',
+        data: Buffer.concat(chunks, length).toString('base64'),
+        mimeType,
+      },
+    ])
+  } finally {
+    await handle.close()
+  }
+}
 
 /** UTF-8 size of one code point (a string from iterating a string) */
 const utf8Bytes = (char: string) => {
@@ -61,12 +148,12 @@ export const readFileParamSchema = z.object({
 })
 export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   name: 'read_file',
-  description: `Reads a text file or a saved tool result file, one page at a time. A page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. When more content remains, appends a footer with the range shown and the offset/column for the next page. At EOF, returns only the file content with no added footer.`,
+  description: `Reads a text file, a saved tool result file, or a JPEG, PNG, GIF, WebP or BMP image detected by its contents. Images are returned as image content; line pagination only applies to text. A text page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. When more content remains, appends a footer with the range shown and the offset/column for the next page. At EOF, returns only the file content with no added footer.`,
   inputSchema: readFileParamSchema,
   annotations: { readOnlyHint: true },
   // A full page plus the footer must fit, so pages are never saved to a file again
   maxResultChars: READ_MAX_BYTES + 1024,
-  execute: async (input: z.infer<typeof readFileParamSchema>) => {
+  execute: async (input: z.infer<typeof readFileParamSchema>, context) => {
     const {
       path,
       offset = 1,
@@ -74,6 +161,8 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       column = 0,
     } = readFileParamSchema.parse(input)
     const file = resolveIn(cwd, path)
+    const image = await readImage(file, path, context?.signal)
+    if (image) return image
     const decoder = new TextDecoder()
     let line = 1
     let col = 0
