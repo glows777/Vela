@@ -9,6 +9,7 @@ import {
   loadConfig,
   type VelaConfig,
 } from '../config/index.ts'
+import { errorMessage } from '../logger.ts'
 import { ModelRegistry } from '../models/index.ts'
 import {
   buildSessionPath,
@@ -226,6 +227,16 @@ const vela = createVela({
     console.error(message)
   }),
 })
+
+// Text mode diagnostics must survive runPrintMode, including the final save during dispose().
+// Vela clears this subscription after every session has closed.
+if (mode === 'print')
+  vela.subscribe((event, sessionId) => {
+    if (event.type === 'session_save_failed')
+      console.error(
+        `Could not save session ${sessionId}: ${errorMessage(event.error)}`,
+      )
+  })
 
 const exitWith = async (code: number, message: string): Promise<never> => {
   ;(code ? process.stderr : process.stdout).write(message)

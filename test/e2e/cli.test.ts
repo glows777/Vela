@@ -142,6 +142,57 @@ test.concurrent('-p prints only the final answer to stdout and saves a new sessi
   expect(await Bun.file(files[0]!).text()).toContain('faux replay')
 })
 
+test.concurrent('-p reports a session save failure on stderr while keeping the answer on stdout', async () => {
+  // Break the real session file only after the new-session guard, using an explicit test extension.
+  // A directory in place of the file fails on every OS/user, including root (unlike chmod).
+  const { stdout, stderr, code } = await cli(
+    ['-e', './fail-save.ts', '-p', 'hello'],
+    {
+      model: `faux:${scenario('hello')}`,
+      files: {
+        'fail-save.ts': `
+        import { mkdirSync, rmSync } from 'node:fs'
+        import { dirname } from 'node:path'
+        export default (vela) => vela.on('before_provider_request', (_event, ctx) => {
+          const { path } = ctx.session.persistence
+          mkdirSync(dirname(path), { recursive: true })
+          rmSync(path, { force: true })
+          mkdirSync(path)
+        })
+      `,
+      },
+    },
+  )
+  expect(code).toBe(0)
+  expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
+  expect(stderr).toContain('Could not save session')
+  expect(stderr).toContain('EISDIR')
+})
+
+test.concurrent('-p reports session save failures during final shutdown on stderr', async () => {
+  const { stdout, stderr, code } = await cli(
+    ['-e', './fail-shutdown-save.ts', '-p', 'hello'],
+    {
+      model: `faux:${scenario('hello')}`,
+      files: {
+        'fail-shutdown-save.ts': `
+          import { mkdirSync, rmSync } from 'node:fs'
+          export default (vela) => vela.on('session_shutdown', (_event, ctx) => {
+            const { path } = ctx.session.persistence
+            rmSync(path, { force: true })
+            mkdirSync(path)
+            ctx.session.setName('shutdown state')
+          })
+        `,
+      },
+    },
+  )
+  expect(code).toBe(0)
+  expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
+  expect(stderr).toContain('Could not save session')
+  expect(stderr).toContain('EISDIR')
+})
+
 test.concurrent('-p executes tools from the scenario in the process working directory', async () => {
   const { stdout, code } = await cli(['-p', 'check notes.txt'], {
     model: `faux:${scenario('read-file')}`,

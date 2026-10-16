@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **Headless session save failures were silent.** Channels now log the error with the session id and refuse new prompts after three consecutive failures until a successful write resets the count. Print mode (`-p`) reports save failures on stderr while keeping the answer on stdout.
+
 - **A turn stopped at `summaryThreshold` when there was nothing to summarize.** A message above that threshold and below `maxInputTokens` is sent. Only a request over `maxInputTokens` stops the turn.
 - **The loop-detection warning was broken English, stored as a user message, and fired one call late.** It now fires on the 10th identical call (a critical stop on the 20th). The sentence names that count. The session stores it as a custom message (`customType: loop`), so a resumed session does not show it as something you typed. The model still sees the text.
 - **`--no-session` still wrote session files.** The transcript stayed in memory, and `/status` said `in-memory (not saved)`, but a tool turn still appended `tool-history.jsonl` and `usage/today.jsonl` under the data directory. Those, and long tool output, now stay out of the data directory. Tool history and long output use a temporary directory removed when the session closes. Memory and the knowledge base are unchanged. Usage totals stay available in `/status` and `/usage`.
