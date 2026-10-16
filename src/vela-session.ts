@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { LanguageModel, ModelMessage } from 'ai'
+import type { LanguageModel } from 'ai'
 import type {
   CustomMessageInfo,
   VelaEvent,
@@ -30,6 +30,12 @@ import type {
 } from './extensions/types.ts'
 import type { VelaLimits } from './limits.ts'
 import type { VelaLogger } from './logger.ts'
+import {
+  type ImageContent,
+  type ModelMessage,
+  normalizeUserMessage,
+  type TextContent,
+} from './messages.ts'
 import {
   clampThinkingLevel,
   supportedThinkingLevels,
@@ -76,6 +82,8 @@ import {
 } from './usage/tracker.ts'
 
 export interface PromptOptions {
+  /** Inline images attached to this input; normalized after input hooks. */
+  images?: ImageContent[]
   signal?: AbortSignal
   /**
    * How to handle this input while the session is running (like pi): `steer` joins the current task
@@ -170,7 +178,8 @@ export interface SessionExtensionHooks {
     text: string,
     source: InputSource,
     streamingBehavior?: 'steer' | 'followUp',
-  ): Promise<string | undefined>
+    images?: ImageContent[],
+  ): Promise<{ text: string; images?: ImageContent[] } | undefined>
   transformContext(
     session: VelaSession,
     messages: ModelMessage[],
@@ -1145,21 +1154,22 @@ export class VelaSession {
     options: PromptOptions,
     expand = true,
   ): Promise<void> {
-    const next = (text: string) =>
+    const next = (text: string, images = options.images) =>
       expand
-        ? this.promptExpanded(text, options)
-        : this.promptModel(text, options)
+        ? this.promptExpanded(text, { ...options, images })
+        : this.promptModel(text, { ...options, images })
     if (!this.deps.extensions.hasHandlers('input')) return next(input)
     return (async () => {
       await this.start()
-      const text = await this.deps.extensions.input(
+      const result = await this.deps.extensions.input(
         this,
         input,
         options.source ?? 'sdk',
         this.prompting ? options.streamingBehavior : undefined,
+        options.images,
       )
-      if (text === undefined) return
-      return next(text)
+      if (result === undefined) return
+      return next(result.text, result.images)
     })()
   }
 
@@ -1196,14 +1206,17 @@ export class VelaSession {
   }
 
   /** While running: joins the current task, sent as a user message after this step's tools finish and before the next model request. Same as prompt() when idle. */
-  steer(input: string, options: { source?: InputSource } = {}): Promise<void> {
+  steer(
+    input: string,
+    options: { source?: InputSource; images?: ImageContent[] } = {},
+  ): Promise<void> {
     return this.promptInput(input, { ...options, streamingBehavior: 'steer' })
   }
 
   /** While running: runs as a user message when the model would otherwise stop (no tool calls, no steer). Same as prompt() when idle. */
   followUp(
     input: string,
-    options: { source?: InputSource } = {},
+    options: { source?: InputSource; images?: ImageContent[] } = {},
   ): Promise<void> {
     return this.promptInput(input, {
       ...options,
@@ -1252,15 +1265,27 @@ export class VelaSession {
    * `deliverAs` to queue it.
    */
   sendUserMessage(
-    text: string,
+    content: string | (TextContent | ImageContent)[],
     options: { deliverAs?: 'steer' | 'followUp' } = {},
   ): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
+    const text =
+      typeof content === 'string'
+        ? content
+        : content
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n')
+    const images =
+      typeof content === 'string'
+        ? undefined
+        : content.filter((part) => part.type === 'image')
     return this.promptInput(
       text,
       {
         source: 'extension',
+        images,
         ...(options.deliverAs ? { streamingBehavior: options.deliverAs } : {}),
       },
       false,
@@ -1355,7 +1380,13 @@ export class VelaSession {
 
   /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
   private promptModel(input: string, options: PromptOptions): Promise<void> {
-    return this.promptMessage({ role: 'user', content: input }, options)
+    const content = options.images?.length
+      ? [
+          { type: 'text' as const, text: input },
+          ...options.images.map((image) => ({ ...image })),
+        ]
+      : input
+    return this.promptMessage({ role: 'user', content }, options)
   }
 
   private promptMessage(
@@ -1467,6 +1498,15 @@ export class VelaSession {
     }
   }
 
+  /** Preserve extension display metadata when normalization replaces an input object. */
+  private async normalizeInput(message: ModelMessage): Promise<ModelMessage> {
+    const normalized = await normalizeUserMessage(message)
+    const custom = this.customMessages.get(message)
+    if (custom && normalized !== message)
+      this.customMessages.set(normalized, custom)
+    return normalized
+  }
+
   /** One agent loop: the inputs are appended in order, then next-turn custom messages and before_agent_start's. */
   private async runLoop(
     inputs: ModelMessage[],
@@ -1482,6 +1522,10 @@ export class VelaSession {
       this.store.appendModelChange(info.ref)
     }
     const reasoning = reasoningOption(this.thinkingLevel, info)
+    inputs = await Promise.all(
+      inputs.map((message) => this.normalizeInput(message)),
+    )
+    signal.throwIfAborted()
     const input = inputs.map(messageText).join('\n\n')
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.sections = started.sections
@@ -1504,6 +1548,7 @@ export class VelaSession {
     }
     await agentLoop({
       model: this.requestModel(),
+      supportsImages: info.input?.includes('image') ?? true,
       reasoning,
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
@@ -1521,8 +1566,18 @@ export class VelaSession {
       abortSignal: signal,
       onEvent: this.emit,
       limits: this.limits,
-      takeSteering: () => this.dequeue('steering'),
-      takeFollowUp: () => this.dequeue('followUp'),
+      takeSteering: () =>
+        Promise.all(
+          this.dequeue('steering').map((message) =>
+            this.normalizeInput(message),
+          ),
+        ),
+      takeFollowUp: () =>
+        Promise.all(
+          this.dequeue('followUp').map((message) =>
+            this.normalizeInput(message),
+          ),
+        ),
       onMessage: (message) => this.record(message),
       injectNotice: (content) =>
         this.customMessage({

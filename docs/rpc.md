@@ -520,3 +520,13 @@ process.wait()
 | Typed client | `RpcClient` exported | No client export; see [examples/rpc-client.ts](../examples/rpc-client.ts) |
 
 pi commands Vela doesn't have: `set_auto_retry`, `abort_retry`, `get_session_stats`, `get_last_assistant_text`. Sending one returns `Unknown command`.
+
+## Image attachments
+
+`prompt`, `steer` and `follow_up` accept an optional `images` array. Each item is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `message` may be empty for an image-only input.
+
+```json
+{"id":"picture","type":"prompt","message":"Describe this","images":[{"type":"image","data":"<base64>","mimeType":"image/png"}]}
+```
+
+Malformed arrays or fields return `success: false` without starting a prompt. Validly shaped but undecodable images produce a text omission hint through the SDK. Images are normalized, saved inline and returned in `get_messages` with the same image shape. A text-only model receives a request-only placeholder, so switching to a vision model can reuse saved images. See [SDK image input](sdk.md#image-input).

@@ -18,8 +18,12 @@ const ROOT = resolve(import.meta.dir, '..')
 const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
 const work = await mkdtemp(join(tmpdir(), 'vela-consumer-'))
 
+const IMAGE = (
+  await readFile(join(ROOT, 'test/fixtures/images/wide.png'))
+).toString('base64')
+
 const SMOKE = `
-import { createVela, memory, type VelaEvent, type VelaExtension } from '@glows777/vela'
+import { createVela, memory, type VelaEvent, type VelaExtension, type ImageContent } from '@glows777/vela'
 import { cleanupTestVelas, createFauxModel, createTestVela, fauxText, fauxToolCall } from '@glows777/vela/testing'
 import { z } from 'zod'
 
@@ -59,6 +63,15 @@ if (!JSON.stringify(model.calls[1]?.prompt).includes('hi Vela'))
 const t = createTestVela({ responses: [fauxText('ok')] })
 await t.run('hello')
 if (t.lastAssistantText() !== 'ok') throw new Error('createTestVela failed')
+
+// Photon WASM must resolve from the installed package under both Node and Bun.
+const image: ImageContent = { type: 'image', data: '${IMAGE}', mimeType: 'image/png' }
+const pictured = createTestVela({ responses: [fauxText('image received')] })
+await pictured.session.prompt('Describe the image', { images: [image] })
+const files = pictured.model.calls[0]?.prompt.flatMap((m) => m.role === 'user' ? m.content.filter((p) => p.type === 'file' && p.mediaType.startsWith('image/')) : []) ?? []
+if (files.length !== 1 || JSON.stringify(pictured.session.messages[0]).includes(image.data))
+  throw new Error('packaged image prompt was not resized and sent as an image')
+console.log('image sdk ok')
 
 // rag extension: sqlite-vec loads via bun:sqlite on Bun / node:sqlite on Node (src/extensions/rag/sqlite.ts)
 const r = createTestVela({

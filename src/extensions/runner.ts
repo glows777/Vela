@@ -1,8 +1,8 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
+import type { ImageContent, ModelMessage } from '../messages.ts'
 import type { ModelRegistry } from '../models/index.ts'
 import type { HookPipeline } from '../security/hooks.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
@@ -418,8 +418,10 @@ export class ExtensionRunner {
     text: string,
     source: InputSource,
     streamingBehavior?: 'steer' | 'followUp',
-  ): Promise<string | undefined> {
+    images?: ImageContent[],
+  ): Promise<{ text: string; images?: ImageContent[] } | undefined> {
     let current = text
+    let currentImages = images
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('input')) {
       try {
@@ -427,18 +429,22 @@ export class ExtensionRunner {
           {
             type: 'input',
             text: current,
+            images: currentImages,
             source,
             ...(streamingBehavior ? { streamingBehavior } : {}),
           },
           ctx,
         )) as InputEventResult | undefined
         if (result?.action === 'handled') return undefined
-        if (result?.action === 'transform') current = result.text
+        if (result?.action === 'transform') {
+          current = result.text
+          currentImages = result.images ?? currentImages
+        }
       } catch (error) {
         this.report(extension, 'input', error)
       }
     }
-    return current
+    return { text: current, images: currentImages }
   }
 
   /**

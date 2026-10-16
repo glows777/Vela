@@ -101,12 +101,35 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | `thinkingLevel` | Vela's level | Thinking level for this session |
 | `autoCompaction` | Vela's setting | Automatic compaction for this session |
 
+### Image input
+
+```typescript
+import { readFile } from 'node:fs/promises'
+import type { ImageContent } from '@glows777/vela'
+
+const image: ImageContent = {
+  type: 'image',
+  data: (await readFile('screenshot.png')).toString('base64'),
+  mimeType: 'image/png',
+}
+await session.prompt('What is in this picture?', { images: [image] })
+// While a prompt is running:
+await session.steer('Focus on this area', { images: [image] })
+await session.followUp('Compare this afterwards', { images: [image] })
+```
+
+Images keep the same `{ type: 'image', data, mimeType }` shape in input hooks, events and saved history. Vela detects PNG, JPEG, GIF, WebP and BMP by their bytes, applies EXIF orientation and uses Photon WASM to reduce images to a longest side of 2000 pixels and at most 4.5 MiB of base64. Images needing conversion are encoded as JPEG at quality 80; small supported images stay unchanged. Invalid images or images beyond the safe decoding limits (128 MiB encoded input or 67,108,864 decoded pixels) are omitted with a text reason, so the rest of the prompt can continue.
+
+Normalized images are saved inline in session JSONL and survive resume, clone and forks that include the image message. If the selected model's `input` metadata excludes `image`, its request gets `(image omitted: model does not support images)` instead. Saved history keeps the image for a later vision model. When input metadata is unknown (including a directly supplied `LanguageModel`), images are forwarded; set provider model metadata when you know it is text-only. Context estimates count each image as 4800 characters. Summary requests omit image payloads instead of treating base64 as prose.
+
+`ModelMessage` and `UserContent` exported by Vela extend the existing AI SDK message types with inline image content. Use these types for session history and extension context; existing text-only messages remain valid. The provider edge converts inline images to AI SDK image files.
+
 ### Session members
 
 | Member | Description |
 |---|---|
 | `id` | Session id |
-| `messages` | History (AI SDK `ModelMessage[]`). Treat it as read-only. |
+| `messages` | History (Vela `ModelMessage[]`, exported by this package). Treat it as read-only. |
 | `append(message)` | Appends a message without calling the model |
 | `prompt(input, options?)` | Appends a user message and runs the agent loop until it settles, then saves. See [Prompting](#prompting). |
 | `steer(input, options?)`, `followUp(input, options?)` | Queue input while running; same as `prompt()` when idle. `options.source` as in `PromptOptions` |

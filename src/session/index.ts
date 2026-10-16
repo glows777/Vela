@@ -2,9 +2,9 @@ import { rmSync } from 'node:fs'
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import type { ModelMessage } from 'ai'
 import type { CustomMessageInfo } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
+import type { ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
   type BashExecutionEntry,

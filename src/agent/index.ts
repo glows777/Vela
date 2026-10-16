@@ -1,7 +1,6 @@
 import {
   type AssistantModelMessage,
   type LanguageModel,
-  type ModelMessage,
   streamText,
   type Tool,
   type ToolSet,
@@ -12,6 +11,7 @@ import {
   type RequestSnapshot,
 } from '../context/request.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
+import { type ModelMessage, toModelMessages } from '../messages.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import { withPromptCache } from './cache.ts'
@@ -50,6 +50,8 @@ interface AgentLoopParameter {
   onEvent?: VelaEventListener
   /** Retry, context and other limits; missing fields use defaults. */
   limits?: Partial<VelaLimits>
+  /** Whether the selected model accepts image input; unknown models default to true. */
+  supportsImages?: boolean
   /** AI SDK reasoning option (mapped from the thinking level); not sent when omitted */
   reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /**
@@ -57,12 +59,12 @@ interface AgentLoopParameter {
    * finish and before the next model request; the messages are appended to the history. If the model
    * was about to stop and steer messages arrive, the loop keeps going.
    */
-  takeSteering?: () => ModelMessage[]
+  takeSteering?: () => ModelMessage[] | Promise<ModelMessage[]>
   /**
    * Takes queued followUp messages (like pi's getFollowUpMessages): called when the model is about to
    * stop (no tool calls, no steer); the messages run in the same loop.
    */
-  takeFollowUp?: () => ModelMessage[]
+  takeFollowUp?: () => ModelMessage[] | Promise<ModelMessage[]>
   /** Messages already added for this loop (e.g. the user input); agent_end reports them plus the loop's own. */
   newMessages?: ModelMessage[]
   /** Called for every message the loop adds to `messages` (the session appends it to its log). */
@@ -117,6 +119,7 @@ export const agentLoop = async ({
   onEvent,
   limits: limitOverrides,
   reasoning,
+  supportsImages = true,
   takeSteering,
   takeFollowUp,
   newMessages = [],
@@ -202,7 +205,7 @@ export const agentLoop = async ({
             ...withPromptCache({
               system: inferenceSystem,
               tools: request.tools,
-              messages: requestMessages,
+              messages: await toModelMessages(requestMessages, supportsImages),
             }),
             maxRetries: 0, // No retries inside streamText; the loop below handles retries
             ...(reasoning ? { reasoning } : {}),
@@ -448,8 +451,9 @@ export const agentLoop = async ({
       emit({ type: 'turn_end', turn, message: assistant, toolResults })
       // Steer messages queued during the run go after this step and before the next request;
       // followUp is checked only when the loop would otherwise end (like pi)
-      let queued = takeSteering?.() ?? []
-      if (!needToolCall && queued.length === 0) queued = takeFollowUp?.() ?? []
+      let queued = (await takeSteering?.()) ?? []
+      if (!needToolCall && queued.length === 0)
+        queued = (await takeFollowUp?.()) ?? []
       for (const message of queued) add(message)
       if (!needToolCall && queued.length === 0) {
         endReason = 'done'

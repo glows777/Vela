@@ -1,6 +1,6 @@
-import type { ModelMessage } from 'ai'
 import type { CompactionReason, VelaEventListener } from '../agent/events.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
+import type { ModelMessage } from '../messages.ts'
 import type { SessionState, SessionStore } from '../session/index.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
 import {

@@ -7,6 +7,7 @@ import { generateText, type ModelMessage } from 'ai'
 import z from 'zod'
 import { summarize } from '../../../src/context/compressor.ts'
 import { createRequestSnapshot } from '../../../src/context/request.ts'
+import { toModelMessages } from '../../../src/messages.ts'
 import { coreRules, PromptPipeline } from '../../../src/prompt/index.ts'
 import { SessionStore } from '../../../src/session/index.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
@@ -120,7 +121,7 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
     model,
     instructions: system(8),
     tools: registry.toAISDKFormat(),
-    messages: restored,
+    messages: await toModelMessages(restored),
   })
   const snapshot = await createRequestSnapshot(
     model,

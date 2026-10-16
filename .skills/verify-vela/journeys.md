@@ -82,6 +82,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Examples | `exec $RUN ex bun $PWD/examples/sdk/01-minimal.ts` (01–04) | Each exits 0 |
 | Your own script | `work/consumer.ts` importing `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, run with `exec`; recipes in [core.md](core.md) | Whatever the change promises, with its edge cases |
 | Channels and guests | `echoChannel({ owners: ['boss'] })` from `examples/extensions/echo-channel.ts`; `receive('stranger', …)` and `receive('boss', …)` | The guest's model sees only `tool_search`; the owner's read works |
+| SDK / RPC image input | SDK `prompt(text, { images })`; RPC `prompt`, `steer`, `follow_up` with the same `images` array; use `test/fixtures/images/wide.png` for resize | Provider gets image content; normalized inline history persists; malformed RPC images reject clearly; non-vision fallback changes only the request |
 | Packaging | `bun run build && bun run smoke:consumer` | Passes in empty Node and Bun projects (needs `fd`) |
 
 ## Not reachable offline
