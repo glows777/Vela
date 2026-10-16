@@ -26,26 +26,29 @@ const pasteImageKey = process.platform === 'win32' ? '\x1bv' : '\x16'
 const blueImage = () =>
   readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))
 
-test('Enter during an image clipboard read waits and submits the inserted path', async () => {
-  let release!: (image: Uint8Array) => void
-  const clipboard = new Promise<Uint8Array>((resolve) => {
-    release = resolve
+for (const key of [KEYS.enter, KEYS.altEnter]) {
+  test(`clipboard insertion leaves ${key === KEYS.enter ? 'Enter' : 'Alt+Enter'} independent of the read`, async () => {
+    let release!: (image: Uint8Array) => void
+    const clipboard = new Promise<Uint8Array>((resolve) => {
+      release = resolve
+    })
+    const t = createTestVela({
+      responses: [fauxText('Submitted before clipboard finished')],
+    })
+    const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
+    await tui.started
+    tui.terminal.type('Send now')
+    tui.terminal.press(pasteImageKey)
+    tui.terminal.press(key)
+    await tui.until('Submitted before clipboard finished')
+    expect(t.model.calls[0]!.lastUserText).toBe('Send now')
+    release(blueImage())
+    await tui.until(() =>
+      Reflect.get(tui.mode, 'editor').getText().includes('vela-clipboard-'),
+    )
+    expect(t.model.calls).toHaveLength(1)
   })
-  const t = createTestVela({
-    responses: [fauxText('Combined prompt received')],
-  })
-  const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
-  await tui.started
-  tui.terminal.type('Describe ')
-  tui.terminal.press(pasteImageKey)
-  tui.terminal.press(KEYS.enter)
-  expect(t.model.calls).toHaveLength(0)
-  release(blueImage())
-  await tui.until('Combined prompt received')
-  expect(t.model.calls[0]!.lastUserText).toMatch(
-    /^Describe \/.*vela-clipboard-.*\.png$/,
-  )
-})
+}
 
 for (const shape of ['native', 'mixed'] as const) {
   test(`resumed ${shape} tool image content never renders base64, including expanded output`, async () => {
@@ -97,30 +100,6 @@ for (const shape of ['native', 'mixed'] as const) {
     tui.terminal.press(KEYS.ctrlO)
     expect(tui.screen()).toContain('[image png ')
     expect(tui.screen()).not.toContain(data.slice(0, 40))
-  })
-}
-
-for (const key of [KEYS.enter, KEYS.altEnter]) {
-  test(`clearing a pending image ${key === KEYS.enter ? 'submit' : 'follow-up'} never sends a replacement draft`, async () => {
-    let release!: (image: Uint8Array) => void
-    const clipboard = new Promise<Uint8Array>((resolve) => {
-      release = resolve
-    })
-    const t = createTestVela({ responses: [fauxText('Explicitly sent')] })
-    const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
-    await tui.started
-    tui.terminal.type('Describe ')
-    tui.terminal.press(pasteImageKey)
-    tui.terminal.press(key)
-    tui.terminal.press(KEYS.ctrlC)
-    tui.terminal.type('Replacement draft')
-    release(blueImage())
-    // Wait for the clipboard submission lock to clear, without a timing-dependent sleep.
-    await tui.until(() => !Reflect.get(tui.mode, 'editor').disableSubmit)
-    expect(t.model.calls).toHaveLength(0)
-    tui.terminal.press(KEYS.enter)
-    await tui.until('Explicitly sent')
-    expect(t.model.calls[0]!.lastUserText).toBe('Replacement draft')
   })
 }
 
@@ -186,6 +165,11 @@ for (const phase of ['live', 'resumed'] as const) {
         mimeType: 'image/png',
         data: { record: 42 },
         caption: 'Structured catalog record',
+      },
+      {
+        type: 'image',
+        image: 'catalog-reference-42',
+        caption: 'Image property is domain metadata',
       },
     ]
     function catalog(
@@ -338,97 +322,6 @@ test('clipboard text fallback inserts literal text at the cursor and waits for E
   tui.terminal.press(KEYS.enter)
   await tui.until('Clipboard text received')
   expect(t.model.calls[0]!.lastUserText).toBe('before héllo\nsecond lineafter')
-})
-
-for (const key of [KEYS.enter, KEYS.altEnter]) {
-  test(`pending clipboard paste preserves the cursor on ${key === KEYS.enter ? 'Enter' : 'Alt+Enter'}`, async () => {
-    let release!: (text: string) => void
-    let reading = false
-    const clipboard = new Promise<string>((resolve) => {
-      release = resolve
-    })
-    const t = createTestVela({ responses: [fauxText('Cursor preserved')] })
-    const tui = await startTui(t.vela, {
-      readClipboardImage: async () => undefined,
-      readClipboardText: () => {
-        reading = true
-        return clipboard
-      },
-    })
-    await tui.started
-    tui.terminal.type('before after')
-    for (let i = 0; i < 5; i++) tui.terminal.press('\x1b[D')
-    tui.terminal.press(pasteImageKey)
-    await tui.until(() => reading)
-    tui.terminal.press(key)
-    expect(t.model.calls).toHaveLength(0)
-    release('héllo\nsecond line')
-    await tui.until('Cursor preserved')
-    expect(t.model.calls[0]!.lastUserText).toBe(
-      'before héllo\nsecond lineafter',
-    )
-  })
-}
-
-for (const input of ['\\\r', '\n', '\x1b[200~\r\x1b[201~']) {
-  test(`pending clipboard paste preserves editor newline input ${JSON.stringify(input)}`, async () => {
-    let release!: (text: string) => void
-    const clipboard = new Promise<string>((resolve) => {
-      release = resolve
-    })
-    const t = createTestVela({ responses: [fauxText('Newline preserved')] })
-    const tui = await startTui(t.vela, {
-      readClipboardImage: () => Promise.resolve(undefined),
-      readClipboardText: () => clipboard,
-    })
-    await tui.started
-    tui.terminal.type('before')
-    tui.terminal.press(pasteImageKey)
-    if (input.startsWith('\\')) tui.terminal.type('\\')
-    if (input.startsWith('\x1b[200~')) {
-      tui.terminal.press('\x1b[200~')
-      tui.terminal.press('\r')
-      tui.terminal.press('\x1b[201~')
-    } else {
-      tui.terminal.press(input.endsWith('\r') ? KEYS.enter : input)
-    }
-    expect(t.model.calls).toHaveLength(0)
-    release('pasted')
-    await tui.until('pasted')
-    expect(t.model.calls).toHaveLength(0)
-    tui.terminal.press(KEYS.enter)
-    await tui.until('Newline preserved')
-    expect(t.model.calls[0]!.lastUserText).toBe('before\npasted')
-  })
-}
-
-test('clearing a pending clipboard text paste preserves the replacement draft', async () => {
-  let release!: (text: string) => void
-  let reading = false
-  const clipboard = new Promise<string>((resolve) => {
-    release = resolve
-  })
-  const t = createTestVela({ responses: [fauxText('Replacement received')] })
-  const tui = await startTui(t.vela, {
-    readClipboardImage: async () => undefined,
-    readClipboardText: () => {
-      reading = true
-      return clipboard
-    },
-  })
-  await tui.started
-  tui.terminal.type('Original draft')
-  tui.terminal.press(pasteImageKey)
-  await tui.until(() => reading)
-  tui.terminal.press(KEYS.enter)
-  tui.terminal.press(KEYS.ctrlC)
-  tui.terminal.type('Replacement draft')
-  release('Stale clipboard text')
-  await tui.until(() => !Reflect.get(tui.mode, 'editor').disableSubmit)
-  expect(t.model.calls).toHaveLength(0)
-  tui.terminal.press(KEYS.enter)
-  await tui.until('Replacement received')
-  expect(t.model.calls[0]!.lastUserText).toBe('Replacement draft')
 })
 
 test('a clipboard read failure shows a notice and keeps the editor usable', async () => {

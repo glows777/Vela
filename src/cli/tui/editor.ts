@@ -1,9 +1,4 @@
-import {
-  Editor,
-  getKeybindings,
-  type KeyId,
-  matchesKey,
-} from '@earendil-works/pi-tui'
+import { Editor, type KeyId, matchesKey } from '@earendil-works/pi-tui'
 
 /** App-level keybindings (pi's defaults). */
 export type AppAction =
@@ -38,16 +33,8 @@ export const APP_KEYS: Record<AppAction, KeyId> = {
 /** pi-tui's Editor, handling app keybindings first (like pi's CustomEditor). */
 export class VelaEditor extends Editor {
   readonly actions = new Map<AppAction, () => void>()
-  /** Consume a submit before pi clears the draft and cursor (e.g. while a paste is pending). */
-  onBeforeSubmit?: () => boolean
-  private bracketedPaste = false
 
   override handleInput(data: string): void {
-    if (this.bracketedPaste || data.includes('\x1b[200~')) {
-      this.bracketedPaste = !data.includes('\x1b[201~')
-      super.handleInput(data)
-      return
-    }
     for (const [action, handler] of this.actions) {
       if (!matchesKey(data, APP_KEYS[action])) continue
       // Esc goes to the autocomplete menu first; Ctrl+D exits only when the editor is empty, otherwise it deletes forward
@@ -56,18 +43,6 @@ export class VelaEditor extends Editor {
       handler()
       return
     }
-    const keys = getKeybindings()
-    const cursor = this.getCursor()
-    if (
-      keys.matches(data, 'tui.input.submit') &&
-      !keys.matches(data, 'tui.input.newLine') &&
-      data !== '\n' &&
-      !this.disableSubmit &&
-      !this.isShowingAutocomplete() &&
-      this.getLines()[cursor.line]?.[cursor.col - 1] !== '\\' &&
-      this.onBeforeSubmit?.()
-    )
-      return
     super.handleInput(data)
   }
 }

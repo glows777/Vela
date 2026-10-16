@@ -27,7 +27,8 @@ export async function readAttachments(paths: string[]): Promise<{
         text.push(`<file name="${name}"></file>`)
         images.push({ type: 'image', data: bytes.toString('base64'), mimeType })
       } else {
-        text.push(`<file name="${name}">\n${bytes.toString('utf8')}\n</file>`)
+        const content = bytes.toString('utf8').replace(/^\ufeff/, '')
+        if (content) text.push(`<file name="${name}">\n${content}\n</file>`)
       }
     } catch (error) {
       throw new Error(
