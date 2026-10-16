@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { LanguageModelV4Prompt } from '@ai-sdk/provider'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { PhotonImage } from '@silvia-odwyer/photon-node'
 import z from 'zod'
 import { mcp } from '../../src/extensions/mcp/index.ts'
 import type { ImageContent } from '../../src/messages.ts'
@@ -450,4 +451,48 @@ test('Chat redaction after an image tool does not promise a second attachment', 
   expect(
     users.at(-1)?.content.filter((part) => part.type === 'file'),
   ).toHaveLength(1)
+})
+
+test('resized read_file transparency survives the tool request and saved image', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('read_file', { path: 'diagram.dat' }),
+      fauxText('lines'),
+    ],
+  })
+  writeFileSync(join(t.cwd, 'diagram.dat'), bytes('transparent-lines.png'))
+  await t.run('Read diagram.dat')
+  const part = toolImages(t.model.calls[1]!.prompt)[0]
+  expect(part).toMatchObject({ type: 'file', mediaType: 'image/png' })
+  const result = t.messages
+    .flatMap((message) => (message.role === 'tool' ? message.content : []))
+    .find((part) => part.type === 'tool-result')!.output
+  if (result.type !== 'content') throw new Error('Missing tool image content')
+  const saved = result.value.find((part) => part.type === 'image')
+  if (!saved) throw new Error('Missing saved image')
+  expect(saved.mimeType).toBe('image/png')
+  expect(JSON.stringify(part)).toContain(saved.data)
+  const decoded = PhotonImage.new_from_byteslice(
+    Buffer.from(saved.data, 'base64'),
+  )
+  try {
+    expect(
+      Math.max(decoded.get_width(), decoded.get_height()),
+    ).toBeLessThanOrEqual(2000)
+    const rgba = decoded.get_raw_pixels()
+    let clear = 0
+    let dark = 0
+    for (let i = 0; i < rgba.length; i += 4) {
+      if ((rgba[i + 3] ?? 255) < 16) clear++
+      if (
+        (rgba[i + 3] ?? 0) > 200 &&
+        (rgba[i] ?? 255) + (rgba[i + 1] ?? 255) + (rgba[i + 2] ?? 255) < 48
+      )
+        dark++
+    }
+    expect(clear / (rgba.length / 4)).toBeGreaterThan(0.5)
+    expect(dark / (rgba.length / 4)).toBeGreaterThan(0.02)
+  } finally {
+    decoded.free()
+  }
 })
