@@ -7,6 +7,21 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 afterEach(cleanupTestVelas)
 const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 
+test.each(['BMC deployment checklist\n1. Restart service\n', 'BM'])(
+  'read_file preserves ordinary text beginning with BM: %s',
+  async (text) => {
+    const t = createTestVela({
+      files: { 'notes.txt': text },
+      responses: [
+        fauxToolCall('read_file', { path: 'notes.txt' }),
+        fauxText('Read the note.'),
+      ],
+    })
+    await t.run('Read notes.txt')
+    expect(t.model.calls[1]?.toolResults[0]?.output).toBe(text)
+  },
+)
+
 test('read_file refuses oversized image input before loading its bytes', async () => {
   const t = createTestVela({
     responses: [
