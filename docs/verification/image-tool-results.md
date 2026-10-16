@@ -20,7 +20,7 @@ From a checkout with Bun 1.4+, Node 22.18+, ripgrep and fd:
 
 ```sh
 bun install --frozen-lockfile
-bun test test/e2e/tool-images.test.ts test/e2e/tool-image-providers.test.ts test/e2e/tool-image-file-limits.test.ts
+bun test test/e2e/tool-images.test.ts test/e2e/tool-image-providers.test.ts test/e2e/tool-image-file-limits.test.ts test/e2e/tool-image-order.test.ts
 bun run test
 bun run typecheck
 bun run lint
@@ -28,7 +28,7 @@ bun run build
 bun run smoke:consumer
 ```
 
-The final local suite passed **751 tests, 0 failures, 5528 assertions across 91 files**. Typecheck, lint (existing warnings only), build and the packed-package consumer smoke passed. The consumer smoke installs the tarball into empty Node and Bun projects; both printed `tool image sdk ok` after calling the real `read_file` on an oversized image with a misleading extension and forcing Photon from `dist/`.
+The final local suite passed **757 tests, 0 failures, 5586 assertions across 92 files**. Typecheck, lint (existing warnings only), build and the packed-package consumer smoke passed. The consumer smoke installs the tarball into empty Node and Bun projects; both printed `tool image sdk ok` after calling the real `read_file` on an oversized image with a misleading extension and forcing Photon from `dist/`.
 
 Independent review passed 100 focused tests and typecheck. Separate practical probes verified all three adapters' failed-image/call-order behavior, interrupted parallel tools followed by resume, native-result recovery and summary safety. No remaining PR 2 blocker was found.
 
@@ -74,3 +74,14 @@ The real CLI process exited 0 and emitted 27 events. Its saved tool message cont
 All model replies were faux, and adapter HTTP responses were offline fixtures. These runs prove real SDK/CLI, provider serialization, normalization and persistence behavior; they do not prove live-provider visual recognition. No credentials or live provider calls were used.
 
 The late core custom-message normalization regression is fixed separately in [PR #67](https://github.com/glows777/Vela/pull/67) and should land before this tools PR. Existing core follow-ups remain separate: [transparent-image conversion #68](https://github.com/glows777/Vela/issues/68), [history normalization cost #69](https://github.com/glows777/Vela/issues/69), and [ModelMessage migration documentation #70](https://github.com/glows777/Vela/issues/70). This PR does not claim to resolve those issues or complete the CLI/TUI stage of #61.
+
+## Automatic review corrections
+
+Two P2 findings on the initial complete head were reproduced before correction:
+
+- A `tool_result` hook returning `content: []` made Chat claim an image would follow. One faux and two actual-adapter E2Es failed first; the request now stays honestly empty, including when a preceding tool result lifted an image in the same batch.
+- Long-caption previews reordered interleaved images and captions. Two faux E2Es failed for caption-before-image and caption-after-image arrangements. Captions are now previewed in their original position. A further failing many-caption case exposed repeated truncation-notice inflation (9660 text characters versus a 370-character allowance). Compact ellipses count inside the shared text budget; only one recovery note is appended.
+
+The actual public SDK walkthrough saved at `/tmp/vela-evidence/tool-order-pr65-final/sdk.stdout` confirmed request order `[file,text,file,text,text]`, full 1651-character caption recovery through `read_file`, preserved native details, no image base64 in the caption file, and the same image/caption association after resume. Tiny per-caption budgets can show only ellipses; the saved full text remains available. These are offline faux model checks, with real assembly, tools and persistence.
+
+The final independent re-review passed 100 affected/neighboring tests (416 assertions), typecheck, and a real SDK many-caption probe. That probe now emitted 100 preview characters plus one recovery note. No remaining blocking issue was found.

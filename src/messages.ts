@@ -234,6 +234,7 @@ export async function toModelMessages(
           return part
         const isError = 'isError' in part.output && part.output.isError === true
         if (!isError && (!toolImagesAsUser || !supportsImages)) return part
+        const liftedBefore = lifted.length
         const value = part.output.value.filter((item) => {
           if (
             supportsImages &&
@@ -261,7 +262,7 @@ export async function toModelMessages(
                     .map((item) => item.text)
                     .join('\n') || 'Tool reported an error',
               }
-            : value.length
+            : value.length || lifted.length === liftedBefore
               ? { ...part.output, value }
               : {
                   type: 'text' as const,

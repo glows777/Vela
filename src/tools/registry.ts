@@ -708,13 +708,7 @@ export class ToolRegistry {
       let output: string | ToolContent =
         raw instanceof ToolExecutionResult && raw.content
           ? stored
-            ? [
-                {
-                  type: 'text',
-                  text: `${stored.preview}\nFull text saved at: ${stored.path}\n${stored.read}`,
-                },
-                ...raw.content.filter((part) => part.type === 'image'),
-              ]
+            ? previewToolContent(raw.content, maxChars, stored)
             : raw.content
           : stored
             ? stored.preview
@@ -985,11 +979,34 @@ function untilAborted(
   })
 }
 
-function truncateResult(text: string, maxChars: number) {
+function previewToolContent(
+  content: ToolContent,
+  maxChars: number,
+  stored: StoredToolResult,
+): ToolContent {
+  // Share the text budget without moving captions away from their images.
+  const captions = content.filter((part) => part.type === 'text').length
+  const captionChars = Math.floor(maxChars / Math.max(1, captions))
+  return [
+    ...content.map((part) =>
+      part.type === 'text'
+        ? { ...part, text: truncateResult(part.text, captionChars, true) }
+        : part,
+    ),
+    {
+      type: 'text',
+      text: `Full text saved at: ${stored.path}\n${stored.read}`,
+    },
+  ]
+}
+
+function truncateResult(text: string, maxChars: number, compact = false) {
   if (text.length <= maxChars) return text
 
-  let headSize = Math.floor(maxChars * 0.6)
-  const tailSize = maxChars - headSize
+  // In ordered content, count the ellipsis in the budget and share one recovery note.
+  const previewChars = compact ? Math.max(0, maxChars - 1) : maxChars
+  let headSize = Math.floor(previewChars * 0.6)
+  const tailSize = previewChars - headSize
   if (
     text.charCodeAt(headSize - 1) >= 0xd800 &&
     text.charCodeAt(headSize - 1) <= 0xdbff
@@ -1003,6 +1020,7 @@ function truncateResult(text: string, maxChars: number) {
     tailStart++
   const head = text.slice(0, headSize)
   const tail = text.slice(tailStart)
+  if (compact) return maxChars > 0 ? `${head}…${tail}` : ''
   const dropped = text.length - head.length - tail.length
 
   return `${head}\n\n[preview: first ${head.length} and last ${tail.length} of ${text.length} UTF-16 code units; ${dropped} omitted here, full output saved]\n\n${tail}`
