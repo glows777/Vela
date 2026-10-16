@@ -6,8 +6,11 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '../../src/channels/types.ts'
+import { feishu } from '../../src/extensions/feishu/index.ts'
+import { silentLogger } from '../../src/logger.ts'
 import type { ProviderContext } from '../../src/models/index.ts'
 import { createFauxModel, fauxHang, fauxText } from '../../src/testing/faux.ts'
+import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -332,4 +335,165 @@ test('providers see which channel a session answers on (so a local-only sign-in 
   await deliver('u1', 'hi')
   await t.session.prompt('hi')
   expect(contexts.map((ctx) => ctx.channel())).toEqual(['fake', undefined])
+})
+
+async function feishuGateway(
+  options: {
+    chats?: string[]
+    owners?: string[]
+    responses?: Parameters<typeof createTestVela>[0]['responses']
+  } = {},
+) {
+  const fake = fakeFeishu()
+  const logs: string[] = []
+  const t = createTestVela({
+    responses: options.responses ?? [
+      fauxText('answer'),
+      fauxText('second answer'),
+    ],
+    allowPendingResponses: true,
+    logger: {
+      ...silentLogger,
+      info: (line) => logs.push(line),
+      warn: (line) => logs.push(line),
+    },
+    extensions: [
+      feishu({
+        appId: 'cli_bot',
+        chats: options.chats ?? ['oc_group'],
+        owners: options.owners ?? ['ou_alice'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  return { t, logs, ...fake }
+}
+
+test('Feishu ignores unlisted chats and stranger DMs without a model call or reply and logs their chat ids', async () => {
+  const f = await feishuGateway()
+  f.deliver(feishuEvent({ chat_id: 'oc_unlisted' }))
+  f.deliver(feishuEvent({ chat_id: 'oc_stranger', chat_type: 'p2p' }, 'ou_bob'))
+  // A later permitted turn is a barrier, so ignored events cannot hide behind async delivery.
+  f.deliver(
+    feishuEvent({ chat_id: 'oc_owner', chat_type: 'p2p', message_id: 'owner' }),
+  )
+  await waitFor(() => f.sent.length >= 1)
+  expect(f.logs).toContain('[feishu] ignored message from chat oc_unlisted')
+  expect(f.logs).toContain('[feishu] ignored message from chat oc_stranger')
+  expect(f.t.model.calls).toHaveLength(1)
+  expect(f.sent).toEqual([{ chatId: 'oc_owner', text: 'answer' }])
+  expect(f.historyCalls).toEqual([])
+})
+
+test('Feishu enabled group members share a persisted owner session and both display names reach the model', async () => {
+  const f = await feishuGateway()
+  f.deliver(feishuEvent({ message_id: 'alice', content: '{"text":"first"}' }))
+  await waitFor(() => f.sent.length === 1)
+  f.deliver(
+    feishuEvent({ message_id: 'bob', content: '{"text":"second"}' }, 'ou_bob'),
+  )
+  await waitFor(() => f.sent.length === 2)
+  expect(
+    f.t.vela
+      .sessions()
+      .filter((s) => s.channel === 'feishu')
+      .map((s) => [s.id, s.role]),
+  ).toEqual([['feishu-oc_group', 'owner']])
+  expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Alice: first')
+  expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Bob: second')
+  expect(f.t.model.calls[1]?.tools).toContain('bash')
+  expect(await f.t.readData('sessions/feishu-oc_group.jsonl')).toContain(
+    'Alice: first',
+  )
+})
+
+test('Feishu group messages without a bot mention, including mentions of someone else, never run', async () => {
+  const f = await feishuGateway()
+  f.deliver(feishuEvent({ mentions: [], message_id: 'no_at' }))
+  f.deliver(
+    feishuEvent({
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bob' } }],
+      message_id: 'other_at',
+    }),
+  )
+  f.deliver(feishuEvent({ message_id: 'bot_at' }))
+  await waitFor(() => f.sent.length >= 1)
+  expect(f.t.model.calls).toHaveLength(1)
+  expect(f.sent).toEqual([{ messageId: 'bot_at', text: 'answer' }])
+})
+
+test('Feishu mention fetches earlier group messages since this bot last replied and injects them before the question', async () => {
+  const f = await feishuGateway()
+  f.history.push(
+    historyMessage('question', 'ou_alice', 'question', '4000'),
+    historyMessage('new', 'ou_bob', 'use blue', '3000'),
+    {
+      ...historyMessage('bot_reply', 'cli_bot', 'previous answer', '2000'),
+      sender: { id: 'cli_bot', sender_type: 'app' },
+    },
+    historyMessage('old', 'ou_bob', 'stale detail', '1000'),
+  )
+  f.deliver(
+    feishuEvent({
+      message_id: 'question',
+      create_time: '4000',
+      content: '{"text":"question"}',
+    }),
+  )
+  await waitFor(() => f.sent.length === 1)
+  expect(f.historyCalls).toEqual([
+    { chatId: 'oc_group', before: '4000', limit: 50 },
+  ])
+  expect(f.t.model.calls[0]?.lastUserText).toBe(
+    '[Chat since last reply]\nBob: use blue\n\n[Question]\nAlice: question',
+  )
+})
+
+test('Feishu group answers reply to each triggering message in queue order, including a second sender during a run', async () => {
+  const f = await feishuGateway({
+    responses: [
+      () => {
+        f.deliver(feishuEvent({ message_id: 'second' }, 'ou_bob'))
+        return fauxText('one')
+      },
+      fauxText('two'),
+    ],
+  })
+  f.deliver(feishuEvent({ message_id: 'first' }))
+  await waitFor(() => f.sent.length === 2)
+  expect(f.sent).toEqual([
+    { messageId: 'first', text: 'one' },
+    { messageId: 'second', text: 'two' },
+  ])
+  expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('one')
+  expect(f.t.eventsOf('channel_error')).toEqual([])
+})
+
+test('Feishu owner DM works with empty chats, prefixes the name, and announces the empty chat configuration', async () => {
+  const f = await feishuGateway({ chats: [] })
+  f.deliver(feishuEvent({ chat_id: 'oc_dm', chat_type: 'p2p', mentions: [] }))
+  await waitFor(() => f.sent.length === 1)
+  expect(f.sent).toEqual([{ chatId: 'oc_dm', text: 'answer' }])
+  expect(f.t.model.calls[0]?.lastUserText).toBe('Alice: @_user_1 hello')
+  expect(f.t.vela.session('feishu-oc_dm').role).toBe('owner')
+  expect(f.logs).toContain(
+    '[feishu] chats is empty; only owners’ direct chats are enabled',
+  )
+  expect(f.historyCalls).toEqual([])
+})
+
+test('Feishu cached sender names fall back to open_id and missing history does not lose the question', async () => {
+  const f = await feishuGateway()
+  f.failHistory()
+  f.deliver(feishuEvent({ message_id: 'one' }, 'ou_unknown'))
+  await waitFor(() => f.sent.length === 1)
+  f.deliver(feishuEvent({ message_id: 'two' }, 'ou_unknown'))
+  await waitFor(() => f.sent.length === 2)
+  expect(f.nameCalls).toEqual(['ou_unknown'])
+  expect(f.t.model.calls[0]?.lastUserText).toBe('ou_unknown: hello')
+  expect(
+    f.logs.some((line) => line.includes('history permission denied')),
+  ).toBe(true)
 })
