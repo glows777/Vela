@@ -240,6 +240,7 @@ export interface SessionDeps {
   /** Session events also go to Vela's subscribers */
   forward: (event: VelaEvent, sessionId: string) => void
   onClose: (session: VelaSession) => void
+  onSaved: (sessionId: string) => void
 }
 
 /**
@@ -326,6 +327,7 @@ export class VelaSession {
       deps.sessionStorage,
       deps.temporaryDataDir,
       deps.cwd,
+      () => deps.onSaved(id),
     )
     this.hasUI = options.ui !== undefined
     this.ui = options.ui ? withDefaults(options.ui) : headlessUI(this.emit)

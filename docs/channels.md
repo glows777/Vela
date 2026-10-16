@@ -15,6 +15,10 @@ When a channel delivers a message:
 3. On the session's first message since startup, the session is resumed from storage, so history survives restarts when Vela has a `dataDir`.
 4. It emits `channel_message`, runs the turn, and sends the text of the final assistant message back through the channel's `send()` to the same `channelId`. It then emits `channel_reply`, or `channel_error` if the turn or the send failed (a `send()` that fails must throw; the built-in Feishu channel does). If the final assistant message has no text, nothing is sent and neither event is emitted.
 
+Session save failures are logged at error level with the session id. After three consecutive reported save failures, new messages receive a reply that the session can't be saved, without running another prompt. A successful storage write resets the count, including an explicit SDK `await session.save()` after storage is repaired. Empty saves do not clear the count.
+
+Before automatically closing an idle session, the gateway saves it. If that save fails, the same live session stays open with its pending history; the gateway does not start a periodic retry loop. While blocked, a new message first retries the pending save, and runs a prompt only after a real write succeeds. SDK callers reopening that id get the same session, so recovery does not create a competing history or another header. Channel activity after recovery restores normal idle cleanup. SDK-only recovery clears the count but leaves the session open until the next channel activity or an explicit close/dispose, so a save cannot schedule a close during SDK work. Failed sessions retain memory until recovery or disposal. Explicit SDK `close()`/`dispose()` and writes made by shutdown hooks keep their existing semantics; they can still discard unsaved data. In-session retries are unchanged.
+
 Channel sessions have no UI. A tool whose permission is `ask` is rejected, and extension UI calls fall back to events (see [Extensions](extensions.md)).
 
 ## Writing a channel

@@ -365,6 +365,7 @@ export function createVela(options: VelaOptions = {}): Vela {
           const source = sessions.get(sessionId)
           if (source) runner.notify(event, source)
         },
+        onSaved: (id) => gateway.sessionSaved(id),
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) sessions.delete(closed.id)
         },
