@@ -10,6 +10,15 @@ const MAX_INPUT_LENGTH = 128 * 1024 * 1024
 const JPEG_QUALITY = 80
 
 type Photon = typeof import('@silvia-odwyer/photon-node')
+
+const hasTransparency = (image: PhotonImage): boolean => {
+  const pixels = image.get_raw_pixels()
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] !== 255) return true
+  }
+  return false
+}
+
 let photonPromise: Promise<Photon> | undefined
 
 /** Validate and bound provider image input without exposing decoder errors or data. */
@@ -68,6 +77,9 @@ export async function normalizeImage(
       }
     }
 
+    // Source pixels only. Rotation pads opaque JPEGs with clear corners,
+    // and JPEG encode turns real transparency black.
+    const keepPng = hasTransparency(current)
     switch (metadata.orientation) {
       case 2:
         photon.fliph(current)
@@ -108,11 +120,18 @@ export async function normalizeImage(
       )
     }
     for (;;) {
-      const data = Buffer.from(current.get_bytes_jpeg(JPEG_QUALITY)).toString(
-        'base64',
-      )
+      const encoded = keepPng
+        ? current.get_bytes()
+        : current.get_bytes_jpeg(JPEG_QUALITY)
+      const data = Buffer.from(encoded).toString('base64')
       if (data.length <= MAX_BASE64_LENGTH) {
-        return { image: { type: 'image', data, mimeType: 'image/jpeg' } }
+        return {
+          image: {
+            type: 'image',
+            data,
+            mimeType: keepPng ? 'image/png' : 'image/jpeg',
+          },
+        }
       }
       const width = current.get_width()
       const height = current.get_height()
