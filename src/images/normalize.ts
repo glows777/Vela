@@ -9,12 +9,25 @@ const MAX_DECODE_PIXELS = 64 * 1024 * 1024
 const MAX_INPUT_LENGTH = 128 * 1024 * 1024
 const JPEG_QUALITY = 80
 
+const withinStoredLimits = (
+  orientation: number,
+  mimeType: string,
+  width: number,
+  height: number,
+  dataLength: number,
+) =>
+  orientation === 1 &&
+  mimeType !== 'image/bmp' &&
+  Math.max(width, height) <= MAX_DIMENSION &&
+  dataLength <= MAX_BASE64_LENGTH
+
 type Photon = typeof import('@silvia-odwyer/photon-node')
 let photonPromise: Promise<Photon> | undefined
 
 /** Validate and bound provider image input without exposing decoder errors or data. */
 export async function normalizeImage(
   image: ImageContent,
+  saved = false,
 ): Promise<{ image?: ImageContent; reason?: string }> {
   if (typeof image.data !== 'string' || !image.data.length) {
     return { reason: 'invalid image data' }
@@ -40,6 +53,21 @@ export async function normalizeImage(
   if (metadata.width * metadata.height > MAX_DECODE_PIXELS) {
     return { reason: 'image exceeds the safe decoding dimension limit' }
   }
+  // Saved history already passed the decoder.
+  if (
+    saved &&
+    withinStoredLimits(
+      metadata.orientation,
+      metadata.mimeType,
+      metadata.width,
+      metadata.height,
+      image.data.length,
+    )
+  ) {
+    return {
+      image: { type: 'image', data: image.data, mimeType: metadata.mimeType },
+    }
+  }
 
   let current: PhotonImage | undefined
   try {
@@ -58,10 +86,13 @@ export async function normalizeImage(
       return { reason: 'invalid image dimensions' }
     }
     if (
-      metadata.orientation === 1 &&
-      metadata.mimeType !== 'image/bmp' &&
-      Math.max(width, height) <= MAX_DIMENSION &&
-      image.data.length <= MAX_BASE64_LENGTH
+      withinStoredLimits(
+        metadata.orientation,
+        metadata.mimeType,
+        width,
+        height,
+        image.data.length,
+      )
     ) {
       return {
         image: { type: 'image', data: image.data, mimeType: metadata.mimeType },

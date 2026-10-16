@@ -34,6 +34,7 @@ import {
   type ImageContent,
   type ModelMessage,
   normalizeUserMessage,
+  reuseSavedImages,
   type TextContent,
 } from './messages.ts'
 import {
@@ -811,6 +812,7 @@ export class VelaSession {
   /** Makes the store's current branch the session's context, model and thinking level. */
   private async loadBranch(context: SessionContext): Promise<void> {
     this.contextManager.restore(context)
+    await reuseSavedImages(this.messages)
     for (const [message, info] of context.custom)
       this.customMessages.set(message, info)
     if (

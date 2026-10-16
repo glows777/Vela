@@ -45,6 +45,7 @@ export function isImageContentPart(part: {
 /** Normalize new user content after input hooks, before recording or requesting it. */
 export async function normalizeUserMessage(
   message: ModelMessage,
+  saved = false,
 ): Promise<ModelMessage> {
   if (message.role !== 'user' || typeof message.content === 'string')
     return message
@@ -59,13 +60,18 @@ export async function normalizeUserMessage(
       content.push(part)
       continue
     }
-    const result = await normalizeImage(part)
+    const result = await normalizeImage(part, saved)
     if (result.image) {
-      normalizedImages.set(result.image, {
-        data: result.image.data,
-        mimeType: result.image.mimeType,
+      const image =
+        result.image.data === part.data &&
+        result.image.mimeType === part.mimeType
+          ? part
+          : result.image
+      normalizedImages.set(image, {
+        data: image.data,
+        mimeType: image.mimeType,
       })
-      content.push(result.image)
+      content.push(image)
     } else
       content.push({
         type: 'text',
@@ -73,6 +79,12 @@ export async function normalizeUserMessage(
       })
   }
   return { ...message, content }
+}
+
+export async function reuseSavedImages(
+  messages: ModelMessage[],
+): Promise<void> {
+  for (const message of messages) await normalizeUserMessage(message, true)
 }
 
 /** Request-only conversion: fallback never removes images from the saved history. */
@@ -84,7 +96,7 @@ export async function toModelMessages(
     messages.map(async (message): Promise<AIModelMessage> => {
       if (message.role === 'user' && typeof message.content !== 'string') {
         const normalized = supportsImages
-          ? await normalizeUserMessage(message)
+          ? await normalizeUserMessage(message, true)
           : message
         if (
           normalized.role !== 'user' ||
