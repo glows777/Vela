@@ -2,7 +2,7 @@ import { constants, createReadStream, readdirSync } from 'node:fs'
 import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import z from 'zod'
-import { imageMimeType } from '../images/metadata.ts'
+import { imageMimeType, isBinaryFile } from '../images/metadata.ts'
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -21,9 +21,9 @@ export const READ_MAX_BYTES = 50 * 1024
 
 // 96 MiB of bytes encode to the normalizer's 128 MiB base64 input limit.
 const READ_MAX_IMAGE_BYTES = 96 * 1024 * 1024
-const IMAGE_HEADER_BYTES = 18
+const FILE_HEADER_BYTES = 8192
 
-/** Bound image reads before allocating base64; text files still use the existing pager. */
+/** Reject binary text and bound image reads before allocating base64. */
 async function readImage(
   file: string,
   path: string,
@@ -31,7 +31,7 @@ async function readImage(
 ): Promise<ToolExecutionResult | undefined> {
   const handle = await open(file, 'r')
   try {
-    const header = Buffer.alloc(IMAGE_HEADER_BYTES)
+    const header = Buffer.alloc(FILE_HEADER_BYTES)
     let headerLength = 0
     while (headerLength < header.length) {
       const { bytesRead } = await handle.read(
@@ -43,8 +43,15 @@ async function readImage(
       if (!bytesRead) break
       headerLength += bytesRead
     }
-    const mimeType = imageMimeType(header.subarray(0, headerLength))
-    if (!mimeType) return undefined
+    const bytes = header.subarray(0, headerLength)
+    const mimeType = imageMimeType(bytes)
+    if (!mimeType) {
+      if (isBinaryFile(bytes))
+        throw new Error(
+          `Cannot read ${path}: binary file. Use bash tools such as pdftotext or unzip -l to inspect it.`,
+        )
+      return undefined
+    }
     const tooLarge = () =>
       new Error('Cannot read image: image exceeds the safe decoding size limit')
     if ((await handle.stat()).size > READ_MAX_IMAGE_BYTES) throw tooLarge()
