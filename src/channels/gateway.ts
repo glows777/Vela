@@ -57,6 +57,7 @@ export class ChannelGateway {
   private queues = new Map<string, Promise<void>>()
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
+  private subscribed = new WeakSet<VelaSession>()
   /** Retained across idle closes; only an actual successful write clears a failure streak. */
   private saveFailures = new Map<string, number>()
   private active = new Set<VelaSession>()
@@ -192,8 +193,8 @@ export class ChannelGateway {
     session.channel = channelName
     // Re-evaluate the role on every message (the allowlist may change); defaults to guest
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
-    if (!this.resumed.has(session)) {
-      this.resumed.add(session)
+    if (!this.subscribed.has(session)) {
+      this.subscribed.add(session)
       session.subscribe((event) => {
         if (event.type !== 'session_save_failed') return
         this.saveFailures.set(id, (this.saveFailures.get(id) ?? 0) + 1)
@@ -201,7 +202,14 @@ export class ChannelGateway {
           `[gateway] Could not save session ${id}: ${errorMessage(event.error)}`,
         )
       })
+    }
+    // A blocked session must reply even when the storage outage also prevents reads.
+    if (
+      (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
+      !this.resumed.has(session)
+    ) {
       await session.resume()
+      this.resumed.add(session)
     }
     session.emit({
       type: 'channel_message',

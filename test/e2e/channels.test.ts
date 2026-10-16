@@ -494,3 +494,43 @@ test('a failed idle close does not let a reopened channel session bypass the fai
   expect(t.model.calls).toHaveLength(2)
   expect(sent.at(-1)?.text).toContain("can't be saved")
 })
+
+test('a blocked session still replies after idle close when storage reads also fail', async () => {
+  const { storage } = failingStorage()
+  let failReads = false
+  let failedReads = 0
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two')],
+    channelIdleMs: 0,
+    sessionStorage: {
+      ...storage,
+      async load(id) {
+        if (failReads) {
+          failedReads++
+          throw new Error('storage unavailable')
+        }
+        return storage.load(id)
+      },
+    },
+  })
+  const { sent, deliver } = fakeChannel(t)
+  const closed = () =>
+    !t.vela.sessions().some((session) => session.id === 'fake-c1-u1')
+  await deliver('u1', 'first')
+  await waitFor(closed)
+  await deliver('u1', 'third failure')
+  await waitFor(closed)
+  expect(t.eventsOf('session_save_failed').length).toBeGreaterThanOrEqual(3)
+
+  failReads = true
+  await deliver('u1', 'refused during full outage')
+  await waitFor(closed)
+  await deliver('u1', 'still refused during full outage')
+  expect(sent).toHaveLength(4)
+  for (const reply of sent.slice(2))
+    expect(reply.text).toContain("can't be saved")
+  expect(failedReads).toBe(0)
+  expect(t.model.calls).toHaveLength(2)
+  expect(t.eventsOf('channel_message')).toHaveLength(4)
+  expect(t.eventsOf('channel_reply')).toHaveLength(4)
+})
