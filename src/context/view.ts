@@ -1,10 +1,15 @@
+import {
+  IMAGE_CHARS,
+  isImageContentPart,
+  type ModelMessage,
+} from '../messages.ts'
 /**
  * Terminal view for /context, modeled on Claude Code's /context view.
  *
  * Splits context usage by category and draws it as a grid where each cell ≈ 1/256 of the window (16x16).
  * Each category gets its own color (ANSI 256) so you can see at a glance what is eating the context.
  */
-import type { ModelMessage } from 'ai'
+
 import { formatUsd } from '../usage/format.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
 
@@ -169,12 +174,24 @@ function approxMessageTokens(messages: ModelMessage[]): number {
     if (typeof m.content === 'string') chars += m.content.length
     else if (Array.isArray(m.content)) {
       for (const part of m.content) {
-        if (part.type === 'text') chars += (part.text || '').length
+        if (isImageContentPart(part)) chars += IMAGE_CHARS
+        else if (part.type === 'text') chars += (part.text || '').length
         else if (part.type === 'tool-call')
           chars += JSON.stringify(part.input || {}).length + 80
         else if (part.type === 'tool-result') {
           const out = part.output
-          if ('value' in out && out.value)
+          if (out.type === 'content')
+            chars += out.value.reduce(
+              (total, item) =>
+                total +
+                (isImageContentPart(item)
+                  ? IMAGE_CHARS
+                  : item.type === 'text'
+                    ? item.text.length
+                    : JSON.stringify(item).length),
+              0,
+            )
+          else if ('value' in out && out.value)
             chars +=
               typeof out.value === 'string'
                 ? out.value.length

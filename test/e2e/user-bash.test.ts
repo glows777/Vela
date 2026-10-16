@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import type { ModelMessage } from 'ai'
+import type { ModelMessage } from '../../src/messages.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

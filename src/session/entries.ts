@@ -1,5 +1,5 @@
-import type { ModelMessage, UserContent } from 'ai'
 import type { CustomMessageInfo } from '../agent/events.ts'
+import type { ModelMessage, UserContent } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 
 /**

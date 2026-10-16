@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import type { ModelMessage } from 'ai'
 import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
+import type { ModelMessage } from '../messages.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type {
   ChannelDefinition,

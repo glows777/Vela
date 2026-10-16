@@ -1,8 +1,8 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { ModelMessage, UserContent } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelDefinition } from '../channels/types.ts'
 import type { VelaLogger } from '../logger.ts'
+import type { ImageContent, ModelMessage, UserContent } from '../messages.ts'
 import type { ProviderDefinition } from '../models/index.ts'
 import type { BranchSummaryEntry, SessionEntry } from '../session/entries.ts'
 import type { ToolDefinition } from '../tools/registry.ts'
@@ -96,6 +96,7 @@ export type InputSource =
  */
 export interface InputEvent {
   type: 'input'
+  images?: ImageContent[]
   text: string
   source: InputSource
   /** How the input will be queued while the session is running; undefined when idle */
@@ -105,7 +106,7 @@ export interface InputEvent {
 /** `transform` replaces the text (later handlers see the new text); `handled` drops the input (prompt() resolves). */
 export type InputEventResult =
   | { action: 'continue' }
-  | { action: 'transform'; text: string }
+  | { action: 'transform'; text: string; images?: ImageContent[] }
   | { action: 'handled' }
 
 /**

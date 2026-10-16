@@ -2,7 +2,6 @@ import { open } from 'node:fs/promises'
 import {
   generateText,
   type LanguageModelUsage,
-  type ModelMessage,
   NoObjectGeneratedError,
   Output,
   type ToolResultPart,
@@ -10,6 +9,7 @@ import {
 } from 'ai'
 import z from 'zod'
 import { DEFAULT_LIMITS } from '../limits.ts'
+import { type ModelMessage, toModelMessages } from '../messages.ts'
 import {
   branchSummaryMessageText,
   summaryMessageText,
@@ -314,7 +314,7 @@ export async function summarize(
   const response = await generateText({
     model: request.model,
     instructions: request.systemPrompt,
-    messages,
+    messages: await toModelMessages(messages, false),
     tools,
     abortSignal: request.abortSignal,
     output: Output.json(),

@@ -17,7 +17,6 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import type { ModelMessage } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import type {
   AuthInteraction,
@@ -25,6 +24,7 @@ import type {
   LoginOptions,
 } from '../auth/types.ts'
 import type { SessionUI } from '../extensions/types.ts'
+import type { ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
   branchSummaryMessageText,

@@ -1,7 +1,12 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { LanguageModelUsage, ModelMessage } from 'ai'
+import type { LanguageModelUsage } from 'ai'
 import { toolResultOutputToText } from '../context/tool-result-output.ts'
+import {
+  IMAGE_CHARS,
+  isImageContentPart,
+  type ModelMessage,
+} from '../messages.ts'
 
 /** Price in $ / 1M tokens (pi's `cost`); models get it from the built-in catalog or models.json. */
 export interface ModelPricing {
@@ -242,13 +247,28 @@ function countMessageChars(message: ModelMessage): number {
   if (!Array.isArray(message.content)) return chars
 
   for (const part of message.content) {
-    if ('text' in part && typeof part.text === 'string') {
+    if (isImageContentPart(part)) {
+      chars += IMAGE_CHARS
+    } else if ('text' in part && typeof part.text === 'string') {
       chars += part.text.length
     } else if ('output' in part) {
+      const output = part.output
       chars +=
-        part.output.type === 'json'
-          ? JSON.stringify(part.output.value).length
-          : toolResultOutputToText(part.output).length
+        output.type === 'content'
+          ? output.value.reduce(
+              (total, item) =>
+                total +
+                (isImageContentPart(item)
+                  ? IMAGE_CHARS
+                  : item.type === 'text'
+                    ? item.text.length
+                    : toolResultOutputToText({ type: 'content', value: [item] })
+                        .length),
+              0,
+            )
+          : output.type === 'json'
+            ? JSON.stringify(output.value).length
+            : toolResultOutputToText(output).length
     } else if ('input' in part) {
       chars += JSON.stringify(part.input)?.length ?? 0
     }
