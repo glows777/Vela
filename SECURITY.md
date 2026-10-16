@@ -16,6 +16,6 @@ Vela runs tools with the permissions of the user who started it and treats exten
 
 Reports we want include:
 
-- A `guest` or `collaborator` session (for example a channel sender) reaching a tool, file or memory its role should not allow.
+- A `guest` or `collaborator` session reaching a tool, file or memory its role should not allow. A channel chat counts only when `roleFor` returns that role. The default channel role is `owner`.
 - Project settings, extensions or skills loading without the project being trusted.
 - Secrets from settings or environment variables leaking into session files, logs, events or model requests where they are not expected.

@@ -62,7 +62,7 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 
 Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
-Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions; MCP tools are not. See [Security](security.md#session-roles).
+Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions; MCP tools are not. See [Security](security.md#core-sdk-session-roles).
 
 ## Data
 
@@ -158,7 +158,7 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 
 `web_search` is registered only when a key is set. With a Tavily key it uses [Tavily](https://tavily.com) and returns an answer summary plus page content; with a Serper key it uses [Serper](https://serper.dev) and returns Google result snippets. If both are set, Tavily is used.
 
-Guest sessions can use `web_search` but not `web_fetch`, so outside senders cannot make Vela request internal addresses.
+A `guest` session can use `web_search` but not `web_fetch`. An enabled channel chat defaults to `owner` and can call `web_fetch`.
 
 **SDK.** `web({ tavilyKey, serperKey })`; both are optional.
 
