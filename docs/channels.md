@@ -39,12 +39,14 @@ The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no
 - In enabled groups, only messages that **@ this bot** trigger a run. A message without a mention, or mentioning another person/bot, does not. Vela resolves its bot open_id at startup; if that fails it logs a warning and ignores group messages until a successful restart. Owner DMs still work.
 - Group answers use `im.message.reply` on the triggering message id. DMs use `im.message.create`. Feishu controls whether an already-threaded trigger receives a threaded reply.
 - A second @ during a run receives a Queue / Steer / Stop card. Queue is the default if nobody clicks. See [Run controls](#run-controls). Other chats can still run concurrently.
-- Text and rich-text (`post`) messages become plain text, with mention markers removed. Unsupported images/files get a short request for text, only in an enabled DM or when this bot is mentioned in an enabled group. Image/file processing is not implemented.
+- Text and rich-text (`post`) messages become plain text, with mention markers removed. Image messages and `img` elements in posts go to the model as images; an image alone triggers a run in an enabled DM. Existing image normalization resizes or drops invalid images with a reason, and non-vision models receive the existing image placeholder.
+- File messages are streamed to `<dataDir>/channels/<session id>/files/<message_id>-<name>`. Only a sanitized base name is used. The model receives `[file: <name>, saved at <absolute path>]` and can use `read_file` or bash tools to inspect it. Files above **20MB** are stopped, the partial file is removed, and the sender receives a too-large reply. Files remain with the session for resumed use; there is no automatic cleanup or native PDF/document input.
+- Audio, video, stickers and merged forwards remain unsupported and receive a short reply saying text, images and files are supported, only in an enabled DM or when this bot is mentioned in an enabled group.
 - The last 1000 incoming message ids are remembered to suppress duplicate event delivery.
 
 ### Run controls
 
-When a new text/post message arrives during the chat's run, Vela sends an interactive Card 2.0 (`schema: "2.0"`) in reply to that message (a normal send for DMs). Its buttons use `column_set` / `column` / `button` and `behaviors: [{ type: "callback", value }]`, matching the subscribed `card.action.trigger` event. The [Lark SDK's card troubleshooting notes](https://github.com/larksuite/node-sdk/blob/main/docs/channel.md#common-issues) describe the v1-payload mismatch that can prevent clicks from reaching that callback.
+When a new text, post, image or file message arrives during the chat's run, Vela sends an interactive Card 2.0 (`schema: "2.0"`) in reply to that message (a normal send for DMs). Its buttons use `column_set` / `column` / `button` and `behaviors: [{ type: "callback", value }]`, matching the subscribed `card.action.trigger` event. The [Lark SDK's card troubleshooting notes](https://github.com/larksuite/node-sdk/blob/main/docs/channel.md#common-issues) describe the v1-payload mismatch that can prevent clicks from reaching that callback.
 
 - **Queue (default)**: wait for the current run and reply, then answer the new message separately. Doing nothing has the same behavior; there is no extra waiting period.
 - **Steer**: prepare the new message with its sender name and group context, then pass it to the current task with `streamingBehavior: 'steer'`. History excludes the active trigger and messages older than its `create_time`, since the session already has that context. Other messages at the same millisecond are retained; timestamps alone cannot order them. The current run sends one final reply to its original trigger, covering the original and steered inputs. The steered message does not start its own answer.
@@ -58,7 +60,7 @@ The callback reserves the choice and returns its toast immediately; it does not 
 
 Each incoming user message is prefixed with the sender's display name. Vela uses `contact.user.get` with `user_id_type: open_id`; names and fallback results are cached in memory (up to 1000 entries). If the contact API is unavailable, the name is empty, or the user is outside the app's contact data scope, the open_id is used instead. Restarting clears this cache. Slash-prefixed inputs are passed through verbatim to preserve extension commands, `/skill:` and prompt-template expansion; they skip name/context wrapping. Ordinary chat questions keep both.
 
-For a group @, after any earlier queued reply finishes, Vela fetches at most 50 recent chat-history messages. It takes text/post messages after this bot's last reply and before the triggering question, excludes the question itself and recalled messages, and injects them in chronological order into the same user message:
+For a group @, after any earlier queued reply finishes, Vela fetches at most 50 recent chat-history messages. It takes text/post messages and attachment placeholders after this bot's last reply and before the triggering question, excludes the question itself and recalled messages, and injects them in chronological order into the same user message:
 
 ```text
 [Chat since last reply]
@@ -68,6 +70,8 @@ Bob: Agreed.
 [Question]
 Alice: What should we do next?
 ```
+
+The history window also supplies at most the four most recent images (including post images). In a group, send an image first, then @ the bot in a text message. Historical files appear only as `[file: <name>]` and are not downloaded.
 
 With no earlier text, the input is just `Alice: What should we do next?`. If history cannot be fetched, Vela logs the failure and answers the named question alone. It does not claim the missing context was read. The API query is bounded to one page; older messages beyond that page are omitted. Feishu's chat-history endpoint returns thread roots, not all replies inside separate threads.
 
@@ -81,6 +85,7 @@ Use application (`tenant_access_token`) permissions. The bot must be enabled/pub
 - [Read group history](https://open.feishu.cn/document/server-docs/im-v1/message/list): `im:message.group_msg` **plus** one of `im:message` or `im:message:readonly` (legacy `im:message.history:readonly` also works). Mention-only event permission does not provide this history access.
 - [Resolve display names](https://open.feishu.cn/document/server-docs/contact-v3/user/get): `contact:contact.base:readonly` for the contact API **and** `contact:user.base:readonly` for name fields. Include the relevant people in the app's contact data scope. No email/phone access is needed. Existing broader legacy contact permissions may already cover these fields.
 - [Send replies](https://open.feishu.cn/document/server-docs/im-v1/message/reply), including interactive control cards (`msg_type: interactive`): `im:message:send_as_bot` or `im:message` (legacy `im:message:send` also works). No CardKit API or additional card-management permission is used. The separate `card.action.trigger` callback subscription above is required for buttons to work; message reception alone does not deliver clicks.
+- Download message images and files: `im:resource`. The bot must be in the same chat as the message.
 - [Identify this bot](https://open.feishu.cn/document/client-docs/bot-v3/obtain-bot-info): no additional API permission beyond enabled bot capability and the app's tenant token.
 
 ### Migration
@@ -90,6 +95,8 @@ This is a breaking channel change. A deployment that sets only `owners` now answ
 Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id>`. Old per-sender files remain on disk and are not automatically combined or resumed as shared history. The new chat starts a separate persisted session; keep old files if you need their transcripts. This avoids silently exposing a previous private sender history to the whole group. Existing core SDK sessions and roles are unchanged.
 
 Custom `FeishuTransport` implementations must add `getBotId`, `getSenderName`, `listMessages` and `reply`. `listMessages` returns newest-first history with millisecond `create_time`; `reply` returns `{ messageId, createTime }` from the service's successful reply receipt. Sends/replies and API errors must reject, so the gateway reports failure instead of a successful reply.
+
+For attachments, implement `getResource(messageId, key, type)` returning a Node readable stream, where `type` is `image` or `file`. The default transport calls `im.messageResource.get` and uses `getReadableStream()`.
 
 For run controls, implement `sendCard(chatId, card, replyToId?)` and accept the second handler in `start(onMessage, onAction)`. Send the Card 2.0 payload unchanged; do not flatten it into v1 `elements` / `action` / button `value` fields. Deliver the v2 callback body unchanged to `onAction` and return its `{ toast }` response to Feishu. Group cards use `replyToId`; DM cards use `chatId`. Card delivery must not be recorded as an ordinary text answer.
 
@@ -118,7 +125,7 @@ Register a `ChannelDefinition` with `vela.registerChannel()` from an extension. 
 
 Optional `prepareMessage(message, activeMessage?)` performs asynchronous preprocessing when the gateway is ready to run the input; return `undefined` for input handled without a prompt. On Steer, the optional second argument is the active trigger already in the shared session, so a channel can exclude previously supplied context. Ordinary queued messages receive no active trigger. Existing one-argument implementations remain valid. Optional `showRunControls(message, { signal, choose })` can present the queued input's choices. `choose('queue' | 'steer' | 'stop')` synchronously reserves a choice and returns false after expiry or a prior choice. The signal aborts with the original run's lifetime; remove any stored controls then. Do not serialize incoming delivery behind the preceding handler if the channel needs to offer controls during that run.
 
-Incoming messages contain `channelId`, `senderId`, `senderName`, `text`, optional `replyToId` and optional `raw`. The sender identifies the speaker, not a separate session. Outgoing `replyToId` identifies the service message to answer; a custom transport decides how to use it.
+Incoming messages contain `channelId`, `senderId`, `senderName`, `text`, optional `images: ImageContent[]`, optional `replyToId` and optional `raw`. The sender identifies the speaker, not a separate session. Outgoing `replyToId` identifies the service message to answer; a custom transport decides how to use it.
 
 Custom channels can still choose an SDK role using `roleFor`, but switching roles does not isolate the shared transcript. Do not mix untrusted and trusted participants in one chat and assume a guest role hides the earlier owner turns. Enforce your chat boundary before invoking the incoming handler.
 

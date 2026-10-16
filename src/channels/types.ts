@@ -1,3 +1,4 @@
+import type { ImageContent } from '../messages.ts'
 import type { Role } from '../security/roles.ts'
 
 export interface IncomingMessage {
@@ -7,6 +8,7 @@ export interface IncomingMessage {
   senderId: string
   senderName: string
   text: string
+  images?: ImageContent[]
   /** Reply to this service message instead of starting a new message (for group conversations). */
   replyToId?: string
   raw?: unknown

@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream'
 import type {
   FeishuHistoryMessage,
   FeishuMessageEvent,
@@ -19,7 +20,23 @@ export function fakeFeishu() {
   const history: FeishuHistoryMessage[] = []
   let failHistory = false
   let failReply = false
+  const resources = new Map<string, Buffer[]>()
+  const resourceCalls: {
+    messageId: string
+    key: string
+    type: 'image' | 'file'
+  }[] = []
   const transport: FeishuTransport = {
+    getResource: async (
+      messageId: string,
+      key: string,
+      type: 'image' | 'file',
+    ) => {
+      resourceCalls.push({ messageId, key, type })
+      const chunks = resources.get(key)
+      if (!chunks) throw new Error(`Missing fake resource ${key}`)
+      return Readable.from(chunks)
+    },
     start: async (handler, onAction) => {
       receive = handler
       action = onAction
@@ -50,6 +67,8 @@ export function fakeFeishu() {
   }
   return {
     transport,
+    resources,
+    resourceCalls,
     sent,
     cards,
     callback: (event: CardAction) => action?.(event),
