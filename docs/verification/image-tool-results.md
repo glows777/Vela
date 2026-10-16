@@ -28,7 +28,7 @@ bun run build
 bun run smoke:consumer
 ```
 
-The final local suite passed **757 tests, 0 failures, 5586 assertions across 92 files**. Typecheck, lint (existing warnings only), build and the packed-package consumer smoke passed. The consumer smoke installs the tarball into empty Node and Bun projects; both printed `tool image sdk ok` after calling the real `read_file` on an oversized image with a misleading extension and forcing Photon from `dist/`.
+The final local suite passed **758 tests, 0 failures, 5588 assertions across 92 files**. Typecheck, lint (existing warnings only), build and the packed-package consumer smoke passed. The consumer smoke installs the tarball into empty Node and Bun projects; both printed `tool image sdk ok` after calling the real `read_file` on an oversized image with a misleading extension and forcing Photon from `dist/`.
 
 Independent review passed 100 focused tests and typecheck. Separate practical probes verified all three adapters' failed-image/call-order behavior, interrupted parallel tools followed by resume, native-result recovery and summary safety. No remaining PR 2 blocker was found.
 
@@ -87,3 +87,5 @@ The actual public SDK walkthrough saved at `/tmp/vela-evidence/tool-order-pr65-f
 The final independent re-review passed 100 affected/neighboring tests (416 assertions), typecheck, and a real SDK many-caption probe. That probe now emitted 100 preview characters plus one recovery note. No remaining blocking issue was found.
 
 Forge's non-blocking pagination clarification is covered by a further failing-first faux E2E: the model sees an explicit description that `offset`, `limit` and `column` are ignored for images, and a call supplying those parameters still receives the complete image. The 13 targeted file/image tests, typecheck and lint passed. This follow-up changes guidance only, not image or text read behavior.
+
+After merging main `b834bc2` (#66 and #71 documentation), the full 758-test suite, typecheck, lint, build and packed Node/Bun consumer smoke passed. Independent merge review confirmed both changelog entries and the migration notice were retained, with identical emitted JavaScript for all seven TypeScript files touched by the merge. Session-format documentation also names canonical tool images as an exception to AI SDK-compatible saved shapes.
