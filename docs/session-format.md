@@ -45,7 +45,7 @@ Every other line is an entry. All entries have pi's base fields:
 
 | `type` | Fields | Description |
 |---|---|---|
-| `message` | `message`, `stopReason?`, `nestedCalls?`, `details?` | A message entered the conversation (user input, assistant reply, tool results). `message` is an AI SDK `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `nestedCalls` is on a tool message whose tools called other tools through `ctx.executeTool()`: by tool call id, `{ calls: [{ id, name, arguments?, argumentsBytes?, status, durationMs?, error? }], complete }` (pi's `nestedCalls`, with pi's limits: 256 calls, 8 KB of arguments per call and 32 KB in total, 500 characters of error); not sent to the model. `details` is on a tool message whose tools returned display data (`tool_execution_end`'s `details`, such as `edit_file`'s diff), by tool call id (pi's `ToolResultMessage.details`); not sent to the model. The TUI uses both to draw a resumed session |
+| `message` | `message`, `stopReason?`, `nestedCalls?`, `details?` | A message entered the conversation (user input, assistant reply, tool results). `message` is a Vela `ModelMessage` (see [Messages](#messages)). `stopReason` (`aborted` or `error`) marks an assistant message cut off while it streamed: like pi, it is kept for the record but never sent to the model again. `nestedCalls` is on a tool message whose tools called other tools through `ctx.executeTool()`: by tool call id, `{ calls: [{ id, name, arguments?, argumentsBytes?, status, durationMs?, error? }], complete }` (pi's `nestedCalls`, with pi's limits: 256 calls, 8 KB of arguments per call and 32 KB in total, 500 characters of error); not sent to the model. `details` is on a tool message whose tools returned display data (`tool_execution_end`'s `details`, such as `edit_file`'s diff), by tool call id (pi's `ToolResultMessage.details`); not sent to the model. The TUI uses both to draw a resumed session |
 | `bash_execution` | `command`, `output`, `exitCode?`, `cancelled`, `truncated`, `fullOutputPath?`, `excludeFromContext?` | A command the user ran with `!` / `!!` or `session.executeBash()` (pi's `bashExecution` message). `output` is the last 2,000 lines or 50 KB; when `truncated`, `fullOutputPath` has the whole output. `exitCode` is missing when the command was cancelled. The model gets it as a user message (`bashExecutionToText()`, pi's text: ``Ran `command` `` and the output in a code block, then `(command cancelled)`, `Command exited with code N` or the full-output path); `excludeFromContext` (`!!`) keeps it out of the context |
 | `model_change` | `model` | The session's model, as `provider/id`. Written when a session starts with a model given by name and on `setModel()` with a name; `resume()` restores the latest |
 | `thinking_level_change` | `thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Written when a session starts and on `setThinkingLevel()`; `resume()` restores the latest |
@@ -54,7 +54,7 @@ Every other line is an entry. All entries have pi's base fields:
 | `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
 | `branch_summary` | `fromId`, `summary` | A summary of the branch the session left with `navigateTree(…, { summarize: true })` (`/tree` → summarize). It is a child of the entry the session moved to, and the model sees it as a user message starting with `[Summary of the conversation branch you left]`. `fromId` is the leaf that was left (`root` if none) |
 | `label` | `targetId`, `label?` | A bookmark on entry `targetId` (`/tree` → label, `session.setLabel()`); no `label` clears it. Not sent to the model |
-| `custom_message` | `customType`, `content`, `display`, `details?` | pi's custom message: an extension's `session.sendMessage()`, or a loop-detection warning (`customType: loop`, `display: true`). The model context gets it as a user message with `content` (a string or AI SDK text / image parts); `display` and `details` are for UIs and the extension, never sent to the model |
+| `custom_message` | `customType`, `content`, `display`, `details?` | pi's custom message: an extension's `session.sendMessage()`, or a loop-detection warning (`customType: loop`, `display: true`). The model context gets it as a user message with `content` (a string or parts, including an image part `{ "type": "image", "data", "mimeType" }`); `display` and `details` are for UIs and the extension, never sent to the model |
 | `custom` | `customType`, `data?` | pi's custom entry: extension state from `session.appendEntry()`. Not part of the model context |
 
 Entries of other types (from a newer Vela or an extension) are kept and ignored.
@@ -85,16 +85,17 @@ The model and thinking level are the latest `model_change` and `thinking_level_c
 
 ## Messages
 
-Messages are AI SDK `ModelMessage` values, stored as the AI SDK produces them. The common shapes:
+Messages are Vela `ModelMessage` values. Assistant messages, tool messages, and text-only user messages match the AI SDK shapes below. A user message can also contain an inline image part.
 
 ```json
+{"role":"user","content":[{"type":"text","text":"What is in this picture?"},{"type":"image","data":"<base64>","mimeType":"image/png"}]}
 {"role":"user","content":"What does notes.txt say?"}
 {"role":"assistant","content":[{"type":"text","text":"Let me check."},{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]}
 {"role":"tool","content":[{"type":"tool-result","toolCallId":"call_1","toolName":"read_file","output":{"type":"text","value":"Ship the docs on Friday."}}]}
 {"role":"assistant","content":[{"type":"reasoning","text":"..."},{"type":"text","text":"The note says: ship the docs on Friday."}]}
 ```
 
-- `user` content is a string (or AI SDK content parts).
+- `user` content is a string or an array of parts. An inline image part is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `data` is base64. `mimeType` is a media type such as `image/png`. This part is not the AI SDK image part, which uses `image` and `mediaType`. Vela converts the stored part to an AI SDK file when it builds a provider request. See [Image input](sdk.md#image-input).
 - `assistant` content is a list of `text`, `reasoning` and `tool-call` parts. Provider-specific `providerOptions` may appear on parts.
 - `tool` content is a list of `tool-result` parts. `output` is an AI SDK tool result output, usually `{ "type": "text", "value": "..." }`.
 
