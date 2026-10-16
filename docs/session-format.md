@@ -95,7 +95,7 @@ Messages are Vela `ModelMessage` values. Assistant messages, tool messages, and 
 {"role":"assistant","content":[{"type":"reasoning","text":"..."},{"type":"text","text":"The note says: ship the docs on Friday."}]}
 ```
 
-- `user` content is a string or an array of parts. An inline image part is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `data` is base64. `mimeType` is a media type such as `image/png`. This part is not the AI SDK image part, which uses `image` and `mediaType`. Vela converts the stored part to an AI SDK file when it builds a provider request. See [Image input](sdk.md#image-input).
+- `user` content is a string or an array of parts. An inline image part is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `data` is base64. `mimeType` is a media type such as `image/png`. The AI SDK image part `{ type: 'image', image, mediaType }` is deprecated in ai@7. Map each stored image part to the file part `{ type: 'file', data, mediaType }`. Vela does that mapping on the provider request and leaves the saved image in place. See [Image input](sdk.md#image-input).
 - `assistant` content is a list of `text`, `reasoning` and `tool-call` parts. Provider-specific `providerOptions` may appear on parts.
 - `tool` content is a list of `tool-result` parts. `output` is an AI SDK tool result output, usually `{ "type": "text", "value": "..." }`.
 
