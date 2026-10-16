@@ -96,7 +96,7 @@ export async function toModelMessages(
     messages.map(async (message): Promise<AIModelMessage> => {
       if (message.role === 'user' && typeof message.content !== 'string') {
         const normalized = supportsImages
-          ? await normalizeUserMessage(message, true)
+          ? await normalizeUserMessage(message)
           : message
         if (
           normalized.role !== 'user' ||
