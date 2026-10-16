@@ -201,3 +201,72 @@ test('microcompaction keeps image results inline while folding old text results'
     'tool result preview omitted',
   )
 })
+
+test('invalid tool images become a reason without losing text or stopping the agent', async () => {
+  const t = createTestVela({
+    extensions: [
+      (v) =>
+        v.registerTool({
+          ...pictureTool(),
+          execute: async () =>
+            new ToolExecutionResult({}, [
+              { type: 'text', text: 'Keep the answer' },
+              { type: 'image', data: 'invalid', mimeType: 'image/png' },
+            ]),
+        }),
+    ],
+    responses: [fauxToolCall('picture', {}), fauxText('done')],
+  })
+  await t.run('Get picture')
+  expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(0)
+  const output = JSON.stringify(t.model.calls[1]!.toolResults)
+  expect(output).toContain('Keep the answer')
+  expect(output).toMatch(/image omitted.*invalid/i)
+})
+
+test('text-only tool_result transforms keep images unless content explicitly replaces them', async () => {
+  const t = createTestVela({
+    extensions: [
+      (v) => {
+        v.registerTool(pictureTool())
+        v.on('tool_result', (event) =>
+          event.toolName === 'picture'
+            ? { output: 'A redacted caption' }
+            : undefined,
+        )
+      },
+    ],
+    responses: [fauxToolCall('picture', {}), fauxText('done')],
+  })
+  await t.run('Get picture')
+  expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
+  expect(JSON.stringify(t.model.calls[1]!.toolResults)).toContain(
+    'A redacted caption',
+  )
+  expect(JSON.stringify(t.model.calls[1]!.toolResults)).not.toContain(
+    'A blue picture',
+  )
+})
+
+test('oversized tool text is previewed while its image stays in the request', async () => {
+  const t = createTestVela({
+    extensions: [
+      (v) =>
+        v.registerTool({
+          ...pictureTool(),
+          maxResultChars: 100,
+          execute: async () =>
+            new ToolExecutionResult({ data: image().data }, [
+              { type: 'text', text: 'Caption '.repeat(500) },
+              image(),
+            ]),
+        }),
+    ],
+    responses: [fauxToolCall('picture', {}), fauxText('done')],
+  })
+  await t.run('Get picture')
+  expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
+  expect(JSON.stringify(t.model.calls[1]!.toolResults)).not.toContain(
+    'Caption '.repeat(500),
+  )
+})
