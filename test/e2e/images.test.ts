@@ -22,6 +22,14 @@ const fixture = (name = 'blue.png') => ({
   ).toString('base64'),
   mimeType: 'image/png',
 })
+/** PNG signature plus a complete IHDR and no image data. Header checks accept it; the decoder does not. */
+const headerOnlyPng = () => ({
+  type: 'image' as const,
+  data: readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))
+    .subarray(0, 33)
+    .toString('base64'),
+  mimeType: 'image/png',
+})
 const encoded = (data: SharedV4FileData) => {
   if (data.type !== 'data') throw new Error('Expected inline image data')
   return typeof data.data === 'string'
@@ -61,6 +69,48 @@ test('oversized prompt image is resized before it reaches the provider', async (
   expect(parts).toHaveLength(1)
   expect(encoded(parts[0]!.data)).not.toBe(image.data)
   expect(encoded(parts[0]!.data).length).toBeLessThanOrEqual(4.5 * 1024 * 1024)
+})
+
+test('a fresh context-hook image with only a PNG header is omitted instead of sent', async () => {
+  const image = headerOnlyPng()
+  const t = createTestVela({
+    extensions: [
+      (vela) => {
+        vela.on('context', (event) => {
+          event.messages.push({
+            role: 'user',
+            content: [{ type: 'text', text: 'hook image' }, image],
+          })
+        })
+      },
+    ],
+    responses: [fauxText('ok')],
+  })
+  await t.session.prompt('look')
+  const wire = JSON.stringify(t.model.calls[0]!.prompt)
+  expect(imagesIn(t.model.calls[0]!.prompt)).toHaveLength(0)
+  expect(wire).toContain(
+    '(image omitted: invalid image or image decoding failed)',
+  )
+  expect(wire).not.toContain(image.data)
+  expect(JSON.stringify(t.session.messages)).not.toContain(image.data)
+})
+
+test('an appended image with only a PNG header is omitted from the request and kept in history', async () => {
+  const image = headerOnlyPng()
+  const t = createTestVela({ responses: [fauxText('ok')] })
+  t.session.append({
+    role: 'user',
+    content: [{ type: 'text', text: 'appended' }, image],
+  })
+  await t.session.prompt('now')
+  const wire = JSON.stringify(t.model.calls[0]!.prompt)
+  expect(imagesIn(t.model.calls[0]!.prompt)).toHaveLength(0)
+  expect(wire).toContain(
+    '(image omitted: invalid image or image decoding failed)',
+  )
+  expect(wire).not.toContain(image.data)
+  expect(JSON.stringify(t.session.messages)).toContain(image.data)
 })
 
 test('invalid image is dropped with a useful text reason instead of failing the whole prompt', async () => {
