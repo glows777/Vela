@@ -29,7 +29,7 @@ async function cli(
     model: string
     cwd?: string
     agentDir?: string
-    files?: Record<string, string>
+    files?: Record<string, string | Uint8Array>
     env?: Record<string, string>
     stdin?: string
     /** Run in a pseudo-terminal (interactive mode): once the first item appears on screen, type the second (in order) */
@@ -128,6 +128,134 @@ function sessionFiles(dataDir: string): string[] {
     return []
   }
 }
+
+for (const [fixture, mimeType] of [
+  ['blue.png', 'image/png'],
+  ['quadrants.jpg', 'image/jpeg'],
+  ['quadrants.gif', 'image/gif'],
+  ['quadrants.webp', 'image/webp'],
+  ['quadrants.bmp', 'image/bmp'],
+]) {
+  test.concurrent(`@file attaches ${mimeType} by header, only to the first prompt`, async () => {
+    const result = await cli(
+      ['--mode', 'json', '@picture.txt', 'Describe this', 'Continue'],
+      {
+        model: 'faux:replies.json',
+        files: {
+          'picture.txt': readFileSync(
+            join(ROOT, 'test/fixtures/images', fixture!),
+          ),
+          'replies.json': JSON.stringify({
+            responses: [{ text: 'First' }, { text: 'Second' }],
+          }),
+        },
+      },
+    )
+    expect(result.code).toBe(0)
+    const users = result.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter(
+        (event) =>
+          event.type === 'message_end' && event.message.role === 'user',
+      )
+      .map((event) => event.message.content)
+    expect(users).toHaveLength(2)
+    expect(users[0]).toEqual([
+      { type: 'text', text: 'Describe this' },
+      expect.objectContaining({
+        type: 'image',
+        mimeType,
+        data: expect.any(String),
+      }),
+    ])
+    expect(users[1]).toBe('Continue')
+  })
+}
+
+test.concurrent('@file inlines UTF-8 text even with an image suffix, preserving stdin and prompt order', async () => {
+  const result = await cli(
+    ['--mode', 'json', '@notes.png', 'Summarize', 'Then explain'],
+    {
+      model: 'faux:replies.json',
+      files: {
+        'notes.png': 'héllo\nBMX is ordinary text\n',
+        'replies.json': JSON.stringify({
+          responses: [{ text: 'First' }, { text: 'Second' }],
+        }),
+      },
+      stdin: 'Additional context',
+    },
+  )
+  expect(result.code).toBe(0)
+  const users = result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter(
+      (event) => event.type === 'message_end' && event.message.role === 'user',
+    )
+    .map((event) => event.message.content)
+  expect(users).toEqual([
+    '<file name="notes.png">\nhéllo\nBMX is ordinary text\n\n</file>\n\nAdditional context\n\nSummarize',
+    'Then explain',
+  ])
+})
+
+test.concurrent('@file alone sends an image-only prompt', async () => {
+  const image = join(ROOT, 'test/fixtures/images/blue.png')
+  const result = await cli(['--mode', 'json', `@${image}`], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(result.code).toBe(0)
+  const user = result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find(
+      (event) => event.type === 'message_end' && event.message.role === 'user',
+    )
+  expect(user.message.content).toContainEqual(
+    expect.objectContaining({ type: 'image', mimeType: 'image/png' }),
+  )
+})
+
+test.concurrent('@file missing exits 1 before any model request', async () => {
+  const result = await cli(['-p', '@missing.png', 'Describe this'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain('missing.png')
+  expect(result.stdout).toBe('')
+  expect(sessionFiles(result.dataDir)).toHaveLength(0)
+})
+
+test.concurrent('@file directory exits 1', async () => {
+  const result = await cli(['-p', '@.', 'Describe this'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain('.')
+  expect(result.stdout).toBe('')
+})
+
+test.concurrent('interactive @file arguments send an initial image prompt and show a placeholder', async () => {
+  const result = await cli(
+    [`@${join(ROOT, 'test/fixtures/images/blue.png')}`, 'Describe this'],
+    {
+      model: `faux:${scenario('hello')}`,
+      terminal: [['Hello, this is Vela (faux replay).', '\x04']],
+    },
+  )
+  expect(result.code).toBe(0)
+  expect(result.stdout).toContain('[image png ')
+  expect(result.stdout).not.toContain(
+    readFileSync(join(ROOT, 'test/fixtures/images/blue.png')).toString(
+      'base64',
+    ),
+  )
+})
 
 test.concurrent('-p prints only the final answer to stdout and saves a new session', async () => {
   const { stdout, code, dataDir } = await cli(['-p', 'hello'], {
