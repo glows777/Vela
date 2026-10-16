@@ -47,6 +47,9 @@ export {
   type VelaSettings,
 } from './config/index.ts'
 export type {
+  FeishuCard,
+  FeishuCardAction,
+  FeishuCardResponse,
   FeishuHistoryMessage,
   FeishuMessageEvent,
   FeishuSentMessage,

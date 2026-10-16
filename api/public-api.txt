@@ -72,8 +72,10 @@
     description: string
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
+    prepareMessage?: ((msg: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
+    showRunControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; choose: (action: "queue" | "steer" | "stop") => boolean; }) => Promise<void>) | undefined
     start: () => Promise<void> | void
     stop: () => Promise<void> | void
   interface CompactionEntry
@@ -192,6 +194,16 @@
     setStatus: (key: string, text?: string) => void
     setWidget: (key: string, lines?: string[]) => void
   function feishu: (options?: FeishuOptions) => VelaExtension
+  interface FeishuCard
+    config: { wide_screen_mode: boolean; }
+    elements: { tag: string; text?: { tag: "plain_text"; content: string; }; actions?: { tag: "button"; text: { tag: "plain_text"; content: string; }; type: "primary" | "default" | "danger"; value: { action: string; token: string; }; }[]; }[]
+    header: { title: { tag: "plain_text"; content: string; }; }
+  interface FeishuCardAction
+    action?: { value?: unknown; } | undefined
+    context?: { open_chat_id?: string; } | undefined
+    operator?: { open_id?: string; } | undefined
+  interface FeishuCardResponse
+    toast: { type: "success" | "info"; content: string; }
   interface FeishuHistoryMessage
     body?: { content?: string; } | undefined
     create_time?: string | undefined
@@ -218,7 +230,8 @@
     listMessages: (chatId: string, options: { before?: string; limit: number; }) => Promise<FeishuHistoryMessage[]>
     reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
     send: (chatId: string, text: string) => Promise<void>
-    start: (onMessage: (event: FeishuMessageEvent) => void) => Promise<void>
+    sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<void>
+    start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>
     stop: () => void
   type FetchFunction = (
       input: string | URL | Request,

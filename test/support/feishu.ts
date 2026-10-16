@@ -53,10 +53,16 @@ export function fakeFeishu() {
     sent,
     cards,
     callback: (event: CardAction) => action?.(event),
-    click: (index: number, choice: string, overrides: Partial<CardAction> = {}) => {
+    click: (
+      index: number,
+      choice: string,
+      overrides: Partial<CardAction> = {},
+    ) => {
       const item = cards[index]
       if (!item) throw new Error(`No card at index ${index}`)
-      const buttons = item.card.elements.flatMap((element) => element.actions ?? [])
+      const buttons = item.card.elements.flatMap(
+        (element) => element.actions ?? [],
+      )
       const button = buttons.find((entry) => entry.value.action === choice)
       if (!button) throw new Error(`No ${choice} button`)
       return action?.({
