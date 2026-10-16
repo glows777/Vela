@@ -93,7 +93,7 @@ pi's default is `codemode`, where the model writes a script that calls the tools
 
 ## Results
 
-Text content reaches the model as text. Vela tool results are text only, so images, audio and binary resources become a one-line placeholder with their type and size; embedded text resources are shown in full, and resource links show their URI, name and description. A result without content blocks shows its `structuredContent` as JSON. A result with `isError` is an error result for the model. Text longer than 20,000 characters is saved to a file and the model gets the beginning and end with the file's path, like other large tool results (see [Tools](tools.md#result-size-and-truncation)). The tool history keeps the whole `CallToolResult`. Progress notifications become `tool_execution_update` events.
+Text content reaches the model as text. Image blocks reach the model as normalized canonical images. Audio and binary resources remain one-line placeholders with their type and size; embedded text resources are shown in full, and resource links show their URI, name and description. A result without content blocks shows its `structuredContent` as JSON. A result with `isError` is an error result for the model. Text longer than 20,000 characters is saved to a file and the model gets the beginning and end with the file's path, like other large tool results (see [Tools](tools.md#result-size-and-truncation)). The tool history keeps the whole `CallToolResult` (without transport `_meta`); oversized multimodal captions are stored separately as text-only files. Images in error results are retained while the model still receives an explicit tool error. Progress notifications become `tool_execution_update` events.
 
 ## Permissions
 

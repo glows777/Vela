@@ -3,6 +3,11 @@ import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
+import {
+  isToolContent,
+  type ToolContent,
+  toolContentText,
+} from '../messages.ts'
 import type { ModelRegistry } from '../models/index.ts'
 import type { HookPipeline } from '../security/hooks.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
@@ -117,7 +122,7 @@ export class ExtensionRunner {
           context.parentToolCallId,
           toolName,
           input,
-          String(output),
+          isToolContent(output) ? output : String(output),
         )
         return text === output
           ? { action: 'allow' }
@@ -568,15 +573,16 @@ export class ExtensionRunner {
     parentToolCallId: string | undefined,
     toolName: string,
     input: unknown,
-    output: string,
-  ): Promise<string> {
-    const event = {
+    output: string | ToolContent,
+  ): Promise<string | ToolContent> {
+    const event: import('./types.ts').ToolResultEvent = {
       type: 'tool_result' as const,
       toolCallId,
       ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
       toolName,
       input,
-      output,
+      output: typeof output === 'string' ? output : toolContentText(output),
+      ...(typeof output === 'string' ? {} : { content: output }),
     }
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('tool_result')) {
@@ -584,12 +590,22 @@ export class ExtensionRunner {
         const result = (await fn(event, ctx)) as
           | ToolResultEventResult
           | undefined
-        if (typeof result?.output === 'string') event.output = result.output
+        if (isToolContent(result?.content)) {
+          event.content = result.content
+          event.output = toolContentText(result.content)
+        } else if (typeof result?.output === 'string') {
+          event.output = result.output
+          if (event.content)
+            event.content = [
+              { type: 'text', text: result.output },
+              ...event.content.filter((part) => part.type === 'image'),
+            ]
+        }
       } catch (error) {
         this.report(extension, event.type, error)
       }
     }
-    return event.output
+    return event.content ?? event.output
   }
 
   /**

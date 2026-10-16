@@ -23,7 +23,9 @@ const IMAGE = (
 ).toString('base64')
 
 const SMOKE = `
-import { createVela, memory, type VelaEvent, type VelaExtension, type ImageContent } from '@glows777/vela'
+import { createVela, memory, type VelaEvent, type VelaExtension, type ImageContent, ToolExecutionResult, type ToolContent } from '@glows777/vela'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { cleanupTestVelas, createFauxModel, createTestVela, fauxText, fauxToolCall } from '@glows777/vela/testing'
 import { z } from 'zod'
 
@@ -72,6 +74,18 @@ const files = pictured.model.calls[0]?.prompt.flatMap((m) => m.role === 'user' ?
 if (files.length !== 1 || JSON.stringify(pictured.session.messages[0]).includes(image.data))
   throw new Error('packaged image prompt was not resized and sent as an image')
 console.log('image sdk ok')
+
+// Tool source, shared image normalization and canonical tool types from the real package.
+const toolContent: ToolContent = [{ type: 'text', text: 'Caption' }, image]
+if (new ToolExecutionResult({ source: 'smoke' }, toolContent).text !== 'Caption')
+  throw new Error('packaged ToolContent API failed')
+const imageTool = createTestVela({ responses: [fauxToolCall('read_file', { path: 'image.dat' }), fauxText('read')] })
+await writeFile(join(imageTool.cwd, 'image.dat'), Buffer.from(image.data, 'base64'))
+await imageTool.run('Read image.dat')
+const toolFiles = imageTool.model.calls[1]?.prompt.flatMap(m => m.role === 'tool' ? m.content.flatMap(p => p.type === 'tool-result' && p.output.type === 'content' ? p.output.value.filter(c => c.type === 'file' && c.mediaType.startsWith('image/')) : []) : []) ?? []
+if (toolFiles.length !== 1 || JSON.stringify(imageTool.session.messages).includes(image.data))
+  throw new Error('packaged read_file image was not resized and sent')
+console.log('tool image sdk ok')
 
 // rag extension: sqlite-vec loads via bun:sqlite on Bun / node:sqlite on Node (src/extensions/rag/sqlite.ts)
 const r = createTestVela({

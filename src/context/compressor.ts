@@ -4,11 +4,11 @@ import {
   type LanguageModelUsage,
   NoObjectGeneratedError,
   Output,
-  type ToolResultPart,
   type ToolSet,
 } from 'ai'
 import z from 'zod'
 import { DEFAULT_LIMITS } from '../limits.ts'
+import type { ToolResultPart } from '../messages.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
 import {
   branchSummaryMessageText,

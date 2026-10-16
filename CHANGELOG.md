@@ -32,6 +32,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Images in SDK prompts and tool results.** Core prompts, extension hooks, RPC, `read_file` and MCP share inline image content with lazy Photon WASM normalization (a new runtime dependency). Native tool images work with Anthropic/Responses; Chat-compatible providers receive request-only user attachments. CLI/TUI attachment entry is planned separately.
+
 - **Core image input.** `PromptOptions.images` attaches images to `prompt`, `steer`, and `followUp`. `sendUserMessage` accepts a string or an array of text and image parts. `InputEvent.images` exposes the same parts to the `input` hook. RPC `prompt`, `steer`, and `follow_up` accept an `images` array. The package exports `ImageContent`, `ModelMessage`, `UserContent`, and `TextContent`. An image is `{ type: 'image', data, mimeType }`. Saved history keeps the normalized image. A text-only model receives a placeholder in that request only. See [Image input](docs/sdk.md#image-input).
 - `/status` in interactive mode: a session overview with the id, file path (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, context estimate and token usage. `session.persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or `{ type: 'unknown' }` when a custom storage does not say. The dollar amount matches the footer.
 - `createVela({ channelIdleMs })`, and `channelIdleMs` in `createTestVela()`.

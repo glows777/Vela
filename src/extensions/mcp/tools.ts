@@ -1,6 +1,6 @@
 /**
- * MCP tools as Vela tools (like pi's `extensions/mcp/tools.ts`). Vela's tool results are text, so
- * images, audio and binary resources become one-line placeholders; long text goes through Vela's
+ * MCP tools as Vela tools (like pi's `extensions/mcp/tools.ts`). Images stay as canonical image
+ * content; audio and binary resources become one-line placeholders. Long text goes through Vela's
  * usual "save the full output, show a head and tail preview" with pi's 20KB limit.
  */
 
@@ -72,13 +72,12 @@ function isTextMimeType(mimeType: string | undefined): boolean {
 }
 
 /** Model-facing text of one content block. */
-function blockText(block: ContentBlock): string {
+function blockText(block: Exclude<ContentBlock, { type: 'image' }>): string {
   switch (block.type) {
     case 'text':
       return block.text
-    case 'image':
     case 'audio':
-      return `[${block.type === 'image' ? 'Image' : 'Audio'}: ${block.mimeType}, ${size(base64Bytes(block.data))} (not shown: Vela tool results are text only)]`
+      return `[Audio: ${block.mimeType}, ${size(base64Bytes(block.data))} (not shown: Vela tool results are text only)]`
     case 'resource': {
       const { resource } = block
       if ('text' in resource) return resource.text
@@ -98,7 +97,7 @@ function blockText(block: ContentBlock): string {
   }
 }
 
-/** The text the model sees for an MCP result. Without content blocks, the structured content as JSON (like pi-mcp). */
+/** Text projection of an MCP result. Images are separate; absent content falls back to structured JSON. */
 export function mcpResultText(
   server: string,
   tool: string,
@@ -106,17 +105,24 @@ export function mcpResultText(
 ): string {
   const text =
     result.content.length > 0
-      ? result.content.map(blockText).join('\n')
+      ? result.content
+          .filter((block) => block.type !== 'image')
+          .map(blockText)
+          .join('\n')
       : result.structuredContent === undefined
         ? ''
         : JSON.stringify(result.structuredContent, null, 2)
-  if (result.isError && text.trim() === '')
+  if (
+    result.isError &&
+    text.trim() === '' &&
+    !result.content.some((block) => block.type === 'image')
+  )
     return `MCP tool ${server}/${tool} returned an error`
   return text
 }
 
 /**
- * The result for Vela: the text for the model, and the whole `CallToolResult` without `_meta` as
+ * The result for Vela: text and images for the model, and `CallToolResult` without `_meta` as
  * the native value (kept in tool history; what codemode scripts will receive). `isError` results
  * are error results for the model.
  */
@@ -126,10 +132,20 @@ export function convertMcpResult(
   result: CallToolResult,
 ): ToolExecutionResult {
   const { _meta: _ignored, ...value } = result
-  const text = mcpResultText(server, tool, result)
+  const content = result.content.some((block) => block.type === 'image')
+    ? result.content.map((block) =>
+        block.type === 'image'
+          ? {
+              type: 'image' as const,
+              data: block.data,
+              mimeType: block.mimeType,
+            }
+          : { type: 'text' as const, text: blockText(block) },
+      )
+    : mcpResultText(server, tool, result)
   return new ToolExecutionResult(
     value,
-    text,
+    content,
     result.isError ? { isError: true } : {},
   )
 }
