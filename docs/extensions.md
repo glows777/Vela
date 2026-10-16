@@ -293,7 +293,7 @@ vela.on('session_start', (_event, ctx) => {
 })
 ```
 
-- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or AI SDK text / image parts) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
+- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or parts, including an image part `{ "type": "image", "data", "mimeType" }`) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
   - `deliverAs: 'nextTurn'`: held until the next prompt and added after its user message.
   - While running, unless `triggerTurn: false`: queued like `steer()` (or `followUp()` with `deliverAs: 'followUp'`). Queued custom messages are not listed in `session.queue`.
   - Idle with `triggerTurn: true`: runs the agent loop with the message as its input; resolves when the run ends.

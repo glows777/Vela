@@ -204,7 +204,7 @@ Cancels the running `bash` command; its response then has `cancelled: true`.
 {"id":"8","type":"get_messages"}
 ```
 
-Data: `{ "messages": ModelMessage[] }`, the session history as AI SDK messages (the same objects as in the `message_end` events).
+Data: `{ "messages": ModelMessage[] }`, the session history as Vela `ModelMessage` values (the same objects as in the `message_end` events). An inline image part is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. See [Image attachments](#image-attachments).
 
 ### Sessions
 
@@ -506,8 +506,8 @@ process.wait()
 
 | | pi | Vela |
 |---|---|---|
-| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are AI SDK `ModelMessage`s and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context_prepare` (microcompaction), `usage`, `loop_detected` and others. See [SDK events](sdk.md#events). |
-| `prompt` / `steer` / `follow_up` | Accept `images` | Text only |
+| Events | `AgentSessionEvent` (`message_start` / `message_update` / `message_end`, `tool_execution_*`, `compaction_*`, `auto_retry_*`) | `VelaEvent` plus `sessionId`: the same message, tool and retry events, but messages are Vela `ModelMessage`s (an inline image part is `{ "type": "image", "data", "mimeType" }`) and the stop reason is on `message_end`; the same `compaction_start` / `compaction_end`; Vela adds `context_prepare` (microcompaction), `usage`, `loop_detected` and others. See [SDK events](sdk.md#events). |
+| `prompt` / `steer` / `follow_up` | Accept `images` | Accept `images` as `{ "type": "image", "data", "mimeType" }`. See [Image attachments](#image-attachments). |
 | `steer` / `follow_up` when idle | Queued | Start a run (`disposition: "started"`) |
 | `new_session`, `switch_session` | Return `{ cancelled }`; `switch_session` takes `sessionPath` | Return `{ sessionId }`; `switch_session` takes `sessionId` |
 | `set_model` | `provider` + `modelId` | Also accepts `model: "provider/id"` |
