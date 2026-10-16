@@ -1254,10 +1254,7 @@ export class VelaSession {
     if (options.triggerTurn) return this.promptMessage(entry, {})
     // Queued/triggered inputs normalize when consumed. Append-only images need the same
     // boundary here; keep text-only delivery synchronous for extension event handlers.
-    if (
-      Array.isArray(entry.content) &&
-      entry.content.some((part) => part.type === 'image' && 'data' in part)
-    ) {
+    if (this.hasInputImages(entry)) {
       entry = await this.normalizeInput(entry)
       if (this.closed) throw new Error(`Session ${this.id} is closed`)
     }
@@ -1516,6 +1513,14 @@ export class VelaSession {
     return normalized
   }
 
+  private hasInputImages(message: ModelMessage): boolean {
+    return (
+      message.role === 'user' &&
+      Array.isArray(message.content) &&
+      message.content.some((part) => part.type === 'image' && 'data' in part)
+    )
+  }
+
   /** One agent loop: the inputs are appended in order, then next-turn custom messages and before_agent_start's. */
   private async runLoop(
     inputs: ModelMessage[],
@@ -1543,19 +1548,43 @@ export class VelaSession {
       this.customMessage(message),
     )
     const nextTurn = this.nextTurnMessages.slice()
-    const added = await Promise.all(
-      [...nextTurn, ...custom].map((message) => this.normalizeInput(message)),
-    )
+    const [normalizedNextTurn, added] = await Promise.all([
+      Promise.all(nextTurn.map((message) => this.normalizeInput(message))),
+      Promise.all(custom.map((message) => this.normalizeInput(message))),
+    ])
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
     signal.throwIfAborted()
-    this.nextTurnMessages.splice(0, nextTurn.length)
     // `!` commands that finished during an earlier loop of this run come before the new input
     this.flushBash()
     this.flushPendingCustom()
     this.emit({ type: 'agent_start', input })
+    // Include late next-turn messages through agent_start, without delaying text listeners.
+    let late = this.nextTurnMessages.slice(nextTurn.length)
+    try {
+      if (late.some((message) => this.hasInputImages(message))) {
+        late = await Promise.all(
+          late.map((message) => this.normalizeInput(message)),
+        )
+      }
+      signal.throwIfAborted()
+    } catch (error) {
+      this.emit({
+        type: 'agent_end',
+        messages: [],
+        reason: signal.aborted ? 'aborted' : 'error',
+        error,
+      })
+      throw error
+    }
+    this.nextTurnMessages.splice(0, nextTurn.length + late.length)
     const newMessages: ModelMessage[] = []
-    for (const message of [...inputs, ...added]) {
+    for (const message of [
+      ...inputs,
+      ...normalizedNextTurn,
+      ...late,
+      ...added,
+    ]) {
       this.append(message)
       newMessages.push(message)
     }

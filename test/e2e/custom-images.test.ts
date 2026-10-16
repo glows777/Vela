@@ -160,3 +160,60 @@ test('closing while before_agent_start returns custom images does not record the
   ).toHaveLength(0)
   expect(t.model.calls).toHaveLength(0)
 })
+
+test('agent_start listeners can synchronously add next-turn custom text to the current prompt', async () => {
+  const t = createTestVela({ responses: [fauxText('seen')] })
+  let customVisibleAtMicrotask = false
+  t.session.subscribe((event) => {
+    if (event.type === 'agent_start') {
+      queueMicrotask(() => {
+        customVisibleAtMicrotask = t.session
+          .getEntries()
+          .some((e) => e.type === 'custom_message')
+      })
+      void t.session.sendMessage(
+        { customType: 'at-start', content: 'listener note', display: false },
+        { deliverAs: 'nextTurn' },
+      )
+    }
+  })
+  await t.run('begin')
+  expect(t.model.calls[0]!.lastUserText).toBe('listener note')
+  expect(customVisibleAtMicrotask).toBe(true)
+  expect(
+    t.session.getEntries().filter((e) => e.type === 'custom_message'),
+  ).toHaveLength(1)
+})
+
+for (const timing of ['synchronous', 'late image'] as const) {
+  test(`${timing} abort after agent_start ends the run and retains unconsumed next-turn images`, async () => {
+    const t = createTestVela({ responses: [fauxText('retried')] })
+    const controller = new AbortController()
+    const unsubscribe = t.session.subscribe((event) => {
+      if (event.type !== 'agent_start') return
+      if (timing === 'late image') {
+        void t.session.sendMessage(custom('late'), { deliverAs: 'nextTurn' })
+        queueMicrotask(() => controller.abort())
+      } else controller.abort()
+    })
+    await expect(
+      t.session.prompt('first', { signal: controller.signal }),
+    ).rejects.toThrow()
+    expect(t.eventsOf('agent_end')).toHaveLength(1)
+    expect(t.eventsOf('agent_end')[0]).toMatchObject({
+      reason: 'aborted',
+      messages: [],
+    })
+    expect(t.model.calls).toHaveLength(0)
+    expect(
+      t.session.getEntries().filter((e) => e.type === 'custom_message'),
+    ).toHaveLength(0)
+    unsubscribe()
+    await t.run('retry')
+    const entries = t.session
+      .getEntries()
+      .filter((e) => e.type === 'custom_message')
+    expect(entries).toHaveLength(timing === 'late image' ? 1 : 0)
+    expect(JSON.stringify(entries)).not.toContain('invalid-image')
+  })
+}
