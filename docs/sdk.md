@@ -219,7 +219,7 @@ Input starting with `/` that names an extension command runs the command instead
 
 `session.subscribe()` receives that session's events; `vela.subscribe()` receives events from every session with the session id. Core never writes to the terminal: everything the CLI shows comes from these events.
 
-Message and tool events have pi's shape (`message_start / message_update / message_end`, `tool_execution_start / update / end`, `auto_retry_start / end`); the messages in them are AI SDK `ModelMessage`s. One prompt produces:
+Message and tool events have pi's shape (`message_start / message_update / message_end`, `tool_execution_start / update / end`, `auto_retry_start / end`). The messages in them are Vela `ModelMessage`s. A user image part is `{ type: 'image', data, mimeType }`. See [Image input](#image-input). One prompt produces:
 
 ```
 agent_start
