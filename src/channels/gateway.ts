@@ -223,7 +223,8 @@ export class ChannelGateway {
       ? await channel.prepareMessage(msg, run.trigger)
       : msg
     // History/name lookups can outlast the run. Leave the default queue intact.
-    if (!prepared || !this.runIsLive(run)) return false
+    if (!prepared) return true
+    if (!this.runIsLive(run)) return false
     run.session.emit({
       type: 'channel_message',
       channel: channel.name,
@@ -234,6 +235,7 @@ export class ChannelGateway {
     await run.session.prompt(prepared.text, {
       source: 'channel',
       streamingBehavior: 'steer',
+      images: prepared.images,
       signal: run.lifetime.signal,
     })
     return true
@@ -376,7 +378,7 @@ export class ChannelGateway {
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
-      await session.prompt(msg.text, { source: 'channel' })
+      await session.prompt(msg.text, { source: 'channel', images: msg.images })
     } catch (error) {
       session.emit({
         type: 'channel_error',

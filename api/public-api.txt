@@ -226,6 +226,7 @@
     messageId: string
   interface FeishuTransport
     getBotId: () => Promise<string>
+    getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
     getSenderName: (openId: string) => Promise<string | undefined>
     listMessages: (chatId: string, options: { before?: string; limit: number; }) => Promise<FeishuHistoryMessage[]>
     reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
@@ -253,6 +254,7 @@
   function importExtension: (path: string, name: string) => Promise<VelaExtension>
   interface IncomingMessage
     channelId: string
+    images?: ImageContent[] | undefined
     raw?: unknown
     replyToId?: string | undefined
     senderId: string
