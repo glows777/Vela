@@ -616,3 +616,62 @@ test('a delayed Steer whose service time precedes the active trigger still suppl
   expect(f.t.model.calls[1]?.lastUserText).toBe('Bob: delayed correction')
   expect(f.sent.map((reply) => reply.messageId)).toEqual(['first', 'second'])
 })
+
+test('Queue immediately followed by Stop on another card keeps the explicitly queued message', async () => {
+  const f = await runningChat()
+  try {
+    await until(() => f.cards.length === 1)
+    f.deliver(
+      feishuEvent({ message_id: 'stop', content: '{"text":"stop this run"}' }),
+    )
+    await until(() => f.cards.length === 2)
+    f.click(0, 'queue')
+    f.click(1, 'stop')
+    await until(
+      () =>
+        f.sent.length >= 1 &&
+        !f.t.internals.gateway['queues'].has('feishu-oc_group'),
+    )
+    expect(f.sent.map((reply) => reply.messageId)).toEqual(['stop', 'second'])
+    expect(f.t.model.calls).toHaveLength(2)
+    expect(f.t.model.calls[1]?.lastUserText).toBe('Bob: use blue')
+  } finally {
+    f.release()
+  }
+})
+
+test('run cards use the Card 2.0 callback schema for the subscribed card.action.trigger event', async () => {
+  const f = await runningChat()
+  try {
+    await until(() => f.cards.length === 1)
+    const card = f.cards[0]!.card
+    expect(card.schema).toBe('2.0')
+    const columns = card.body.elements.flatMap(
+      (element) => element.columns ?? [],
+    )
+    expect(columns).toHaveLength(3)
+    const callbacks = columns
+      .flatMap((column) => column.elements)
+      .flatMap((button) => button.behaviors)
+    expect(
+      callbacks.map((callback) => [callback.type, callback.value.action]),
+    ).toEqual([
+      ['callback', 'queue'],
+      ['callback', 'steer'],
+      ['callback', 'stop'],
+    ])
+    expect(
+      new Set(callbacks.map((callback) => callback.value.token)).size,
+    ).toBe(1)
+    expect(f.click(0, 'steer')).toMatchObject({ toast: { type: 'success' } })
+    await until(
+      () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+    )
+  } finally {
+    f.release()
+  }
+  await until(() => f.sent.length === 1)
+  expect(f.sent).toEqual([
+    { messageId: 'first', text: 'Alice and Bob: use blue' },
+  ])
+})

@@ -60,15 +60,18 @@ export function fakeFeishu() {
     ) => {
       const item = cards[index]
       if (!item) throw new Error(`No card at index ${index}`)
-      const buttons = item.card.elements.flatMap(
-        (element) => element.actions ?? [],
+      const callbacks = item.card.body.elements
+        .flatMap((element) => element.columns ?? [])
+        .flatMap((column) => column.elements)
+        .flatMap((button) => button.behaviors)
+      const callback = callbacks.find(
+        (entry) => entry.type === 'callback' && entry.value.action === choice,
       )
-      const button = buttons.find((entry) => entry.value.action === choice)
-      if (!button) throw new Error(`No ${choice} button`)
+      if (!callback) throw new Error(`No ${choice} callback button`)
       return action?.({
         operator: { open_id: 'ou_bob' },
         context: { open_chat_id: item.chatId },
-        action: { value: button.value },
+        action: { value: callback.value },
         ...overrides,
       })
     },
@@ -87,7 +90,20 @@ export function fakeFeishu() {
 }
 
 interface Card {
-  elements: { actions?: { value: { action: string; token: string } }[] }[]
+  schema: '2.0'
+  body: {
+    elements: {
+      tag: string
+      columns?: {
+        elements: {
+          behaviors: {
+            type: 'callback'
+            value: { action: string; token: string }
+          }[]
+        }[]
+      }[]
+    }[]
+  }
 }
 
 interface CardAction {
