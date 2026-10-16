@@ -433,9 +433,7 @@ test('Chat redaction after an image tool does not promise a second attachment', 
         v.registerTool(pictureTool())
         v.registerTool(pictureTool('private'))
         v.on('tool_result', (event) =>
-          event.toolName === 'pictures_private'
-            ? { content: [] }
-            : undefined,
+          event.toolName === 'pictures_private' ? { content: [] } : undefined,
         )
       },
     ],
@@ -446,6 +444,10 @@ test('Chat redaction after an image tool does not promise a second attachment', 
   )
   expect(results.at(-1)?.output).toEqual({ type: 'content', value: [] })
   expect(JSON.stringify(results.at(-1))).not.toContain('tool image follows')
-  const users = model.calls[1]!.prompt.filter((message) => message.role === 'user')
-  expect(users.at(-1)?.content.filter((part) => part.type === 'file')).toHaveLength(1)
+  const users = model.calls[1]!.prompt.filter(
+    (message) => message.role === 'user',
+  )
+  expect(
+    users.at(-1)?.content.filter((part) => part.type === 'file'),
+  ).toHaveLength(1)
 })
