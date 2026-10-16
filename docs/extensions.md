@@ -146,7 +146,7 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 
 `ctx.executeTool(name, args, { signal?, onUpdate? })` runs another tool from inside a tool, same as pi. The call goes through everything a model call goes through: the session's role and permissions, extensions' `tool_call` hooks, the dangerous-command check for `bash`, confirmation for `ask`, the tool history and `tool_result` hooks. It can run the session's `direct` tools and every `deferred` or `codemode` tool the session may use, never `model-only` or `hidden` ones. The call's id is `<parent id>/<n>`, its `tool_execution_*` events carry `parentToolCallId`, and it is recorded in the tool history but not added to the conversation. It does not throw for tool failures: an unknown tool, invalid arguments, a refusal and an error all return `{ toolCallId, toolName, result, isError: true }`, with the reason or error message as `result`. `signal` defaults to the calling tool's signal. A nested call does not wait for the calling tool's `executionMode`.
 
-Tools are shared by all sessions, and an extension can register and unregister them at any time (the mcp extension does when a server connects or changes its tool list). The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#session-roles)). See [Tools](tools.md) for the built-in tools.
+Tools are shared by all sessions, and an extension can register and unregister them at any time (the mcp extension does when a server connects or changes its tool list). The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#core-sdk-session-roles)). See [Tools](tools.md) for the built-in tools.
 
 ### registerCommand
 
@@ -163,7 +163,7 @@ vela.registerCommand('todo', {
 
 `session.prompt('/todo buy milk')` runs the handler with `args` set to `buy milk` (the text after the name, trimmed) instead of sending the text to the model. Commands run immediately, even while the session is busy. Names must match `[A-Za-z0-9][\w-]*`; a name already registered by another extension throws.
 
-Commands only run in `owner` sessions. In a `collaborator` or `guest` session (for example a channel sender), `/todo` is plain text for the model.
+Commands only run in `owner` sessions. In a `collaborator` or `guest` session, `/todo` is plain text for the model. Open that session with `vela.session(id, { role })`, or return the role from a channel `roleFor`. A channel that omits `roleFor` is `owner`, so a sender in that chat can run the command.
 
 In interactive mode, Vela's own commands (`/model`, `/extensions`, ...) are checked first, so an extension cannot override them. Extension commands appear in autocomplete. In print mode, `vela -p "/todo buy milk"` runs the command. In RPC mode, send commands with the `prompt` command.
 
@@ -220,7 +220,7 @@ If you only need a different base URL or key for an OpenAI- or Anthropic-compati
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
-A channel brings messages from outside (a chat app, a webhook) into Vela. Each sender gets their own session, and replies go back through the channel's `send()`.
+A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`.
 
 ```ts
 vela.registerChannel({
@@ -234,7 +234,7 @@ vela.registerChannel({
 })
 ```
 
-`roleFor` decides each sender's role and is checked on every message. Without it every sender is a `guest`. The interactive CLI starts channels after startup; the SDK starts them with `vela.startChannels()`. See [Channels](channels.md).
+`roleFor` is optional. The gateway checks it on every message. When you omit it, every sender in the chat is `owner`. When you return `guest` or `collaborator`, the role changes tools, permissions, and prompt and command behavior. Earlier turns stay in the shared transcript. See [Session roles](security.md#core-sdk-session-roles) and [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
 
 ### on
 
@@ -293,7 +293,7 @@ vela.on('session_start', (_event, ctx) => {
 })
 ```
 
-- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or AI SDK text / image parts) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
+- `session.sendMessage({ customType, content, display, details? }, { triggerTurn?, deliverAs? })` adds a custom message. The model sees `content` (a string or parts, including an image part `{ "type": "image", "data", "mimeType" }`) as a user message; `display` says whether the TUI shows it (as a `[customType]` block); `details` is saved but never sent to the model. Its `message_start` / `message_end` events carry `custom: { customType, display, details }`, and `session.customMessageOf(message)` returns the same for a message in `session.messages`. It is saved as a `custom_message` entry ([session format](session-format.md)). Delivery is the same as pi's:
   - `deliverAs: 'nextTurn'`: held until the next prompt and added after its user message.
   - While running, unless `triggerTurn: false`: queued like `steer()` (or `followUp()` with `deliverAs: 'followUp'`). Queued custom messages are not listed in `session.queue`.
   - Idle with `triggerTurn: true`: runs the agent loop with the message as its input; resolves when the run ends.

@@ -5,6 +5,7 @@ import type {
   LanguageModelV4Prompt,
   SharedV4FileData,
 } from '@ai-sdk/provider'
+import { PhotonImage } from '@silvia-odwyer/photon-node'
 import {
   createFauxModel,
   fauxSummary,
@@ -36,6 +37,28 @@ const imagesIn = (prompt: LanguageModelV4Prompt) =>
         )
       : [],
   )
+const alphaContrast = (data: string) => {
+  const image = PhotonImage.new_from_byteslice(Buffer.from(data, 'base64'))
+  try {
+    const raw = image.get_raw_pixels()
+    let opaqueDark = 0
+    let transparent = 0
+    for (let i = 0; i < raw.length; i += 4) {
+      const alpha = raw[i + 3] ?? 0
+      const rgb = (raw[i] ?? 0) + (raw[i + 1] ?? 0) + (raw[i + 2] ?? 0)
+      if (alpha < 16) transparent++
+      if (alpha > 200 && rgb < 48) opaqueDark++
+    }
+    const count = raw.length / 4
+    return {
+      longest: Math.max(image.get_width(), image.get_height()),
+      opaqueDark: opaqueDark / count,
+      transparent: transparent / count,
+    }
+  } finally {
+    image.free()
+  }
+}
 
 test('image prompt reaches the provider as an image and history uses one inline base64 shape', async () => {
   const image = fixture()
@@ -60,6 +83,41 @@ test('oversized prompt image is resized before it reaches the provider', async (
   expect(parts).toHaveLength(1)
   expect(encoded(parts[0]!.data)).not.toBe(image.data)
   expect(encoded(parts[0]!.data).length).toBeLessThanOrEqual(4.5 * 1024 * 1024)
+})
+
+test('resized transparent PNG keeps dark lines distinguishable from the background', async () => {
+  const image = fixture('transparent-lines.png')
+  const original = PhotonImage.new_from_byteslice(
+    Buffer.from(image.data, 'base64'),
+  )
+  try {
+    expect(
+      Math.max(original.get_width(), original.get_height()),
+    ).toBeGreaterThan(2000)
+  } finally {
+    original.free()
+  }
+  const t = createTestVela({ responses: [fauxText('lines')] })
+  await t.session.prompt('what is in this diagram?', { images: [image] })
+  const parts = imagesIn(t.model.calls[0]!.prompt)
+  expect(parts).toHaveLength(1)
+  const sent = encoded(parts[0]!.data)
+  const history = t.messages[0]?.content
+  const saved = (Array.isArray(history) ? history : []).find(
+    (part) => part.type === 'image',
+  )
+  expect(saved).toMatchObject({
+    type: 'image',
+    mimeType: 'image/png',
+    data: sent,
+  })
+  expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'image/png' })
+  expect(sent).not.toBe(image.data)
+  expect(sent.length).toBeLessThanOrEqual(4.5 * 1024 * 1024)
+  const seen = alphaContrast(sent)
+  expect(seen.longest).toBeLessThanOrEqual(2000)
+  expect(seen.opaqueDark).toBeGreaterThan(0.02)
+  expect(seen.transparent).toBeGreaterThan(0.5)
 })
 
 test('invalid image is dropped with a useful text reason instead of failing the whole prompt', async () => {

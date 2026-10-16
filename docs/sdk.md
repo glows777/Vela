@@ -118,7 +118,7 @@ await session.steer('Focus on this area', { images: [image] })
 await session.followUp('Compare this afterwards', { images: [image] })
 ```
 
-Images keep the same `{ type: 'image', data, mimeType }` shape in input hooks, events and saved history. Vela detects PNG, JPEG, GIF, WebP and BMP by their bytes, applies EXIF orientation and uses Photon WASM to reduce images to a longest side of 2000 pixels and at most 4.5 MiB of base64. Images needing conversion are encoded as JPEG at quality 80; small supported images stay unchanged. Invalid images or images beyond the safe decoding limits (128 MiB encoded input or 67,108,864 decoded pixels) are omitted with a text reason, so the rest of the prompt can continue.
+Images keep the same `{ type: 'image', data, mimeType }` shape in input hooks, events and saved history. Vela detects PNG, JPEG, GIF, WebP and BMP by their bytes, applies EXIF orientation and uses Photon WASM to reduce images to a longest side of 2000 pixels and at most 4.5 MiB of base64. When an image needs conversion, Vela encodes it as PNG if any pixel is not fully opaque before orientation. Vela does not encode that PNG as JPEG. Vela encodes it as JPEG at quality 80 if every pixel is fully opaque. If either encoding exceeds 4.5 MiB of base64, Vela shrinks the bitmap further and repeats that encoding until the base64 is at most 4.5 MiB. Small supported images stay unchanged. Invalid images or images beyond the safe decoding limits (128 MiB encoded input or 67,108,864 decoded pixels) are omitted with a text reason, so the rest of the prompt can continue.
 
 Normalized images are saved inline in session JSONL and survive resume, clone and forks that include the image message. If the selected model's `input` metadata excludes `image`, its request gets `(image omitted: model does not support images)` instead. Saved history keeps the image for a later vision model. When input metadata is unknown (including a directly supplied `LanguageModel`), images are forwarded; set provider model metadata when you know it is text-only. Context estimates count each image as 4800 characters. Summary requests omit image payloads instead of treating base64 as prose.
 
@@ -219,7 +219,7 @@ Input starting with `/` that names an extension command runs the command instead
 
 `session.subscribe()` receives that session's events; `vela.subscribe()` receives events from every session with the session id. Core never writes to the terminal: everything the CLI shows comes from these events.
 
-Message and tool events have pi's shape (`message_start / message_update / message_end`, `tool_execution_start / update / end`, `auto_retry_start / end`); the messages in them are AI SDK `ModelMessage`s. One prompt produces:
+Message and tool events have pi's shape (`message_start / message_update / message_end`, `tool_execution_start / update / end`, `auto_retry_start / end`). The messages in them are Vela `ModelMessage`s. A user image part is `{ type: 'image', data, mimeType }`. See [Image input](#image-input). One prompt produces:
 
 ```
 agent_start
