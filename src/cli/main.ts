@@ -10,6 +10,7 @@ import {
   type VelaConfig,
 } from '../config/index.ts'
 import { errorMessage } from '../logger.ts'
+import type { ImageContent } from '../messages.ts'
 import { ModelRegistry } from '../models/index.ts'
 import {
   buildSessionPath,
@@ -26,6 +27,7 @@ import { loadFauxScenario } from '../testing/faux.ts'
 import { recordModel } from '../testing/record.ts'
 import { createVela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
+import { readAttachments } from './files.ts'
 import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
 import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
@@ -99,13 +101,33 @@ if (mode !== 'interactive' && args.resume)
   )
 
 // Print mode: piped stdin is prepended to the first prompt (like pi: `git diff | vela -p "review"`)
-const messages = [...args.messages]
+const messages = args.export
+  ? [...args.messages]
+  : args.messages.filter((arg) => !arg.startsWith('@'))
+let attachments: { text: string; images: ImageContent[] } = {
+  text: '',
+  images: [],
+}
+if (mode !== 'rpc' && !args.listModels && !args.export) {
+  try {
+    attachments = await readAttachments(
+      args.messages
+        .filter((arg) => arg.startsWith('@'))
+        .map((arg) => arg.slice(1)),
+    )
+  } catch (error) {
+    console.error(errorMessage(error))
+    process.exit(1)
+  }
+}
 if ((mode === 'print' || mode === 'json') && !args.listModels && !args.export) {
   const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
   if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
-  if (!messages.length)
+  if (!messages.length && !attachments.text && !attachments.images.length)
     usageError('No prompt: pass one on the command line or via stdin')
 }
+if (attachments.text || attachments.images.length)
+  messages[0] = [attachments.text, messages[0]].filter(Boolean).join('\n\n')
 // Config: ~/.vela/settings.json + <cwd>/.vela/settings.json once trusted (step 4, see 04-plan.md)
 const agentDir = defaultAgentDir(env)
 let config: VelaConfig
@@ -408,6 +430,7 @@ if (mode === 'print' || mode === 'json') {
       vela,
       session,
       messages,
+      images: attachments.images,
       mode: mode === 'json' ? 'json' : 'text',
     }),
   )
@@ -434,6 +457,8 @@ if (mode === 'print' || mode === 'json') {
 } else {
   await runInteractive({
     vela,
+    messages,
+    images: attachments.images,
     sessionId,
     resume,
     pick: args.resume,

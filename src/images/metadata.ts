@@ -1,5 +1,39 @@
 import { Buffer } from 'node:buffer'
 
+/** Recognize image signatures without trying to decode possibly incomplete bytes. */
+export function imageMimeType(header: Buffer): string | undefined {
+  if (
+    header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  )
+    return 'image/png'
+  if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff)
+    return 'image/jpeg'
+  if (['GIF87a', 'GIF89a'].includes(header.toString('ascii', 0, 6)))
+    return 'image/gif'
+  if (
+    header.toString('ascii', 0, 4) === 'RIFF' &&
+    header.toString('ascii', 8, 12) === 'WEBP'
+  )
+    return 'image/webp'
+  // "BM" also starts ordinary prose. Require the binary BMP file header and a
+  // recognized DIB header size before treating text as an image.
+  if (
+    header.length >= 18 &&
+    header.toString('ascii', 0, 2) === 'BM' &&
+    header.readUInt32LE(6) === 0
+  ) {
+    const dibSize = header.readUInt32LE(14)
+    const pixelOffset = header.readUInt32LE(10)
+    if (
+      [12, 16, 40, 52, 56, 64, 108, 124].includes(dibSize) &&
+      pixelOffset >= 14 + dibSize &&
+      header.readUInt32LE(2) >= pixelOffset
+    )
+      return 'image/bmp'
+  }
+  return undefined
+}
+
 interface ImageMetadata {
   mimeType: string
   width: number

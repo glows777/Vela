@@ -166,7 +166,7 @@ for (const [fixture, mimeType] of [
       { type: 'text', text: 'Describe this' },
       expect.objectContaining({
         type: 'image',
-        mimeType,
+        mimeType: mimeType === 'image/bmp' ? 'image/jpeg' : mimeType,
         data: expect.any(String),
       }),
     ])

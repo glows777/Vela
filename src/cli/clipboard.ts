@@ -3,6 +3,20 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getNativeClipboard } from '@earendil-works/pi-tui'
+
+/** pi-tui supplies native image reads on macOS, Windows and X11; Wayland uses wl-paste. */
+export async function readClipboardImage(): Promise<Uint8Array | undefined> {
+  if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
+    const bytes = await run(
+      'wl-paste',
+      ['--no-newline', '--type', 'image/png'],
+      process.env,
+    )
+    return bytes?.length ? bytes : undefined
+  }
+  return (await getNativeClipboard()?.getImage()) ?? undefined
+}
 
 /** Terminals cap OSC 52 payloads; pi uses the same limit. */
 const MAX_OSC52_ENCODED_LENGTH = 100_000
