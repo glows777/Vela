@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
+import type { FeishuHistoryMessage } from '../../src/extensions/feishu/channel.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
@@ -24,8 +25,9 @@ async function until(check: () => boolean) {
   }
 }
 
-async function runningChat(dm = false) {
+async function runningChat(dm = false, history: FeishuHistoryMessage[] = []) {
   const fake = fakeFeishu()
+  fake.history.push(...history)
   const held = latch()
   const entered = latch()
   const t = createTestVela({
@@ -76,13 +78,19 @@ async function runningChat(dm = false) {
     feishuEvent({
       ...chat,
       message_id: 'first',
+      create_time: '3000',
       content: '{"text":"original question"}',
     }),
   )
   await entered.promise
   fake.deliver(
     feishuEvent(
-      { ...chat, message_id: 'second', content: '{"text":"use blue"}' },
+      {
+        ...chat,
+        message_id: 'second',
+        create_time: '5000',
+        content: '{"text":"use blue"}',
+      },
       dm ? 'ou_alice' : 'ou_bob',
     ),
   )
@@ -383,11 +391,11 @@ test('a control card in Feishu history is not mistaken for the last answer durin
     await until(() => f.cards.length === 1)
     f.history.push(
       {
-        ...historyMessage('control', 'cli_bot', 'control card', '3000'),
+        ...historyMessage('control', 'cli_bot', 'control card', '4000'),
         msg_type: 'interactive',
         sender: { id: 'cli_bot', sender_type: 'app' },
       },
-      historyMessage('context', 'ou_alice', 'keep this context', '2000'),
+      historyMessage('context', 'ou_alice', 'keep this context', '3500'),
       {
         ...historyMessage('old_answer', 'cli_bot', 'old answer', '1000'),
         sender: { id: 'cli_bot', sender_type: 'app' },
@@ -528,4 +536,83 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
     hookHeld.release()
     held.release()
   }
+})
+
+for (const peerTime of ['4500', '3000']) {
+  test(`Steer excludes the active trigger and older context but retains later discussion (peer time ${peerTime})`, async () => {
+    const earlier = historyMessage(
+      'earlier',
+      'ou_bob',
+      'context already read',
+      '2500',
+    )
+    const f = await runningChat(false, [earlier])
+    try {
+      await until(() => f.cards.length === 1)
+      expect(f.t.model.calls[0]?.lastUserText).toBe(
+        '[Chat since last reply]\nBob: context already read\n\n[Question]\nAlice: original question',
+      )
+      f.history.unshift(
+        historyMessage('second', 'ou_bob', 'use blue', '5000'),
+        historyMessage(
+          'discussion',
+          'ou_alice',
+          'keep the new detail',
+          peerTime,
+        ),
+        historyMessage('first', 'ou_alice', 'original question', '3000'),
+      )
+      f.click(0, 'steer')
+      await until(
+        () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+      )
+    } finally {
+      f.release()
+    }
+    await until(() => f.sent.length === 1)
+    expect(f.t.model.calls[1]?.lastUserText).toBe(
+      '[Chat since last reply]\nAlice: keep the new detail\n\n[Question]\nBob: use blue',
+    )
+    const users = f.t.model.calls[1]?.prompt.filter(
+      (message) => message.role === 'user',
+    )
+    const content = JSON.stringify(users)
+    expect(content.split('original question')).toHaveLength(2)
+    expect(content.split('context already read')).toHaveLength(2)
+    expect(f.t.eventsOf('agent_start')).toHaveLength(1)
+    expect(f.sent[0]?.messageId).toBe('first')
+  })
+}
+
+test('a delayed Steer whose service time precedes the active trigger still supplies its named question', async () => {
+  const f = await runningChat()
+  try {
+    await until(() => f.cards.length === 1)
+    f.click(0, 'queue')
+    f.deliver(
+      feishuEvent(
+        {
+          message_id: 'delayed',
+          create_time: '2000',
+          content: '{"text":"delayed correction"}',
+        },
+        'ou_bob',
+      ),
+    )
+    await until(() => f.cards.length === 2)
+    f.history.push(
+      historyMessage('first', 'ou_alice', 'original question', '3000'),
+      historyMessage('delayed', 'ou_bob', 'delayed correction', '2000'),
+      historyMessage('older', 'ou_alice', 'older context', '1000'),
+    )
+    f.click(1, 'steer')
+    await until(
+      () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+    )
+  } finally {
+    f.release()
+  }
+  await until(() => f.sent.length === 2)
+  expect(f.t.model.calls[1]?.lastUserText).toBe('Bob: delayed correction')
+  expect(f.sent.map((reply) => reply.messageId)).toEqual(['first', 'second'])
 })
