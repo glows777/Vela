@@ -24,7 +24,7 @@ bun run build
 bun run smoke:consumer
 ```
 
-The full reviewed suite passed **699 tests, 0 failures, 5297 assertions**. Typecheck, lint (existing warnings only), and build passed. Consumer smoke installs a real tarball into empty Node and Bun projects; its image prompt forces Photon WASM initialization and resize from `dist/`, checks the provider's image file part, and type-checks the exported `ImageContent` API.
+After integrating main `d4c6538` (#60), the full reviewed suite passed **713 tests, 0 failures, 5391 assertions**. An independent integration review passed 71 focused tests and a combined input-hook image/save-failure/reopen walkthrough without blocking findings. Typecheck, lint (existing warnings only), and build passed. Consumer smoke installs a real tarball into empty Node and Bun projects; its image prompt forces Photon WASM initialization and resize from `dist/`, checks the provider's image file part, and type-checks the exported `ImageContent` API.
 
 The cloud host's login shell resets PATH, so its tool-history recipe initially could not find an already-installed Bun (exit 127). Supplying that Bun path through an isolated `BASH_ENV` fixed the environment; the complete suite then passed. The first npm consumer installation also needed a writable isolated HOME/npm cache. Neither workaround changes repository code or installs system software.
 
