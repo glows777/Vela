@@ -85,7 +85,7 @@ The model and thinking level are the latest `model_change` and `thinking_level_c
 
 ## Messages
 
-Messages are Vela `ModelMessage` values. Assistant messages, tool messages, and text-only user messages match the AI SDK shapes below. A user message can also contain an inline image part.
+Messages are Vela `ModelMessage` values. Assistant messages and text-only user messages match the AI SDK shapes below. User messages and tool-result content can also contain Vela inline image parts; those require provider conversion.
 
 ```json
 {"role":"user","content":[{"type":"text","text":"What is in this picture?"},{"type":"image","data":"<base64>","mimeType":"image/png"}]}
@@ -97,7 +97,7 @@ Messages are Vela `ModelMessage` values. Assistant messages, tool messages, and 
 
 - `user` content is a string or an array of parts. An inline image part is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. `data` is base64. `mimeType` is a media type such as `image/png`. The AI SDK image part `{ type: 'image', image, mediaType }` is deprecated in ai@7. Map each stored image part to the file part `{ type: 'file', data, mediaType }`. Vela does that mapping on the provider request and leaves the saved image in place. See [Image input](sdk.md#image-input).
 - `assistant` content is a list of `text`, `reasoning` and `tool-call` parts. Provider-specific `providerOptions` may appear on parts.
-- `tool` content is a list of `tool-result` parts. `output` is an AI SDK tool result output, usually `{ "type": "text", "value": "..." }`.
+- `tool` content is a list of `tool-result` parts. Ordinary outputs use AI SDK shapes, such as `{ "type": "text", "value": "..." }`. Image-bearing outputs use `{ "type": "content", "value": [...] }` with ordered text and Vela image parts (`type`, `data`, `mimeType`); failed content also has `isError: true`. Vela adapts these at request time to native provider tool images or a following user image message, without changing saved history. See [Tool image results](sdk.md#tool-images).
 
 Vela adds two conventions on top:
 
