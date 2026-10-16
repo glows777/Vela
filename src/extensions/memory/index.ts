@@ -19,7 +19,7 @@ const DREAM_PROMPT = [
 /**
  * Cross-session memory (stored in `<dataDir>/memory`): the `memory` tool, the memory index in the
  * system prompt, and the `/memory [search <keywords> | lint]` and `/dream` commands.
- * Memory is the owner's private data: guest sessions (e.g. outside senders on a channel) get neither
+ * Memory is the owner's private data: guest sessions get neither
  * the tool nor the index.
  */
 export function memory(): VelaExtension {
