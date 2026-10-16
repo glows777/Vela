@@ -303,6 +303,7 @@ export class VelaSession {
   >()
   /** Custom messages sent while running without triggering a turn: appended once the step's tool results are in (like pi) */
   private readonly pendingCustom: ModelMessage[] = []
+  private customAppends?: Promise<void>
   /** Custom messages for the next prompt (`deliverAs: 'nextTurn'`) */
   private readonly nextTurnMessages: ModelMessage[] = []
   /** How steer messages are taken (default one-at-a-time, like pi) */
@@ -1238,7 +1239,7 @@ export class VelaSession {
     options: SendMessageOptions = {},
   ): Promise<void> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    let entry = this.customMessage(message)
+    const entry = this.customMessage(message)
     if (options.deliverAs === 'nextTurn') {
       this.nextTurnMessages.push(entry)
       return
@@ -1252,12 +1253,25 @@ export class VelaSession {
       return
     }
     if (options.triggerTurn) return this.promptMessage(entry, {})
-    // Queued/triggered inputs normalize when consumed. Append-only images need the same
-    // boundary here; keep text-only delivery synchronous for extension event handlers.
-    if (this.hasInputImages(entry)) {
-      entry = await this.normalizeInput(entry)
-      if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (!this.customAppends && !this.hasInputImages(entry)) {
+      this.appendCustom(entry)
+      return
     }
+    const append = (this.customAppends ?? Promise.resolve()).then(async () => {
+      this.appendCustom(
+        this.hasInputImages(entry) ? await this.normalizeInput(entry) : entry,
+      )
+    })
+    const clear = () => {
+      if (this.customAppends === settled) this.customAppends = undefined
+    }
+    const settled = append.then(clear, clear)
+    this.customAppends = settled
+    return append
+  }
+
+  private appendCustom(entry: ModelMessage): void {
+    if (this.closed) throw new Error(`Session ${this.id} is closed`)
     if (this.busy.locked) {
       this.pendingCustom.push(entry)
       return
