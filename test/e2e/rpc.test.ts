@@ -1,6 +1,7 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { PhotonImage } from '@silvia-odwyer/photon-node'
 import { tempDir } from '../support/vela.ts'
 
 // `vela --mode rpc` child process: write JSONL commands to stdin, read responses / events / extension_ui_request from stdout
@@ -459,6 +460,74 @@ test.concurrent('rpc: prompt, steer and follow_up forward canonical image attach
     } finally {
       expect(await rpc.close()).toBe(0)
     }
+  }
+})
+
+const alphaContrast = (data: string) => {
+  const image = PhotonImage.new_from_byteslice(Buffer.from(data, 'base64'))
+  try {
+    const raw = image.get_raw_pixels()
+    let opaqueDark = 0
+    let transparent = 0
+    for (let i = 0; i < raw.length; i += 4) {
+      const alpha = raw[i + 3] ?? 0
+      const rgb = (raw[i] ?? 0) + (raw[i + 1] ?? 0) + (raw[i + 2] ?? 0)
+      if (alpha < 16) transparent++
+      if (alpha > 200 && rgb < 48) opaqueDark++
+    }
+    const count = raw.length / 4
+    return {
+      longest: Math.max(image.get_width(), image.get_height()),
+      opaqueDark: opaqueDark / count,
+      transparent: transparent / count,
+    }
+  } finally {
+    image.free()
+  }
+}
+
+test.concurrent('rpc: resized transparent PNG keeps dark lines in prompt history', async () => {
+  const rpc = startRpc(`faux:${scenario('hello')}`)
+  try {
+    const image = {
+      type: 'image',
+      data: await Bun.file(
+        join(ROOT, 'test/fixtures/images/transparent-lines.png'),
+      )
+        .arrayBuffer()
+        .then((bytes) => Buffer.from(bytes).toString('base64')),
+      mimeType: 'image/png',
+    }
+    expect(
+      await rpc.call({
+        type: 'prompt',
+        message: 'what is in this diagram?',
+        images: [image],
+      }),
+    ).toMatchObject({ success: true })
+    await rpc.waitFor((record) => record.type === 'agent_settled')
+    const history = await rpc.call({ type: 'get_messages' })
+    const saved = (
+      history.data as {
+        messages: {
+          content?: { type?: string; data?: string; mimeType?: string }[]
+        }[]
+      }
+    ).messages
+      .flatMap((message) =>
+        Array.isArray(message.content) ? message.content : [],
+      )
+      .find((part) => part.type === 'image')
+    expect(saved?.mimeType).toBe('image/png')
+    expect(saved?.data).not.toBe(image.data)
+    if (!saved?.data) throw new Error('history image missing')
+    expect(saved.data.length).toBeLessThanOrEqual(4.5 * 1024 * 1024)
+    const seen = alphaContrast(saved.data)
+    expect(seen.longest).toBeLessThanOrEqual(2000)
+    expect(seen.opaqueDark).toBeGreaterThan(0.02)
+    expect(seen.transparent).toBeGreaterThan(0.5)
+  } finally {
+    expect(await rpc.close()).toBe(0)
   }
 })
 
