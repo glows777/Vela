@@ -353,7 +353,7 @@ export interface ExtensionAPI {
   registerProvider(name: string, provider: ProviderDefinition): void
   /** Registers a `/name` command: in owner sessions, `session.prompt('/name args')` runs it instead of sending it to the model. */
   registerCommand(name: string, command: ExtensionCommand): void
-  /** Registers a message channel (Vela-specific): one session per conversation and sender, guest role by default. */
+  /** Registers a message channel (Vela-specific): one shared session per chat. The role is owner when roleFor is omitted. */
   registerChannel(channel: ChannelDefinition): void
   /** Subscribes to an event; handlers run in extension load and registration order. Returns an unsubscribe function. */
   on<K extends ExtensionEventName>(
