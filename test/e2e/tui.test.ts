@@ -26,6 +26,143 @@ const pasteImageKey = process.platform === 'win32' ? '\x1bv' : '\x16'
 const blueImage = () =>
   readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))
 
+test('Enter during an image clipboard read waits and submits the inserted path', async () => {
+  let release!: (image: Uint8Array) => void
+  const clipboard = new Promise<Uint8Array>((resolve) => {
+    release = resolve
+  })
+  const t = createTestVela({
+    responses: [fauxText('Combined prompt received')],
+  })
+  const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
+  await tui.started
+  tui.terminal.type('Describe ')
+  tui.terminal.press(pasteImageKey)
+  tui.terminal.press(KEYS.enter)
+  expect(t.model.calls).toHaveLength(0)
+  release(blueImage())
+  await tui.until('Combined prompt received')
+  expect(t.model.calls[0]!.lastUserText).toMatch(
+    /^Describe \/.*vela-clipboard-.*\.png$/,
+  )
+})
+
+for (const shape of ['native', 'mixed'] as const) {
+  test(`resumed ${shape} tool image content never renders base64, including expanded output`, async () => {
+    const data = blueImage().toString('base64')
+    const t = createTestVela({ sessionId: 'tool-image-history' })
+    t.session.append({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'picture',
+          toolName: 'read_file',
+          input: { path: 'picture.png' },
+        },
+      ],
+    })
+    t.session.append({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'picture',
+          toolName: 'read_file',
+          output: {
+            type: 'content',
+            value:
+              shape === 'native'
+                ? [
+                    {
+                      type: 'file',
+                      mediaType: 'image/png',
+                      data: { type: 'data', data },
+                    },
+                  ]
+                : [
+                    { type: 'image', mimeType: 'image/png', data },
+                    { type: 'custom', providerOptions: {} },
+                  ],
+          },
+        },
+      ],
+    })
+    await t.session.close()
+    const tui = await startTui(t.vela, {
+      sessionId: 'tool-image-history',
+      resume: true,
+    })
+    await tui.started
+    tui.terminal.press(KEYS.ctrlO)
+    expect(tui.screen()).toContain('[image png ')
+    expect(tui.screen()).not.toContain(data.slice(0, 40))
+  })
+}
+
+for (const key of [KEYS.enter, KEYS.altEnter]) {
+  test(`clearing a pending image ${key === KEYS.enter ? 'submit' : 'follow-up'} never sends a replacement draft`, async () => {
+    let release!: (image: Uint8Array) => void
+    const clipboard = new Promise<Uint8Array>((resolve) => {
+      release = resolve
+    })
+    const t = createTestVela({ responses: [fauxText('Explicitly sent')] })
+    const tui = await startTui(t.vela, { readClipboardImage: () => clipboard })
+    await tui.started
+    tui.terminal.type('Describe ')
+    tui.terminal.press(pasteImageKey)
+    tui.terminal.press(key)
+    tui.terminal.press(KEYS.ctrlC)
+    tui.terminal.type('Replacement draft')
+    release(blueImage())
+    // Wait for the clipboard submission lock to clear, without a timing-dependent sleep.
+    await tui.until(() => !Reflect.get(tui.mode, 'editor').disableSubmit)
+    expect(t.model.calls).toHaveLength(0)
+    tui.terminal.press(KEYS.enter)
+    await tui.until('Explicitly sent')
+    expect(t.model.calls[0]!.lastUserText).toBe('Replacement draft')
+  })
+}
+
+test('ordinary JSON tool results keep file metadata in resumed history', async () => {
+  const t = createTestVela({ sessionId: 'file-metadata' })
+  t.session.append({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool-call',
+        toolCallId: 'metadata',
+        toolName: 'inspect',
+        input: {},
+      },
+    ],
+  })
+  t.session.append({
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId: 'metadata',
+        toolName: 'inspect',
+        output: {
+          type: 'json',
+          value: { type: 'file', path: 'report.txt', size: 37 },
+        },
+      },
+    ],
+  })
+  await t.session.close()
+  const tui = await startTui(t.vela, {
+    sessionId: 'file-metadata',
+    resume: true,
+  })
+  await tui.started
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('report.txt')
+  expect(tui.screen()).toContain('37')
+  expect(tui.screen()).not.toContain('[image]')
+})
+
 test('clipboard image paste inserts a private temp path, read_file sends the image, and shutdown removes it', async () => {
   const image = blueImage()
   let file = ''

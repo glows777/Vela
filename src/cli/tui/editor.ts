@@ -13,6 +13,7 @@ export type AppAction =
   | 'cycleModelBackward'
   | 'expandTools'
   | 'toggleThinking'
+  | 'pasteImage'
 
 export const APP_KEYS: Record<AppAction, KeyId> = {
   interrupt: 'escape',
@@ -26,6 +27,7 @@ export const APP_KEYS: Record<AppAction, KeyId> = {
   cycleModelBackward: 'shift+ctrl+p',
   expandTools: 'ctrl+o',
   toggleThinking: 'ctrl+t',
+  pasteImage: process.platform === 'win32' ? 'alt+v' : 'ctrl+v',
 }
 
 /** pi-tui's Editor, handling app keybindings first (like pi's CustomEditor). */
