@@ -2,13 +2,13 @@ import {
   type AssistantContent,
   type AssistantModelMessage,
   type FinishReason,
-  type ModelMessage,
   type ProviderMetadata,
   parsePartialJson,
   type ToolCallPart,
   type ToolModelMessage,
   type ToolResultPart,
 } from 'ai'
+import type { ModelMessage } from '../messages.ts'
 import type { AssistantMessageEvent, StopReason, VelaEvent } from './events.ts'
 
 /** The assistant parts Vela streams */

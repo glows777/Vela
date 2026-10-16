@@ -155,6 +155,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 
 | File | Scenarios |
 |---|---|
+| e2e/images | image request payloads, resize and invalid-image hints; model-capability switching; image history resume/fork/clone; input-hook replacement; queued images; summary safety |
 | e2e/basic | event sequence and persistence for a plain text reply; the system prompt, tools and user message the model receives; multi-turn history; answering after a tool call |
 | e2e/tools | several tool calls in one response; write/edit write into cwd and emit audit events; bash runs in cwd with the timestamp hook; dangerous bash is refused; tool errors go back to the model; unknown tools and invalid arguments are rejected and recorded; deferred tools become usable only after tool_search; the guest role can't use bash; bash failures are error results and its output streams as tool_execution_update; ctx.executeTool goes through permissions, hooks and the bash check |
 | e2e/resilience | 429/503 retried until success; provider APICallError retried by statusCode; a stream cut midway is retried without leaving a partial answer; 400 not retried and the real cause reported; retries exhausted; abort during streaming and continuing afterwards; abort during a tool recorded as cancelled; concurrent runs rejected; loop-detection warning on the 10th identical call, stored as a custom notice, then a critical stop; no turn limit (like pi); requests over maxInputTokens are not sent |

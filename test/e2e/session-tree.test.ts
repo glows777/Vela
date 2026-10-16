@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
-import type { ModelMessage } from 'ai'
 import type { VelaExtension } from '../../src/extensions/types.ts'
+import type { ModelMessage } from '../../src/messages.ts'
 import type {
   SessionEntry,
   SessionMessageEntry,

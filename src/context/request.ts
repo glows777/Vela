@@ -1,10 +1,6 @@
-import {
-  asSchema,
-  type LanguageModel,
-  type ModelMessage,
-  type ToolSet,
-} from 'ai'
+import { asSchema, type LanguageModel, type ToolSet } from 'ai'
 import { DEFAULT_LIMITS } from '../limits.ts'
+import { type ModelMessage, messageEnvelopeChars } from '../messages.ts'
 
 export interface RequestSnapshot {
   model: LanguageModel
@@ -55,7 +51,7 @@ export function estimateRequestTokens(
   return Math.ceil(
     (request.systemPrompt.length +
       JSON.stringify(request.toolDefinitions).length +
-      JSON.stringify(messages).length) *
+      messageEnvelopeChars(messages)) *
       0.3,
   )
 }

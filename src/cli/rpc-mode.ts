@@ -1,4 +1,5 @@
 import type { SessionUI } from '../extensions/types.ts'
+import type { ImageContent } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import { messageText } from '../session/entries.ts'
 import { type Vela, velaInternals } from '../vela.ts'
@@ -141,6 +142,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   > = {
     async prompt(command) {
       const message = String(command.message ?? '')
+      const images = readImages(command.images)
       const behavior = command.streamingBehavior as
         | 'steer'
         | 'followUp'
@@ -152,17 +154,18 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       )
         throw new Error('streamingBehavior must be steer or followUp')
       if (isExtensionCommand(message)) {
-        await session.prompt(message, { source: 'rpc' })
+        await session.prompt(message, { source: 'rpc', images })
         return { disposition: 'handled' }
       }
       if (session.isRunning) {
         await session.prompt(message, {
           streamingBehavior: behavior,
           source: 'rpc',
+          images,
         })
         return { disposition: 'queued' }
       }
-      start(session.prompt(message, { source: 'rpc' }), command)
+      start(session.prompt(message, { source: 'rpc', images }), command)
       return { disposition: 'started' }
     },
     steer: (command) => enqueue(command, 'steer'),
@@ -363,15 +366,16 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
 
   async function enqueue(command: RpcCommand, behavior: 'steer' | 'followUp') {
     const message = String(command.message ?? '')
+    const images = readImages(command.images)
     if (message.startsWith('/') && isExtensionCommand(message))
       throw new Error('Run extension commands with prompt')
     if (!session.isRunning) {
-      start(session.prompt(message, { source: 'rpc' }), command)
+      start(session.prompt(message, { source: 'rpc', images }), command)
       return { disposition: 'started' }
     }
     await (behavior === 'steer'
-      ? session.steer(message, { source: 'rpc' })
-      : session.followUp(message, { source: 'rpc' }))
+      ? session.steer(message, { source: 'rpc', images })
+      : session.followUp(message, { source: 'rpc', images }))
     return { disposition: 'queued' }
   }
 
@@ -460,4 +464,28 @@ function queueMode(mode: unknown): QueueMode {
   if (!QUEUE_MODES.includes(mode as QueueMode))
     throw new Error(`mode must be one of ${QUEUE_MODES.join(' / ')}`)
   return mode as QueueMode
+}
+
+/** Validate the JSON shape at the protocol boundary; core handles image decoding and omission hints. */
+function readImages(value: unknown): ImageContent[] | undefined {
+  if (value === undefined) return undefined
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (image) =>
+        !image ||
+        typeof image !== 'object' ||
+        image.type !== 'image' ||
+        typeof image.data !== 'string' ||
+        typeof image.mimeType !== 'string',
+    )
+  )
+    throw new Error(
+      'images must be an array of { type: "image", data: base64, mimeType }',
+    )
+  return value.map((image) => ({
+    type: 'image',
+    data: image.data,
+    mimeType: image.mimeType,
+  }))
 }

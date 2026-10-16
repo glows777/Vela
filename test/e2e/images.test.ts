@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import type { LanguageModelV4Prompt } from '@ai-sdk/provider'
+import type {
+  LanguageModelV4FilePart,
+  LanguageModelV4Prompt,
+  SharedV4FileData,
+} from '@ai-sdk/provider'
 import {
   createFauxModel,
   fauxSummary,
@@ -17,10 +21,19 @@ const fixture = (name = 'blue.png') => ({
   ).toString('base64'),
   mimeType: 'image/png',
 })
+const encoded = (data: SharedV4FileData) => {
+  if (data.type !== 'data') throw new Error('Expected inline image data')
+  return typeof data.data === 'string'
+    ? data.data
+    : Buffer.from(data.data).toString('base64')
+}
 const imagesIn = (prompt: LanguageModelV4Prompt) =>
   prompt.flatMap((message) =>
     message.role === 'user'
-      ? message.content.filter((part) => part.type === 'image')
+      ? message.content.filter(
+          (part): part is LanguageModelV4FilePart =>
+            part.type === 'file' && part.mediaType.startsWith('image/'),
+        )
       : [],
   )
 
@@ -30,15 +43,13 @@ test('image prompt reaches the provider as an image and history uses one inline 
   await t.session.prompt('Describe the image', { images: [image] })
   const parts = imagesIn(t.model.calls[0]!.prompt)
   expect(parts).toHaveLength(1)
-  expect(parts[0]).toMatchObject({ type: 'image', mediaType: 'image/png' })
-  expect(Buffer.from(parts[0]!.image as Uint8Array).toString('base64')).toBe(
-    image.data,
-  )
+  expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'image/png' })
+  expect(encoded(parts[0]!.data)).toBe(image.data)
   expect(t.messages[0]).toEqual({
     role: 'user',
     content: [{ type: 'text', text: 'Describe the image' }, image],
   })
-  expect(t.readData('sessions/default.jsonl')).toContain(image.data)
+  expect(await t.readData('sessions/default.jsonl')).toContain(image.data)
 })
 
 test('oversized prompt image is resized before it reaches the provider', async () => {
@@ -47,12 +58,8 @@ test('oversized prompt image is resized before it reaches the provider', async (
   await t.session.prompt('Describe the wide image', { images: [image] })
   const parts = imagesIn(t.model.calls[0]!.prompt)
   expect(parts).toHaveLength(1)
-  expect(
-    Buffer.from(parts[0]!.image as Uint8Array).toString('base64'),
-  ).not.toBe(image.data)
-  expect(
-    Buffer.from(parts[0]!.image as Uint8Array).toString('base64').length,
-  ).toBeLessThanOrEqual(4.5 * 1024 * 1024)
+  expect(encoded(parts[0]!.data)).not.toBe(image.data)
+  expect(encoded(parts[0]!.data).length).toBeLessThanOrEqual(4.5 * 1024 * 1024)
 })
 
 test('invalid image is dropped with a useful text reason instead of failing the whole prompt', async () => {
@@ -188,4 +195,114 @@ test('summary compaction never serializes image base64 as text', async () => {
   )
   expect(texts.join('\n')).not.toContain(image.data)
   expect(JSON.stringify(t.session.getEntries())).toContain(image.data)
+})
+
+test('normalizing triggered and queued custom content preserves display metadata and session entries', async () => {
+  const t = createTestVela({
+    responses: [
+      () => {
+        void t.session.sendMessage(
+          {
+            customType: 'queued',
+            content: [{ type: 'text', text: 'queued note' }, fixture()],
+            display: false,
+            details: { saved: 'queued' },
+          },
+          { deliverAs: 'followUp' },
+        )
+        return fauxText('first')
+      },
+      fauxText('second'),
+    ],
+  })
+  await t.session.sendMessage(
+    {
+      customType: 'triggered',
+      content: [{ type: 'text', text: 'triggered note' }],
+      display: false,
+      details: { saved: 'triggered' },
+    },
+    { triggerTurn: true },
+  )
+  const custom = t.session
+    .getEntries()
+    .filter((entry) => entry.type === 'custom_message')
+  expect(custom).toHaveLength(2)
+  expect(
+    custom.map((entry) => ({
+      type: entry.customType,
+      display: entry.display,
+      details: entry.details,
+    })),
+  ).toEqual([
+    { type: 'triggered', display: false, details: { saved: 'triggered' } },
+    { type: 'queued', display: false, details: { saved: 'queued' } },
+  ])
+  expect(
+    t
+      .eventsOf('message_end')
+      .filter((event) => event.custom)
+      .map((event) => event.custom?.customType),
+  ).toEqual(['triggered', 'queued'])
+  expect(imagesIn(t.model.calls[1]!.prompt)).toHaveLength(1)
+})
+
+test('text-only requests omit compatible AI SDK image file parts from user and tool history', async () => {
+  const model = createFauxModel({ responses: [fauxText('text')] })
+  const t = createTestVela({
+    model: 'faux/text',
+    providers: {
+      faux: {
+        models: [{ id: 'text', input: ['text'] }],
+        createModel: () => model,
+      },
+    },
+  })
+  const image = fixture()
+  t.session.append({
+    role: 'user',
+    content: [{ type: 'file', data: image.data, mediaType: 'image/png' }],
+  })
+  t.session.append({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool-call',
+        toolName: 'picture',
+        toolCallId: 'picture-1',
+        input: {},
+      },
+    ],
+  })
+  t.session.append({
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolName: 'picture',
+        toolCallId: 'picture-1',
+        output: {
+          type: 'content',
+          value: [
+            {
+              type: 'file',
+              data: { type: 'data', data: image.data },
+              mediaType: 'image',
+            },
+            {
+              type: 'image-file-reference',
+              providerReference: { openai: 'reference-image-1' },
+            },
+          ],
+        },
+      },
+    ],
+  })
+  await t.session.prompt('Continue')
+  const request = JSON.stringify(model.calls[0]!.prompt)
+  expect(request).toContain('(image omitted: model does not support images)')
+  expect(request.match(/tool image omitted/g)).toHaveLength(2)
+  expect(request).not.toContain(image.data)
+  expect(request).not.toContain('reference-image-1')
+  expect(JSON.stringify(t.session.messages)).toContain(image.data)
 })

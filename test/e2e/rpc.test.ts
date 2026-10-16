@@ -440,10 +440,18 @@ test.concurrent('rpc: prompt, steer and follow_up forward canonical image attach
     try {
       const image = {
         type: 'image',
-        data: await Bun.file(join(ROOT, 'test/fixtures/images/blue.png')).arrayBuffer().then((b) => Buffer.from(b).toString('base64')),
+        data: await Bun.file(join(ROOT, 'test/fixtures/images/blue.png'))
+          .arrayBuffer()
+          .then((b) => Buffer.from(b).toString('base64')),
         mimeType: 'image/png',
       }
-      expect(await rpc.call({ type, message: 'Describe the picture', images: [image] })).toMatchObject({ success: true })
+      expect(
+        await rpc.call({
+          type,
+          message: 'Describe the picture',
+          images: [image],
+        }),
+      ).toMatchObject({ success: true })
       await rpc.waitFor((r) => r.type === 'agent_settled')
       const history = await rpc.call({ type: 'get_messages' })
       expect(JSON.stringify(history.data)).toContain(image.data)
@@ -458,11 +466,20 @@ test.concurrent('rpc: malformed image arrays fail clearly and a later valid prom
   const rpc = startRpc(`faux:${scenario('hello')}`)
   try {
     for (const type of ['prompt', 'steer', 'follow_up']) {
-      for (const images of [{ data: 'x' }, [null], [{ type: 'image', data: 2, mimeType: 'image/png' }]]) {
-        expect(await rpc.call({ type, message: 'bad', images })).toMatchObject({ success: false, error: expect.stringContaining('images') })
+      for (const images of [
+        { data: 'x' },
+        [null],
+        [{ type: 'image', data: 2, mimeType: 'image/png' }],
+      ]) {
+        expect(await rpc.call({ type, message: 'bad', images })).toMatchObject({
+          success: false,
+          error: expect.stringContaining('images'),
+        })
       }
     }
-    expect(await rpc.call({ type: 'prompt', message: 'hello' })).toMatchObject({ success: true })
+    expect(await rpc.call({ type: 'prompt', message: 'hello' })).toMatchObject({
+      success: true,
+    })
     await rpc.waitFor((r) => r.type === 'agent_settled')
   } finally {
     expect(await rpc.close()).toBe(0)

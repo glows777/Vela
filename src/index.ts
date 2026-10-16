@@ -103,6 +103,12 @@ export { type WebOptions, web } from './extensions/web/index.ts'
 export type { VelaLimits } from './limits.ts'
 export { silentLogger, type VelaLogger } from './logger.ts'
 export type {
+  ImageContent,
+  ModelMessage,
+  TextContent,
+  UserContent,
+} from './messages.ts'
+export type {
   LoginProvider,
   ModelInfo,
   ModelSpec,

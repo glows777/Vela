@@ -1,6 +1,7 @@
 import { mkdir, open, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import type { ModelMessage, ToolResultPart } from 'ai'
+import type { ToolResultPart } from 'ai'
+import type { ModelMessage } from '../messages.ts'
 import {
   type ExecutionMetadata,
   type LegacyResultRecord,

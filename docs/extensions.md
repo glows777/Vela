@@ -247,7 +247,7 @@ Some events let a handler change what happens; the rest are notifications.
 | Event | When | What a handler can do |
 |---|---|---|
 | `session_start` | Before a session's first prompt, command or compaction, after its history is restored | Set up per-session state, for example `ctx.session.setActiveTools(...)`. Handlers are awaited in order |
-| `input` | User input arrives (`prompt()`, `steer()`, `followUp()`, `sendUserMessage()`), after extension commands and before `/skill:` and prompt template expansion | Return `{ action: 'transform', text }` to rewrite it or `{ action: 'handled' }` to drop it |
+| `input` | User input arrives (`prompt()`, `steer()`, `followUp()`, `sendUserMessage()`), after extension commands and before `/skill:` and prompt template expansion | Return `{ action: 'transform', text, images? }` to rewrite it or `{ action: 'handled' }` to drop it |
 | `before_agent_start` | At the start of each agent loop (normally once per `prompt()`), before the first model request | Write system prompt sections into `event.sections` (keyed by name); return `{ message }` to add a custom message after the user message. `event.prompt` is the user input |
 | `context` | Before every model request | Change `event.messages` (a copy) in place or return `{ messages }`: changes what this request sends, not the history |
 | `before_provider_request` | Before a request goes to the provider (summaries too) | Change `event.params` (AI SDK call options) in place or return replacement options |
@@ -262,7 +262,7 @@ Some events let a handler change what happens; the rest are notifications.
 Details:
 
 - `before_agent_start`: sections are computed once per agent loop (normally once per `prompt()`) and stay the same for every model request in that turn, which keeps the prompt cache prefix stable. Sections appear in the system prompt in the order they were written. Example: [prompt-section.ts](../examples/extensions/prompt-section.ts).
-- `input` (like pi): `event` has `text`, `source` (`interactive` for the TUI and `-p`, `rpc`, `extension` for `sendUserMessage()`, `channel` for channel senders, `sdk` by default; set it with `prompt(text, { source })`) and `streamingBehavior` (`steer` / `followUp` while the session is running). It fires in sessions of every role, so check `ctx.session.role`. Transforms chain; `handled` stops the remaining handlers and `prompt()` resolves without running. Extension commands run before it and never reach it. A throwing handler is logged and skipped.
+- `input` (like pi): `event` has `text`, optional `images` (`ImageContent[]`), `source` (`interactive` for the TUI and `-p`, `rpc`, `extension` for `sendUserMessage()`, `channel` for channel senders, `sdk` by default; set it with `prompt(text, { source })`) and `streamingBehavior` (`steer` / `followUp` while the session is running). It fires in sessions of every role, so check `ctx.session.role`. Transforms chain; omitted `images` preserves the current attachments, while `images: []` removes them. Images are normalized after the input hooks. `handled` stops the remaining handlers and `prompt()` resolves without running. Extension commands run before it and never reach it. A throwing handler is logged and skipped.
 - `before_agent_start` messages: like pi, a returned `{ message: { customType, content, display, details? } }` is added as a custom message (see [Messages](#messages)) after the user message and any `nextTurn` messages. Unlike a section it is part of the conversation, so it does not change the cached system prompt.
 - `context` (like pi): `event.messages` is a copy of the messages the request sends, without the system prompt; handlers chain. The history, the session file and later requests are unchanged. After an overflow compaction the request is built again and handlers run again. A throwing handler is logged and the previous result is used.
 - Provider hooks (like pi's, with one difference): pi's providers are its own, so pi passes the provider's JSON body; Vela uses the AI SDK, which builds the body inside the provider, so `before_provider_request` gets the AI SDK call options (`prompt`, `tools`, `providerOptions`, `headers`, `maxOutputTokens`, ...). Add request headers through `event.params.headers`. `after_provider_response` gets the response headers but no status: the AI SDK reports a failed response as the request's error. Errors in either are logged and the request goes on.
@@ -365,3 +365,16 @@ See [SDK](sdk.md) and, for testing extensions with the scripted faux model, [Tes
 ## Examples
 
 [examples/extensions/](../examples/extensions/README.md) has a small, runnable example for each API above.
+
+### Sending images
+
+`ctx.session.sendUserMessage()` accepts a string or an array of text and inline image parts:
+
+```typescript
+await ctx.session.sendUserMessage([
+  { type: 'text', text: 'Inspect this screenshot' },
+  { type: 'image', data: pngBase64, mimeType: 'image/png' },
+], { deliverAs: 'followUp' })
+```
+
+The input hook receives source `extension` and may replace the images. This follows the same resize, persistence and model-capability rules as SDK prompts; it does not interpret the text as a slash command.

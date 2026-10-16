@@ -1,4 +1,5 @@
-import type { ModelMessage } from 'ai'
+import type { ModelMessage } from '../messages.ts'
+
 import type { Vela } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'

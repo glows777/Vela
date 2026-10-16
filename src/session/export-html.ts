@@ -1,8 +1,8 @@
-import type { ModelMessage } from 'ai'
 import {
   type ToolResultOutput,
   toolResultOutputToText,
 } from '../context/tool-result-output.ts'
+import type { ModelMessage } from '../messages.ts'
 import { messageText, type SessionEntry } from './entries.ts'
 
 /** What `renderSessionHtml()` renders. */
