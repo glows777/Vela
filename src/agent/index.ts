@@ -205,7 +205,11 @@ export const agentLoop = async ({
             ...withPromptCache({
               system: inferenceSystem,
               tools: request.tools,
-              messages: await toModelMessages(requestMessages, supportsImages),
+              messages: await toModelMessages(
+                requestMessages,
+                supportsImages,
+                typeof model !== 'string' && model.provider.endsWith('.chat'),
+              ),
             }),
             maxRetries: 0, // No retries inside streamText; the loop below handles retries
             ...(reasoning ? { reasoning } : {}),
@@ -415,7 +419,21 @@ export const agentLoop = async ({
       step.end(finalStep.finishReason)
       // Push this step's assistant and tool messages even on a critical stop: its tools already ran,
       // so the history must keep each call paired with its result
-      const responseMessages: ModelMessage[] = [...finalStep.response.messages]
+      // The SDK's response converts tool images to provider edge shapes. Keep canonical
+      // tool content from the execution stream in history (also used on interrupted steps).
+      const responseMessages: ModelMessage[] = finalStep.response.messages.map(
+        (message) =>
+          message.role !== 'tool'
+            ? message
+            : {
+                ...message,
+                content: message.content.map((part) =>
+                  part.type === 'tool-result'
+                    ? (step.results.get(part.toolCallId) ?? part)
+                    : part,
+                ),
+              },
+      )
       if (finalStep.finishReason === 'length' && step.toolCalls.length) {
         // Like pi: the AI SDK runs no tools for a truncated response, and their arguments may be cut off.
         // Answer each call with an error so the history stays valid and the model re-issues them.

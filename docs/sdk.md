@@ -122,7 +122,7 @@ Images keep the same `{ type: 'image', data, mimeType }` shape in input hooks, e
 
 Normalized images are saved inline in session JSONL and survive resume, clone and forks that include the image message. If the selected model's `input` metadata excludes `image`, its request gets `(image omitted: model does not support images)` instead. Saved history keeps the image for a later vision model. When input metadata is unknown (including a directly supplied `LanguageModel`), images are forwarded; set provider model metadata when you know it is text-only. Context estimates count each image as 4800 characters. Summary requests omit image payloads instead of treating base64 as prose.
 
-`ModelMessage` and `UserContent` exported by Vela extend the existing AI SDK message types with inline image content. Use these types for session history and extension context; existing text-only messages remain valid. The provider edge converts inline images to AI SDK image files.
+`ModelMessage`, `UserContent` and `ToolModelMessage` exported by Vela extend the existing AI SDK message types with inline image content. Use these types for session history and extension context; existing text-only messages remain valid. The provider edge converts inline images to AI SDK image files.
 
 ### Session members
 
@@ -443,3 +443,11 @@ The public surface is:
 Anything marked `@internal` in the type declarations is not covered.
 
 During 0.x, a breaking change bumps the minor version (0.1 to 0.2); patch releases don't break anything. Every breaking change is listed under "Breaking Changes" in [CHANGELOG.md](../CHANGELOG.md) with migration notes.
+
+### Tool images
+
+`read_file` detects JPEG/PNG/GIF/WebP/BMP from the header, regardless of extension; text still uses the same pager. Extension tools return `new ToolExecutionResult(details, content)` with a `ToolContent` array. MCP images use that same pipeline. Tool images are normalized after `tool_result` hooks and saved inline. Text-only model requests get `(tool image omitted: model does not support images)` without changing history.
+
+Anthropic and OpenAI Responses accept native tool images. OpenAI Chat-compatible adapters serialize tool content as JSON, so Vela lifts images into one request-only user message after the complete consecutive tool-result group. Adapter detection uses the provider's `.chat` suffix, including configured aliases. Custom provider implementations must report that protocol suffix if they share this limitation.
+
+See [the offline tool-image example](../examples/sdk/06-tool-images.ts), [tool hooks](extensions.md#tool-image-results), and [verification notes](verification/image-tool-results.md).

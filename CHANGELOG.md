@@ -31,6 +31,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Images in SDK prompts and tool results.** Core prompts, extension hooks, RPC, `read_file` and MCP share inline image content with lazy Photon WASM normalization (a new runtime dependency). Native tool images work with Anthropic/Responses; Chat-compatible providers receive request-only user attachments. CLI/TUI attachment entry is planned separately.
+
 - `/status` in interactive mode: a session overview with the id, file path (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, context estimate and token usage. `session.persistence` is `{ type: 'file', path }`, `{ type: 'memory' }`, or `{ type: 'unknown' }` when a custom storage does not say. The dollar amount matches the footer.
 - `createVela({ channelIdleMs })`, and `channelIdleMs` in `createTestVela()`.
 - `feishu({ transport })` and the `FeishuTransport` / `FeishuMessageEvent` types, so the Feishu channel can be tested without a Feishu app.

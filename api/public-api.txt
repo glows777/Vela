@@ -340,8 +340,9 @@
     reasoning?: boolean | undefined
     ref: string
     thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>> | undefined
-  type ModelMessage = | Exclude<AIModelMessage, UserModelMessage>
+  type ModelMessage = | Exclude<AIModelMessage, UserModelMessage | AIToolModelMessage>
       | (Omit<UserModelMessage, 'content'> & { content: UserContent })
+      | ToolModelMessage
   interface ModelPricing
     cacheRead: number
     cacheWrite: number
@@ -559,6 +560,7 @@
     result: unknown
     toolCallId: string
     toolName: string
+  type ToolContent = (TextContent | ImageContent)[]
   interface ToolContext
     executeTool?: ((name: string, args: unknown, options?: ExecuteToolOptions) => Promise<ToolCallOutcome>) | undefined
     onUpdate?: ((partialResult: unknown) => void) | undefined
@@ -577,6 +579,7 @@
     searchHint?: string | undefined
   type ToolExecutionMode = 'sequential' | 'parallel'
   class ToolExecutionResult
+    readonly content?: ToolContent | undefined
     readonly execution: ExecutionMetadata
     readonly text: string
     readonly value: unknown
@@ -585,11 +588,18 @@
       | 'codemode'
       | 'deferred'
       | 'hidden'
+  type ToolModelMessage = Omit<AIToolModelMessage, 'content'> & {
+      content: (
+      | Exclude<AIToolModelMessage['content'][number], AIToolResultPart>
+      | ToolResultPart
+      )[]
+      }
   interface ToolNamespace
     description?: string | undefined
     instructions?: string | undefined
     name: string
   interface ToolResultEvent
+    content?: ToolContent | undefined
     input: unknown
     output: string
     parentToolCallId?: string | undefined
@@ -597,7 +607,11 @@
     toolName: string
     type: "tool_result"
   interface ToolResultEventResult
+    content?: ToolContent | undefined
     output?: string | undefined
+  type ToolResultPart = Omit<AIToolResultPart, 'output'> & {
+      output: ToolResultOutput
+      }
   interface TreePreparation
     commonAncestorId: string | null
     entriesToSummarize: SessionEntry[]

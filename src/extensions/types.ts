@@ -2,7 +2,12 @@ import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { VelaEvent } from '../agent/events.ts'
 import type { ChannelDefinition } from '../channels/types.ts'
 import type { VelaLogger } from '../logger.ts'
-import type { ImageContent, ModelMessage, UserContent } from '../messages.ts'
+import type {
+  ImageContent,
+  ModelMessage,
+  ToolContent,
+  UserContent,
+} from '../messages.ts'
 import type { ProviderDefinition } from '../models/index.ts'
 import type { BranchSummaryEntry, SessionEntry } from '../session/entries.ts'
 import type { ToolDefinition } from '../tools/registry.ts'
@@ -176,10 +181,15 @@ export interface ToolResultEvent {
   input: unknown
   /** The text the model will see (a preview for oversized results) */
   output: string
+  /** Ordered text/image blocks when the tool returned multimodal content. */
+  content?: ToolContent
 }
 
 export interface ToolResultEventResult {
+  /** Replace the caption while preserving images. */
   output?: string
+  /** Replace all content, including images; [] removes it. Normalized after hooks. */
+  content?: ToolContent
 }
 
 /**

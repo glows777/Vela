@@ -1,4 +1,4 @@
-import type { ToolResultPart } from 'ai'
+import type { ToolResultPart } from '../messages.ts'
 import { getStoredResult } from '../session/tool-results.ts'
 
 export type ToolResultOutput = ToolResultPart['output']
