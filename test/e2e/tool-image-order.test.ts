@@ -110,3 +110,50 @@ test.each(['before', 'after'] as const)(
     for (const caption of captions) expect(recovered).toContain(caption)
   },
 )
+
+test('many ordered captions share a bounded preview and one recovery notice', async () => {
+  const picture = image('blue.png', 'image/png')
+  const captions = Array.from(
+    { length: 100 },
+    (_, index) => `Caption ${index}.`,
+  )
+  const content: ToolContent = captions.flatMap((text) => [
+    picture,
+    { type: 'text' as const, text },
+  ])
+  const maxResultChars = 100
+  const t = createTestVela({
+    limits: { summaryThreshold: 1e9, maxInputTokens: 1e9 },
+    extensions: [
+      function pictures(v) {
+        v.registerTool({
+          name: 'many',
+          description: 'Return many images with short captions',
+          inputSchema: z.object({}),
+          maxResultChars,
+          execute: async () => new ToolExecutionResult({}, content),
+        })
+      },
+    ],
+    responses: [fauxToolCall('pictures_many', {}), fauxText('done')],
+  })
+  await t.run('Describe these captioned pictures')
+  const output = t.model.calls[1]!.prompt.flatMap((message) =>
+    message.role === 'tool' ? message.content : [],
+  ).find((part) => part.type === 'tool-result')!.output
+  expect(output.type).toBe('content')
+  if (output.type !== 'content') throw new Error('Missing image content')
+  expect(
+    output.value.slice(0, content.length).map((part) => part.type),
+  ).toEqual(content.map((part) => (part.type === 'image' ? 'file' : 'text')))
+  const texts = output.value.flatMap((part) =>
+    part.type === 'text' ? [part.text] : [],
+  )
+  const notices = texts.filter((text) => text.includes('Full text saved at:'))
+  expect(notices).toHaveLength(1)
+  const totalTextChars = texts.reduce((total, text) => total + text.length, 0)
+  expect(totalTextChars).toBeLessThanOrEqual(
+    maxResultChars + notices[0]!.length,
+  )
+  expect(totalTextChars).toBeLessThan(captions.join('\n').length)
+})

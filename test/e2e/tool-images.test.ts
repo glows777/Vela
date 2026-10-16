@@ -441,7 +441,7 @@ test('Chat redaction after an image tool does not promise a second attachment', 
   await t.run('Read both tool results after redaction')
   const results = model.calls[1]!.prompt.flatMap((message) =>
     message.role === 'tool' ? message.content : [],
-  )
+  ).filter((part) => part.type === 'tool-result')
   expect(results.at(-1)?.output).toEqual({ type: 'content', value: [] })
   expect(JSON.stringify(results.at(-1))).not.toContain('tool image follows')
   const users = model.calls[1]!.prompt.filter(

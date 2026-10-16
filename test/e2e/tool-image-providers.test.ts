@@ -252,10 +252,10 @@ test('aliased OpenAI Chat moves mixed and image-only tool images after every res
   expectCanonicalHistory(t.messages, 2)
 })
 
-test.each([['mixed'], ['image-only', 'mixed']])(
+test.each([{ variants: ['mixed'] }, { variants: ['image-only', 'mixed'] }])(
   'Chat hook removal leaves an honestly empty result for %j',
-  async (...variants: string[]) => {
-    const provider = providerFixture('chat', variants)
+  async ({ variants }) => {
+    const provider = providerFixture('chat', [...variants])
     const t = createTestVela({
       model: provider.model,
       extensions: [
@@ -263,7 +263,7 @@ test.each([['mixed'], ['image-only', 'mixed']])(
         function redact(v) {
           v.on('tool_result', (event) =>
             event.toolName === 'pictures_render' &&
-            event.input.variant === 'mixed'
+            (event.input as { variant: string }).variant === 'mixed'
               ? { content: [] }
               : undefined,
           )
