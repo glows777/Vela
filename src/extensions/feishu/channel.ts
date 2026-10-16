@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import * as lark from '@larksuiteoapi/node-sdk'
 import type {
   ChannelDefinition,
@@ -38,12 +39,52 @@ export interface FeishuSentMessage {
   createTime: string
 }
 
+/** The fields used from a `card.action.trigger` callback (v2). */
+export interface FeishuCardAction {
+  operator?: { open_id?: string }
+  context?: { open_chat_id?: string }
+  action?: { value?: unknown }
+}
+
+export interface FeishuCardResponse {
+  toast: { type: 'success' | 'info'; content: string }
+}
+
+export interface FeishuCard {
+  schema: '2.0'
+  header: { title: { tag: 'plain_text'; content: string } }
+  body: {
+    elements: {
+      tag: 'markdown' | 'column_set'
+      content?: string
+      columns?: {
+        tag: 'column'
+        width: 'weighted'
+        weight: number
+        elements: {
+          tag: 'button'
+          text: { tag: 'plain_text'; content: string }
+          type: 'primary' | 'default' | 'danger'
+          behaviors: {
+            type: 'callback'
+            value: { action: string; token: string }
+          }[]
+        }[]
+      }[]
+    }[]
+  }
+}
+
 /** The connection to Feishu: receives message events and sends text to a chat (lark's long connection by default). */
 export interface FeishuTransport {
-  start(onMessage: (event: FeishuMessageEvent) => void): Promise<void>
+  start(
+    onMessage: (event: FeishuMessageEvent) => void,
+    onAction: (event: FeishuCardAction) => FeishuCardResponse,
+  ): Promise<void>
   stop(): void
   send(chatId: string, text: string): Promise<void>
   reply(messageId: string, text: string): Promise<FeishuSentMessage>
+  sendCard(chatId: string, card: FeishuCard, replyToId?: string): Promise<void>
   getBotId(): Promise<string>
   getSenderName(openId: string): Promise<string | undefined>
   listMessages(
@@ -79,7 +120,15 @@ export class FeishuChannel implements ChannelDefinition {
   private transport?: FeishuTransport
   private readonly seen = new Set<string>()
   private stopped = false
-  private readonly queues = new Map<string, Promise<void>>()
+  private readonly pending = new Set<Promise<void>>()
+  private readonly controls = new Map<
+    string,
+    {
+      msg: IncomingMessage
+      choose: (action: 'queue' | 'steer' | 'stop') => boolean
+      clear: () => void
+    }
+  >()
   private botId?: string
   private readonly names = new Map<string, Promise<string>>()
   private readonly lastReplies = new Map<string, FeishuSentMessage>()
@@ -122,14 +171,132 @@ export class FeishuChannel implements ChannelDefinition {
         `[feishu] Cannot identify bot; group messages will be ignored: ${String(error)}`,
       )
     }
-    await transport.start((event) => this.receive(event))
+    await transport.start(
+      (event) => this.receive(event),
+      (event) => this.receiveAction(event),
+    )
     this.config.logger.info('[feishu] Long connection established')
   }
 
   async stop(): Promise<void> {
     this.stopped = true
     this.transport?.stop()
-    await Promise.all(this.queues.values())
+    for (const entry of this.controls.values()) entry.clear()
+    await Promise.all(this.pending)
+  }
+
+  async showRunControls(
+    msg: IncomingMessage,
+    controls: Parameters<NonNullable<ChannelDefinition['showRunControls']>>[1],
+  ): Promise<void> {
+    if (
+      this.stopped ||
+      controls.signal.aborted ||
+      !this.transport ||
+      messageText((msg.raw as FeishuMessageEvent).message) === undefined
+    )
+      return
+    const token = randomUUID()
+    const clear = () => {
+      this.controls.delete(token)
+      controls.signal.removeEventListener('abort', clear)
+    }
+    this.controls.set(token, { msg, choose: controls.choose, clear })
+    controls.signal.addEventListener('abort', clear, { once: true })
+    const card: FeishuCard = {
+      schema: '2.0',
+      header: { title: { tag: 'plain_text', content: 'A run is in progress' } },
+      body: {
+        elements: [
+          {
+            tag: 'markdown',
+            content:
+              'Your message is queued by default. Steer adds it to the current task for one combined reply. Stop cancels the current run and discards this queued message.',
+          },
+          {
+            tag: 'column_set',
+            columns: (['queue', 'steer', 'stop'] as const).map((action) => ({
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [
+                {
+                  tag: 'button',
+                  text: {
+                    tag: 'plain_text',
+                    content: {
+                      queue: 'Queue (default)',
+                      steer: 'Steer',
+                      stop: 'Stop',
+                    }[action],
+                  },
+                  type:
+                    action === 'queue'
+                      ? 'primary'
+                      : action === 'stop'
+                        ? 'danger'
+                        : 'default',
+                  behaviors: [{ type: 'callback', value: { action, token } }],
+                },
+              ],
+            })),
+          },
+        ],
+      },
+    }
+    try {
+      // Control cards are not answers and must not advance the chat-history boundary.
+      await this.transport.sendCard(msg.channelId, card, msg.replyToId)
+    } catch (error) {
+      clear()
+      throw error
+    }
+  }
+
+  private receiveAction(event: FeishuCardAction): FeishuCardResponse {
+    const ignored: FeishuCardResponse = {
+      toast: {
+        type: 'info',
+        content: 'This control is unavailable or has expired.',
+      },
+    }
+    const value = event.action?.value
+    if (this.stopped || !value || typeof value !== 'object') return ignored
+    const { action, token } = value as { action?: unknown; token?: unknown }
+    if (
+      typeof token !== 'string' ||
+      (action !== 'queue' && action !== 'steer' && action !== 'stop')
+    )
+      return ignored
+    const entry = this.controls.get(token)
+    const operator = event.operator?.open_id
+    if (
+      !entry ||
+      !operator ||
+      event.context?.open_chat_id !== entry.msg.channelId
+    )
+      return ignored
+    const original = entry.msg.raw as FeishuMessageEvent
+    if (
+      !this.config.chats?.includes(entry.msg.channelId) &&
+      !(
+        original.message.chat_type === 'p2p' &&
+        this.config.owners.includes(operator)
+      )
+    )
+      return ignored
+    entry.clear()
+    if (!entry.choose(action)) return ignored
+    return {
+      toast: {
+        type: 'success',
+        content: {
+          queue: 'Message queued.',
+          steer: 'Adding the message to the current run.',
+          stop: 'Stopping the current run.',
+        }[action],
+      },
+    }
   }
 
   async send(message: OutgoingMessage): Promise<void> {
@@ -151,13 +318,28 @@ export class FeishuChannel implements ChannelDefinition {
     }
   }
 
-  /** The Feishu queue waits for the preceding gateway reply before preparing the next input. */
-  private async prepareMessage(msg: IncomingMessage): Promise<IncomingMessage> {
+  /** The gateway prepares queued input after the preceding reply; Steer prepares it during the run. */
+  async prepareMessage(
+    msg: IncomingMessage,
+    activeMessage?: IncomingMessage,
+  ): Promise<IncomingMessage | undefined> {
+    if (this.stopped) return
+    const event = msg.raw as FeishuMessageEvent
+    const activeTrigger = (activeMessage?.raw as FeishuMessageEvent | undefined)
+      ?.message
+    if (messageText(event.message) === undefined) {
+      await this.send({
+        channelId: msg.channelId,
+        recipientId: msg.senderId,
+        replyToId: msg.replyToId,
+        text: UNSUPPORTED_MESSAGE,
+      })
+      return
+    }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
     const question = { name, text: msg.text }
-    const event = msg.raw as FeishuMessageEvent
     let text = `${name}: ${msg.text}`
     if (event.message.chat_type === 'group' && this.transport) {
       try {
@@ -172,15 +354,22 @@ export class FeishuChannel implements ChannelDefinition {
           if (item.message_id && seen.has(item.message_id)) continue
           if (item.message_id) seen.add(item.message_id)
           if (
+            (activeTrigger?.create_time &&
+              item.create_time &&
+              Number(item.create_time) < Number(activeTrigger.create_time)) ||
             (previous &&
               (item.message_id === previous.messageId ||
                 Number(item.create_time) <= Number(previous.createTime))) ||
             (item.sender?.sender_type === 'app' &&
-              item.sender.id === this.config.appId)
+              item.sender.id === this.config.appId &&
+              (item.msg_type === 'text' || item.msg_type === 'post'))
           )
             break
           if (
             item.deleted ||
+            // Other messages can share this millisecond; exclude the known trigger by id.
+            (activeTrigger?.message_id &&
+              item.message_id === activeTrigger.message_id) ||
             item.message_id === event.message.message_id ||
             (event.message.create_time &&
               Number(item.create_time) > Number(event.message.create_time))
@@ -253,41 +442,25 @@ export class FeishuChannel implements ChannelDefinition {
     // A group reply needs its actual trigger; never accidentally post an unthreaded answer.
     if (group && !message.message_id) return
     const replyToId = group ? message.message_id : undefined
-    const previous = this.queues.get(message.chat_id) ?? Promise.resolve()
-    const next = previous
-      .then(async () => {
-        if (this.stopped) return
-        const text = messageText(message)
-        if (text === undefined) {
-          await this.send({
-            channelId: message.chat_id,
-            recipientId: senderId,
-            replyToId,
-            text: UNSUPPORTED_MESSAGE,
-          })
-          return
-        }
-        if (!text || !this.messageHandler) return
-        const prepared = await this.prepareMessage({
-          channelId: message.chat_id,
-          senderId,
-          senderName: senderId,
-          text,
-          replyToId,
-          raw: event,
-        })
-        if (!this.stopped) await this.messageHandler(prepared)
-      })
-      .catch((error) =>
-        this.config.logger.warn(
-          `[feishu] Failed to handle message: ${String(error)}`,
-        ),
-      )
-    this.queues.set(message.chat_id, next)
-    void next.then(() => {
-      if (this.queues.get(message.chat_id) === next)
-        this.queues.delete(message.chat_id)
-    })
+    const text = messageText(message)
+    if (text === '' || !this.messageHandler) return
+    // Deliver immediately so the gateway can show run controls, then serialize preparation and replies there.
+    const next = Promise.resolve(
+      this.messageHandler({
+        channelId: message.chat_id,
+        senderId,
+        senderName: senderId,
+        text: text ?? '',
+        replyToId,
+        raw: event,
+      }),
+    ).catch((error) =>
+      this.config.logger.warn(
+        `[feishu] Failed to handle message: ${String(error)}`,
+      ),
+    )
+    this.pending.add(next)
+    void next.then(() => this.pending.delete(next))
   }
 }
 
@@ -367,11 +540,12 @@ function larkTransport(appId: string, appSecret: string): FeishuTransport {
   const client = new lark.Client({ appId, appSecret })
   let wsClient: lark.WSClient | undefined
   return {
-    async start(onMessage) {
+    async start(onMessage, onAction) {
       const dispatcher = new lark.EventDispatcher({})
       dispatcher.register({
         'im.message.receive_v1': (data) =>
           onMessage(data as FeishuMessageEvent),
+        'card.action.trigger': (data: FeishuCardAction) => onAction(data),
       })
       wsClient = new lark.WSClient({
         appId,
@@ -393,6 +567,20 @@ function larkTransport(appId: string, appSecret: string): FeishuTransport {
             content: JSON.stringify({ text }),
           },
         }),
+      )
+    },
+    async sendCard(chatId, card, replyToId) {
+      const data = { msg_type: 'interactive', content: JSON.stringify(card) }
+      checked(
+        replyToId
+          ? await client.im.message.reply({
+              path: { message_id: replyToId },
+              data,
+            })
+          : await client.im.message.create({
+              params: { receive_id_type: 'chat_id' },
+              data: { ...data, receive_id: chatId },
+            }),
       )
     },
     async reply(messageId, text) {
