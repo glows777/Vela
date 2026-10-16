@@ -37,10 +37,10 @@ for (const route of [
     const t = createTestVela({
       responses:
         route === 'pending'
-          ? [fauxToolCall('add_picture', {}), fauxText('seen')]
+          ? [fauxToolCall('pictures_add_picture', {}), fauxText('seen')]
           : [fauxText('seen')],
       extensions: [
-        (v) => {
+        function pictures(v) {
           if (route === 'before_agent_start')
             v.on('before_agent_start', () => ({ message }))
           if (route === 'pending')
@@ -48,8 +48,8 @@ for (const route of [
               name: 'add_picture',
               description: 'Add a custom picture while a tool is running',
               inputSchema: z.object({}),
-              execute: async (_input, ctx) => {
-                await ctx.session.sendMessage(message, { triggerTurn: false })
+              execute: async () => {
+                await t.session.sendMessage(message, { triggerTurn: false })
                 return 'picture added'
               },
             })
@@ -130,5 +130,33 @@ test('closing during custom image normalization cannot append after the final sa
   )
   await t.session.close()
   expect(await send).toMatch(/closed/)
-  expect(t.session.getEntries()).toHaveLength(0)
+  expect(
+    t.session.getEntries().filter((e) => e.type === 'custom_message'),
+  ).toHaveLength(0)
+})
+
+test('closing while before_agent_start returns custom images does not record them', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const t = createTestVela({
+    responses: [],
+    extensions: [
+      (v) => {
+        v.on('before_agent_start', async () => {
+          entered.resolve()
+          await release.promise
+          return { message: custom() }
+        })
+      },
+    ],
+  })
+  const run = t.run('start').catch((error: Error) => error.message)
+  await entered.promise
+  const closing = t.session.close()
+  release.resolve()
+  await Promise.all([run, closing])
+  expect(
+    t.session.getEntries().filter((e) => e.type === 'custom_message'),
+  ).toHaveLength(0)
+  expect(t.model.calls).toHaveLength(0)
 })

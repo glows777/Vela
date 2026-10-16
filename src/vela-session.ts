@@ -1238,7 +1238,7 @@ export class VelaSession {
     options: SendMessageOptions = {},
   ): Promise<void> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    const entry = this.customMessage(message)
+    let entry = this.customMessage(message)
     if (options.deliverAs === 'nextTurn') {
       this.nextTurnMessages.push(entry)
       return
@@ -1252,6 +1252,15 @@ export class VelaSession {
       return
     }
     if (options.triggerTurn) return this.promptMessage(entry, {})
+    // Queued/triggered inputs normalize when consumed. Append-only images need the same
+    // boundary here; keep text-only delivery synchronous for extension event handlers.
+    if (
+      Array.isArray(entry.content) &&
+      entry.content.some((part) => part.type === 'image' && 'data' in part)
+    ) {
+      entry = await this.normalizeInput(entry)
+      if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    }
     if (this.busy.locked) {
       this.pendingCustom.push(entry)
       return
@@ -1530,19 +1539,23 @@ export class VelaSession {
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.sections = started.sections
     // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
-    const added = started.messages.map((message) => this.customMessage(message))
+    const custom = started.messages.map((message) =>
+      this.customMessage(message),
+    )
+    const nextTurn = this.nextTurnMessages.slice()
+    const added = await Promise.all(
+      [...nextTurn, ...custom].map((message) => this.normalizeInput(message)),
+    )
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
+    signal.throwIfAborted()
+    this.nextTurnMessages.splice(0, nextTurn.length)
     // `!` commands that finished during an earlier loop of this run come before the new input
     this.flushBash()
     this.flushPendingCustom()
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
-    for (const message of [
-      ...inputs,
-      ...this.nextTurnMessages.splice(0),
-      ...added,
-    ]) {
+    for (const message of [...inputs, ...added]) {
       this.append(message)
       newMessages.push(message)
     }
