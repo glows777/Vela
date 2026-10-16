@@ -3,6 +3,13 @@ import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
 import type { VelaEventListener } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
+import {
+  isToolContent,
+  normalizeToolContent,
+  type ToolContent,
+  toAIToolOutput,
+  toolContentText,
+} from '../messages.ts'
 import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { HookPipeline } from '../security/hooks.ts'
 import {
@@ -18,17 +25,18 @@ import type {
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 
-/**
- * What a tool can return to keep structured data apart from the text the model gets (like pi's
- * `{ content, details }`): the model sees `text`; `value` is kept in the tool history and is the
- * `details` of `tool_execution_end` (display data for UIs). `execution.isError` makes the call an error result.
- */
+/** A tool's native details plus model-facing text or canonical text/image content. */
 export class ToolExecutionResult {
+  readonly text: string
+  readonly content?: ToolContent
   constructor(
     readonly value: unknown,
-    readonly text: string,
+    content: string | ToolContent,
     readonly execution: ExecutionMetadata = {},
-  ) {}
+  ) {
+    this.text = typeof content === 'string' ? content : toolContentText(content)
+    if (typeof content !== 'string') this.content = content
+  }
 }
 
 /** What a tool call ended with (`ctx.executeTool()`, like pi's `AgentToolCallOutcome`). */
@@ -166,7 +174,14 @@ class ToolRejection {
  * A tool reported an error result (e.g. bash exiting non-zero): like pi's `isError`, the model gets
  * the output as an error result.
  */
-class ToolResultError extends Error {}
+export class ToolResultError extends Error {
+  constructor(
+    message: string,
+    readonly content?: ToolContent,
+  ) {
+    super(message)
+  }
+}
 
 /** Per call: how the call was issued */
 interface CallOptions {
@@ -421,6 +436,15 @@ export class ToolRegistry {
       result[tool.name] = AITool({
         description: tool.description,
         inputSchema: tool.inputSchema,
+        toModelOutput: ({ output }) =>
+          isToolContent(output)
+            ? toAIToolOutput({ type: 'content', value: output })
+            : typeof output === 'string'
+              ? { type: 'text', value: output }
+              : {
+                  type: 'json',
+                  value: JSON.parse(JSON.stringify(output ?? null)),
+                },
         execute: (input: unknown, options) =>
           this.track(async () => {
             const output = await this.runCall(tool, input, {
@@ -619,9 +643,11 @@ export class ToolRegistry {
               JSON.stringify(value)?.length > maxChars))
         ) {
           stored = await this.results.save(
-            typeof value === 'string'
-              ? value
-              : (JSON.stringify(value, null, 2) ?? String(value)),
+            raw instanceof ToolExecutionResult && raw.content
+              ? text
+              : typeof value === 'string'
+                ? value
+                : (JSON.stringify(value, null, 2) ?? String(value)),
             name,
             truncateResult(text, maxChars),
             options.toolCallId,
@@ -638,16 +664,25 @@ export class ToolRegistry {
               : 'completed',
           durationMs: performance.now() - started,
           ...execution,
-          ...(stored
+          ...(stored && raw instanceof ToolExecutionResult && raw.content
             ? {
-                outputPath: stored.path,
-                bytes: stored.bytes,
-                format:
-                  raw instanceof StoredToolResult || typeof value === 'string'
-                    ? ('text' as const)
-                    : ('json' as const),
+                output: value ?? null,
+                modelTextPath: stored.path,
+                modelTextBytes: stored.bytes,
               }
-            : { output: value ?? null }),
+            : stored
+              ? {
+                  outputPath: stored.path,
+                  bytes: stored.bytes,
+                  format:
+                    raw instanceof StoredToolResult ||
+                    typeof value === 'string' ||
+                    (raw instanceof ToolExecutionResult &&
+                      raw.content !== undefined)
+                      ? ('text' as const)
+                      : ('json' as const),
+                }
+              : { output: value ?? null }),
         })
         if (stored) {
           stored.callId = call.callId
@@ -657,7 +692,9 @@ export class ToolRegistry {
       } catch (error) {
         // Do not invent a terminal result when the result could not be recorded.
         const location = stored
-          ? `full output saved at: ${stored.path}`
+          ? raw instanceof ToolExecutionResult && raw.content
+            ? `full model text saved at: ${stored.path}; native result details remain unconfirmed`
+            : `full output saved at: ${stored.path}`
           : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
         const status =
           execution.exitCode === undefined
@@ -668,15 +705,35 @@ export class ToolRegistry {
         )
         throw this.persistenceFailure
       }
-      let output = stored ? stored.preview : text
+      let output: string | ToolContent =
+        raw instanceof ToolExecutionResult && raw.content
+          ? stored
+            ? previewToolContent(raw.content, maxChars, stored)
+            : raw.content
+          : stored
+            ? stored.preview
+            : text
       if (pipeline) {
         const post = await pipeline.runPost(name, input, output, hookContext)
         if (post.modifiedOutput !== undefined)
-          output = String(post.modifiedOutput)
+          output = isToolContent(post.modifiedOutput)
+            ? post.modifiedOutput
+            : String(post.modifiedOutput)
       }
+      // Normalize after all post hooks, including replacement image payloads.
+      if (isToolContent(output)) output = await normalizeToolContent(output)
       // Like pi: a failed command is an error result, with its output (and where the full output is) as the message
-      if (execution.isError) throw new ToolResultError(output)
-      return stored ? { ...stored, preview: output } : output
+      if (execution.isError)
+        throw new ToolResultError(
+          (typeof output === 'string' ? output : toolContentText(output)) ||
+            'Tool reported an error',
+          typeof output === 'string' ? undefined : output,
+        )
+      return typeof output !== 'string'
+        ? output
+        : stored
+          ? { ...stored, preview: output }
+          : output
     })
   }
 
@@ -755,7 +812,11 @@ export class ToolRegistry {
       // A failed result save stops the session, as it does for model-issued calls
       if (error === this.persistenceFailure) throw error
       return finish(
-        error instanceof Error ? error.message : String(error),
+        error instanceof ToolResultError && error.content
+          ? error.content
+          : error instanceof Error
+            ? error.message
+            : String(error),
         true,
         true,
       )
@@ -918,11 +979,34 @@ function untilAborted(
   })
 }
 
-function truncateResult(text: string, maxChars: number) {
+function previewToolContent(
+  content: ToolContent,
+  maxChars: number,
+  stored: StoredToolResult,
+): ToolContent {
+  // Share the text budget without moving captions away from their images.
+  const captions = content.filter((part) => part.type === 'text').length
+  const captionChars = Math.floor(maxChars / Math.max(1, captions))
+  return [
+    ...content.map((part) =>
+      part.type === 'text'
+        ? { ...part, text: truncateResult(part.text, captionChars, true) }
+        : part,
+    ),
+    {
+      type: 'text',
+      text: `Full text saved at: ${stored.path}\n${stored.read}`,
+    },
+  ]
+}
+
+function truncateResult(text: string, maxChars: number, compact = false) {
   if (text.length <= maxChars) return text
 
-  let headSize = Math.floor(maxChars * 0.6)
-  const tailSize = maxChars - headSize
+  // In ordered content, count the ellipsis in the budget and share one recovery note.
+  const previewChars = compact ? Math.max(0, maxChars - 1) : maxChars
+  let headSize = Math.floor(previewChars * 0.6)
+  const tailSize = previewChars - headSize
   if (
     text.charCodeAt(headSize - 1) >= 0xd800 &&
     text.charCodeAt(headSize - 1) <= 0xdbff
@@ -936,6 +1020,7 @@ function truncateResult(text: string, maxChars: number) {
     tailStart++
   const head = text.slice(0, headSize)
   const tail = text.slice(tailStart)
+  if (compact) return maxChars > 0 ? `${head}…${tail}` : ''
   const dropped = text.length - head.length - tail.length
 
   return `${head}\n\n[preview: first ${head.length} and last ${tail.length} of ${text.length} UTF-16 code units; ${dropped} omitted here, full output saved]\n\n${tail}`

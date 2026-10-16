@@ -5,10 +5,10 @@ import {
   type ProviderMetadata,
   parsePartialJson,
   type ToolCallPart,
-  type ToolModelMessage,
-  type ToolResultPart,
 } from 'ai'
-import type { ModelMessage } from '../messages.ts'
+import type { ToolModelMessage, ToolResultPart } from '../messages.ts'
+import { isToolContent, type ModelMessage } from '../messages.ts'
+import { ToolResultError } from '../tools/registry.ts'
 import type { AssistantMessageEvent, StopReason, VelaEvent } from './events.ts'
 
 /** The assistant parts Vela streams */
@@ -330,10 +330,14 @@ export class StepMessage {
       toolCallId: call.toolCallId,
       toolName: call.toolName,
       output: isError
-        ? { type: 'error-text', value: errorMessageOf(result) }
-        : typeof result === 'string'
-          ? { type: 'text', value: result }
-          : { type: 'json', value: (result ?? null) as never },
+        ? result instanceof ToolResultError && result.content
+          ? { type: 'content', value: result.content, isError: true }
+          : { type: 'error-text', value: errorMessageOf(result) }
+        : isToolContent(result)
+          ? { type: 'content', value: result }
+          : typeof result === 'string'
+            ? { type: 'text', value: result }
+            : { type: 'json', value: (result ?? null) as never },
     })
   }
 

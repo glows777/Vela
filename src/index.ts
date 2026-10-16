@@ -108,6 +108,9 @@ export type {
   ImageContent,
   ModelMessage,
   TextContent,
+  ToolContent,
+  ToolModelMessage,
+  ToolResultPart,
   UserContent,
 } from './messages.ts'
 export type {

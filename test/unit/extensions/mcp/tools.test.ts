@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
+  convertMcpResult,
   createMcpToolName,
   mcpResultText,
 } from '../../../../src/extensions/mcp/tools.ts'
@@ -15,7 +16,7 @@ test('tool names are mcp__<server>__<tool>, sanitized, with a hash when too long
   expect(taken).toMatch(/^mcp__s__a_b_[0-9a-f]{8}$/)
 })
 
-test('MCP results become text: images, audio and binary resources are placeholders', () => {
+test('MCP text projection omits images and keeps audio and binary placeholders', () => {
   const png = Buffer.from('12345678').toString('base64')
   expect(
     mcpResultText('s', 't', {
@@ -56,7 +57,6 @@ test('MCP results become text: images, audio and binary resources are placeholde
   ).toBe(
     [
       'hello',
-      '[Image: image/png, 8 B (not shown: Vela tool results are text only)]',
       '[Audio: audio/wav, 8 B (not shown: Vela tool results are text only)]',
       'embedded text',
       '{"a":1}',
@@ -64,6 +64,44 @@ test('MCP results become text: images, audio and binary resources are placeholde
       '[Resource file:///b.md "b.md" (text/markdown, 2.0 KB): Notes]',
     ].join('\n'),
   )
+})
+
+test('MCP conversion keeps ordered image blocks and the native result without metadata', () => {
+  const image = {
+    type: 'image' as const,
+    data: Buffer.from('image bytes').toString('base64'),
+    mimeType: 'image/png',
+  }
+  const result = {
+    content: [
+      { type: 'text' as const, text: 'before' },
+      image,
+      { type: 'text' as const, text: 'after' },
+    ],
+    structuredContent: { source: 'picture' },
+    isError: true,
+    _meta: { private: true },
+  }
+  const converted = convertMcpResult('s', 't', result)
+  expect(converted.content).toEqual(result.content)
+  expect(converted.text).toBe('before\nafter')
+  expect(converted.value).toEqual({
+    content: result.content,
+    structuredContent: result.structuredContent,
+    isError: true,
+  })
+  expect(converted.execution).toEqual({ isError: true })
+})
+
+test('an image-only MCP error keeps its image without adding an empty-error message', () => {
+  const image = { type: 'image' as const, data: 'YQ==', mimeType: 'image/png' }
+  const converted = convertMcpResult('s', 't', {
+    content: [image],
+    isError: true,
+  })
+  expect(converted.content).toEqual([image])
+  expect(converted.text).toBe('')
+  expect(converted.execution.isError).toBe(true)
 })
 
 test('without content, the structured content is the text; an empty error gets a message', () => {
