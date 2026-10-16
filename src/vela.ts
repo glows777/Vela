@@ -102,7 +102,7 @@ export interface VelaOptions {
   /** Text appended to the system prompt (pi's `--append-system-prompt`) */
   appendSystemPrompt?: string
   /**
-   * A channel session (one per conversation and sender) with no new message for this long is closed, so a
+   * A channel session (one shared session per chat) with no new message for this long is closed, so a
    * long-running bot doesn't keep every conversation in memory; the next message reopens and resumes it.
    * Default 10 minutes; 0 closes it right after each reply.
    */

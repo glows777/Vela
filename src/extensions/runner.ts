@@ -595,7 +595,6 @@ export class ExtensionRunner {
   /**
    * Runs `/name args` and returns true when it is an extension command; returns false otherwise
    * (the text goes to the model as normal input).
-   * Only owner sessions can run commands: a `/xxx` from a channel sender is plain text.
    * `signal` is this command's own abort signal (ctx.signal).
    */
   async runCommand(
