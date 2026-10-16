@@ -234,7 +234,7 @@ vela.registerChannel({
 })
 ```
 
-`roleFor` is optional. The gateway checks it on every message. When you omit it, every sender in the chat is `owner`. When you return `guest` or `collaborator`, only the tools change. Earlier turns stay in the shared transcript. See [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
+`roleFor` is optional. The gateway checks it on every message. When you omit it, every sender in the chat is `owner`. When you return `guest` or `collaborator`, the role changes tools, permissions, and prompt and command behavior. Earlier turns stay in the shared transcript. See [Session roles](security.md#session-roles) and [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
 
 ### on
 
