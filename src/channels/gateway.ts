@@ -58,11 +58,7 @@ export class ChannelGateway {
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
   private subscribed = new WeakSet<VelaSession>()
-  /** Retain the latest failed store across idle closes so recovery retries real pending entries. */
-  private saveFailures = new Map<
-    string,
-    { count: number; retry: () => Promise<void> }
-  >()
+  private saveFailures = new Map<string, number>()
   private active = new Set<VelaSession>()
   /** Idle sessions waiting to be closed, by session id */
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -169,8 +165,7 @@ export class ChannelGateway {
         this.closeWhenIdle(id, idleMs || BUSY_RECHECK_MS)
         return
       }
-      const closed = session
-        .close()
+      const closed = this.closeIdleSession(id, session, idleMs)
         .catch((error) =>
           this.logger.error(
             `[gateway] Failed to close idle session ${id}: ${errorMessage(error)}`,
@@ -186,6 +181,32 @@ export class ChannelGateway {
     this.idleTimers.set(id, timer)
   }
 
+  private async closeIdleSession(
+    id: string,
+    session: VelaSession,
+    idleMs: number,
+  ): Promise<void> {
+    try {
+      // A failed close discards pending history. Keep the live session until a real save succeeds.
+      await session.save()
+    } catch (error) {
+      session.emit({ type: 'session_save_failed', error })
+      return
+    }
+    // New work may have arrived while saving; its queue will rearm idle cleanup.
+    if (
+      this.stopped ||
+      this.options.find(id) !== session ||
+      this.queues.has(id)
+    )
+      return
+    if (session.isRunning || session.hasUI) {
+      this.closeWhenIdle(id, idleMs || BUSY_RECHECK_MS)
+      return
+    }
+    await session.close()
+  }
+
   private async process(
     id: string,
     channelName: string,
@@ -199,37 +220,26 @@ export class ChannelGateway {
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
     if (!this.subscribed.has(session)) {
       this.subscribed.add(session)
-      const store = session.store
       session.subscribe((event) => {
         if (event.type !== 'session_save_failed') return
         if (!this.stopped)
-          this.saveFailures.set(id, {
-            count: (this.saveFailures.get(id)?.count ?? 0) + 1,
-            retry: () => store.flush(),
-          })
+          this.saveFailures.set(id, (this.saveFailures.get(id) ?? 0) + 1)
         this.logger.error(
           `[gateway] Could not save session ${id}: ${errorMessage(event.error)}`,
         )
       })
     }
-    const failure = this.saveFailures.get(id)
-    if (failure && failure.count >= MAX_SAVE_FAILURES) {
+    if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
       try {
-        // A closed session's store still has its failed batch. Never use an empty write as a probe.
-        await failure.retry()
-        if (!this.resumed.has(session)) {
-          await session.resume()
-          this.resumed.add(session)
-        }
-        this.sessionSaved(id)
+        // Retry the retained live session, without appending the new input or calling the model.
+        await session.save()
       } catch {
-        // A successful retry may clear the count before resume fails. Keep replying until both work.
-        this.saveFailures.set(id, failure)
+        // The refusal below reports the continuing outage; only a real write clears the count.
       }
     }
     // A blocked session must reply even when the storage outage also prevents reads.
     if (
-      (this.saveFailures.get(id)?.count ?? 0) < MAX_SAVE_FAILURES &&
+      (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
       !this.resumed.has(session)
     ) {
       await session.resume()
@@ -243,7 +253,7 @@ export class ChannelGateway {
       text: msg.text,
     })
 
-    if ((this.saveFailures.get(id)?.count ?? 0) >= MAX_SAVE_FAILURES) {
+    if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
       await this.sendReply(
         session,
         channelName,

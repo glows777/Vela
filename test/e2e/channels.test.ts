@@ -468,7 +468,7 @@ test('handling an input without saving does not clear failures from channel or S
   expect(sent.at(-1)?.text).toContain("can't be saved")
 })
 
-test('a failed idle close does not let a reopened channel session bypass the failure limit', async () => {
+test('an idle save failure retains the same session and its pending history', async () => {
   const { storage } = failingStorage()
   const t = createTestVela({
     responses: [fauxText('one'), fauxText('two')],
@@ -477,30 +477,24 @@ test('a failed idle close does not let a reopened channel session bypass the fai
   })
   const { sent, deliver } = fakeChannel(t)
   await deliver('u1', 'first')
-  await waitFor(
-    () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
-  )
-  // The prompt and its close each failed to save. Reopening must retain that count.
+  const session = t.vela.session('fake-c1-u1')
+  await waitFor(() => t.eventsOf('session_save_failed').length >= 2)
+  expect(t.vela.sessions()).toContain(session)
   await deliver('u1', 'third failure')
-  await waitFor(
-    () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
-  )
   await deliver('u1', 'refused')
-  await waitFor(
-    () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
-  )
-  // Closing an empty reopened session writes nothing; it must not count as recovery.
-  await deliver('u1', 'still refused')
+  expect(t.vela.session('fake-c1-u1')).toBe(session)
   expect(t.model.calls).toHaveLength(2)
   expect(sent.at(-1)?.text).toContain("can't be saved")
+  expect(JSON.stringify(session.getEntries())).toContain('first')
+  expect(JSON.stringify(session.getEntries())).not.toContain('refused')
 })
 
-test('a blocked session still replies after idle close when storage reads also fail', async () => {
+test('a retained blocked session still replies when storage reads also fail', async () => {
   const { storage } = failingStorage()
   let failReads = false
   let failedReads = 0
   const t = createTestVela({
-    responses: [fauxText('one'), fauxText('two')],
+    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
     channelIdleMs: 0,
     sessionStorage: {
       ...storage,
@@ -514,43 +508,37 @@ test('a blocked session still replies after idle close when storage reads also f
     },
   })
   const { sent, deliver } = fakeChannel(t)
-  const closed = () =>
-    !t.vela.sessions().some((session) => session.id === 'fake-c1-u1')
-  await deliver('u1', 'first')
-  await waitFor(closed)
-  await deliver('u1', 'third failure')
-  await waitFor(closed)
-  expect(t.eventsOf('session_save_failed').length).toBeGreaterThanOrEqual(3)
-
+  await Promise.all(
+    ['first', 'second', 'third'].map((text) => deliver('u1', text)),
+  )
+  await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
+  const session = t.vela.session('fake-c1-u1')
   failReads = true
   await deliver('u1', 'refused during full outage')
-  await waitFor(closed)
   await deliver('u1', 'still refused during full outage')
-  expect(sent).toHaveLength(4)
-  for (const reply of sent.slice(2))
+  expect(sent).toHaveLength(5)
+  for (const reply of sent.slice(3))
     expect(reply.text).toContain("can't be saved")
   expect(failedReads).toBe(0)
-  expect(t.model.calls).toHaveLength(2)
-  expect(t.eventsOf('channel_message')).toHaveLength(4)
-  expect(t.eventsOf('channel_reply')).toHaveLength(4)
+  expect(t.model.calls).toHaveLength(3)
+  expect(t.vela.session('fake-c1-u1')).toBe(session)
+  expect(t.eventsOf('channel_message')).toHaveLength(5)
+  expect(t.eventsOf('channel_reply')).toHaveLength(5)
 })
 
-test('a blocked idle-closed session recovers by saving its failed batch before accepting a new prompt', async () => {
+test('a blocked retained session saves its real batch before accepting a new prompt', async () => {
   const { storage, failing } = failingStorage()
   let emptyAppends = 0
   const t = createTestVela({
-    responses: [
-      fauxText('one'),
-      fauxText('two'),
-      fauxText('recovered'),
-      fauxText('continued'),
-    ],
+    responses: ['one', 'two', 'three', 'recovered', 'continued'].map((text) =>
+      fauxText(text),
+    ),
     allowPendingResponses: true,
     channelIdleMs: 0,
     sessionStorage: {
       ...storage,
       async append(id, entries) {
-        // Some backends return early for an empty batch even while real writes fail.
+        // An empty append can be a no-op even while real writes still fail.
         if (!entries.length) {
           emptyAppends++
           return
@@ -560,78 +548,170 @@ test('a blocked idle-closed session recovers by saving its failed batch before a
     },
   })
   const { sent, deliver } = fakeChannel(t)
-  const closed = () =>
-    !t.vela.sessions().some((session) => session.id === 'fake-c1-u1')
-  await deliver('u1', 'first')
-  await waitFor(closed)
-  await deliver('u1', 'last unsaved turn')
-  await waitFor(closed)
+  await Promise.all(
+    ['first', 'second', 'third'].map((text) => deliver('u1', text)),
+  )
+  const session = t.vela.session('fake-c1-u1')
+  await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
+  expect(t.vela.sessions()).toContain(session)
   await deliver('u1', 'refused while broken')
-  await waitFor(closed)
   expect(sent.at(-1)?.text).toContain("can't be saved")
-  expect(t.model.calls).toHaveLength(2)
-
+  expect(t.model.calls).toHaveLength(3)
   failing.clear()
   await deliver('u1', 'after repair')
   expect(sent.at(-1)?.text).toBe('recovered')
-  expect(t.model.calls).toHaveLength(3)
-  expect(JSON.stringify(t.model.calls[2]?.prompt)).toContain(
-    'last unsaved turn',
-  )
-  expect(JSON.stringify(await storage.load('fake-c1-u1'))).toContain(
-    'after repair',
-  )
-  expect(JSON.stringify(await storage.load('fake-c1-u1'))).not.toContain(
-    'refused while broken',
-  )
+  expect(t.model.calls).toHaveLength(4)
+  expect(JSON.stringify(t.model.calls[3]?.prompt)).toContain('first')
+  const saved = JSON.stringify(await storage.load('fake-c1-u1'))
+  expect(saved).toContain('after repair')
+  expect(saved).not.toContain('refused while broken')
   expect(emptyAppends).toBe(0)
-  await waitFor(closed)
-  await deliver('u1', 'after another idle close')
+  await waitFor(() => !t.vela.sessions().some((s) => s.id === 'fake-c1-u1'))
+  await deliver('u1', 'after successful idle close')
   expect(sent.at(-1)?.text).toBe('continued')
-  expect(JSON.stringify(t.model.calls[3]?.prompt)).toContain('after repair')
+  expect(JSON.stringify(t.model.calls[4]?.prompt)).toContain('after repair')
 })
 
-test('a recovery write does not silence refusals while resumed history is still unreadable', async () => {
+test('repairing writes recovers the retained context without needing a storage reload', async () => {
   const { storage, failing } = failingStorage()
   let failReads = false
+  let failedReads = 0
   const t = createTestVela({
-    responses: [
-      fauxText('one'),
-      fauxText('two'),
-      fauxText('three'),
-      fauxText('recovered'),
-    ],
+    responses: ['one', 'two', 'three', 'recovered'].map((text) =>
+      fauxText(text),
+    ),
     allowPendingResponses: true,
     channelIdleMs: 0,
     sessionStorage: {
       ...storage,
       async load(id) {
-        if (failReads) throw new Error('reads unavailable')
+        if (failReads) {
+          failedReads++
+          throw new Error('reads unavailable')
+        }
         return storage.load(id)
       },
     },
   })
   const { sent, deliver } = fakeChannel(t)
-  const closed = () =>
-    !t.vela.sessions().some((session) => session.id === 'fake-c1-u1')
   await Promise.all(
     ['first', 'second', 'third'].map((text) => deliver('u1', text)),
   )
-  await waitFor(closed)
+  await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
   failing.clear()
   failReads = true
-  await deliver('u1', 'refused while reads fail')
-  await waitFor(closed)
-  expect(sent).toHaveLength(4)
-  expect(sent.at(-1)?.text).toContain("can't be saved")
-  expect(t.model.calls).toHaveLength(3)
-
-  failReads = false
-  await deliver('u1', 'after full repair')
+  await deliver('u1', 'after writes repair')
   expect(sent.at(-1)?.text).toBe('recovered')
   expect(t.model.calls).toHaveLength(4)
   expect(JSON.stringify(t.model.calls[3]?.prompt)).toContain('first')
-  expect(JSON.stringify(t.model.calls[3]?.prompt)).not.toContain(
-    'refused while reads fail',
-  )
+  expect(failedReads).toBe(0)
+})
+
+for (const persistedBaseline of [false, true]) {
+  test(`SDK recovery uses the retained idle session with persisted baseline=${persistedBaseline}`, async () => {
+    const { storage, failing } = failingStorage()
+    const t = createTestVela({
+      responses: [
+        ...(persistedBaseline ? ['saved'] : []),
+        'one',
+        'two',
+        'three',
+        'continued',
+      ].map((text) => fauxText(text)),
+      allowPendingResponses: true,
+      channelIdleMs: 0,
+      sessionStorage: storage,
+    })
+    const { sent, deliver } = fakeChannel(t)
+    const id = 'fake-c1-u1'
+    const closed = () => !t.vela.sessions().some((session) => session.id === id)
+    if (persistedBaseline) {
+      failing.clear()
+      await deliver('u1', 'saved before outage')
+      await waitFor(closed)
+      failing.add(id)
+    }
+    await Promise.all(
+      ['unsaved 1', 'unsaved 2', 'unsaved 3'].map((text) =>
+        deliver('u1', text),
+      ),
+    )
+    const original = t.vela.session(id)
+    await waitFor(() => t.eventsOf('session_save_failed').length >= 4)
+    expect(t.vela.sessions()).toContain(original)
+    expect(t.vela.session(id)).toBe(original)
+    failing.clear()
+    const sdk = t.vela.session(id)
+    await sdk.resume()
+    sdk.appendEntry('sdk-repair', { healthy: true })
+    await sdk.save()
+    // Saving through the SDK clears failures without scheduling a close during SDK work.
+    expect(t.internals.gateway['idleTimers'].has(id)).toBe(false)
+    expect(t.vela.session(id)).toBe(original)
+    await deliver('u1', 'after SDK recovery')
+    expect(sent.at(-1)?.text).toBe('continued')
+    const saved = await storage.load(id)
+    expect(saved?.filter((entry) => entry.type === 'session')).toHaveLength(1)
+    for (const text of ['unsaved 1', 'unsaved 2', 'unsaved 3', 'sdk-repair'])
+      expect(JSON.stringify(saved)).toContain(text)
+    const prompt = JSON.stringify(t.model.calls.at(-1)?.prompt)
+    for (const text of ['unsaved 1', 'unsaved 2', 'unsaved 3'])
+      expect(prompt).toContain(text)
+    if (persistedBaseline) expect(prompt).toContain('saved before outage')
+    await waitFor(closed)
+  })
+}
+
+test('disposal closes an unsaved retained channel session without retrying indefinitely', async () => {
+  const { storage } = failingStorage()
+  const t = createTestVela({
+    responses: [fauxText('answer')],
+    sessionStorage: storage,
+    channelIdleMs: 0,
+  })
+  const { deliver } = fakeChannel(t)
+  await deliver('u1', 'unsaved')
+  const session = t.vela.session('fake-c1-u1')
+  await waitFor(() => t.eventsOf('session_save_failed').length >= 2)
+  expect(t.vela.sessions()).toContain(session)
+  await t.vela.dispose()
+  expect(t.vela.sessions()).toEqual([])
+  expect(t.eventsOf('session_save_failed')).toHaveLength(3)
+  await deliver('u1', 'after disposal')
+  expect(t.model.calls).toHaveLength(1)
+})
+
+test('a message queued during idle saving keeps the current session open', async () => {
+  const storage = memorySessionStorage()
+  let blockWrites = false
+  let releaseWrite!: () => void
+  const gate = new Promise<void>((resolve) => {
+    releaseWrite = resolve
+  })
+  const t = createTestVela({
+    responses: [fauxText('first'), fauxText('second')],
+    allowPendingResponses: true,
+    channelIdleMs: 0,
+    sessionStorage: {
+      ...storage,
+      async append(id, entries) {
+        if (blockWrites) await gate
+        await storage.append(id, entries)
+      },
+    },
+  })
+  const { deliver } = fakeChannel(t)
+  await deliver('u1', 'first input')
+  const session = t.vela.session('fake-c1-u1')
+  blockWrites = true
+  session.appendEntry('idle-write', {})
+  // Synchronize on the idle save operation rather than assuming a timer duration.
+  await waitFor(() => t.internals.gateway['closing'].has(session.id))
+  const queued = deliver('u1', 'queued while saving')
+  blockWrites = false
+  releaseWrite()
+  await queued
+  expect(t.vela.session(session.id)).toBe(session)
+  expect(t.model.calls).toHaveLength(2)
+  expect(JSON.stringify(t.model.calls[1]?.prompt)).toContain('first input')
 })
