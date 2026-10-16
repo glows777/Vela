@@ -191,7 +191,7 @@ All core tools are direct. Deferred exposure is for extensions that register man
 
 ## Roles and tool access
 
-Every session has a role (`owner`, `collaborator` or `guest`) that decides which tools the model sees: an owner gets all tools, a collaborator all but `bash`, and a guest only `tool_search`, `rag_search` and `web_search`. CLI sessions are `owner`. A channel chat is `owner` unless its `roleFor` returns another role. A tool the role denies is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. The full rules are in [Security](security.md#session-roles).
+Every session has a role (`owner`, `collaborator` or `guest`) that decides which tools the model sees: an owner gets all tools, a collaborator all but `bash`, and a guest only `tool_search`, `rag_search` and `web_search`. CLI sessions are `owner`. A channel chat is `owner` unless its `roleFor` returns another role. A tool the role denies is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. The full rules are in [Security](security.md#core-sdk-session-roles).
 
 ## Choosing tools per session (SDK)
 

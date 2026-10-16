@@ -62,7 +62,7 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 
 Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
-Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions; MCP tools are not. See [Security](security.md#session-roles).
+Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions; MCP tools are not. See [Security](security.md#core-sdk-session-roles).
 
 ## Data
 
