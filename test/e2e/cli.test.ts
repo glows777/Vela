@@ -163,7 +163,10 @@ for (const [fixture, mimeType] of [
       .map((event) => event.message.content)
     expect(users).toHaveLength(2)
     expect(users[0]).toEqual([
-      { type: 'text', text: 'Describe this' },
+      {
+        type: 'text',
+        text: `<file name="${join(result.cwd, 'picture.txt')}"></file>\n\nDescribe this`,
+      },
       expect.objectContaining({
         type: 'image',
         mimeType: mimeType === 'image/bmp' ? 'image/jpeg' : mimeType,
@@ -173,6 +176,68 @@ for (const [fixture, mimeType] of [
     expect(users[1]).toBe('Continue')
   })
 }
+
+for (const kind of ['image', 'text'] as const) {
+  test.concurrent(`@file expands home paths for ${kind} attachments`, async () => {
+    const home = tempDir('vela-attachment-home-')
+    dirs.push(home)
+    const path = join(home.path, 'attachment')
+    await Bun.write(
+      path,
+      kind === 'image'
+        ? readFileSync(join(ROOT, 'test/fixtures/images/blue.png'))
+        : 'Home attachment',
+    )
+    const result = await cli(['--mode', 'json', '@~/attachment', 'Describe'], {
+      agentDir: home.path,
+      model: `faux:${scenario('hello')}`,
+    })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain(`<file name=\\"${path}\\">`)
+    expect(result.stdout).toContain(
+      kind === 'image' ? 'image/png' : 'Home attachment',
+    )
+  })
+}
+
+test.concurrent('@file resolves screenshot narrow-space names and keeps image reference order', async () => {
+  const first = 'Screenshot 2026-10-16 at 12.00.00\u202fPM.png'
+  const second = 'second & blue.png'
+  const result = await cli(
+    [
+      '--mode',
+      'json',
+      `@${first.replace('\u202f', ' ')}`,
+      `@${second}`,
+      'Compare',
+    ],
+    {
+      model: `faux:${scenario('hello')}`,
+      files: {
+        [first]: readFileSync(join(ROOT, 'test/fixtures/images/blue.png')),
+        [second]: readFileSync(
+          join(ROOT, 'test/fixtures/images/quadrants.jpg'),
+        ),
+      },
+    },
+  )
+  expect(result.code).toBe(0)
+  const user = result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find(
+      (event) => event.type === 'message_end' && event.message.role === 'user',
+    )
+  expect(user.message.content).toEqual([
+    {
+      type: 'text',
+      text: `<file name="${join(result.cwd, first)}"></file>\n\n<file name="${join(result.cwd, second).replace('&', '&amp;')}"></file>\n\nCompare`,
+    },
+    expect.objectContaining({ type: 'image', mimeType: 'image/png' }),
+    expect.objectContaining({ type: 'image', mimeType: 'image/jpeg' }),
+  ])
+})
 
 test.concurrent('@file inlines UTF-8 text even with an image suffix, preserving stdin and prompt order', async () => {
   const result = await cli(
@@ -198,7 +263,7 @@ test.concurrent('@file inlines UTF-8 text even with an image suffix, preserving 
     )
     .map((event) => event.message.content)
   expect(users).toEqual([
-    '<file name="notes.png">\nhéllo\nBMX is ordinary text\n\n</file>\n\nAdditional context\n\nSummarize',
+    `<file name="${join(result.cwd, 'notes.png')}">\nhéllo\nBMX is ordinary text\n\n</file>\n\nAdditional context\n\nSummarize`,
     'Then explain',
   ])
 })

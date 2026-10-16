@@ -18,6 +18,16 @@ export async function readClipboardImage(): Promise<Uint8Array | undefined> {
   return (await getNativeClipboard()?.getImage()) ?? undefined
 }
 
+/** Used by the explicit paste shortcut when the clipboard has no image. */
+export async function readClipboardText(): Promise<string | undefined> {
+  if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
+    return (
+      await run('wl-paste', ['--no-newline', '--type', 'text'], process.env)
+    )?.toString('utf8')
+  }
+  return (await getNativeClipboard()?.getText()) ?? undefined
+}
+
 /** Terminals cap OSC 52 payloads; pi uses the same limit. */
 const MAX_OSC52_ENCODED_LENGTH = 100_000
 
