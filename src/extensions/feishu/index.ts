@@ -26,6 +26,7 @@ export function feishu(options: FeishuOptions = {}): VelaExtension {
         owners: options.owners ?? configStrings(vela.config, 'owners') ?? [],
         chats: options.chats ?? configStrings(vela.config, 'chats') ?? [],
         logger: vela.logger,
+        dataDir: vela.dataDir,
         transport: options.transport,
       }),
     )

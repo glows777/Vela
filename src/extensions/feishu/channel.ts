@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
+import { extname, join, resolve } from 'node:path'
+import type { Readable } from 'node:stream'
 import * as lark from '@larksuiteoapi/node-sdk'
+import { channelSessionId } from '../../channels/gateway.ts'
+import { imageMimeType } from '../../images/metadata.ts'
 import type {
   ChannelDefinition,
   IncomingMessage,
@@ -7,6 +12,8 @@ import type {
   Role,
   VelaLogger,
 } from '../../index.ts'
+import { errorMessage } from '../../logger.ts'
+import type { ImageContent } from '../../messages.ts'
 
 /** The parts of an `im.message.receive_v1` event the channel reads */
 export interface FeishuMessageEvent {
@@ -85,6 +92,11 @@ export interface FeishuTransport {
   send(chatId: string, text: string): Promise<void>
   reply(messageId: string, text: string): Promise<FeishuSentMessage>
   sendCard(chatId: string, card: FeishuCard, replyToId?: string): Promise<void>
+  getResource(
+    messageId: string,
+    key: string,
+    type: 'image' | 'file',
+  ): Promise<Readable>
   getBotId(): Promise<string>
   getSenderName(openId: string): Promise<string | undefined>
   listMessages(
@@ -100,6 +112,7 @@ export interface FeishuChannelConfig {
   owners: readonly string[]
   /** Every member of these chats is trusted with owner access. */
   chats?: readonly string[]
+  dataDir: string
   logger: VelaLogger
   /** Default: lark's long connection with appId / appSecret */
   transport?: FeishuTransport
@@ -109,7 +122,7 @@ export interface FeishuChannelConfig {
 const SEEN_MESSAGES = 1000
 
 export const UNSUPPORTED_MESSAGE =
-  'Only text messages are supported; please send your message as text.'
+  'Only text, images and files are supported; please send one of these message types.'
 
 export class FeishuChannel implements ChannelDefinition {
   name = 'feishu'
@@ -131,6 +144,11 @@ export class FeishuChannel implements ChannelDefinition {
   >()
   private botId?: string
   private readonly names = new Map<string, Promise<string>>()
+  private readonly images = new WeakMap<
+    IncomingMessage,
+    Map<string, Promise<ImageContent>>
+  >()
+  private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
   private readonly lastReplies = new Map<string, FeishuSentMessage>()
 
   constructor(config: FeishuChannelConfig) {
@@ -336,6 +354,38 @@ export class FeishuChannel implements ChannelDefinition {
       })
       return
     }
+    let images: ImageContent[]
+    let imageCache = this.images.get(msg)
+    if (!imageCache) {
+      imageCache = new Map()
+      this.images.set(msg, imageCache)
+    }
+    let input = msg.text
+    const attachmentType =
+      event.message.message_type === 'file' ? 'file' : 'image'
+    try {
+      images = await this.downloadImages(event.message, imageCache)
+      if (event.message.message_type === 'file') {
+        let file = this.files.get(msg)
+        if (!file) {
+          file = this.downloadFile(event.message)
+          this.files.set(msg, file)
+        }
+        input = await file
+      }
+    } catch (error) {
+      await this.send({
+        channelId: msg.channelId,
+        recipientId: msg.senderId,
+        replyToId: msg.replyToId,
+        text:
+          error instanceof FileTooLarge
+            ? 'File too large. The limit is 20MB.'
+            : `Couldn't download the ${attachmentType}: ${errorMessage(error)}. Check the bot's im:resource permission and retry.`,
+      })
+      return
+    }
+    msg = { ...msg, text: input, images }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
@@ -350,6 +400,8 @@ export class FeishuChannel implements ChannelDefinition {
         const previous = this.lastReplies.get(msg.channelId)
         const earlier: { name: string; text: string }[] = []
         const seen = new Set<string>()
+        const historyImages: ImageContent[][] = []
+        let imageCount = 0
         for (const item of history.slice(0, 50)) {
           if (item.message_id && seen.has(item.message_id)) continue
           if (item.message_id) seen.add(item.message_id)
@@ -375,26 +427,136 @@ export class FeishuChannel implements ChannelDefinition {
               Number(item.create_time) > Number(event.message.create_time))
           )
             continue
-          const body = messageText({
+          const historyMessage = {
             chat_id: msg.channelId,
             message_type: item.msg_type ?? '',
             content: item.body?.content ?? '',
             mentions: item.mentions,
-          })
+            message_id: item.message_id,
+          }
+          const body = messageText(historyMessage)
           if (!body) continue
+          const attachments = await this.downloadImages(
+            historyMessage,
+            imageCache,
+            4 - imageCount,
+          )
+          imageCount += attachments.length
+          historyImages.push(attachments)
           earlier.push({
             name: await this.senderName(item.sender?.id ?? 'unknown'),
             text: body,
           })
         }
+        images.unshift(...historyImages.reverse().flat())
         text = formatGroupContext(earlier.reverse(), question)
       } catch (error) {
         this.config.logger.warn(
-          `[feishu] Failed to fetch context for chat ${msg.channelId}: ${String(error)}`,
+          `[feishu] Failed to fetch context for chat ${msg.channelId}: ${String(error)}. History images require im:resource permission.`,
         )
       }
     }
     return { ...msg, senderName: name, text }
+  }
+
+  private async downloadImages(
+    message: FeishuMessageEvent['message'],
+    cache: Map<string, Promise<ImageContent>>,
+    limit = Infinity,
+  ): Promise<ImageContent[]> {
+    if (limit === 0) return []
+    const keys = imageKeys(message).slice(-limit)
+    if (!keys.length) return []
+    if (!message.message_id || !this.transport)
+      throw new Error('Image has no message id or transport')
+    const images: ImageContent[] = []
+    for (const key of keys) {
+      const cacheKey = JSON.stringify([message.message_id, key])
+      let image = cache.get(cacheKey)
+      if (!image) {
+        image = this.downloadImage(message.message_id, key)
+        cache.set(cacheKey, image)
+      }
+      images.push(await image)
+    }
+    return images
+  }
+
+  private async downloadImage(
+    messageId: string,
+    key: string,
+  ): Promise<ImageContent> {
+    if (!this.transport) throw new Error('Image has no transport')
+    const stream = await this.transport.getResource(messageId, key, 'image')
+    const chunks: Buffer[] = []
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+    const bytes = Buffer.concat(chunks)
+    return {
+      type: 'image',
+      data: bytes.toString('base64'),
+      mimeType: imageMimeType(bytes) ?? 'application/octet-stream',
+    }
+  }
+
+  private async downloadFile(
+    message: FeishuMessageEvent['message'],
+  ): Promise<string> {
+    const content = JSON.parse(message.content) as {
+      file_key: string
+      file_name?: string
+    }
+    if (!message.message_id || !content.file_key || !this.transport)
+      throw new Error('File has no resource key or message id')
+    const messageId = safeName(message.message_id, 64)
+    const name = safeName(
+      content.file_name ?? 'file',
+      254 - Buffer.byteLength(messageId),
+    )
+    await mkdir(this.config.dataDir, { recursive: true })
+    const root = await realpath(this.config.dataDir)
+    const directory = resolve(
+      root,
+      'channels',
+      channelSessionId(this.name, message.chat_id),
+      'files',
+    )
+    await mkdir(directory, { recursive: true })
+    if ((await realpath(directory)) !== directory)
+      throw new Error('File directory must not contain symlinks')
+    const path = join(directory, `${messageId}-${name}`)
+    const reference = `[file: ${name}, saved at ${path}]`
+    try {
+      const existing = await lstat(path)
+      if (!existing.isFile())
+        throw new Error('Attachment destination is not a regular file')
+      return reference
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    // Only completed downloads get the replayable name. A crash may leave a .part file,
+    // but redelivery cannot mistake those bytes for a completed attachment.
+    const temporary = join(directory, `${randomUUID()}.part`)
+    const file = await open(temporary, 'wx')
+    try {
+      const stream = await this.transport.getResource(
+        message.message_id,
+        content.file_key,
+        'file',
+      )
+      let size = 0
+      for await (const chunk of stream) {
+        const bytes = Buffer.from(chunk)
+        size += bytes.length
+        if (size > 20 * 1024 * 1024) throw new FileTooLarge()
+        await file.writeFile(bytes)
+      }
+      await file.close()
+      await rename(temporary, path)
+    } finally {
+      await file.close()
+      await rm(temporary, { force: true })
+    }
+    return reference
   }
 
   private senderName(id: string): Promise<string> {
@@ -465,13 +627,13 @@ export class FeishuChannel implements ChannelDefinition {
 }
 
 /**
- * Plain text of a text or rich-text (`post`) message, with `@` mentions removed; undefined for other message
+ * Text and attachment placeholders, with `@` mentions removed; undefined for unsupported
  * types. Malformed content counts as empty.
  */
 export function messageText(
   message: FeishuMessageEvent['message'],
 ): string | undefined {
-  if (message.message_type !== 'text' && message.message_type !== 'post')
+  if (!['text', 'post', 'image', 'file'].includes(message.message_type))
     return undefined
   let content: unknown
   try {
@@ -480,6 +642,10 @@ export function messageText(
     return ''
   }
   if (!content || typeof content !== 'object') return ''
+  if (message.message_type === 'image')
+    return imageKeys(message).length ? '[image]' : ''
+  if (message.message_type === 'file')
+    return `[file: ${safeName(String((content as { file_name?: unknown }).file_name ?? 'file'))}]`
   let text =
     message.message_type === 'text'
       ? String((content as { text?: unknown }).text ?? '')
@@ -487,7 +653,7 @@ export function messageText(
   // Strip @ mention markers (`@_user_1`)
   for (const mention of message.mentions ?? [])
     text = text.replaceAll(mention.key, '')
-  return text.trim()
+  return text.trim() || (imageKeys(message).length ? '[image]' : '')
 }
 
 /** A post is `{ title, content: [[element]] }`, possibly wrapped in a language key (`{ zh_cn: {...} }`) */
@@ -526,6 +692,73 @@ export function formatGroupContext(
   return history.length
     ? `[Chat since last reply]\n${history.slice(-50).map(named).join('\n')}\n\n[Question]\n${named(question)}`
     : named(question)
+}
+
+class FileTooLarge extends Error {}
+
+function safeName(name: string, maxBytes = 255): string {
+  const clean =
+    (name.split(/[\\/]/).at(-1) ?? '')
+      .replaceAll('..', '')
+      .replace(/[:?*"<>|]/g, '_')
+      .split('')
+      .filter((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
+      .join('')
+      .replace(/[. ]+$/, '') || 'file'
+  const suffix = extname(clean)
+  const extension = utf8Prefix(suffix, 32)
+  return (
+    (
+      utf8Prefix(
+        clean.slice(0, clean.length - suffix.length),
+        maxBytes - Buffer.byteLength(extension),
+      ) + extension
+    ).replace(/[. ]+$/, '') || 'file'
+  )
+}
+
+function utf8Prefix(text: string, maxBytes: number): string {
+  let result = ''
+  let bytes = 0
+  for (const char of text) {
+    bytes += Buffer.byteLength(char)
+    if (bytes > maxBytes) break
+    result += char
+  }
+  return result
+}
+
+function imageKeys(message: FeishuMessageEvent['message']): string[] {
+  if (message.message_type !== 'image' && message.message_type !== 'post')
+    return []
+  let content: unknown
+  try {
+    content = JSON.parse(message.content)
+  } catch {
+    return []
+  }
+  if (!content || typeof content !== 'object') return []
+  if (message.message_type === 'image')
+    return 'image_key' in content && typeof content.image_key === 'string'
+      ? [content.image_key]
+      : []
+  const post = 'content' in content ? content : Object.values(content)[0]
+  if (
+    !post ||
+    typeof post !== 'object' ||
+    !('content' in post) ||
+    !Array.isArray(post.content)
+  )
+    return []
+  return post.content.flatMap((line: unknown) =>
+    Array.isArray(line)
+      ? line.flatMap((element) =>
+          element?.tag === 'img' && typeof element.image_key === 'string'
+            ? [element.image_key]
+            : [],
+        )
+      : [],
+  )
 }
 
 function checked<T extends { code?: number; msg?: string }>(response: T): T {
@@ -594,6 +827,13 @@ function larkTransport(appId: string, appSecret: string): FeishuTransport {
       if (!data?.message_id || !data.create_time)
         throw new Error('Feishu reply returned no message receipt')
       return { messageId: data.message_id, createTime: data.create_time }
+    },
+    async getResource(messageId, key, type) {
+      const resource = await client.im.messageResource.get({
+        path: { message_id: messageId, file_key: key },
+        params: { type },
+      })
+      return resource.getReadableStream()
     },
     async getBotId() {
       const response = checked(
