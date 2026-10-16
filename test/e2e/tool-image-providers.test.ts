@@ -251,3 +251,42 @@ test('aliased OpenAI Chat moves mixed and image-only tool images after every res
     expect(part.image_url).toMatchObject({ url: dataUrl })
   expectCanonicalHistory(t.messages, 2)
 })
+
+test.each([['mixed'], ['image-only', 'mixed']])(
+  'Chat hook removal leaves an honestly empty result for %j',
+  async (...variants: string[]) => {
+    const provider = providerFixture('chat', variants)
+    const t = createTestVela({
+      model: provider.model,
+      extensions: [
+        pictures,
+        function redact(v) {
+          v.on('tool_result', (event) =>
+            event.toolName === 'pictures_render' &&
+            event.input.variant === 'mixed'
+              ? { content: [] }
+              : undefined,
+          )
+        },
+      ],
+    })
+    await t.run('Read the tool result after removal')
+    const messages = provider.requests[1]?.messages ?? []
+    const results = messages.filter((message) => message.role === 'tool')
+    expect(results).toHaveLength(variants.length)
+    expect(results.at(-1)?.content).toBe('[]')
+    const images = messages.flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content.filter((part) => part.type === 'image_url')
+        : [],
+    )
+    expect(images).toHaveLength(variants.length - 1)
+    const saved = t.messages.flatMap((message) =>
+      message.role === 'tool' ? message.content : [],
+    )
+    expect(saved.at(-1)).toMatchObject({
+      type: 'tool-result',
+      output: { type: 'content', value: [] },
+    })
+  },
+)

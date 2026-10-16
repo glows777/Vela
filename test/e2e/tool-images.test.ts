@@ -412,3 +412,40 @@ test('failed native-result persistence labels a saved caption as model text, not
   })
   await expect(t.run('Get picture')).rejects.toThrow('full model text saved at')
 })
+
+test('Chat redaction after an image tool does not promise a second attachment', async () => {
+  const model = Object.assign(
+    createFauxModel({
+      responses: [
+        [
+          fauxToolCall('pictures_picture', {}),
+          fauxToolCall('pictures_private', {}),
+        ],
+        fauxText('Only the public image remains.'),
+      ],
+    }),
+    { provider: 'redaction-fixture.chat' },
+  )
+  const t = createTestVela({
+    model,
+    extensions: [
+      function pictures(v) {
+        v.registerTool(pictureTool())
+        v.registerTool(pictureTool('private'))
+        v.on('tool_result', (event) =>
+          event.toolName === 'pictures_private'
+            ? { content: [] }
+            : undefined,
+        )
+      },
+    ],
+  })
+  await t.run('Read both tool results after redaction')
+  const results = model.calls[1]!.prompt.flatMap((message) =>
+    message.role === 'tool' ? message.content : [],
+  )
+  expect(results.at(-1)?.output).toEqual({ type: 'content', value: [] })
+  expect(JSON.stringify(results.at(-1))).not.toContain('tool image follows')
+  const users = model.calls[1]!.prompt.filter((message) => message.role === 'user')
+  expect(users.at(-1)?.content.filter((part) => part.type === 'file')).toHaveLength(1)
+})
