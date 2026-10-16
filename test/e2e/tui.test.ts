@@ -163,6 +163,93 @@ test('ordinary JSON tool results keep file metadata in resumed history', async (
   expect(tui.screen()).not.toContain('[image]')
 })
 
+for (const phase of ['live', 'resumed'] as const) {
+  test(`${phase} tool JSON preserves image discriminators without image payloads`, async () => {
+    const records = [
+      {
+        type: 'image',
+        url: 'https://example.test/catalog/blue',
+        caption: 'Blue catalog item',
+      },
+      {
+        type: 'image',
+        data: 'catalog-record-42',
+        caption: 'Record without image MIME type',
+      },
+      {
+        type: 'image',
+        mimeType: 'image/png',
+        caption: 'Metadata without payload',
+      },
+      {
+        type: 'image',
+        mimeType: 'image/png',
+        data: { record: 42 },
+        caption: 'Structured catalog record',
+      },
+    ]
+    function catalog(
+      vela: import('../../src/extensions/types.ts').ExtensionAPI,
+    ) {
+      vela.registerTool({
+        name: 'inspect',
+        description: 'Return catalog metadata',
+        inputSchema: z.object({}),
+        execute: async () => ({ records }),
+      })
+    }
+    const t = createTestVela({
+      sessionId: 'tui',
+      extensions: [catalog],
+      responses:
+        phase === 'live'
+          ? [fauxToolCall('catalog_inspect', {}), fauxText('Catalog received')]
+          : [fauxText('History continued')],
+    })
+    if (phase === 'resumed') {
+      t.session.append({
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'catalog',
+            toolName: 'catalog_inspect',
+            input: {},
+          },
+        ],
+      })
+      t.session.append({
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'catalog',
+            toolName: 'catalog_inspect',
+            output: { type: 'json', value: { records } },
+          },
+        ],
+      })
+      await t.session.close()
+    }
+    const tui = await startTui(t.vela, { resume: phase === 'resumed' })
+    await tui.started
+    tui.submit(
+      phase === 'live'
+        ? 'Inspect the catalog'
+        : 'Continue saved catalog history',
+    )
+    await tui.until(
+      () => t.model.pending() === 0 && !t.vela.session('tui').isRunning,
+    )
+    tui.terminal.press(KEYS.ctrlO)
+    const screen = tui.screen()
+    for (const record of records) expect(screen).toContain(record.caption)
+    expect(screen).toContain('https://example.test/catalog/blue')
+    expect(screen).toContain('catalog-record-42')
+    expect(screen).not.toContain('[image')
+  })
+}
+
 test('clipboard image paste inserts a private temp path, read_file sends the image, and shutdown removes it', async () => {
   const image = blueImage()
   let file = ''

@@ -33,7 +33,20 @@ export function imagePlaceholder(image: unknown): string | undefined {
   const data =
     source && typeof source === 'object' && 'data' in source
       ? source.data
-      : source
+      : source && typeof source === 'object' && 'url' in source
+        ? source.url
+        : source
+  // A domain JSON discriminator alone is not image content.
+  if (
+    (!('image' in part) && !/^image\//i.test(mimeType)) ||
+    !(
+      typeof data === 'string' ||
+      data instanceof Uint8Array ||
+      data instanceof ArrayBuffer ||
+      data instanceof URL
+    )
+  )
+    return undefined
   const bytes =
     typeof data === 'string'
       ? Buffer.byteLength(data, 'base64')
