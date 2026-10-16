@@ -7,6 +7,7 @@ import type {
   OutgoingMessage,
 } from '../../src/channels/types.ts'
 import type { ProviderContext } from '../../src/models/index.ts'
+import { memorySessionStorage } from '../../src/session/storage.ts'
 import { createFauxModel, fauxHang, fauxText } from '../../src/testing/faux.ts'
 import {
   cleanupTestVelas,
@@ -332,4 +333,159 @@ test('providers see which channel a session answers on (so a local-only sign-in 
   await deliver('u1', 'hi')
   await t.session.prompt('hi')
   expect(contexts.map((ctx) => ctx.channel())).toEqual(['fake', undefined])
+})
+
+/** Real session persistence and retry handling, with a switchable storage outage. */
+function failingStorage() {
+  const storage = memorySessionStorage()
+  const failing = new Set(['fake-c1-u1'])
+  return {
+    failing,
+    storage: {
+      ...storage,
+      async append(...args: Parameters<typeof storage.append>) {
+        if (failing.has(args[0])) throw new Error('disk full')
+        await storage.append(...args)
+      },
+    },
+  }
+}
+
+test('the gateway logs the first session save failure at error level with its session id', async () => {
+  const { storage } = failingStorage()
+  const errors: string[] = []
+  const t = createTestVela({
+    responses: [fauxText('answer')],
+    sessionStorage: storage,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error: (message) => errors.push(message),
+    },
+  })
+  await fakeChannel(t).deliver('u1', 'hello')
+  expect(t.eventsOf('session_save_failed')).toHaveLength(1)
+  expect(errors).toHaveLength(1)
+  expect(errors[0]).toContain('fake-c1-u1')
+  expect(errors[0]).toContain('disk full')
+})
+
+test('after three save failures the gateway refuses queued prompts without calling the model again', async () => {
+  const { storage } = failingStorage()
+  const t = createTestVela({
+    responses: [
+      fauxText('one'),
+      fauxText('two'),
+      fauxText('three'),
+      fauxText('other sender'),
+    ],
+    sessionStorage: storage,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await Promise.all(
+    ['first', 'second', 'third', 'refused', 'refused again'].map((text) =>
+      deliver('u1', text),
+    ),
+  )
+  expect(t.eventsOf('session_save_failed')).toHaveLength(3)
+  expect(t.model.calls).toHaveLength(3)
+  expect(sent.slice(0, 3).map((reply) => reply.text)).toEqual([
+    'one',
+    'two',
+    'three',
+  ])
+  expect(sent).toHaveLength(5)
+  for (const reply of sent.slice(3)) {
+    expect(reply).toMatchObject({ channelId: 'c1', recipientId: 'u1' })
+    expect(reply.text).toContain("can't be saved")
+  }
+  expect(
+    JSON.stringify(t.vela.session('fake-c1-u1').getEntries()),
+  ).not.toContain('refused')
+  expect(t.eventsOf('channel_reply')).toHaveLength(5)
+  await deliver('u2', 'unaffected')
+  expect(sent.at(-1)?.text).toBe('other sender')
+})
+
+test('a successful save resets consecutive failures, including SDK saves after refusal', async () => {
+  const { storage, failing } = failingStorage()
+  const t = createTestVela({
+    responses: Array.from({ length: 7 }, (_, i) => fauxText(`answer ${i + 1}`)),
+    sessionStorage: storage,
+    allowPendingResponses: true,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await deliver('u1', 'failure 1')
+  await deliver('u1', 'failure 2')
+  failing.clear()
+  await deliver('u1', 'successful turn')
+  failing.add('fake-c1-u1')
+  await deliver('u1', 'new failure 1')
+  await deliver('u1', 'new failure 2')
+  await deliver('u1', 'new failure 3')
+  await deliver('u1', 'refused')
+  expect(t.model.calls).toHaveLength(6)
+  expect(sent.at(-1)?.text).toContain("can't be saved")
+  failing.clear()
+  await t.vela.session('fake-c1-u1').save()
+  await deliver('u1', 'recovered')
+  expect(t.model.calls).toHaveLength(7)
+  expect(sent.at(-1)?.text).toBe('answer 7')
+  expect(JSON.stringify(await storage.load('fake-c1-u1'))).toContain(
+    'failure 1',
+  )
+})
+
+test('handling an input without saving does not clear failures from channel or SDK prompts', async () => {
+  const { storage } = failingStorage()
+  const errors: string[] = []
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
+    sessionStorage: storage,
+    logger: {
+      debug() {},
+      info() {},
+      warn() {},
+      error: (message) => errors.push(message),
+    },
+    extensions: [
+      (vela) => {
+        vela.on('input', (event) =>
+          event.text === 'skip' ? { action: 'handled' } : undefined,
+        )
+      },
+    ],
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await deliver('u1', 'first')
+  await t.vela.session('fake-c1-u1').prompt('SDK turn')
+  await deliver('u1', 'skip')
+  await deliver('u1', 'third')
+  await deliver('u1', 'refused')
+  expect(t.model.calls).toHaveLength(3)
+  expect(errors).toHaveLength(3)
+  expect(sent.at(-1)?.text).toContain("can't be saved")
+})
+
+test('a failed idle close does not let a reopened channel session bypass the failure limit', async () => {
+  const { storage } = failingStorage()
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two')],
+    sessionStorage: storage,
+    channelIdleMs: 0,
+  })
+  const { sent, deliver } = fakeChannel(t)
+  await deliver('u1', 'first')
+  await waitFor(
+    () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
+  )
+  // The prompt and its close each failed to save. Reopening must retain that count.
+  await deliver('u1', 'third failure')
+  await waitFor(
+    () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
+  )
+  await deliver('u1', 'refused')
+  expect(t.model.calls).toHaveLength(2)
+  expect(sent.at(-1)?.text).toContain("can't be saved")
 })
