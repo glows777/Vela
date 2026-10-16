@@ -51,18 +51,28 @@ export interface FeishuCardResponse {
 }
 
 export interface FeishuCard {
-  config: { wide_screen_mode: boolean }
+  schema: '2.0'
   header: { title: { tag: 'plain_text'; content: string } }
-  elements: {
-    tag: string
-    text?: { tag: 'plain_text'; content: string }
-    actions?: {
-      tag: 'button'
-      text: { tag: 'plain_text'; content: string }
-      type: 'primary' | 'default' | 'danger'
-      value: { action: string; token: string }
+  body: {
+    elements: {
+      tag: 'markdown' | 'column_set'
+      content?: string
+      columns?: {
+        tag: 'column'
+        width: 'weighted'
+        weight: number
+        elements: {
+          tag: 'button'
+          text: { tag: 'plain_text'; content: string }
+          type: 'primary' | 'default' | 'danger'
+          behaviors: {
+            type: 'callback'
+            value: { action: string; token: string }
+          }[]
+        }[]
+      }[]
     }[]
-  }[]
+  }
 }
 
 /** The connection to Feishu: receives message events and sends text to a chat (lark's long connection by default). */
@@ -194,41 +204,45 @@ export class FeishuChannel implements ChannelDefinition {
     this.controls.set(token, { msg, choose: controls.choose, clear })
     controls.signal.addEventListener('abort', clear, { once: true })
     const card: FeishuCard = {
-      config: { wide_screen_mode: true },
+      schema: '2.0',
       header: { title: { tag: 'plain_text', content: 'A run is in progress' } },
-      elements: [
-        {
-          tag: 'div',
-          text: {
-            tag: 'plain_text',
+      body: {
+        elements: [
+          {
+            tag: 'markdown',
             content:
               'Your message is queued by default. Steer adds it to the current task for one combined reply. Stop cancels the current run and discards this queued message.',
           },
-        },
-        {
-          tag: 'action',
-          actions: [
-            {
-              tag: 'button',
-              text: { tag: 'plain_text', content: 'Queue (default)' },
-              type: 'primary',
-              value: { action: 'queue', token },
-            },
-            {
-              tag: 'button',
-              text: { tag: 'plain_text', content: 'Steer' },
-              type: 'default',
-              value: { action: 'steer', token },
-            },
-            {
-              tag: 'button',
-              text: { tag: 'plain_text', content: 'Stop' },
-              type: 'danger',
-              value: { action: 'stop', token },
-            },
-          ],
-        },
-      ],
+          {
+            tag: 'column_set',
+            columns: (['queue', 'steer', 'stop'] as const).map((action) => ({
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [
+                {
+                  tag: 'button',
+                  text: {
+                    tag: 'plain_text',
+                    content: {
+                      queue: 'Queue (default)',
+                      steer: 'Steer',
+                      stop: 'Stop',
+                    }[action],
+                  },
+                  type:
+                    action === 'queue'
+                      ? 'primary'
+                      : action === 'stop'
+                        ? 'danger'
+                        : 'default',
+                  behaviors: [{ type: 'callback', value: { action, token } }],
+                },
+              ],
+            })),
+          },
+        ],
+      },
     }
     try {
       // Control cards are not answers and must not advance the chat-history boundary.
@@ -307,9 +321,12 @@ export class FeishuChannel implements ChannelDefinition {
   /** The gateway prepares queued input after the preceding reply; Steer prepares it during the run. */
   async prepareMessage(
     msg: IncomingMessage,
+    activeMessage?: IncomingMessage,
   ): Promise<IncomingMessage | undefined> {
     if (this.stopped) return
     const event = msg.raw as FeishuMessageEvent
+    const activeTrigger = (activeMessage?.raw as FeishuMessageEvent | undefined)
+      ?.message
     if (messageText(event.message) === undefined) {
       await this.send({
         channelId: msg.channelId,
@@ -337,6 +354,9 @@ export class FeishuChannel implements ChannelDefinition {
           if (item.message_id && seen.has(item.message_id)) continue
           if (item.message_id) seen.add(item.message_id)
           if (
+            (activeTrigger?.create_time &&
+              item.create_time &&
+              Number(item.create_time) < Number(activeTrigger.create_time)) ||
             (previous &&
               (item.message_id === previous.messageId ||
                 Number(item.create_time) <= Number(previous.createTime))) ||
@@ -347,6 +367,9 @@ export class FeishuChannel implements ChannelDefinition {
             break
           if (
             item.deleted ||
+            // Other messages can share this millisecond; exclude the known trigger by id.
+            (activeTrigger?.message_id &&
+              item.message_id === activeTrigger.message_id) ||
             item.message_id === event.message.message_id ||
             (event.message.create_time &&
               Number(item.create_time) > Number(event.message.create_time))
