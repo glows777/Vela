@@ -35,6 +35,7 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
       if (options.failSend) throw new Error('send failed')
       sent.push({ chatId, text })
     },
+    sendCard: async () => {},
   }
   return {
     transport,
@@ -68,8 +69,9 @@ async function startedChannel(fake = fakeTransport()) {
     transport: fake.transport,
   })
   const received: IncomingMessage[] = []
-  channel.onMessage((msg) => {
-    received.push(msg)
+  channel.onMessage(async (msg) => {
+    const prepared = await channel.prepareMessage(msg)
+    if (prepared) received.push(prepared)
   })
   await channel.start()
   return { channel, received, ...fake }
