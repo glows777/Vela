@@ -276,3 +276,66 @@ test('oversized tool text is previewed while its image stays in the request', as
     'Caption '.repeat(500),
   )
 })
+
+test('failed image-only tools keep error status and move the retained image into a following request message', async () => {
+  const t = createTestVela({
+    extensions: [
+      function pictures(v) {
+        v.registerTool({
+          ...pictureTool(),
+          execute: async () =>
+            new ToolExecutionResult({}, [image()], { isError: true }),
+        })
+      },
+    ],
+    responses: [
+      fauxToolCall('pictures_picture', {}),
+      fauxText('saw the failure screenshot'),
+    ],
+  })
+  await t.run('Get a failure screenshot')
+  expect(t.eventsOf('tool_execution_end')[0]?.isError).toBe(true)
+  expect(t.model.calls[1]!.toolResults[0]?.raw).toMatchObject({
+    type: 'error-text',
+    value: 'Tool reported an error',
+  })
+  const attached = t.model.calls[1]!.prompt.flatMap((message) =>
+    message.role === 'user'
+      ? message.content.filter((part) => part.type === 'file')
+      : [],
+  )
+  expect(attached).toHaveLength(1)
+  expect(JSON.stringify(t.messages)).toContain(image().data)
+  expect(JSON.stringify(t.messages)).toContain('"isError":true')
+})
+
+test('oversized image captions retain native tool details separately from the full caption file', async () => {
+  const native = { importantNativeValue: 42, screenshot: image().data }
+  const caption = 'A long caption. '.repeat(500)
+  const t = createTestVela({
+    extensions: [
+      function pictures(v) {
+        v.registerTool({
+          ...pictureTool(),
+          maxResultChars: 100,
+          execute: async () =>
+            new ToolExecutionResult(native, [
+              { type: 'text', text: caption },
+              image(),
+            ]),
+        })
+      },
+    ],
+    responses: [fauxToolCall('pictures_picture', {}), fauxText('done')],
+  })
+  await t.run('Get the picture')
+  const records = readFileSync(t.session.store.results.history.path, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  const result = records.find((record) => record.type === 'tool_result')
+  expect(result.output).toEqual(native)
+  expect(typeof result.modelTextPath).toBe('string')
+  expect(readFileSync(result.modelTextPath, 'utf8')).toBe(caption)
+  expect(readFileSync(result.modelTextPath, 'utf8')).not.toContain(image().data)
+})
