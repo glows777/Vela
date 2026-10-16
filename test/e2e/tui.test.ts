@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import z from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import todo from '../../examples/extensions/todo-command.ts'
@@ -20,6 +21,120 @@ afterEach(async () => {
 })
 
 // Interactive mode (pi-tui) runs in a fake terminal: keys go straight to the TUI, and assertions check the rendered screen text.
+
+const pasteImageKey = process.platform === 'win32' ? '\x1bv' : '\x16'
+const blueImage = () =>
+  readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))
+
+test('clipboard image paste inserts a private temp path, read_file sends the image, and shutdown removes it', async () => {
+  const image = blueImage()
+  let file = ''
+  const t = createTestVela({
+    responses: [
+      (req) => {
+        file = req.lastUserText.trim().slice('Describe '.length)
+        expect(readFileSync(file)).toEqual(image)
+        if (process.platform !== 'win32')
+          expect(statSync(file).mode & 0o777).toBe(0o600)
+        return fauxToolCall('read_file', { path: file })
+      },
+      (req) => {
+        expect(JSON.stringify(req.prompt)).toContain('"mediaType":"image/png"')
+        return fauxText('Clipboard image read')
+      },
+    ],
+  })
+  const tui = await startTui(t.vela, { readClipboardImage: async () => image })
+  await tui.started
+  tui.terminal.type('Describe ')
+  tui.terminal.press(pasteImageKey)
+  await tui.until(() =>
+    tui.mode.tui.render(100).join('').includes('vela-clipboard-'),
+  )
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Clipboard image read')
+  expect(tui.screen()).toContain('[image png ')
+  expect(tui.screen()).not.toContain(image.toString('base64'))
+  tui.submit('/hotkeys')
+  await tui.until(process.platform === 'win32' ? 'Alt+V paste' : 'Ctrl+V paste')
+  await tui.mode.shutdown()
+  expect(existsSync(file)).toBe(false)
+})
+
+test('ordinary bracketed text paste stays literal and does not query the image clipboard', async () => {
+  let reads = 0
+  const t = createTestVela({
+    responses: [(req) => fauxText(`Received: ${req.lastUserText}`)],
+  })
+  const tui = await startTui(t.vela, {
+    readClipboardImage: async () => {
+      reads++
+      return undefined
+    },
+  })
+  await tui.started
+  tui.terminal.press('\x1b[200~héllo\nsecond line\x1b[201~')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Received: héllo')
+  expect(t.model.calls[0]!.lastUserText).toBe('héllo\nsecond line')
+  expect(reads).toBe(0)
+})
+
+test('an empty image clipboard leaves the editor text intact', async () => {
+  let reads = 0
+  const t = createTestVela({ responses: [fauxText('Text still works')] })
+  const tui = await startTui(t.vela, {
+    readClipboardImage: async () => {
+      reads++
+      return undefined
+    },
+  })
+  await tui.started
+  tui.terminal.type('keep this')
+  tui.terminal.press(pasteImageKey)
+  await tui.until(() => reads === 1)
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Text still works')
+  expect(t.model.calls[0]!.lastUserText).toBe('keep this')
+})
+
+test('a clipboard read failure shows a notice and keeps the editor usable', async () => {
+  const t = createTestVela({ responses: [fauxText('Recovered')] })
+  const tui = await startTui(t.vela, {
+    readClipboardImage: async () => {
+      throw new Error('Clipboard disconnected')
+    },
+  })
+  await tui.started
+  tui.terminal.type('keep this')
+  tui.terminal.press(pasteImageKey)
+  await tui.until('Clipboard disconnected')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('Recovered')
+  expect(t.model.calls[0]!.lastUserText).toBe('keep this')
+})
+
+test('resumed image-only history has a short placeholder and never displays base64', async () => {
+  const image = {
+    type: 'image' as const,
+    data: blueImage().toString('base64'),
+    mimeType: 'image/png',
+  }
+  const t = createTestVela({
+    sessionId: 'saved-images',
+    responses: [fauxText('Saved image')],
+  })
+  await t.session.prompt('', { images: [image] })
+  await t.session.close()
+  const tui = await startTui(t.vela, {
+    sessionId: 'saved-images',
+    resume: true,
+  })
+  await tui.started
+  expect(tui.screen()).toContain('[image png ')
+  expect(tui.screen()).not.toContain(image.data)
+  expect(tui.screen()).toContain('Saved image')
+})
 
 test('a prompt shows the user message, tool calls with results and the streamed answer', async () => {
   const t = createTestVela({
