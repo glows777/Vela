@@ -34,6 +34,11 @@ export function imageMimeType(header: Buffer): string | undefined {
   return undefined
 }
 
+/** Detect binary content without rejecting non-ASCII UTF-8 text. */
+export function isBinaryFile(header: Buffer): boolean {
+  return header.subarray(0, 8192).includes(0)
+}
+
 interface ImageMetadata {
   mimeType: string
   width: number

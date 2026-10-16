@@ -10,7 +10,7 @@ import {
 
 afterEach(cleanupTestVelas)
 
-test.each(['Hello, Vela!!!', 'hello\n', 'hello\r\n', ''])(
+test.each(['Hello, Vela!!!', '中文 😀\n', 'hello\n', 'hello\r\n', ''])(
   'read_file sends the exact EOF body to the model: %j',
   async (body) => {
     const t = createTestVela({
@@ -24,6 +24,40 @@ test.each(['Hello, Vela!!!', 'hello\n', 'hello\r\n', ''])(
     expect(t.model.calls[1]!.toolResults[0]!.output).toBe(body)
   },
 )
+
+test.each([0, 8191])(
+  'read_file rejects a NUL at byte %i before pagination',
+  async (nulOffset) => {
+    const t = createTestVela({
+      files: { 'document.pdf': 'x'.repeat(nulOffset) + '\0binary payload' },
+      responses: [
+        fauxToolCall('read_file', { path: 'document.pdf' }),
+        fauxText('Use bash to inspect the document'),
+      ],
+    })
+    await t.run('Read document.pdf')
+    expect(t.eventsOf('tool_execution_end')[0]!.isError).toBe(true)
+    const output = String(t.model.calls[1]!.toolResults[0]!.output)
+    expect(output).toContain('binary file')
+    expect(output).toContain('pdftotext')
+    expect(output).toContain('unzip -l')
+    expect(output).not.toContain('binary payload')
+    expect(output).not.toContain('More content exists')
+  },
+)
+
+test('read_file only checks the first 8KB for NUL', async () => {
+  const body = 'x'.repeat(8192) + '\0tail'
+  const t = createTestVela({
+    files: { 'notes.txt': body },
+    responses: [
+      fauxToolCall('read_file', { path: 'notes.txt' }),
+      fauxText('Done'),
+    ],
+  })
+  await t.run('Read notes.txt')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe(body)
+})
 
 test('read_file keeps line-limit continuation guidance and sends only the final page body', async () => {
   const t = createTestVela({
