@@ -1,7 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { truncateSync, writeFileSync } from 'node:fs'
+import { readFileSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -51,4 +55,40 @@ test('read_file recognizes a truncated image signature and gives an invalid-imag
   const prompt = JSON.stringify(t.model.calls[1]!.prompt)
   expect(prompt).toContain('unsupported or invalid image format')
   expect(prompt).not.toContain('�PNG')
+})
+
+test('read_file explains that image reads ignore text pagination parameters', async () => {
+  const image = readFileSync(
+    new URL('../fixtures/images/blue.png', import.meta.url),
+  )
+  const faux = createFauxModel({
+    responses: [
+      fauxToolCall('read_file', {
+        path: 'picture.txt',
+        offset: 100,
+        limit: 1,
+        column: 40,
+      }),
+      fauxText('The complete image was returned.'),
+    ],
+  })
+  let description = ''
+  const t = createTestVela({
+    model: {
+      ...faux,
+      async doStream(options) {
+        const tool = options.tools?.find((tool) => tool.name === 'read_file')
+        if (tool?.type === 'function') description = tool.description ?? ''
+        return faux.doStream(options)
+      },
+    },
+  })
+  writeFileSync(join(t.cwd, 'picture.txt'), image)
+  await t.run('Read picture.txt')
+  expect(description).toContain(
+    'offset, limit and column are ignored for images',
+  )
+  expect(JSON.stringify(faux.calls[1]?.prompt)).toContain(
+    image.toString('base64'),
+  )
 })
