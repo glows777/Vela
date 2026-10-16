@@ -125,6 +125,10 @@ Prompts are sent in order. In interactive mode, text starting with / is a comman
 /context, /usage, /skill, /model, ...), /skill:<name> sends a skill and /<template> expands a prompt template;
 anything else goes to the model.
 
+Command-line @file arguments attach images (detected by header) or inline text in <file name="…">…</file>
+on the first prompt. Missing files exit 1. In the TUI, Ctrl+V (Windows: Alt+V) pastes a clipboard image
+as a temporary file path for read_file. Images in history show a short placeholder.
+
 Examples:
   # Interactive mode
   vela
@@ -134,6 +138,9 @@ Examples:
 
   # Print mode: answer and exit
   vela -p "Summarize README.md"
+
+  # Attach an image to the first prompt
+  vela @shot.png "What is this?"
 
   # Piped stdin is prepended to the first prompt
   git diff | vela -p "Review this change"

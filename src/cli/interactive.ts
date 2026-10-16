@@ -1,4 +1,7 @@
-import { homedir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { format } from 'node:util'
 import {
   CombinedAutocompleteProvider,
@@ -24,7 +27,8 @@ import type {
   LoginOptions,
 } from '../auth/types.ts'
 import type { SessionUI } from '../extensions/types.ts'
-import type { ModelMessage } from '../messages.ts'
+import { imageMimeType } from '../images/metadata.ts'
+import type { ImageContent, ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import {
   branchSummaryMessageText,
@@ -36,7 +40,11 @@ import {
 import { formatUsd } from '../usage/format.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
-import { copyToClipboard } from './clipboard.ts'
+import {
+  copyToClipboard,
+  readClipboardImage,
+  readClipboardText,
+} from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
 import { openBrowser } from './login.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'
@@ -45,6 +53,7 @@ import {
   AssistantMessage,
   BashExecution,
   CustomMessageBlock,
+  imagePlaceholder,
   notice,
   sanitize,
   ToolBlock,
@@ -57,6 +66,9 @@ import { nearestShown, treeItems } from './tui/tree-selector.ts'
 
 export interface InteractiveOptions {
   vela: Vela
+  /** Command-line prompts and attachments, sent after startup. */
+  messages?: string[]
+  images?: ImageContent[]
   /** Session at startup */
   sessionId: string
   /** Restore this session's history at startup (`-c` / `--session`) */
@@ -77,6 +89,10 @@ export interface InteractiveOptions {
   describeError?: (error: unknown) => string
   /** Clipboard for `/copy`; defaults to the system clipboard (tests pass a fake) */
   copyToClipboard?: (text: string) => Promise<void>
+  /** Defaults to pi-tui's native clipboard or wl-paste on Wayland. */
+  readClipboardImage?: () => Promise<Uint8Array | undefined>
+  /** Text fallback for the explicit paste shortcut when there is no image. */
+  readClipboardText?: () => Promise<string | undefined>
   /** Passed to `vela.login()` by `/login` (the CLI's installation id for Sign in with ChatGPT) */
   loginOptions?: LoginOptions
   /** Opens a sign-in URL; defaults to the system browser (tests pass a fake) */
@@ -138,6 +154,7 @@ const HOTKEYS = [
   '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',
   'Shift+Tab cycle thinking level · Ctrl+L select model · Ctrl+P / Shift+Ctrl+P cycle models',
   'Ctrl+O expand / collapse tool output · Ctrl+T show / hide thinking',
+  `${process.platform === 'win32' ? 'Alt+V' : 'Ctrl+V'} paste a clipboard image as a file path for read_file`,
   'Ctrl+C clear editor, twice to exit · Ctrl+D exit when editor is empty',
 ]
 
@@ -151,6 +168,9 @@ export async function runInteractive(
 ): Promise<void> {
   const mode = new InteractiveMode(options)
   await mode.start()
+  for (const [index, message] of (options.messages ?? []).entries()) {
+    await mode.submit(message, index === 0 ? options.images : undefined)
+  }
   return mode.exited
 }
 
@@ -188,6 +208,7 @@ export class InteractiveMode {
   private restoreConsole?: () => void
   private readonly cleanups: (() => void)[] = []
   private shuttingDown = false
+  private clipboardDir?: string
   private resolveExit!: () => void
   readonly exited = new Promise<void>((resolve) => {
     this.resolveExit = resolve
@@ -679,7 +700,11 @@ export class InteractiveMode {
         typeof message.content === 'string'
           ? message.content
           : message.content
-              .map((part) => (part.type === 'text' ? part.text : ''))
+              .map((part) =>
+                part.type === 'text'
+                  ? part.text
+                  : `\n${imagePlaceholder(part) ?? ''}`,
+              )
               .join('')
       // Like pi: an extension's custom message shows only with `display: true`, in its own block
       if (custom) {
@@ -900,6 +925,7 @@ export class InteractiveMode {
       }
     })
     actions.set('exit', () => void this.shutdown())
+    actions.set('pasteImage', () => void this.pasteClipboard())
     actions.set('cycleThinking', () => {
       // Like pi: only the levels the model supports
       const levels = this.session.availableThinkingLevels()
@@ -969,9 +995,47 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  async submit(raw: string): Promise<void> {
+  private async pasteClipboard(): Promise<void> {
+    try {
+      const bytes = await (
+        this.options.readClipboardImage ?? readClipboardImage
+      )()
+      const text = bytes?.length
+        ? undefined
+        : await (this.options.readClipboardText ?? readClipboardText)()
+      if (!bytes?.length) {
+        if (text) {
+          this.editor.insertTextAtCursor(text)
+          this.tui.requestRender()
+        }
+        return
+      }
+      const mimeType = imageMimeType(Buffer.from(bytes))
+      if (!mimeType) throw new Error('Unsupported clipboard image format')
+      this.clipboardDir ??= mkdtempSync(join(tmpdir(), 'vela-clipboard-'))
+      const file = join(
+        this.clipboardDir,
+        `${randomUUID()}.${mimeType.slice('image/'.length)}`,
+      )
+      writeFileSync(file, bytes, { mode: 0o600 })
+      const cursor = this.editor.getCursor()
+      const before =
+        this.editor.getLines()[cursor.line]?.slice(0, cursor.col) ?? ''
+      this.editor.insertTextAtCursor(
+        `${before && !/\s$/.test(before) ? ' ' : ''}${file} `,
+      )
+      this.tui.requestRender()
+    } catch (error) {
+      this.addNotice(
+        `Clipboard paste failed: ${errorMessage(error)}`,
+        'warning',
+      )
+    }
+  }
+
+  async submit(raw: string, images?: ImageContent[]): Promise<void> {
     const text = raw.trim()
-    if (!text) return
+    if (!text && !images?.length) return
     this.editor.addToHistory(text)
     this.editor.setText('')
     if (text.startsWith('!')) {
@@ -1117,7 +1181,7 @@ export class InteractiveMode {
       return
     }
     try {
-      await this.session.prompt(text, { source: 'interactive' })
+      await this.session.prompt(text, { source: 'interactive', images })
     } catch (error) {
       // Loop errors were already shown at agent_end
       if (error !== this.shownError)
@@ -1689,6 +1753,8 @@ export class InteractiveMode {
       if (!options.fromSignal) restore()
       await this.options.onExit()
     } finally {
+      if (this.clipboardDir)
+        rmSync(this.clipboardDir, { recursive: true, force: true })
       if (options.fromSignal) restore()
       for (const cleanup of this.cleanups.splice(0)) cleanup()
       this.resolveExit()

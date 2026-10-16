@@ -9,9 +9,40 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
+import { isToolContent } from '../../messages.ts'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
+
+/** Render image metadata only; inline base64 belongs in session storage, never the terminal. */
+export function imagePlaceholder(image: unknown): string | undefined {
+  if (!image || typeof image !== 'object') return undefined
+  const part = image as Record<string, unknown>
+  const mimeType =
+    part.type === 'image' && typeof part.mimeType === 'string'
+      ? part.mimeType
+      : part.type === 'file' && typeof part.mediaType === 'string'
+        ? part.mediaType
+        : ''
+  if (!/^image\//i.test(mimeType)) return undefined
+  const source = part.data
+  const data =
+    part.type === 'file' &&
+    source &&
+    typeof source === 'object' &&
+    'type' in source &&
+    source.type === 'data' &&
+    'data' in source
+      ? source.data
+      : source
+  if (typeof data !== 'string') return undefined
+  const bytes = Buffer.byteLength(data, 'base64')
+  const size = bytes
+    ? ` ${bytes < 1024 ? `${bytes}B` : `${Math.round(bytes / 1024)}KB`}`
+    : ''
+  const format = mimeType.replace(/^image\/?/, '')
+  return `[image${format ? ` ${format}` : ''}${size}]`
+}
 
 /** User message: Markdown on a dark background (like pi); very long ones (skill bodies) show only the first lines. */
 export class UserMessage extends Container {
@@ -508,6 +539,12 @@ function formatOutput(output: unknown): string {
 function rawOutput(output: unknown): string {
   if (typeof output === 'string') return output.trimEnd()
   if (output instanceof Error) return output.message
+  if (isToolContent(output))
+    return output
+      .map((part) =>
+        part.type === 'text' ? part.text : imagePlaceholder(part),
+      )
+      .join('\n')
   // Partial results (`tool_execution_update`, like pi): { content: [{ type: 'text', text }] }
   if (
     output &&
@@ -526,12 +563,28 @@ function rawOutput(output: unknown): string {
     typeof (output as { preview?: unknown }).preview === 'string'
   )
     return (output as { preview: string }).preview.trimEnd()
+  // Canonical image tool results must not fall through to JSON/base64 rendering.
+  if (
+    output &&
+    typeof output === 'object' &&
+    'type' in output &&
+    output.type === 'content' &&
+    'value' in output &&
+    isToolContent(output.value)
+  )
+    return rawOutput(output.value)
   // AI SDK tool results: { type: 'text', value } / { type: 'json', value } / { type: 'error-text', value }
   if (output && typeof output === 'object' && 'value' in output) {
     const value = (output as { value: unknown }).value
     if (typeof value === 'string') return value.trimEnd()
   }
-  return JSON.stringify(output, null, 2) ?? ''
+  return (
+    JSON.stringify(
+      output,
+      (_key, value) => imagePlaceholder(value) ?? value,
+      2,
+    ) ?? ''
+  )
 }
 
 /**

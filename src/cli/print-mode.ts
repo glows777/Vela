@@ -1,4 +1,4 @@
-import type { ModelMessage } from '../messages.ts'
+import type { ImageContent, ModelMessage } from '../messages.ts'
 
 import type { Vela } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
@@ -26,6 +26,7 @@ export async function runPrintMode(options: {
   vela: Vela
   session: VelaSession
   messages: string[]
+  images?: ImageContent[]
   mode: 'text' | 'json'
 }): Promise<number> {
   const { vela, session, messages, mode } = options
@@ -74,8 +75,11 @@ export async function runPrintMode(options: {
   }
   let exitCode = 0
   try {
-    for (const message of messages)
-      await session.prompt(message, { source: 'interactive' })
+    for (const [index, message] of messages.entries())
+      await session.prompt(message, {
+        source: 'interactive',
+        images: index === 0 ? options.images : undefined,
+      })
     if (mode === 'text') {
       const text = answer ? lastAssistantText([answer]) : ''
       if (text) await writeStdout(`${text}\n`)

@@ -69,6 +69,8 @@ export async function startTui(
     pick?: boolean
     newSessionId?: () => string
     copyToClipboard?: (text: string) => Promise<void>
+    readClipboardImage?: () => Promise<Uint8Array | undefined>
+    readClipboardText?: () => Promise<string | undefined>
     openBrowser?: (url: string) => void
     enabledModels?: string[]
   } = {},
@@ -84,6 +86,8 @@ export async function startTui(
     newSessionId: options.newSessionId ?? (() => `tui-new-${++ids}`),
     configure: () => true,
     copyToClipboard: options.copyToClipboard,
+    readClipboardImage: options.readClipboardImage,
+    readClipboardText: options.readClipboardText,
     openBrowser: options.openBrowser ?? (() => {}),
     enabledModels: options.enabledModels,
     onExit: async () => {
