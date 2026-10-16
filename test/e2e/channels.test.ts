@@ -486,6 +486,11 @@ test('a failed idle close does not let a reopened channel session bypass the fai
     () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
   )
   await deliver('u1', 'refused')
+  await waitFor(
+    () => !t.vela.sessions().some((session) => session.id === 'fake-c1-u1'),
+  )
+  // Closing an empty reopened session writes nothing; it must not count as recovery.
+  await deliver('u1', 'still refused')
   expect(t.model.calls).toHaveLength(2)
   expect(sent.at(-1)?.text).toContain("can't be saved")
 })

@@ -21,6 +21,7 @@ interface GatewayOptions {
 export const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
 /** With `idleMs` 0, how often a session that is busy at its deadline is checked again */
 const BUSY_RECHECK_MS = 1000
+const MAX_SAVE_FAILURES = 3
 
 const PLAIN = /^[A-Za-z0-9_]+$/
 
@@ -56,6 +57,8 @@ export class ChannelGateway {
   private queues = new Map<string, Promise<void>>()
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
+  /** Retained across idle closes; only an actual successful write clears a failure streak. */
+  private saveFailures = new Map<string, number>()
   private active = new Set<VelaSession>()
   /** Idle sessions waiting to be closed, by session id */
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -66,6 +69,11 @@ export class ChannelGateway {
 
   constructor(private options: GatewayOptions) {
     this.logger = options.logger ?? silentLogger
+  }
+
+  /** Internal storage-success notification, including saves outside a channel prompt. */
+  sessionSaved(id: string): void {
+    this.saveFailures.delete(id)
   }
 
   register(channel: ChannelDefinition): void {
@@ -186,6 +194,13 @@ export class ChannelGateway {
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
     if (!this.resumed.has(session)) {
       this.resumed.add(session)
+      session.subscribe((event) => {
+        if (event.type !== 'session_save_failed') return
+        this.saveFailures.set(id, (this.saveFailures.get(id) ?? 0) + 1)
+        this.logger.error(
+          `[gateway] Could not save session ${id}: ${errorMessage(event.error)}`,
+        )
+      })
       await session.resume()
     }
     session.emit({
@@ -195,6 +210,16 @@ export class ChannelGateway {
       senderName: msg.senderName,
       text: msg.text,
     })
+
+    if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
+      await this.sendReply(
+        session,
+        channelName,
+        msg,
+        "This session can't be saved. New prompts are paused after 3 consecutive save failures. Please ask the operator to restore session storage.",
+      )
+      return
+    }
 
     this.active.add(session)
     // An input handler can handle the message without a run: then there is no new answer to send
@@ -215,7 +240,20 @@ export class ChannelGateway {
     }
 
     if (session.messages.at(-1) === previous) return
-    const replyText = lastAssistantText(session.messages)
+    await this.sendReply(
+      session,
+      channelName,
+      msg,
+      lastAssistantText(session.messages),
+    )
+  }
+
+  private async sendReply(
+    session: VelaSession,
+    channelName: string,
+    msg: IncomingMessage,
+    replyText: string,
+  ): Promise<void> {
     const channel = this.channels.get(channelName)
     if (!replyText || !channel) return
     const reply: OutgoingMessage = {

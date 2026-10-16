@@ -15,6 +15,8 @@ When a channel delivers a message:
 3. On the session's first message since startup, the session is resumed from storage, so history survives restarts when Vela has a `dataDir`.
 4. It emits `channel_message`, runs the turn, and sends the text of the final assistant message back through the channel's `send()` to the same `channelId`. It then emits `channel_reply`, or `channel_error` if the turn or the send failed (a `send()` that fails must throw; the built-in Feishu channel does). If the final assistant message has no text, nothing is sent and neither event is emitted.
 
+Session save failures are logged at error level with the session id. After three consecutive reported save failures, new messages receive a reply that the session can't be saved, without running another prompt. A successful storage write resets the count, including an explicit SDK `await session.save()` after storage is repaired. Empty saves do not clear the count, and closing/reopening a session does not bypass it. In-session retries are unchanged.
+
 Channel sessions have no UI. A tool whose permission is `ask` is rejected, and extension UI calls fall back to events (see [Extensions](extensions.md)).
 
 ## Writing a channel
