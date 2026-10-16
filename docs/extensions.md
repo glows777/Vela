@@ -163,7 +163,7 @@ vela.registerCommand('todo', {
 
 `session.prompt('/todo buy milk')` runs the handler with `args` set to `buy milk` (the text after the name, trimmed) instead of sending the text to the model. Commands run immediately, even while the session is busy. Names must match `[A-Za-z0-9][\w-]*`; a name already registered by another extension throws.
 
-Commands only run in `owner` sessions. In a `collaborator` or `guest` session (for example a channel sender), `/todo` is plain text for the model.
+Commands only run in `owner` sessions. In a `collaborator` or `guest` session, `/todo` is plain text for the model. Open that session with `vela.session(id, { role })`, or return the role from a channel `roleFor`. A channel that omits `roleFor` is `owner`, so a sender in that chat can run the command.
 
 In interactive mode, Vela's own commands (`/model`, `/extensions`, ...) are checked first, so an extension cannot override them. Extension commands appear in autocomplete. In print mode, `vela -p "/todo buy milk"` runs the command. In RPC mode, send commands with the `prompt` command.
 
@@ -220,7 +220,7 @@ If you only need a different base URL or key for an OpenAI- or Anthropic-compati
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
-A channel brings messages from outside (a chat app, a webhook) into Vela. Each sender gets their own session, and replies go back through the channel's `send()`.
+A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`.
 
 ```ts
 vela.registerChannel({
@@ -234,7 +234,7 @@ vela.registerChannel({
 })
 ```
 
-`roleFor` decides each sender's role and is checked on every message. Without it every sender is a `guest`. The interactive CLI starts channels after startup; the SDK starts them with `vela.startChannels()`. See [Channels](channels.md).
+`roleFor` is optional. The gateway checks it on every message. When you omit it, every sender in the chat is `owner`. When you return `guest` or `collaborator`, only the tools change. Earlier turns stay in the shared transcript. See [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
 
 ### on
 

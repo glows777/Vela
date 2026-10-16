@@ -158,7 +158,7 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 
 `web_search` is registered only when a key is set. With a Tavily key it uses [Tavily](https://tavily.com) and returns an answer summary plus page content; with a Serper key it uses [Serper](https://serper.dev) and returns Google result snippets. If both are set, Tavily is used.
 
-Guest sessions can use `web_search` but not `web_fetch`, so outside senders cannot make Vela request internal addresses.
+A `guest` session can use `web_search` but not `web_fetch`. An enabled channel chat defaults to `owner` and can call `web_fetch`.
 
 **SDK.** `web({ tavilyKey, serperKey })`; both are optional.
 

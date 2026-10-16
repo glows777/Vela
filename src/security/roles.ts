@@ -1,6 +1,6 @@
 /**
- * Session roles and tool permissions. Roles belong to sessions: the CLI owner defaults to
- * owner, channel senders default to guest.
+ * Session roles and tool permissions. Roles belong to sessions. The CLI session defaults to
+ * owner. A channel chat defaults to owner unless its roleFor returns another role.
  *
  * - owner: all tools
  * - collaborator: all except bash
