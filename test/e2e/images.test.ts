@@ -5,6 +5,7 @@ import type {
   LanguageModelV4Prompt,
   SharedV4FileData,
 } from '@ai-sdk/provider'
+import { PhotonImage } from '@silvia-odwyer/photon-node'
 import {
   createFauxModel,
   fauxSummary,
@@ -305,4 +306,100 @@ test('text-only requests omit compatible AI SDK image file parts from user and t
   expect(request).not.toContain(image.data)
   expect(request).not.toContain('reference-image-1')
   expect(JSON.stringify(t.session.messages)).toContain(image.data)
+})
+
+const noisyJpeg = () => {
+  const width = 1200
+  const height = 900
+  const pixels = new Uint8Array(width * height * 4)
+  let seed = 0x12345678
+  for (let i = 0; i < pixels.length; i++) {
+    seed ^= seed << 13
+    seed ^= seed >>> 17
+    seed ^= seed << 5
+    pixels[i] = i % 4 === 3 ? 255 : seed & 255
+  }
+  const rendered = new PhotonImage(pixels, width, height)
+  try {
+    return {
+      type: 'image' as const,
+      data: Buffer.from(rendered.get_bytes_jpeg(90)).toString('base64'),
+      mimeType: 'image/jpeg',
+    }
+  } finally {
+    rendered.free()
+  }
+}
+
+test('resume, clone and fork keep saved images without decoding them again', async () => {
+  const image = noisyJpeg()
+  const count = 8
+  const model = createFauxModel({ responses: [] })
+  const providersFor = (scripted: ReturnType<typeof createFauxModel>) => ({
+    faux: {
+      models: [
+        { id: 'vision', input: ['text', 'image'] },
+        { id: 'text', input: ['text'] },
+      ],
+      createModel: () => scripted,
+    },
+  })
+  const t = createTestVela({
+    model: 'faux/vision',
+    providers: providersFor(model),
+  })
+  for (let i = 0; i < count; i++) {
+    model.push(fauxText('seen'))
+    await t.session.prompt(`photo ${i}`, { images: [image] })
+  }
+  expect(JSON.stringify(t.messages[0])).toContain(image.data)
+  const elapsed = async (
+    session: { prompt: (input: string) => Promise<void> },
+    scripted = model,
+  ) => {
+    scripted.push(fauxText('ok'))
+    const started = performance.now()
+    await session.prompt('text-only question')
+    return performance.now() - started
+  }
+  const same = await elapsed(t.session)
+  const cloned = await t.session.clone({ sessionId: 'image-clone' })
+  const forked = await t.session.fork(t.session.getEntries().at(-1)!.id, {
+    sessionId: 'image-fork',
+    position: 'at',
+  })
+  expect(cloned.session).toBeDefined()
+  expect(forked.session).toBeDefined()
+  const cloneTurns = [
+    await elapsed(cloned.session!),
+    await elapsed(cloned.session!),
+  ]
+  const forkTurns = [
+    await elapsed(forked.session!),
+    await elapsed(forked.session!),
+  ]
+  const resumedModel = createFauxModel({ responses: [] })
+  const resumed = createTestVela({
+    cwd: t.cwd,
+    model: 'faux/vision',
+    providers: providersFor(resumedModel),
+  })
+  expect(await resumed.session.resume()).toBe(true)
+  const resumeTurns = [
+    await elapsed(resumed.session, resumedModel),
+    await elapsed(resumed.session, resumedModel),
+  ]
+  const carried = imagesIn(resumedModel.calls[0]!.prompt)
+  expect(carried).toHaveLength(count)
+  expect(carried.every((part) => encoded(part.data) === image.data)).toBe(true)
+  const budget = same + 80
+  for (const turn of [...cloneTurns, ...forkTurns, ...resumeTurns])
+    expect(turn).toBeLessThan(budget)
+  resumed.session.setModel('faux/text')
+  resumedModel.push(fauxText('blind'))
+  await resumed.session.prompt('describe again')
+  const blind = JSON.stringify(resumedModel.calls.at(-1)!.prompt)
+  expect(blind).toContain('(image omitted: model does not support images)')
+  expect(blind).not.toContain(image.data)
+  expect(JSON.stringify(resumed.session.messages)).toContain(image.data)
 })
