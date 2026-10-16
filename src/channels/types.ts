@@ -30,9 +30,10 @@ export interface ChannelDefinition {
   /** Await the handler to wait until the gateway finishes this message and its reply. */
   onMessage?: (handler: (msg: IncomingMessage) => void | Promise<void>) => void
 
-  /** Prepare names/context only when this message is ready to run. Undefined means handled without a prompt. */
+  /** Prepare names/context when ready to run. Steer also receives the active trigger already in the session. Undefined means handled without a prompt. */
   prepareMessage?: (
     msg: IncomingMessage,
+    activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
 
   /** Offer controls for this queued message while the preceding run is active. */

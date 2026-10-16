@@ -72,7 +72,7 @@
     description: string
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
-    prepareMessage?: ((msg: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
+    prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     showRunControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; choose: (action: "queue" | "steer" | "stop") => boolean; }) => Promise<void>) | undefined
@@ -195,9 +195,9 @@
     setWidget: (key: string, lines?: string[]) => void
   function feishu: (options?: FeishuOptions) => VelaExtension
   interface FeishuCard
-    config: { wide_screen_mode: boolean; }
-    elements: { tag: string; text?: { tag: "plain_text"; content: string; }; actions?: { tag: "button"; text: { tag: "plain_text"; content: string; }; type: "primary" | "default" | "danger"; value: { action: string; token: string; }; }[]; }[]
+    body: { elements: { tag: "markdown" | "column_set"; content?: string; columns?: { tag: "column"; width: "weighted"; weight: number; elements: { tag: "button"; text: { tag: "plain_text"; content: string; }; type: "primary" | "default" | "danger"; behaviors: { type: "callback"; value: { action: string; token: string; }; }[]; }[]; }[]; }[]; }
     header: { title: { tag: "plain_text"; content: string; }; }
+    schema: "2.0"
   interface FeishuCardAction
     action?: { value?: unknown; } | undefined
     context?: { open_chat_id?: string; } | undefined

@@ -27,6 +27,7 @@ const PLAIN = /^[A-Za-z0-9_]+$/
 
 interface ChannelRun {
   session: VelaSession
+  trigger: IncomingMessage
   lifetime: AbortController
   stopped: boolean
 }
@@ -134,69 +135,18 @@ export class ChannelGateway {
     let chosen = false
     let decision: Promise<void> | undefined
     let card: Promise<void> | undefined
-    if (!this.stopped && run?.session.isRunning && channel?.showRunControls) {
+    if (run && this.runIsLive(run) && channel?.showRunControls) {
       card = channel
         .showRunControls(msg, {
           signal: run.lifetime.signal,
           choose: (action) => {
-            if (
-              chosen ||
-              this.stopped ||
-              run.stopped ||
-              run.lifetime.signal.aborted ||
-              this.runs.get(id) !== run ||
-              !run.session.isRunning
-            )
-              return false
+            if (chosen || !this.runIsLive(run)) return false
             chosen = true
             if (action === 'queue') return true
-            if (action === 'stop') {
-              consumed = true
-              run.stopped = true
-              run.lifetime.abort()
-              // These inputs belong to the cancelled run; the gateway's default queue stays intact.
-              run.session.clearQueue()
-              decision = run.session
-                .abort()
-                .then(() =>
-                  this.sendReply(
-                    run.session,
-                    channelName,
-                    msg,
-                    'Stopped the current run.',
-                  ),
-                )
-            } else {
-              decision = (async () => {
-                const prepared = channel.prepareMessage
-                  ? await channel.prepareMessage(msg)
-                  : msg
-                // History/name lookups can outlast the run. Leave the default queue intact.
-                if (
-                  !prepared ||
-                  this.stopped ||
-                  run.stopped ||
-                  run.lifetime.signal.aborted ||
-                  this.runs.get(id) !== run ||
-                  !run.session.isRunning
-                )
-                  return
-                run.session.emit({
-                  type: 'channel_message',
-                  channel: channelName,
-                  senderId: prepared.senderId,
-                  senderName: prepared.senderName,
-                  text: prepared.text,
-                })
-                await run.session.prompt(prepared.text, {
-                  source: 'channel',
-                  streamingBehavior: 'steer',
-                  signal: run.lifetime.signal,
-                })
-                consumed = true
-              })()
-            }
-            decision = decision
+            decision = this.applyRunChoice(channel, msg, run, action)
+              .then((handled) => {
+                consumed = handled
+              })
               .catch((error) => {
                 run.session.emit({
                   type: 'channel_error',
@@ -236,6 +186,57 @@ export class ChannelGateway {
       this.closeWhenIdle(id)
     })
     return next
+  }
+
+  private runIsLive(run: ChannelRun): boolean {
+    return (
+      !this.stopped &&
+      !run.stopped &&
+      !run.lifetime.signal.aborted &&
+      this.runs.get(run.session.id) === run &&
+      run.session.isRunning
+    )
+  }
+
+  /** Apply one reserved card choice; true consumes its gateway input. */
+  private async applyRunChoice(
+    channel: ChannelDefinition,
+    msg: IncomingMessage,
+    run: ChannelRun,
+    action: 'steer' | 'stop',
+  ): Promise<boolean> {
+    if (action === 'stop') {
+      run.stopped = true
+      run.lifetime.abort()
+      // These inputs belong to the cancelled run; the gateway's default queue stays intact.
+      run.session.clearQueue()
+      await run.session.abort()
+      await this.sendReply(
+        run.session,
+        channel.name,
+        msg,
+        'Stopped the current run.',
+      )
+      return true
+    }
+    const prepared = channel.prepareMessage
+      ? await channel.prepareMessage(msg, run.trigger)
+      : msg
+    // History/name lookups can outlast the run. Leave the default queue intact.
+    if (!prepared || !this.runIsLive(run)) return false
+    run.session.emit({
+      type: 'channel_message',
+      channel: channel.name,
+      senderId: prepared.senderId,
+      senderName: prepared.senderName,
+      text: prepared.text,
+    })
+    await run.session.prompt(prepared.text, {
+      source: 'channel',
+      streamingBehavior: 'steer',
+      signal: run.lifetime.signal,
+    })
+    return true
   }
 
   /**
@@ -364,6 +365,7 @@ export class ChannelGateway {
     this.active.add(session)
     const run: ChannelRun = {
       session,
+      trigger: msg,
       lifetime: new AbortController(),
       stopped: false,
     }
