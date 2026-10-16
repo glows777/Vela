@@ -40,7 +40,11 @@ import {
 import { formatUsd } from '../usage/format.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
-import { copyToClipboard, readClipboardImage } from './clipboard.ts'
+import {
+  copyToClipboard,
+  readClipboardImage,
+  readClipboardText,
+} from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
 import { openBrowser } from './login.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'
@@ -87,6 +91,8 @@ export interface InteractiveOptions {
   copyToClipboard?: (text: string) => Promise<void>
   /** Defaults to pi-tui's native clipboard or wl-paste on Wayland. */
   readClipboardImage?: () => Promise<Uint8Array | undefined>
+  /** Text fallback for the explicit paste shortcut when there is no image. */
+  readClipboardText?: () => Promise<string | undefined>
   /** Passed to `vela.login()` by `/login` (the CLI's installation id for Sign in with ChatGPT) */
   loginOptions?: LoginOptions
   /** Opens a sign-in URL; defaults to the system browser (tests pass a fake) */
@@ -203,7 +209,7 @@ export class InteractiveMode {
   private readonly cleanups: (() => void)[] = []
   private shuttingDown = false
   private clipboardDir?: string
-  private pendingImagePaste?: Promise<void>
+  private pendingPaste?: Promise<void>
   private pasteCancelled = 0
   private resolveExit!: () => void
   readonly exited = new Promise<void>((resolve) => {
@@ -882,25 +888,19 @@ export class InteractiveMode {
 
   private setupKeys(): void {
     const { editor } = this
+    editor.onBeforeSubmit = () => {
+      if (!this.pendingPaste) return false
+      void this.submitEditor()
+      return true
+    }
     editor.onSubmit = (text) => {
-      if (!this.pendingImagePaste) {
+      if (!this.pendingPaste) {
         void this.submit(text)
         return
       }
-      // pi-tui clears the editor before onSubmit. Keep the draft until its image path is inserted.
-      const cancelled = this.pasteCancelled
-      const session = this.session
+      // Autocomplete can submit a completed slash command directly through pi's editor.
       editor.setText(text)
-      editor.disableSubmit = true
-      void this.pendingImagePaste.then(() => {
-        editor.disableSubmit = false
-        if (
-          !this.shuttingDown &&
-          cancelled === this.pasteCancelled &&
-          session === this.session
-        )
-          void this.submit(editor.getExpandedText())
-      })
+      void this.submitEditor()
     }
     let bashMode = false
     editor.onChange = (text) => {
@@ -919,7 +919,7 @@ export class InteractiveMode {
     actions.set('dequeue', () => {
       if (!this.restoreQueue()) this.addNotice('No queued messages', 'dim')
     })
-    actions.set('followUp', () => void this.submitFollowUp())
+    actions.set('followUp', () => void this.submitEditor(true))
     actions.set('clear', () => {
       this.pasteCancelled++
       const now = Date.now()
@@ -931,9 +931,9 @@ export class InteractiveMode {
     })
     actions.set('exit', () => void this.shutdown())
     actions.set('pasteImage', () => {
-      if (this.pendingImagePaste || this.shuttingDown) return
-      this.pendingImagePaste = this.pasteClipboardImage().finally(() => {
-        this.pendingImagePaste = undefined
+      if (this.pendingPaste || this.shuttingDown) return
+      this.pendingPaste = this.pasteClipboard().finally(() => {
+        this.pendingPaste = undefined
       })
     })
     actions.set('cycleThinking', () => {
@@ -1005,20 +1005,29 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  private async pasteClipboardImage(): Promise<void> {
+  private async pasteClipboard(): Promise<void> {
     const session = this.session
     const cancelled = this.pasteCancelled
     try {
       const bytes = await (
         this.options.readClipboardImage ?? readClipboardImage
       )()
+      const text = bytes?.length
+        ? undefined
+        : await (this.options.readClipboardText ?? readClipboardText)()
       if (
-        !bytes?.length ||
         this.shuttingDown ||
         session !== this.session ||
         cancelled !== this.pasteCancelled
       )
         return
+      if (!bytes?.length) {
+        if (text) {
+          this.editor.insertTextAtCursor(text)
+          this.tui.requestRender()
+        }
+        return
+      }
       const mimeType = imageMimeType(Buffer.from(bytes))
       if (!mimeType) throw new Error('Unsupported clipboard image format')
       this.clipboardDir ??= mkdtempSync(join(tmpdir(), 'vela-clipboard-'))
@@ -1035,18 +1044,22 @@ export class InteractiveMode {
       )
       this.tui.requestRender()
     } catch (error) {
-      this.addNotice(`Image paste failed: ${errorMessage(error)}`, 'warning')
+      this.addNotice(
+        `Clipboard paste failed: ${errorMessage(error)}`,
+        'warning',
+      )
     }
   }
 
-  private async submitFollowUp(): Promise<void> {
+  /** Share pending-paste handling for Enter and Alt+Enter, including cancellation. */
+  private async submitEditor(followUp = false): Promise<void> {
     const { editor } = this
     const cancelled = this.pasteCancelled
     const session = this.session
     if (editor.disableSubmit) return
-    if (this.pendingImagePaste) {
+    if (this.pendingPaste) {
       editor.disableSubmit = true
-      await this.pendingImagePaste
+      await this.pendingPaste
       editor.disableSubmit = false
     }
     if (
@@ -1057,7 +1070,7 @@ export class InteractiveMode {
       return
     const text = editor.getExpandedText().trim()
     if (!text) return
-    if (!this.session.isRunning) {
+    if (!followUp || !this.session.isRunning) {
       await this.submit(text)
       return
     }
