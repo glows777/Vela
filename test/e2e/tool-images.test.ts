@@ -49,8 +49,12 @@ const pictureTool = (name = 'picture') => ({
 
 test('a tool returns text and a canonical image, saved inline and restored on resume', async () => {
   const t = createTestVela({
-    extensions: [(v) => v.registerTool(pictureTool())],
-    responses: [fauxToolCall('picture', {}), fauxText('blue')],
+    extensions: [
+      function pictures(v) {
+        v.registerTool(pictureTool())
+      },
+    ],
+    responses: [fauxToolCall('pictures_picture', {}), fauxText('blue')],
   })
   await t.run('Describe the picture')
   expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
@@ -74,10 +78,10 @@ test('tool_result can replace image content and normalization runs after the hoo
   const seen: unknown[] = []
   const t = createTestVela({
     extensions: [
-      (v) => {
+      function pictures(v) {
         v.registerTool(pictureTool())
         v.on('tool_result', (event) => {
-          if (event.toolName !== 'picture') return
+          if (event.toolName !== 'pictures_picture') return
           seen.push(event.content)
           return {
             content: [{ type: 'text', text: 'Replacement' }, image('wide.png')],
@@ -85,7 +89,7 @@ test('tool_result can replace image content and normalization runs after the hoo
         })
       },
     ],
-    responses: [fauxToolCall('picture', {}), fauxText('wide')],
+    responses: [fauxToolCall('pictures_picture', {}), fauxText('wide')],
   })
   await t.run('Describe the picture')
   expect(seen[0]).toEqual([{ type: 'text', text: 'A blue picture' }, image()])
@@ -205,7 +209,7 @@ test('microcompaction keeps image results inline while folding old text results'
 test('invalid tool images become a reason without losing text or stopping the agent', async () => {
   const t = createTestVela({
     extensions: [
-      (v) =>
+      function pictures(v) {
         v.registerTool({
           ...pictureTool(),
           execute: async () =>
@@ -213,9 +217,10 @@ test('invalid tool images become a reason without losing text or stopping the ag
               { type: 'text', text: 'Keep the answer' },
               { type: 'image', data: 'invalid', mimeType: 'image/png' },
             ]),
-        }),
+        })
+      },
     ],
-    responses: [fauxToolCall('picture', {}), fauxText('done')],
+    responses: [fauxToolCall('pictures_picture', {}), fauxText('done')],
   })
   await t.run('Get picture')
   expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(0)
@@ -227,16 +232,16 @@ test('invalid tool images become a reason without losing text or stopping the ag
 test('text-only tool_result transforms keep images unless content explicitly replaces them', async () => {
   const t = createTestVela({
     extensions: [
-      (v) => {
+      function pictures(v) {
         v.registerTool(pictureTool())
         v.on('tool_result', (event) =>
-          event.toolName === 'picture'
+          event.toolName === 'pictures_picture'
             ? { output: 'A redacted caption' }
             : undefined,
         )
       },
     ],
-    responses: [fauxToolCall('picture', {}), fauxText('done')],
+    responses: [fauxToolCall('pictures_picture', {}), fauxText('done')],
   })
   await t.run('Get picture')
   expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
@@ -251,7 +256,7 @@ test('text-only tool_result transforms keep images unless content explicitly rep
 test('oversized tool text is previewed while its image stays in the request', async () => {
   const t = createTestVela({
     extensions: [
-      (v) =>
+      function pictures(v) {
         v.registerTool({
           ...pictureTool(),
           maxResultChars: 100,
@@ -260,9 +265,10 @@ test('oversized tool text is previewed while its image stays in the request', as
               { type: 'text', text: 'Caption '.repeat(500) },
               image(),
             ]),
-        }),
+        })
+      },
     ],
-    responses: [fauxToolCall('picture', {}), fauxText('done')],
+    responses: [fauxToolCall('pictures_picture', {}), fauxText('done')],
   })
   await t.run('Get picture')
   expect(toolImages(t.model.calls[1]!.prompt)).toHaveLength(1)
