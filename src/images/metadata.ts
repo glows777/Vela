@@ -34,6 +34,18 @@ export function imageMimeType(header: Buffer): string | undefined {
   return undefined
 }
 
+/** Reject PDF, NUL and invalid UTF-8; a partial header may end mid-character. */
+export function isBinaryFile(bytes: Buffer, partial = false): boolean {
+  if (bytes.includes(0) || bytes.subarray(0, 5).equals(Buffer.from('%PDF-')))
+    return true
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: partial })
+    return false
+  } catch {
+    return true
+  }
+}
+
 interface ImageMetadata {
   mimeType: string
   width: number

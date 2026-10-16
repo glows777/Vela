@@ -2,7 +2,7 @@ import { constants, createReadStream, readdirSync } from 'node:fs'
 import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import z from 'zod'
-import { imageMimeType } from '../images/metadata.ts'
+import { imageMimeType, isBinaryFile } from '../images/metadata.ts'
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -21,17 +21,22 @@ export const READ_MAX_BYTES = 50 * 1024
 
 // 96 MiB of bytes encode to the normalizer's 128 MiB base64 input limit.
 const READ_MAX_IMAGE_BYTES = 96 * 1024 * 1024
-const IMAGE_HEADER_BYTES = 18
+const FILE_HEADER_BYTES = 8192
 
-/** Bound image reads before allocating base64; text files still use the existing pager. */
-async function readImage(
+const binaryFileError = (path: string) =>
+  new Error(
+    `Cannot read ${path}: binary file. Use bash tools such as pdftotext or unzip -l to inspect it.`,
+  )
+
+/** Check the file header and return images before entering the text pager. */
+async function readSpecialFile(
   file: string,
   path: string,
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult | undefined> {
   const handle = await open(file, 'r')
   try {
-    const header = Buffer.alloc(IMAGE_HEADER_BYTES)
+    const header = Buffer.alloc(FILE_HEADER_BYTES)
     let headerLength = 0
     while (headerLength < header.length) {
       const { bytesRead } = await handle.read(
@@ -43,8 +48,12 @@ async function readImage(
       if (!bytesRead) break
       headerLength += bytesRead
     }
-    const mimeType = imageMimeType(header.subarray(0, headerLength))
-    if (!mimeType) return undefined
+    const bytes = header.subarray(0, headerLength)
+    const mimeType = imageMimeType(bytes)
+    if (!mimeType) {
+      if (isBinaryFile(bytes, true)) throw binaryFileError(path)
+      return undefined
+    }
     const tooLarge = () =>
       new Error('Cannot read image: image exceeds the safe decoding size limit')
     if ((await handle.stat()).size > READ_MAX_IMAGE_BYTES) throw tooLarge()
@@ -128,9 +137,19 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       column = 0,
     } = readFileParamSchema.parse(input)
     const file = resolveIn(cwd, path)
-    const image = await readImage(file, path, context?.signal)
+    const image = await readSpecialFile(file, path, context?.signal)
     if (image) return image
-    const decoder = new TextDecoder()
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    // Validate every chunk the pager reads, including bytes past the header.
+    // Streaming preserves UTF-8 characters split across chunks.
+    const decodeText = (bytes?: Buffer): string => {
+      if (bytes?.includes(0)) throw binaryFileError(path)
+      try {
+        return decoder.decode(bytes, { stream: bytes !== undefined })
+      } catch {
+        throw binaryFileError(path)
+      }
+    }
     let line = 1
     let col = 0
     let body = ''
@@ -169,9 +188,9 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       return true
     }
     for await (const chunk of createReadStream(file)) {
-      if (!consume(decoder.decode(chunk, { stream: true }))) break
+      if (!consume(decodeText(chunk))) break
     }
-    if (!more) consume(decoder.decode())
+    if (!more) consume(decodeText())
     if (!reachedStart && !(line === offset && col === column))
       throw new Error('offset/column is past the end of the file')
     if (!more) return body
