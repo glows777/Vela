@@ -1,4 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
+import type {
+  ChannelDefinition,
+  IncomingMessage,
+} from '../../../../src/channels/types.ts'
 import { formatGroupContext } from '../../../../src/extensions/feishu/channel.ts'
 import { feishu } from '../../../../src/extensions/feishu/index.ts'
 import { silentLogger } from '../../../../src/logger.ts'
@@ -24,9 +28,9 @@ test('group context puts named history before the named question and keeps only 
   )
 })
 
-test.each([['oc_group'], ' oc_group , oc_other '])(
+test.each([{ chats: ['oc_group'] }, { chats: ' oc_group , oc_other ' }])(
   'Feishu chats config accepts arrays and comma-separated ids: %j',
-  async (chats) => {
+  async ({ chats }) => {
     const fake = fakeFeishu()
     const t = createTestVela({
       responses: [],
@@ -37,18 +41,33 @@ test.each([['oc_group'], ' oc_group , oc_other '])(
     await t.vela.ready()
     const channel = (
       t.internals.gateway as unknown as {
-        channels: Map<string, { roleFor(msg: unknown): string }>
+        channels: Map<string, ChannelDefinition>
       }
     ).channels.get('feishu')!
-    expect(channel.roleFor({ channelId: 'oc_group', senderId: 'ou_bob' })).toBe(
-      'owner',
-    )
+    const received: IncomingMessage[] = []
+    channel.onMessage?.((message) => {
+      received.push(message)
+    })
     await t.vela.startChannels()
     fake.deliver(
       feishuEvent({ chat_id: 'disabled', chat_type: 'group' }, 'ou_alice'),
     )
     // The boundary rejects synchronously, even when an owner speaks in an unlisted group.
     expect(fake.historyCalls).toEqual([])
+    fake.deliver(feishuEvent({}, 'ou_bob'))
+    fake.deliver(
+      feishuEvent({ chat_id: 'owner_dm', chat_type: 'p2p' }, 'ou_owner'),
+    )
+    const deadline = Date.now() + 2000
+    while (received.length < 2) {
+      if (Date.now() > deadline)
+        throw new Error('Parsed chat/owner config did not admit messages')
+      await Bun.sleep(1)
+    }
+    expect(received.map((message) => message.channelId).sort()).toEqual([
+      'oc_group',
+      'owner_dm',
+    ])
     expect(t.model.calls).toEqual([])
   },
 )

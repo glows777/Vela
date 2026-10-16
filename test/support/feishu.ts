@@ -87,7 +87,7 @@ export function historyMessage(
   return {
     message_id: id,
     create_time: time,
-    message_type: 'text',
+    msg_type: 'text',
     body: { content: JSON.stringify({ text }) },
     sender: { id: sender, sender_type: 'user' },
   }

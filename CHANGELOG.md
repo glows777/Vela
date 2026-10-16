@@ -4,7 +4,13 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Channels now share one owner session per enabled chat.** Feishu `chats` lists enabled chat_ids; `owners` now enables only those open_ids' direct chats. A deployment with only `owners` no longer answers in groups until each trusted group is listed in `chats`. Every member of an enabled chat has owner access to bash, files, memory and extensions. Groups run only on an @mention of this bot, include up to 50 recent history messages with cached display names, and reply to the triggering message. Empty `chats` logs a startup notice; unlisted chats are ignored and logged. Session ids change from `<channel>-<chat>-<sender>` to `<channel>-<chat>`; old per-sender files are kept but not combined or automatically resumed. Core SDK roles are unchanged. Custom channels default to owner and must enforce enablement before delivery. Custom `FeishuTransport` implementations need bot identity, contact lookup, history and reply methods. See [channel migration and required Feishu permissions](docs/channels.md#migration).
+
 ### Fixed
+
+- **Headless session save failures were silent.** Channels now log the error with the session id and refuse new prompts after three consecutive failures until a successful write resets the count. Print mode (`-p`) reports save failures on stderr while keeping the answer on stdout.
 
 - **A turn stopped at `summaryThreshold` when there was nothing to summarize.** A message above that threshold and below `maxInputTokens` is sent. Only a request over `maxInputTokens` stops the turn.
 - **The loop-detection warning was broken English, stored as a user message, and fired one call late.** It now fires on the 10th identical call (a critical stop on the 20th). The sentence names that count. The session stores it as a custom message (`customType: loop`), so a resumed session does not show it as something you typed. The model still sees the text.

@@ -92,7 +92,7 @@ export type QueueMode = 'one-at-a-time' | 'all'
 
 /** Options for `vela.session(id, options)`; only apply when the session is first opened. */
 export interface SessionOptions {
-  /** Session role, default owner (for channel senders the channel decides, default guest) */
+  /** Session role, default owner (custom channels can choose a role for their shared chat) */
   role?: Role
   /** Tool permissions layered on top of the role, e.g. `{ bash: 'ask' }` */
   permissions?: PermissionRules
@@ -231,6 +231,7 @@ export interface SessionDeps {
   /** Session events also go to Vela's subscribers */
   forward: (event: VelaEvent, sessionId: string) => void
   onClose: (session: VelaSession) => void
+  onSaved: (sessionId: string) => void
 }
 
 /**
@@ -317,6 +318,7 @@ export class VelaSession {
       deps.sessionStorage,
       deps.temporaryDataDir,
       deps.cwd,
+      () => deps.onSaved(id),
     )
     this.hasUI = options.ui !== undefined
     this.ui = options.ui ? withDefaults(options.ui) : headlessUI(this.emit)

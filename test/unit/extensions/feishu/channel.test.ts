@@ -17,12 +17,20 @@ afterEach(cleanupTestVelas)
 /** A fake Feishu connection: `deliver` pushes an event, `sent` collects the texts sent to chats */
 function fakeTransport(options: { failSend?: boolean } = {}) {
   let push: ((event: FeishuMessageEvent) => void) | undefined
-  const sent: { chatId: string; text: string }[] = []
+  const sent: { chatId?: string; messageId?: string; text: string }[] = []
   const transport: FeishuTransport = {
     start: async (onMessage) => {
       push = onMessage
     },
     stop: () => {},
+    getBotId: async () => 'ou_bot',
+    getSenderName: async () => undefined,
+    listMessages: async () => [],
+    reply: async (messageId, text) => {
+      if (options.failSend) throw new Error('send failed')
+      sent.push({ messageId, text })
+      return { messageId: 'reply', createTime: String(Date.now()) }
+    },
     send: async (chatId, text) => {
       if (options.failSend) throw new Error('send failed')
       sent.push({ chatId, text })
@@ -55,11 +63,14 @@ async function startedChannel(fake = fakeTransport()) {
     appId: '',
     appSecret: '',
     owners: ['ou_owner'],
+    chats: ['oc_1', 'oc_group', 'oc_g', 'oc_g2'],
     logger: silentLogger,
     transport: fake.transport,
   })
   const received: IncomingMessage[] = []
-  channel.onMessage((msg) => received.push(msg))
+  channel.onMessage((msg) => {
+    received.push(msg)
+  })
   await channel.start()
   return { channel, received, ...fake }
 }
@@ -106,15 +117,25 @@ test('text and rich-text (post) messages become plain text without @ mentions', 
 test('a message delivered twice is handled once; chat and open_id pick the conversation and sender', async () => {
   const { received, deliver } = await startedChannel()
   const repeated = event(
-    { message_id: 'om_1', chat_id: 'oc_group', chat_type: 'group' },
+    {
+      message_id: 'om_1',
+      chat_id: 'oc_group',
+      chat_type: 'group',
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+    },
     'ou_2',
   )
   deliver(repeated)
   deliver(repeated)
   deliver(event({ message_id: 'om_2' }))
-  expect(received.map((m) => [m.channelId, m.senderId, m.text])).toEqual([
-    ['oc_group', 'ou_2', 'hi'],
-    ['oc_1', 'ou_1', 'hi'],
+  await waitFor(() => received.length === 2)
+  expect(
+    received
+      .map((m) => [m.channelId, m.senderId, m.text])
+      .sort((a, b) => a[0]!.localeCompare(b[0]!)),
+  ).toEqual([
+    ['oc_1', 'ou_1', 'ou_1: hi'],
+    ['oc_group', 'ou_2', 'ou_2: hi'],
   ])
 })
 
@@ -127,14 +148,15 @@ test('an unsupported message gets a short reply instead of silence; in a group o
       message_type: 'file',
       chat_type: 'group',
       chat_id: 'oc_g2',
-      mentions: [{ key: '@_user_1' }],
+      message_id: 'file_trigger',
+      mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
     }),
   )
   await Bun.sleep(0)
   expect(received).toHaveLength(0)
   expect(sent).toEqual([
     { chatId: 'oc_1', text: UNSUPPORTED_MESSAGE },
-    { chatId: 'oc_g2', text: UNSUPPORTED_MESSAGE },
+    { messageId: 'file_trigger', text: UNSUPPORTED_MESSAGE },
   ])
 })
 
@@ -170,14 +192,16 @@ test('without app id, secret or a transport the channel does not connect', async
   expect(warnings).toHaveLength(2)
 })
 
-test('owners from a comma-separated config value are owners; everyone else is a guest, end to end', async () => {
+test('owners and enabled chats from comma-separated config give permitted senders owner tools', async () => {
   const fake = fakeTransport()
   const t = createTestVela({
     responses: [
       (req) => fauxText(`tools: ${req.tools.join(',') || 'none'}`),
       (req) => fauxText(`tools: ${req.tools.join(',') || 'none'}`),
     ],
-    extensionConfig: { feishu: { owners: ' ou_owner , ou_other ' } },
+    extensionConfig: {
+      feishu: { owners: ' ou_owner , ou_other ', chats: ' oc_b , oc_c ' },
+    },
     extensions: [feishu({ transport: fake.transport })],
   })
   await t.vela.ready()
@@ -190,8 +214,8 @@ test('owners from a comma-separated config value are owners; everyone else is a 
 
   fake.deliver(event({ chat_id: 'oc_b' }, 'ou_stranger'))
   await waitFor(() => replies().length === 2)
-  expect(replies()[1]).not.toContain('bash')
-  expect(replies()[1]).not.toContain('read_file')
+  expect(replies()[1]).toContain('bash')
+  expect(replies()[1]).toContain('read_file')
 })
 
 async function waitFor(condition: () => boolean) {

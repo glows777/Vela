@@ -164,18 +164,19 @@ Guest sessions can use `web_search` but not `web_fetch`, so outside senders cann
 
 ## feishu
 
-Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each sender gets their own session; senders listed in `owners` are `owner`, everyone else is `guest`.
+Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each enabled chat has one shared owner session. All members are trusted with bash, files, memory and extension tools.
 
 | Option | Config key | Description |
 |---|---|---|
 | `appId` | `extensionConfig.feishu.appId` | Feishu app id |
 | `appSecret` | `extensionConfig.feishu.appSecret` | Feishu app secret |
-| `owners` | `extensionConfig.feishu.owners` | `open_id`s of owners; an array, or a comma-separated string |
+| `owners` | `extensionConfig.feishu.owners` | `open_id`s whose direct chats are always enabled; array or comma-separated string |
+| `chats` | `extensionConfig.feishu.chats` | Enabled chat_ids; array or comma-separated string. All members get owner access |
 | `transport` | | SDK only: the connection to Feishu (`FeishuTransport`); default Feishu's long connection. Tests pass a fake |
 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#feishu).
 
-**SDK.** `feishu({ appId, appSecret, owners })`.
+**SDK.** `feishu({ appId, appSecret, owners, chats })`.
 
 ## mcp
 

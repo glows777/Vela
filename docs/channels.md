@@ -1,135 +1,17 @@
 # Channels
 
-A channel brings messages from outside into Vela, such as chat messages sent to a bot, and sends the model's replies back. Channels are specific to Vela; pi has no equivalent.
+A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `feishu-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history and messages run in order, with one reply per triggering message.
 
-Each sender gets their own session in each conversation: the same person has separate sessions in a direct chat and in each group chat, and every member of a group chat has their own session there. Sessions run concurrently and share the Vela's tools and extensions, but each has its own history, role and run lock. Messages from one sender in one conversation are handled one at a time: a second message waits until the reply to the first has been sent.
-
-Channel senders are `guest` by default. A guest's model sees only `tool_search`, `rag_search` and `web_search`: it cannot read or write files, run commands, use the owner's memory or run extension commands. See [Security](security.md) for what this boundary does and does not cover.
-
-## How a message is handled
-
-When a channel delivers a message:
-
-1. Vela picks the session id from the channel name, the conversation (`channelId`) and the sender id, for example `feishu-oc_456-ou_123`. Ids with other characters are sanitized and suffixed with a hash, so different senders or conversations never share a session.
-2. It sets the session's role from the channel's `roleFor(message)`, or `guest` when the channel has no `roleFor`. The role is checked again on every message, so changing the owner list takes effect on the next message.
-3. On the session's first message since startup, the session is resumed from storage, so history survives restarts when Vela has a `dataDir`.
-4. It emits `channel_message`, runs the turn, and sends the text of the final assistant message back through the channel's `send()` to the same `channelId`. It then emits `channel_reply`, or `channel_error` if the turn or the send failed (a `send()` that fails must throw; the built-in Feishu channel does). If the final assistant message has no text, nothing is sent and neither event is emitted.
-
-Channel sessions have no UI. A tool whose permission is `ask` is rejected, and extension UI calls fall back to events (see [Extensions](extensions.md)).
-
-## Writing a channel
-
-An extension registers a channel with `vela.registerChannel()`:
-
-```ts
-import type { IncomingMessage, VelaExtension } from '@glows777/vela'
-
-const myChannel: VelaExtension = (vela) => {
-  let deliver: ((msg: IncomingMessage) => void) | undefined
-  vela.registerChannel({
-    name: 'my-chat',
-    description: 'My chat service',
-    onMessage: (handler) => {
-      deliver = handler
-    },
-    start: async () => {
-      // connect, then call deliver({ channelId, senderId, senderName, text }) for each message
-    },
-    stop: async () => {
-      // disconnect
-    },
-    send: async ({ channelId, recipientId, text }) => {
-      // post text to the conversation channelId
-    },
-    roleFor: (msg) => (msg.senderId === 'me' ? 'owner' : 'guest'),
-  })
-}
-
-export default myChannel
-```
-
-| Member | Description |
-|---|---|
-| `name` | Channel name, used in session ids and events |
-| `description` | Shown by `/channel` |
-| `start()` | Connect and begin receiving; called by `vela.startChannels()` |
-| `stop()` | Disconnect; called by `vela.dispose()` after running channel sessions are aborted |
-| `send(message)` | Deliver a reply: `{ channelId, recipientId, text }` |
-| `onMessage(handler)` | Optional. Called once at registration with the handler to call for each incoming message |
-| `roleFor(message)` | Optional. The sender's role: `owner`, `collaborator` or `guest`. Default `guest` |
-
-An incoming message has `channelId` (the conversation: a group or direct chat, where the reply goes), `senderId` (who sent it; with `channelId` this selects the session), `senderName`, `text`, and optionally `raw` (the original payload).
-
-A failing `start()` is logged and does not stop other channels from starting.
-
-### Events
-
-Channel sessions emit these events, which `vela.subscribe()` receives along with the session id:
-
-| Event | Fields |
-|---|---|
-| `channel_message` | `channel`, `senderId`, `senderName`, `text` |
-| `channel_reply` | `channel`, `recipientId`, `text` |
-| `channel_error` | `channel`, `senderId`, `error`, `aborted` |
-
-### Example
-
-[examples/extensions/echo-channel.ts](../examples/extensions/echo-channel.ts) is a channel that sends and receives in memory: `receive(senderId, text)` simulates an incoming message and `sent` collects the replies. It runs offline with the faux model:
-
-```ts
-import { createVela } from '@glows777/vela'
-import { createFauxModel, fauxText } from '@glows777/vela/testing'
-import { echoChannel } from './examples/extensions/echo-channel.ts'
-
-const channel = echoChannel({ owners: ['alice'] })
-const vela = createVela({
-  model: createFauxModel({
-    responses: [fauxText('Hello, guest'), fauxText('Hello, owner')],
-  }),
-  extensions: [channel.extension],
-})
-await vela.ready()
-await vela.startChannels()
-
-const done = new Promise<void>((resolve) => {
-  let replies = 0
-  vela.subscribe((event, sessionId) => {
-    if (event.type !== 'channel_reply') return
-    console.log(sessionId, vela.session(sessionId).role, event.text)
-    if (++replies === 2) resolve()
-  })
-})
-channel.receive('bob', 'hi')
-channel.receive('alice', 'hi')
-await done
-await vela.dispose()
-// echo-demo-bob guest Hello, guest
-// echo-demo-alice owner Hello, owner
-```
-
-## Running channels
-
-A channel session that gets no new message for 10 minutes is closed: its history is already saved, and the sender's next message reopens and resumes it. This keeps a long-running bot from holding every conversation it ever had in memory. `createVela({ channelIdleMs })` changes the wait (`0` closes the session right after each reply). A session that is running or has messages queued is not closed then; one that is busy (an SDK caller or the terminal is using it) is checked again later. Extensions see `session_shutdown` when it closes and `session_start` when it reopens.
-
-**SDK.** Call `await vela.startChannels()` after `vela.ready()`. `vela.channels()` lists the registered channels. `vela.dispose()` aborts running channel sessions, waits for them, and stops the channels.
-
-**CLI.** Channels start when interactive mode starts, and stop when it exits. Each incoming message, reply (first 80 characters) and error is shown as one line in the terminal; the channel session's tool calls are not shown. Print, JSON and RPC modes do not start channels. `/channel` lists the registered channels.
+**Enabling a chat means trusting everyone in it with this machine.** Feishu gives every member of an enabled chat the `owner` role, including bash, files, memory and extension tools. There is no sandbox or per-member guest boundary. See [Security](security.md#channel-senders) before enabling a group.
 
 ## Feishu
 
-The built-in `feishu` extension connects a Feishu (Lark) bot through Feishu's long connection (WebSocket), so Vela needs no public URL. It is loaded by default in the CLI.
+The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no public URL is needed. It is loaded by default in the CLI.
 
-1. In the Feishu developer console, create a custom app, enable the bot capability, and grant it permission to receive and send messages.
-2. Under events, choose long-connection mode and subscribe to `im.message.receive_v1`.
-3. Give Vela the app id and secret, and the `open_id`s of the people who should be owners:
-
-   ```sh
-   export FEISHU_APP_ID=cli_xxx
-   export FEISHU_APP_SECRET=xxx
-   export FEISHU_OWNERS=ou_aaa,ou_bbb
-   ```
-
-   or in [settings](settings.md):
+1. Create and publish a Feishu custom app with bot capability enabled.
+2. Choose long-connection mode and subscribe to `im.message.receive_v1`.
+3. Grant the API permissions below and add the bot to groups you intend to enable.
+4. Configure the app credentials, owner open_ids and enabled chat_ids in [settings](settings.md):
 
    ```json
    {
@@ -137,20 +19,93 @@ The built-in `feishu` extension connects a Feishu (Lark) bot through Feishu's lo
        "feishu": {
          "appId": "cli_xxx",
          "appSecret": "$FEISHU_APP_SECRET",
-         "owners": ["ou_aaa", "ou_bbb"]
+         "owners": ["ou_aaa"],
+         "chats": ["oc_trusted_group"]
        }
      }
    }
    ```
 
-4. Start `vela` in interactive mode and keep it running.
+   `owners` and `chats` accept string arrays or comma-separated strings. `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_OWNERS` remain environment defaults; settings take precedence. To supply chat ids from an environment variable, set `"chats": "$FEISHU_CHATS"` in settings.
 
-Behavior:
+5. Start `vela` in interactive mode and keep it running. The SDK equivalent is `feishu({ appId, appSecret, owners, chats })`, followed by `await vela.ready()` and `await vela.startChannels()`.
 
-- Text and rich-text (`post`) messages are handled; a rich-text message becomes plain text (title, then each line's text and links). `@` mentions are removed from the text. Other messages (images, files, stickers, ...) get a short reply asking for text, in a group chat only when they mention the bot.
-- Feishu can deliver the same event more than once; the channel remembers the last 1000 message ids and handles each message once.
-- The chat's `chat_id` is the conversation and the sender's `open_id` is the sender id, so each person has one session per chat: a direct chat and each group chat are separate, and group members don't share a session. The reply goes to the chat the message came from. Sessions from older versions were keyed `feishu-<open_id>` and are not picked up again.
-- Senders in `owners` are `owner`; everyone else is `guest`.
-- Without an app id or secret the channel logs a warning and does not connect.
+### Enablement and replies
 
-With the SDK: `feishu({ appId, appSecret, owners })`, then `vela.startChannels()`. See [Built-in extensions](built-in-extensions.md#feishu).
+- `chats` lists the chat_ids that may use the bot. Every member of a listed chat has owner access. A listed DM also works.
+- `owners` contains people's open_ids. Their **direct chats** are always enabled, including when `chats` is empty. Being an owner does not enable a group they happen to speak in.
+- Every other group or DM is dropped without a reply, a model call or history/name lookup. Vela logs `[feishu] ignored message from chat <chat_id>` so you can copy the id into settings. Restart after changing settings; there is no in-chat `/enable` command.
+- Empty `chats` produces one startup notice: only owners' direct chats are enabled.
+- In enabled groups, only messages that **@ this bot** trigger a run. A message without a mention, or mentioning another person/bot, does not. Vela resolves its bot open_id at startup; if that fails it logs a warning and ignores group messages until a successful restart. Owner DMs still work.
+- Group answers use `im.message.reply` on the triggering message id. DMs use `im.message.create`. Feishu controls whether an already-threaded trigger receives a threaded reply.
+- A second @ waits for the previous turn and reply. It gets its own answer to its own message; it is not steering. Other chats can still run concurrently.
+- Text and rich-text (`post`) messages become plain text, with mention markers removed. Unsupported images/files get a short request for text, only in an enabled DM or when this bot is mentioned in an enabled group. Image/file processing is not implemented.
+- The last 1000 incoming message ids are remembered to suppress duplicate event delivery.
+
+### Names and group context
+
+Each incoming user message is prefixed with the sender's display name. Vela uses `contact.user.get` with `user_id_type: open_id`; names and fallback results are cached in memory (up to 1000 entries). If the contact API is unavailable, the name is empty, or the user is outside the app's contact data scope, the open_id is used instead. Restarting clears this cache. Slash-prefixed inputs are passed through verbatim to preserve extension commands, `/skill:` and prompt-template expansion; they skip name/context wrapping. Ordinary chat questions keep both.
+
+For a group @, after any earlier queued reply finishes, Vela fetches at most 50 recent chat-history messages. It takes text/post messages after this bot's last reply and before the triggering question, excludes the question itself and recalled messages, and injects them in chronological order into the same user message:
+
+```text
+[Chat since last reply]
+Alice: Let's use blue.
+Bob: Agreed.
+
+[Question]
+Alice: What should we do next?
+```
+
+With no earlier text, the input is just `Alice: What should we do next?`. If history cannot be fetched, Vela logs the failure and answers the named question alone. It does not claim the missing context was read. The API query is bounded to one page; older messages beyond that page are omitted. Feishu's chat-history endpoint returns thread roots, not all replies inside separate threads.
+
+The most recent successful group reply is remembered in memory. History also identifies this application's own replies by app_id, so a restart can find the latest visible reply within the fetched page. Replies from a different bot are not this bot's context boundary.
+
+### Feishu permissions
+
+Use application (`tenant_access_token`) permissions. The bot must be enabled/published, be in the group, and have permission to speak. New permissions and contact data-scope changes must be published/approved in Feishu; Vela does not change them.
+
+- Receive owner DMs: `im:message.p2p_msg:readonly`; receive group @ events: `im:message.group_at_msg:readonly`. The broader all-group-message permission can also deliver ordinary group events; Vela still enforces its own bot-mention gate.
+- [Read group history](https://open.feishu.cn/document/server-docs/im-v1/message/list): `im:message.group_msg` **plus** one of `im:message` or `im:message:readonly` (legacy `im:message.history:readonly` also works). Mention-only event permission does not provide this history access.
+- [Resolve display names](https://open.feishu.cn/document/server-docs/contact-v3/user/get): `contact:contact.base:readonly` for the contact API **and** `contact:user.base:readonly` for name fields. Include the relevant people in the app's contact data scope. No email/phone access is needed. Existing broader legacy contact permissions may already cover these fields.
+- [Send replies](https://open.feishu.cn/document/server-docs/im-v1/message/reply): `im:message:send_as_bot` or `im:message` (legacy `im:message:send` also works).
+- [Identify this bot](https://open.feishu.cn/document/client-docs/bot-v3/obtain-bot-info): no additional API permission beyond enabled bot capability and the app's tenant token.
+
+### Migration
+
+This is a breaking channel change. A deployment that sets only `owners` now answers **only those owners' DMs**. Add each trusted group's chat_id to `chats` before expecting group replies. All members of that group receive full owner access; review the membership first.
+
+Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id>`. Old per-sender files remain on disk and are not automatically combined or resumed as shared history. The new chat starts a separate persisted session; keep old files if you need their transcripts. This avoids silently exposing a previous private sender history to the whole group. Existing core SDK sessions and roles are unchanged.
+
+Custom `FeishuTransport` implementations must add `getBotId`, `getSenderName`, `listMessages` and `reply`. `listMessages` returns newest-first history with millisecond `create_time`; `reply` returns `{ messageId, createTime }` from the service's successful reply receipt. Sends/replies and API errors must reject, so the gateway reports failure instead of a successful reply.
+
+## Gateway lifecycle
+
+On receiving a message, the gateway:
+
+1. Selects the shared session from `(channel name, channelId)`. Non-plain or long ids get a hash suffix to prevent collisions.
+2. Waits for the earlier message/reply in that chat. Feishu also serializes its preprocessing and unsupported-message replies, so a later reply cannot change the context boundary of an earlier question.
+3. Opens/resumes that chat's persisted session and sets its role from `roleFor(message)`, defaulting to `owner`. A channel must reject untrusted chats **before** delivering them.
+4. Emits `channel_message`, prompts the session, and sends the last assistant text through `send({ channelId, recipientId, text, replyToId? })`. It emits `channel_reply` after success or `channel_error` after a failed turn/send. Empty answers and input handled by an extension do not resend an earlier answer.
+
+Session save failures are logged at error level with the session id. After three consecutive reported save failures, new messages receive a reply that the session can't be saved, without running another prompt. A successful storage write resets the count, including an explicit SDK `await session.save()` after storage is repaired. Empty saves do not clear the count.
+
+Before automatically closing an idle session, the gateway saves it. If that save fails, the same live session stays open with its pending history; the gateway does not start a periodic retry loop. While blocked, a new message first retries the pending save, and runs a prompt only after a real write succeeds. SDK callers reopening that id get the same session, so recovery does not create a competing history or another header. Channel activity after recovery restores normal idle cleanup. SDK-only recovery clears the count but leaves the session open until the next channel activity or an explicit close/dispose, so a save cannot schedule a close during SDK work. Failed sessions retain memory until recovery or disposal. Explicit SDK `close()`/`dispose()` and writes made by shutdown hooks keep their existing semantics; they can still discard unsaved data. In-session retries are unchanged.
+
+Channel sessions have no UI: permissions set to `ask` are rejected, and extension UI calls fall back to events. Sessions close after 10 idle minutes and resume on the next message; `createVela({ channelIdleMs })` changes that wait (`0` closes after each completed queue). Running sessions or queued chats are not closed prematurely.
+
+**SDK:** `await vela.startChannels()` starts registered channels. `vela.channels()` lists them. `vela.dispose()` aborts running sessions, waits for pending work and stops channels. A failed channel `start()` is logged without stopping other channels.
+
+**CLI:** channels start with interactive mode, and stop on exit. Incoming messages, replies and errors appear in the terminal; channel tool calls are not displayed there. Print, JSON and RPC modes do not start channels. `/channel` lists them.
+
+## Writing a channel
+
+Register a `ChannelDefinition` with `vela.registerChannel()` from an extension. It has `name`, `description`, `start()`, `stop()`, `send(message)`, optional `onMessage(handler)` and optional `roleFor(message)`. The incoming handler returns `void | Promise<void>`; await it when preprocessing must wait until that message and its reply finish.
+
+Incoming messages contain `channelId`, `senderId`, `senderName`, `text`, optional `replyToId` and optional `raw`. The sender identifies the speaker, not a separate session. Outgoing `replyToId` identifies the service message to answer; a custom transport decides how to use it.
+
+Custom channels can still choose an SDK role using `roleFor`, but switching roles does not isolate the shared transcript. Do not mix untrusted and trusted participants in one chat and assume a guest role hides the earlier owner turns. Enforce your chat boundary before invoking the incoming handler.
+
+[echo-channel.ts](../examples/extensions/echo-channel.ts) is an offline registration example. The core SDK's independent `vela.session(id, { role })` model remains available for callers that need explicitly separate sessions.
+
+Channel events keep their existing shape: `channel_message` has `channel`, `senderId`, `senderName`, `text`; `channel_reply` has `channel`, `recipientId`, `text`; `channel_error` has `channel`, `senderId`, `error`, `aborted`. Subscribers also receive the session id.
