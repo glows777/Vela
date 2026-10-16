@@ -58,8 +58,11 @@ export class ChannelGateway {
   /** Session objects already resumed from disk; a reopened session is a new object and must be resumed again */
   private resumed = new WeakSet<VelaSession>()
   private subscribed = new WeakSet<VelaSession>()
-  /** Retained across idle closes; only an actual successful write clears a failure streak. */
-  private saveFailures = new Map<string, number>()
+  /** Retain the latest failed store across idle closes so recovery retries real pending entries. */
+  private saveFailures = new Map<
+    string,
+    { count: number; retry: () => Promise<void> }
+  >()
   private active = new Set<VelaSession>()
   /** Idle sessions waiting to be closed, by session id */
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -110,6 +113,7 @@ export class ChannelGateway {
       ...this.queues.values(),
       ...this.closing.values(),
     ])
+    this.saveFailures.clear()
     for (const result of drained)
       if (result.status === 'rejected') errors.push(result.reason)
 
@@ -195,17 +199,37 @@ export class ChannelGateway {
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'guest'
     if (!this.subscribed.has(session)) {
       this.subscribed.add(session)
+      const store = session.store
       session.subscribe((event) => {
         if (event.type !== 'session_save_failed') return
-        this.saveFailures.set(id, (this.saveFailures.get(id) ?? 0) + 1)
+        if (!this.stopped)
+          this.saveFailures.set(id, {
+            count: (this.saveFailures.get(id)?.count ?? 0) + 1,
+            retry: () => store.flush(),
+          })
         this.logger.error(
           `[gateway] Could not save session ${id}: ${errorMessage(event.error)}`,
         )
       })
     }
+    const failure = this.saveFailures.get(id)
+    if (failure && failure.count >= MAX_SAVE_FAILURES) {
+      try {
+        // A closed session's store still has its failed batch. Never use an empty write as a probe.
+        await failure.retry()
+        if (!this.resumed.has(session)) {
+          await session.resume()
+          this.resumed.add(session)
+        }
+        this.sessionSaved(id)
+      } catch {
+        // A successful retry may clear the count before resume fails. Keep replying until both work.
+        this.saveFailures.set(id, failure)
+      }
+    }
     // A blocked session must reply even when the storage outage also prevents reads.
     if (
-      (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
+      (this.saveFailures.get(id)?.count ?? 0) < MAX_SAVE_FAILURES &&
       !this.resumed.has(session)
     ) {
       await session.resume()
@@ -219,7 +243,7 @@ export class ChannelGateway {
       text: msg.text,
     })
 
-    if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
+    if ((this.saveFailures.get(id)?.count ?? 0) >= MAX_SAVE_FAILURES) {
       await this.sendReply(
         session,
         channelName,
