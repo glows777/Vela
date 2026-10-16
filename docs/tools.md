@@ -8,7 +8,7 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 | Tool | Purpose | Annotations |
 |---|---|---|
-| `read_file` | Read a text file, or a saved tool result, one page at a time | read-only |
+| `read_file` | Read an image, or a text/saved tool result file one page at a time | read-only |
 | `write_file` | Create or overwrite a file | destructive, idempotent |
 | `edit_file` | Replace one or more exact pieces of text in a file | destructive |
 | `list_directory` | List a directory's entries | read-only |
@@ -21,7 +21,7 @@ The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructive
 
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
 
-Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. All core tools are enabled by default, and there is no `--tools` flag, `powershell` tool, `codemode` or image reading.
+Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. All core tools are enabled by default, and there is no `--tools` flag, `powershell` tool or `codemode` tool.
 
 ### read_file
 
@@ -32,7 +32,9 @@ Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `l
 | `limit` | integer >= 1 | `2000` | Maximum number of lines |
 | `column` | integer >= 0 | `0` | UTF-16 offset within the start line, for continuing a very long line |
 
-One call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. When more content remains, the result ends with a footer naming the range shown and the exact `path`, `offset`, `column` and `limit` for the next call. At EOF, the result is only the page's file content, preserving any existing trailing newline and adding no footer or separator. The file is read as a stream, so large files are not loaded into memory.
+JPEG, PNG, GIF, WebP and BMP images are detected by their header and returned whole as image content. The `offset`, `limit` and `column` parameters are ignored for images; they only paginate text.
+
+For text files, one call returns at most `limit` lines and at most 50KB (UTF-8), the same page size as pi. When more content remains, the result ends with a footer naming the range shown and the exact `path`, `offset`, `column` and `limit` for the next call. At EOF, the result is only the page's file content, preserving any existing trailing newline and adding no footer or separator. The file is read as a stream, so large files are not loaded into memory.
 
 ### write_file
 
