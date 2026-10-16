@@ -314,7 +314,7 @@ export async function summarize(
   const response = await generateText({
     model: request.model,
     instructions: request.systemPrompt,
-    messages: await toModelMessages(messages, false),
+    messages: toModelMessages(messages, false),
     tools,
     abortSignal: request.abortSignal,
     output: Output.json(),

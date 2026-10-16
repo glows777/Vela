@@ -54,7 +54,7 @@ test('request-only non-vision fallback covers user and tool images without chang
     },
   ]
   const before = JSON.stringify(messages)
-  const wire = await toModelMessages(messages, false)
+  const wire = toModelMessages(messages, false)
   expect(JSON.stringify(wire)).toContain(
     '(image omitted: model does not support images)',
   )
