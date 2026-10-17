@@ -77,3 +77,15 @@ export function runControlsCard(token: string): FeishuCard {
     },
   }
 }
+
+export function topicRunCard(token: string): FeishuCard {
+  const card = runControlsCard(token)
+  card.body.elements[0] = {
+    tag: 'markdown',
+    content:
+      'Working on this topic. Stop keeps the conversation for your next message.',
+  }
+  const buttons = card.body.elements[1]
+  if (buttons?.columns) buttons.columns = buttons.columns.slice(-1)
+  return card
+}
