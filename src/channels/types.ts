@@ -1,6 +1,5 @@
 import type { ImageContent } from '../messages.ts'
-import type { Role } from '../security/roles.ts'
-import type { SessionOptions } from '../vela-session.ts'
+import type { PermissionRules, Role } from '../security/roles.ts'
 
 export interface IncomingMessage {
   /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
@@ -49,7 +48,7 @@ export interface ChannelDefinition {
   description: string
 
   connect?: (runtime: ChannelRuntime) => void
-  sessionOptions?: (msg: IncomingMessage) => SessionOptions
+  sessionOptions?: (msg: IncomingMessage) => { permissions?: PermissionRules }
 
   start(): Promise<void> | void
   stop(): Promise<void> | void
