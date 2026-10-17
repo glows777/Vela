@@ -2,12 +2,14 @@ import { afterEach, expect, test } from 'bun:test'
 import type { IncomingMessage } from '../../../../src/channels/types.ts'
 import {
   FeishuChannel,
-  type FeishuMessageEvent,
-  type FeishuTransport,
-  messageText,
   UNSUPPORTED_MESSAGE,
 } from '../../../../src/extensions/feishu/channel.ts'
 import { feishu } from '../../../../src/extensions/feishu/index.ts'
+import { messageText } from '../../../../src/extensions/feishu/messages.ts'
+import type {
+  FeishuMessageEvent,
+  FeishuTransport,
+} from '../../../../src/extensions/feishu/transport.ts'
 import { silentLogger } from '../../../../src/logger.ts'
 import { fauxText } from '../../../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../../../support/vela.ts'

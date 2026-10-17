@@ -1,6 +1,7 @@
 import type { VelaExtension } from '../../index.ts'
 import { configString, configStrings } from '../config.ts'
-import { FeishuChannel, type FeishuTransport } from './channel.ts'
+import { FeishuChannel } from './channel.ts'
+import type { FeishuTransport } from './transport.ts'
 
 export interface FeishuOptions {
   appId?: string
