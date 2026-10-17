@@ -50,12 +50,14 @@ export type {
   FeishuCard,
   FeishuCardAction,
   FeishuCardResponse,
-  FeishuHistoryMessage,
+} from './extensions/feishu/cards.ts'
+export type { FeishuHistoryMessage } from './extensions/feishu/history.ts'
+export { type FeishuOptions, feishu } from './extensions/feishu/index.ts'
+export type {
   FeishuMessageEvent,
   FeishuSentMessage,
   FeishuTransport,
-} from './extensions/feishu/channel.ts'
-export { type FeishuOptions, feishu } from './extensions/feishu/index.ts'
+} from './extensions/feishu/transport.ts'
 export {
   type McpExposure,
   type McpHttpServerConfig,
