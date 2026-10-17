@@ -5,7 +5,6 @@ import type {
   FeishuCardAction,
   FeishuCardResponse,
 } from './cards.ts'
-import type { FeishuHistoryMessage } from './history.ts'
 
 /** The parts of an `im.message.receive_v1` event the channel reads */
 export interface FeishuMessageEvent {
@@ -20,6 +19,17 @@ export interface FeishuMessageEvent {
     mentions?: { key: string; id?: { open_id?: string } }[]
   }
   sender: { sender_id?: { open_id?: string } }
+}
+
+/** History items returned newest first by Feishu's message API. Times are milliseconds. */
+export interface FeishuHistoryMessage {
+  message_id?: string
+  create_time?: string
+  msg_type?: string
+  body?: { content?: string }
+  sender?: { id?: string; sender_type?: string }
+  mentions?: { key: string }[]
+  deleted?: boolean
 }
 
 export interface FeishuSentMessage {
