@@ -43,6 +43,10 @@ How tests are organized, how to verify a change and how to add tests: see [test/
 - Unit tests live in `test/unit/`, mirroring `src/`; end-to-end flows live in `test/e2e/` and use `createTestVela()` from `test/support/vela.ts` and the scripted faux model from `src/testing/faux.ts`.
 - Fix a bug by first writing a faux scenario that reproduces it; when you change events, the faux interface or test conventions, update test/README.md.
 
+## Review
+
+When reviewing a pull request, follow [REVIEW.md](REVIEW.md). When opening one, fill in [the PR template](.github/pull_request_template.md).
+
 ## Product verification (verify-vela)
 
 After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.skills/verify-vela/SKILL.md`](.skills/verify-vela/SKILL.md) before claiming done: use the change as a user would, through the real CLI or an SDK script, with the mock or a faux scenario model. Tests don't replace this. What to drive per feature: [`journeys.md`](.skills/verify-vela/journeys.md); SDK onboarding and core checks: [`core.md`](.skills/verify-vela/core.md).
