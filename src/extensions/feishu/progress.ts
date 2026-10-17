@@ -58,6 +58,9 @@ export class FeishuProgress implements ChannelRunFeedback {
   private snapshot(terminal = false): FeishuCard {
     return {
       ...this.card,
+      header: terminal
+        ? { title: { tag: 'plain_text', content: this.stage } }
+        : this.card.header,
       config: { update_multi: true },
       body: {
         elements: [
