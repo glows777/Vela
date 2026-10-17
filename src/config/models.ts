@@ -315,15 +315,49 @@ function createProvider(
           break
       }
       const transform = oauthRequests?.transformParams
-      if (!transform || typeof model === 'string') return model
+      // DeepSeek Responses is stateless and ignores item_reference inputs.
+      // Keep earlier answers inline without changing store or reasoning settings.
+      // https://api-docs.deepseek.com/guides/responses_api/
+      const inlineAnswers =
+        api === 'openai-responses' &&
+        settings.baseURL != null &&
+        new URL(settings.baseURL).hostname === 'api.deepseek.com'
+      if ((!transform && !inlineAnswers) || typeof model === 'string')
+        return model
       return wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
-          transformParams: async ({ params }) =>
-            (await ctx.credential())?.type === 'oauth'
-              ? transform(params)
-              : params,
+          transformParams: async ({ params }) => {
+            const request =
+              transform && (await ctx.credential())?.type === 'oauth'
+                ? transform(params)
+                : params
+            if (!inlineAnswers) return request
+            return {
+              ...request,
+              prompt: request.prompt.map((message) =>
+                message.role !== 'assistant'
+                  ? message
+                  : {
+                      ...message,
+                      content: message.content.map((part) => {
+                        if (
+                          part.type !== 'text' ||
+                          !part.providerOptions?.openai?.itemId
+                        )
+                          return part
+                        const openai = { ...part.providerOptions.openai }
+                        delete openai.itemId
+                        return {
+                          ...part,
+                          providerOptions: { ...part.providerOptions, openai },
+                        }
+                      }),
+                    },
+              ),
+            }
+          },
         },
       })
     },

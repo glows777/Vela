@@ -60,6 +60,61 @@ const call = (model: unknown) =>
     })
     .catch(() => {})
 
+test.each([
+  ['https://api.deepseek.com', false],
+  ['https://api.deepseek.com/v1', false],
+  ['https://api.openai.com/v1', true],
+  ['https://api.deepseek.com.example/v1', true],
+] as const)(
+  'Responses history at %s preserves earlier answers',
+  async (baseURL, references) => {
+    const requests = captureRequests()
+    const registry = registryOf(
+      loadModels({
+        agentDir: agentDir(),
+        env: { OPENAI_API_KEY: 'test-key', OPENAI_API_BASE_URL: baseURL },
+      }),
+    )
+    const model = registry.resolve('openai/deepseek-flash').model
+    if (typeof model === 'string') throw new Error('Expected a provider model')
+    const priorAnswer = {
+      type: 'text' as const,
+      text: 'The completed report is cobalt.',
+      providerOptions: {
+        openai: { itemId: 'msg_report', phase: 'final_answer' },
+      },
+    }
+    await Promise.resolve(
+      model.doGenerate({
+        prompt: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Summarize the file.' }],
+          },
+          { role: 'assistant', content: [priorAnswer] },
+          { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        ],
+      }),
+    ).catch(() => {})
+    expect(requests.at(-1)?.body.input).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Summarize the file.' }],
+      },
+      references
+        ? { type: 'item_reference', id: 'msg_report' }
+        : {
+            role: 'assistant',
+            content: priorAnswer.text,
+            phase: 'final_answer',
+          },
+      { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+    ])
+    expect(priorAnswer.providerOptions.openai.itemId).toBe('msg_report')
+    expect(requests.at(-1)?.body).not.toHaveProperty('store')
+  },
+)
+
 test('anthropic, openai and openrouter are built in, with models and defaults from the catalog', () => {
   const providers = loadModels({ agentDir: agentDir(), env: {} })
   expect(Object.keys(providers)).toEqual(['anthropic', 'openai', 'openrouter'])

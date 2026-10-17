@@ -36,6 +36,8 @@ The part after the first `/` is the model id, so ids that contain `/` work: `ope
 
 Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `models.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `models.json`, or add it as its own provider.
 
+For Responses endpoints hosted at `api.deepseek.com`, Vela sends earlier assistant answers inline. [DeepSeek's stateless Responses API](https://api-docs.deepseek.com/guides/responses_api/) ignores server-side item references; sending only their IDs would lose the prior answers. This compatibility handling preserves local history and does not change `store` or thinking settings.
+
 ## Credentials and /login
 
 A provider's key is looked up per request, in this order (pi's):
