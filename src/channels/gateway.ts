@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto'
 import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { SessionOptions, VelaSession } from '../vela-session.ts'
+import { MessageFeedback } from './feedback.ts'
 import type {
   ChannelDefinition,
+  ChannelOutcome,
+  ChannelRunFeedback,
   ChannelTopic,
   IncomingMessage,
   OutgoingMessage,
@@ -31,6 +34,7 @@ interface ChannelRun {
   trigger: IncomingMessage
   lifetime: AbortController
   stopped: boolean
+  inputs: MessageFeedback[]
   handedOff?: boolean
   steering?: Promise<void>
 }
@@ -75,6 +79,7 @@ export class ChannelGateway {
     string,
     { channel: string; chatId: string; topic: Omit<ChannelTopic, 'state'> }
   >()
+  private acknowledgements = new WeakMap<IncomingMessage, MessageFeedback[]>()
   private stopped = false
   private readonly logger: VelaLogger
 
@@ -121,6 +126,7 @@ export class ChannelGateway {
             chatId: msg.channelId,
             topic: { ...msg.topic, task: msg.text.slice(0, 120) },
           })
+        this.acknowledgements.set(msg, source.inputs)
         source.handedOff = true
         void this.handleIncoming(channel.name, msg)
       },
@@ -178,6 +184,11 @@ export class ChannelGateway {
     const previous = this.queues.get(id) ?? Promise.resolve()
     const channel = this.channels.get(channelName)
     const run = this.runs.get(id)
+    if (
+      channel &&
+      (!msg.requireExistingSession || (run && this.runIsLive(run)))
+    )
+      this.acknowledge(channel, msg)
     let consumed = false
     let chosen = false
     let decision: Promise<void> | undefined
@@ -188,14 +199,25 @@ export class ChannelGateway {
         .then((handled) => {
           consumed = handled
         })
-        .catch((error) => {
-          run.session.emit({
-            type: 'channel_error',
-            channel: channelName,
-            senderId: msg.senderId,
-            error,
-            aborted: this.stopped || isAbort(error),
-          })
+        .catch(async (error) => {
+          const aborted = this.stopped || run.stopped || isAbort(error)
+          if (!aborted) await this.feedbackError(channelName, msg, error)
+          else
+            run.session.emit({
+              type: 'channel_error',
+              channel: channelName,
+              senderId: msg.senderId,
+              error,
+              aborted: true,
+            })
+          await Promise.all(
+            (this.acknowledgements.get(msg) ?? []).map(async (input) => {
+              if (!aborted) input.fail()
+              if (!run.inputs.includes(input))
+                await input.finish(aborted ? 'stopped' : 'failed')
+            }),
+          )
+          consumed = true
         })
         .finally(() => {
           if (run.stopped) consumed = true
@@ -268,21 +290,37 @@ export class ChannelGateway {
       // These inputs belong to the cancelled run; the gateway's default queue stays intact.
       run.session.clearQueue()
       await run.session.abort()
-      await this.sendReply(
-        run.session,
-        channel.name,
-        msg,
-        'Stopped the current run.',
+      if (!msg.topic)
+        await this.sendReply(
+          run.session,
+          channel.name,
+          msg,
+          'Stopped the current run.',
+        )
+      await Promise.all(
+        (this.acknowledgements.get(msg) ?? [])
+          .filter((input) => !run.inputs.includes(input))
+          .map((input) => input.finish('stopped')),
       )
       return true
     }
+    const inputs = this.acknowledge(channel, msg)
+    await Promise.all(inputs.map((input) => input.ready))
     if (msg.topic) msg.isNewTopic = false
     const prepared = channel.prepareMessage
       ? await channel.prepareMessage(msg, run.trigger)
       : msg
     // History/name lookups can outlast the run. Leave the default queue intact.
-    if (!prepared) return true
-    if (!this.runIsLive(run)) return false
+    if (!prepared) {
+      await Promise.all(inputs.map((input) => input.finish('failed')))
+      return true
+    }
+    if (!this.runIsLive(run)) {
+      if (!run.stopped) return false
+      await Promise.all(inputs.map((input) => input.finish('stopped')))
+      return true
+    }
+    run.inputs.push(...inputs)
     run.session.emit({
       type: 'channel_message',
       channel: channel.name,
@@ -360,12 +398,79 @@ export class ChannelGateway {
     await session.close()
   }
 
+  private acknowledge(
+    channel: ChannelDefinition,
+    msg: IncomingMessage,
+  ): MessageFeedback[] {
+    let inputs = this.acknowledgements.get(msg)
+    if (!inputs) {
+      inputs = [
+        new MessageFeedback(channel, msg, (error) =>
+          this.feedbackError(channel.name, msg, error),
+        ),
+      ]
+      this.acknowledgements.set(msg, inputs)
+    }
+    return inputs
+  }
+
+  private async feedbackError(
+    channelName: string,
+    msg: IncomingMessage,
+    error: unknown,
+  ): Promise<void> {
+    const session = this.options.find(
+      channelSessionId(channelName, msg.channelId, msg.topic?.rootId),
+    )
+    session?.emit({
+      type: 'channel_error',
+      channel: channelName,
+      senderId: msg.senderId,
+      error,
+      aborted: false,
+    })
+    this.logger.error(
+      `[${channelName}] Feedback failed: ${errorMessage(error)}`,
+    )
+    try {
+      await this.channels.get(channelName)?.send({
+        ...msg,
+        recipientId: msg.senderId,
+        text: `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
+      })
+    } catch (sendError) {
+      this.logger.error(
+        `[${channelName}] Could not deliver feedback error: ${errorMessage(sendError)}`,
+      )
+    }
+  }
+
   private async process(
     id: string,
     channelName: string,
     msg: IncomingMessage,
   ): Promise<void> {
-    if (this.stopped) return
+    let outcome: ChannelOutcome | undefined = 'failed'
+    try {
+      outcome = await this.processRun(id, channelName, msg)
+    } catch (error) {
+      await this.feedbackError(channelName, msg, error)
+    } finally {
+      if (outcome)
+        await Promise.all(
+          (this.acknowledgements.get(msg) ?? []).map((input) =>
+            input.finish(outcome!),
+          ),
+        )
+    }
+  }
+
+  private async processRun(
+    id: string,
+    channelName: string,
+    msg: IncomingMessage,
+  ): Promise<ChannelOutcome | undefined> {
+    if (this.stopped) return 'stopped'
     await this.closing.get(id)
     const channel = this.channels.get(channelName)
     let topicSession: VelaSession | undefined
@@ -376,16 +481,18 @@ export class ChannelGateway {
         : await topicSession.resume()
       if (msg.requireExistingSession && !exists) {
         await topicSession.close()
-        return
+        return 'failed'
       }
       this.resumed.add(topicSession)
       msg.isNewTopic = !exists
     }
+    const inputs = channel ? this.acknowledge(channel, msg) : []
+    await Promise.all(inputs.map((input) => input.ready))
     const task = msg.text
     const prepared = channel?.prepareMessage
       ? await channel.prepareMessage(msg)
       : msg
-    if (!prepared || this.stopped) return
+    if (!prepared || this.stopped) return 'failed'
     msg = prepared
     const session =
       topicSession ?? this.options.session(id, channel?.sessionOptions?.(msg))
@@ -440,7 +547,7 @@ export class ChannelGateway {
         msg,
         "This session can't be saved. New prompts are paused after 3 consecutive save failures. Please ask the operator to restore session storage.",
       )
-      return
+      return 'failed'
     }
 
     this.active.add(session)
@@ -449,18 +556,31 @@ export class ChannelGateway {
       trigger: msg,
       lifetime: new AbortController(),
       stopped: false,
+      inputs,
     }
     this.runs.set(id, run)
+    let feedback: ChannelRunFeedback | undefined
+    let feedbackErrorReported = false
+    const report = async (error: unknown) => {
+      if (feedbackErrorReported) return
+      feedbackErrorReported = true
+      await this.feedbackError(channelName, msg, error)
+    }
     const unsubscribe = session.subscribe((event) => {
+      feedback?.event(event)
       if (event.type === 'agent_settled') run.lifetime.abort()
     })
+    let outcome: ChannelOutcome = 'done'
+    let answer = ''
+    let failureReported = false
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
       if (msg.topic && channel?.showTopicControls) {
-        await channel
+        feedback = await channel
           .showTopicControls(msg, {
             signal: run.lifetime.signal,
+            error: report,
             stop: () => {
               if (!this.runIsLive(run)) return false
               void this.applyRunChoice(channel, msg, run, 'stop').catch(
@@ -477,6 +597,7 @@ export class ChannelGateway {
             },
           })
           .catch(async (error) => {
+            failureReported = true
             await this.sendReply(
               session,
               channelName,
@@ -485,32 +606,47 @@ export class ChannelGateway {
             )
             throw error
           })
+          .then((value) => value || undefined)
       }
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
+      if (session.messages.at(-1) !== previous)
+        answer = lastAssistantText(session.messages)
     } catch (error) {
+      outcome =
+        run.stopped || this.stopped || isAbort(error) ? 'stopped' : 'failed'
+      if (outcome === 'failed' && !failureReported)
+        answer = `Task failed: ${errorMessage(error)}`
       session.emit({
         type: 'channel_error',
         channel: channelName,
         senderId: msg.senderId,
         error,
-        aborted: this.stopped || isAbort(error),
+        aborted: outcome === 'stopped',
       })
-      return
     } finally {
       unsubscribe()
       run.lifetime.abort()
+      await run.steering
+      try {
+        await feedback?.finish(outcome)
+      } catch (error) {
+        await report(error)
+      }
       this.runs.delete(id)
       this.active.delete(session)
     }
-
-    if (run.stopped || run.handedOff) return
-    if (session.messages.at(-1) === previous) return
-    await this.sendReply(
-      session,
-      channelName,
-      msg,
-      lastAssistantText(session.messages),
-    )
+    if (run.handedOff) return
+    if (outcome === 'stopped')
+      answer = msg.topic ? 'Stopped the current run.' : ''
+    if (answer && !(await this.sendReply(session, channelName, msg, answer))) {
+      outcome = 'failed'
+      try {
+        await feedback?.finish(outcome)
+      } catch (error) {
+        await report(error)
+      }
+    }
+    return outcome
   }
 
   private async sendReply(
@@ -518,9 +654,9 @@ export class ChannelGateway {
     channelName: string,
     msg: IncomingMessage,
     replyText: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const channel = this.channels.get(channelName)
-    if (!replyText || !channel) return
+    if (!replyText || !channel) return false
     const reply: OutgoingMessage = {
       topic: msg.topic,
       channelId: msg.channelId,
@@ -538,7 +674,8 @@ export class ChannelGateway {
         error,
         aborted: false,
       })
-      return
+      this.logger.error(`[${channelName}] Reply failed: ${errorMessage(error)}`)
+      return false
     }
     session.emit({
       type: 'channel_reply',
@@ -546,6 +683,7 @@ export class ChannelGateway {
       recipientId: msg.senderId,
       text: replyText,
     })
+    return true
   }
 
   list(): Array<{ name: string; description: string }> {

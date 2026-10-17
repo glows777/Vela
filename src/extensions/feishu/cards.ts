@@ -11,6 +11,7 @@ export interface FeishuCardResponse {
 
 export interface FeishuCard {
   schema: '2.0'
+  config?: { update_multi: true }
   header: { title: { tag: 'plain_text'; content: string } }
   body: {
     elements: {
@@ -80,6 +81,7 @@ export function runControlsCard(token: string): FeishuCard {
 
 export function topicRunCard(token: string): FeishuCard {
   const card = runControlsCard(token)
+  card.config = { update_multi: true }
   card.body.elements[0] = {
     tag: 'markdown',
     content:

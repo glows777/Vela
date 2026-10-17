@@ -457,7 +457,11 @@ test('topic Stop affects only its run, expires, and preserves context for the ne
         content: '{"text":"continue alpha"}',
       }),
     )
-    await until(() => fake.sent.some((message) => message.text === 'continued'))
+    await until(() =>
+      fake.sent.some(
+        (message) => message.text === '<at user_id="ou_alice"></at> continued',
+      ),
+    )
     expect(JSON.stringify(t.model.calls[2]?.prompt)).toContain('task alpha')
     expect(JSON.stringify(t.model.calls[2]?.prompt)).not.toContain('task beta')
   } finally {

@@ -53,7 +53,17 @@ export interface FeishuTransport {
   forward(messageId: string, threadId: string): Promise<FeishuSentMessage>
   send(chatId: string, text: string): Promise<void>
   reply(messageId: string, text: string): Promise<FeishuSentMessage>
-  sendCard(chatId: string, card: FeishuCard, replyToId?: string): Promise<void>
+  sendCard(
+    chatId: string,
+    card: FeishuCard,
+    replyToId?: string,
+  ): Promise<string>
+  patchCard(messageId: string, card: FeishuCard): Promise<void>
+  addReaction(
+    messageId: string,
+    emoji: 'OnIt' | 'DONE' | 'CrossMark',
+  ): Promise<string>
+  removeReaction(messageId: string, reactionId: string): Promise<void>
   getResource(
     messageId: string,
     key: string,
@@ -154,7 +164,7 @@ export function larkTransport(
     },
     async sendCard(chatId, card, replyToId) {
       const data = { msg_type: 'interactive', content: JSON.stringify(card) }
-      checked(
+      const response = checked(
         replyToId
           ? await client.im.message.reply({
               path: { message_id: replyToId },
@@ -164,6 +174,35 @@ export function larkTransport(
               params: { receive_id_type: 'chat_id' },
               data: { ...data, receive_id: chatId },
             }),
+      )
+      if (!response.data?.message_id)
+        throw new Error('Feishu card returned no message ID')
+      return response.data.message_id
+    },
+    async patchCard(messageId, card) {
+      checked(
+        await client.im.message.patch({
+          path: { message_id: messageId },
+          data: { content: JSON.stringify(card) },
+        }),
+      )
+    },
+    async addReaction(messageId, emoji) {
+      const response = checked(
+        await client.im.messageReaction.create({
+          path: { message_id: messageId },
+          data: { reaction_type: { emoji_type: emoji } },
+        }),
+      )
+      if (!response.data?.reaction_id)
+        throw new Error('Feishu reaction returned no reaction ID')
+      return response.data.reaction_id
+    },
+    async removeReaction(messageId, reactionId) {
+      checked(
+        await client.im.messageReaction.delete({
+          path: { message_id: messageId, reaction_id: reactionId },
+        }),
       )
     },
     async reply(messageId, text) {

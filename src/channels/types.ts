@@ -1,3 +1,4 @@
+import type { VelaEvent } from '../agent/events.ts'
 import type { ImageContent } from '../messages.ts'
 import type { PermissionRules, Role } from '../security/roles.ts'
 
@@ -43,6 +44,17 @@ export interface ChannelRuntime {
   dispatch(sourceSessionId: string, message: IncomingMessage): void
 }
 
+export type ChannelOutcome = 'done' | 'failed' | 'stopped'
+
+export interface ChannelAcknowledgement {
+  finish(outcome: ChannelOutcome): Promise<void>
+}
+
+export interface ChannelRunFeedback {
+  event(event: VelaEvent): void
+  finish(outcome: ChannelOutcome): Promise<void>
+}
+
 export interface ChannelDefinition {
   name: string
   description: string
@@ -63,11 +75,18 @@ export interface ChannelDefinition {
     activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
 
-  /** One Stop control for this topic run, removed when its lifetime ends. */
+  /** Called after admission, before queued preparation. */
+  acknowledge?: (msg: IncomingMessage) => Promise<ChannelAcknowledgement | void>
+
+  /** One Stop/progress card for this run; events arrive before prompt completion. */
   showTopicControls?: (
     msg: IncomingMessage,
-    controls: { signal: AbortSignal; stop: () => boolean },
-  ) => Promise<void>
+    controls: {
+      signal: AbortSignal
+      stop: () => boolean
+      error: (error: unknown) => Promise<void>
+    },
+  ) => Promise<ChannelRunFeedback | void>
 
   /** Offer controls for this queued message while the preceding run is active. */
   showRunControls?: (

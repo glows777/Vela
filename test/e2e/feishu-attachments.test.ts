@@ -489,6 +489,12 @@ test('Feishu expired group Steer reuses history images after the active run fail
       },
     ],
   )
+  const reply = f.transport.reply
+  f.transport.reply = async (messageId, text) => {
+    if (messageId === 'start')
+      throw new Error('Failure notification unavailable')
+    return reply(messageId, text)
+  }
   let release!: () => void
   let entered!: () => void
   const gate = new Promise<void>((r) => {

@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { channelSessionId } from '../../channels/gateway.ts'
+import type {
+  ChannelAcknowledgement,
+  ChannelOutcome,
+  ChannelRunFeedback,
+} from '../../channels/types.ts'
 import { imageMimeType } from '../../images/metadata.ts'
 import type {
   ChannelDefinition,
@@ -20,6 +25,7 @@ import {
 } from './cards.ts'
 import { readGroupContext, readTopicContext } from './history.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
+import { FeishuProgress } from './progress.ts'
 import { FeishuTopics } from './topics.ts'
 import {
   type FeishuMessageEvent,
@@ -136,10 +142,11 @@ export class FeishuChannel implements ChannelDefinition {
     await Promise.all(this.pending)
   }
 
-  async showRunControls(
+  private async createControls(
     msg: IncomingMessage,
     controls: Parameters<NonNullable<ChannelDefinition['showRunControls']>>[1],
-  ): Promise<void> {
+    report?: (error: unknown) => Promise<void>,
+  ): Promise<ChannelRunFeedback | void> {
     if (
       this.stopped ||
       controls.signal.aborted ||
@@ -158,11 +165,24 @@ export class FeishuChannel implements ChannelDefinition {
     const card = msg.topic ? topicRunCard(token) : runControlsCard(token)
     try {
       // Control cards are not answers and must not advance the chat-history boundary.
-      await this.transport.sendCard(msg.channelId, card, msg.replyToId)
+      const messageId = await this.transport.sendCard(
+        msg.channelId,
+        card,
+        msg.replyToId,
+      )
+      if (report)
+        return new FeishuProgress(this.transport, messageId, card, report)
     } catch (error) {
       clear()
       throw error
     }
+  }
+
+  async showRunControls(
+    msg: IncomingMessage,
+    controls: Parameters<NonNullable<ChannelDefinition['showRunControls']>>[1],
+  ): Promise<void> {
+    await this.createControls(msg, controls)
   }
 
   async showTopicControls(
@@ -170,11 +190,34 @@ export class FeishuChannel implements ChannelDefinition {
     controls: Parameters<
       NonNullable<ChannelDefinition['showTopicControls']>
     >[1],
-  ): Promise<void> {
-    await this.showRunControls(msg, {
-      signal: controls.signal,
-      choose: (action) => action === 'stop' && controls.stop(),
-    })
+  ): Promise<ChannelRunFeedback | void> {
+    return this.createControls(
+      msg,
+      {
+        signal: controls.signal,
+        choose: (action) => action === 'stop' && controls.stop(),
+      },
+      controls.error,
+    )
+  }
+
+  async acknowledge(
+    msg: IncomingMessage,
+  ): Promise<ChannelAcknowledgement | void> {
+    const event = msg.raw as FeishuMessageEvent | undefined
+    const messageId = event?.message.message_id
+    const transport = this.transport
+    if (!transport || !messageId || event?.message.chat_type !== 'group') return
+    const reactionId = await transport.addReaction(messageId, 'OnIt')
+    return {
+      finish: async (outcome: ChannelOutcome) => {
+        await transport.removeReaction(messageId, reactionId)
+        await transport.addReaction(
+          messageId,
+          outcome === 'done' ? 'DONE' : 'CrossMark',
+        )
+      },
+    }
   }
 
   private receiveAction(event: FeishuCardAction): FeishuCardResponse {
@@ -235,7 +278,9 @@ export class FeishuChannel implements ChannelDefinition {
     if (message.replyToId) {
       const receipt = await this.transport.reply(
         message.replyToId,
-        message.text,
+        message.topic
+          ? `<at user_id="${message.recipientId}"></at> ${message.text}`
+          : message.text,
       )
       if (!message.topic) this.lastReplies.set(message.channelId, receipt)
     } else {
