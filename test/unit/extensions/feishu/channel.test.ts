@@ -30,6 +30,7 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
     },
     getBotId: async () => 'ou_bot',
     getSenderName: async () => undefined,
+    listTopicMessages: async () => ({ items: [] }),
     listMessages: async () => [],
     reply: async (messageId, text) => {
       if (options.failSend) throw new Error('send failed')
