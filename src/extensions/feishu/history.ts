@@ -1,17 +1,10 @@
 import type { ImageContent } from '../../messages.ts'
 import { messageText } from './messages.ts'
-import type { FeishuMessageEvent, FeishuSentMessage } from './transport.ts'
-
-/** History items returned newest first by Feishu's message API. Times are milliseconds. */
-export interface FeishuHistoryMessage {
-  message_id?: string
-  create_time?: string
-  msg_type?: string
-  body?: { content?: string }
-  sender?: { id?: string; sender_type?: string }
-  mentions?: { key: string }[]
-  deleted?: boolean
-}
+import type {
+  FeishuHistoryMessage,
+  FeishuMessageEvent,
+  FeishuSentMessage,
+} from './transport.ts'
 
 interface GroupContextOptions {
   chatId: string

@@ -51,9 +51,9 @@ export type {
   FeishuCardAction,
   FeishuCardResponse,
 } from './extensions/feishu/cards.ts'
-export type { FeishuHistoryMessage } from './extensions/feishu/history.ts'
 export { type FeishuOptions, feishu } from './extensions/feishu/index.ts'
 export type {
+  FeishuHistoryMessage,
   FeishuMessageEvent,
   FeishuSentMessage,
   FeishuTransport,

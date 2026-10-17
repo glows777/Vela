@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream'
-import type { FeishuHistoryMessage } from '../../src/extensions/feishu/history.ts'
 import type {
+  FeishuHistoryMessage,
   FeishuMessageEvent,
   FeishuTransport,
 } from '../../src/extensions/feishu/transport.ts'
