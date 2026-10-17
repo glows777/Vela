@@ -96,3 +96,37 @@ export function formatGroupContext(
     ? `[Chat since last reply]\n${history.slice(-50).map(named).join('\n')}\n\n[Question]\n${named(question)}`
     : named(question)
 }
+
+/** Full topic history, already fetched in ascending creation order. */
+export async function readTopicContext(
+  history: FeishuHistoryMessage[],
+  options: GroupContextOptions,
+): Promise<{ text: string; images: ImageContent[] }> {
+  const lines: string[] = []
+  const images: ImageContent[] = []
+  const seen = new Set<string>()
+  for (const item of history) {
+    if (item.deleted || item.message_id === options.message.message_id) continue
+    if (item.message_id && seen.has(item.message_id)) continue
+    if (item.message_id) seen.add(item.message_id)
+    const message = {
+      chat_id: options.chatId,
+      message_id: item.message_id,
+      message_type: item.msg_type ?? '',
+      content: item.body?.content ?? '',
+      mentions: item.mentions,
+    }
+    const text = messageText(message)
+    if (!text) continue
+    const name =
+      item.sender?.sender_type === 'app' && item.sender.id === options.appId
+        ? 'Vela'
+        : await options.senderName(item.sender?.id ?? 'unknown')
+    lines.push(`${name}: ${text}`)
+    images.push(...(await options.downloadImages(message, 4 - images.length)))
+  }
+  return {
+    text: `[Topic history]\n${lines.join('\n')}\n\n[Question]\n${options.question.name}: ${options.question.text}`,
+    images,
+  }
+}
