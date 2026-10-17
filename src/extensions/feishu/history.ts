@@ -106,7 +106,13 @@ export async function readTopicContext(
   const images: ImageContent[] = []
   const seen = new Set<string>()
   for (const item of history) {
-    if (item.deleted || item.message_id === options.message.message_id) continue
+    if (
+      item.deleted ||
+      item.message_id === options.message.message_id ||
+      (options.message.create_time &&
+        Number(item.create_time) > Number(options.message.create_time))
+    )
+      continue
     if (item.message_id && seen.has(item.message_id)) continue
     if (item.message_id) seen.add(item.message_id)
     const message = {

@@ -257,6 +257,7 @@
   interface IncomingMessage
     channelId: string
     images?: ImageContent[] | undefined
+    isNewTopic?: boolean | undefined
     raw?: unknown
     replyToId?: string | undefined
     requireExistingSession?: boolean | undefined

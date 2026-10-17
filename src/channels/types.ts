@@ -15,6 +15,8 @@ export interface IncomingMessage {
   topic?: { rootId: string; threadId: string }
   /** Admit only if this topic already has a saved session. */
   requireExistingSession?: boolean
+  /** Set by the gateway before preparation when entering a topic without saved context. */
+  isNewTopic?: boolean
   raw?: unknown
 }
 
