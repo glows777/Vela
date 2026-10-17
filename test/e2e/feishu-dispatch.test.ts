@@ -181,7 +181,11 @@ test('forwarding a channel message feeds the same-group topic once with original
       'ou_bob',
     ),
   )
-  await until(() => fake.sent.some((item) => item.text === 'received'))
+  await until(() =>
+    fake.sent.some(
+      (item) => item.text === '<at user_id="ou_bob"></at> received',
+    ),
+  )
   expect(fake.forwards).toEqual([{ messageId: 'original', threadId: 'thread' }])
   const call = t.model.calls.find(
     (req) =>
@@ -265,7 +269,11 @@ test('forwarded attachments are prepared from the original service message, not 
       'ou_bob',
     ),
   )
-  await until(() => fake.sent.some((item) => item.text === 'file received'))
+  await until(() =>
+    fake.sent.some(
+      (item) => item.text === '<at user_id="ou_bob"></at> file received',
+    ),
+  )
   expect(fake.resourceCalls).toEqual([
     { messageId: 'file_original', key: 'file-key', type: 'file' },
   ])
@@ -430,7 +438,11 @@ test('an earlier-work follow-up has a disclosure instruction and puts its notice
       content: '{"text":"continue the earlier cobalt investigation"}',
     }),
   )
-  await until(() => fake.sent.some((item) => item.text === 'continued'))
+  await until(() =>
+    fake.sent.some(
+      (item) => item.text === '<at user_id="ou_alice"></at> continued',
+    ),
+  )
   expect(t.model.calls[1]?.system).toContain(
     'earlier work missing from the list',
   )
@@ -555,7 +567,11 @@ test('a screenshot post handoff carries trigger images without copying group his
       }),
     }),
   )
-  await until(() => fake.sent.some((item) => item.text === 'fixed'))
+  await until(() =>
+    fake.sent.some(
+      (item) => item.text === '<at user_id="ou_alice"></at> fixed',
+    ),
+  )
   const images = (req: FauxRequest | undefined) =>
     req?.prompt.flatMap((message) =>
       message.role === 'user'
@@ -632,7 +648,10 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
     ])
     release()
     await until(() =>
-      fake.sent.some((item) => item.text === 'forwarded input answer'),
+      fake.sent.some(
+        (item) =>
+          item.text === '<at user_id="ou_alice"></at> forwarded input answer',
+      ),
     )
     expect(t.model.calls[6]?.lastUserText).toContain(
       'Alice: also inspect cobalt',

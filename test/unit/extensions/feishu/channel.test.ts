@@ -47,7 +47,10 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
       if (options.failSend) throw new Error('send failed')
       sent.push({ chatId, text })
     },
-    sendCard: async () => {},
+    sendCard: async () => 'card',
+    patchCard: async () => {},
+    addReaction: async () => 'reaction',
+    removeReaction: async () => {},
   }
   return {
     transport,
