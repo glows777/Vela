@@ -151,7 +151,7 @@ test('Stop finalizes the same card and reaction while retaining the topic for th
   await until(() => t.model.calls.length === 1)
   fake.click(0, 'stop')
   await until(() => fake.reactions.some((r) => r.emoji === 'CrossMark'))
-  expect(JSON.stringify(fake.patches.at(-1)?.card)).toContain('Stopped')
+  expect(fake.patches.at(-1)?.card.header.title.content).toBe('Stopped')
   fake.deliver(
     feishuEvent({
       message_id: 'next',
