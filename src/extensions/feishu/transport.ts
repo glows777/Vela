@@ -46,6 +46,11 @@ export interface FeishuTransport {
     onAction: (event: FeishuCardAction) => FeishuCardResponse,
   ): Promise<void>
   stop(): void
+  startTopic(
+    messageId: string,
+    task: string,
+  ): Promise<FeishuSentMessage & { rootId: string; threadId: string }>
+  forward(messageId: string, threadId: string): Promise<FeishuSentMessage>
   send(chatId: string, text: string): Promise<void>
   reply(messageId: string, text: string): Promise<FeishuSentMessage>
   sendCard(chatId: string, card: FeishuCard, replyToId?: string): Promise<void>
@@ -97,6 +102,43 @@ export function larkTransport(
     },
     stop() {
       wsClient?.close()
+    },
+    async startTopic(messageId, task) {
+      const { data } = checked(
+        await client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text: task }),
+            reply_in_thread: true,
+          },
+        }),
+      )
+      if (
+        !data?.message_id ||
+        !data.create_time ||
+        !data.root_id ||
+        !data.thread_id
+      )
+        throw new Error('Feishu topic reply returned no root/thread receipt')
+      return {
+        messageId: data.message_id,
+        createTime: data.create_time,
+        rootId: data.root_id,
+        threadId: data.thread_id,
+      }
+    },
+    async forward(messageId, threadId) {
+      const { data } = checked(
+        await client.im.message.forward({
+          path: { message_id: messageId },
+          params: { receive_id_type: 'thread_id' },
+          data: { receive_id: threadId },
+        }),
+      )
+      if (!data?.message_id || !data.create_time)
+        throw new Error('Feishu forward returned no message receipt')
+      return { messageId: data.message_id, createTime: data.create_time }
     },
     async send(chatId, text) {
       checked(
