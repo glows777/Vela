@@ -84,11 +84,87 @@ test('short channel answers and topic/DM requests have the right prompts and vis
     expect(call.tools.some((name) => dispatchTools.includes(name))).toBe(false)
     expect(call.tools).toContain('read_file')
   }
-  expect(t.model.calls[1]?.system).toContain('one task in this topic')
+  expect(t.model.calls[1]?.system).toContain('conversation about one task')
   expect(t.model.calls[1]?.system).toContain(
     'ask one clear question and end the run',
   )
-  expect(t.model.calls[2]?.system).not.toContain('one task in this topic')
+  expect(t.model.calls[2]?.system).not.toContain('conversation about one task')
+})
+
+test('completed topics prioritize follow-ups without losing the task context or requested additions', async () => {
+  // Faux verifies the prompt contract and routing, not whether a live model obeys it.
+  const report = 'Checks: bun run test, then bun run typecheck.'
+  const replies = [
+    'Hi!',
+    'Understood.',
+    'I will not repeat it.',
+    'Run bun run typecheck second.',
+  ]
+  const { fake, t, start } = setup([
+    fauxToolCall('read_file', { path: 'CONTRIBUTING.md' }),
+    fauxText(report),
+    ...replies.map((text) => fauxText(text)),
+  ])
+  await Bun.write(`${t.cwd}/CONTRIBUTING.md`, report)
+  await start()
+  fake.deliver(
+    feishuEvent({
+      message_id: 'task',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: JSON.stringify({
+        text: 'Read CONTRIBUTING.md and summarize the checks.',
+      }),
+    }),
+  )
+  await until(() => fake.sent.length === 1)
+  const inputs = [
+    'hi',
+    'This is already complete.',
+    'Do not repeat the same content.',
+    'Which command was second?',
+  ]
+  for (const [index, text] of inputs.entries()) {
+    fake.deliver(
+      feishuEvent({
+        message_id: `followup_${index}`,
+        root_id: 'root',
+        thread_id: 'thread',
+        mentions: [],
+        content: JSON.stringify({ text }),
+      }),
+    )
+    await until(() => fake.sent.length === index + 2)
+  }
+  expect(t.model.pending()).toBe(0)
+  expect(
+    t.eventsOf('tool_execution_start').map((event) => event.toolName),
+  ).toEqual(['read_file'])
+  expect(fake.topicHistoryCalls).toHaveLength(1)
+  expect(fake.topics).toEqual([])
+  expect(fake.sent.map((item) => item.text)).toEqual(
+    [report, ...replies].map((text) => `<at user_id="ou_alice"></at> ${text}`),
+  )
+  for (const [index, call] of t.model.calls.slice(2).entries()) {
+    expect(call.lastUserText).toBe(`Alice: ${inputs[index]}`)
+    expect(JSON.stringify(call.prompt)).toContain(report)
+    expect(call.system).not.toContain(
+      'Read CONTRIBUTING.md and summarize the checks.',
+    )
+    expect(call.system).toContain('Respond to the latest user message.')
+    expect(call.system).toContain(
+      'do not repeat or resume the task unless the latest user asks for that',
+    )
+    expect(call.system).toContain(
+      'Continue unfinished work and apply requested additions or corrections',
+    )
+    expect(call.system).toContain('ask one clear question and end the run')
+    expect(call.system).toContain('Progress is shown to people automatically')
+    expect(call.system).not.toContain('When finished, give the result.')
+    expect(call.system).toContain(
+      'Treat completed answers in the history as already reported',
+    )
+  }
 })
 
 test('starting a topic returns its receipt and frees the channel while its task is still running', async () => {
@@ -582,7 +658,7 @@ test('a screenshot post handoff carries trigger images without copying group his
   expect(
     images(
       t.model.calls.find((req) =>
-        req.system.includes('one task in this topic'),
+        req.system.includes('conversation about one task'),
       ),
     ),
   ).toEqual([expect.objectContaining({ mediaType: 'image/png' })])
