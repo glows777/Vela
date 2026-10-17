@@ -296,6 +296,7 @@ export class FeishuChannel implements ChannelDefinition {
       })
       return
     }
+    this.topics.triggerImages.set(event, [...images])
     msg = { ...msg, text: input, images }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (msg.text.startsWith('/')) return msg

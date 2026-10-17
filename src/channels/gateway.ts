@@ -108,8 +108,19 @@ export class ChannelGateway {
           })),
       dispatch: (id, msg) => {
         const source = this.runs.get(id)
-        if (!source || this.stopped)
+        if (!source || !this.runIsLive(source))
           throw new Error('The source channel run has ended')
+        const targetId = channelSessionId(
+          channel.name,
+          msg.channelId,
+          msg.topic?.rootId,
+        )
+        if (msg.topic && !this.topics.has(targetId))
+          this.topics.set(targetId, {
+            channel: channel.name,
+            chatId: msg.channelId,
+            topic: { ...msg.topic, task: msg.text.slice(0, 120) },
+          })
         source.handedOff = true
         void this.handleIncoming(channel.name, msg)
       },

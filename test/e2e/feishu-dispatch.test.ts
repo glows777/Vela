@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
+import { readFileSync, rmSync } from 'node:fs'
 import { z } from 'zod'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
+import { memorySessionStorage } from '../../src/session/storage.ts'
 import {
   type FauxRequest,
+  fauxHang,
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
@@ -26,10 +29,16 @@ async function until(condition: () => boolean) {
 function setup(
   responses: NonNullable<Parameters<typeof createTestVela>[0]>['responses'],
   extensions: VelaExtension[] = [],
+  cwd?: string,
+  sessionStorage?: NonNullable<
+    Parameters<typeof createTestVela>[0]
+  >['sessionStorage'],
 ) {
   const fake = fakeFeishu()
   const t = createTestVela({
     responses,
+    cwd,
+    sessionStorage,
     allowPendingResponses: true,
     extensions: [
       feishu({
@@ -266,4 +275,370 @@ test('forwarded attachments are prepared from the original service message, not 
       req.lastUserText.includes('notes.txt'),
   )?.lastUserText
   expect(input).toContain('Bob: [file: notes.txt')
+})
+
+const listCall = () => fauxToolCall('feishu_list_topics', {})
+const listAnswer = (req: FauxRequest) =>
+  fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
+
+test('topic listing after restart discloses its empty coverage and reobserves persisted same-group topics', async () => {
+  const first = setup([fauxText('remember cobalt')])
+  await first.start()
+  first.fake.deliver(
+    feishuEvent({ root_id: 'saved', thread_id: 'saved_thread' }),
+  )
+  await until(() => first.fake.sent.length === 1)
+  await first.t.cleanup({ keepDir: true })
+  const second = setup(
+    [
+      listCall(),
+      listAnswer,
+      fauxText('resumed cobalt'),
+      listCall(),
+      listAnswer,
+    ],
+    [],
+    first.t.cwd,
+  )
+  try {
+    await second.start()
+    second.fake.deliver(
+      feishuEvent({ content: '{"text":"what tasks do you see?"}' }),
+    )
+    await until(() => second.fake.sent.length === 1)
+    const empty = JSON.parse(second.fake.sent[0]!.text)
+    expect(empty.topics).toEqual([])
+    expect(empty.coverage).toMatch(/since .*\d{4}-\d{2}-\d{2}T/)
+    expect(empty.coverage).toContain('earlier topics may exist')
+    expect(empty.coverage).toContain('does not mean there are no tasks')
+    second.fake.deliver(
+      feishuEvent({
+        root_id: 'saved',
+        thread_id: 'saved_thread',
+        mentions: [],
+        content: '{"text":"continue cobalt"}',
+      }),
+    )
+    await until(() => second.fake.sent.length === 2)
+    expect(JSON.stringify(second.t.model.calls[2]?.prompt)).toContain(
+      'remember cobalt',
+    )
+    second.fake.deliver(feishuEvent({ content: '{"text":"list tasks again"}' }))
+    await until(() => second.fake.sent.length === 3)
+    const observed = JSON.parse(second.fake.sent[2]!.text)
+    expect(observed.topics).toEqual([
+      expect.objectContaining({
+        rootId: 'saved',
+        threadId: 'saved_thread',
+        state: 'idle',
+      }),
+    ])
+    expect(observed.coverage).toBe(empty.coverage)
+  } finally {
+    await second.t.cleanup()
+    rmSync(first.t.cwd, { recursive: true, force: true })
+  }
+})
+
+test('topic listing reports only this group with queued, running and idle states', async () => {
+  let entered = false
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { fake, t, start } = setup([
+    fauxText('owned'),
+    fauxText('other group'),
+    listCall(),
+    listAnswer,
+    fauxHang('working'),
+    listCall(),
+    listAnswer,
+    listCall(),
+    listAnswer,
+  ])
+  await start()
+  try {
+    fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+    await until(() => fake.sent.length === 1)
+    fake.deliver(
+      feishuEvent({
+        chat_id: 'oc_other',
+        root_id: 'other',
+        thread_id: 'other_thread',
+      }),
+    )
+    await until(() => fake.sent.length === 2)
+    fake.resources.set('queued-file', [Buffer.from('detail')])
+    const download = fake.transport.getResource
+    fake.transport.getResource = async (...args) => {
+      entered = true
+      await held
+      return download(...args)
+    }
+    fake.deliver(
+      feishuEvent({
+        root_id: 'root',
+        thread_id: 'thread',
+        mentions: [],
+        message_type: 'file',
+        content: '{"file_key":"queued-file","file_name":"detail.txt"}',
+      }),
+    )
+    await until(() => entered)
+    async function list(state: string) {
+      const count = fake.sent.length
+      fake.deliver(feishuEvent({ content: '{"text":"list current topics"}' }))
+      await until(() => fake.sent.length > count)
+      const result = JSON.parse(fake.sent.at(-1)!.text)
+      expect(result.topics).toEqual([
+        expect.objectContaining({ rootId: 'root', threadId: 'thread', state }),
+      ])
+    }
+    await list('queued')
+    release()
+    await until(() => t.model.calls.length === 5)
+    await list('running')
+    expect(fake.click(2, 'stop')).toMatchObject({ toast: { type: 'success' } })
+    await until(() => fake.sent.some((item) => item.text.includes('Stopped')))
+    await list('idle')
+  } finally {
+    release()
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('an earlier-work follow-up has a disclosure instruction and puts its notice in the visible replacement topic entry', async () => {
+  const notice =
+    'The earlier topic could not be found. Continue investigating cobalt.'
+  const { fake, t, start } = setup([
+    listCall(),
+    fauxToolCall('feishu_start_topic', { task: notice }),
+    (req) =>
+      req.tools.includes('feishu_start_topic')
+        ? fauxText('handed off')
+        : fauxText('continued'),
+    (req) =>
+      req.tools.includes('feishu_start_topic')
+        ? fauxText('handed off')
+        : fauxText('continued'),
+  ])
+  await start()
+  fake.deliver(
+    feishuEvent({
+      message_id: 'followup',
+      content: '{"text":"continue the earlier cobalt investigation"}',
+    }),
+  )
+  await until(() => fake.sent.some((item) => item.text === 'continued'))
+  expect(t.model.calls[1]?.system).toContain(
+    'earlier work missing from the list',
+  )
+  expect(t.model.calls[1]?.system).toContain(
+    'include that notice at the beginning of the task',
+  )
+  expect(t.model.calls[1]?.system).toContain(
+    'An empty list does not mean there are no tasks',
+  )
+  expect(fake.topics).toEqual([{ messageId: 'followup', task: notice }])
+  expect(fake.sent.some((item) => item.messageId === 'followup')).toBe(false)
+})
+
+test.each(['start', 'forward'] as const)(
+  'Stop while %s is awaiting Feishu prevents task dispatch after the request returns',
+  async (operation) => {
+    let entered = false
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { fake, t, start } = setup([
+      ...(operation === 'forward' ? [fauxText('target established')] : []),
+      operation === 'start'
+        ? fauxToolCall('feishu_start_topic', { task: 'cancelled task' })
+        : fauxToolCall('feishu_forward_to_topic', { root_id: 'target' }),
+      fauxText('must not run'),
+    ])
+    const create = fake.transport.startTopic
+    const forward = fake.transport.forward
+    fake.transport.startTopic = async (...args) => {
+      entered = true
+      await held
+      return create(...args)
+    }
+    fake.transport.forward = async (...args) => {
+      entered = true
+      await held
+      return forward(...args)
+    }
+    await start()
+    try {
+      if (operation === 'forward') {
+        fake.deliver(
+          feishuEvent({ root_id: 'target', thread_id: 'target_thread' }),
+        )
+        await until(() => fake.sent.length === 1)
+      }
+      fake.deliver(
+        feishuEvent({
+          message_id: 'source',
+          content: '{"text":"do this task"}',
+        }),
+      )
+      await until(() => entered)
+      fake.deliver(
+        feishuEvent({ message_id: 'cancel', content: '{"text":"stop"}' }),
+      )
+      await until(() => fake.cards.some((card) => card.replyToId === 'cancel'))
+      const index = fake.cards.findIndex((card) => card.replyToId === 'cancel')
+      expect(fake.click(index, 'stop')).toMatchObject({
+        toast: { type: 'success' },
+      })
+      release()
+      await until(() => fake.sent.some((item) => item.text.includes('Stopped')))
+      await t.internals.gateway.stopAll()
+      expect(t.model.calls).toHaveLength(operation === 'start' ? 1 : 2)
+      expect(fake.sent.some((item) => item.text === 'must not run')).toBe(false)
+      expect(t.eventsOf('agent_start')).toHaveLength(
+        operation === 'start' ? 1 : 2,
+      )
+    } finally {
+      release()
+      await t.internals.gateway.stopAll()
+    }
+  },
+)
+
+test('a screenshot post handoff carries trigger images without copying group history images', async () => {
+  const { fake, t, start } = setup([
+    fauxToolCall('feishu_start_topic', {
+      task: 'Fix the broken page in this screenshot',
+    }),
+    (req) =>
+      req.tools.includes('feishu_start_topic')
+        ? fauxText('handed off')
+        : fauxText('fixed'),
+    (req) =>
+      req.tools.includes('feishu_start_topic')
+        ? fauxText('handed off')
+        : fauxText('fixed'),
+  ])
+  const png = readFileSync(
+    new URL('../fixtures/images/blue.png', import.meta.url),
+  )
+  fake.resources.set('screenshot', [png])
+  fake.resources.set('history-image', [
+    readFileSync(new URL('../fixtures/images/quadrants.jpg', import.meta.url)),
+  ])
+  fake.history.push({
+    message_id: 'old_image',
+    create_time: '1000',
+    msg_type: 'image',
+    body: { content: '{"image_key":"history-image"}' },
+    sender: { id: 'ou_bob', sender_type: 'user' },
+  })
+  await start()
+  fake.deliver(
+    feishuEvent({
+      message_id: 'screenshot_post',
+      message_type: 'post',
+      content: JSON.stringify({
+        zh_cn: {
+          content: [
+            [
+              { tag: 'at', user_id: 'ou_bot' },
+              { tag: 'text', text: 'this page is broken, fix it' },
+              { tag: 'img', image_key: 'screenshot' },
+            ],
+          ],
+        },
+      }),
+    }),
+  )
+  await until(() => fake.sent.some((item) => item.text === 'fixed'))
+  const images = (req: FauxRequest | undefined) =>
+    req?.prompt.flatMap((message) =>
+      message.role === 'user'
+        ? message.content.filter((part) => part.type === 'file')
+        : [],
+    ) ?? []
+  expect(images(t.model.calls[0])).toHaveLength(2)
+  expect(
+    images(
+      t.model.calls.find((req) =>
+        req.system.includes('one task in this topic'),
+      ),
+    ),
+  ).toEqual([expect.objectContaining({ mediaType: 'image/png' })])
+  expect(fake.resourceCalls).toHaveLength(2)
+})
+
+test('a newly dispatched topic can be listed and forwarded to while its initial storage load is pending', async () => {
+  let entered = false
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const storage = memorySessionStorage()
+  const { fake, t, start } = setup(
+    [
+      fauxToolCall('feishu_start_topic', { task: 'Investigate cobalt' }),
+      listCall(),
+      fauxText('listed'),
+      fauxToolCall('feishu_forward_to_topic', { root_id: 'source' }),
+      fauxText('forwarded'),
+      fauxText('first topic answer'),
+      fauxText('forwarded input answer'),
+    ],
+    [],
+    undefined,
+    {
+      ...storage,
+      load: async (id) => {
+        if (id === 'feishu-oc_group-source') {
+          entered = true
+          await held
+        }
+        return storage.load(id)
+      },
+    },
+  )
+  await start()
+  try {
+    fake.deliver(feishuEvent({ message_id: 'source' }))
+    await until(
+      () =>
+        entered &&
+        t.model.calls.length === 3 &&
+        !t.vela.session('feishu-oc_group').isRunning,
+    )
+    const listed = JSON.parse(t.model.calls[2]!.toolResults.at(-1)!.output)
+    expect(listed.topics).toEqual([
+      expect.objectContaining({
+        rootId: 'source',
+        threadId: 'thread_source',
+        state: 'queued',
+      }),
+    ])
+    fake.deliver(
+      feishuEvent({
+        message_id: 'followup',
+        content: '{"text":"also inspect cobalt"}',
+      }),
+    )
+    await until(() => t.model.calls.length === 5)
+    expect(fake.forwards).toEqual([
+      { messageId: 'followup', threadId: 'thread_source' },
+    ])
+    release()
+    await until(() =>
+      fake.sent.some((item) => item.text === 'forwarded input answer'),
+    )
+    expect(t.model.calls[6]?.lastUserText).toContain(
+      'Alice: also inspect cobalt',
+    )
+  } finally {
+    release()
+    await t.internals.gateway.stopAll()
+  }
 })

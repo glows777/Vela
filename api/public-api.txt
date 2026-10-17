@@ -76,7 +76,7 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
-    sessionOptions?: ((msg: IncomingMessage) => SessionOptions) | undefined
+    sessionOptions?: ((msg: IncomingMessage) => { permissions?: PermissionRules; }) | undefined
     showRunControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; choose: (action: "queue" | "steer" | "stop") => boolean; }) => Promise<void>) | undefined
     showTopicControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; stop: () => boolean; }) => Promise<void>) | undefined
     start: () => Promise<void> | void
