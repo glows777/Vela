@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream'
+import type { FeishuCard } from '../../src/extensions/feishu/cards.ts'
 import type {
   FeishuHistoryMessage,
   FeishuMessageEvent,
@@ -11,6 +12,13 @@ export function fakeFeishu() {
   let action: ((event: CardAction) => unknown) | undefined
   const sent: { chatId?: string; messageId?: string; text: string }[] = []
   const cards: { chatId: string; replyToId?: string; card: Card }[] = []
+  const patches: { messageId: string; card: FeishuCard }[] = []
+  const reactions: {
+    messageId: string
+    emoji: string
+    id: string
+    removed?: boolean
+  }[] = []
   const topics: { messageId: string; task: string }[] = []
   const forwards: { messageId: string; threadId: string }[] = []
   const names = new Map<string, string>([
@@ -89,6 +97,19 @@ export function fakeFeishu() {
     },
     sendCard: async (chatId: string, card: Card, replyToId?: string) => {
       cards.push({ chatId, replyToId, card })
+      return `card_${cards.length}`
+    },
+    patchCard: async (messageId, card) => {
+      patches.push({ messageId, card })
+    },
+    addReaction: async (messageId, emoji) => {
+      const id = `reaction_${reactions.length}`
+      reactions.push({ messageId, emoji, id })
+      return id
+    },
+    removeReaction: async (_messageId, id) => {
+      const reaction = reactions.find((item) => item.id === id)
+      if (reaction) reaction.removed = true
     },
     reply: async (messageId, text) => {
       if (failReply) throw new Error('reply failed')
@@ -98,6 +119,8 @@ export function fakeFeishu() {
   }
   return {
     transport,
+    patches,
+    reactions,
     topics,
     forwards,
     resources,
