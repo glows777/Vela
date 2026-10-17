@@ -25,6 +25,12 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
       push = onMessage
     },
     stop: () => {},
+    startTopic: async () => {
+      throw new Error('No topic creation in this fixture')
+    },
+    forward: async () => {
+      throw new Error('No forwarding in this fixture')
+    },
     getResource: async () => {
       throw new Error('No resources in this fixture')
     },

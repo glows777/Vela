@@ -69,12 +69,14 @@
     timestamp: string
     type: "branch_summary"
   interface ChannelDefinition
+    connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
+    sessionOptions?: ((msg: IncomingMessage) => SessionOptions) | undefined
     showRunControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; choose: (action: "queue" | "steer" | "stop") => boolean; }) => Promise<void>) | undefined
     showTopicControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; stop: () => boolean; }) => Promise<void>) | undefined
     start: () => Promise<void> | void
@@ -226,6 +228,7 @@
     createTime: string
     messageId: string
   interface FeishuTransport
+    forward: (messageId: string, threadId: string) => Promise<FeishuSentMessage>
     getBotId: () => Promise<string>
     getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
     getSenderName: (openId: string) => Promise<string | undefined>
@@ -235,6 +238,7 @@
     send: (chatId: string, text: string) => Promise<void>
     sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<void>
     start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>
+    startTopic: (messageId: string, task: string) => Promise<FeishuSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
   type FetchFunction = (
       input: string | URL | Request,
