@@ -3,7 +3,7 @@ import type {
   ChannelDefinition,
   IncomingMessage,
 } from '../../../../src/channels/types.ts'
-import { formatGroupContext } from '../../../../src/extensions/feishu/channel.ts'
+import { formatGroupContext } from '../../../../src/extensions/feishu/history.ts'
 import { feishu } from '../../../../src/extensions/feishu/index.ts'
 import { silentLogger } from '../../../../src/logger.ts'
 import { fakeFeishu, feishuEvent } from '../../../support/feishu.ts'

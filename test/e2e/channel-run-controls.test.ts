@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
-import type { FeishuHistoryMessage } from '../../src/extensions/feishu/channel.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
+import type { FeishuHistoryMessage } from '../../src/extensions/feishu/transport.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
