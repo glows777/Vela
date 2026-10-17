@@ -16,8 +16,9 @@ import {
   type FeishuCardAction,
   type FeishuCardResponse,
   runControlsCard,
+  topicRunCard,
 } from './cards.ts'
-import { readGroupContext } from './history.ts'
+import { readGroupContext, readTopicContext } from './history.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import {
   type FeishuMessageEvent,
@@ -142,7 +143,7 @@ export class FeishuChannel implements ChannelDefinition {
     }
     this.controls.set(token, { msg, choose: controls.choose, clear })
     controls.signal.addEventListener('abort', clear, { once: true })
-    const card = runControlsCard(token)
+    const card = msg.topic ? topicRunCard(token) : runControlsCard(token)
     try {
       // Control cards are not answers and must not advance the chat-history boundary.
       await this.transport.sendCard(msg.channelId, card, msg.replyToId)
@@ -150,6 +151,18 @@ export class FeishuChannel implements ChannelDefinition {
       clear()
       throw error
     }
+  }
+
+  async showTopicControls(
+    msg: IncomingMessage,
+    controls: Parameters<
+      NonNullable<ChannelDefinition['showTopicControls']>
+    >[1],
+  ): Promise<void> {
+    await this.showRunControls(msg, {
+      signal: controls.signal,
+      choose: (action) => action === 'stop' && controls.stop(),
+    })
   }
 
   private receiveAction(event: FeishuCardAction): FeishuCardResponse {
@@ -184,6 +197,7 @@ export class FeishuChannel implements ChannelDefinition {
       )
     )
       return ignored
+    if (entry.msg.topic && action !== 'stop') return ignored
     entry.clear()
     if (!entry.choose(action)) return ignored
     return {
@@ -211,7 +225,7 @@ export class FeishuChannel implements ChannelDefinition {
         message.replyToId,
         message.text,
       )
-      this.lastReplies.set(message.channelId, receipt)
+      if (!message.topic) this.lastReplies.set(message.channelId, receipt)
     } else {
       await this.transport.send(message.channelId, message.text)
     }
@@ -230,6 +244,7 @@ export class FeishuChannel implements ChannelDefinition {
       await this.send({
         channelId: msg.channelId,
         recipientId: msg.senderId,
+        topic: msg.topic,
         replyToId: msg.replyToId,
         text: UNSUPPORTED_MESSAGE,
       })
@@ -241,7 +256,8 @@ export class FeishuChannel implements ChannelDefinition {
       imageCache = new Map()
       this.images.set(msg, imageCache)
     }
-    let input = msg.text
+    let input = messageText(event.message) ?? msg.text
+    if (!input) return
     const attachmentType =
       event.message.message_type === 'file' ? 'file' : 'image'
     try {
@@ -258,6 +274,7 @@ export class FeishuChannel implements ChannelDefinition {
       await this.send({
         channelId: msg.channelId,
         recipientId: msg.senderId,
+        topic: msg.topic,
         replyToId: msg.replyToId,
         text:
           error instanceof FileTooLarge
@@ -272,6 +289,45 @@ export class FeishuChannel implements ChannelDefinition {
     const name = await this.senderName(msg.senderId)
     const question = { name, text: msg.text }
     let text = `${name}: ${msg.text}`
+    if (msg.topic && !msg.isNewTopic) return { ...msg, senderName: name, text }
+    if (msg.topic && this.transport) {
+      try {
+        const history = []
+        let pageToken: string | undefined
+        do {
+          const page = await this.transport.listTopicMessages(
+            msg.topic.threadId,
+            pageToken,
+          )
+          history.push(...page.items)
+          pageToken = page.pageToken
+        } while (pageToken)
+        const context = await readTopicContext(history, {
+          chatId: msg.channelId,
+          message: event.message,
+          appId: this.config.appId,
+          question,
+          senderName: (id) => this.senderName(id),
+          downloadImages: (message, limit) =>
+            this.downloadImages(message, imageCache, limit),
+        })
+        return {
+          ...msg,
+          senderName: name,
+          text: context.text,
+          images: [...context.images, ...images],
+        }
+      } catch (error) {
+        await this.send({
+          channelId: msg.channelId,
+          recipientId: msg.senderId,
+          topic: msg.topic,
+          replyToId: msg.replyToId,
+          text: `Couldn't read the topic history: ${errorMessage(error)}. Check im:message:readonly and im:message.group_msg permissions and retry.`,
+        })
+        return
+      }
+    }
     if (event.message.chat_type === 'group' && this.transport) {
       try {
         const history = await this.transport.listMessages(msg.channelId, {
@@ -434,18 +490,15 @@ export class FeishuChannel implements ChannelDefinition {
       return
     }
     const group = message.chat_type === 'group'
-    if (
-      group &&
-      (!this.botId ||
-        !message.mentions?.some(
-          (mention) => mention.id?.open_id === this.botId,
-        ))
-    )
-      return
+    const mentioned =
+      !!this.botId &&
+      !!message.mentions?.some((mention) => mention.id?.open_id === this.botId)
+    if (group && (!this.botId || (!mentioned && !message.thread_id))) return
     // A group reply needs its actual trigger; never accidentally post an unthreaded answer.
     if (group && !message.message_id) return
     const replyToId = group ? message.message_id : undefined
-    const text = messageText(message)
+    const requireExistingSession = group && !!message.thread_id && !mentioned
+    const text = requireExistingSession ? undefined : messageText(message)
     if (text === '' || !this.messageHandler) return
     // Deliver immediately so the gateway can show run controls, then serialize preparation and replies there.
     const next = Promise.resolve(
@@ -455,6 +508,15 @@ export class FeishuChannel implements ChannelDefinition {
         senderName: senderId,
         text: text ?? '',
         replyToId,
+        ...(group && message.thread_id && message.message_id
+          ? {
+              topic: {
+                rootId: message.root_id || message.message_id,
+                threadId: message.thread_id,
+              },
+            }
+          : {}),
+        requireExistingSession,
         raw: event,
       }),
     ).catch((error) =>

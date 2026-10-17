@@ -18,6 +18,8 @@ export function fakeFeishu() {
   const nameCalls: string[] = []
   const historyCalls: { chatId: string; before?: string; limit: number }[] = []
   const history: FeishuHistoryMessage[] = []
+  const topicHistory: FeishuHistoryMessage[][] = []
+  const topicHistoryCalls: { threadId: string; pageToken?: string }[] = []
   let failHistory = false
   let failReply = false
   const resources = new Map<string, Buffer[]>()
@@ -52,6 +54,16 @@ export function fakeFeishu() {
       historyCalls.push({ chatId, ...options })
       if (failHistory) throw new Error('history permission denied')
       return [...history]
+    },
+    listTopicMessages: async (threadId, pageToken) => {
+      topicHistoryCalls.push({ threadId, pageToken })
+      if (failHistory) throw new Error('history permission denied')
+      const page = Number(pageToken ?? 0)
+      return {
+        items: topicHistory[page] ?? [],
+        pageToken:
+          page + 1 < topicHistory.length ? String(page + 1) : undefined,
+      }
     },
     send: async (chatId, text) => {
       sent.push({ chatId, text })
@@ -97,6 +109,8 @@ export function fakeFeishu() {
     names,
     nameCalls,
     historyCalls,
+    topicHistory,
+    topicHistoryCalls,
     history,
     failHistory: () => {
       failHistory = true

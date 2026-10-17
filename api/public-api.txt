@@ -76,6 +76,7 @@
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     showRunControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; choose: (action: "queue" | "steer" | "stop") => boolean; }) => Promise<void>) | undefined
+    showTopicControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; stop: () => boolean; }) => Promise<void>) | undefined
     start: () => Promise<void> | void
     stop: () => Promise<void> | void
   interface CompactionEntry
@@ -213,7 +214,7 @@
     msg_type?: string | undefined
     sender?: { id?: string; sender_type?: string; } | undefined
   interface FeishuMessageEvent
-    message: { message_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
+    message: { message_id?: string; root_id?: string; thread_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
     sender: { sender_id?: { open_id?: string; }; }
   interface FeishuOptions
     appId?: string | undefined
@@ -229,6 +230,7 @@
     getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
     getSenderName: (openId: string) => Promise<string | undefined>
     listMessages: (chatId: string, options: { before?: string; limit: number; }) => Promise<FeishuHistoryMessage[]>
+    listTopicMessages: (threadId: string, pageToken?: string) => Promise<{ items: FeishuHistoryMessage[]; pageToken?: string; }>
     reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
     send: (chatId: string, text: string) => Promise<void>
     sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<void>
@@ -255,11 +257,14 @@
   interface IncomingMessage
     channelId: string
     images?: ImageContent[] | undefined
+    isNewTopic?: boolean | undefined
     raw?: unknown
     replyToId?: string | undefined
+    requireExistingSession?: boolean | undefined
     senderId: string
     senderName: string
     text: string
+    topic?: { rootId: string; threadId: string; } | undefined
   interface InputEvent
     images?: ImageContent[] | undefined
     source: InputSource
@@ -401,6 +406,7 @@
     recipientId: string
     replyToId?: string | undefined
     text: string
+    topic?: { rootId: string; threadId: string; } | undefined
   type PermissionDecision = 'allow' | 'deny' | 'ask'
   type PermissionRules = Record<string, PermissionDecision>
   interface PromptOptions

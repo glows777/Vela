@@ -2,7 +2,7 @@ import type { ImageContent } from '../messages.ts'
 import type { Role } from '../security/roles.ts'
 
 export interface IncomingMessage {
-  /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name it selects the shared session. */
+  /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
   channelId: string
   /** Who sent the message */
   senderId: string
@@ -11,10 +11,17 @@ export interface IncomingMessage {
   images?: ImageContent[]
   /** Reply to this service message instead of starting a new message (for group conversations). */
   replyToId?: string
+  /** The root message identifies a topic independently of its platform container. */
+  topic?: { rootId: string; threadId: string }
+  /** Admit only if this topic already has a saved session. */
+  requireExistingSession?: boolean
+  /** Set by the gateway before preparation when entering a topic without saved context. */
+  isNewTopic?: boolean
   raw?: unknown
 }
 
 export interface OutgoingMessage {
+  topic?: IncomingMessage['topic']
   channelId: string
   recipientId: string
   text: string
@@ -37,6 +44,12 @@ export interface ChannelDefinition {
     msg: IncomingMessage,
     activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
+
+  /** One Stop control for this topic run, removed when its lifetime ends. */
+  showTopicControls?: (
+    msg: IncomingMessage,
+    controls: { signal: AbortSignal; stop: () => boolean },
+  ) => Promise<void>
 
   /** Offer controls for this queued message while the preceding run is active. */
   showRunControls?: (

@@ -10,6 +10,8 @@ import type {
 export interface FeishuMessageEvent {
   message: {
     message_id?: string
+    root_id?: string
+    thread_id?: string
     create_time?: string
     chat_id: string
     /** `p2p` or `group` */
@@ -54,6 +56,10 @@ export interface FeishuTransport {
   ): Promise<Readable>
   getBotId(): Promise<string>
   getSenderName(openId: string): Promise<string | undefined>
+  listTopicMessages(
+    threadId: string,
+    pageToken?: string,
+  ): Promise<{ items: FeishuHistoryMessage[]; pageToken?: string }>
   listMessages(
     chatId: string,
     options: { before?: string; limit: number },
@@ -157,6 +163,25 @@ export function larkTransport(
         }),
       )
       return response.data?.user?.name
+    },
+    async listTopicMessages(threadId, pageToken) {
+      const response = checked(
+        await client.im.message.list({
+          params: {
+            container_id_type: 'thread',
+            container_id: threadId,
+            sort_type: 'ByCreateTimeAsc',
+            page_size: 50,
+            page_token: pageToken,
+          },
+        }),
+      )
+      return {
+        items: response.data?.items ?? [],
+        pageToken: response.data?.has_more
+          ? response.data.page_token
+          : undefined,
+      }
     },
     async listMessages(chatId, { before, limit }) {
       const response = checked(

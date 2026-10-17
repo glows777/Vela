@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type { SessionOptions, VelaSession } from '../vela-session.ts'
 import type {
   ChannelDefinition,
   IncomingMessage,
@@ -10,7 +10,7 @@ import type {
 
 interface GatewayOptions {
   /** Opens (or returns) a session by id; one shared session per channel and conversation */
-  session: (id: string) => VelaSession
+  session: (id: string, options?: SessionOptions) => VelaSession
   /** The open session with this id, without opening one */
   find: (id: string) => VelaSession | undefined
   /** A channel session with no message for this long is closed; the next message resumes it. Default 10 minutes */
@@ -30,14 +30,20 @@ interface ChannelRun {
   trigger: IncomingMessage
   lifetime: AbortController
   stopped: boolean
+  steering?: Promise<void>
 }
 
 /**
- * Shared session id for a chat, e.g. `feishu-oc_456`. Non-plain or long ids get a
- * hash suffix so different (channel, conversation) pairs cannot share history.
+ * Shared session id for a chat or topic, e.g. `feishu-oc_456`. Non-plain or long ids get a
+ * hash suffix so different (channel, conversation, topic root) tuples cannot share history.
  */
-export const channelSessionId = (channel: string, conversationId: string) => {
+export const channelSessionId = (
+  channel: string,
+  conversationId: string,
+  topicRootId?: string,
+) => {
   const parts = [channel, conversationId]
+  if (topicRootId !== undefined) parts.push(topicRootId)
   const plain = parts.join('-')
   if (parts.every((part) => PLAIN.test(part)) && plain.length <= 128)
     return plain
@@ -125,7 +131,7 @@ export class ChannelGateway {
 
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
-    const id = channelSessionId(channelName, msg.channelId)
+    const id = channelSessionId(channelName, msg.channelId, msg.topic?.rootId)
     clearTimeout(this.idleTimers.get(id))
     this.idleTimers.delete(id)
     const previous = this.queues.get(id) ?? Promise.resolve()
@@ -135,38 +141,48 @@ export class ChannelGateway {
     let chosen = false
     let decision: Promise<void> | undefined
     let card: Promise<void> | undefined
-    if (run && this.runIsLive(run) && channel?.showRunControls) {
-      card = channel
-        .showRunControls(msg, {
-          signal: run.lifetime.signal,
-          choose: (action) => {
-            if (chosen || !this.runIsLive(run)) return false
-            chosen = true
-            if (action === 'queue') return true
-            decision = this.applyRunChoice(channel, msg, run, action)
-              .then((handled) => {
-                consumed = handled
-              })
-              .catch((error) => {
-                run.session.emit({
-                  type: 'channel_error',
-                  channel: channelName,
-                  senderId: msg.senderId,
-                  error,
-                  aborted: this.stopped || isAbort(error),
-                })
-              })
-              .finally(() => {
-                if (run.stopped) consumed = true
-              })
-            return true
-          },
+    const apply = (action: 'steer' | 'stop'): Promise<void> => {
+      if (!run || !channel) return Promise.resolve()
+      return this.applyRunChoice(channel, msg, run, action)
+        .then((handled) => {
+          consumed = handled
         })
-        .catch((error) =>
-          this.logger.warn(
-            `[${channelName}] Failed to send run controls: ${errorMessage(error)}`,
-          ),
+        .catch((error) => {
+          run.session.emit({
+            type: 'channel_error',
+            channel: channelName,
+            senderId: msg.senderId,
+            error,
+            aborted: this.stopped || isAbort(error),
+          })
+        })
+        .finally(() => {
+          if (run.stopped) consumed = true
+        })
+    }
+    if (run && this.runIsLive(run) && channel) {
+      if (msg.topic) {
+        decision = (run.steering ?? Promise.resolve()).then(() =>
+          apply('steer'),
         )
+        run.steering = decision
+      } else if (channel.showRunControls) {
+        card = channel
+          .showRunControls(msg, {
+            signal: run.lifetime.signal,
+            choose: (action) => {
+              if (chosen || !this.runIsLive(run)) return false
+              chosen = true
+              if (action !== 'queue') decision = apply(action)
+              return true
+            },
+          })
+          .catch((error) =>
+            this.logger.warn(
+              `[${channelName}] Failed to send run controls: ${errorMessage(error)}`,
+            ),
+          )
+      }
     }
     const next = previous
       .then(async () => {
@@ -219,6 +235,7 @@ export class ChannelGateway {
       )
       return true
     }
+    if (msg.topic) msg.isNewTopic = false
     const prepared = channel.prepareMessage
       ? await channel.prepareMessage(msg, run.trigger)
       : msg
@@ -310,12 +327,25 @@ export class ChannelGateway {
     if (this.stopped) return
     await this.closing.get(id)
     const channel = this.channels.get(channelName)
+    let topicSession: VelaSession | undefined
+    if (msg.topic) {
+      topicSession = this.options.session(id)
+      const exists = this.resumed.has(topicSession)
+        ? topicSession.getEntries().length > 0
+        : await topicSession.resume()
+      if (msg.requireExistingSession && !exists) {
+        await topicSession.close()
+        return
+      }
+      this.resumed.add(topicSession)
+      msg.isNewTopic = !exists
+    }
     const prepared = channel?.prepareMessage
       ? await channel.prepareMessage(msg)
       : msg
     if (!prepared || this.stopped) return
     msg = prepared
-    const session = this.options.session(id)
+    const session = topicSession ?? this.options.session(id)
     session.channel = channelName
     // Channels admit only trusted chats; custom channels can still choose an SDK role.
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'owner'
@@ -378,6 +408,35 @@ export class ChannelGateway {
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
+      if (msg.topic && channel?.showTopicControls) {
+        await channel
+          .showTopicControls(msg, {
+            signal: run.lifetime.signal,
+            stop: () => {
+              if (!this.runIsLive(run)) return false
+              void this.applyRunChoice(channel, msg, run, 'stop').catch(
+                (error) =>
+                  session.emit({
+                    type: 'channel_error',
+                    channel: channelName,
+                    senderId: msg.senderId,
+                    error,
+                    aborted: this.stopped || isAbort(error),
+                  }),
+              )
+              return true
+            },
+          })
+          .catch(async (error) => {
+            await this.sendReply(
+              session,
+              channelName,
+              msg,
+              `Couldn't show the topic Stop control: ${errorMessage(error)}. Check the bot's send permission and retry.`,
+            )
+            throw error
+          })
+      }
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
     } catch (error) {
       session.emit({
@@ -414,6 +473,7 @@ export class ChannelGateway {
     const channel = this.channels.get(channelName)
     if (!replyText || !channel) return
     const reply: OutgoingMessage = {
+      topic: msg.topic,
       channelId: msg.channelId,
       recipientId: msg.senderId,
       text: replyText,
