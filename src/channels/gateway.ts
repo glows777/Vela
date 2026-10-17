@@ -235,6 +235,7 @@ export class ChannelGateway {
       )
       return true
     }
+    if (msg.topic) msg.isNewTopic = false
     const prepared = channel.prepareMessage
       ? await channel.prepareMessage(msg, run.trigger)
       : msg
@@ -337,6 +338,7 @@ export class ChannelGateway {
         return
       }
       this.resumed.add(topicSession)
+      msg.isNewTopic = !exists
     }
     const prepared = channel?.prepareMessage
       ? await channel.prepareMessage(msg)

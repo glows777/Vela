@@ -289,8 +289,7 @@ export class FeishuChannel implements ChannelDefinition {
     const name = await this.senderName(msg.senderId)
     const question = { name, text: msg.text }
     let text = `${name}: ${msg.text}`
-    if (msg.topic && msg.requireExistingSession)
-      return { ...msg, senderName: name, text }
+    if (msg.topic && !msg.isNewTopic) return { ...msg, senderName: name, text }
     if (msg.topic && this.transport) {
       try {
         const history = []

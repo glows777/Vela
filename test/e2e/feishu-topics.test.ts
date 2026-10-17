@@ -100,56 +100,63 @@ test('untagged top-level Feishu attachments are dropped before preparation or co
   expect(logs.join('\n')).not.toContain('private-')
 })
 
-test('a reply in a running topic steers that run without a Queue/Steer card', async () => {
-  const fake = fakeFeishu()
-  const t = createTestVela({
-    responses: [fauxHang('working')],
-    extensions: [
-      feishu({
-        appId: 'bot',
-        owners: ['ou_alice'],
-        chats: ['oc_group'],
-        transport: fake.transport,
-      }),
-    ],
-  })
-  await t.vela.ready()
-  await t.vela.startChannels()
-  try {
-    fake.deliver(
-      feishuEvent({
-        root_id: 'root',
-        thread_id: 'thread',
-        content: '{"text":"original task"}',
-      }),
-    )
-    await until(() => t.model.calls.length === 1)
-    fake.deliver(
-      feishuEvent(
-        {
+test.each([false, true])(
+  'a running topic reply steers without rereading history or Queue/Steer cards (mentioned=%s)',
+  async (mentioned) => {
+    const fake = fakeFeishu()
+    const t = createTestVela({
+      responses: [fauxHang('working')],
+      extensions: [
+        feishu({
+          appId: 'bot',
+          owners: ['ou_alice'],
+          chats: ['oc_group'],
+          transport: fake.transport,
+        }),
+      ],
+    })
+    await t.vela.ready()
+    await t.vela.startChannels()
+    try {
+      fake.deliver(
+        feishuEvent({
           root_id: 'root',
           thread_id: 'thread',
-          mentions: [],
-          content: '{"text":"use blue"}',
-        },
-        'ou_bob',
-      ),
-    )
-    await until(() =>
-      t
-        .eventsOf('queue_update')
-        .some((event) =>
-          event.steering.some((text) => text.includes('use blue')),
+          content: '{"text":"original task"}',
+        }),
+      )
+      await until(() => t.model.calls.length === 1)
+      fake.topicHistoryCalls.length = 0
+      fake.deliver(
+        feishuEvent(
+          {
+            root_id: 'root',
+            thread_id: 'thread',
+            mentions: mentioned
+              ? [{ key: '@_user_1', id: { open_id: 'ou_bot' } }]
+              : [],
+            content: '{"text":"use blue"}',
+          },
+          'ou_bob',
         ),
-    )
-    expect(fake.cards).toHaveLength(1)
-    expect(JSON.stringify(fake.cards[0])).not.toContain('Queue')
-    expect(JSON.stringify(fake.cards[0])).not.toContain('Steer')
-    expect(t.eventsOf('agent_start')).toHaveLength(1)
-  } finally {
-    await t.internals.gateway.stopAll()
-  }
-})
+      )
+      await until(() =>
+        t
+          .eventsOf('queue_update')
+          .some((event) =>
+            event.steering.some((text) => text.includes('use blue')),
+          ),
+      )
+      expect(fake.topicHistoryCalls).toEqual([])
+      expect(fake.cards).toHaveLength(1)
+      expect(JSON.stringify(fake.cards[0])).not.toContain('Queue')
+      expect(JSON.stringify(fake.cards[0])).not.toContain('Steer')
+      expect(t.eventsOf('agent_start')).toHaveLength(1)
+    } finally {
+      await t.internals.gateway.stopAll()
+    }
+  },
+)
 
 test('a topic mention reads every history page by thread ID including earlier bot answers', async () => {
   const fake = fakeFeishu()
@@ -480,4 +487,92 @@ test('a failed topic Stop-card send reports its cause without starting uncontrol
   await until(() => t.eventsOf('channel_error').length === 1)
   expect(fake.sent[0]?.text).toContain('card permission denied')
   expect(t.model.calls).toEqual([])
+})
+
+test('an explicit mention in an owned topic uses stored context without reinjecting platform history', async () => {
+  const fake = fakeFeishu()
+  const t = createTestVela({
+    responses: [fauxText('earlier answer'), fauxText('next answer')],
+    extensions: [
+      feishu({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(
+    feishuEvent({
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"first question"}',
+    }),
+  )
+  await until(() => fake.sent.length === 1)
+  fake.topicHistoryCalls.length = 0
+  fake.deliver(
+    feishuEvent({
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"follow-up mention"}',
+    }),
+  )
+  await until(() => fake.sent.length === 2)
+  expect(fake.topicHistoryCalls).toEqual([])
+  expect(t.model.calls[1]?.lastUserText).not.toContain('[Topic history]')
+  expect(JSON.stringify(t.model.calls[1]?.prompt)).toContain('earlier answer')
+})
+
+test('first topic entry excludes later history replies which arrive through their own events', async () => {
+  const fake = fakeFeishu()
+  fake.topicHistory.push([
+    historyMessage('earlier', 'ou_alice', 'earlier context', '1000'),
+    historyMessage('peer', 'ou_bob', 'same millisecond context', '2000'),
+    historyMessage('later', 'ou_bob', 'later instruction', '3000'),
+  ])
+  const t = createTestVela({
+    responses: [fauxText('first answer'), fauxText('later answer')],
+    extensions: [
+      feishu({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(
+    feishuEvent({
+      message_id: 'trigger',
+      root_id: 'root',
+      thread_id: 'thread',
+      create_time: '2000',
+      content: '{"text":"initial task"}',
+    }),
+  )
+  await until(() => fake.sent.length === 1)
+  expect(t.model.calls[0]?.lastUserText).not.toContain('later instruction')
+  expect(t.model.calls[0]?.lastUserText).toContain('same millisecond context')
+  fake.deliver(
+    feishuEvent(
+      {
+        mentions: [],
+        message_id: 'later',
+        root_id: 'root',
+        thread_id: 'thread',
+        create_time: '3000',
+        content: '{"text":"later instruction"}',
+      },
+      'ou_bob',
+    ),
+  )
+  await until(() => fake.sent.length === 2)
+  expect(
+    JSON.stringify(t.model.calls[1]?.prompt).match(/later instruction/g),
+  ).toHaveLength(1)
 })
