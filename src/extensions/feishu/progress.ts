@@ -6,9 +6,35 @@ import type {
 import type { FeishuCard } from './cards.ts'
 import type { FeishuTransport } from './transport.ts'
 
+function plain(value: string, limit: number): string {
+  return value
+    .replace(/[<>[\]`*_]/g, '')
+    .replace(/[\s\p{Cc}]+/gu, ' ')
+    .trim()
+    .slice(0, limit)
+}
+
+function inputSummary(args: unknown): string {
+  if (!args || typeof args !== 'object') return ''
+  const values = args as Record<string, unknown>
+  const value = ['command', 'path', 'query', 'pattern']
+    .map((key) => values[key])
+    .find((item) => typeof item === 'string')
+  if (typeof value !== 'string') return ''
+  // Do not put credential-bearing inputs on a shared card, even in truncated form.
+  if (
+    /\b(password|passwd|secret|token|authorization|api[_-]?key|bearer)\b|\b[A-Za-z_]\w*=|:\/\/[^/\s]+@|(?:^|\s)(?:-u|--user)(?:\s|=)|\b(?:sk-|ghp_|github_pat_)/i.test(
+      value,
+    )
+  )
+    return ''
+  return plain(value, 60)
+}
+
 /** One ordered writer for one shared card. Event listeners never await network I/O. */
 export class FeishuProgress implements ChannelRunFeedback {
-  private rows = new Map<string, string>()
+  private rows = new Map<string, { state: string; label: string }>()
+  private readonly startedAt = Date.now()
   private stage = 'Working'
   private pending = false
   private closed = false
@@ -33,6 +59,7 @@ export class FeishuProgress implements ChannelRunFeedback {
       event.type === 'tool_execution_update' ||
       event.type === 'tool_execution_end'
     ) {
+      if (event.parentToolCallId) return
       const state =
         event.type === 'tool_execution_end'
           ? event.isError
@@ -40,10 +67,14 @@ export class FeishuProgress implements ChannelRunFeedback {
             : 'Finished'
           : 'Running'
       this.stage = state === 'Running' ? 'Using tools' : 'Working'
-      this.rows.set(
-        event.toolCallId,
-        `${state}: ${event.toolName.slice(0, 80).replace(/[<>[\]`*_]/g, '')}`,
-      )
+      const summary =
+        event.type === 'tool_execution_end' ? '' : inputSummary(event.args)
+      const label =
+        event.type === 'tool_execution_end'
+          ? (this.rows.get(event.toolCallId)?.label ??
+            plain(event.toolName, 80))
+          : `${plain(event.toolName, 80)}${summary ? ` — ${summary}` : ''}`
+      this.rows.set(event.toolCallId, { state, label })
       if (this.rows.size > 8) this.rows.delete(this.rows.keys().next().value!)
       this.schedule()
     } else if (
@@ -56,6 +87,11 @@ export class FeishuProgress implements ChannelRunFeedback {
   }
 
   private snapshot(terminal = false): FeishuCard {
+    const seconds = Math.max(
+      0,
+      Math.floor((Date.now() - this.startedAt) / 1000),
+    )
+    const elapsed = `${Math.floor(seconds / 60)}m ${seconds % 60}s`
     return {
       ...this.card,
       header: terminal
@@ -66,7 +102,7 @@ export class FeishuProgress implements ChannelRunFeedback {
         elements: [
           {
             tag: 'markdown',
-            content: `${this.stage}\n${[...this.rows.values()].join('\n')}`,
+            content: `${this.stage} · ${elapsed}\n${[...this.rows.values()].map(({ state, label }) => `${state}: ${label}`).join('\n')}`,
           },
           ...(terminal ? [] : this.card.body.elements.slice(1)),
         ],
@@ -114,6 +150,12 @@ export class FeishuProgress implements ChannelRunFeedback {
     await new Promise((resolve) =>
       setTimeout(resolve, Math.max(0, 250 - (Date.now() - this.lastWrite))),
     )
-    await this.transport.patchCard(this.messageId, this.snapshot(true))
+    this.lastWrite = Date.now()
+    try {
+      await this.transport.patchCard(this.messageId, this.snapshot(true))
+    } catch (error) {
+      this.failure = error
+      throw error
+    }
   }
 }

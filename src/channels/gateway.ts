@@ -315,7 +315,11 @@ export class ChannelGateway {
       await Promise.all(inputs.map((input) => input.finish('failed')))
       return true
     }
-    if (!this.runIsLive(run)) return false
+    if (!this.runIsLive(run)) {
+      if (!run.stopped) return false
+      await Promise.all(inputs.map((input) => input.finish('stopped')))
+      return true
+    }
     run.inputs.push(...inputs)
     run.session.emit({
       type: 'channel_message',
@@ -556,9 +560,10 @@ export class ChannelGateway {
     }
     this.runs.set(id, run)
     let feedback: ChannelRunFeedback | undefined
-    let feedbackFailed = false
+    let feedbackErrorReported = false
     const report = async (error: unknown) => {
-      feedbackFailed = true
+      if (feedbackErrorReported) return
+      feedbackErrorReported = true
       await this.feedbackError(channelName, msg, error)
     }
     const unsubscribe = session.subscribe((event) => {
@@ -625,7 +630,7 @@ export class ChannelGateway {
       try {
         await feedback?.finish(outcome)
       } catch (error) {
-        if (!feedbackFailed) await report(error)
+        await report(error)
       }
       this.runs.delete(id)
       this.active.delete(session)
@@ -633,9 +638,15 @@ export class ChannelGateway {
     if (run.handedOff) return
     if (outcome === 'stopped')
       answer = msg.topic ? 'Stopped the current run.' : ''
-    if (answer && !(await this.sendReply(session, channelName, msg, answer)))
+    if (answer && !(await this.sendReply(session, channelName, msg, answer))) {
       outcome = 'failed'
-    return feedbackFailed ? 'failed' : outcome
+      try {
+        await feedback?.finish(outcome)
+      } catch (error) {
+        await report(error)
+      }
+    }
+    return outcome
   }
 
   private async sendReply(
