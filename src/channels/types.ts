@@ -1,5 +1,6 @@
 import type { ImageContent } from '../messages.ts'
 import type { Role } from '../security/roles.ts'
+import type { SessionOptions } from '../vela-session.ts'
 
 export interface IncomingMessage {
   /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
@@ -28,9 +29,27 @@ export interface OutgoingMessage {
   replyToId?: string
 }
 
+/** The gateway's observed topic and current execution state, not a durable directory. */
+export interface ChannelTopic {
+  rootId: string
+  threadId: string
+  task: string
+  state: 'running' | 'queued' | 'idle'
+}
+
+export interface ChannelRuntime {
+  context(sessionId: string): IncomingMessage | undefined
+  topics(chatId: string): ChannelTopic[]
+  /** Hand off without waiting for the target run; suppress the source run's duplicate reply. */
+  dispatch(sourceSessionId: string, message: IncomingMessage): void
+}
+
 export interface ChannelDefinition {
   name: string
   description: string
+
+  connect?: (runtime: ChannelRuntime) => void
+  sessionOptions?: (msg: IncomingMessage) => SessionOptions
 
   start(): Promise<void> | void
   stop(): Promise<void> | void
