@@ -1,0 +1,79 @@
+/** The fields used from a `card.action.trigger` callback (v2). */
+export interface FeishuCardAction {
+  operator?: { open_id?: string }
+  context?: { open_chat_id?: string }
+  action?: { value?: unknown }
+}
+
+export interface FeishuCardResponse {
+  toast: { type: 'success' | 'info'; content: string }
+}
+
+export interface FeishuCard {
+  schema: '2.0'
+  header: { title: { tag: 'plain_text'; content: string } }
+  body: {
+    elements: {
+      tag: 'markdown' | 'column_set'
+      content?: string
+      columns?: {
+        tag: 'column'
+        width: 'weighted'
+        weight: number
+        elements: {
+          tag: 'button'
+          text: { tag: 'plain_text'; content: string }
+          type: 'primary' | 'default' | 'danger'
+          behaviors: {
+            type: 'callback'
+            value: { action: string; token: string }
+          }[]
+        }[]
+      }[]
+    }[]
+  }
+}
+
+export function runControlsCard(token: string): FeishuCard {
+  return {
+    schema: '2.0',
+    header: { title: { tag: 'plain_text', content: 'A run is in progress' } },
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content:
+            'Your message is queued by default. Steer adds it to the current task for one combined reply. Stop cancels the current run and discards this queued message.',
+        },
+        {
+          tag: 'column_set',
+          columns: (['queue', 'steer', 'stop'] as const).map((action) => ({
+            tag: 'column',
+            width: 'weighted',
+            weight: 1,
+            elements: [
+              {
+                tag: 'button',
+                text: {
+                  tag: 'plain_text',
+                  content: {
+                    queue: 'Queue (default)',
+                    steer: 'Steer',
+                    stop: 'Stop',
+                  }[action],
+                },
+                type:
+                  action === 'queue'
+                    ? 'primary'
+                    : action === 'stop'
+                      ? 'danger'
+                      : 'default',
+                behaviors: [{ type: 'callback', value: { action, token } }],
+              },
+            ],
+          })),
+        },
+      ],
+    },
+  }
+}

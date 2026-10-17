@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
-import { extname, join, resolve } from 'node:path'
-import type { Readable } from 'node:stream'
-import * as lark from '@larksuiteoapi/node-sdk'
+import { join, resolve } from 'node:path'
 import { channelSessionId } from '../../channels/gateway.ts'
 import { imageMimeType } from '../../images/metadata.ts'
 import type {
@@ -14,96 +12,19 @@ import type {
 } from '../../index.ts'
 import { errorMessage } from '../../logger.ts'
 import type { ImageContent } from '../../messages.ts'
-
-/** The parts of an `im.message.receive_v1` event the channel reads */
-export interface FeishuMessageEvent {
-  message: {
-    message_id?: string
-    create_time?: string
-    chat_id: string
-    /** `p2p` or `group` */
-    chat_type?: string
-    message_type: string
-    content: string
-    mentions?: { key: string; id?: { open_id?: string } }[]
-  }
-  sender: { sender_id?: { open_id?: string } }
-}
-
-/** History items returned newest first by Feishu's message API. Times are milliseconds. */
-export interface FeishuHistoryMessage {
-  message_id?: string
-  create_time?: string
-  msg_type?: string
-  body?: { content?: string }
-  sender?: { id?: string; sender_type?: string }
-  mentions?: { key: string }[]
-  deleted?: boolean
-}
-
-export interface FeishuSentMessage {
-  messageId: string
-  createTime: string
-}
-
-/** The fields used from a `card.action.trigger` callback (v2). */
-export interface FeishuCardAction {
-  operator?: { open_id?: string }
-  context?: { open_chat_id?: string }
-  action?: { value?: unknown }
-}
-
-export interface FeishuCardResponse {
-  toast: { type: 'success' | 'info'; content: string }
-}
-
-export interface FeishuCard {
-  schema: '2.0'
-  header: { title: { tag: 'plain_text'; content: string } }
-  body: {
-    elements: {
-      tag: 'markdown' | 'column_set'
-      content?: string
-      columns?: {
-        tag: 'column'
-        width: 'weighted'
-        weight: number
-        elements: {
-          tag: 'button'
-          text: { tag: 'plain_text'; content: string }
-          type: 'primary' | 'default' | 'danger'
-          behaviors: {
-            type: 'callback'
-            value: { action: string; token: string }
-          }[]
-        }[]
-      }[]
-    }[]
-  }
-}
-
-/** The connection to Feishu: receives message events and sends text to a chat (lark's long connection by default). */
-export interface FeishuTransport {
-  start(
-    onMessage: (event: FeishuMessageEvent) => void,
-    onAction: (event: FeishuCardAction) => FeishuCardResponse,
-  ): Promise<void>
-  stop(): void
-  send(chatId: string, text: string): Promise<void>
-  reply(messageId: string, text: string): Promise<FeishuSentMessage>
-  sendCard(chatId: string, card: FeishuCard, replyToId?: string): Promise<void>
-  getResource(
-    messageId: string,
-    key: string,
-    type: 'image' | 'file',
-  ): Promise<Readable>
-  getBotId(): Promise<string>
-  getSenderName(openId: string): Promise<string | undefined>
-  listMessages(
-    chatId: string,
-    options: { before?: string; limit: number },
-  ): Promise<FeishuHistoryMessage[]>
-}
+import {
+  type FeishuCardAction,
+  type FeishuCardResponse,
+  runControlsCard,
+} from './cards.ts'
+import { readGroupContext } from './history.ts'
+import { imageKeys, messageText, safeName } from './messages.ts'
+import {
+  type FeishuMessageEvent,
+  type FeishuSentMessage,
+  type FeishuTransport,
+  larkTransport,
+} from './transport.ts'
 
 export interface FeishuChannelConfig {
   appId: string
@@ -221,47 +142,7 @@ export class FeishuChannel implements ChannelDefinition {
     }
     this.controls.set(token, { msg, choose: controls.choose, clear })
     controls.signal.addEventListener('abort', clear, { once: true })
-    const card: FeishuCard = {
-      schema: '2.0',
-      header: { title: { tag: 'plain_text', content: 'A run is in progress' } },
-      body: {
-        elements: [
-          {
-            tag: 'markdown',
-            content:
-              'Your message is queued by default. Steer adds it to the current task for one combined reply. Stop cancels the current run and discards this queued message.',
-          },
-          {
-            tag: 'column_set',
-            columns: (['queue', 'steer', 'stop'] as const).map((action) => ({
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-                  text: {
-                    tag: 'plain_text',
-                    content: {
-                      queue: 'Queue (default)',
-                      steer: 'Steer',
-                      stop: 'Stop',
-                    }[action],
-                  },
-                  type:
-                    action === 'queue'
-                      ? 'primary'
-                      : action === 'stop'
-                        ? 'danger'
-                        : 'default',
-                  behaviors: [{ type: 'callback', value: { action, token } }],
-                },
-              ],
-            })),
-          },
-        ],
-      },
-    }
+    const card = runControlsCard(token)
     try {
       // Control cards are not answers and must not advance the chat-history boundary.
       await this.transport.sendCard(msg.channelId, card, msg.replyToId)
@@ -397,59 +278,19 @@ export class FeishuChannel implements ChannelDefinition {
           before: event.message.create_time,
           limit: 50,
         })
-        const previous = this.lastReplies.get(msg.channelId)
-        const earlier: { name: string; text: string }[] = []
-        const seen = new Set<string>()
-        const historyImages: ImageContent[][] = []
-        let imageCount = 0
-        for (const item of history.slice(0, 50)) {
-          if (item.message_id && seen.has(item.message_id)) continue
-          if (item.message_id) seen.add(item.message_id)
-          if (
-            (activeTrigger?.create_time &&
-              item.create_time &&
-              Number(item.create_time) < Number(activeTrigger.create_time)) ||
-            (previous &&
-              (item.message_id === previous.messageId ||
-                Number(item.create_time) <= Number(previous.createTime))) ||
-            (item.sender?.sender_type === 'app' &&
-              item.sender.id === this.config.appId &&
-              (item.msg_type === 'text' || item.msg_type === 'post'))
-          )
-            break
-          if (
-            item.deleted ||
-            // Other messages can share this millisecond; exclude the known trigger by id.
-            (activeTrigger?.message_id &&
-              item.message_id === activeTrigger.message_id) ||
-            item.message_id === event.message.message_id ||
-            (event.message.create_time &&
-              Number(item.create_time) > Number(event.message.create_time))
-          )
-            continue
-          const historyMessage = {
-            chat_id: msg.channelId,
-            message_type: item.msg_type ?? '',
-            content: item.body?.content ?? '',
-            mentions: item.mentions,
-            message_id: item.message_id,
-          }
-          const body = messageText(historyMessage)
-          if (!body) continue
-          const attachments = await this.downloadImages(
-            historyMessage,
-            imageCache,
-            4 - imageCount,
-          )
-          imageCount += attachments.length
-          historyImages.push(attachments)
-          earlier.push({
-            name: await this.senderName(item.sender?.id ?? 'unknown'),
-            text: body,
-          })
-        }
-        images.unshift(...historyImages.reverse().flat())
-        text = formatGroupContext(earlier.reverse(), question)
+        const context = await readGroupContext(history, {
+          chatId: msg.channelId,
+          message: event.message,
+          activeTrigger,
+          previous: this.lastReplies.get(msg.channelId),
+          appId: this.config.appId,
+          question,
+          senderName: (id) => this.senderName(id),
+          downloadImages: (message, limit) =>
+            this.downloadImages(message, imageCache, limit),
+        })
+        images.unshift(...context.images)
+        text = context.text
       } catch (error) {
         this.config.logger.warn(
           `[feishu] Failed to fetch context for chat ${msg.channelId}: ${String(error)}. History images require im:resource permission.`,
@@ -626,251 +467,4 @@ export class FeishuChannel implements ChannelDefinition {
   }
 }
 
-/**
- * Text and attachment placeholders, with `@` mentions removed; undefined for unsupported
- * types. Malformed content counts as empty.
- */
-export function messageText(
-  message: FeishuMessageEvent['message'],
-): string | undefined {
-  if (!['text', 'post', 'image', 'file'].includes(message.message_type))
-    return undefined
-  let content: unknown
-  try {
-    content = JSON.parse(message.content)
-  } catch {
-    return ''
-  }
-  if (!content || typeof content !== 'object') return ''
-  if (message.message_type === 'image')
-    return imageKeys(message).length ? '[image]' : ''
-  if (message.message_type === 'file')
-    return `[file: ${safeName(String((content as { file_name?: unknown }).file_name ?? 'file'))}]`
-  let text =
-    message.message_type === 'text'
-      ? String((content as { text?: unknown }).text ?? '')
-      : postText(content)
-  // Strip @ mention markers (`@_user_1`)
-  for (const mention of message.mentions ?? [])
-    text = text.replaceAll(mention.key, '')
-  return text.trim() || (imageKeys(message).length ? '[image]' : '')
-}
-
-/** A post is `{ title, content: [[element]] }`, possibly wrapped in a language key (`{ zh_cn: {...} }`) */
-function postText(content: object): string {
-  const post = ('content' in content ? content : Object.values(content)[0]) as
-    | { title?: unknown; content?: unknown }
-    | undefined
-  if (!post || typeof post !== 'object') return ''
-  const lines = Array.isArray(post.content)
-    ? post.content.map((line) =>
-        Array.isArray(line)
-          ? line
-              .map((element: { tag?: string; text?: unknown }) =>
-                // `at` elements are mentions, images and media have no text
-                element?.tag === 'text' ||
-                element?.tag === 'a' ||
-                element?.tag === 'code_block'
-                  ? String(element.text ?? '')
-                  : '',
-              )
-              .join('')
-          : '',
-      )
-    : []
-  const title = typeof post.title === 'string' && post.title ? [post.title] : []
-  return [...title, ...lines].join('\n')
-}
-
-/** Already-resolved names and plain text, in chronological order. */
-export function formatGroupContext(
-  history: readonly { name: string; text: string }[],
-  question: { name: string; text: string },
-): string {
-  const named = (item: { name: string; text: string }) =>
-    `${item.name}: ${item.text}`
-  return history.length
-    ? `[Chat since last reply]\n${history.slice(-50).map(named).join('\n')}\n\n[Question]\n${named(question)}`
-    : named(question)
-}
-
 class FileTooLarge extends Error {}
-
-function safeName(name: string, maxBytes = 255): string {
-  const clean =
-    (name.split(/[\\/]/).at(-1) ?? '')
-      .replaceAll('..', '')
-      .replace(/[:?*"<>|]/g, '_')
-      .split('')
-      .filter((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
-      .join('')
-      .replace(/[. ]+$/, '') || 'file'
-  const suffix = extname(clean)
-  const extension = utf8Prefix(suffix, 32)
-  return (
-    (
-      utf8Prefix(
-        clean.slice(0, clean.length - suffix.length),
-        maxBytes - Buffer.byteLength(extension),
-      ) + extension
-    ).replace(/[. ]+$/, '') || 'file'
-  )
-}
-
-function utf8Prefix(text: string, maxBytes: number): string {
-  let result = ''
-  let bytes = 0
-  for (const char of text) {
-    bytes += Buffer.byteLength(char)
-    if (bytes > maxBytes) break
-    result += char
-  }
-  return result
-}
-
-function imageKeys(message: FeishuMessageEvent['message']): string[] {
-  if (message.message_type !== 'image' && message.message_type !== 'post')
-    return []
-  let content: unknown
-  try {
-    content = JSON.parse(message.content)
-  } catch {
-    return []
-  }
-  if (!content || typeof content !== 'object') return []
-  if (message.message_type === 'image')
-    return 'image_key' in content && typeof content.image_key === 'string'
-      ? [content.image_key]
-      : []
-  const post = 'content' in content ? content : Object.values(content)[0]
-  if (
-    !post ||
-    typeof post !== 'object' ||
-    !('content' in post) ||
-    !Array.isArray(post.content)
-  )
-    return []
-  return post.content.flatMap((line: unknown) =>
-    Array.isArray(line)
-      ? line.flatMap((element) =>
-          element?.tag === 'img' && typeof element.image_key === 'string'
-            ? [element.image_key]
-            : [],
-        )
-      : [],
-  )
-}
-
-function checked<T extends { code?: number; msg?: string }>(response: T): T {
-  if (response.code !== undefined && response.code !== 0)
-    throw new Error(
-      `Feishu ${response.code}: ${response.msg ?? 'request failed'}`,
-    )
-  return response
-}
-
-function larkTransport(appId: string, appSecret: string): FeishuTransport {
-  const client = new lark.Client({ appId, appSecret })
-  let wsClient: lark.WSClient | undefined
-  return {
-    async start(onMessage, onAction) {
-      const dispatcher = new lark.EventDispatcher({})
-      dispatcher.register({
-        'im.message.receive_v1': (data) =>
-          onMessage(data as FeishuMessageEvent),
-        'card.action.trigger': (data: FeishuCardAction) => onAction(data),
-      })
-      wsClient = new lark.WSClient({
-        appId,
-        appSecret,
-        loggerLevel: lark.LoggerLevel.warn,
-      })
-      await wsClient.start({ eventDispatcher: dispatcher })
-    },
-    stop() {
-      wsClient?.close()
-    },
-    async send(chatId, text) {
-      checked(
-        await client.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'text',
-            content: JSON.stringify({ text }),
-          },
-        }),
-      )
-    },
-    async sendCard(chatId, card, replyToId) {
-      const data = { msg_type: 'interactive', content: JSON.stringify(card) }
-      checked(
-        replyToId
-          ? await client.im.message.reply({
-              path: { message_id: replyToId },
-              data,
-            })
-          : await client.im.message.create({
-              params: { receive_id_type: 'chat_id' },
-              data: { ...data, receive_id: chatId },
-            }),
-      )
-    },
-    async reply(messageId, text) {
-      const response = checked(
-        await client.im.message.reply({
-          path: { message_id: messageId },
-          data: { msg_type: 'text', content: JSON.stringify({ text }) },
-        }),
-      )
-      const data = response.data
-      if (!data?.message_id || !data.create_time)
-        throw new Error('Feishu reply returned no message receipt')
-      return { messageId: data.message_id, createTime: data.create_time }
-    },
-    async getResource(messageId, key, type) {
-      const resource = await client.im.messageResource.get({
-        path: { message_id: messageId, file_key: key },
-        params: { type },
-      })
-      return resource.getReadableStream()
-    },
-    async getBotId() {
-      const response = checked(
-        await client.request<{
-          code?: number
-          msg?: string
-          bot?: { open_id?: string }
-        }>({ url: '/open-apis/bot/v3/info', method: 'GET' }),
-      )
-      if (!response.bot?.open_id)
-        throw new Error('Feishu bot info returned no open_id')
-      return response.bot.open_id
-    },
-    async getSenderName(openId) {
-      const response = checked(
-        await client.contact.user.get({
-          path: { user_id: openId },
-          params: { user_id_type: 'open_id' },
-        }),
-      )
-      return response.data?.user?.name
-    },
-    async listMessages(chatId, { before, limit }) {
-      const response = checked(
-        await client.im.message.list({
-          params: {
-            container_id_type: 'chat',
-            container_id: chatId,
-            sort_type: 'ByCreateTimeDesc',
-            page_size: Math.min(50, limit),
-            ...(before
-              ? { end_time: String(Math.floor(Number(before) / 1000) + 1) }
-              : {}),
-          },
-        }),
-      )
-      return response.data?.items ?? []
-    },
-  }
-}

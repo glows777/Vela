@@ -3,7 +3,7 @@ import type {
   FeishuHistoryMessage,
   FeishuMessageEvent,
   FeishuTransport,
-} from '../../src/extensions/feishu/channel.ts'
+} from '../../src/extensions/feishu/transport.ts'
 
 /** Offline Feishu boundary; the actual extension and gateway still process every event. */
 export function fakeFeishu() {
