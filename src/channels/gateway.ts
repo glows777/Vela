@@ -4,6 +4,7 @@ import type { ModelMessage } from '../messages.ts'
 import type { SessionOptions, VelaSession } from '../vela-session.ts'
 import type {
   ChannelDefinition,
+  ChannelTopic,
   IncomingMessage,
   OutgoingMessage,
 } from './types.ts'
@@ -30,6 +31,7 @@ interface ChannelRun {
   trigger: IncomingMessage
   lifetime: AbortController
   stopped: boolean
+  handedOff?: boolean
   steering?: Promise<void>
 }
 
@@ -69,6 +71,10 @@ export class ChannelGateway {
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Sessions being closed: a new message for the id waits until the close is done, then reopens it */
   private closing = new Map<string, Promise<void>>()
+  private topics = new Map<
+    string,
+    { channel: string; chatId: string; topic: Omit<ChannelTopic, 'state'> }
+  >()
   private stopped = false
   private readonly logger: VelaLogger
 
@@ -84,6 +90,41 @@ export class ChannelGateway {
   register(channel: ChannelDefinition): void {
     this.channels.set(channel.name, channel)
 
+    channel.connect?.({
+      context: (id) => this.runs.get(id)?.trigger,
+      topics: (chatId) =>
+        [...this.topics.entries()]
+          .filter(
+            ([, item]) =>
+              item.channel === channel.name && item.chatId === chatId,
+          )
+          .map(([id, item]) => ({
+            ...item.topic,
+            state: this.runs.has(id)
+              ? 'running'
+              : this.queues.has(id)
+                ? 'queued'
+                : 'idle',
+          })),
+      dispatch: (id, msg) => {
+        const source = this.runs.get(id)
+        if (!source || !this.runIsLive(source))
+          throw new Error('The source channel run has ended')
+        const targetId = channelSessionId(
+          channel.name,
+          msg.channelId,
+          msg.topic?.rootId,
+        )
+        if (msg.topic && !this.topics.has(targetId))
+          this.topics.set(targetId, {
+            channel: channel.name,
+            chatId: msg.channelId,
+            topic: { ...msg.topic, task: msg.text.slice(0, 120) },
+          })
+        source.handedOff = true
+        void this.handleIncoming(channel.name, msg)
+      },
+    })
     channel.onMessage?.((msg: IncomingMessage) => {
       return this.handleIncoming(channel.name, msg)
     })
@@ -329,7 +370,7 @@ export class ChannelGateway {
     const channel = this.channels.get(channelName)
     let topicSession: VelaSession | undefined
     if (msg.topic) {
-      topicSession = this.options.session(id)
+      topicSession = this.options.session(id, channel?.sessionOptions?.(msg))
       const exists = this.resumed.has(topicSession)
         ? topicSession.getEntries().length > 0
         : await topicSession.resume()
@@ -340,12 +381,20 @@ export class ChannelGateway {
       this.resumed.add(topicSession)
       msg.isNewTopic = !exists
     }
+    const task = msg.text
     const prepared = channel?.prepareMessage
       ? await channel.prepareMessage(msg)
       : msg
     if (!prepared || this.stopped) return
     msg = prepared
-    const session = topicSession ?? this.options.session(id)
+    const session =
+      topicSession ?? this.options.session(id, channel?.sessionOptions?.(msg))
+    if (msg.topic && !this.topics.has(id))
+      this.topics.set(id, {
+        channel: channelName,
+        chatId: msg.channelId,
+        topic: { ...msg.topic, task: task.slice(0, 120) },
+      })
     session.channel = channelName
     // Channels admit only trusted chats; custom channels can still choose an SDK role.
     session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'owner'
@@ -454,7 +503,7 @@ export class ChannelGateway {
       this.active.delete(session)
     }
 
-    if (run.stopped) return
+    if (run.stopped || run.handedOff) return
     if (session.messages.at(-1) === previous) return
     await this.sendReply(
       session,

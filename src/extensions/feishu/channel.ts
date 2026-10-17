@@ -20,6 +20,7 @@ import {
 } from './cards.ts'
 import { readGroupContext, readTopicContext } from './history.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
+import { FeishuTopics } from './topics.ts'
 import {
   type FeishuMessageEvent,
   type FeishuSentMessage,
@@ -49,6 +50,16 @@ export const UNSUPPORTED_MESSAGE =
 export class FeishuChannel implements ChannelDefinition {
   name = 'feishu'
   description = 'Feishu bot message channel (long-connection mode)'
+
+  readonly topics = new FeishuTopics(() => {
+    if (!this.transport) throw new Error('Feishu is not connected')
+    return this.transport
+  })
+  connect: NonNullable<ChannelDefinition['connect']> = (runtime) => {
+    this.topics.runtime = runtime
+  }
+  sessionOptions: NonNullable<ChannelDefinition['sessionOptions']> = (msg) =>
+    this.topics.sessionOptions(msg)
 
   private config: FeishuChannelConfig
   private messageHandler?: (msg: IncomingMessage) => void | Promise<void>
@@ -133,7 +144,8 @@ export class FeishuChannel implements ChannelDefinition {
       this.stopped ||
       controls.signal.aborted ||
       !this.transport ||
-      messageText((msg.raw as FeishuMessageEvent).message) === undefined
+      (msg.raw !== undefined &&
+        messageText((msg.raw as FeishuMessageEvent).message) === undefined)
     )
       return
     const token = randomUUID()
@@ -237,6 +249,7 @@ export class FeishuChannel implements ChannelDefinition {
     activeMessage?: IncomingMessage,
   ): Promise<IncomingMessage | undefined> {
     if (this.stopped) return
+    if (!msg.raw) return msg
     const event = msg.raw as FeishuMessageEvent
     const activeTrigger = (activeMessage?.raw as FeishuMessageEvent | undefined)
       ?.message
@@ -283,6 +296,7 @@ export class FeishuChannel implements ChannelDefinition {
       })
       return
     }
+    this.topics.triggerImages.set(event, [...images])
     msg = { ...msg, text: input, images }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (msg.text.startsWith('/')) return msg

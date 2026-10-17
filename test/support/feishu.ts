@@ -11,6 +11,8 @@ export function fakeFeishu() {
   let action: ((event: CardAction) => unknown) | undefined
   const sent: { chatId?: string; messageId?: string; text: string }[] = []
   const cards: { chatId: string; replyToId?: string; card: Card }[] = []
+  const topics: { messageId: string; task: string }[] = []
+  const forwards: { messageId: string; threadId: string }[] = []
   const names = new Map<string, string>([
     ['ou_alice', 'Alice'],
     ['ou_bob', 'Bob'],
@@ -29,6 +31,23 @@ export function fakeFeishu() {
     type: 'image' | 'file'
   }[] = []
   const transport: FeishuTransport = {
+    startTopic: async (messageId, task) => {
+      if (failReply) throw new Error('topic permission denied')
+      topics.push({ messageId, task })
+      return {
+        messageId: `topic_${messageId}`,
+        rootId: messageId,
+        threadId: `thread_${messageId}`,
+        createTime: String(Date.now()),
+      }
+    },
+    forward: async (messageId, threadId) => {
+      forwards.push({ messageId, threadId })
+      return {
+        messageId: `forward_${messageId}`,
+        createTime: String(Date.now()),
+      }
+    },
     getResource: async (
       messageId: string,
       key: string,
@@ -79,6 +98,8 @@ export function fakeFeishu() {
   }
   return {
     transport,
+    topics,
+    forwards,
     resources,
     resourceCalls,
     sent,
