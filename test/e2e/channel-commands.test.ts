@@ -80,7 +80,7 @@ test.each([
     const admitSpy = spyOn(
       ChannelDirectory.prototype,
       'admit',
-    ).mockImplementation(function (key, channel, msg) {
+    ).mockImplementation(function (this: ChannelDirectory, key, channel, msg) {
       const result = admit.call(this, key, channel, msg)
       if (msg.replyToId === 'later-input') {
         admitted = result
