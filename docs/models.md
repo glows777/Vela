@@ -163,6 +163,12 @@ Like pi, a level the model doesn't support is clamped to the nearest supported o
 
 The clamp looks for the next higher supported level first, then lower. `/thinking` lists the supported levels and says when the level you picked was clamped; the session records the level actually used, and switching models clamps again.
 
+For `openai-responses` providers loaded from configuration, Vela uses the effective model metadata (your merged model entry, then the catalog) before the SDK serializes the request. `reasoning: true` enables the SDK's reasoning path even for an unfamiliar model id. False or missing metadata leaves the SDK's own capability inference unchanged. String values in `thinkingLevelMap` map the selected level to `reasoning.effort`; missing values retain the generic effort (`off` uses `none`). Explicit `providerOptions.openai.forceReasoning` and `reasoningEffort` take precedence. Native OpenAI model-specific effort validation still applies.
+
+Responses requests to the exact hostname `api.deepseek.com` default to the `system` role: [DeepSeek treats `developer` as `user`](https://api-docs.deepseek.com/guides/responses_api/). An explicit `systemMessageMode` wins; ChatGPT OAuth's existing request rules remain authoritative. Other protocols and hosts keep their existing role behavior.
+
+This enables thinking controls, not full DeepSeek Responses compatibility. With the installed SDK, forcing reasoning also filters `temperature` and `topP` for unfamiliar model ids, even with effort `none`, and adds `reasoning.encrypted_content` to `include` when callers set `store: false`. DeepSeek does not support encrypted reasoning or that include field. Plaintext reasoning stream parsing and replay are not implemented by this change.
+
 ## Extension providers
 
 An extension can register a provider with `vela.registerProvider(name, { models, createModel })`, where `createModel(id, ctx)` returns any AI SDK model. Afterwards `name/<id>` works with `--model`, `defaultModel`, `/model` and `session.setModel()`. A provider can also offer `/login`: `oauth` (an `OAuthLogin` with `login` and `refresh`) or `apiKeyLogin: true`, and reads the stored credential per request with `await ctx.credential()`, which refreshes an expiring OAuth token first. Use this for protocols or authentication that `models.json` cannot express. Provider names are not prefixed with the extension name, and registering a name that already exists is an error. See [Extensions](extensions.md#registerprovider) and `examples/extensions/local-provider.ts`.
