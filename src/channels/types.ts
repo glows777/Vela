@@ -29,7 +29,7 @@ export interface OutgoingMessage {
   replyToId?: string
 }
 
-/** The gateway's observed topic and current execution state, not a durable directory. */
+/** An owned topic from the durable directory with its current execution state. */
 export interface ChannelTopic {
   rootId: string
   threadId: string
@@ -40,6 +40,7 @@ export interface ChannelTopic {
 export interface ChannelRuntime {
   context(sessionId: string): IncomingMessage | undefined
   topics(chatId: string): ChannelTopic[]
+  topicCoverage(): string
   /** Hand off without waiting for the target run; suppress the source run's duplicate reply. */
   dispatch(sourceSessionId: string, message: IncomingMessage): void
 }
@@ -73,6 +74,12 @@ export interface ChannelDefinition {
 
   connect?: (runtime: ChannelRuntime) => void
   sessionOptions?: (msg: IncomingMessage) => { permissions?: PermissionRules }
+
+  /** Recheck current channel access before restoring work from the directory. False skips recovery. */
+  canRecover?: (
+    message: IncomingMessage,
+    chatKind: 'group' | 'direct',
+  ) => boolean
 
   start(): Promise<void> | void
   stop(): Promise<void> | void

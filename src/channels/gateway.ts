@@ -1,7 +1,9 @@
 import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 import type { SessionOptions, VelaSession } from '../vela-session.ts'
 import { TopicAdmission } from './admission.ts'
+import { ChannelDirectory } from './directory.ts'
 import { RunFeedback } from './feedback.ts'
+import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
 
 import type {
@@ -14,6 +16,7 @@ import type {
 export { channelSessionId } from './session-id.ts'
 
 interface GatewayOptions {
+  dataDir?: string
   /** Opens (or returns) a session by id; one shared session per channel and conversation */
   session: (id: string, options?: SessionOptions) => VelaSession
   /** The open session with this id, without opening one */
@@ -29,6 +32,9 @@ const BUSY_RECHECK_MS = 1000
 const MAX_SAVE_FAILURES = 3
 
 export class ChannelGateway {
+  private readonly directory: ChannelDirectory
+  private readonly recovery: ChannelRecovery
+  private admitting = new Map<string, Promise<void>>()
   private channels = new Map<string, ChannelDefinition>()
   /** Messages are processed serially per session: the next message in a chat waits for the previous reply */
   private queues = new Map<string, Promise<void>>()
@@ -45,8 +51,14 @@ export class ChannelGateway {
 
   constructor(private options: GatewayOptions) {
     this.logger = options.logger ?? silentLogger
-    this.admission = new TopicAdmission((id, opts) => options.session(id, opts))
+    this.directory = new ChannelDirectory(options.dataDir)
+    this.recovery = new ChannelRecovery(this.directory)
+    this.admission = new TopicAdmission(this.directory, (id, opts) =>
+      options.session(id, opts),
+    )
     this.feedback = new RunFeedback({
+      directory: this.directory,
+      recovery: this.recovery,
       stopped: () => this.stopped,
       channel: (name) => this.channels.get(name),
       find: (id) => options.find(id),
@@ -66,6 +78,7 @@ export class ChannelGateway {
 
     channel.connect?.({
       context: (id) => this.feedback.runs.get(id)?.trigger,
+      topicCoverage: () => this.directory.coverage,
       topics: (chatId) =>
         this.admission.list(channel.name, chatId, (id) =>
           this.feedback.runs.has(id)
@@ -95,10 +108,54 @@ export class ChannelGateway {
   }
 
   async startAll(): Promise<void> {
+    await this.directory.load()
     this.stopped = false
     for (const [name, ch] of this.channels) {
       try {
-        await ch.start()
+        // Reserve recovery before transport startup can deliver new events.
+        let connected!: (started: boolean) => void
+        const ready = new Promise<boolean>((resolve) => {
+          connected = resolve
+        })
+        const records = this.directory
+          .entries(name)
+          .filter(
+            (record) =>
+              record.state === 'running' || record.pendingMessageIds.length,
+          )
+        for (const record of records) {
+          const task = ready
+            .then(async (started) => {
+              if (!started) return
+              const msg = storedMessage(record)
+              if (
+                this.stopped ||
+                ch.canRecover?.(msg, record.chatKind) === false
+              )
+                return
+              const session = this.options.session(
+                record.activeSessionId,
+                ch.sessionOptions?.(msg),
+              )
+              await session.resume()
+              this.admission.resumed.add(session)
+              await this.recovery.recover(record, ch, session, (input) =>
+                this.process(record.key, name, input, true),
+              )
+            })
+            .catch((error) =>
+              this.feedback.feedbackError(name, storedMessage(record), error),
+            )
+          this.queues.set(record.key, task)
+          this.releaseQueue(record.key, task)
+        }
+        try {
+          await ch.start()
+          connected(true)
+        } catch (error) {
+          connected(false)
+          throw error
+        }
         this.logger.info(`[gateway] ✓ ${name} started`)
       } catch (err) {
         this.logger.error(
@@ -117,6 +174,7 @@ export class ChannelGateway {
     const drained = await Promise.allSettled([
       ...[...this.feedback.active].map((session) => session.abort()),
       ...this.queues.values(),
+      ...this.admitting.values(),
       ...this.closing.values(),
     ])
     this.saveFailures.clear()
@@ -130,6 +188,11 @@ export class ChannelGateway {
         errors.push(error)
       }
     }
+    try {
+      if (this.channels.size) await this.directory.flush()
+    } catch (error) {
+      errors.push(error)
+    }
     if (errors.length)
       throw new AggregateError(errors, 'Channel shutdown failed')
   }
@@ -140,10 +203,49 @@ export class ChannelGateway {
     clearTimeout(this.idleTimers.get(id))
     this.idleTimers.delete(id)
     const previous = this.queues.get(id) ?? Promise.resolve()
-    const consumed = this.feedback.receive(id, channelName, msg)
+    const admitted = (this.admitting.get(id) ?? this.directory.load()).then(
+      async () => {
+        if (this.stopped) return false
+        const channel = this.channels.get(channelName)
+        if (msg.requireExistingSession && !this.directory.get(id)) {
+          await this.closing.get(id)
+          if (!(await this.admission.admit(id, channel, msg))) return false
+        }
+        await this.directory.admit(id, channelName, msg)
+        return true
+      },
+    )
+    const admission = admitted.then(
+      () => {},
+      () => {},
+    )
+    this.admitting.set(id, admission)
+    void admission.then(() => {
+      if (this.admitting.get(id) === admission) this.admitting.delete(id)
+    })
+    // Keep live controls immediate. Steer waits for its admitted ID before submitting input.
+    const ready = admitted.then(() => {})
+    void ready.catch(() => {})
+    const receive =
+      !msg.requireExistingSession ||
+      this.directory.get(id) ||
+      this.feedback.runs.has(id)
+        ? this.feedback.receive(id, channelName, msg, ready)
+        : undefined
+    const consumed = admitted
+      .then((accepted) =>
+        accepted
+          ? (receive ?? this.feedback.receive(id, channelName, msg))
+          : () => Promise.resolve(true),
+      )
+      .catch(async (error) => {
+        await this.feedback.feedbackError(channelName, msg, error)
+        return () => Promise.resolve(true)
+      })
     const next = previous
       .then(async () => {
-        if (!(await consumed())) await this.process(id, channelName, msg)
+        if (!(await (await consumed)()))
+          await this.process(id, channelName, msg)
       })
       .catch((error) =>
         this.logger.error(
@@ -151,12 +253,16 @@ export class ChannelGateway {
         ),
       )
     this.queues.set(id, next)
+    this.releaseQueue(id, next)
+    return next
+  }
+
+  private releaseQueue(id: string, next: Promise<void>): void {
     void next.then(() => {
       if (this.queues.get(id) !== next) return
       this.queues.delete(id)
       this.closeWhenIdle(id)
     })
-    return next
   }
 
   /**
@@ -224,10 +330,11 @@ export class ChannelGateway {
     id: string,
     channelName: string,
     msg: IncomingMessage,
+    recovered = false,
   ): Promise<void> {
     let outcome: ChannelOutcome | undefined = 'failed'
     try {
-      outcome = await this.processRun(id, channelName, msg)
+      outcome = await this.processRun(id, channelName, msg, recovered)
     } catch (error) {
       await this.feedback.feedbackError(channelName, msg, error)
     } finally {
@@ -244,6 +351,7 @@ export class ChannelGateway {
     id: string,
     channelName: string,
     msg: IncomingMessage,
+    recovered = false,
   ): Promise<ChannelOutcome | undefined> {
     if (this.stopped) return 'stopped'
     await this.closing.get(id)
@@ -252,13 +360,16 @@ export class ChannelGateway {
       ? await this.admission.admit(id, channel, msg)
       : undefined
     if (msg.topic && !topicSession) return 'failed'
-    const inputs = channel ? this.feedback.acknowledge(channel, msg) : []
+    const inputs = channel
+      ? this.feedback.acknowledge(channel, msg, !recovered)
+      : []
     await Promise.all(inputs.map((input) => input.ready))
     const input = msg
     const task = msg.text
-    const prepared = channel?.prepareMessage
-      ? await channel.prepareMessage(msg)
-      : msg
+    const prepared =
+      !recovered && channel?.prepareMessage
+        ? await channel.prepareMessage(msg)
+        : msg
     if (!prepared || this.stopped) return 'failed'
     msg = prepared
     const session =

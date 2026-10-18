@@ -224,3 +224,69 @@ test('recovery does not send or run work for a group removed from the enabled li
   expect(fake.sent).toEqual([])
   expect(t.model.calls).toEqual([])
 })
+
+test('recovery retains saved images without downloading the original resources again', async () => {
+  const cwd = await crash('image')
+  const { fake, t, start } = setup(cwd, [fauxText('image recovered')])
+  await start()
+  await until(() => fake.sent.some((m) => m.text.includes('image recovered')))
+  expect(JSON.stringify(t.model.calls[0]?.prompt)).toContain('image/jpeg')
+  expect(fake.resourceCalls).toEqual([])
+})
+
+test('an unappended queued steer receives its own resend notice while the saved task recovers', async () => {
+  const cwd = await crash('steer')
+  const { fake, t, start } = setup(cwd, [fauxText('original recovered')])
+  await start()
+  await until(() =>
+    fake.sent.some((m) => m.text.includes('original recovered')),
+  )
+  expect(fake.sent[0]).toMatchObject({
+    messageId: 'steer',
+    text: expect.stringContaining('send it again'),
+  })
+  expect(t.model.calls).toHaveLength(1)
+  expect(JSON.stringify(t.model.calls[0]?.prompt)).not.toContain(
+    'also check blue',
+  )
+})
+
+test('a recovered top-level group input retains channel tools and prompt classification', async () => {
+  const cwd = await crash('group')
+  const { fake, t, start } = setup(cwd, [fauxText('group recovered')])
+  await start()
+  await until(() => fake.sent.some((m) => m.text.includes('group recovered')))
+  expect(t.model.calls[0]?.tools).toContain('feishu_start_topic')
+  expect(t.model.calls[0]?.system).toContain('channel session for this group')
+  expect(fake.sent.at(-1)?.messageId).toBe('trigger')
+})
+
+test('a recovered group run forwards its saved input without needing a live raw event (SDK regression)', async () => {
+  const cwd = await crash('forward')
+  const { fake, t, start } = setup(cwd, [
+    fauxToolCall('feishu_forward_to_topic', { root_id: 'root' }),
+    (req) =>
+      fauxText(
+        req.tools.includes('feishu_start_topic')
+          ? 'forwarded'
+          : 'recovered forward answer',
+      ),
+    (req) =>
+      fauxText(
+        req.tools.includes('feishu_start_topic')
+          ? 'forwarded'
+          : 'recovered forward answer',
+      ),
+  ])
+  await start()
+  await until(() =>
+    fake.sent.some((m) => m.text.includes('recovered forward answer')),
+  )
+  expect(fake.forwards).toEqual([{ messageId: 'trigger', threadId: 'thread' }])
+  expect(fake.topics).toEqual([])
+  expect(
+    t.model.calls.filter(
+      (call) => !call.tools.includes('feishu_start_topic'),
+    )[0]?.lastUserText,
+  ).toContain('remember cobalt')
+})
