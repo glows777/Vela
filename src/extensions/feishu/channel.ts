@@ -123,6 +123,7 @@ export class FeishuChannel implements ChannelDefinition {
     Map<string, Promise<ImageContent>>
   >()
   private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
+  // Custom transports without appId cannot identify own-app history items.
   private readonly lastReplies = new Map<string, FeishuSentMessage>()
 
   constructor(config: FeishuChannelConfig) {
@@ -324,7 +325,8 @@ export class FeishuChannel implements ChannelDefinition {
           ? `<at user_id="${message.recipientId}"></at> ${message.text}`
           : message.text,
       )
-      if (!message.topic) this.lastReplies.set(message.channelId, receipt)
+      if (!this.config.appId && !message.topic)
+        this.lastReplies.set(message.channelId, receipt)
     } else {
       await this.transport.send(message.channelId, message.text)
     }
@@ -373,6 +375,12 @@ export class FeishuChannel implements ChannelDefinition {
         input = await file
       }
     } catch (error) {
+      if (msg.passive) {
+        this.config.logger.warn(
+          `[feishu] Passive attachment preparation failed: ${errorMessage(error)}`,
+        )
+        return
+      }
       await this.send({
         channelId: msg.channelId,
         recipientId: msg.senderId,
@@ -388,11 +396,12 @@ export class FeishuChannel implements ChannelDefinition {
     this.topics.triggerImages.set(event, [...images])
     msg = { ...msg, text: input, images }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
-    if (msg.text.startsWith('/')) return msg
+    if (!msg.passive && msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
     const question = { name, text: msg.text }
     let text = `${name}: ${msg.text}`
-    if (msg.topic && !msg.isNewTopic) return { ...msg, senderName: name, text }
+    if (msg.passive || (msg.topic && !msg.isNewTopic))
+      return { ...msg, senderName: name, text }
     if (msg.topic && this.transport) {
       try {
         const history = []
@@ -586,24 +595,31 @@ export class FeishuChannel implements ChannelDefinition {
     const enabled =
       this.chats.has(message.chat_id) ||
       (message.chat_type === 'p2p' && this.config.owners.includes(senderId))
-    if (!enabled) {
-      this.config.logger.info(
-        `[feishu] ignored message from chat ${message.chat_id}`,
-      )
+    if (
+      !enabled ||
+      event.sender.sender_type !== 'user' ||
+      senderId === this.botId
+    )
       return
-    }
     const group = message.chat_type === 'group'
     const mentioned =
       !!this.botId &&
       !!message.mentions?.some((mention) => mention.id?.open_id === this.botId)
-    if (group && (!this.botId || (!mentioned && !message.thread_id))) return
+    const passive = group && !mentioned && !message.thread_id
+    if (
+      group &&
+      (!this.botId ||
+        (passive && this.chats.get(message.chat_id)?.readUntagged === false))
+    )
+      return
     // A group reply needs its actual trigger; never accidentally post an unthreaded answer.
     if (group && !message.message_id) return
     // Normalized replyToId identifies a group input, including during recovery.
     const replyToId = group ? message.message_id : undefined
     const requireExistingSession = group && !!message.thread_id && !mentioned
     const text = messageText(message)
-    if (text === '' || !this.messageHandler) return
+    if (text === '' || (passive && text === undefined) || !this.messageHandler)
+      return
     // Deliver immediately so the gateway can show run controls, then serialize preparation and replies there.
     const next = Promise.resolve(
       this.messageHandler({
@@ -621,6 +637,7 @@ export class FeishuChannel implements ChannelDefinition {
             }
           : {}),
         requireExistingSession,
+        passive,
         raw: event,
       }),
     ).catch((error) =>

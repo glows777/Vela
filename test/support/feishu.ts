@@ -195,7 +195,7 @@ export function feishuEvent(
   sender = 'ou_alice',
 ): FeishuMessageEvent {
   return {
-    sender: { sender_id: { open_id: sender } },
+    sender: { sender_type: 'user', sender_id: { open_id: sender } },
     message: {
       chat_id: 'oc_group',
       chat_type: 'group',

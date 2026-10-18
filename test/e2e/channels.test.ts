@@ -329,7 +329,7 @@ test('providers see which channel a session answers on (so a local-only sign-in 
 
 async function feishuGateway(
   options: {
-    chats?: string[]
+    chats?: NonNullable<Parameters<typeof feishu>[0]>['chats']
     owners?: string[]
     responses?: NonNullable<Parameters<typeof createTestVela>[0]>['responses']
   } = {},
@@ -361,7 +361,7 @@ async function feishuGateway(
   return { t, logs, ...fake }
 }
 
-test('Feishu ignores unlisted chats and stranger DMs without a model call or reply and logs their chat ids', async () => {
+test('Feishu ignores unlisted chats and stranger DMs without a model call, reply or per-message log', async () => {
   const f = await feishuGateway()
   f.deliver(feishuEvent({ chat_id: 'oc_unlisted' }))
   f.deliver(feishuEvent({ chat_id: 'oc_stranger', chat_type: 'p2p' }, 'ou_bob'))
@@ -370,8 +370,8 @@ test('Feishu ignores unlisted chats and stranger DMs without a model call or rep
     feishuEvent({ chat_id: 'oc_owner', chat_type: 'p2p', message_id: 'owner' }),
   )
   await waitFor(() => f.sent.length >= 1)
-  expect(f.logs).toContain('[feishu] ignored message from chat oc_unlisted')
-  expect(f.logs).toContain('[feishu] ignored message from chat oc_stranger')
+  expect(f.logs.join('\n')).not.toContain('oc_unlisted')
+  expect(f.logs.join('\n')).not.toContain('oc_stranger')
   expect(f.t.model.calls).toHaveLength(1)
   expect(f.sent).toEqual([{ chatId: 'oc_owner', text: 'answer' }])
   expect(f.historyCalls).toEqual([])
@@ -399,8 +399,10 @@ test('Feishu enabled group members share a persisted owner session and both disp
   )
 })
 
-test('Feishu group messages without a bot mention, including mentions of someone else, never run', async () => {
-  const f = await feishuGateway()
+test('Feishu readUntagged off keeps mention-only top-level behavior', async () => {
+  const f = await feishuGateway({
+    chats: [{ id: 'oc_group', readUntagged: false }],
+  })
   f.deliver(feishuEvent({ mentions: [], message_id: 'no_at' }))
   f.deliver(
     feishuEvent({

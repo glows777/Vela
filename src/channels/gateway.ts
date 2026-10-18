@@ -58,7 +58,7 @@ export class ChannelGateway {
     this.logger = options.logger ?? silentLogger
     this.directory = new ChannelDirectory(options.dataDir)
     this.usage = new ChannelUsage(options.dataDir, this.directory)
-    this.recovery = new ChannelRecovery(this.directory)
+    this.recovery = new ChannelRecovery(this.directory, this.logger)
     this.sessions = new ChannelSessions(
       this.directory,
       (name) => this.channels.get(name),
@@ -105,6 +105,17 @@ export class ChannelGateway {
       context: (id) =>
         this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
       topicCoverage: () => this.directory.coverage,
+      skipReply: (id) => {
+        const run = this.feedback.runs.get(this.directory.keyForSession(id))
+        if (
+          !run ||
+          run.session.id !== id ||
+          !run.trigger.passive ||
+          !this.feedback.runIsLive(run)
+        )
+          throw new Error('Silence requires an active passive group run')
+        run.skipReply = true
+      },
       topics: (chatId) =>
         this.admission.list(channel.name, chatId, (id) =>
           this.feedback.runs.has(id)
@@ -159,7 +170,8 @@ export class ChannelGateway {
             (record) =>
               record.state === 'running' || record.pendingMessageIds.length,
           )
-        for (const record of records) {
+        for (const stored of records) {
+          const record = structuredClone(stored)
           const task = ready
             .then(async (started) => {
               if (!started) return
@@ -418,10 +430,20 @@ export class ChannelGateway {
     if (this.stopped) return 'stopped'
     await this.closing.get(id)
     const channel = this.channels.get(channelName)
-    const topicSession = msg.topic
-      ? await this.admission.admit(id, channel, msg)
-      : undefined
+    const topicSession =
+      msg.topic || msg.passive
+        ? await this.admission.admit(id, channel, msg)
+        : undefined
     if (msg.topic && !topicSession) return 'failed'
+    if (
+      msg.passive &&
+      msg.replyToId &&
+      topicSession &&
+      this.recovery.hasInput(topicSession, msg.replyToId)
+    ) {
+      await this.directory.forget(id, [msg.replyToId])
+      return 'done'
+    }
     const inputs = channel
       ? this.feedback.acknowledge(channel, msg, !recovered)
       : []
@@ -489,6 +511,12 @@ export class ChannelGateway {
     })
 
     if ((this.saveFailures.get(id) ?? 0) >= MAX_SAVE_FAILURES) {
+      if (msg.passive) {
+        this.logger.error(
+          `[${channelName}] Passive evaluation paused: session ${session.id} cannot be saved`,
+        )
+        return 'failed'
+      }
       await this.sendReply(
         session,
         channelName,
