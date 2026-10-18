@@ -51,7 +51,8 @@ if (mode === 'forward') {
 fake.deliver(
   feishuEvent({
     message_id: 'trigger',
-    ...(['group', 'forward'].includes(mode!)
+    ...(mode === 'passive' ? { mentions: [] } : {}),
+    ...(['group', 'forward', 'passive'].includes(mode!)
       ? {}
       : { root_id: 'root', thread_id: 'thread' }),
     ...(mode === 'image'
@@ -59,10 +60,12 @@ fake.deliver(
       : { content: '{"text":"remember cobalt"}' }),
   }),
 )
-if (['saved', 'image', 'group', 'steer', 'forward'].includes(mode!)) {
+if (
+  ['saved', 'image', 'group', 'steer', 'forward', 'passive'].includes(mode!)
+) {
   while (t.model.calls.length < (mode === 'forward' ? 2 : 1)) await Bun.sleep(1)
   const session = t.vela.session(
-    ['group', 'forward'].includes(mode!)
+    ['group', 'forward', 'passive'].includes(mode!)
       ? 'feishu-oc_group'
       : 'feishu-oc_group-root',
   )
@@ -81,6 +84,18 @@ if (['saved', 'image', 'group', 'steer', 'forward'].includes(mode!)) {
       ),
     )
     while (!session.queue.steering.length) await Bun.sleep(1)
+  }
+  if (mode === 'passive') {
+    fake.deliver(
+      feishuEvent({
+        message_id: 'queued-passive',
+        mentions: [],
+        content: '{"text":"another discussion"}',
+      }),
+    )
+    const index = `${t.vela.dataDir}/channels/index.json`
+    while (!readFileSync(index, 'utf8').includes('queued-passive'))
+      await Bun.sleep(1)
   }
   ready()
 }
