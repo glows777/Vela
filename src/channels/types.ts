@@ -18,6 +18,8 @@ export interface IncomingMessage {
   requireExistingSession?: boolean
   /** Set by the gateway before preparation when entering a topic without saved context. */
   isNewTopic?: boolean
+  /** Unsolicited group discussion: queue quietly and never recover work after restart. */
+  passive?: boolean
   raw?: unknown
 }
 
@@ -45,6 +47,8 @@ export interface ChannelRuntime {
   context(sessionId: string): IncomingMessage | undefined
   topics(chatId: string): ChannelTopic[]
   topicCoverage(): string
+  /** Suppress this active passive run's reply; the tool call is its only durable decision. */
+  skipReply(sessionId: string): void
   /** Record a required human decision; waiting becomes visible after successful delivery. */
   waitForInput(sessionId: string, reason: string): Promise<void>
   /** Hand off without waiting for the target run; suppress the source run's duplicate reply. */

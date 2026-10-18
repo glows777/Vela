@@ -47,9 +47,7 @@ export async function readGroupContext(
       (previous &&
         (item.message_id === previous.messageId ||
           Number(item.create_time) <= Number(previous.createTime))) ||
-      (item.sender?.sender_type === 'app' &&
-        item.sender.id === appId &&
-        (item.msg_type === 'text' || item.msg_type === 'post'))
+      (item.sender?.sender_type === 'app' && item.sender.id === appId)
     )
       break
     if (

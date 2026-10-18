@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { feishu } from '../../src/extensions/feishu/index.ts'
+import { silentLogger } from '../../src/logger.ts'
 import {
   fauxError,
   fauxHang,
@@ -420,3 +421,50 @@ test('a recovered group run forwards its saved input without needing a live raw 
     )[0]?.lastUserText,
   ).toContain('remember cobalt')
 })
+
+test('restart drops active and queued passive work with operator diagnostics and does not replay duplicate delivery', async () => {
+  const cwd = await crash('passive')
+  const fake = fakeFeishu()
+  const logs: string[] = []
+  const t = createTestVela({
+    cwd,
+    responses: [fauxText('explicit after restart')],
+    logger: {
+      ...silentLogger,
+      info: (line) => logs.push(line),
+      warn: (line) => logs.push(line),
+    },
+    extensions: [feishu({ chats: ['oc_group'], transport: fake.transport })],
+  })
+  await t.vela.startChannels()
+  for (const message_id of ['trigger', 'queued-passive'])
+    fake.deliver(
+      feishuEvent({
+        message_id,
+        mentions: [],
+        content: '{"text":"duplicate discussion"}',
+      }),
+    )
+  fake.deliver(feishuEvent({ message_id: 'explicit-after' }))
+  await until(() =>
+    fake.sent.some(
+      (item) =>
+        item.messageId === 'explicit-after' &&
+        item.text === 'explicit after restart',
+    ),
+  )
+  await t.internals.gateway.stopAll()
+  expect(t.model.calls).toHaveLength(1)
+  expect(fake.sent).toEqual([
+    { messageId: 'explicit-after', text: 'explicit after restart' },
+  ])
+  expect(logs.join('\n')).toMatch(/dropped.*passive/i)
+  expect(fake.cards).toEqual([])
+  expect(
+    fake.reactions.every((item) => item.messageId === 'explicit-after'),
+  ).toBe(true)
+  const index = JSON.parse(
+    await readFile(join(t.vela.dataDir, 'channels/index.json'), 'utf8'),
+  )
+  expect(index.records[0].pendingMessageIds).toEqual([])
+}, 10000)

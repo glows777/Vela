@@ -61,7 +61,7 @@ test('Feishu mentions in two topics run concurrently with separate transcripts',
   }
 })
 
-test('untagged top-level Feishu attachments are dropped before preparation or content logging', async () => {
+test('with readUntagged off, top-level Feishu attachments are dropped before preparation or content logging', async () => {
   const fake = fakeFeishu()
   const logs: string[] = []
   const t = createTestVela({
@@ -75,7 +75,7 @@ test('untagged top-level Feishu attachments are dropped before preparation or co
       feishu({
         appId: 'bot',
         owners: ['ou_alice'],
-        chats: ['oc_group'],
+        chats: [{ id: 'oc_group', readUntagged: false }],
         transport: fake.transport,
       }),
     ],
