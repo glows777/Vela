@@ -315,15 +315,54 @@ function createProvider(
           break
       }
       const transform = oauthRequests?.transformParams
-      if (!transform || typeof model === 'string') return model
+      if (
+        (api !== 'openai-responses' && !transform) ||
+        typeof model === 'string'
+      )
+        return model
+      const spec =
+        config.models?.find((m) => m.id === id) ?? catalogLookup(name, id)
+      const deepseekResponses =
+        api === 'openai-responses' &&
+        settings.baseURL !== undefined &&
+        new URL(settings.baseURL).hostname === 'api.deepseek.com'
       return wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
-          transformParams: async ({ params }) =>
-            (await ctx.credential())?.type === 'oauth'
+          transformParams: async ({ params }) => {
+            if (api === 'openai-responses') {
+              const openai = { ...params.providerOptions?.openai }
+              // The SDK infers capability from IDs; positive metadata also enables custom IDs.
+              if (
+                openai.forceReasoning === undefined &&
+                spec?.reasoning === true
+              )
+                openai.forceReasoning = true
+              const level =
+                params.reasoning === 'none' ? 'off' : params.reasoning
+              const effort =
+                level && level !== 'provider-default'
+                  ? spec?.thinkingLevelMap?.[level]
+                  : undefined
+              if (
+                openai.reasoningEffort === undefined &&
+                typeof effort === 'string'
+              )
+                openai.reasoningEffort = effort
+              // DeepSeek treats developer messages as user messages. Keep the system instruction's role.
+              if (deepseekResponses && openai.systemMessageMode === undefined)
+                openai.systemMessageMode = 'system'
+              params = {
+                ...params,
+                providerOptions: { ...params.providerOptions, openai },
+              }
+            }
+            // The OAuth route's requirements remain authoritative over caller/default options.
+            return transform && (await ctx.credential())?.type === 'oauth'
               ? transform(params)
-              : params,
+              : params
+          },
         },
       })
     },

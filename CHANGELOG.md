@@ -18,6 +18,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **Responses thinking controls were dropped for unfamiliar reasoning model ids.** Configured/catalog `reasoning: true` now enables SDK serialization and existing `thinkingLevelMap` strings reach `reasoning.effort`, preserving explicit provider options. Responses requests to `api.deepseek.com` keep system instructions in the system role. See [thinking levels and SDK limitations](docs/models.md#thinking-levels).
+
 - **Headless session save failures were silent.** Channels now log the error with the session id and refuse new prompts after three consecutive failures until a successful write resets the count. Print mode (`-p`) reports save failures on stderr while keeping the answer on stdout.
 
 - **A turn stopped at `summaryThreshold` when there was nothing to summarize.** A message above that threshold and below `maxInputTokens` is sent. Only a request over `maxInputTokens` stops the turn.
