@@ -22,7 +22,9 @@ export interface RagOptions {
  */
 export function rag(options: RagOptions = {}): VelaExtension {
   return function rag(vela) {
-    const embedder = options.embedder ?? embedderFromConfig(vela.config)
+    const embedding = embeddingConfig(vela.config)
+    const embedder =
+      options.embedder ?? (embedding && createEmbedder(embedding))
     if (!embedder) return
     const dir = join(vela.dataDir, 'rag')
     mkdirSync(dir, { recursive: true })
@@ -86,9 +88,8 @@ export function rag(options: RagOptions = {}): VelaExtension {
   }
 }
 
-function embedderFromConfig(
-  config: Readonly<Record<string, unknown>>,
-): EmbeddingFn | undefined {
+/** Internal config reader shared with the CLI diagnostics. */
+export function embeddingConfig(config: Readonly<Record<string, unknown>>) {
   const embedding = config.embedding as Record<string, unknown> | undefined
   const { baseUrl, model, apiKey } = embedding ?? {}
   if (
@@ -99,5 +100,5 @@ function embedderFromConfig(
     typeof apiKey === 'string' &&
     apiKey
   )
-    return createEmbedder({ url: baseUrl, modelId: model, apiKey })
+    return { url: baseUrl, modelId: model, apiKey }
 }
