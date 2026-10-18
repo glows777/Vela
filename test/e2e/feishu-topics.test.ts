@@ -328,6 +328,9 @@ test('unowned untagged topics serialize admission without preparation, saves or 
   expect(maximumLoads).toBe(1)
   expect(saves).toBe(0)
   expect(existsSync(directory)).toBe(false)
+  expect(existsSync(join(t.vela.dataDir, 'channels', 'feishu-oc_group'))).toBe(
+    false,
+  )
   expect(fake.nameCalls).toEqual([])
   expect(fake.topicHistoryCalls).toEqual([])
   expect(fake.resourceCalls).toEqual([])

@@ -1,4 +1,4 @@
-import type { SessionOptions, VelaSession } from '../vela-session.ts'
+import type { VelaSession } from '../vela-session.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type {
   ChannelDefinition,
@@ -13,7 +13,11 @@ export class TopicAdmission {
 
   constructor(
     private directory: ChannelDirectory,
-    private open: (id: string, options?: SessionOptions) => VelaSession,
+    private open: (
+      id: string,
+      channel: string | undefined,
+      msg: IncomingMessage,
+    ) => VelaSession,
   ) {}
 
   async admit(
@@ -21,7 +25,7 @@ export class TopicAdmission {
     channel: ChannelDefinition | undefined,
     msg: IncomingMessage,
   ): Promise<VelaSession | undefined> {
-    const session = this.open(id, channel?.sessionOptions?.(msg))
+    const session = this.open(id, channel?.name, msg)
     const exists = this.resumed.has(session)
       ? session.getEntries().length > 0
       : await session.resume()
