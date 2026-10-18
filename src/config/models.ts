@@ -16,6 +16,7 @@ import type {
   ProviderContext,
   ProviderDefinition,
 } from '../models/index.ts'
+import { deepseekReasoningStream } from './deepseek-responses.ts'
 import { interpolate, isPlainObject } from './interpolate.ts'
 
 type Env = Record<string, string | undefined>
@@ -330,6 +331,7 @@ function createProvider(
         model,
         middleware: {
           specificationVersion: 'v4',
+          ...(deepseekResponses ? { wrapStream: deepseekReasoningStream } : {}),
           transformParams: async ({ params }) => {
             if (api === 'openai-responses') {
               const openai = { ...params.providerOptions?.openai }
