@@ -85,18 +85,22 @@ test('short channel answers and topic/DM requests have the right prompts and vis
     expect(call.tools).toContain('read_file')
   }
   expect(t.model.calls[1]?.system).toContain(
-    'You are working on one task in this topic.',
+    'This topic contains a conversation about one task.',
   )
-  const latestMessageInstruction =
-    'Respond to the latest message, treating results already given in this topic as delivered and not repeating them unless asked.'
+  const latestMessageInstruction = 'Respond to the latest user message.'
   expect(t.model.calls[1]?.system).toContain(latestMessageInstruction)
   expect(t.model.calls[0]?.system).not.toContain(latestMessageInstruction)
   expect(t.model.calls[2]?.system).not.toContain(latestMessageInstruction)
+  const completionInstruction =
+    'Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
+  expect(t.model.calls[1]?.system).toContain(completionInstruction)
+  expect(t.model.calls[0]?.system).not.toContain(completionInstruction)
+  expect(t.model.calls[2]?.system).not.toContain(completionInstruction)
   expect(t.model.calls[1]?.system).toContain(
     'ask one clear question and end the run',
   )
   expect(t.model.calls[2]?.system).not.toContain(
-    'You are working on one task in this topic.',
+    'This topic contains a conversation about one task.',
   )
 })
 
@@ -591,7 +595,9 @@ test('a screenshot post handoff carries trigger images without copying group his
   expect(
     images(
       t.model.calls.find((req) =>
-        req.system.includes('You are working on one task in this topic.'),
+        req.system.includes(
+          'This topic contains a conversation about one task.',
+        ),
       ),
     ),
   ).toEqual([expect.objectContaining({ mediaType: 'image/png' })])
