@@ -72,6 +72,7 @@ export class MessageFeedback {
 }
 
 interface ChannelRun {
+  key: string
   session: VelaSession
   trigger: IncomingMessage
   lifetime: AbortController
@@ -198,9 +199,34 @@ export class RunFeedback {
       !this.options.stopped() &&
       !run.stopped &&
       !run.lifetime.signal.aborted &&
-      this.runs.get(run.session.id) === run &&
+      this.runs.get(run.key) === run &&
       run.session.isRunning
     )
+  }
+
+  /** The same cancellation boundary is used by topic commands and card controls. */
+  async stop(id: string): Promise<boolean> {
+    const run = this.runs.get(id)
+    if (
+      !run ||
+      this.options.stopped() ||
+      run.stopped ||
+      run.lifetime.signal.aborted
+    )
+      return false
+    await this.stopRun(run)
+    return true
+  }
+
+  private async stopRun(run: ChannelRun): Promise<void> {
+    run.stopped = true
+    run.lifetime.abort()
+    // These inputs belong to the cancelled run; the gateway's default queue stays intact.
+    run.session.clearQueue()
+    await Promise.all([
+      run.session.abort(),
+      this.options.directory.finish(run.key, 'stopped'),
+    ])
   }
 
   /** Apply one reserved card choice; true consumes its gateway input. */
@@ -211,15 +237,7 @@ export class RunFeedback {
     action: 'steer' | 'stop',
   ): Promise<boolean> {
     if (action === 'stop') {
-      run.stopped = true
-      run.lifetime.abort()
-      // These inputs belong to the cancelled run; the gateway's default queue stays intact.
-      run.session.clearQueue()
-      const aborted = run.session.abort()
-      await Promise.all([
-        aborted,
-        this.options.directory.finish(run.session.id, 'stopped'),
-      ])
+      await this.stopRun(run)
       if (!msg.topic)
         await this.options.reply(
           run.session,
@@ -243,7 +261,7 @@ export class RunFeedback {
     // History/name lookups can outlast the run. Leave the default queue intact.
     if (!prepared) {
       await this.options.directory.forget(
-        run.session.id,
+        run.key,
         msg.replyToId ? [msg.replyToId] : [],
       )
       await Promise.all(inputs.map((input) => input.finish('failed')))
@@ -262,7 +280,7 @@ export class RunFeedback {
       senderName: prepared.senderName,
       text: prepared.text,
     })
-    this.options.recovery.track(run.session, prepared)
+    this.options.recovery.track(run.key, run.session, prepared)
     await run.session.prompt(prepared.text, {
       source: 'channel',
       streamingBehavior: 'steer',
@@ -334,6 +352,7 @@ export class RunFeedback {
   ): Promise<ChannelOutcome | undefined> {
     this.active.add(session)
     const run: ChannelRun = {
+      key: id,
       session,
       trigger: msg,
       lifetime: new AbortController(),
@@ -404,8 +423,12 @@ export class RunFeedback {
           throw error
         }
       }
+      if (run.stopped)
+        throw new DOMException('Stopped before prompting', 'AbortError')
       await this.options.directory.begin(id, msg)
-      this.options.recovery.track(session, msg)
+      if (run.stopped)
+        throw new DOMException('Stopped before prompting', 'AbortError')
+      this.options.recovery.track(id, session, msg)
       promptStarted = true
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
       if (session.messages.at(-1) !== previous)
