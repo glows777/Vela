@@ -332,7 +332,7 @@ test('topic listing after restart retains recorded same-group topics and stable 
       expect.objectContaining({
         rootId: 'saved',
         threadId: 'saved_thread',
-        state: 'idle',
+        state: 'done',
       }),
     ])
     expect(empty.coverage).toMatch(/since .*\d{4}-\d{2}-\d{2}T/)
@@ -357,7 +357,7 @@ test('topic listing after restart retains recorded same-group topics and stable 
       expect.objectContaining({
         rootId: 'saved',
         threadId: 'saved_thread',
-        state: 'idle',
+        state: 'done',
       }),
     ])
     expect(observed.coverage).toBe(empty.coverage)
@@ -367,7 +367,7 @@ test('topic listing after restart retains recorded same-group topics and stable 
   }
 })
 
-test('topic listing reports only this group with queued, running and idle states', async () => {
+test('topic listing reports only this group with queued, running and stopped states', async () => {
   let entered = false
   let release!: () => void
   const held = new Promise<void>((resolve) => {
@@ -428,7 +428,7 @@ test('topic listing reports only this group with queued, running and idle states
     await list('running')
     expect(fake.click(2, 'stop')).toMatchObject({ toast: { type: 'success' } })
     await until(() => fake.sent.some((item) => item.text.includes('Stopped')))
-    await list('idle')
+    await list('stopped')
   } finally {
     release()
     await t.internals.gateway.stopAll()
@@ -680,5 +680,117 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
   } finally {
     release()
     await t.internals.gateway.stopAll()
+  }
+})
+
+test('topic overview reports running, durable waiting, then done with requester and activity', async () => {
+  let entered = false
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const first = setup(
+    [
+      fauxToolCall('hold_pause', {}),
+      listCall(),
+      listAnswer,
+      fauxToolCall('feishu_wait_for_input', {
+        reason: 'Which release should I use?',
+      }),
+      fauxText('Which release should I use?'),
+      listCall(),
+      listAnswer,
+    ],
+    [
+      function hold(api) {
+        api.registerTool({
+          name: 'pause',
+          description: 'Hold until the overview is read',
+          inputSchema: z.object({}),
+          execute: async () => {
+            entered = true
+            await held
+            return 'ready'
+          },
+        })
+      },
+    ],
+  )
+  await first.start()
+  try {
+    first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+    await until(() => entered)
+    first.fake.deliver(feishuEvent({ message_id: 'running-list' }))
+    await until(() => first.fake.sent.length === 1)
+    const running = JSON.parse(first.fake.sent[0]!.text).topics[0]
+    expect(running).toMatchObject({
+      state: 'running',
+      requester: { id: 'ou_alice', name: 'Alice' },
+    })
+    expect(Number.isNaN(Date.parse(running.updatedAt))).toBe(false)
+    release()
+    await until(() => first.fake.sent.length === 2)
+    first.fake.deliver(feishuEvent({ message_id: 'waiting-list' }))
+    await until(() => first.fake.sent.length === 3)
+    const waiting = JSON.parse(first.fake.sent[2]!.text).topics[0]
+    expect(waiting).toMatchObject({
+      state: 'waiting',
+      waitingReason: 'Which release should I use?',
+      requester: running.requester,
+    })
+    expect(Date.parse(waiting.updatedAt)).toBeGreaterThanOrEqual(
+      Date.parse(running.updatedAt),
+    )
+    await first.t.cleanup({ keepDir: true })
+    const second = setup(
+      [
+        listCall(),
+        listAnswer,
+        fauxText('Release selected; done.'),
+        listCall(),
+        listAnswer,
+      ],
+      [],
+      first.t.cwd,
+    )
+    try {
+      await second.start()
+      second.fake.deliver(feishuEvent({ message_id: 'after-restart-list' }))
+      await until(() => second.fake.sent.length === 1)
+      expect(JSON.parse(second.fake.sent[0]!.text).topics[0]).toMatchObject({
+        state: 'waiting',
+        waitingReason: waiting.waitingReason,
+      })
+      second.fake.deliver(
+        feishuEvent(
+          {
+            message_id: 'decision',
+            root_id: 'root',
+            thread_id: 'thread',
+            mentions: [],
+            content: '{"text":"Use release blue"}',
+          },
+          'ou_bob',
+        ),
+      )
+      await until(() => second.fake.sent.length === 2)
+      second.fake.deliver(feishuEvent({ message_id: 'done-list' }))
+      await until(() => second.fake.sent.length === 3)
+      const done = JSON.parse(second.fake.sent[2]!.text).topics[0]
+      expect(done).toMatchObject({
+        state: 'done',
+        requester: running.requester,
+      })
+      expect(done.waitingReason).toBeUndefined()
+      expect(Date.parse(done.updatedAt)).toBeGreaterThanOrEqual(
+        Date.parse(waiting.updatedAt),
+      )
+    } finally {
+      await second.t.cleanup()
+    }
+  } finally {
+    release()
+    await first.t.cleanup()
+    rmSync(first.t.cwd, { recursive: true, force: true })
   }
 })

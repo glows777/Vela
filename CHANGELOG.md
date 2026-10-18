@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Feishu group overview and bounded history search.** Topic lists include requester, activity and durable waiting/done/stopped state. `feishu_wait_for_input` marks a required decision until the next accepted topic input. `feishu_search_history` searches only the current channel/topic's group, with explicit scan/result limits and topic-root coverage. Custom Feishu transports now implement `searchMessages`; experimental topic state replaces `idle` with `done`, `waiting` or `stopped`.
+
 - **Feishu groups have their own workspace, memory and tool selection.** Group topics share these resources across idle reopen, process restart and `!restart`; existing attachments stay in place. Groups read/search shared global notes but write only their own memory through the memory API. Object-form chat configuration validates exact tool names before connecting, with channel controls retained. Cwd is not a security sandbox.
 
 - **SDK sessions can choose their working directory.** `vela.session(id, { cwd })` scopes file/search/bash tools and automatic project instructions to that directory; `session.cwd` exposes it. Application resources and export destinations stay Vela-wide. Fork/clone preserves cwd; callers pass it again on reopen/resume. This is not a security sandbox.

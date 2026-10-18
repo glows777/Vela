@@ -82,6 +82,7 @@ export function fakeFeishu() {
       if (failHistory) throw new Error('history permission denied')
       return [...history]
     },
+    searchMessages: async () => ({ items: [] }),
     listTopicMessages: async (threadId, pageToken) => {
       topicHistoryCalls.push({ threadId, pageToken })
       if (failHistory) throw new Error('history permission denied')

@@ -240,6 +240,7 @@
     patchCard: (messageId: string, card: FeishuCard) => Promise<void>
     removeReaction: (messageId: string, reactionId: string) => Promise<void>
     reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
+    searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: FeishuHistoryMessage[]; pageToken?: string; }>
     send: (chatId: string, text: string) => Promise<void>
     sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<string>
     start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>

@@ -111,8 +111,15 @@ export class ChannelGateway {
             ? 'running'
             : this.queues.has(id)
               ? 'queued'
-              : 'idle',
+              : (this.directory.get(id)?.state ?? 'done'),
         ),
+      waitForInput: (id, reason) => {
+        const key = this.directory.keyForSession(id)
+        const run = this.feedback.runs.get(key)
+        if (!run || run.session.id !== id || !this.feedback.runIsLive(run))
+          throw new Error('The topic run has ended')
+        return this.directory.waitForInput(key, reason)
+      },
       dispatch: (id, msg) => {
         const source = this.feedback.runs.get(this.directory.keyForSession(id))
         if (!source || !this.feedback.runIsLive(source))
