@@ -484,6 +484,7 @@ export class RunFeedback {
       await this.options.directory.finish(
         id,
         outcome === 'stopped' ? 'stopped' : 'done',
+        outcome === 'done' && !!answer,
       )
     }
     return outcome

@@ -75,6 +75,15 @@ export interface FeishuTransport {
     threadId: string,
     pageToken?: string,
   ): Promise<{ items: FeishuHistoryMessage[]; pageToken?: string }>
+  searchMessages(
+    chatId: string,
+    options: {
+      startTime: string
+      endTime: string
+      limit: number
+      pageToken?: string
+    },
+  ): Promise<{ items: FeishuHistoryMessage[]; pageToken?: string }>
   listMessages(
     chatId: string,
     options: { before?: string; limit: number },
@@ -253,6 +262,27 @@ export function larkTransport(
             container_id: threadId,
             sort_type: 'ByCreateTimeAsc',
             page_size: 50,
+            page_token: pageToken,
+          },
+        }),
+      )
+      return {
+        items: response.data?.items ?? [],
+        pageToken: response.data?.has_more
+          ? response.data.page_token
+          : undefined,
+      }
+    },
+    async searchMessages(chatId, { startTime, endTime, limit, pageToken }) {
+      const response = checked(
+        await client.im.message.list({
+          params: {
+            container_id_type: 'chat',
+            container_id: chatId,
+            sort_type: 'ByCreateTimeDesc',
+            start_time: startTime,
+            end_time: endTime,
+            page_size: Math.min(50, limit),
             page_token: pageToken,
           },
         }),
