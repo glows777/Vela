@@ -219,7 +219,7 @@
     sender?: { id?: string; sender_type?: string; } | undefined
   interface FeishuMessageEvent
     message: { message_id?: string; root_id?: string; thread_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
-    sender: { sender_id?: { open_id?: string; }; sender_type?: string; }
+    sender: { sender_id?: { open_id?: string; }; sender_type: string; }
   interface FeishuOptions
     appId?: string | undefined
     appSecret?: string | undefined

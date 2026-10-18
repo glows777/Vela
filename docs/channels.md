@@ -144,7 +144,9 @@ The history window also supplies at most the four most recent images (including 
 
 With no earlier text, the input is just `Alice: What should we do next?`. If history cannot be fetched, Vela logs the failure and answers the named question alone. It does not claim the missing context was read. The API query is bounded to one page; older messages beyond that page are omitted. Feishu's chat-history endpoint returns thread roots, not all replies inside separate threads.
 
-History stops at any message sent by this application's app_id, including interactive cards and other message types. The boundary works after process restart and needs no in-memory last-reply state. Messages from a different bot are not this app's boundary. This also applies to control cards, so the bounded scan may omit earlier discussion; use history search when needed.
+With `appId` configured, history stops at any message sent by this application's app_id, including interactive cards and other message types. That boundary works after process restart without in-memory reply state. Messages from a different bot are not this app's boundary. This also applies to control cards, so the bounded scan may omit earlier discussion; use history search when needed.
+
+Custom `feishu({ transport })` integrations may omit `appId`. In that case only, Vela retains successful top-level reply receipts in memory and stops at the reply's message ID or timestamp. That fallback preserves the current-process boundary, including when the reply is absent from the returned history, but cannot identify older own-app messages after a process restart. Supply `appId` alongside the custom transport for the restart-safe boundary; no app secret is needed with a custom transport.
 
 ### Feishu permissions
 
@@ -167,6 +169,8 @@ This is a breaking channel change. A deployment that sets only `owners` now answ
 Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id>`. Old per-sender files remain on disk and are not automatically combined or resumed as shared history. The new chat starts a separate persisted session; keep old files if you need their transcripts. This avoids silently exposing a previous private sender history to the whole group. Existing core SDK sessions and roles are unchanged.
 
 Custom `FeishuTransport` implementations must provide `getBotId`, `getSenderName`, `listMessages`, `listTopicMessages`, `reply`, `startTopic` and `forward`. `listTopicMessages(threadId, pageToken?)` returns `{ items, pageToken? }` in ascending creation order, with a next token only when more pages remain; use a thread container, page size 50 and no time filters. `listMessages` returns newest-first history with millisecond `create_time`; `reply` returns `{ messageId, createTime }` from the service's successful reply receipt. Sends/replies and API errors must reject, so the gateway reports failure instead of a successful reply.
+
+`FeishuMessageEvent.sender.sender_type` is required in the public transport contract. Classify human events as `user` and bot events as `bot`; only `user` events are admitted. Missing or unknown sender types are still rejected at runtime, including from untyped integrations.
 
 `startTopic(messageId, task)` returns `{ messageId, createTime, rootId, threadId }` from the successful threaded reply. `forward(messageId, threadId)` returns `{ messageId, createTime }` from the successful forward. Missing required receipt fields and platform errors must reject; do not pretend an unthreaded send created a topic.
 
