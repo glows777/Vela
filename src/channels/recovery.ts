@@ -109,7 +109,7 @@ export class ChannelRecovery {
         recipientId: msg.senderId,
         text: finalAnswer(last.message),
       })
-      await this.directory.finish(record.key, 'done')
+      await this.directory.finish(record.key, 'done', true)
       return
     }
     const user = branch.findLast((entry) => entry.message.role === 'user')
