@@ -85,6 +85,7 @@ Every extension has a name. It sets the prefix of its tool names and selects its
 
 On Bun any TypeScript works. On Node (>= 22.18) the CLI imports the file and Node strips the types natively, which has limits:
 
+- For an ES-module `.ts` extension, set `"type": "module"` in its nearest parent `package.json` (for example, `~/.vela/extensions/package.json`). This avoids Node's `MODULE_TYPELESS_PACKAGE_JSON` warning when that package has no `type` field. See [Node's module-system rules](https://nodejs.org/docs/latest-v22.x/api/typescript.html#determining-module-system).
 - Only erasable syntax works. `enum`, `namespace` with values, constructor parameter properties (`constructor(private x: T)`) and other syntax that generates code fail with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Use plain objects, union types and explicit fields.
 - Node does not strip types in files under `node_modules`. Ship compiled `.js` in a package.
 - Imports must resolve from the extension's own location. Import Vela's types with `import type { ... } from '@glows777/vela'`; the import is erased and works anywhere. A value import (`import { createVela } from '@glows777/vela'`) or a third-party import such as `zod` needs that package installed where the extension can resolve it, for example a `package.json` and `node_modules` next to the extension. This applies on Bun too.
@@ -141,6 +142,19 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
 | `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
+
+<a id="tool-image-results"></a>
+
+`ToolContent` is an array of `{ type: 'text', text }` and the same `{ type: 'image', data: base64, mimeType }` used in prompts:
+
+```ts
+return new ToolExecutionResult({ source: 'screenshot' }, [
+  { type: 'text', text: 'Current screen' },
+  { type: 'image', data: pngBase64, mimeType: 'image/png' },
+])
+```
+
+The `.text` property remains the joined text caption. `.content` is present for an array result. Images are resized after `tool_result` hooks and stored inline in session messages; non-vision requests use placeholders without changing the stored images. Oversized captions have a separate text-only `modelTextPath` in tool history; native details remain in `output`. Failed image results keep their error status and images: vision-capable provider requests get an error-text tool result followed by a request-only user image message, because the AI SDK has no multimodal error-output variant.
 
 `ctx.onUpdate(partialResult)` reports partial output while the tool runs. Each call becomes a `tool_execution_update` event (pi's event and field names), so print, JSON and RPC modes see it; updates after the tool returned are ignored. `bash` sends `{ content: [{ type: 'text', text }] }` with the tail of its output.
 
@@ -299,7 +313,15 @@ vela.on('session_start', (_event, ctx) => {
   - Idle with `triggerTurn: true`: runs the agent loop with the message as its input; resolves when the run ends.
   - While running with `triggerTurn: false`: appended once the current step's tool results are in, so it never lands between a tool call and its result.
   - Otherwise: appended right away, without calling the model.
-- `session.sendUserMessage(text, { deliverAs? })` sends input as if the user typed it: it goes through `input` handlers with source `extension`, but is not run as a command or expanded as a skill or prompt template. While running, pass `deliverAs` (`steer` / `followUp`), as with `prompt()`.
+- `session.sendUserMessage(content, { deliverAs? })` accepts `content: string | (TextContent | ImageContent)[]` and returns `Promise<void>`. It sends input as if the user typed it: it goes through `input` handlers with source `extension`, but is not run as a command or expanded as a skill or prompt template. While running, pass `deliverAs` (`steer` / `followUp`), as with `prompt()`. The input hook can replace the images; they follow the same resize, persistence and model-capability rules as SDK prompts.
+
+  ```ts
+  await ctx.session.sendUserMessage([
+    { type: 'text', text: 'Inspect this screenshot' },
+    { type: 'image', data: pngBase64, mimeType: 'image/png' },
+  ], { deliverAs: 'followUp' })
+  ```
+
 - `session.appendEntry(customType, data?)` saves extension state as a `custom` entry, never sent to the model. Read it back from `session.getEntries()`, for example in `session_start` after a resume. Like pi, entries added before the session has any conversation are written once the first message is (a session that never gets one is not saved).
 
 ## Context
@@ -365,29 +387,3 @@ See [SDK](sdk.md) and, for testing extensions with the scripted faux model, [Tes
 ## Examples
 
 [examples/extensions/](../examples/extensions/README.md) has a small, runnable example for each API above.
-
-### Tool image results
-
-`ToolContent` is an array of `{ type: 'text', text }` and the same `{ type: 'image', data: base64, mimeType }` used in prompts:
-
-```ts
-return new ToolExecutionResult({ source: 'screenshot' }, [
-  { type: 'text', text: 'Current screen' },
-  { type: 'image', data: pngBase64, mimeType: 'image/png' },
-])
-```
-
-The `.text` property remains the joined text caption. `.content` is present for an array result. Images are resized after `tool_result` hooks, stored inline in session messages, and replaced only in non-vision requests. Oversized captions have a separate text-only `modelTextPath` in tool history; native details remain in `output`. Failed image results keep their error status and images: the provider gets an error-text tool result followed by a request-only user image message, because the AI SDK has no multimodal error-output variant.
-
-### Sending images
-
-`ctx.session.sendUserMessage()` accepts a string or an array of text and inline image parts:
-
-```typescript
-await ctx.session.sendUserMessage([
-  { type: 'text', text: 'Inspect this screenshot' },
-  { type: 'image', data: pngBase64, mimeType: 'image/png' },
-], { deliverAs: 'followUp' })
-```
-
-The input hook receives source `extension` and may replace the images. This follows the same resize, persistence and model-capability rules as SDK prompts; it does not interpret the text as a slash command.

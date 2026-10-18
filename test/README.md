@@ -26,11 +26,11 @@ The faux model, the demo model and createTestVela live in `src/testing/` rather 
 
 ## Running
 
-| Command | What it runs | Time |
+| Command | What it runs | Approximate time |
 |---|---|---|
-| `bun run test` | unit + e2e; run this before committing | a few seconds |
-| `bun run test:unit` | unit tests only | ~1.5 s |
-| `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | a few seconds |
+| `bun run test` | unit + e2e; run this before committing | 1–2 min |
+| `bun run test:unit` | unit tests only | ~5–15 s |
+| `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | ~1 min |
 | `bun run test:live` | real model; needs `OPENAI_API_KEY` and `OPENAI_API_MODEL_NAME` | depends on the model |
 | `bun test <file or dir>` | a targeted subset | |
 | `bun run typecheck` | `tsc --noEmit`; must report 0 errors | |
