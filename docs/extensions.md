@@ -143,6 +143,8 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
 
+<a id="tool-image-results"></a>
+
 `ToolContent` is an array of `{ type: 'text', text }` and the same `{ type: 'image', data: base64, mimeType }` used in prompts:
 
 ```ts
