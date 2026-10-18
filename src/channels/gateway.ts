@@ -1,6 +1,11 @@
 import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 import type { SessionOptions, VelaSession } from '../vela-session.ts'
 import { TopicAdmission } from './admission.ts'
+import {
+  finishTopicCommand,
+  type TopicCommand,
+  topicCommand,
+} from './commands.ts'
 import { ChannelDirectory } from './directory.ts'
 import { RunFeedback } from './feedback.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
@@ -35,6 +40,8 @@ export class ChannelGateway {
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
   private admitting = new Map<string, Promise<void>>()
+  private commands = new Map<string, Promise<void>>()
+  private processing = new Map<string, { stopped: boolean }>()
   private channels = new Map<string, ChannelDefinition>()
   /** Messages are processed serially per session: the next message in a chat waits for the previous reply */
   private queues = new Map<string, Promise<void>>()
@@ -54,14 +61,14 @@ export class ChannelGateway {
     this.directory = new ChannelDirectory(options.dataDir)
     this.recovery = new ChannelRecovery(this.directory)
     this.admission = new TopicAdmission(this.directory, (id, opts) =>
-      options.session(id, opts),
+      this.open(id, opts),
     )
     this.feedback = new RunFeedback({
       directory: this.directory,
       recovery: this.recovery,
       stopped: () => this.stopped,
       channel: (name) => this.channels.get(name),
-      find: (id) => options.find(id),
+      find: (id) => this.find(id),
       reply: (session, name, msg, text) =>
         this.sendReply(session, name, msg, text),
       logger: this.logger,
@@ -70,14 +77,23 @@ export class ChannelGateway {
 
   /** Internal storage-success notification, including saves outside a channel prompt. */
   sessionSaved(id: string): void {
-    this.saveFailures.delete(id)
+    this.saveFailures.delete(this.directory.keyForSession(id))
+  }
+
+  private open(key: string, options?: SessionOptions): VelaSession {
+    return this.options.session(this.directory.sessionId(key), options)
+  }
+
+  private find(key: string): VelaSession | undefined {
+    return this.options.find(this.directory.sessionId(key))
   }
 
   register(channel: ChannelDefinition): void {
     this.channels.set(channel.name, channel)
 
     channel.connect?.({
-      context: (id) => this.feedback.runs.get(id)?.trigger,
+      context: (id) =>
+        this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
       topicCoverage: () => this.directory.coverage,
       topics: (chatId) =>
         this.admission.list(channel.name, chatId, (id) =>
@@ -88,7 +104,7 @@ export class ChannelGateway {
               : 'idle',
         ),
       dispatch: (id, msg) => {
-        const source = this.feedback.runs.get(id)
+        const source = this.feedback.runs.get(this.directory.keyForSession(id))
         if (!source || !this.feedback.runIsLive(source))
           throw new Error('The source channel run has ended')
         const targetId = channelSessionId(
@@ -203,36 +219,44 @@ export class ChannelGateway {
     clearTimeout(this.idleTimers.get(id))
     this.idleTimers.delete(id)
     const previous = this.queues.get(id) ?? Promise.resolve()
-    const admitted = (this.admitting.get(id) ?? this.directory.load()).then(
-      async () => {
-        if (this.stopped) return false
-        const channel = this.channels.get(channelName)
-        if (msg.requireExistingSession && !this.directory.get(id)) {
-          await this.closing.get(id)
-          if (!(await this.admission.admit(id, channel, msg))) return false
-        }
-        await this.directory.admit(id, channelName, msg)
-        return true
-      },
-    )
-    const admission = admitted.then(
-      () => {},
-      () => {},
-    )
-    this.admitting.set(id, admission)
-    void admission.then(() => {
-      if (this.admitting.get(id) === admission) this.admitting.delete(id)
-    })
+    const command = topicCommand(msg)
+    const barrier = this.commands.get(id)
+    // A live admitted topic already passed ownership. Cancel preparation synchronously,
+    // before its pending history/resource await can release into a model call.
+    const processing = !barrier && command && this.processing.get(id)
+    if (processing && !this.stopped) processing.stopped = true
+    const stopping = processing ? this.feedback.stop(id) : undefined
+    void stopping?.catch(() => {})
+    const admitted = this.admit(id, channelName, msg)
+    if (command)
+      return this.handleCommand(
+        id,
+        channelName,
+        msg,
+        command,
+        admitted,
+        previous,
+        barrier,
+        stopping,
+      )
+    // Messages after a command must not steer the generation being archived.
+    const available = barrier
+      ? admitted.then(async (accepted) => {
+          await barrier
+          return accepted
+        })
+      : admitted
     // Keep live controls immediate. Steer waits for its admitted ID before submitting input.
-    const ready = admitted.then(() => {})
+    const ready = available.then(() => {})
     void ready.catch(() => {})
     const receive =
-      !msg.requireExistingSession ||
-      this.directory.get(id) ||
-      this.feedback.runs.has(id)
+      !barrier &&
+      (!msg.requireExistingSession ||
+        this.directory.get(id) ||
+        this.feedback.runs.has(id))
         ? this.feedback.receive(id, channelName, msg, ready)
         : undefined
-    const consumed = admitted
+    const consumed = available
       .then((accepted) =>
         accepted
           ? (receive ?? this.feedback.receive(id, channelName, msg))
@@ -257,6 +281,77 @@ export class ChannelGateway {
     return next
   }
 
+  private admit(
+    id: string,
+    channelName: string,
+    msg: IncomingMessage,
+  ): Promise<boolean> {
+    const admitted = (this.admitting.get(id) ?? this.directory.load()).then(
+      async () => {
+        if (this.stopped) return false
+        const channel = this.channels.get(channelName)
+        if (msg.requireExistingSession && !this.directory.get(id)) {
+          await this.closing.get(id)
+          if (!(await this.admission.admit(id, channel, msg))) return false
+        }
+        await this.directory.admit(id, channelName, msg)
+        return true
+      },
+    )
+    const admission = admitted.then(
+      () => {},
+      () => {},
+    )
+    this.admitting.set(id, admission)
+    void admission.then(() => {
+      if (this.admitting.get(id) === admission) this.admitting.delete(id)
+    })
+    return admitted
+  }
+
+  private handleCommand(
+    id: string,
+    channelName: string,
+    msg: IncomingMessage,
+    command: TopicCommand,
+    admitted: Promise<boolean>,
+    previous: Promise<void>,
+    barrier?: Promise<void>,
+    stopping?: Promise<boolean>,
+  ): Promise<void> {
+    const next = (async () => {
+      if (!(await admitted)) return
+      await barrier
+      if (this.stopped) return
+      const processing = this.processing.get(id)
+      if (processing) processing.stopped = true
+      const stopped =
+        (await (stopping ?? this.feedback.stop(id))) || !!processing
+      await previous
+      await this.closing.get(id)
+      if (this.stopped) return
+      const channel = this.channels.get(channelName)
+      if (!channel) return
+      await finishTopicCommand(
+        command,
+        id,
+        channel,
+        msg,
+        stopped,
+        this.directory,
+        this.feedback,
+        this.find(id),
+      )
+    })().catch((error) => this.feedback.feedbackError(channelName, msg, error))
+    this.commands.set(id, next)
+    void next.then(() => {
+      if (this.commands.get(id) === next) this.commands.delete(id)
+    })
+    this.queues.set(id, next)
+    this.releaseQueue(id, next)
+    return next
+  }
+
   private releaseQueue(id: string, next: Promise<void>): void {
     void next.then(() => {
       if (this.queues.get(id) !== next) return
@@ -275,7 +370,7 @@ export class ChannelGateway {
     const idleMs = this.options.idleMs ?? DEFAULT_CHANNEL_IDLE_MS
     const timer = setTimeout(() => {
       this.idleTimers.delete(id)
-      const session = this.options.find(id)
+      const session = this.find(id)
       // A queued message rearms the timer once its reply is sent
       if (!session || this.queues.has(id)) return
       // Running (an extension or SDK caller is using it), or opened with a UI (the terminal resumed it): check
@@ -313,12 +408,7 @@ export class ChannelGateway {
       return
     }
     // New work may have arrived while saving; its queue will rearm idle cleanup.
-    if (
-      this.stopped ||
-      this.options.find(id) !== session ||
-      this.queues.has(id)
-    )
-      return
+    if (this.stopped || this.find(id) !== session || this.queues.has(id)) return
     if (session.isRunning || session.hasUI) {
       this.closeWhenIdle(id, idleMs || BUSY_RECHECK_MS)
       return
@@ -332,12 +422,21 @@ export class ChannelGateway {
     msg: IncomingMessage,
     recovered = false,
   ): Promise<void> {
+    const processing = { stopped: false }
+    this.processing.set(id, processing)
     let outcome: ChannelOutcome | undefined = 'failed'
     try {
-      outcome = await this.processRun(id, channelName, msg, recovered)
+      outcome = await this.processRun(
+        id,
+        channelName,
+        msg,
+        processing,
+        recovered,
+      )
     } catch (error) {
       await this.feedback.feedbackError(channelName, msg, error)
     } finally {
+      if (this.processing.get(id) === processing) this.processing.delete(id)
       if (outcome)
         await Promise.all(
           (this.feedback.acknowledgements.get(msg) ?? []).map((input) =>
@@ -351,6 +450,7 @@ export class ChannelGateway {
     id: string,
     channelName: string,
     msg: IncomingMessage,
+    processing: { stopped: boolean },
     recovered = false,
   ): Promise<ChannelOutcome | undefined> {
     if (this.stopped) return 'stopped'
@@ -367,9 +467,20 @@ export class ChannelGateway {
     const input = msg
     const task = msg.text
     const prepared =
-      !recovered && channel?.prepareMessage
+      !processing.stopped && !recovered && channel?.prepareMessage
         ? await channel.prepareMessage(msg)
         : msg
+    if (processing.stopped) {
+      await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
+      await this.directory.finish(id, 'stopped')
+      await this.sendReply(
+        topicSession ?? this.open(id),
+        channelName,
+        msg,
+        'Stopped the current run.',
+      )
+      return 'stopped'
+    }
     if (!prepared) {
       // Undefined means the adapter handled the input without a model prompt.
       await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
@@ -378,7 +489,7 @@ export class ChannelGateway {
     if (this.stopped) return 'failed'
     msg = prepared
     const session =
-      topicSession ?? this.options.session(id, channel?.sessionOptions?.(msg))
+      topicSession ?? this.open(id, channel?.sessionOptions?.(msg))
     this.admission.observe(id, channelName, msg, task)
     session.channel = channelName
     // Channels admit only trusted chats; custom channels can still choose an SDK role.

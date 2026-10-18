@@ -562,7 +562,7 @@ export class FeishuChannel implements ChannelDefinition {
     // Normalized replyToId identifies a group input, including during recovery.
     const replyToId = group ? message.message_id : undefined
     const requireExistingSession = group && !!message.thread_id && !mentioned
-    const text = requireExistingSession ? undefined : messageText(message)
+    const text = messageText(message)
     if (text === '' || !this.messageHandler) return
     // Deliver immediately so the gateway can show run controls, then serialize preparation and replies there.
     const next = Promise.resolve(
