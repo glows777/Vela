@@ -315,31 +315,57 @@ function createProvider(
           break
       }
       const transform = oauthRequests?.transformParams
-      // DeepSeek Responses is stateless: let the SDK serialize history inline.
-      // https://api-docs.deepseek.com/guides/responses_api/
-      const statelessResponses =
-        api === 'openai-responses' &&
-        settings.baseURL != null &&
-        new URL(settings.baseURL).hostname === 'api.deepseek.com'
-      if ((!transform && !statelessResponses) || typeof model === 'string')
+      if (
+        (api !== 'openai-responses' && !transform) ||
+        typeof model === 'string'
+      )
         return model
+      const spec =
+        config.models?.find((m) => m.id === id) ?? catalogLookup(name, id)
+      const deepseekResponses =
+        api === 'openai-responses' &&
+        settings.baseURL !== undefined &&
+        new URL(settings.baseURL).hostname === 'api.deepseek.com'
       return wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
           transformParams: async ({ params }) => {
-            const request =
-              transform && (await ctx.credential())?.type === 'oauth'
-                ? transform(params)
-                : params
-            if (!statelessResponses) return request
-            return {
-              ...request,
-              providerOptions: {
-                ...request.providerOptions,
-                openai: { ...request.providerOptions?.openai, store: false },
-              },
+            if (api === 'openai-responses') {
+              const openai = { ...params.providerOptions?.openai }
+              // The SDK infers capability from IDs; positive metadata also enables custom IDs.
+              if (
+                openai.forceReasoning === undefined &&
+                spec?.reasoning === true
+              )
+                openai.forceReasoning = true
+              const level =
+                params.reasoning === 'none' ? 'off' : params.reasoning
+              const effort =
+                level && level !== 'provider-default'
+                  ? spec?.thinkingLevelMap?.[level]
+                  : undefined
+              if (
+                openai.reasoningEffort === undefined &&
+                typeof effort === 'string'
+              )
+                openai.reasoningEffort = effort
+              // DeepSeek treats developer messages as user messages. Keep the system instruction's role.
+              if (deepseekResponses) {
+                // DeepSeek is stateless: let the SDK serialize history inline.
+                openai.store = false
+                if (openai.systemMessageMode === undefined)
+                  openai.systemMessageMode = 'system'
+              }
+              params = {
+                ...params,
+                providerOptions: { ...params.providerOptions, openai },
+              }
             }
+            // The OAuth route's requirements remain authoritative over caller/default options.
+            return transform && (await ctx.credential())?.type === 'oauth'
+              ? transform(params)
+              : params
           },
         },
       })
