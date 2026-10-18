@@ -1,7 +1,9 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
+import * as fs from 'node:fs/promises'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ChannelDirectory } from '../../src/channels/directory.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import { fauxHang, fauxText } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
@@ -31,6 +33,125 @@ function message(text: string, mentioned = true) {
     mentions: mentioned ? [{ key: '@_user_1', id: { open_id: 'ou_bot' } }] : [],
   })
 }
+
+test.each([
+  [false, true],
+  [true, true],
+  [false, false],
+  [true, false],
+])(
+  'restart persistence stays consistent with a later admission (other topic=%s, failed write=%s)',
+  async (otherTopic, failWrite) => {
+    const { fake, t } = await setup()
+    fake.deliver(message('original task'))
+    await until(() => fake.sent.length === 1)
+    const oldId = 'feishu-oc_group-root'
+    const path = t.dataPath('channels/index.json')
+    let releaseWrite!: () => void
+    const heldWrite = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    let releasePreparation!: () => void
+    const heldPreparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve
+    })
+    let restartWriteStarted = false
+    let preparationStarted = false
+    let admitted!: Promise<void>
+    let admissionStarted = false
+    const rename = fs.rename
+    const admit = ChannelDirectory.prototype.admit
+    const renameSpy = spyOn(fs, 'rename').mockImplementation(
+      async (from, to) => {
+        if (to === path && !restartWriteStarted) {
+          const snapshot = JSON.parse(await fs.readFile(from, 'utf8'))
+          if (
+            snapshot.records.find((r: { key: string }) => r.key === oldId)
+              ?.activeSessionId !== oldId
+          ) {
+            restartWriteStarted = true
+            await heldWrite
+            if (failWrite) throw new Error('simulated index rename failure')
+          }
+        }
+        await rename(from, to)
+      },
+    )
+    const admitSpy = spyOn(
+      ChannelDirectory.prototype,
+      'admit',
+    ).mockImplementation(function (key, channel, msg) {
+      const result = admit.call(this, key, channel, msg)
+      if (msg.replyToId === 'later-input') {
+        admitted = result
+        admissionStarted = true
+      }
+      return result
+    })
+    fake.transport.getSenderName = async () => {
+      preparationStarted = true
+      await heldPreparation
+      return 'Bob'
+    }
+    try {
+      fake.deliver(message('!restart'))
+      await until(() => restartWriteStarted)
+      const later = message('later input')
+      later.sender.sender_id = { open_id: 'ou_bob' }
+      later.message.message_id = 'later-input'
+      if (otherTopic)
+        Object.assign(later.message, {
+          root_id: 'other',
+          thread_id: 'other-thread',
+        })
+      fake.deliver(later)
+      await until(() => admissionStarted)
+      releaseWrite()
+      await admitted
+      await until(
+        () =>
+          preparationStarted &&
+          fake.sent.some((m) =>
+            m.text.includes(
+              failWrite
+                ? 'simulated index rename failure'
+                : 'Restarted with a fresh session',
+            ),
+          ),
+      )
+      const records = JSON.parse(
+        await t.readData('channels/index.json'),
+      ).records
+      expect(
+        records.find((r: { key: string }) => r.key === oldId),
+      ).toMatchObject({
+        activeSessionId: failWrite
+          ? oldId
+          : expect.not.stringMatching(/^feishu-/),
+        previousSessionIds: failWrite ? [] : [oldId],
+      })
+      expect(
+        records.find(
+          (r: { key: string }) =>
+            r.key === (otherTopic ? 'feishu-oc_group-other' : oldId),
+        ).pendingMessageIds,
+      ).toContain('later-input')
+      expect(t.model.calls).toHaveLength(1)
+      expect(
+        fake.sent.some((m) =>
+          m.text.includes('Restarted with a fresh session'),
+        ),
+      ).toBe(!failWrite)
+    } finally {
+      releaseWrite()
+      const stopping = t.internals.gateway.stopAll()
+      releasePreparation()
+      await stopping
+      renameSpy.mockRestore()
+      admitSpy.mockRestore()
+    }
+  },
+)
 
 test.each([false, true])(
   'active !restart drains the old run and stale Stop cannot cancel its successor (mentioned=%s)',
