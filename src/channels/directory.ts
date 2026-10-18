@@ -183,11 +183,16 @@ export class ChannelDirectory {
     await this.save(record)
   }
 
-  async finish(key: string, state: ChannelRecord['state']): Promise<void> {
+  async finish(
+    key: string,
+    state: ChannelRecord['state'],
+    answered = false,
+  ): Promise<void> {
     const record = this.records.get(key)
     if (!record) return
-    record.state = state === 'done' && record.waitingReason ? 'waiting' : state
-    if (state === 'stopped') record.waitingReason = undefined
+    record.state =
+      state === 'done' && answered && record.waitingReason ? 'waiting' : state
+    if (record.state !== 'waiting') record.waitingReason = undefined
     await this.save(record)
   }
 
