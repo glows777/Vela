@@ -28,18 +28,24 @@ The faux model, the demo model and createTestVela live in `src/testing/` rather 
 
 | Command | What it runs | Time |
 |---|---|---|
-| `bun run test` | unit + e2e; run this before committing | a few seconds |
-| `bun run test:unit` | unit tests only | ~1.5 s |
-| `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | a few seconds |
+| `bun run test` | unit + e2e; run this before committing | See [Test duration](#test-duration) |
+| `bun run test:unit` | unit tests only | Depends on the selected tests and machine |
+| `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | See [Test duration](#test-duration) |
 | `bun run test:live` | real model; needs `OPENAI_API_KEY` and `OPENAI_API_MODEL_NAME` | depends on the model |
 | `bun test <file or dir>` | a targeted subset | |
 | `bun run typecheck` | `tsc --noEmit`; must report 0 errors | |
-| `bun run smoke:consumer` | runs `bun run build`, packs a tarball and installs it into an empty Node project (strict NodeNext tsconfig, no @types/bun) and an empty Bun project; in each, type-checks like a consumer, runs a faux session and `vela -p`. Needs network; CI runs it as its own step (on Node 22.18) | ~30 s |
+| `bun run smoke:consumer` | runs `bun run build`, packs a tarball and installs it into an empty Node project (strict NodeNext tsconfig, no @types/bun) and an empty Bun project; in each, type-checks like a consumer, runs a faux session and `vela -p`. Needs network; CI runs it as its own step (on Node 22.18) | Depends on build, installation and network |
 | `bun run lint` | `biome check` (formatting, import order, lint); must report 0 errors (warnings don't block); `bun run lint:fix` fixes formatting and imports | |
 
 The suite never touches the network and needs no environment variables, but it needs ripgrep and fd installed: the `grep` / `find` tools run the real `rg` / `fd` (macOS `brew install ripgrep fd`, Ubuntu `apt install ripgrep fd-find`). The test Vela passes no `binDir`, so it only looks on PATH and never downloads. Every test runs in its own temp directory, isolated from the others and removed afterwards.
 
 CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint` and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. The Release workflow runs the same job on a release tag before publishing. `test/live/` does not run in CI.
+
+### Test duration
+
+The [2026-10-18 health check in #97](https://github.com/glows777/Vela/issues/97), on main `556631a`, reported 64–105 seconds for `bun run test` and about 30–40 seconds for `bun test test/e2e/cli.test.ts` alone. These are reported local timings, not CI guarantees; the issue does not specify the machine or Bun version. The CLI file is part of `test:e2e`, so budget for its subprocess runtime when running that command too.
+
+Time the command you need in your environment (for example, `time bun run test` or `time bun test test/e2e/cli.test.ts`), and record the commit, Bun version, OS and pass/fail result with the elapsed time. Subprocess startup, machine load and the selected tests affect duration.
 
 ## Layers
 
