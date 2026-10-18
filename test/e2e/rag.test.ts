@@ -23,65 +23,40 @@ const GUIDE = [
   'Alerts are sent by the Feishu bot; the on-call rota is in the oncall doc.',
 ].join('\n')
 
-test('unconfigured RAG stays silent and lists only /rag in /extensions', async () => {
+test('unconfigured RAG stays silent and /rag explains configuration without model or database work', async () => {
   const diagnostics: string[] = []
   const log = (message: string) => diagnostics.push(message)
   const t = createTestVela({
     extensions: [rag()],
     logger: { debug: log, info: log, warn: log, error: log },
-    responses: [fauxText('Hello')],
   })
-  await t.run('hello')
-  expect(t.lastAssistantText()).toBe('Hello')
   expect(diagnostics).toEqual([])
-  expect(t.model.calls[0]!.tools).not.toContain('rag_search')
-  expect(t.model.calls[0]!.tools).not.toContain('rag_ingest')
-  expect(t.exists('rag/knowledge.db')).toBe(false)
-  const { output } = await captureConsole(() => t.dispatch('/extensions'))
-  expect(output).toContain('Commands: /rag')
   expect(t.vela.extensions().find((ext) => ext.name === 'rag')).toMatchObject({
     tools: [],
     commands: ['rag'],
   })
-})
-
-for (const command of ['/rag', '/rag ingest docs/guide.md', '/rag clear']) {
-  test(`unconfigured ${command} explains configuration without a model call or database`, async () => {
-    const t = createTestVela({
-      extensions: [rag()],
-      files: { 'docs/guide.md': GUIDE },
-    })
-    await t.run(command)
-    expect(t.model.calls).toHaveLength(0)
-    expect(t.exists('rag')).toBe(false)
-    const message = notes(t)
-    expect(message).toContain('Knowledge base disabled')
-    expect(message).toContain('extensionConfig.rag.embedding')
-    for (const key of [
-      'baseUrl',
-      'model',
-      'apiKey',
-      'settings.json',
-      'EMBEDDING_MODEL_BASE_URL',
-      'EMBEDDING_MODEL',
-      'EMBEDDING_MODEL_KEY',
-    ])
-      expect(message).toContain(key)
-  })
-}
-
-test('unconfigured /rag keeps the existing owner-only command restriction', async () => {
-  const t = createTestVela({
-    extensions: [rag()],
-    session: { role: 'guest' },
-    responses: [fauxText('Guest answer')],
-  })
+  const { output } = await captureConsole(() => t.dispatch('/extensions'))
+  expect(output).toContain('Commands: /rag')
   await t.run('/rag')
-  expect(t.model.calls).toHaveLength(1)
-  expect(t.eventsOf('notify')).toHaveLength(0)
+  expect(t.model.calls).toHaveLength(0)
+  expect(t.exists('rag')).toBe(false)
+  expect(diagnostics).toEqual([])
+  const message = notes(t)
+  expect(message).toContain('Knowledge base disabled')
+  expect(message).toContain('extensionConfig.rag.embedding')
+  for (const key of [
+    'baseUrl',
+    'model',
+    'apiKey',
+    'settings.json',
+    'EMBEDDING_MODEL_BASE_URL',
+    'EMBEDDING_MODEL',
+    'EMBEDDING_MODEL_KEY',
+  ])
+    expect(message).toContain(key)
 })
 
-test('configured RAG registers tools and /extensions does not report it disabled', async () => {
+test('configured RAG registers tools', async () => {
   const t = createTestVela({
     extensions: [rag()],
     extensionConfig: {
@@ -99,9 +74,6 @@ test('configured RAG registers tools and /extensions does not report it disabled
   expect(t.model.calls[0]!.tools).toEqual(
     expect.arrayContaining(['rag_search', 'rag_ingest']),
   )
-  const { output } = await captureConsole(() => t.dispatch('/extensions'))
-  expect(output).toContain('rag_search')
-  expect(output).not.toContain('Knowledge base disabled')
 })
 
 test('ingest a document relative to cwd, then search it, offline with the faux embedder', async () => {

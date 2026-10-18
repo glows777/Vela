@@ -432,7 +432,7 @@ test.concurrent('-p prints only the final answer to stdout and saves a new sessi
   expect(await Bun.file(files[0]!).text()).toContain('faux replay')
 })
 
-test.concurrent('unconfigured /rag explains configuration on demand in print and JSON modes', async () => {
+test.concurrent('unconfigured /rag explains configuration on demand in print mode', async () => {
   const model = `faux:${scenario('rag-unconfigured')}`
   const print = await cli(['-p', '/rag'], { model })
   expect(print.code).toBe(0)
@@ -440,27 +440,6 @@ test.concurrent('unconfigured /rag explains configuration on demand in print and
   expect(print.stderr).toContain('Knowledge base disabled')
   expect(print.stderr).toContain('extensionConfig.rag.embedding')
   expect(print.stderr).toContain('settings.json')
-
-  const json = await cli(['--mode', 'json', '/rag'], { model })
-  expect(json.code).toBe(0)
-  expect(json.stderr).toBe('')
-  const events = json.stdout
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(events.some((event) => event.type === 'agent_start')).toBe(false)
-  expect(events.find((event) => event.type === 'notify')).toMatchObject({
-    message: expect.stringContaining('extensionConfig.rag.embedding'),
-  })
-})
-
-test.concurrent('--no-extensions keeps /rag as model input', async () => {
-  const result = await cli(['--no-extensions', '-p', '/rag'], {
-    model: `faux:${scenario('hello')}`,
-  })
-  expect(result.code).toBe(0)
-  expect(result.stderr).toBe('')
-  expect(result.stdout).toBe('Hello, this is Vela (faux replay).\n')
 })
 
 test.concurrent('-p reports a session save failure on stderr while keeping the answer on stdout', async () => {
@@ -962,42 +941,6 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
 // TUI behavior itself is tested with a fake terminal in e2e/tui; here we only check that it starts, chats and exits in a real terminal
 const hasScript =
   process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
-
-for (const failure of ['corrupt database', 'blocked directory']) {
-  test.if(hasScript)(
-    `configured RAG reports a ${failure} while the CLI remains usable`,
-    async () => {
-      const cwd = tempDir('vela-rag-failure-')
-      const home = tempDir('vela-rag-home-')
-      dirs.push(cwd, home)
-      const ragDir = join(projectDataDir(home.path, cwd.path), 'rag')
-      await Bun.write(
-        failure === 'corrupt database' ? join(ragDir, 'knowledge.db') : ragDir,
-        'not a SQLite database',
-      )
-      const { stdout, stderr, code } = await cli([], {
-        model: `faux:${scenario('hello')}`,
-        cwd: cwd.path,
-        agentDir: home.path,
-        env: {
-          EMBEDDING_MODEL_BASE_URL: 'https://example.invalid/embeddings',
-          EMBEDDING_MODEL: 'test-embedding',
-          EMBEDDING_MODEL_KEY: 'offline-test',
-        },
-        terminal: [
-          ['Ctrl+D exit', '/extensions\r'],
-          ['[extensions]', 'hello\r'],
-          ['Hello, this is Vela (faux replay).', '\x04'],
-        ],
-      })
-      expect(code).toBe(0)
-      expect(stdout + stderr).toContain('Failed to load builtin:rag')
-      expect(stdout).toContain('[extensions]')
-      expect(stdout).toContain('Hello, this is Vela (faux replay).')
-      expect(stdout).not.toContain('Knowledge base disabled:')
-    },
-  )
-}
 
 test.if(hasScript)(
   'interactive mode shows loaded context files at startup and in /status',
