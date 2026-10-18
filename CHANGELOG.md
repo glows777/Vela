@@ -4,6 +4,11 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Fixed
+
+- Feishu topic prompts now ask the model to respond to the latest message and treat earlier results as delivered, without repeating them unless asked; completion notices call for a brief acknowledgment without restating the task or result.
+- DeepSeek Responses requests use `store: false` before SDK serialization so follow-ups receive earlier assistant answers as text instead of unsupported server-side item references. Local history and other providers are unchanged; reasoning-event parsing and replay support are outside this fix.
+
 ### Breaking Changes
 
 - **Feishu topic runs now show live feedback.** Group inputs receive `OnIt` then `DONE`/`CrossMark`; one shared Stop card shows bounded tool progress and a 15-second heartbeat. Topic results and decision questions @-mention the original requester. Custom `FeishuTransport` implementations must return a message ID from `sendCard` and implement `patchCard`, `addReaction` and `removeReaction`. See [task feedback and permissions](docs/channels.md#task-feedback).
