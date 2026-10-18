@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { EmbeddingFn } from '../../src/index.ts'
+import { type EmbeddingFn, rag } from '../../src/index.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { createFauxEmbedder } from '../../src/testing/faux-embedder.ts'
 import {
+  captureConsole,
   cleanupTestVelas,
   createTestVela,
   type TestVela,
@@ -22,12 +23,57 @@ const GUIDE = [
   'Alerts are sent by the Feishu bot; the on-call rota is in the oncall doc.',
 ].join('\n')
 
-test('without an embedder the RAG tools are not registered', () => {
-  const t = createTestVela()
-  const names = t.internals.registry.getAllTools().map((tool) => tool.name)
-  expect(names).toContain('read_file')
-  expect(names).not.toContain('rag_search')
-  expect(names).not.toContain('rag_ingest')
+test('unconfigured RAG stays silent and /rag explains configuration without model or database work', async () => {
+  const diagnostics: string[] = []
+  const log = (message: string) => diagnostics.push(message)
+  const t = createTestVela({
+    extensions: [rag()],
+    logger: { debug: log, info: log, warn: log, error: log },
+  })
+  expect(diagnostics).toEqual([])
+  expect(t.vela.extensions().find((ext) => ext.name === 'rag')).toMatchObject({
+    tools: [],
+    commands: ['rag'],
+  })
+  const { output } = await captureConsole(() => t.dispatch('/extensions'))
+  expect(output).toContain('Commands: /rag')
+  await t.run('/rag')
+  expect(t.model.calls).toHaveLength(0)
+  expect(t.exists('rag')).toBe(false)
+  expect(diagnostics).toEqual([])
+  const message = notes(t)
+  expect(message).toContain('Knowledge base disabled')
+  expect(message).toContain('extensionConfig.rag.embedding')
+  for (const key of [
+    'baseUrl',
+    'model',
+    'apiKey',
+    'settings.json',
+    'EMBEDDING_MODEL_BASE_URL',
+    'EMBEDDING_MODEL',
+    'EMBEDDING_MODEL_KEY',
+  ])
+    expect(message).toContain(key)
+})
+
+test('configured RAG registers tools', async () => {
+  const t = createTestVela({
+    extensions: [rag()],
+    extensionConfig: {
+      rag: {
+        embedding: {
+          baseUrl: 'https://example.invalid/embeddings',
+          model: 'test-embedding',
+          apiKey: 'offline-test',
+        },
+      },
+    },
+    responses: [fauxText('Hello')],
+  })
+  await t.run('hello')
+  expect(t.model.calls[0]!.tools).toEqual(
+    expect.arrayContaining(['rag_search', 'rag_ingest']),
+  )
 })
 
 test('ingest a document relative to cwd, then search it, offline with the faux embedder', async () => {
@@ -164,7 +210,7 @@ test('session.abort() stops a running /rag ingest', async () => {
   expect(t.session.signal).toBeUndefined()
 })
 
-test('without an embedder there is no /rag command; the text goes to the model', async () => {
+test('when the RAG extension is not loaded, /rag goes to the model', async () => {
   const t = createTestVela({ responses: [fauxText('No knowledge base')] })
   await t.run('/rag')
   expect(t.model.calls).toHaveLength(1)

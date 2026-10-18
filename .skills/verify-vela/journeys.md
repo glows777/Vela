@@ -25,7 +25,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 
 | Feature | Drive | Check |
 |---|---|---|
-| `-p` | `run $RUN p -p "list files"` | exit 0; stdout is only the answer; stderr only startup notices (`[rag] …`) |
+| `-p` | `run $RUN p -p "list files"` | exit 0; stdout is only the answer; empty stderr with no optional services configured |
 | Piped stdin | `echo ctx \| $H run $RUN --stdin pipe -p "list files"` | Same answer, exit 0 |
 | `--mode json` | `run $RUN j --mode json "list files"` | Line 1 `{"type":"session",…}`, then events including `tool_execution_end` |
 | RPC | `exec $RUN rpc env VELA_RPC_COMMAND="bun $PWD/src/cli/main.ts" bun $PWD/examples/rpc-client.ts "list files"` | The tool call and answer, exit 0. Closing stdin aborts a running prompt (`agent_end` reason `aborted`) |
@@ -73,6 +73,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Feature | Drive | Check |
 |---|---|---|
 | MCP | `home/mcp.json` → `{"mcpServers":{"echo":{"command":"bun","args":["$PWD/test/fixtures/mcp-echo-server.ts"]}}}`; faux `tool_search` then `mcp__echo__echo` | `Loaded 1 tool`, then the echoed text |
+| Unconfigured RAG | `run $RUN p -p "hello"`; in the TUI, `/extensions` then `/rag` | Ordinary startup is quiet; the listing includes `/rag`; `/rag` explains missing settings without a model call or database |
 | memory | faux `memory` with `{"action":"save",…}` | `Saved to memory: …`; the file under `home/projects/*/memory/` |
 | web_fetch | Serve a page locally (`python3 -m http.server`), faux `web_fetch` with its URL | The page as Markdown |
 | Retry | `-p "test retry"` | `Retry succeeded!` after two 429s |

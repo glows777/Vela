@@ -419,16 +419,27 @@ test.concurrent('interactive @file arguments send an initial image prompt and sh
 })
 
 test.concurrent('-p prints only the final answer to stdout and saves a new session', async () => {
-  const { stdout, code, dataDir } = await cli(['-p', 'hello'], {
+  const { stdout, stderr, code, dataDir } = await cli(['-p', 'hello'], {
     model: `faux:${scenario('hello')}`,
   })
   expect(code).toBe(0)
+  expect(stderr).toBe('')
   // Like pi: stdout holds only the final answer; diagnostics go to stderr
   expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
   const files = sessionFiles(dataDir)
   expect(files).toHaveLength(1)
   expect(files[0]).toMatch(/\/\d{8}-\d{6}-[0-9a-f]{4}\.jsonl$/)
   expect(await Bun.file(files[0]!).text()).toContain('faux replay')
+})
+
+test.concurrent('unconfigured /rag explains configuration on demand in print mode', async () => {
+  const model = `faux:${scenario('rag-unconfigured')}`
+  const print = await cli(['-p', '/rag'], { model })
+  expect(print.code).toBe(0)
+  expect(print.stdout).toBe('')
+  expect(print.stderr).toContain('Knowledge base disabled')
+  expect(print.stderr).toContain('extensionConfig.rag.embedding')
+  expect(print.stderr).toContain('settings.json')
 })
 
 test.concurrent('-p reports a session save failure on stderr while keeping the answer on stdout', async () => {
@@ -503,11 +514,15 @@ test.concurrent('piped stdin is prepended to the prompt (print mode without -p)'
 })
 
 test.concurrent('--mode json writes a session header and one JSON event per line', async () => {
-  const { stdout, code } = await cli(['--mode', 'json', 'check notes.txt'], {
-    model: `faux:${scenario('read-file')}`,
-    files: { 'notes.txt': 'remember the milk' },
-  })
+  const { stdout, stderr, code } = await cli(
+    ['--mode', 'json', 'check notes.txt'],
+    {
+      model: `faux:${scenario('read-file')}`,
+      files: { 'notes.txt': 'remember the milk' },
+    },
+  )
   expect(code).toBe(0)
+  expect(stderr).toBe('')
   const records = stdout
     .trim()
     .split('\n')
@@ -839,8 +854,7 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   )
   expect(code).toBe(0)
   expect(stderr).toContain('[extra] loaded {}')
-  // The built-in rag extension did not load (it announces that embedding is not configured when it does)
-  expect(stderr).not.toContain('[rag]')
+  expect(stderr).toBe('  [extra] loaded {}\n')
 })
 
 test.concurrent('loaded context files are named at startup', async () => {
@@ -965,7 +979,7 @@ test.if(hasScript)(
 test.if(hasScript)(
   'interactive mode in a real terminal: a turn, then Ctrl+D exits and the session is saved',
   async () => {
-    const { stdout, code, dataDir } = await cli([], {
+    const { stdout, stderr, code, dataDir } = await cli([], {
       model: `faux:${scenario('hello')}`,
       terminal: [
         ['Ctrl+D exit', 'hello\r'],
@@ -973,6 +987,8 @@ test.if(hasScript)(
       ],
     })
     expect(code).toBe(0)
+    expect(stdout).not.toContain('[rag]')
+    expect(stderr).toBe('')
     expect(stdout).toContain('Hello, this is Vela (faux replay).')
     const files = sessionFiles(dataDir)
     expect(files).toHaveLength(1)

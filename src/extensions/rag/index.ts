@@ -18,15 +18,22 @@ export interface RagOptions {
 /**
  * Local knowledge base (`<dataDir>/rag/knowledge.db`): the `rag_ingest` / `rag_search` tools, a knowledge
  * base summary in the system prompt, and the `/rag [ingest <path>]` command. Guest sessions can also use rag_search.
- * Registers nothing when there is neither an embedder nor an `embedding` config.
+ * Without an embedder or `embedding` config, registers only /rag to explain how to configure it.
  */
 export function rag(options: RagOptions = {}): VelaExtension {
   return function rag(vela) {
-    const embedder = options.embedder ?? embedderFromConfig(vela.config)
+    const embedding = embeddingConfig(vela.config)
+    const embedder =
+      options.embedder ?? (embedding && createEmbedder(embedding))
     if (!embedder) {
-      vela.logger.info(
-        '[rag] embedding (baseUrl / model / apiKey) not configured; knowledge base disabled',
-      )
+      vela.registerCommand('rag', {
+        description: 'Explain how to configure the knowledge base',
+        handler: (_args, ctx) => {
+          ctx.ui.notify(
+            'Knowledge base disabled: embedding is not configured.\nCLI: set extensionConfig.rag.embedding with baseUrl, model and apiKey in ~/.vela/settings.json (or $VELA_DIR/settings.json), or set EMBEDDING_MODEL_BASE_URL, EMBEDDING_MODEL and EMBEDDING_MODEL_KEY.\nSDK: pass rag({ embedder }) or set extensionConfig.rag.embedding in createVela().',
+          )
+        },
+      })
       return
     }
     const dir = join(vela.dataDir, 'rag')
@@ -91,9 +98,7 @@ export function rag(options: RagOptions = {}): VelaExtension {
   }
 }
 
-function embedderFromConfig(
-  config: Readonly<Record<string, unknown>>,
-): EmbeddingFn | undefined {
+function embeddingConfig(config: Readonly<Record<string, unknown>>) {
   const embedding = config.embedding as Record<string, unknown> | undefined
   const { baseUrl, model, apiKey } = embedding ?? {}
   if (
@@ -104,5 +109,5 @@ function embedderFromConfig(
     typeof apiKey === 'string' &&
     apiKey
   )
-    return createEmbedder({ url: baseUrl, modelId: model, apiKey })
+    return { url: baseUrl, modelId: model, apiKey }
 }
