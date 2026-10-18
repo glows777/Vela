@@ -50,3 +50,14 @@ test('the allow list only names paths that exist', async () => {
     expect(matches.length, relative(SRC, join(SRC, prefix))).toBeGreaterThan(0)
   }
 })
+
+test('image modules do not depend on the higher-level messages module', async () => {
+  const violations: string[] = []
+  for await (const file of new Bun.Glob('images/**/*.ts').scan(SRC)) {
+    const source = stripComments(await Bun.file(join(SRC, file)).text())
+    if (/['"][^'"]*\bmessages\.ts['"]/.test(source)) {
+      violations.push(file)
+    }
+  }
+  expect(violations).toEqual([])
+})

@@ -1,5 +1,4 @@
 import type { PhotonImage } from '@silvia-odwyer/photon-node'
-import type { ImageContent } from '../messages.ts'
 import { imageMetadata } from './metadata.ts'
 
 const MAX_DIMENSION = 2000
@@ -22,9 +21,11 @@ const hasTransparency = (image: PhotonImage): boolean => {
 let photonPromise: Promise<Photon> | undefined
 
 /** Validate and bound provider image input without exposing decoder errors or data. */
-export async function normalizeImage(
-  image: ImageContent,
-): Promise<{ image?: ImageContent; reason?: string }> {
+export async function normalizeImage(image: {
+  type: 'image'
+  data: string
+  mimeType: string
+}): Promise<{ image?: typeof image; reason?: string }> {
   if (typeof image.data !== 'string' || !image.data.length) {
     return { reason: 'invalid image data' }
   }
