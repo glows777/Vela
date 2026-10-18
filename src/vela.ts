@@ -256,6 +256,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       `channelIdleMs must be a whole number of milliseconds from 0 to ${2 ** 31 - 1}; got ${channelIdleMs}`,
     )
   const logger = options.logger ?? silentLogger
+  const sessionCwds = new WeakMap<ToolRegistry, string>()
 
   // The Vela-level registry only holds shared tool definitions; tools run in each session's forked registry.
   // Its own results dir starts with `.`, so it never collides with a session id.
@@ -273,6 +274,8 @@ export function createVela(options: VelaOptions = {}): Vela {
       cwd,
       shellPath: options.shellPath,
       resolveBinary,
+      resolveCwd: (context) =>
+        (context?.registry && sessionCwds.get(context.registry)) ?? cwd,
     }),
   )
 
@@ -306,6 +309,8 @@ export function createVela(options: VelaOptions = {}): Vela {
     options.contextFiles === false
       ? []
       : (options.contextFiles ?? loadContextFiles({ cwd }))
+  const sessions = new Map<string, VelaSession>()
+  const sessionContextFiles = new Map<string, readonly ContextFile[]>()
 
   // Same order as pi: intro + rules, addendum, project context, skills, cwd, then extension sections
   const builder = new PromptPipeline()
@@ -313,15 +318,20 @@ export function createVela(options: VelaOptions = {}): Vela {
     .pipe('toolHistoryGuide', toolHistoryGuide())
     .pipe('deferredTools', deferredTools())
     .pipe('appendSystemPrompt', addendum(options.appendSystemPrompt))
-    .pipe('projectContext', projectContext(contextFiles))
+    .pipe('projectContext', (ctx) =>
+      projectContext(sessionContextFiles.get(ctx.sessionId) ?? contextFiles)(
+        ctx,
+      ),
+    )
     .pipe('skills', (ctx) =>
       skillLoader.buildPromptSection(ctx.activeTools ?? []),
     )
-    .pipe('cwd', workingDirectory(cwd))
+    .pipe('cwd', (ctx) =>
+      workingDirectory(sessions.get(ctx.sessionId)?.cwd ?? cwd)(ctx),
+    )
     .pipe('extensions', extensionSections())
 
   const listeners = new Set<VelaSessionEventListener>()
-  const sessions = new Map<string, VelaSession>()
   let disposed = false
   /** The one dispose in progress: a second caller (a signal racing the CLI's exit) waits for it to finish */
   let disposing: Promise<void> | undefined
@@ -367,12 +377,18 @@ export function createVela(options: VelaOptions = {}): Vela {
         },
         onSaved: (id) => gateway.sessionSaved(id),
         onClose: (closed) => {
-          if (sessions.get(closed.id) === closed) sessions.delete(closed.id)
+          if (sessions.get(closed.id) === closed) {
+            sessions.delete(closed.id)
+            sessionContextFiles.delete(closed.id)
+          }
         },
       },
       sessionOptions,
     )
+    if (created.cwd !== cwd && options.contextFiles !== false)
+      sessionContextFiles.set(id, loadContextFiles({ cwd: created.cwd }))
     sessions.set(id, created)
+    sessionCwds.set(created.registry, created.cwd)
     return created
   }
 

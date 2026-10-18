@@ -93,6 +93,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 
 | Option | Default | Description |
 |---|---|---|
+| `cwd` | Vela's cwd | Base for file/search/bash tools (also `executeBash`), the cwd prompt and automatic AGENTS/CLAUDE discovery; relative values resolve against Vela's cwd. `session.cwd` exposes the resolved path. A different cwd reloads its own instruction chain instead of a supplied `contextFiles` array; `contextFiles: false` still disables loading. Skills, templates, extensions/config, `dataDir`, storage and relative export destinations stay Vela-wide. Fork/clone preserves cwd; callers must pass it again when reopening/resuming. This is a default path, not a security sandbox. |
 | `role` | `owner` | `owner`, `collaborator` or `guest`. Decides which tools are available and whether extension commands run. See [Security](security.md). |
 | `permissions` | none | Per-tool rules that tighten the role: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`. They cannot grant a tool the role denies (`allow` on it stays denied). `ask` calls `ui.confirm`; without a UI it refuses. |
 | `tools` | all | Enable only these tools (still limited by the role) |
