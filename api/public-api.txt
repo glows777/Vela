@@ -69,7 +69,6 @@
     timestamp: string
     type: "branch_summary"
   interface ChannelDefinition
-    acknowledge?: ((msg: IncomingMessage) => Promise<ChannelAcknowledgement | void>) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string
@@ -78,9 +77,8 @@
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     sessionOptions?: ((msg: IncomingMessage) => { permissions?: PermissionRules; }) | undefined
-    showRunControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; choose: (action: "queue" | "steer" | "stop") => boolean; }) => Promise<void>) | undefined
-    showTopicControls?: ((msg: IncomingMessage, controls: { signal: AbortSignal; stop: () => boolean; error: (error: unknown) => Promise<void>; }) => Promise<ChannelRunFeedback | void>) | undefined
     start: () => Promise<void> | void
+    startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
   interface CompactionEntry
     firstKeptEntryId: string

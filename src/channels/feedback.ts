@@ -3,8 +3,8 @@ import type { ModelMessage } from '../messages.ts'
 import type { VelaSession } from '../vela-session.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
-  ChannelAcknowledgement,
   ChannelDefinition,
+  ChannelFeedbackUpdate,
   ChannelOutcome,
   ChannelRunFeedback,
   IncomingMessage,
@@ -13,21 +13,31 @@ import type {
 /** An admitted input keeps its acknowledgement across asynchronous task handoff. */
 export class MessageFeedback {
   readonly ready: Promise<void>
-  private acknowledgement?: ChannelAcknowledgement
+  private feedback?: ChannelRunFeedback
+  private finished?: Promise<void>
+  private startPresentation?: () => Promise<void>
   private failed = false
   constructor(
     channel: ChannelDefinition,
-    message: IncomingMessage,
+    readonly message: IncomingMessage,
     private report: (error: unknown) => Promise<void>,
+    acknowledge = true,
   ) {
     this.ready = Promise.resolve()
-      .then(() => channel.acknowledge?.(message))
+      .then(() => channel.startRun?.(message, { acknowledge }))
       .then((value) => {
-        this.acknowledgement = value || undefined
+        this.feedback = value || undefined
       })
       .catch(async (error) => {
-        this.failed = true
         await this.report(error)
+        // A failed initial reaction must not remove the run's Stop control.
+        // Create presentation only; never retry the acknowledgement.
+        this.startPresentation = async () => {
+          if (!acknowledge) throw error
+          this.feedback =
+            (await channel.startRun?.(message, { acknowledge: false })) ||
+            undefined
+        }
       })
   }
 
@@ -35,10 +45,24 @@ export class MessageFeedback {
     this.failed = true
   }
 
-  async finish(outcome: ChannelOutcome): Promise<void> {
+  event(update: ChannelFeedbackUpdate): void | Promise<void> {
+    if (this.startPresentation) {
+      const start = this.startPresentation
+      this.startPresentation = undefined
+      return start().then(() => this.event(update))
+    }
+    return this.feedback?.event(update)
+  }
+
+  finish(outcome: ChannelOutcome): Promise<void> {
+    this.finished ??= this.complete(outcome)
+    return this.finished
+  }
+
+  private async complete(outcome: ChannelOutcome): Promise<void> {
     await this.ready
     try {
-      await this.acknowledgement?.finish(this.failed ? 'failed' : outcome)
+      await this.feedback?.finish(this.failed ? 'failed' : outcome)
     } catch (error) {
       await this.report(error)
     }
@@ -129,17 +153,23 @@ export class RunFeedback {
           apply('steer'),
         )
         run.steering = decision
-      } else if (channel.showRunControls) {
-        card = channel
-          .showRunControls(msg, {
-            signal: run.lifetime.signal,
-            choose: (action) => {
-              if (chosen || !this.runIsLive(run)) return false
-              chosen = true
-              if (action !== 'queue') decision = apply(action)
-              return true
-            },
-          })
+      } else if (channel.startRun) {
+        const input = this.acknowledge(channel, msg)[0]!
+        card = input.ready
+          .then(() =>
+            input.event({
+              type: 'controls',
+              message: msg,
+              signal: run.lifetime.signal,
+              choose: (action) => {
+                if (chosen || !this.runIsLive(run)) return false
+                chosen = true
+                if (action !== 'queue') decision = apply(action)
+                return true
+              },
+              error: (error) => this.feedbackError(channelName, msg, error),
+            }),
+          )
           .catch((error) =>
             this.options.logger.warn(
               `[${channelName}] Failed to send run controls: ${errorMessage(error)}`,
@@ -278,6 +308,7 @@ export class RunFeedback {
     msg: IncomingMessage,
     session: VelaSession,
     inputs: MessageFeedback[],
+    input: IncomingMessage,
   ): Promise<ChannelOutcome | undefined> {
     this.active.add(session)
     const run: ChannelRun = {
@@ -288,15 +319,25 @@ export class RunFeedback {
       inputs,
     }
     this.runs.set(id, run)
-    let feedback: ChannelRunFeedback | undefined
     let feedbackErrorReported = false
     const report = async (error: unknown) => {
       if (feedbackErrorReported) return
       feedbackErrorReported = true
       await this.feedbackError(channelName, msg, error)
     }
+    const feedback = channel
+      ? (inputs.find((item) => item.message === input) ??
+        new MessageFeedback(channel, msg, report, false))
+      : undefined
+    await feedback?.ready
+    const pending: Promise<void>[] = []
     const unsubscribe = session.subscribe((event) => {
-      feedback?.event(event)
+      try {
+        const update = feedback?.event({ type: 'agent', event })
+        if (update) pending.push(Promise.resolve(update).catch(report))
+      } catch (error) {
+        pending.push(report(error))
+      }
       if (event.type === 'agent_settled') run.lifetime.abort()
     })
     let outcome: ChannelOutcome = 'done'
@@ -305,13 +346,15 @@ export class RunFeedback {
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
-      if (msg.topic && channel?.showTopicControls) {
-        feedback = await channel
-          .showTopicControls(msg, {
+      if (msg.topic && channel && feedback) {
+        try {
+          await feedback.event({
+            type: 'controls',
+            message: msg,
             signal: run.lifetime.signal,
             error: report,
-            stop: () => {
-              if (!this.runIsLive(run)) return false
+            choose: (action) => {
+              if (action !== 'stop' || !this.runIsLive(run)) return false
               void this.applyRunChoice(channel, msg, run, 'stop').catch(
                 (error) =>
                   session.emit({
@@ -325,17 +368,16 @@ export class RunFeedback {
               return true
             },
           })
-          .catch(async (error) => {
-            failureReported = true
-            await this.options.reply(
-              session,
-              channelName,
-              msg,
-              `Couldn't show the topic Stop control: ${errorMessage(error)}. Check the bot's send permission and retry.`,
-            )
-            throw error
-          })
-          .then((value) => value || undefined)
+        } catch (error) {
+          failureReported = true
+          await this.options.reply(
+            session,
+            channelName,
+            msg,
+            `Couldn't show the topic Stop control: ${errorMessage(error)}. Check the bot's send permission and retry.`,
+          )
+          throw error
+        }
       }
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
       if (session.messages.at(-1) !== previous)
@@ -358,11 +400,7 @@ export class RunFeedback {
       unsubscribe()
       run.lifetime.abort()
       await run.steering
-      try {
-        await feedback?.finish(outcome)
-      } catch (error) {
-        await report(error)
-      }
+      await Promise.all(pending)
       this.runs.delete(id)
       this.active.delete(session)
     }
@@ -372,14 +410,9 @@ export class RunFeedback {
     if (
       answer &&
       !(await this.options.reply(session, channelName, msg, answer))
-    ) {
+    )
       outcome = 'failed'
-      try {
-        await feedback?.finish(outcome)
-      } catch (error) {
-        await report(error)
-      }
-    }
+    await feedback?.finish(outcome)
     return outcome
   }
 }

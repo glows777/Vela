@@ -46,15 +46,27 @@ export interface ChannelRuntime {
 
 export type ChannelOutcome = 'done' | 'failed' | 'stopped'
 
-export interface ChannelAcknowledgement {
-  finish(outcome: ChannelOutcome): Promise<void>
-}
+/** Channel-local lifecycle updates; agent events retain their core shape. */
+export type ChannelFeedbackUpdate =
+  | {
+      type: 'controls'
+      message: IncomingMessage
+      /** Aborted when the targeted run ends; expire its callbacks then. */
+      signal: AbortSignal
+      /** Synchronously reserves a choice; false means expired or already chosen. */
+      choose: (action: 'queue' | 'steer' | 'stop') => boolean
+      error: (error: unknown) => Promise<void>
+    }
+  | { type: 'agent'; event: VelaEvent }
 
 export interface ChannelRunFeedback {
-  event(event: VelaEvent): void
+  /** Controls are awaited before prompting. Agent updates do not block the stream; pending work drains before the reply. */
+  event(update: ChannelFeedbackUpdate): void | Promise<void>
+  /** Called once after result delivery (or failure/Stop), including transferred inputs. */
   finish(outcome: ChannelOutcome): Promise<void>
 }
 
+/** Channel hooks are experimental until the channel milestones reach M4. */
 export interface ChannelDefinition {
   name: string
   description: string
@@ -75,29 +87,11 @@ export interface ChannelDefinition {
     activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
 
-  /** Called after admission, before queued preparation. */
-  acknowledge?: (msg: IncomingMessage) => Promise<ChannelAcknowledgement | void>
-
-  /** One Stop/progress card for this run; events arrive before prompt completion. */
-  showTopicControls?: (
-    msg: IncomingMessage,
-    controls: {
-      signal: AbortSignal
-      stop: () => boolean
-      error: (error: unknown) => Promise<void>
-    },
+  /** Experimental until M4. Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
+  startRun?: (
+    message: IncomingMessage,
+    options: { acknowledge: boolean },
   ) => Promise<ChannelRunFeedback | void>
-
-  /** Offer controls for this queued message while the preceding run is active. */
-  showRunControls?: (
-    msg: IncomingMessage,
-    controls: {
-      /** Aborted when the original run ends; old cards must no longer control anything. */
-      signal: AbortSignal
-      /** Reserves a choice synchronously; false means expired or already chosen. */
-      choose: (action: 'queue' | 'steer' | 'stop') => boolean
-    },
-  ) => Promise<void>
 
   /**
    * The Vela role for the enabled chat. Defaults to owner: a channel must enforce
