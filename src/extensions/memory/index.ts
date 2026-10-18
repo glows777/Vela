@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { channelScopes, chatDirectory } from '../../channels/scope.ts'
 import type { VelaExtension } from '../../index.ts'
 import { MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
@@ -17,10 +18,9 @@ const DREAM_PROMPT = [
 ].join('\n')
 
 /**
- * Cross-session memory (stored in `<dataDir>/memory`): the `memory` tool, the memory index in the
- * system prompt, and the `/memory [search <keywords> | lint]` and `/dream` commands.
- * Memory is the owner's private data: guest sessions get neither
- * the tool nor the index.
+ * Cross-session memory: local/direct sessions use `<dataDir>/memory`; groups use their own store
+ * plus shared global read/search. The same scope applies to the prompt and /memory /dream.
+ * Sessions without the memory tool get no index or memory commands.
  */
 export function memory(): VelaExtension {
   return function memory(vela) {
@@ -30,24 +30,56 @@ export function memory(): VelaExtension {
       vela.cwd,
     )
     store.init()
-    vela.registerTool(createMemoryTool(store))
+    const groups = new Map<string, MemoryStore>()
+    const forSession = (registry?: object): MemoryStore => {
+      const scope = registry && channelScopes.get(registry)
+      if (!scope || scope.chatKind !== 'group') return store
+      const dir = chatDirectory(vela.dataDir, scope.channel, scope.chatId)
+      let group = groups.get(dir)
+      if (!group) {
+        group = new MemoryStore(
+          join(dir, 'memory'),
+          vela.logger,
+          join(dir, 'workspace'),
+        )
+        group.init()
+        groups.set(dir, group)
+      }
+      return group
+    }
+    vela.registerTool(
+      createMemoryTool(store, (context) => forSession(context?.registry)),
+    )
 
     vela.on('before_agent_start', (event, ctx) => {
-      if (ctx.session.role === 'guest') return
-      event.sections.memory = store.buildPromptSection()
+      if (ctx.session.registry.decide('memory') === 'deny') return
+      const local = forSession(ctx.session.registry)
+      event.sections.memory =
+        local === store
+          ? store.buildPromptSection()
+          : [
+              promptLayer('Group memory', local),
+              promptLayer(
+                'Global notes (read/search with scope: global; group writes stay in group memory)',
+                store,
+              ),
+            ].join('\n\n')
     })
 
     vela.registerCommand('memory', {
       description:
         'List memories; /memory search <keywords> to search, /memory lint to check',
       handler: (args, ctx) => {
-        if (args === 'lint') return ctx.ui.notify(lintReport(store))
+        if (ctx.session.registry.decide('memory') === 'deny')
+          return ctx.ui.notify('Memory is not enabled for this session.')
+        const local = forSession(ctx.session.registry)
+        if (args === 'lint') return ctx.ui.notify(lintReport(local))
         if (args.startsWith('search ')) {
           const query = args.slice('search '.length).trim()
-          return ctx.ui.notify(searchReport(store, query))
+          return ctx.ui.notify(searchReport(local, query))
         }
-        const entries = store.list()
-        const reports = store.lint()
+        const entries = local.list()
+        const reports = local.lint()
         const lines = [
           `[memory] ${entries.length} memories, ${reports.length} with warnings`,
         ]
@@ -65,12 +97,22 @@ export function memory(): VelaExtension {
       description:
         'Have the model clean up the memory store (merge duplicates, delete stale entries)',
       handler: async (_args, ctx) => {
+        if (ctx.session.registry.decide('memory') === 'deny')
+          return ctx.ui.notify('Memory is not enabled for this session.')
         ctx.ui.notify('[dream] Starting memory cleanup...')
         await ctx.session.prompt(DREAM_PROMPT, { signal: ctx.signal })
         ctx.ui.notify('[dream] Done')
       },
     })
   }
+}
+
+function promptLayer(label: string, store: MemoryStore): string {
+  const section = `${label}:\n${store.buildPromptSection()}`
+  const suffix = '\n...(truncated)'
+  return section.length > 4000
+    ? section.slice(0, 4000 - suffix.length) + suffix
+    : section
 }
 
 function lintReport(store: MemoryStore): string {

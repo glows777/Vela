@@ -1,5 +1,6 @@
 import z from 'zod'
 import type { ToolDefinition } from '../../index.ts'
+import type { ToolContext } from '../../tools/registry.ts'
 import type { MemoryStore } from './store.ts'
 
 const memoryToolParamSchema = z
@@ -7,6 +8,12 @@ const memoryToolParamSchema = z
     action: z
       .enum(['save', 'list', 'search', 'read', 'delete', 'lint'])
       .describe('Memory operation'),
+    scope: z
+      .enum(['group', 'global'])
+      .optional()
+      .describe(
+        'Group sessions default to their own memory. Global notes allow only read/search from a group.',
+      ),
     name: z.string().optional().describe('Memory name (required for save)'),
     description: z
       .string()
@@ -30,7 +37,10 @@ const memoryToolParamSchema = z
   })
   .strict()
 
-export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
+export function createMemoryTool(
+  globalStore: MemoryStore,
+  resolveStore?: (context?: ToolContext) => MemoryStore,
+): ToolDefinition {
   return {
     name: 'memory',
     description:
@@ -38,7 +48,18 @@ export function createMemoryTool(memoryStore: MemoryStore): ToolDefinition {
     inputSchema: memoryToolParamSchema,
     executionMode: 'sequential',
     annotations: { readOnlyHint: false },
-    execute: async (args: z.infer<typeof memoryToolParamSchema>) => {
+    execute: async (args: z.infer<typeof memoryToolParamSchema>, context) => {
+      const local = resolveStore?.(context) ?? globalStore
+      if (
+        args.scope === 'global' &&
+        local !== globalStore &&
+        args.action !== 'read' &&
+        args.action !== 'search'
+      )
+        throw new Error(
+          'Global memory is read-only from a group; use read/search with scope: global',
+        )
+      const memoryStore = args.scope === 'global' ? globalStore : local
       switch (args.action) {
         case 'save': {
           if (!args.name || !args.type || !args.content)

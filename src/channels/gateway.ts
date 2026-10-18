@@ -6,6 +6,7 @@ import { ChannelDirectory } from './directory.ts'
 import { RunFeedback } from './feedback.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
+import { ChannelSessions } from './sessions.ts'
 import type {
   ChannelDefinition,
   ChannelOutcome,
@@ -35,6 +36,7 @@ const MAX_SAVE_FAILURES = 3
 export class ChannelGateway {
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
+  private readonly sessions: ChannelSessions
   private admitting = new Map<string, Promise<void>>()
   private readonly commands: TopicCommands
   private readonly usage: ChannelUsage
@@ -57,8 +59,13 @@ export class ChannelGateway {
     this.directory = new ChannelDirectory(options.dataDir)
     this.usage = new ChannelUsage(options.dataDir, this.directory)
     this.recovery = new ChannelRecovery(this.directory)
-    this.admission = new TopicAdmission(this.directory, (id, opts) =>
-      this.open(id, opts),
+    this.sessions = new ChannelSessions(
+      this.directory,
+      (name) => this.channels.get(name),
+      options.session,
+    )
+    this.admission = new TopicAdmission(this.directory, (id, name, msg) =>
+      this.sessions.open(id, name, msg),
     )
     this.feedback = new RunFeedback({
       directory: this.directory,
@@ -85,10 +92,6 @@ export class ChannelGateway {
   /** Internal storage-success notification, including saves outside a channel prompt. */
   sessionSaved(id: string): void {
     this.saveFailures.delete(this.directory.keyForSession(id))
-  }
-
-  private open(key: string, options?: SessionOptions): VelaSession {
-    return this.options.session(this.directory.sessionId(key), options)
   }
 
   private find(key: string): VelaSession | undefined {
@@ -130,7 +133,9 @@ export class ChannelGateway {
     })
   }
 
-  async startAll(): Promise<void> {
+  async startAll(toolNames: readonly string[] = []): Promise<void> {
+    for (const channel of this.channels.values())
+      channel.validateTools?.(toolNames)
     await this.directory.load()
     this.usage.load()
     this.stopped = false
@@ -157,10 +162,7 @@ export class ChannelGateway {
                 ch.canRecover?.(msg, record.chatKind) === false
               )
                 return
-              const session = this.options.session(
-                record.activeSessionId,
-                ch.sessionOptions?.(msg),
-              )
+              const session = this.sessions.open(record.activeSessionId)
               await session.resume()
               this.admission.resumed.add(session)
               await this.recovery.recover(record, ch, session, (input) =>
@@ -427,7 +429,7 @@ export class ChannelGateway {
       await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
       await this.directory.finish(id, 'stopped')
       await this.sendReply(
-        topicSession ?? this.open(id),
+        topicSession ?? this.sessions.open(id, channelName, msg),
         channelName,
         msg,
         'Stopped the current run.',
@@ -441,13 +443,9 @@ export class ChannelGateway {
     }
     if (this.stopped) return 'failed'
     msg = prepared
-    const session =
-      topicSession ?? this.open(id, channel?.sessionOptions?.(msg))
+    const session = topicSession ?? this.sessions.open(id, channelName, msg)
     this.admission.observe(id, channelName, msg, task)
     this.usage.track(id, msg.channelId, session)
-    session.channel = channelName
-    // Channels admit only trusted chats; custom channels can still choose an SDK role.
-    session.role = this.channels.get(channelName)?.roleFor?.(msg) ?? 'owner'
     if (!this.subscribed.has(session)) {
       this.subscribed.add(session)
       session.subscribe((event) => {

@@ -5,7 +5,7 @@ import type { ToolContext, ToolRegistry } from '../../tools/registry.ts'
 import type { ExtensionAPI } from '../types.ts'
 import type { FeishuMessageEvent, FeishuTransport } from './transport.ts'
 
-const toolNames = [
+export const topicToolNames = [
   'feishu_start_topic',
   'feishu_forward_to_topic',
   'feishu_list_topics',
@@ -30,7 +30,7 @@ export class FeishuTopics {
       ? {}
       : {
           permissions: Object.fromEntries(
-            toolNames.map((name) => [name, 'deny' as const]),
+            topicToolNames.map((name) => [name, 'deny' as const]),
           ),
         }
   }

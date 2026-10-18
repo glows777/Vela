@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { channelSessionId } from '../../channels/gateway.ts'
+import { chatDirectory } from '../../channels/scope.ts'
 import type {
   ChannelFeedbackUpdate,
   ChannelOutcome,
@@ -23,10 +25,11 @@ import {
   runControlsCard,
   topicRunCard,
 } from './cards.ts'
+import { type FeishuChat, parseChats } from './chats.ts'
 import { readGroupContext, readTopicContext } from './history.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { FeishuProgress } from './progress.ts'
-import { FeishuTopics } from './topics.ts'
+import { FeishuTopics, topicToolNames } from './topics.ts'
 import {
   type FeishuMessageEvent,
   type FeishuSentMessage,
@@ -40,7 +43,7 @@ export interface FeishuChannelConfig {
   /** These senders (open_id) always have their direct chats enabled. */
   owners: readonly string[]
   /** Every member of these chats is trusted with owner access. */
-  chats?: readonly string[]
+  chats?: unknown
   dataDir: string
   logger: VelaLogger
   /** Default: lark's long connection with appId / appSecret */
@@ -64,10 +67,37 @@ export class FeishuChannel implements ChannelDefinition {
   connect: NonNullable<ChannelDefinition['connect']> = (runtime) => {
     this.topics.runtime = runtime
   }
-  sessionOptions: NonNullable<ChannelDefinition['sessionOptions']> = (msg) =>
-    this.topics.sessionOptions(msg)
+  sessionOptions: NonNullable<ChannelDefinition['sessionOptions']> = (msg) => {
+    const options = this.topics.sessionOptions(msg)
+    if (!msg.topic && !msg.replyToId) return options
+    const chat = this.chats.get(msg.channelId)
+    if (!chat) throw new Error('Feishu group is not enabled')
+    const cwd = join(
+      chatDirectory(this.config.dataDir, this.name, chat.id),
+      'workspace',
+    )
+    // Probing an unowned topic must not create any chat data.
+    if (!msg.requireExistingSession) mkdirSync(cwd, { recursive: true })
+    return {
+      ...options,
+      cwd,
+      tools:
+        chat.tools === undefined
+          ? undefined
+          : [...new Set([...chat.tools, ...topicToolNames])],
+    }
+  }
+
+  validateTools(names: readonly string[]): void {
+    const known = new Set(names)
+    for (const chat of this.chats.values())
+      for (const name of chat.tools ?? [])
+        if (!known.has(name))
+          throw new Error(`Unknown Feishu tool "${name}" for chat ${chat.id}`)
+  }
 
   private config: FeishuChannelConfig
+  private readonly chats: Map<string, FeishuChat>
   private messageHandler?: (msg: IncomingMessage) => void | Promise<void>
   private transport?: FeishuTransport
   private readonly seen = new Set<string>()
@@ -92,12 +122,15 @@ export class FeishuChannel implements ChannelDefinition {
 
   constructor(config: FeishuChannelConfig) {
     this.config = config
+    this.chats = new Map(
+      parseChats(config.chats).map((chat) => [chat.id, chat]),
+    )
   }
 
   canRecover(msg: IncomingMessage, chatKind: 'group' | 'direct'): boolean {
     return (
       !!this.transport &&
-      (this.config.chats?.includes(msg.channelId) === true ||
+      (this.chats.has(msg.channelId) ||
         (chatKind === 'direct' && this.config.owners.includes(msg.senderId)))
     )
   }
@@ -124,7 +157,7 @@ export class FeishuChannel implements ChannelDefinition {
       )
       return
     }
-    if (!this.config.chats?.length)
+    if (!this.chats.size)
       this.config.logger.info(
         '[feishu] chats is empty; only owners’ direct chats are enabled',
       )
@@ -252,7 +285,7 @@ export class FeishuChannel implements ChannelDefinition {
     )
       return ignored
     if (
-      !this.config.chats?.includes(entry.msg.channelId) &&
+      !this.chats.has(entry.msg.channelId) &&
       !(!entry.msg.replyToId && this.config.owners.includes(operator))
     )
       return ignored
@@ -320,6 +353,14 @@ export class FeishuChannel implements ChannelDefinition {
     }
     let input = messageText(event.message) ?? msg.text
     if (!input) return
+    if (msg.topic || msg.replyToId)
+      await mkdir(
+        join(
+          chatDirectory(this.config.dataDir, this.name, msg.channelId),
+          'workspace',
+        ),
+        { recursive: true },
+      )
     const attachmentType =
       event.message.message_type === 'file' ? 'file' : 'image'
     try {
@@ -544,7 +585,7 @@ export class FeishuChannel implements ChannelDefinition {
     }
     const senderId = event.sender.sender_id?.open_id || 'unknown'
     const enabled =
-      this.config.chats?.includes(message.chat_id) ||
+      this.chats.has(message.chat_id) ||
       (message.chat_type === 'p2p' && this.config.owners.includes(senderId))
     if (!enabled) {
       this.config.logger.info(

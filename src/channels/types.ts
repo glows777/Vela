@@ -74,7 +74,13 @@ export interface ChannelDefinition {
   description: string
 
   connect?: (runtime: ChannelRuntime) => void
-  sessionOptions?: (msg: IncomingMessage) => { permissions?: PermissionRules }
+  sessionOptions?: (msg: IncomingMessage) => {
+    cwd?: string
+    tools?: string[]
+    permissions?: PermissionRules
+  }
+  /** Validate configured tool names after extensions load, before transport or recovery starts. */
+  validateTools?: (names: readonly string[]) => void
 
   /** Recheck current channel access before restoring work from the directory. False skips recovery. */
   canRecover?: (
