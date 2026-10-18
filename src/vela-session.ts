@@ -100,6 +100,8 @@ export type QueueMode = 'one-at-a-time' | 'all'
 
 /** Options for `vela.session(id, options)`; only apply when the session is first opened. */
 export interface SessionOptions {
+  /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
+  cwd?: string
   /** Session role, default owner (custom channels can choose a role for their shared chat) */
   role?: Role
   /** Tool permissions layered on top of the role, e.g. `{ bash: 'ask' }` */
@@ -249,6 +251,8 @@ export interface SessionDeps {
  */
 export class VelaSession {
   readonly id: string
+  /** Effective working directory; not a filesystem sandbox. */
+  readonly cwd: string
   /** Limits in effect (recomputed from the new model's context window on model switch) */
   readonly limits: VelaLimits
   /** Message history (in order). SDK users should treat it as read-only and use append() to add. */
@@ -314,6 +318,7 @@ export class VelaSession {
   constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
     assertSessionId(id)
     this.id = id
+    this.cwd = resolve(deps.cwd ?? process.cwd(), options.cwd ?? '.')
     this.deps = deps
     this.options = options
     this.modelChoice = options.model ?? deps.model
@@ -326,7 +331,7 @@ export class VelaSession {
       deps.logger,
       deps.sessionStorage,
       deps.temporaryDataDir,
-      deps.cwd,
+      this.cwd,
       () => deps.onSaved(id),
     )
     this.hasUI = options.ui !== undefined
@@ -924,7 +929,7 @@ export class VelaSession {
       version: SESSION_FORMAT_VERSION,
       id: this.id,
       timestamp: new Date().toISOString(),
-      ...(this.deps.cwd ? { cwd: this.deps.cwd } : {}),
+      cwd: this.cwd,
     }
     const lines: object[] = [header]
     let parentId: string | null = null
@@ -1071,7 +1076,7 @@ export class VelaSession {
       await this.store.assertNew()
       const result = await runBash(command, {
         results: this.store.results,
-        cwd: this.deps.cwd,
+        cwd: this.cwd,
         shellPath: this.deps.shellPath,
         signal: controller.signal,
         onUpdate: options.onUpdate,
