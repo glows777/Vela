@@ -1,8 +1,5 @@
 import type { VelaEvent } from '../../agent/events.ts'
-import type {
-  ChannelOutcome,
-  ChannelRunFeedback,
-} from '../../channels/types.ts'
+import type { ChannelOutcome } from '../../channels/types.ts'
 import type { FeishuCard } from './cards.ts'
 import type { FeishuTransport } from './transport.ts'
 
@@ -32,7 +29,7 @@ function inputSummary(args: unknown): string {
 }
 
 /** One ordered writer for one shared card. Event listeners never await network I/O. */
-export class FeishuProgress implements ChannelRunFeedback {
+export class FeishuProgress {
   private rows = new Map<string, { state: string; label: string }>()
   private readonly startedAt = Date.now()
   private stage = 'Working'
@@ -52,7 +49,8 @@ export class FeishuProgress implements ChannelRunFeedback {
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
   }
 
-  event(event: VelaEvent): void {
+  event(event: VelaEvent): void | Promise<void> {
+    if (event.type === 'agent_settled') return this.drain()
     if (this.closed || this.failure) return
     if (
       event.type === 'tool_execution_start' ||
@@ -138,18 +136,23 @@ export class FeishuProgress implements ChannelRunFeedback {
     )
   }
 
-  async finish(outcome: ChannelOutcome): Promise<void> {
+  private async drain(): Promise<void> {
     this.closed = true
     clearInterval(this.heartbeat)
     clearTimeout(this.timer)
     await this.writing
+    // Reserve the terminal PATCH slot before the reply, so finish can publish immediately after delivery.
+    const delay = Math.max(0, 250 - (Date.now() - this.lastWrite))
+    if (!this.failure && delay)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+  }
+
+  async finish(outcome: ChannelOutcome): Promise<void> {
+    await this.drain()
     if (this.failure) throw this.failure
     this.stage = { done: 'Finished', failed: 'Failed', stopped: 'Stopped' }[
       outcome
     ]
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(0, 250 - (Date.now() - this.lastWrite))),
-    )
     this.lastWrite = Date.now()
     try {
       await this.transport.patchCard(this.messageId, this.snapshot(true))

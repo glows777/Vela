@@ -71,7 +71,7 @@ Topic sessions and DMs do not see these three tools in their model tool list. Ea
 
 An admitted group message receives an `OnIt` reaction before name/history/attachment preparation and model work. Unknown untagged topics are checked for ownership first. The reaction becomes `DONE` after the result is sent, or `CrossMark` on failure or Stop (the card explicitly says “Stopped”). A channel-to-topic handoff keeps the original reaction pending until the topic finishes; accepted steers finish with that run.
 
-The same Stop card is updated in place with the current stage, elapsed time and up to eight top-level tool summaries. A summary uses the first string among `command`, `path`, `query` and `pattern`, sanitizes it to one line and caps it at 60 characters. Credential-marked input (including token/password fields in the selected text, environment assignments, authentication flags and URL credentials) is omitted. Nested calls do not displace their parent. Thinking, arbitrary argument fields and raw logs are not displayed. Updates are serialized and coalesced at no more than four per second, with a 15-second heartbeat during quiet work. At completion, the gateway unsubscribes, stops the heartbeat and drains in-flight updates before finalizing the card and sending one result or decision question that @-mentions the run's original requester. Another member's steer does not replace that requester. Progress updates contain no mentions or separate timeline messages.
+The same Stop card is updated in place with the current stage, elapsed time and up to eight top-level tool summaries. A summary uses the first string among `command`, `path`, `query` and `pattern`, sanitizes it to one line and caps it at 60 characters. Credential-marked input (including token/password fields in the selected text, environment assignments, authentication flags and URL credentials) is omitted. Nested calls do not displace their parent. Thinking, arbitrary argument fields and raw logs are not displayed. Updates are serialized and coalesced at no more than four per second, with a 15-second heartbeat during quiet work. At completion, the gateway unsubscribes, stops the heartbeat and drains in-flight updates before sending one result or decision question that @-mentions the run's original requester. It then finalizes the same card and reactions with the delivery outcome. Another member's steer does not replace that requester. Progress updates contain no mentions or separate timeline messages.
 
 A failed progress update is reported in the topic and is not retried automatically. If the task succeeds and its result is delivered, its reaction becomes `DONE` even when the progress card could not be updated. A failed result send emits `channel_error`, records an operator log, marks the reaction `CrossMark` and changes the terminal card to `Failed` when card updates are available; Vela does not claim delivery or move the result to the main timeline. The first-reaction ≤2-second target and actual notification/rendering behavior require acceptance in a real Feishu group; offline tests establish ordering, not platform latency.
 
@@ -143,7 +143,7 @@ On receiving a message, the gateway:
 1. Selects the shared session from `(channel name, channelId)` or `(channel name, channelId, topic.rootId)`. Non-plain or long ids get a hash suffix to prevent collisions.
 2. Serializes messages per session. Active topic inputs steer automatically; channel/DM inputs can offer Queue/Steer/Stop controls. Queued preparation and unsupported-message replies stay serialized, so a later reply cannot change the context boundary of an earlier question.
 3. For topics, opens/resumes before preparation and rejects unowned input marked `requireExistingSession` without writing an empty file. Opens/resumes the selected persisted session and sets its role from `roleFor(message)`, defaulting to `owner`. A channel must reject untrusted chats **before** delivering them.
-4. Acknowledges admitted input, subscribes to run events before prompting, and forwards them to the optional `showTopicControls` feedback handle. Cleans up and drains that handle before the terminal reply. Emits `channel_message`, prompts the session, and sends the last assistant text through `send({ channelId, recipientId, text, replyToId?, topic? })`. It emits `channel_reply` after success or `channel_error` after a failed turn/send. Empty answers and input handled by an extension do not resend an earlier answer.
+4. Starts the optional `startRun` feedback lifecycle for admitted input before preparation, binds controls at the appropriate run boundary, and subscribes to agent events before prompting. Drains pending feedback events before the terminal reply and calls `finish(outcome)` after delivery. Emits `channel_message`, prompts the session, and sends the last assistant text through `send({ channelId, recipientId, text, replyToId?, topic? })`. It emits `channel_reply` after success or `channel_error` after a failed turn/send. Empty answers and input handled by an extension do not resend an earlier answer.
 
 Session save failures are logged at error level with the session id. After three consecutive reported save failures, new messages receive a reply that the session can't be saved, without running another prompt. A successful storage write resets the count, including an explicit SDK `await session.save()` after storage is repaired. Empty saves do not clear the count.
 
@@ -157,18 +157,69 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 
 ## Writing a channel
 
-Register a `ChannelDefinition` with `vela.registerChannel()` from an extension. It has `name`, `description`, `start()`, `stop()`, `send(message)`, optional `onMessage(handler)` and optional `roleFor(message)`. The incoming handler returns `void | Promise<void>`; await it when preprocessing must wait until that message and its reply finish.
+**Channel hooks are experimental until M4 of the channel milestones.** Their signatures may change while the milestones are in progress; consult the migration notes when upgrading. This does not change the stability policy for the rest of the SDK.
 
-Optional `prepareMessage(message, activeMessage?)` performs asynchronous preprocessing when the gateway is ready to run the input; return `undefined` for input handled without a prompt. On Steer, the optional second argument is the active trigger already in the shared session, so a channel can exclude previously supplied context. Ordinary queued messages receive no active trigger. Existing one-argument implementations remain valid. Optional `showRunControls(message, { signal, choose })` can present the queued input's choices. `choose('queue' | 'steer' | 'stop')` synchronously reserves a choice and returns false after expiry or a prior choice. The signal aborts with the original run's lifetime; remove any stored controls then. Do not serialize incoming delivery behind the preceding handler if the channel needs to offer controls during that run.
+Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway defaults to owner access and a shared transcript.
 
-Incoming messages contain `channelId`, `senderId`, `senderName`, `text`, optional `images: ImageContent[]`, optional `replyToId` and optional `raw`. The sender identifies the speaker, not a separate session. Outgoing `replyToId` identifies the service message to answer; a custom transport decides how to use it.
+| Member | Required | Contract |
+| --- | --- | --- |
+| `name`, `description` | Yes | Stable channel name (part of session identity) and description shown in channel listings. |
+| `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. A rejected start is logged without preventing other channels from starting. |
+| `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
+| `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
+| `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
+| `roleFor(message)` | No | Select the shared session's role for each prepared input; defaults to `owner`. Roles change tools and permissions, not who can read earlier transcript content. |
+| `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
+| `sessionOptions(message)` | No | Select `{ permissions? }` when opening the session. Topic ownership admission uses these options before preparation; ordinary chats open after preparation. |
+| `prepareMessage(message, activeMessage?)` | No | Asynchronously resolve names/history/attachments when the input is ready. Return the prepared message, or `undefined` when handled without a prompt. A steer receives its active run's original trigger as the second argument; queued inputs do not. Exclude context already present in that trigger. |
+| `startRun(message, { acknowledge })` | No | Begin feedback after admission and before preparation; return a lifecycle with `event(update)` and `finish(outcome)`, or no handle. `acknowledge: false` creates presentation for a handed-off task whose original input already owns feedback. See below. |
 
-Custom channels can still choose an SDK role using `roleFor`, but switching roles does not isolate the shared transcript. Do not mix untrusted and trusted participants in one chat and assume a guest role hides the earlier owner turns. Enforce your chat boundary before invoking the incoming handler.
+### Messages and runtime
 
-[echo-channel.ts](../examples/extensions/echo-channel.ts) is an offline registration example. The core SDK's independent `vela.session(id, { role })` model remains available for callers that need explicitly separate sessions.
+`IncomingMessage` contains `channelId`, `senderId`, `senderName` and `text`, with optional `images: ImageContent[]`, `replyToId`, `topic: { rootId, threadId }`, `requireExistingSession`, `isNewTopic` and opaque `raw`. The sender identifies the speaker, not a separate session. A topic's root ID selects its session; its thread ID addresses the platform container. For untagged topic input, set `requireExistingSession: true`: admission rejects an unknown topic before preparation or feedback, without saving an empty session. The gateway sets `isNewTopic` from its ownership probe and sets it to false for active steers. Leave that field to the gateway.
 
-Channel events keep their existing shape: `channel_message` has `channel`, `senderId`, `senderName`, `text`; `channel_reply` has `channel`, `recipientId`, `text`; `channel_error` has `channel`, `senderId`, `error`, `aborted`. Subscribers also receive the session id.
+`OutgoingMessage` contains `channelId`, `recipientId`, `text`, optional `replyToId` and `topic`. Preserve topic and reply identity when sending. Feishu uses the group trigger's service ID as `replyToId`; direct messages omit it. A control-card send must not advance the service's last-answer history boundary.
 
-Topic-capable channels can supply `IncomingMessage.topic: { rootId, threadId }` and `requireExistingSession: true` for untagged input that must not establish a new conversation. The gateway performs that admission before `prepareMessage` and sets `isNewTopic` from the saved-session probe (false for active steers); active topic inputs steer automatically. `OutgoingMessage.topic` preserves topic identity for reply bookkeeping. Optional `showTopicControls(message, { signal, stop })` creates one control per run; `stop()` reserves cancellation synchronously and expired callbacks return false. Keep per-message Queue/Steer controls in `showRunControls` for non-topic conversations.
+`ChannelRuntime`, passed to `connect`, supplies:
 
-Optional `connect(runtime)` receives gateway operations: `context(sessionId)` reads the current trigger, `topics(chatId)` lists observed owned topics, and `dispatch(sourceSessionId, message)` independently enqueues a handoff and suppresses the source run’s duplicate final reply. Optional `sessionOptions(message)` selects tool permissions when that session is first opened. These operations do not introduce a recovery index or change core session APIs.
+- `context(sessionId)`: the active run's trigger, or `undefined` when there is no active run. Do not retain it as a substitute for durable session data.
+- `topics(chatId)`: this channel's observed topics in that chat, each with `rootId`, `threadId`, a short `task` and `state` (`running`, `queued`, `idle`). Coverage is process-local; an empty list after restart does not prove that no earlier topics exist.
+- `dispatch(sourceSessionId, message)`: enqueue a handoff without waiting for the destination task. The source run must still be live or this throws. It transfers input-feedback ownership, observes a new topic immediately and suppresses the source's duplicate final reply. A running topic target steers; an idle target queues normally. The channel must enforce its destination authorization before dispatching.
+
+### Run feedback lifecycle
+
+`startRun` receives normalized message data; it must work without `raw` or an old receive-event object. For Feishu presentation, persistable chat/topic IDs, original requester ID and reply/service message ID are sufficient; text/name data supplies the prompt and attribution. Live preprocessing may still use `raw`. Signals and callbacks are fresh runtime capabilities and are not persisted. Restart recovery and storage of routing metadata belong to the later milestone, not to this hook.
+
+The factory may acknowledge the newly admitted input before names/history/resources are prepared. Its handle can outlive the source run: handoff carries the original handle to the destination; accepted steers finish with their receiving run. A new handoff presentation uses `acknowledge: false`, so it must not acknowledge the same input again. If initial feedback creation fails, the gateway reports it and may request presentation with `acknowledge: false` on the next update; this preserves Stop controls without retrying the failed reaction. A failure while creating those controls still prevents a topic prompt.
+
+`event(update)` receives one of:
+
+- **`controls`**: `{ type: 'controls', message, signal, choose, error }`. The message is the input whose controls are being presented. For a topic, this is the prepared run trigger immediately before prompting, with Stop only. For a non-topic message arriving during another run, this is the queued input, with Queue/Steer/Stop targeting that earlier run. No controls update is issued for an ordinary idle non-topic run or each automatic topic steer. Choose buttons from `message.topic`; `choose(action)` reserves synchronously and returns false for an expired/already-reserved choice, or an unsupported topic action. Remove callbacks on signal abort. Report asynchronous presentation errors through `error(error)`.
+- **`agent`**: `{ type: 'agent', event }`, wrapping existing `VelaEvent` values from the run. Subscribe before prompting; handle tool/progress events without blocking the event stream. For `agent_settled`, stop heartbeat timers and return any outstanding writer-drain promise if writes must complete before the reply. The gateway waits for returned promises before delivery; it does not await each event while the model streams.
+
+The gateway awaits controls before a topic prompt, but does not block the preceding run on a queued input's controls. A topic controls failure is reported and prevents that prompt; failed non-topic controls leave the input queued. An agent-feedback error is reported without turning a successfully delivered task into a failed one.
+
+`finish(outcome)` is the single terminal input signal: `done`, `failed` or `stopped`. It runs once after delivery, or after a terminal preparation/Stop failure. Finalize the existing card and input reactions here and release resources. A failed send means `failed`, even if the model completed successfully. There is no separate `settled` lifecycle phase. Keep progress failure separate from task/delivery failure: Feishu stops failed PATCH attempts and reports once, but still uses DONE when the result succeeds and is delivered.
+
+A minimal feedback implementation can use an existing UI writer:
+
+```ts
+const startRun: NonNullable<ChannelDefinition['startRun']> = async (message, { acknowledge }) => {
+  const feedback = await openFeedback(message, { acknowledge })
+  return {
+    event(update) {
+      if (update.type === 'controls') return feedback.showControls(update)
+      return feedback.onAgentEvent(update.event)
+    },
+    finish(outcome) { return feedback.finish(outcome) },
+  }
+}
+```
+
+Here `openFeedback` is your adapter's implementation: control creation may be asynchronous; ordinary progress events enqueue writes; completion drains/cancels timers and finalizes existing presentation. Channels without feedback can omit `startRun` entirely.
+
+### Migrating existing feedback hooks
+
+Replace `acknowledge`, `showTopicControls` and `showRunControls` with `startRun`. Move reaction creation to the factory, honor `{ acknowledge: false }`, move both control presentations into `event({ type: 'controls', ... })`, and forward agent events from the `agent` variant. Replace the old topic `stop()` callback with `choose('stop')`. Combine acknowledgement/card completion in `finish(outcome)`; `ChannelAcknowledgement` is removed. Update custom channel types along with the public API snapshot. Basic channels that never supplied these hooks need no change.
+
+Channel session events keep their shape: `channel_message` carries `channel`, `senderId`, `senderName`, `text`; `channel_reply` carries `channel`, `recipientId`, `text`; `channel_error` carries `channel`, `senderId`, `error`, `aborted`. Subscribers also receive the session ID. Channel-local feedback updates do not add core event types.
