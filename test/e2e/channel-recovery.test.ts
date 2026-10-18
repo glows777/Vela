@@ -1,9 +1,21 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { feishu } from '../../src/extensions/feishu/index.ts'
-import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import {
+  fauxError,
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -241,6 +253,7 @@ test('an unappended queued steer receives its own resend notice while the saved 
   await until(() =>
     fake.sent.some((m) => m.text.includes('original recovered')),
   )
+  expect(fake.sent[0]?.text.includes('<at ')).toBe(false)
   expect(fake.sent[0]).toMatchObject({
     messageId: 'steer',
     text: expect.stringContaining('send it again'),
@@ -250,6 +263,123 @@ test('an unappended queued steer receives its own resend notice while the saved 
     'also check blue',
   )
 })
+
+async function records(dataDir: string) {
+  return JSON.parse(
+    await readFile(join(dataDir, 'channels/index.json'), 'utf8'),
+  ).records as {
+    state: string
+    pendingMessageIds: string[]
+  }[]
+}
+
+test('graceful shutdown preserves the interrupted run and its unsaved steer for restart', async () => {
+  const cwd = await root()
+  const first = setup(cwd, [fauxHang()])
+  await first.start()
+  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  await until(() => first.t.model.calls.length === 1)
+  const session = first.t.vela.session('feishu-oc_group-root')
+  first.fake.deliver(
+    feishuEvent(
+      {
+        message_id: 'pending',
+        root_id: 'root',
+        thread_id: 'thread',
+        mentions: [],
+        content: '{"text":"later input"}',
+      },
+      'ou_bob',
+    ),
+  )
+  await until(() => session.queue.steering.length === 1)
+  await first.t.cleanup({ keepDir: true })
+  expect((await records(first.t.vela.dataDir))[0]).toMatchObject({
+    state: 'running',
+    pendingMessageIds: ['pending'],
+  })
+  const second = setup(cwd, [fauxText('continued after shutdown')])
+  await second.start()
+  await until(() =>
+    second.fake.sent.some((m) => m.text.includes('continued after shutdown')),
+  )
+  expect(
+    second.fake.sent.some(
+      (m) => m.messageId === 'pending' && m.text.includes('send it again'),
+    ),
+  ).toBe(true)
+  expect(second.fake.sent.some((m) => m.text.includes('interrupted'))).toBe(
+    true,
+  )
+  expect(second.t.model.calls).toHaveLength(1)
+})
+
+test('a delivered terminal execution failure is not retried after restart', async () => {
+  const cwd = await root()
+  const first = setup(cwd, [fauxError('400 permanent provider failure')])
+  await first.start()
+  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  await until(() => first.fake.sent.some((m) => m.text.includes('Task failed')))
+  await first.t.cleanup({ keepDir: true })
+  expect((await records(first.t.vela.dataDir))[0]?.state).toBe('done')
+  const second = setup(cwd)
+  await second.start()
+  await second.t.cleanup({ keepDir: true })
+  expect(second.fake.sent).toEqual([])
+  expect(second.t.model.calls).toEqual([])
+})
+
+test('failed final delivery stays recoverable and delivers the saved answer without a model call', async () => {
+  const cwd = await root()
+  const first = setup(cwd, [fauxText('answer awaiting delivery')])
+  first.fake.failReply()
+  await first.start()
+  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  await until(() => first.t.eventsOf('channel_error').length > 0)
+  await first.t.cleanup({ keepDir: true })
+  expect((await records(first.t.vela.dataDir))[0]?.state).toBe('running')
+  const second = setup(cwd)
+  await second.start()
+  await until(() =>
+    second.fake.sent.some((m) => m.text.includes('answer awaiting delivery')),
+  )
+  expect(second.t.model.calls).toEqual([])
+})
+
+for (const active of [false, true]) {
+  test(`handled preparation rejection clears only its admission (${active ? 'steer' : 'idle'})`, async () => {
+    const cwd = await root()
+    const first = setup(cwd, active ? [fauxHang()] : [])
+    await first.start()
+    if (active) {
+      first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+      await until(() => first.t.model.calls.length === 1)
+    }
+    first.fake.deliver(
+      feishuEvent({
+        message_id: 'rejected',
+        root_id: 'root',
+        thread_id: 'thread',
+        message_type: 'audio',
+        content: '{"file_key":"audio"}',
+      }),
+    )
+    await until(() => first.fake.sent.some((m) => m.messageId === 'rejected'))
+    if (active) {
+      first.fake.click(0, 'stop')
+      await until(() => first.fake.sent.some((m) => m.text.includes('Stopped')))
+    }
+    await first.t.cleanup({ keepDir: true })
+    expect((await records(first.t.vela.dataDir))[0]?.pendingMessageIds).toEqual(
+      [],
+    )
+    const second = setup(cwd)
+    await second.start()
+    await second.t.cleanup({ keepDir: true })
+    expect(second.fake.sent).toEqual([])
+    expect(second.t.model.calls).toEqual([])
+  })
+}
 
 test('a recovered top-level group input retains channel tools and prompt classification', async () => {
   const cwd = await crash('group')

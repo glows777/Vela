@@ -370,7 +370,12 @@ export class ChannelGateway {
       !recovered && channel?.prepareMessage
         ? await channel.prepareMessage(msg)
         : msg
-    if (!prepared || this.stopped) return 'failed'
+    if (!prepared) {
+      // Undefined means the adapter handled the input without a model prompt.
+      await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
+      return 'failed'
+    }
+    if (this.stopped) return 'failed'
     msg = prepared
     const session =
       topicSession ?? this.options.session(id, channel?.sessionOptions?.(msg))

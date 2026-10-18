@@ -86,7 +86,6 @@ export class ChannelRecovery {
         await channel.send({
           ...msg,
           replyToId: id,
-          recipientId: msg.senderId,
           text: RESEND_NOTICE,
         })
       await this.directory.forget(record.key, [id])

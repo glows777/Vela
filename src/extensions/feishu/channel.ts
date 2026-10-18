@@ -282,7 +282,7 @@ export class FeishuChannel implements ChannelDefinition {
     if (message.replyToId) {
       const receipt = await this.transport.reply(
         message.replyToId,
-        message.topic
+        message.topic && message.recipientId
           ? `<at user_id="${message.recipientId}"></at> ${message.text}`
           : message.text,
       )
@@ -559,6 +559,7 @@ export class FeishuChannel implements ChannelDefinition {
     if (group && (!this.botId || (!mentioned && !message.thread_id))) return
     // A group reply needs its actual trigger; never accidentally post an unthreaded answer.
     if (group && !message.message_id) return
+    // Normalized replyToId identifies a group input, including during recovery.
     const replyToId = group ? message.message_id : undefined
     const requireExistingSession = group && !!message.thread_id && !mentioned
     const text = requireExistingSession ? undefined : messageText(message)

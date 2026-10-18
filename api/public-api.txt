@@ -411,7 +411,7 @@
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
   interface OutgoingMessage
     channelId: string
-    recipientId: string
+    recipientId?: string | undefined
     replyToId?: string | undefined
     text: string
     topic?: { rootId: string; threadId: string; } | undefined

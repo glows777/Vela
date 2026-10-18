@@ -242,6 +242,10 @@ export class RunFeedback {
       : msg
     // History/name lookups can outlast the run. Leave the default queue intact.
     if (!prepared) {
+      await this.options.directory.forget(
+        run.session.id,
+        msg.replyToId ? [msg.replyToId] : [],
+      )
       await Promise.all(inputs.map((input) => input.finish('failed')))
       return true
     }
@@ -361,6 +365,9 @@ export class RunFeedback {
     let outcome: ChannelOutcome = 'done'
     let answer = ''
     let failureReported = false
+    let promptStarted = false
+    let executionFailed = false
+    let interrupted = false
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
@@ -399,6 +406,7 @@ export class RunFeedback {
       }
       await this.options.directory.begin(id, msg)
       this.options.recovery.track(session, msg)
+      promptStarted = true
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
       if (session.messages.at(-1) !== previous)
         answer = lastAssistantText(session.messages)
@@ -407,6 +415,8 @@ export class RunFeedback {
         run.stopped || this.options.stopped() || isAbort(error)
           ? 'stopped'
           : 'failed'
+      interrupted = this.options.stopped() && !run.stopped
+      executionFailed = promptStarted && outcome === 'failed'
       if (outcome === 'failed' && !failureReported)
         answer = `Task failed: ${errorMessage(error)}`
       session.emit({
@@ -432,20 +442,26 @@ export class RunFeedback {
     if (run.stopped) outcome = 'stopped'
     if (outcome === 'stopped')
       answer = msg.topic ? 'Stopped the current run.' : ''
-    if (
-      answer &&
-      !(await this.options.reply(session, channelName, msg, answer))
-    )
-      outcome = 'failed'
+    const delivered =
+      !answer || (await this.options.reply(session, channelName, msg, answer))
+    if (!delivered) outcome = 'failed'
     await feedback?.finish(outcome)
-    if (outcome !== 'failed') {
+    // Shutdown is recoverable, including accepted steers not yet saved. A reported
+    // execution failure is terminal; a failed delivery must remain recoverable.
+    if (
+      !interrupted &&
+      (outcome !== 'failed' || (executionFailed && delivered))
+    ) {
       await this.options.directory.forget(
         id,
         [msg, ...run.inputs.map((item) => item.message)].flatMap((item) =>
           item.replyToId ? [item.replyToId] : [],
         ),
       )
-      await this.options.directory.finish(id, outcome)
+      await this.options.directory.finish(
+        id,
+        outcome === 'stopped' ? 'stopped' : 'done',
+      )
     }
     return outcome
   }
