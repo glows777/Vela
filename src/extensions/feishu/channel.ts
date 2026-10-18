@@ -31,6 +31,7 @@ import { FeishuProgress } from './progress.ts'
 import { FeishuTopics, topicToolNames } from './topics.ts'
 import {
   type FeishuMessageEvent,
+  type FeishuSentMessage,
   type FeishuTransport,
   larkTransport,
 } from './transport.ts'
@@ -122,6 +123,8 @@ export class FeishuChannel implements ChannelDefinition {
     Map<string, Promise<ImageContent>>
   >()
   private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
+  // Custom transports without appId cannot identify own-app history items.
+  private readonly lastReplies = new Map<string, FeishuSentMessage>()
 
   constructor(config: FeishuChannelConfig) {
     this.config = config
@@ -316,12 +319,14 @@ export class FeishuChannel implements ChannelDefinition {
     }
     // A failed send throws: the gateway reports it as channel_error instead of a channel_reply that never arrived
     if (message.replyToId) {
-      await this.transport.reply(
+      const receipt = await this.transport.reply(
         message.replyToId,
         message.topic && message.recipientId
           ? `<at user_id="${message.recipientId}"></at> ${message.text}`
           : message.text,
       )
+      if (!this.config.appId && !message.topic)
+        this.lastReplies.set(message.channelId, receipt)
     } else {
       await this.transport.send(message.channelId, message.text)
     }
@@ -445,6 +450,7 @@ export class FeishuChannel implements ChannelDefinition {
           chatId: msg.channelId,
           message: event.message,
           activeTrigger,
+          previous: this.lastReplies.get(msg.channelId),
           appId: this.config.appId,
           question,
           senderName: (id) => this.senderName(id),

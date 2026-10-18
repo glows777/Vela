@@ -26,7 +26,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
-- **Feishu top-level intake defaults to on.** Use `{ id, readUntagged: false }` to retain mention-only behavior. Custom transports must include `sender.sender_type: "user"` for human events. Before downgrading, stop Vela, remove object-shaped passive entries from `pendingMessageIds` and mark active passive records done; older directory readers accept only string IDs.
+- **Feishu top-level intake defaults to on.** Use `{ id, readUntagged: false }` to retain mention-only behavior. Custom transports must include the now-required `sender.sender_type: "user"` for human events. Custom transports without `appId` keep their current-process reply-receipt boundary; supply `appId` for own-app history boundaries after restart. Before downgrading, stop Vela, remove object-shaped passive entries from `pendingMessageIds` and mark active passive records done; older directory readers accept only string IDs.
 
 - **Channel feedback uses one experimental lifecycle.** Replace `acknowledge`, `showTopicControls` and `showRunControls` with `startRun(message, { acknowledge })`, returning `event(update)` and `finish(outcome)`. Move controls and agent progress into the corresponding updates, and combine terminal card/reaction handling in `finish`; channel hooks remain experimental until M4. See [migration guidance](docs/channels.md#migrating-existing-feedback-hooks). Feishu behavior and session data are preserved.
 

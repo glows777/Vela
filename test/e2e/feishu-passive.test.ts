@@ -7,6 +7,7 @@ import {
   type FeishuOptions,
   feishu,
 } from '../../src/extensions/feishu/index.ts'
+import type { FeishuMessageEvent } from '../../src/index.ts'
 import { silentLogger } from '../../src/logger.ts'
 import { fileSessionStorage } from '../../src/session/storage.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
@@ -168,6 +169,12 @@ test('off, disabled groups, self and other bots, and unsupported passive message
     },
   })
   run.fake.deliver(disabled)
+  const unknownSender: FeishuMessageEvent = {
+    ...feishuEvent({ chat_id: 'oc_on', message_id: 'unknown-sender' }),
+    // @ts-expect-error Custom transports must classify senders before delivery.
+    sender: { sender_id: { open_id: 'ou_unknown' } },
+  }
+  run.fake.deliver(unknownSender)
   for (const sender of ['ou_bot', 'ou_other_bot']) {
     const event = feishuEvent({ chat_id: 'oc_on' }, sender)
     Object.assign(event.sender, { sender_type: 'bot' })
@@ -292,6 +299,59 @@ test('a top-level card answer is a history boundary after process restart regard
   await until(() => second.fake.sent.length > 0)
   expect(second.fake.sent.at(-1)?.text).toBe('second answer')
 })
+
+test.each([true, false])(
+  'a custom transport without appId retains its reply boundary (receipt in history: %s)',
+  async (includeReceipt) => {
+    const fake = fakeFeishu()
+    fake.transport.reply = async (messageId, text) => {
+      fake.sent.push({ messageId, text })
+      return { messageId: 'own-reply', createTime: '2000' }
+    }
+    const t = createTestVela({
+      responses: [fauxText('first answer'), fauxText('second answer')],
+      extensions: [
+        feishu({
+          chats: [{ id: 'oc_group', readUntagged: false }],
+          transport: fake.transport,
+        }),
+      ],
+    })
+    await t.vela.startChannels()
+    fake.deliver(feishuEvent({ message_id: 'first', create_time: '1500' }))
+    await until(() => fake.sent.length === 1)
+    fake.history.push(
+      historyMessage('new', 'ou_bob', 'new discussion', '3000'),
+      {
+        ...historyMessage(
+          'other-app',
+          'other_app',
+          'other bot context',
+          '2500',
+        ),
+        sender: { id: 'other_app', sender_type: 'app' },
+      },
+      ...(includeReceipt
+        ? [
+            {
+              message_id: 'own-reply',
+              create_time: '2000',
+              msg_type: 'interactive',
+              sender: { id: 'custom_app', sender_type: 'app' },
+              body: { content: '{}' },
+            },
+          ]
+        : []),
+      historyMessage('old', 'ou_bob', 'already answered discussion', '1000'),
+    )
+    fake.deliver(feishuEvent({ message_id: 'second', create_time: '4000' }))
+    await until(() => fake.sent.length === 2)
+    const input = t.model.calls[1]!.lastUserText
+    expect(input).toContain('new discussion')
+    expect(input).toContain('other bot context')
+    expect(input).not.toContain('already answered discussion')
+  },
+)
 
 test('a passive session blocked by repeated storage failures stays operator-only', async () => {
   const cwd = await root()

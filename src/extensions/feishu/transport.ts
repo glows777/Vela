@@ -20,7 +20,7 @@ export interface FeishuMessageEvent {
     content: string
     mentions?: { key: string; id?: { open_id?: string } }[]
   }
-  sender: { sender_id?: { open_id?: string }; sender_type?: string }
+  sender: { sender_id?: { open_id?: string }; sender_type: string }
 }
 
 /** History items returned newest first by Feishu's message API. Times are milliseconds. */
