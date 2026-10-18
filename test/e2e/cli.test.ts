@@ -932,6 +932,42 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
 const hasScript =
   process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
 
+for (const failure of ['corrupt database', 'blocked directory']) {
+  test.if(hasScript)(
+    `/extensions does not call configured RAG unconfigured after a ${failure}`,
+    async () => {
+      const cwd = tempDir('vela-rag-failure-')
+      const home = tempDir('vela-rag-home-')
+      dirs.push(cwd, home)
+      const ragDir = join(projectDataDir(home.path, cwd.path), 'rag')
+      await Bun.write(
+        failure === 'corrupt database' ? join(ragDir, 'knowledge.db') : ragDir,
+        'not a SQLite database',
+      )
+      const { stdout, stderr, code } = await cli([], {
+        model: `faux:${scenario('hello')}`,
+        cwd: cwd.path,
+        agentDir: home.path,
+        env: {
+          EMBEDDING_MODEL_BASE_URL: 'https://example.invalid/embeddings',
+          EMBEDDING_MODEL: 'test-embedding',
+          EMBEDDING_MODEL_KEY: 'offline-test',
+        },
+        terminal: [
+          ['Ctrl+D exit', '/extensions\r'],
+          ['[extensions]', 'hello\r'],
+          ['Hello, this is Vela (faux replay).', '\x04'],
+        ],
+      })
+      expect(code).toBe(0)
+      expect(stdout + stderr).toContain('Failed to load builtin:rag')
+      expect(stdout).toContain('[extensions]')
+      expect(stdout).toContain('Hello, this is Vela (faux replay).')
+      expect(stdout).not.toContain('Knowledge base disabled:')
+    },
+  )
+}
+
 test.if(hasScript)(
   'interactive mode shows loaded context files at startup and in /status',
   async () => {
