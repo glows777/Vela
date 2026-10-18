@@ -12,7 +12,7 @@ Vela ships five extensions: `memory`, `rag`, `web`, `feishu` and `mcp`. They use
 
 ## Loading
 
-**CLI.** All five load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API, `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** All five load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API and stays quiet at startup (`/extensions` shows why the knowledge base is disabled), `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
 To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. `--no-extensions` skips them, and `-e builtin:<name>` loads a single one for a run. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
