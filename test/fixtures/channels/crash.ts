@@ -69,13 +69,16 @@ if (['saved', 'image', 'group', 'steer', 'forward'].includes(mode!)) {
   await session.save()
   if (mode === 'steer') {
     fake.deliver(
-      feishuEvent({
-        message_id: 'steer',
-        root_id: 'root',
-        thread_id: 'thread',
-        mentions: [],
-        content: '{"text":"also check blue"}',
-      }),
+      feishuEvent(
+        {
+          message_id: 'steer',
+          root_id: 'root',
+          thread_id: 'thread',
+          mentions: [],
+          content: '{"text":"also check blue"}',
+        },
+        'ou_bob',
+      ),
     )
     while (!session.queue.steering.length) await Bun.sleep(1)
   }

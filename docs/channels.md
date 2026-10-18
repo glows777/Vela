@@ -179,7 +179,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 
 `IncomingMessage` contains `channelId`, `senderId`, `senderName` and `text`, with optional `images: ImageContent[]`, `replyToId`, `topic: { rootId, threadId }`, `requireExistingSession`, `isNewTopic` and opaque `raw`. The sender identifies the speaker, not a separate session. A topic's root ID selects its session; its thread ID addresses the platform container. For untagged topic input, set `requireExistingSession: true`: admission rejects an unknown topic before preparation or feedback, without saving an empty session. The gateway sets `isNewTopic` from its ownership probe and sets it to false for active steers. Leave that field to the gateway.
 
-`OutgoingMessage` contains `channelId`, `recipientId`, `text`, optional `replyToId` and `topic`. Preserve topic and reply identity when sending. Feishu uses the group trigger's service ID as `replyToId`; direct messages omit it. A control-card send must not advance the service's last-answer history boundary.
+`OutgoingMessage` contains `channelId`, `text`, optional `recipientId`, `replyToId` and `topic`. The recipient identifies a person to mention; omit it when a reply addresses only the service message. Preserve topic and reply identity when sending. Feishu uses the group trigger's service ID as `replyToId`; direct messages omit it. A control-card send must not advance the service's last-answer history boundary.
 
 `ChannelRuntime`, passed to `connect`, supplies:
 
@@ -195,6 +195,8 @@ The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, sh
 Records contain the channel/chat kind, topic root/thread IDs, requester/reply target, task label, active and previous session IDs, run state, pending service-message IDs and timestamps. Input content remains in the session JSONL. The directory does not backfill pre-M2 topics or reconstruct hashed routing IDs; an older topic joins on its next admitted message. `runtime.topicCoverage()` reports that boundary.
 
 After the channel connects, the gateway restores indexed unfinished work through `session.resume()` and the existing run feedback lifecycle. A saved unanswered user turn (including images) is replayed by navigating to that turn's parent and prompting its saved input. The old branch remains in history. The topic receives an interruption/continuation notice before model work, and fresh Stop controls. A run whose branch already ends in a final assistant answer delivers that answer without another model call. Completed and explicitly stopped runs stay quiet.
+
+Graceful shutdown leaves interrupted runs and unsaved steers recoverable, while an explicit Stop remains terminal. An execution failure whose terminal explanation was delivered is complete for recovery purposes; a failed result delivery stays recoverable. Inputs handled during preparation, such as unsupported attachments, are removed from pending admissions. Resend notices reply to the unsaved message without mentioning the original task requester, who may be a different person.
 
 Admitted group message IDs without a saved user entry receive a reply asking the sender to send the message again. This includes steers still queued at process death: no adapter event or second copy of input is persisted. A small `channel.input` custom entry associates a saved input with its service-message ID; it is not model context. Tool execution may repeat from the saved input after a crash; there is no durable mid-tool resumption or exactly-once delivery guarantee.
 

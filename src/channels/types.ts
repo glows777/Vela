@@ -24,7 +24,8 @@ export interface IncomingMessage {
 export interface OutgoingMessage {
   topic?: IncomingMessage['topic']
   channelId: string
-  recipientId: string
+  /** Optional person to mention; a reply target alone addresses a service message. */
+  recipientId?: string
   text: string
   replyToId?: string
 }
