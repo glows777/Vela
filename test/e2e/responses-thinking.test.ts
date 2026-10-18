@@ -32,6 +32,8 @@ function fixture(models?: ModelSpec[]) {
   )
   const requests: {
     reasoning?: { effort?: string }
+    store?: boolean
+    include?: string[]
     input: { role?: string }[]
   }[] = []
   globalThis.fetch = (async (_input, init) => {
@@ -62,6 +64,8 @@ test.each(['high', 'max', 'off'] as ThinkingLevel[])(
       thinkingLevel === 'off' ? 'none' : thinkingLevel,
     )
     expect(f.requests[0]?.input[0]?.role).toBe('system')
+    expect(f.requests[0]?.store).toBe(false)
+    expect(f.requests[0]?.include).toContain('reasoning.encrypted_content')
   },
 )
 

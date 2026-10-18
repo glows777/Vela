@@ -84,11 +84,24 @@ test('short channel answers and topic/DM requests have the right prompts and vis
     expect(call.tools.some((name) => dispatchTools.includes(name))).toBe(false)
     expect(call.tools).toContain('read_file')
   }
-  expect(t.model.calls[1]?.system).toContain('one task in this topic')
+  expect(t.model.calls[1]?.system).toContain(
+    'This topic contains a conversation about one task.',
+  )
+  const latestMessageInstruction = 'Respond to the latest user message.'
+  expect(t.model.calls[1]?.system).toContain(latestMessageInstruction)
+  expect(t.model.calls[0]?.system).not.toContain(latestMessageInstruction)
+  expect(t.model.calls[2]?.system).not.toContain(latestMessageInstruction)
+  const completionInstruction =
+    'Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
+  expect(t.model.calls[1]?.system).toContain(completionInstruction)
+  expect(t.model.calls[0]?.system).not.toContain(completionInstruction)
+  expect(t.model.calls[2]?.system).not.toContain(completionInstruction)
   expect(t.model.calls[1]?.system).toContain(
     'ask one clear question and end the run',
   )
-  expect(t.model.calls[2]?.system).not.toContain('one task in this topic')
+  expect(t.model.calls[2]?.system).not.toContain(
+    'This topic contains a conversation about one task.',
+  )
 })
 
 test('starting a topic returns its receipt and frees the channel while its task is still running', async () => {
@@ -582,7 +595,9 @@ test('a screenshot post handoff carries trigger images without copying group his
   expect(
     images(
       t.model.calls.find((req) =>
-        req.system.includes('one task in this topic'),
+        req.system.includes(
+          'This topic contains a conversation about one task.',
+        ),
       ),
     ),
   ).toEqual([expect.objectContaining({ mediaType: 'image/png' })])

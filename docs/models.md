@@ -36,6 +36,8 @@ The part after the first `/` is the model id, so ids that contain `/` work: `ope
 
 Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `models.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `models.json`, or add it as its own provider.
 
+For `openai-responses` endpoints whose hostname is exactly `api.deepseek.com`, Vela sets `providerOptions.openai.store: false` before SDK serialization. [DeepSeek's Responses API](https://api-docs.deepseek.com/guides/responses_api/) is stateless and does not support server-side item references. This option lets the SDK send earlier assistant answers inline, retaining their phase and ordinary function call/result pairs without manually rewriting history. Local history, user messages and other providers are unchanged. This does not fix reasoning-event parsing or establish complete reasoning-history replay support.
+
 ## Credentials and /login
 
 A provider's key is looked up per request, in this order (pi's):
@@ -167,7 +169,7 @@ For `openai-responses` providers loaded from configuration, Vela uses the effect
 
 Responses requests to the exact hostname `api.deepseek.com` default to the `system` role: [DeepSeek treats `developer` as `user`](https://api-docs.deepseek.com/guides/responses_api/). An explicit `systemMessageMode` wins; ChatGPT OAuth's existing request rules remain authoritative. Other protocols keep their existing role behavior. On other Responses hosts, enabling reasoning for an unfamiliar model can change the SDK's default role from `system` to `developer`. Custom endpoints requiring `system` can set the existing `providerOptions.openai.systemMessageMode` request option to `'system'` through a [`before_provider_request` hook](extensions.md#intercepting-events) or model wrapper; there is no general `models.json` field for this option.
 
-This enables thinking controls, not full DeepSeek Responses compatibility. With the installed SDK, forcing reasoning also filters `temperature` and `topP` for unfamiliar model ids, even with effort `none`, and adds `reasoning.encrypted_content` to `include` when callers set `store: false`. DeepSeek does not support encrypted reasoning or that include field. Plaintext reasoning stream parsing and replay are not implemented by this change.
+This enables thinking controls, not full DeepSeek Responses compatibility. With the installed SDK, forcing reasoning also filters `temperature` and `topP` for unfamiliar model ids, even with effort `none`, and adds `reasoning.encrypted_content` to `include` when `store: false` is used, including the policy enforced for `api.deepseek.com`. DeepSeek documents encrypted reasoning and that include field as unsupported. Plaintext reasoning stream parsing and replay are not implemented by this change.
 
 ## Extension providers
 

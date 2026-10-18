@@ -351,8 +351,12 @@ function createProvider(
               )
                 openai.reasoningEffort = effort
               // DeepSeek treats developer messages as user messages. Keep the system instruction's role.
-              if (deepseekResponses && openai.systemMessageMode === undefined)
-                openai.systemMessageMode = 'system'
+              if (deepseekResponses) {
+                // DeepSeek is stateless: let the SDK serialize history inline.
+                openai.store = false
+                if (openai.systemMessageMode === undefined)
+                  openai.systemMessageMode = 'system'
+              }
               params = {
                 ...params,
                 providerOptions: { ...params.providerOptions, openai },
