@@ -236,3 +236,29 @@ test('an unmentioned status in an unowned topic writes no session, directory or 
   expect(existsSync(t.dataPath('channels/index.json'))).toBe(false)
   expect(existsSync(t.dataPath('channels/usage.jsonl'))).toBe(false)
 })
+
+test('an unpriced summary does not turn a prior priced subtotal into a free summary', async () => {
+  const answer = { text: 'answer', usage: { input: 1000, output: 100 } }
+  const f = await setup([answer, answer, answer, answer], undefined, [
+    (req) => ({ ...fauxSummary()(req), usage: { input: 2000, output: 200 } }),
+  ])
+  for (let i = 0; i < 4; i++) {
+    f.fake.deliver(message(`question ${i}`))
+    await until(() => f.fake.sent.length === i + 1)
+  }
+  const session = f.t.vela.session('feishu-oc_group-root')
+  session.setModel('test/unpriced')
+  await session.compact()
+  f.fake.deliver(message('!status', false))
+  await until(() => f.fake.sent.length === 5)
+  expect(f.fake.sent[4]?.text).toContain(
+    'Topic: 6600 tokens; known cost $0.0060 (1 unpriced request)',
+  )
+  const rows = (await f.t.readData('channels/usage.jsonl'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(rows).toHaveLength(5)
+  expect(rows[4].cost).toBeUndefined()
+  expect(f.model.calls).toHaveLength(5)
+})
