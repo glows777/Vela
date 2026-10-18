@@ -1,6 +1,8 @@
 import { errorMessage, type VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { VelaSession } from '../vela-session.ts'
+import type { ChannelDirectory } from './directory.ts'
+import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
   ChannelDefinition,
@@ -80,6 +82,8 @@ interface ChannelRun {
 }
 
 interface FeedbackOptions {
+  directory: ChannelDirectory
+  recovery: ChannelRecovery
   stopped: () => boolean
   channel: (name: string) => ChannelDefinition | undefined
   find: (id: string) => VelaSession | undefined
@@ -104,6 +108,7 @@ export class RunFeedback {
     id: string,
     channelName: string,
     msg: IncomingMessage,
+    admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
@@ -118,7 +123,11 @@ export class RunFeedback {
     let card: Promise<void> | undefined
     const apply = (action: 'steer' | 'stop'): Promise<void> => {
       if (!run || !channel) return Promise.resolve()
-      return this.applyRunChoice(channel, msg, run, action)
+      const choice =
+        action === 'stop'
+          ? this.applyRunChoice(channel, msg, run, action)
+          : admitted.then(() => this.applyRunChoice(channel, msg, run, action))
+      return choice
         .then((handled) => {
           consumed = handled
         })
@@ -206,7 +215,11 @@ export class RunFeedback {
       run.lifetime.abort()
       // These inputs belong to the cancelled run; the gateway's default queue stays intact.
       run.session.clearQueue()
-      await run.session.abort()
+      const aborted = run.session.abort()
+      await Promise.all([
+        aborted,
+        this.options.directory.finish(run.session.id, 'stopped'),
+      ])
       if (!msg.topic)
         await this.options.reply(
           run.session,
@@ -245,6 +258,7 @@ export class RunFeedback {
       senderName: prepared.senderName,
       text: prepared.text,
     })
+    this.options.recovery.track(run.session, prepared)
     await run.session.prompt(prepared.text, {
       source: 'channel',
       streamingBehavior: 'steer',
@@ -257,12 +271,16 @@ export class RunFeedback {
   acknowledge(
     channel: ChannelDefinition,
     msg: IncomingMessage,
+    acknowledge = true,
   ): MessageFeedback[] {
     let inputs = this.acknowledgements.get(msg)
     if (!inputs) {
       inputs = [
-        new MessageFeedback(channel, msg, (error) =>
-          this.feedbackError(channel.name, msg, error),
+        new MessageFeedback(
+          channel,
+          msg,
+          (error) => this.feedbackError(channel.name, msg, error),
+          acknowledge,
         ),
       ]
       this.acknowledgements.set(msg, inputs)
@@ -379,6 +397,8 @@ export class RunFeedback {
           throw error
         }
       }
+      await this.options.directory.begin(id, msg)
+      this.options.recovery.track(session, msg)
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
       if (session.messages.at(-1) !== previous)
         answer = lastAssistantText(session.messages)
@@ -404,7 +424,12 @@ export class RunFeedback {
       this.runs.delete(id)
       this.active.delete(session)
     }
-    if (run.handedOff) return
+    await this.options.recovery.settled(session)
+    if (run.handedOff) {
+      await this.options.directory.finish(id, 'done')
+      return
+    }
+    if (run.stopped) outcome = 'stopped'
     if (outcome === 'stopped')
       answer = msg.topic ? 'Stopped the current run.' : ''
     if (
@@ -413,6 +438,15 @@ export class RunFeedback {
     )
       outcome = 'failed'
     await feedback?.finish(outcome)
+    if (outcome !== 'failed') {
+      await this.options.directory.forget(
+        id,
+        [msg, ...run.inputs.map((item) => item.message)].flatMap((item) =>
+          item.replyToId ? [item.replyToId] : [],
+        ),
+      )
+      await this.options.directory.finish(id, outcome)
+    }
     return outcome
   }
 }

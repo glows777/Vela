@@ -69,6 +69,7 @@
     timestamp: string
     type: "branch_summary"
   interface ChannelDefinition
+    canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string

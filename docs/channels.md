@@ -60,7 +60,7 @@ The top-level group session answers short questions directly: answerable from th
 
 - `feishu_start_topic({ task })` replies under the current message with `reply_in_thread: true`, then independently enqueues the explicit task in its topic session. It returns the platform receipt without waiting for task completion, so another top-level question can run while the topic works. The task text is its whole brief, so it must include the goal and needed facts. The triggering message’s own images are carried over, excluding images from group history. The channel transcript is not copied into the task, and a successful handoff suppresses the channel's duplicate final reply.
 - `feishu_forward_to_topic({ root_id })` forwards the current original message to an observed owned topic in the same group, then explicitly enqueues its content with the original sender's name. It does not depend on receiving the bot's forwarded message as an event. A running target is steered; an idle target starts its next run.
-- `feishu_list_topics()` reports observed owned topics and current execution state. Its result states the observation start time and warns that earlier topics may exist: an empty list does not mean there are no tasks. Coverage is process-local, not a complete historical directory after restart; a persisted topic returns to the list when observed again. Persistent session ownership remains independent of this directory. When a follow-up refers to earlier work absent from the list, the channel prompt requires a notice that the earlier topic could not be found, at the beginning of the new topic entry, instead of silently duplicating it.
+- `feishu_list_topics()` reports recorded owned topics and current execution state from the gateway's durable directory. The list survives process restarts; topics from before M2 join when they next receive an admitted message. Its result states when directory coverage began and warns that earlier topics may exist: an empty list does not mean there are no tasks. Persistent session ownership remains independent of this directory. When a follow-up refers to earlier work absent from the list, the channel prompt requires a notice that the earlier topic could not be found, at the beginning of the new topic entry, instead of silently duplicating it.
 
 If Stop is selected while a create/forward API request is pending, its eventual receipt cannot enqueue topic work. Feishu may already have accepted the remote message; Stop does not retract that message.
 
@@ -164,6 +164,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | Member | Required | Contract |
 | --- | --- | --- |
 | `name`, `description` | Yes | Stable channel name (part of session identity) and description shown in channel listings. |
+| `canRecover(message, chatKind)` | No | Recheck current access for a stored group/direct conversation. Return false to leave it untouched during startup recovery. |
 | `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. A rejected start is logged without preventing other channels from starting. |
 | `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
 | `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
@@ -183,12 +184,25 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 `ChannelRuntime`, passed to `connect`, supplies:
 
 - `context(sessionId)`: the active run's trigger, or `undefined` when there is no active run. Do not retain it as a substitute for durable session data.
-- `topics(chatId)`: this channel's observed topics in that chat, each with `rootId`, `threadId`, a short `task` and `state` (`running`, `queued`, `idle`). Coverage is process-local; an empty list after restart does not prove that no earlier topics exist.
+- `topics(chatId)`: this channel's recorded topics in that chat, each with `rootId`, `threadId`, a short `task` and `state` (`running`, `queued`, `idle`). The directory survives process restarts. Topics from before M2 appear after their next admitted message; topicCoverage() describes that boundary.
+- `topicCoverage()`: describes when directory coverage began and the pre-M2 topic boundary.
 - `dispatch(sourceSessionId, message)`: enqueue a handoff without waiting for the destination task. The source run must still be live or this throws. It transfers input-feedback ownership, observes a new topic immediately and suppresses the source's duplicate final reply. A running topic target steers; an idle target queues normally. The channel must enforce its destination authorization before dispatching.
+
+### Restart recovery
+
+The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `feishu_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues.
+
+Records contain the channel/chat kind, topic root/thread IDs, requester/reply target, task label, active and previous session IDs, run state, pending service-message IDs and timestamps. Input content remains in the session JSONL. The directory does not backfill pre-M2 topics or reconstruct hashed routing IDs; an older topic joins on its next admitted message. `runtime.topicCoverage()` reports that boundary.
+
+After the channel connects, the gateway restores indexed unfinished work through `session.resume()` and the existing run feedback lifecycle. A saved unanswered user turn (including images) is replayed by navigating to that turn's parent and prompting its saved input. The old branch remains in history. The topic receives an interruption/continuation notice before model work, and fresh Stop controls. A run whose branch already ends in a final assistant answer delivers that answer without another model call. Completed and explicitly stopped runs stay quiet.
+
+Admitted group message IDs without a saved user entry receive a reply asking the sender to send the message again. This includes steers still queued at process death: no adapter event or second copy of input is persisted. A small `channel.input` custom entry associates a saved input with its service-message ID; it is not model context. Tool execution may repeat from the saved input after a crash; there is no durable mid-tool resumption or exactly-once delivery guarantee.
+
+`canRecover(message, chatKind)` is an optional channel hook to recheck current access before opening a stored session or posting recovery feedback. Feishu rechecks its configured chats and owner DMs. Its group classification uses normalized reply identity, so recovered group work keeps the channel prompt/tools without a live receive event. Unknown untagged topics are checked for existing ownership before directory writes or feedback. Startup reserves recovery in the same per-session queues used by new input.
 
 ### Run feedback lifecycle
 
-`startRun` receives normalized message data; it must work without `raw` or an old receive-event object. For Feishu presentation, persistable chat/topic IDs, original requester ID and reply/service message ID are sufficient; text/name data supplies the prompt and attribution. Live preprocessing may still use `raw`. Signals and callbacks are fresh runtime capabilities and are not persisted. Restart recovery and storage of routing metadata belong to the later milestone, not to this hook.
+`startRun` receives normalized message data; it must work without `raw` or an old receive-event object. For Feishu presentation, persistable chat/topic IDs, original requester ID and reply/service message ID are sufficient; text/name data supplies the prompt and attribution. Live preprocessing may still use `raw`. Signals and callbacks are fresh runtime capabilities and are not persisted. The gateway stores routing metadata in its directory and reuses this hook for recovered work.
 
 The factory may acknowledge the newly admitted input before names/history/resources are prepared. Its handle can outlive the source run: handoff carries the original handle to the destination; accepted steers finish with their receiving run. A new handoff presentation uses `acknowledge: false`, so it must not acknowledge the same input again. If initial feedback creation fails, the gateway reports it and may request presentation with `acknowledge: false` on the next update; this preserves Stop controls without retrying the failed reaction. A failure while creating those controls still prevents a topic prompt.
 

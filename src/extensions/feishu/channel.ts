@@ -94,6 +94,14 @@ export class FeishuChannel implements ChannelDefinition {
     this.config = config
   }
 
+  canRecover(msg: IncomingMessage, chatKind: 'group' | 'direct'): boolean {
+    return (
+      !!this.transport &&
+      (this.config.chats?.includes(msg.channelId) === true ||
+        (chatKind === 'direct' && this.config.owners.includes(msg.senderId)))
+    )
+  }
+
   roleFor(): Role {
     return 'owner'
   }
