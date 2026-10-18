@@ -69,6 +69,7 @@
     timestamp: string
     type: "branch_summary"
   interface ChannelDefinition
+    canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string
@@ -410,7 +411,7 @@
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
   interface OutgoingMessage
     channelId: string
-    recipientId: string
+    recipientId?: string | undefined
     replyToId?: string | undefined
     text: string
     topic?: { rootId: string; threadId: string; } | undefined

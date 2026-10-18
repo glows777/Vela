@@ -377,6 +377,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   }
 
   const gateway: ChannelGateway = new ChannelGateway({
+    dataDir,
     session,
     find: (id) => sessions.get(id),
     idleMs: channelIdleMs,

@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Added
+
+- **Channel restart recovery and durable topic listing.** The gateway resumes saved unanswered inputs with an interruption notice, delivers already-saved final answers and asks for unsaved admitted group messages to be resent. One atomic directory under `dataDir/channels/index.json` preserves owned topics across restarts; stopped runs remain stopped. Existing topics join on their next message. Real Feishu acceptance remains required for M2.
+
 ### Fixed
 
 - **An unconfigured knowledge base printed a notice on every CLI start.** Startup is now quiet when embedding is not configured; `/rag` explains the missing configuration and `/extensions` lists the command. Configured knowledge-base warnings and errors are unchanged.
