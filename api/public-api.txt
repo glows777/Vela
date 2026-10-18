@@ -77,10 +77,11 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
-    sessionOptions?: ((msg: IncomingMessage) => { permissions?: PermissionRules; }) | undefined
+    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; }) | undefined
     start: () => Promise<void> | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
+    validateTools?: ((names: readonly string[]) => void) | undefined
   interface CompactionEntry
     firstKeptEntryId: string
     id: string
@@ -222,7 +223,7 @@
   interface FeishuOptions
     appId?: string | undefined
     appSecret?: string | undefined
-    chats?: string[] | undefined
+    chats?: (string | { id: string; tools?: string[] | undefined; readUntagged?: boolean | undefined; })[] | undefined
     owners?: string[] | undefined
     transport?: FeishuTransport | undefined
   interface FeishuSentMessage

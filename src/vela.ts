@@ -447,7 +447,10 @@ export function createVela(options: VelaOptions = {}): Vela {
     extensions: () => runner.loaded(),
     commands: () => runner.commands(),
     channels: () => gateway.list(),
-    startChannels: () => gateway.startAll(),
+    startChannels: async () => {
+      await runner.ready
+      await gateway.startAll(registry.getAllTools().map((tool) => tool.name))
+    },
     dispose() {
       disposed = true
       disposing ??= (async () => {

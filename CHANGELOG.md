@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Feishu groups have their own workspace, memory and tool selection.** Group topics share these resources across idle reopen, process restart and `!restart`; existing attachments stay in place. Groups read/search shared global notes but write only their own memory through the memory API. Object-form chat configuration validates exact tool names before connecting, with channel controls retained. Cwd is not a security sandbox.
+
 - **SDK sessions can choose their working directory.** `vela.session(id, { cwd })` scopes file/search/bash tools and automatic project instructions to that directory; `session.cwd` exposes it. Application resources and export destinations stay Vela-wide. Fork/clone preserves cwd; callers pass it again on reopen/resume. This is not a security sandbox.
 - **Feishu topic `!status`, with or without a mention.** Reports the model, estimated context and durable topic/group token and known-cost totals without interrupting the run or calling the model. The append-only channel usage ledger includes compaction and keeps totals across session generations; coverage and unknown prices are explicit.
 - **Feishu topic `!stop` and `!restart`, with or without a mention.** Stop retains the session; Restart archives it and reloads topic history on the next message. A failed index write retains the previous active generation even when another message is admitted concurrently.
