@@ -14,7 +14,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
-function fixture(models?: ModelSpec[]) {
+function fixture(models?: ModelSpec[], reasoning?: 'text' | 'summary') {
   const dir = tempDir('vela-thinking-')
   dirs.push(dir)
   writeFileSync(
@@ -39,7 +39,7 @@ function fixture(models?: ModelSpec[]) {
   globalThis.fetch = (async (_input, init) => {
     const body = JSON.parse(String(init?.body))
     requests.push(body)
-    return responsesReply(body)
+    return responsesReply(body, reasoning)
   }) as typeof fetch
   return {
     cwd: dir.path,
@@ -102,3 +102,36 @@ test('custom medium mapping and resumed model/level reach the wire', async () =>
     'medium',
   ])
 })
+
+test.each(['text', 'summary'] as const)(
+  'Responses reasoning %s deltas reach thinking events and the saved session',
+  async (reasoning) => {
+    const f = fixture(undefined, reasoning)
+    const t = createTestVela({
+      ...f,
+      model: 'compat/deepseek-flash',
+      thinkingLevel: 'high',
+    })
+    await t.run('Answer OK')
+    const thinking = t
+      .eventsOf('message_update')
+      .flatMap((e) =>
+        e.assistantMessageEvent.type === 'thinking_delta'
+          ? [e.assistantMessageEvent.delta]
+          : [],
+      )
+      .join('')
+    expect(thinking).toBe('Check the result.')
+    expect(t.lastAssistantText()).toBe('OK')
+    const saved = (await t.readData('sessions/default.jsonl'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const assistant = saved
+      .filter((entry) => entry.message?.role === 'assistant')
+      .at(-1).message
+    expect(assistant.content).toContainEqual(
+      expect.objectContaining({ type: 'reasoning', text: thinking }),
+    )
+  },
+)
