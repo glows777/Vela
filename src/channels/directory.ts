@@ -99,13 +99,7 @@ export class ChannelDirectory {
       ],
       state: 'done' as const,
     }
-    this.records.set(key, next)
-    try {
-      await this.save(next)
-    } catch (error) {
-      this.records.set(key, record)
-      throw error
-    }
+    await this.save(next, true)
   }
   entries(channel: string): ChannelRecord[] {
     return [...this.records.values()].filter(
@@ -207,19 +201,25 @@ export class ChannelDirectory {
     return this.writing
   }
 
-  private save(record: ChannelRecord): Promise<void> {
+  private save(record: ChannelRecord, replace = false): Promise<void> {
     record.updatedAt = new Date().toISOString()
     const path = this.path
-    if (!path) return Promise.resolve()
-    const text =
-      JSON.stringify({
-        version: 1,
-        createdAt: this.createdAt,
-        records: [...this.records.values()],
-      }) + '\n'
+    if (!path) {
+      if (replace) this.records.set(record.key, record)
+      return Promise.resolve()
+    }
     const write = this.writing
       .catch(() => {})
       .then(async () => {
+        // Later saves see only generations whose index write succeeded.
+        const text =
+          JSON.stringify({
+            version: 1,
+            createdAt: this.createdAt,
+            records: [...this.records.values()].map((current) =>
+              replace && current.key === record.key ? record : current,
+            ),
+          }) + '\n'
         await mkdir(dirname(path), { recursive: true, mode: 0o700 })
         const temporary = `${path}.${crypto.randomUUID()}.tmp`
         try {
@@ -234,6 +234,7 @@ export class ChannelDirectory {
         } finally {
           await rm(temporary, { force: true })
         }
+        if (replace) this.records.set(record.key, record)
       })
     this.writing = write
     return write
