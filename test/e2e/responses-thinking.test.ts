@@ -135,3 +135,43 @@ test.each(['text', 'summary'] as const)(
     )
   },
 )
+
+test('DeepSeek reasoning preserves tool execution and the following answer', async () => {
+  const f = fixture()
+  const requests: {
+    input: { type?: string; call_id?: string; output?: string }[]
+  }[] = []
+  globalThis.fetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    requests.push(body)
+    return responsesReply(
+      body,
+      'text',
+      requests.length === 1
+        ? { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }) }
+        : undefined,
+    )
+  }) as typeof fetch
+  const t = createTestVela({
+    ...f,
+    model: 'compat/deepseek-flash',
+    thinkingLevel: 'high',
+    files: { 'a.txt': 'fixture content' },
+  })
+  await t.run('Read a.txt then answer OK')
+  expect(t.eventsOf('tool_execution_start')).toHaveLength(1)
+  expect(t.eventsOf('tool_execution_start')[0]).toMatchObject({
+    toolName: 'read_file',
+    args: { path: 'a.txt' },
+  })
+  expect(t.eventsOf('tool_execution_end')[0]?.isError).toBe(false)
+  expect(requests).toHaveLength(2)
+  expect(requests[1]?.input).toContainEqual(
+    expect.objectContaining({
+      type: 'function_call_output',
+      call_id: 'call_test',
+      output: expect.stringContaining('fixture content'),
+    }),
+  )
+  expect(t.lastAssistantText()).toBe('OK')
+})
