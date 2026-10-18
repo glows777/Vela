@@ -315,15 +315,32 @@ function createProvider(
           break
       }
       const transform = oauthRequests?.transformParams
-      if (!transform || typeof model === 'string') return model
+      // DeepSeek Responses is stateless: let the SDK serialize history inline.
+      // https://api-docs.deepseek.com/guides/responses_api/
+      const statelessResponses =
+        api === 'openai-responses' &&
+        settings.baseURL != null &&
+        new URL(settings.baseURL).hostname === 'api.deepseek.com'
+      if ((!transform && !statelessResponses) || typeof model === 'string')
+        return model
       return wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
-          transformParams: async ({ params }) =>
-            (await ctx.credential())?.type === 'oauth'
-              ? transform(params)
-              : params,
+          transformParams: async ({ params }) => {
+            const request =
+              transform && (await ctx.credential())?.type === 'oauth'
+                ? transform(params)
+                : params
+            if (!statelessResponses) return request
+            return {
+              ...request,
+              providerOptions: {
+                ...request.providerOptions,
+                openai: { ...request.providerOptions?.openai, store: false },
+              },
+            }
+          },
         },
       })
     },
