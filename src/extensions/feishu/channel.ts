@@ -331,14 +331,6 @@ export class FeishuChannel implements ChannelDefinition {
     activeMessage?: IncomingMessage,
   ): Promise<IncomingMessage | undefined> {
     if (this.stopped) return
-    if (msg.topic || msg.replyToId)
-      await mkdir(
-        join(
-          chatDirectory(this.config.dataDir, this.name, msg.channelId),
-          'workspace',
-        ),
-        { recursive: true },
-      )
     if (!msg.raw) return msg
     const event = msg.raw as FeishuMessageEvent
     const activeTrigger = (activeMessage?.raw as FeishuMessageEvent | undefined)
@@ -361,6 +353,14 @@ export class FeishuChannel implements ChannelDefinition {
     }
     let input = messageText(event.message) ?? msg.text
     if (!input) return
+    if (msg.topic || msg.replyToId)
+      await mkdir(
+        join(
+          chatDirectory(this.config.dataDir, this.name, msg.channelId),
+          'workspace',
+        ),
+        { recursive: true },
+      )
     const attachmentType =
       event.message.message_type === 'file' ? 'file' : 'image'
     try {
