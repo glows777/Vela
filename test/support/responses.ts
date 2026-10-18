@@ -1,5 +1,8 @@
 /** Successful offline HTTP responses for tests of the real OpenAI Responses adapter. */
-export function responsesReply(body: { model?: unknown; stream?: unknown }) {
+export function responsesReply(
+  body: { model?: unknown; stream?: unknown },
+  reasoning?: 'text' | 'summary',
+) {
   const item = {
     type: 'message',
     id: 'msg_test',
@@ -16,7 +19,7 @@ export function responsesReply(body: { model?: unknown; stream?: unknown }) {
     usage: { input_tokens: 10, output_tokens: 1 },
   }
   if (!body.stream) return Response.json(response)
-  const events = [
+  const events: Record<string, unknown>[] = [
     { type: 'response.created', response },
     { type: 'response.output_item.added', output_index: 0, item },
     {
@@ -28,6 +31,26 @@ export function responsesReply(body: { model?: unknown; stream?: unknown }) {
     { type: 'response.output_item.done', output_index: 0, item },
     { type: 'response.completed', response },
   ]
+  if (reasoning) {
+    const item = { type: 'reasoning', id: 'rs_test', summary: [] }
+    events.splice(
+      1,
+      0,
+      { type: 'response.output_item.added', output_index: 1, item },
+      ...['Check ', 'the result.'].map((delta) => ({
+        type:
+          reasoning === 'text'
+            ? 'response.reasoning_text.delta'
+            : 'response.reasoning_summary_text.delta',
+        item_id: item.id,
+        output_index: 1,
+        content_index: 0,
+        summary_index: 0,
+        delta,
+      })),
+      { type: 'response.output_item.done', output_index: 1, item },
+    )
+  }
   return new Response(
     events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
     {
