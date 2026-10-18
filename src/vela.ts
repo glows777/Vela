@@ -186,8 +186,6 @@ export interface Vela {
 
 /** Internals used by the CLI and tests; not part of the public API. */
 export interface VelaInternals {
-  /** Resolved extension settings, also used by CLI diagnostics. */
-  extensionConfig: Readonly<Record<string, Record<string, unknown>>>
   logger: VelaLogger
   registry: ToolRegistry
   hooks: HookPipeline
@@ -473,7 +471,6 @@ export function createVela(options: VelaOptions = {}): Vela {
     },
   }
   internals.set(vela, {
-    extensionConfig: options.extensionConfig ?? {},
     logger,
     registry,
     hooks,

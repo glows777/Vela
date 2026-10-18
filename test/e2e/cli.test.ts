@@ -432,6 +432,37 @@ test.concurrent('-p prints only the final answer to stdout and saves a new sessi
   expect(await Bun.file(files[0]!).text()).toContain('faux replay')
 })
 
+test.concurrent('unconfigured /rag explains configuration on demand in print and JSON modes', async () => {
+  const model = `faux:${scenario('rag-unconfigured')}`
+  const print = await cli(['-p', '/rag'], { model })
+  expect(print.code).toBe(0)
+  expect(print.stdout).toBe('')
+  expect(print.stderr).toContain('Knowledge base disabled')
+  expect(print.stderr).toContain('extensionConfig.rag.embedding')
+  expect(print.stderr).toContain('settings.json')
+
+  const json = await cli(['--mode', 'json', '/rag'], { model })
+  expect(json.code).toBe(0)
+  expect(json.stderr).toBe('')
+  const events = json.stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(events.some((event) => event.type === 'agent_start')).toBe(false)
+  expect(events.find((event) => event.type === 'notify')).toMatchObject({
+    message: expect.stringContaining('extensionConfig.rag.embedding'),
+  })
+})
+
+test.concurrent('--no-extensions keeps /rag as model input', async () => {
+  const result = await cli(['--no-extensions', '-p', '/rag'], {
+    model: `faux:${scenario('hello')}`,
+  })
+  expect(result.code).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(result.stdout).toBe('Hello, this is Vela (faux replay).\n')
+})
+
 test.concurrent('-p reports a session save failure on stderr while keeping the answer on stdout', async () => {
   // Break the real session file only after the new-session guard, using an explicit test extension.
   // A directory in place of the file fails on every OS/user, including root (unlike chmod).
@@ -934,7 +965,7 @@ const hasScript =
 
 for (const failure of ['corrupt database', 'blocked directory']) {
   test.if(hasScript)(
-    `/extensions does not call configured RAG unconfigured after a ${failure}`,
+    `configured RAG reports a ${failure} while the CLI remains usable`,
     async () => {
       const cwd = tempDir('vela-rag-failure-')
       const home = tempDir('vela-rag-home-')

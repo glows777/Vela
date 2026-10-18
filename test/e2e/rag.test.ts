@@ -23,7 +23,7 @@ const GUIDE = [
   'Alerts are sent by the Feishu bot; the on-call rota is in the oncall doc.',
 ].join('\n')
 
-test('unconfigured RAG stays silent and exposes its disabled reason through /extensions', async () => {
+test('unconfigured RAG stays silent and lists only /rag in /extensions', async () => {
   const diagnostics: string[] = []
   const log = (message: string) => diagnostics.push(message)
   const t = createTestVela({
@@ -38,9 +38,47 @@ test('unconfigured RAG stays silent and exposes its disabled reason through /ext
   expect(t.model.calls[0]!.tools).not.toContain('rag_ingest')
   expect(t.exists('rag/knowledge.db')).toBe(false)
   const { output } = await captureConsole(() => t.dispatch('/extensions'))
-  expect(output).toContain(
-    'Knowledge base disabled: embedding (baseUrl / model / apiKey) not configured',
-  )
+  expect(output).toContain('Commands: /rag')
+  expect(t.vela.extensions().find((ext) => ext.name === 'rag')).toMatchObject({
+    tools: [],
+    commands: ['rag'],
+  })
+})
+
+for (const command of ['/rag', '/rag ingest docs/guide.md', '/rag clear']) {
+  test(`unconfigured ${command} explains configuration without a model call or database`, async () => {
+    const t = createTestVela({
+      extensions: [rag()],
+      files: { 'docs/guide.md': GUIDE },
+    })
+    await t.run(command)
+    expect(t.model.calls).toHaveLength(0)
+    expect(t.exists('rag')).toBe(false)
+    const message = notes(t)
+    expect(message).toContain('Knowledge base disabled')
+    expect(message).toContain('extensionConfig.rag.embedding')
+    for (const key of [
+      'baseUrl',
+      'model',
+      'apiKey',
+      'settings.json',
+      'EMBEDDING_MODEL_BASE_URL',
+      'EMBEDDING_MODEL',
+      'EMBEDDING_MODEL_KEY',
+    ])
+      expect(message).toContain(key)
+  })
+}
+
+test('unconfigured /rag keeps the existing owner-only command restriction', async () => {
+  const t = createTestVela({
+    extensions: [rag()],
+    session: { role: 'guest' },
+    responses: [fauxText('Guest answer')],
+  })
+  await t.run('/rag')
+  expect(t.model.calls).toHaveLength(1)
+  expect(t.eventsOf('notify')).toHaveLength(0)
 })
 
 test('configured RAG registers tools and /extensions does not report it disabled', async () => {
@@ -200,7 +238,7 @@ test('session.abort() stops a running /rag ingest', async () => {
   expect(t.session.signal).toBeUndefined()
 })
 
-test('without an embedder there is no /rag command; the text goes to the model', async () => {
+test('when the RAG extension is not loaded, /rag goes to the model', async () => {
   const t = createTestVela({ responses: [fauxText('No knowledge base')] })
   await t.run('/rag')
   expect(t.model.calls).toHaveLength(1)
