@@ -1,8 +1,10 @@
 import { z } from 'zod'
+import { channelScopes } from '../../channels/scope.ts'
 import type { ChannelRuntime, IncomingMessage } from '../../channels/types.ts'
 import type { ImageContent } from '../../messages.ts'
 import type { ToolContext, ToolRegistry } from '../../tools/registry.ts'
 import type { ExtensionAPI } from '../types.ts'
+import { historySearchSchema, searchHistory } from './search-history.ts'
 import type { FeishuMessageEvent, FeishuTransport } from './transport.ts'
 
 export const topicToolNames = [
@@ -13,7 +15,7 @@ export const topicToolNames = [
 const channelPrompt =
   'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply, without tools. For investigation, execution, tool-based work, or a longer exchange, start a topic with a concrete task. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the task passed to feishu_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the task.'
 const topicPrompt =
-  'This topic contains a conversation about one task. Progress is shown to people automatically, so do not narrate progress in separate replies. Continue unfinished work and apply requested additions or corrections using the topic context. When completing requested work, give its result once. When you need a decision, ask one clear question and end the run.\n\nRespond to the latest user message. Earlier tasks and completed reports are context, not a standing request to repeat them. Treat completed answers in the history as already reported, not as pending delivery. Once a result has been delivered, do not repeat or resume the task unless the latest user asks for that. A greeting should receive only a brief greeting. Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
+  'This topic contains a conversation about one task. Progress is shown to people automatically, so do not narrate progress in separate replies. Continue unfinished work and apply requested additions or corrections using the topic context. When completing requested work, give its result once. When you need a decision, call feishu_wait_for_input with the required decision as its reason, then ask one clear question and end the run.\n\nRespond to the latest user message. Earlier tasks and completed reports are context, not a standing request to repeat them. Treat completed answers in the history as already reported, not as pending delivery. Once a result has been delivered, do not repeat or resume the task unless the latest user asks for that. A greeting should receive only a brief greeting. Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
 
 function isChannel(msg: IncomingMessage): boolean {
   return !msg.topic && !!msg.replyToId
@@ -27,10 +29,15 @@ export class FeishuTopics {
 
   sessionOptions(msg: IncomingMessage) {
     return isChannel(msg)
-      ? {}
+      ? { permissions: { feishu_wait_for_input: 'deny' as const } }
       : {
           permissions: Object.fromEntries(
-            topicToolNames.map((name) => [name, 'deny' as const]),
+            [
+              ...topicToolNames,
+              ...(!msg.topic
+                ? ['feishu_wait_for_input', 'feishu_search_history']
+                : []),
+            ].map((name) => [name, 'deny' as const]),
           ),
         }
   }
@@ -53,6 +60,34 @@ export class FeishuTopics {
       if (msg?.topic) event.sections.feishuTopic = topicPrompt
       else if (msg && isChannel(msg))
         event.sections.feishuChannel = channelPrompt
+    })
+    vela.registerTool({
+      name: 'wait_for_input',
+      description:
+        'Mark this topic as waiting for required human input. Supply the reason, then ask the question and end the run. The next accepted topic message clears waiting.',
+      inputSchema: z.object({ reason: z.string().trim().min(1).max(2000) }),
+      executionMode: 'sequential',
+      execute: async ({ reason }: { reason: string }, ctx) => {
+        const id = ctx?.registry && this.sessions.get(ctx.registry)
+        if (!id || !this.runtime?.context(id)?.topic)
+          throw new Error('Waiting requires an active Feishu topic session')
+        await this.runtime.waitForInput(id, reason)
+        return { reason, instruction: 'Ask the question and end the run.' }
+      },
+    })
+    vela.registerTool({
+      name: 'search_history',
+      maxResultChars: 20000,
+      description:
+        'Search older messages in this group by keyword or time range (default last seven days). Chat listing includes topic roots, not every thread reply. Results disclose scanned range and truncation; use an earlier end_time to search further.',
+      inputSchema: historySearchSchema,
+      annotations: { readOnlyHint: true },
+      execute: async (input, ctx) => {
+        const scope = ctx?.registry && channelScopes.get(ctx.registry)
+        if (scope?.channel !== 'feishu' || scope.chatKind !== 'group')
+          throw new Error('History search requires a Feishu group session')
+        return searchHistory(this.transport(), scope.chatId, input)
+      },
     })
     vela.registerTool({
       name: 'start_topic',

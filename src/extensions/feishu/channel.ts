@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { channelSessionId } from '../../channels/gateway.ts'
-import { chatDirectory } from '../../channels/scope.ts'
+import { groupWorkspace } from '../../channels/scope.ts'
 import type {
   ChannelFeedbackUpdate,
   ChannelOutcome,
@@ -72,19 +71,25 @@ export class FeishuChannel implements ChannelDefinition {
     if (!msg.topic && !msg.replyToId) return options
     const chat = this.chats.get(msg.channelId)
     if (!chat) throw new Error('Feishu group is not enabled')
-    const cwd = join(
-      chatDirectory(this.config.dataDir, this.name, chat.id),
-      'workspace',
+    const cwd = groupWorkspace(
+      this.config.dataDir,
+      this.name,
+      chat.id,
+      !msg.requireExistingSession,
     )
-    // Probing an unowned topic must not create any chat data.
-    if (!msg.requireExistingSession) mkdirSync(cwd, { recursive: true })
     return {
       ...options,
       cwd,
       tools:
         chat.tools === undefined
           ? undefined
-          : [...new Set([...chat.tools, ...topicToolNames])],
+          : [
+              ...new Set([
+                ...chat.tools,
+                ...topicToolNames,
+                ...(msg.topic ? ['feishu_wait_for_input'] : []),
+              ]),
+            ],
     }
   }
 
@@ -354,13 +359,7 @@ export class FeishuChannel implements ChannelDefinition {
     let input = messageText(event.message) ?? msg.text
     if (!input) return
     if (msg.topic || msg.replyToId)
-      await mkdir(
-        join(
-          chatDirectory(this.config.dataDir, this.name, msg.channelId),
-          'workspace',
-        ),
-        { recursive: true },
-      )
+      groupWorkspace(this.config.dataDir, this.name, msg.channelId)
     const attachmentType =
       event.message.message_type === 'file' ? 'file' : 'image'
     try {

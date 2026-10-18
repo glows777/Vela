@@ -38,6 +38,7 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
     getSenderName: async () => undefined,
     listTopicMessages: async () => ({ items: [] }),
     listMessages: async () => [],
+    searchMessages: async () => ({ items: [] }),
     reply: async (messageId, text) => {
       if (options.failSend) throw new Error('send failed')
       sent.push({ messageId, text })
