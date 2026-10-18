@@ -64,7 +64,7 @@ The top-level group session answers short questions directly: answerable from th
 
 If Stop is selected while a create/forward API request is pending, its eventual receipt cannot enqueue topic work. Feishu may already have accepted the remote message; Stop does not retract that message.
 
-Topic sessions and DMs do not see these three tools in their model tool list. Each tool also validates the caller's active group context; forwarding rejects targets outside that group. Topic prompts prioritize the latest message: completed reports remain context rather than a standing request to repeat them. Greetings and completion acknowledgments get brief replies; requested additions, corrections and unfinished work continue with the topic's existing context. Progress narration stays in the automatic display; the model gives the result when done, or asks one decision question and ends the run when blocked.
+Topic sessions and DMs do not see these three tools in their model tool list. Each tool also validates the caller's active group context; forwarding rejects targets outside that group. The topic prompt asks the model to respond to the latest message and treat results already given as delivered, without repeating them unless asked. Progress narration stays in the automatic display; the model gives the result when done, or asks one decision question and ends the run when blocked.
 
 
 ### Task feedback
