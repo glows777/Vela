@@ -254,6 +254,7 @@ export class ChannelGateway {
     if (msg.topic && !topicSession) return 'failed'
     const inputs = channel ? this.feedback.acknowledge(channel, msg) : []
     await Promise.all(inputs.map((input) => input.ready))
+    const input = msg
     const task = msg.text
     const prepared = channel?.prepareMessage
       ? await channel.prepareMessage(msg)
@@ -311,7 +312,15 @@ export class ChannelGateway {
       return 'failed'
     }
 
-    return this.feedback.prompt(id, channelName, channel, msg, session, inputs)
+    return this.feedback.prompt(
+      id,
+      channelName,
+      channel,
+      msg,
+      session,
+      inputs,
+      input,
+    )
   }
 
   private async sendReply(
