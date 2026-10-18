@@ -4,6 +4,12 @@ A channel connects a chat service to Vela. The gateway keeps **one shared sessio
 
 **Enabling a chat means trusting everyone in it with this machine.** Feishu gives every member of an enabled chat the `owner` role, including bash, files, memory and extension tools. There is no sandbox or per-member guest boundary. See [Security](security.md#channel-senders) before enabling a group.
 
+### Planned M3 isolation scope
+
+PR1 adds the SDK cwd option only; the following describes the intended M3 channel boundary, not functionality shipped by PR1.
+
+**Isolation scope:** cwd is a default path, **not a security sandbox**. Absolute paths, traversal, symlinks outside managed storage, bash, shared extensions and credentials can still reach host resources. Memory/global-write restrictions apply to the memory API, not OS access. Enabled chats remain the trust boundary; topics share their group's workspace/notes, and all groups intentionally read global notes. This plan claims routine workspace/context separation, not hostile-user containment.
+
 ## Feishu
 
 The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no public URL is needed. It is loaded by default in the CLI.

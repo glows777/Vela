@@ -512,6 +512,7 @@
     type: "message"
   interface SessionOptions
     autoCompaction?: boolean | undefined
+    cwd?: string | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     permissions?: PermissionRules | undefined
     role?: Role | undefined
@@ -897,6 +898,7 @@
     getTree: () => SessionTreeNode[]
     navigateTree: (targetId: string, options?: NavigateTreeOptions) => Promise<{ editorText?: string; cancelled: boolean; }>
     prompt: (input: string, options?: PromptOptions) => Promise<void>
+    readonly cwd: string
     readonly id: string
     readonly limits: VelaLimits
     readonly messages: ModelMessage[]
