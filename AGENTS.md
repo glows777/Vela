@@ -39,7 +39,7 @@ All code, comments, messages and docs in the repo are in English.
 
 How tests are organized, how to verify a change and how to add tests: see [test/README.md](test/README.md) (read it before changing tests or the agent loop, assembly, events, context or CLI). In short:
 
-- `bun run test` runs unit + e2e (no network, no environment variables; [timing context](test/README.md#test-duration)); target with `bun test test/unit/<module>` or `bun test test/e2e/<scenario>`.
+- `bun run test` runs unit + e2e (about 1–2 minutes, no network, no environment variables); target with `bun test test/unit/<module>` or `bun test test/e2e/<scenario>`.
 - Unit tests live in `test/unit/`, mirroring `src/`; end-to-end flows live in `test/e2e/` and use `createTestVela()` from `test/support/vela.ts` and the scripted faux model from `src/testing/faux.ts`.
 - Fix a bug by first writing a faux scenario that reproduces it; when you change events, the faux interface or test conventions, update test/README.md.
 

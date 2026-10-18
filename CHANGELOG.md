@@ -6,7 +6,6 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
-- Extension documentation now places image results and message inputs with their APIs, explains Node's module-package warning, and links test commands to timing context.
 - DeepSeek Responses plaintext thinking (`response.reasoning_text.delta`) is now displayed and saved for `api.deepseek.com`; the SDK previously dropped these deltas. Reasoning replay remains unsupported.
 - Feishu topic prompts now ask the model to respond to the latest message and treat earlier results as delivered, without repeating them unless asked; completion notices call for a brief acknowledgment without restating the task or result.
 - DeepSeek Responses requests use `store: false` before SDK serialization so follow-ups receive earlier assistant answers as text instead of unsupported server-side item references. Local history and other providers are unchanged; reasoning-event parsing and replay support are outside this fix.
