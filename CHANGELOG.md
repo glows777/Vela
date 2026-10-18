@@ -6,6 +6,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Feishu topic `!status`, with or without a mention.** Reports the model, estimated context and durable topic/group token and known-cost totals without interrupting the run or calling the model. The append-only channel usage ledger includes compaction and keeps totals across session generations; coverage and unknown prices are explicit.
 - **Feishu topic `!stop` and `!restart`, with or without a mention.** Stop retains the session; Restart archives it and reloads topic history on the next message. A failed index write retains the previous active generation even when another message is admitted concurrently.
 - **Channel restart recovery and durable topic listing.** The gateway resumes saved unanswered inputs with an interruption notice, delivers already-saved final answers and asks for unsaved admitted group messages to be resent. One atomic directory under `dataDir/channels/index.json` preserves owned topics across restarts; stopped runs remain stopped. Existing topics join on their next message. Real Feishu acceptance remains required for M2.
 
