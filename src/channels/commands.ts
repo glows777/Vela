@@ -38,6 +38,7 @@ export async function finishTopicCommand(
       text = 'Restarted with a fresh session'
     }
     if (text) await channel.send({ ...msg, recipientId: msg.senderId, text })
+    await directory.forget(key, msg.replyToId ? [msg.replyToId] : [])
     outcome = 'done'
   } finally {
     await Promise.all(inputs.map((input) => input.finish(outcome)))

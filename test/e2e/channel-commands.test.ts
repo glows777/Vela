@@ -199,6 +199,29 @@ async function setup(response = fauxText('original answer'), cwd?: string) {
   return { fake, t }
 }
 
+test('an admitted Stop command stays durable until the old run finishes', async () => {
+  const { fake, t } = await setup(fauxHang())
+  fake.deliver(message('old task'))
+  await until(() => t.model.calls.length === 1)
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  let delivering = false
+  const reply = fake.transport.reply
+  fake.transport.reply = async (...args) => { delivering = true; await held; return reply(...args) }
+  const command = message('!stop')
+  command.message.message_id = 'pending-stop'
+  try {
+    fake.deliver(command)
+    await until(() => delivering)
+    // The old run is still draining; a crash now must retain an ID for a resend notice.
+    const record = JSON.parse(await t.readData('channels/index.json')).records[0]
+    expect(record.pendingMessageIds).toContain('pending-stop')
+  } finally {
+    release()
+    await t.internals.gateway.stopAll()
+  }
+})
+
 test.each([false, true])(
   '!stop retains the topic and continues its history (mentioned=%s)',
   async (mentioned) => {

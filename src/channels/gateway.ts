@@ -227,7 +227,7 @@ export class ChannelGateway {
     if (processing && !this.stopped) processing.stopped = true
     const stopping = processing ? this.feedback.stop(id) : undefined
     void stopping?.catch(() => {})
-    const admitted = this.admit(id, channelName, msg, !command)
+    const admitted = this.admit(id, channelName, msg)
     if (command)
       return this.handleCommand(
         id,
@@ -285,7 +285,6 @@ export class ChannelGateway {
     id: string,
     channelName: string,
     msg: IncomingMessage,
-    persist: boolean,
   ): Promise<boolean> {
     const admitted = (this.admitting.get(id) ?? this.directory.load()).then(
       async () => {
@@ -295,7 +294,7 @@ export class ChannelGateway {
           await this.closing.get(id)
           if (!(await this.admission.admit(id, channel, msg))) return false
         }
-        if (persist) await this.directory.admit(id, channelName, msg)
+        await this.directory.admit(id, channelName, msg)
         return true
       },
     )
