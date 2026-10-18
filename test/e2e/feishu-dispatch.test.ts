@@ -302,7 +302,7 @@ const listCall = () => fauxToolCall('feishu_list_topics', {})
 const listAnswer = (req: FauxRequest) =>
   fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
 
-test('topic listing after restart discloses its empty coverage and reobserves persisted same-group topics', async () => {
+test('topic listing after restart retains recorded same-group topics and stable coverage', async () => {
   const first = setup([fauxText('remember cobalt')])
   await first.start()
   first.fake.deliver(
@@ -328,7 +328,13 @@ test('topic listing after restart discloses its empty coverage and reobserves pe
     )
     await until(() => second.fake.sent.length === 1)
     const empty = JSON.parse(second.fake.sent[0]!.text)
-    expect(empty.topics).toEqual([])
+    expect(empty.topics).toEqual([
+      expect.objectContaining({
+        rootId: 'saved',
+        threadId: 'saved_thread',
+        state: 'idle',
+      }),
+    ])
     expect(empty.coverage).toMatch(/since .*\d{4}-\d{2}-\d{2}T/)
     expect(empty.coverage).toContain('earlier topics may exist')
     expect(empty.coverage).toContain('does not mean there are no tasks')

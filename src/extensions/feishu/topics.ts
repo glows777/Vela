@@ -16,16 +16,12 @@ const topicPrompt =
   'This topic contains a conversation about one task. Progress is shown to people automatically, so do not narrate progress in separate replies. Continue unfinished work and apply requested additions or corrections using the topic context. When completing requested work, give its result once. When you need a decision, ask one clear question and end the run.\n\nRespond to the latest user message. Earlier tasks and completed reports are context, not a standing request to repeat them. Treat completed answers in the history as already reported, not as pending delivery. Once a result has been delivered, do not repeat or resume the task unless the latest user asks for that. A greeting should receive only a brief greeting. Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
 
 function isChannel(msg: IncomingMessage): boolean {
-  return (
-    !msg.topic &&
-    (msg.raw as FeishuMessageEvent | undefined)?.message.chat_type === 'group'
-  )
+  return !msg.topic && !!msg.replyToId
 }
 
 export class FeishuTopics {
   runtime?: ChannelRuntime
   readonly triggerImages = new WeakMap<FeishuMessageEvent, ImageContent[]>()
-  private readonly observedSince = new Date().toISOString()
   private sessions = new WeakMap<ToolRegistry, string>()
   constructor(private transport: () => FeishuTransport) {}
 
@@ -72,7 +68,8 @@ export class FeishuTopics {
           senderId: msg.senderId,
           senderName: msg.senderName,
           text: `${msg.senderName}: ${task}`,
-          images: this.triggerImages.get(msg.raw as FeishuMessageEvent),
+          images:
+            this.triggerImages.get(msg.raw as FeishuMessageEvent) ?? msg.images,
           replyToId: receipt.messageId,
           topic: { rootId: receipt.rootId, threadId: receipt.threadId },
         })
@@ -98,23 +95,26 @@ export class FeishuTopics {
           messageId,
           target.threadId,
         )
-        const original = msg.raw as FeishuMessageEvent
+        const original = msg.raw as FeishuMessageEvent | undefined
         runtime.dispatch(id, {
           channelId: msg.channelId,
           senderId: msg.senderId,
           senderName: msg.senderName,
-          text: '',
+          text: original ? '' : msg.text,
+          images: original ? undefined : msg.images,
           replyToId: receipt.messageId,
           topic: target,
           requireExistingSession: true,
-          raw: {
-            ...original,
-            message: {
-              ...original.message,
-              root_id: target.rootId,
-              thread_id: target.threadId,
-            },
-          },
+          raw: original
+            ? {
+                ...original,
+                message: {
+                  ...original.message,
+                  root_id: target.rootId,
+                  thread_id: target.threadId,
+                },
+              }
+            : undefined,
         })
         return receipt
       },
@@ -122,13 +122,13 @@ export class FeishuTopics {
     vela.registerTool({
       name: 'list_topics',
       description:
-        'List this group’s owned topics observed by this process and their current state. This is not a complete historical directory after restart.',
+        'List this group’s recorded owned topics and their current state, including earlier process runs. Topics from before M2 join when next observed.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
       execute: async (_input, ctx) => {
         const { msg, runtime } = this.source(ctx)
         return {
-          coverage: `Topics seen by this process since this channel started at ${this.observedSince}; earlier topics may exist. An empty list does not mean there are no tasks.`,
+          coverage: runtime.topicCoverage(),
           topics: runtime.topics(msg.channelId),
         }
       },
