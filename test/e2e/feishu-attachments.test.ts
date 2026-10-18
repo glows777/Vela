@@ -324,6 +324,7 @@ test('Feishu redelivery after process restart reuses the completed regular file'
       'utf8',
     ),
   ).toBe('complete')
+  await next.vela.dispose()
 })
 
 for (const name of [

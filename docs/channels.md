@@ -190,13 +190,17 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 
 ### Topic commands
 
-In an owned Feishu topic, send `!stop` or `!restart` with or without an @-mention. Commands must be the whole message; they bypass model input and automatic steering. Unmentioned commands in unowned topics are ignored without feedback or writes.
+In an owned Feishu topic, send `!stop`, `!restart` or `!status` with or without an @-mention. Commands must be the whole message; they bypass model input and automatic steering. Unmentioned commands in unowned topics are ignored without feedback or writes.
 
 `!stop` uses the progress card's Stop operation and keeps the session and its history. It also cancels input still preparing to start. An idle topic replies that no run is active.
 
 `!restart` stops and drains the old run, retains its session file, and atomically switches the directory's `activeSessionId`, appending the old ID to `previousSessionIds`. It replies "Restarted with a fresh session" without calling the model. The next topic message, including an unmentioned one, starts the new session and reads the full topic history. The logical topic and its listing stay the same; expired Stop controls cannot affect the new generation.
 
-Model/context and durable topic/group spend reporting through `!status` is the remaining M2 usage phase.
+`!status` replies during an active run without steering, stopping or calling the model. It shows the current model, estimated context tokens/window, and topic/group token and cost totals. A reopened session restores its saved model and context first. Status does not add a user entry or reset the topic's running/stopped state.
+
+Usage is appended to `<dataDir>/channels/usage.jsonl` as `{ key, chatId, model, ts, tokens, cost? }`. `tokens` contains uncached input, output, cache-read and cache-write counts; displayed totals sum all four. Each existing `usage` event adds one row; `compaction_end` adds the change in session totals since `compaction_start`, including a measured summary whose result was rejected. The existing request record distinguishes an unknown summary price from a known zero cost. Logical keys retain totals across `!restart` generations, idle closure and process restarts. Group totals include all recorded channel sessions in that group, including top-level dispatch work.
+
+Status says "Recorded since …" using the first ledger row. Earlier usage is not backfilled from `usage/today.jsonl`, which lacks session identity. Unpriced requests still count tokens; mixed pricing shows only the known subtotal and the number of unpriced requests. An interrupted request without a usage report is not counted. Without a `dataDir`, accounting stays in memory. This is a single-process append-only ledger; malformed rows reject startup with the file and line, and write failures surface through the run's failure path. It is usage visibility, with no spending caps or promise of billing reconciliation.
 
 ### Restart recovery
 
