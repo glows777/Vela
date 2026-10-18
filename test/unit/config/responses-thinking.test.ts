@@ -27,6 +27,7 @@ function fixture({
   spec = { reasoning: true },
   api = 'openai-responses',
   credential,
+  reasoning,
 }: {
   id?: string
   name?: string
@@ -34,6 +35,7 @@ function fixture({
   spec?: Omit<ModelSpec, 'id'>
   api?: ProviderConfig['api']
   credential?: Credential
+  reasoning?: 'text' | 'summary'
 } = {}) {
   const dir = tempDir('vela-response-options-')
   dirs.push(dir)
@@ -50,7 +52,7 @@ function fixture({
     const body = JSON.parse(String(init?.body))
     requests.push(body)
     if (api !== 'openai-responses') throw new Error('wire captured')
-    return responsesReply(body)
+    return responsesReply(body, reasoning)
   }) as typeof fetch
   const registry = new ModelRegistry(
     loadModels({ agentDir: dir.path }),
@@ -389,4 +391,56 @@ test('OAuth remains authoritative over explicit role, storage and sampling optio
   expect(requests[0]?.max_output_tokens).toBeUndefined()
   expect(requests[0]?.include).toContain('reasoning.encrypted_content')
   expect(params.providerOptions.openai.store).toBe(true)
+})
+
+test.each([false, true])(
+  'DeepSeek plaintext reasoning preserves lifecycle, metadata and raw opt-in %s',
+  async (includeRawChunks) => {
+    const { model } = fixture({
+      baseUrl: 'https://api.deepseek.com/v1',
+      reasoning: 'text',
+    })
+    const params = freeze({ ...options(), includeRawChunks })
+    const { stream } = await model.doStream(params)
+    const parts = await Array.fromAsync(stream)
+    const reasoning = parts.filter((p) => p.type.startsWith('reasoning-'))
+    expect(reasoning).toMatchObject([
+      { type: 'reasoning-start', id: 'rs_test:0' },
+      { type: 'reasoning-delta', id: 'rs_test:0', delta: 'Check ' },
+      { type: 'reasoning-delta', id: 'rs_test:0', delta: 'the result.' },
+      {
+        type: 'reasoning-end',
+        id: 'rs_test:0',
+        providerMetadata: {
+          openai: { reasoningEncryptedContent: 'encrypted-test' },
+        },
+      },
+    ])
+    expect(parts.filter((p) => p.type === 'raw')).toHaveLength(
+      includeRawChunks ? 9 : 0,
+    )
+    expect(parts.some((p) => p.type === 'error')).toBe(false)
+    expect(parts.at(-1)?.type).toBe('finish')
+    expect(params.includeRawChunks).toBe(includeRawChunks)
+  },
+)
+
+test.each([
+  'https://api.openai.com/v1',
+  'https://api.deepseek.com.evil.test/v1',
+  'https://example.test/api.deepseek.com',
+])('Responses stream behavior stays unchanged at %s', async (baseUrl) => {
+  for (const reasoning of ['summary', 'text'] as const) {
+    const { model } = fixture({ baseUrl, reasoning })
+    const { stream } = await model.doStream(options())
+    const parts = await Array.fromAsync(stream)
+    expect(
+      parts
+        .filter((p) => p.type === 'reasoning-delta')
+        .map((p) => p.delta)
+        .join(''),
+    ).toBe(reasoning === 'summary' ? 'Check the result.' : '')
+    expect(parts.some((p) => p.type === 'raw')).toBe(false)
+    expect(parts.some((p) => p.type === 'error')).toBe(false)
+  }
 })
