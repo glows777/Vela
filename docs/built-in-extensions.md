@@ -12,7 +12,7 @@ Vela ships five extensions: `memory`, `rag`, `web`, `feishu` and `mcp`. They use
 
 ## Loading
 
-**CLI.** All five load by default, before any discovered or `-e` extensions. Some do nothing until configured: `rag` registers nothing without an embedding API and stays quiet at startup (`/extensions` shows why the knowledge base is disabled), `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** All five load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
 To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. `--no-extensions` skips them, and `-e builtin:<name>` loads a single one for a run. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
@@ -122,9 +122,9 @@ A local knowledge base with hybrid search, stored in SQLite.
 
 **Prompt section.** When the knowledge base is not empty, the system prompt says how many chunks it holds, lists the sources, and points the model to `rag_search`.
 
-**Commands.** `/rag` shows the number of chunks, the sources and the embedder. `/rag ingest <path>` ingests a file. `/rag clear` deletes every chunk.
+**Commands.** `/rag` shows the number of chunks, the sources and the embedder. `/rag ingest <path>` ingests a file. `/rag clear` deletes every chunk. Without embedding configuration, `/rag` (including `ingest` or `clear` arguments) explains how to configure it without calling a model or touching the database. `/extensions` lists the command through normal extension discovery.
 
-**Embeddings.** rag needs an embedding function. With the CLI, set `extensionConfig.rag.embedding` with `baseUrl`, `model` and `apiKey` (or `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL` and `EMBEDDING_MODEL_KEY`); any OpenAI-compatible embeddings API works. Vectors have 128 dimensions, so the model must support the `dimensions` parameter. If any of the three values is missing, rag logs a message and registers nothing.
+**Embeddings.** rag needs an embedding function. With the CLI, set `extensionConfig.rag.embedding` with `baseUrl`, `model` and `apiKey` (or `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL` and `EMBEDDING_MODEL_KEY`); any OpenAI-compatible embeddings API works. Vectors have 128 dimensions, so the model must support the `dimensions` parameter. If any of the three values is missing, startup stays quiet and only `/rag` is registered. It points to `extensionConfig.rag.embedding` in `~/.vela/settings.json` (or `$VELA_DIR/settings.json`) and the environment variables above. See [extension settings](settings.md#extensionconfig).
 
 With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, apiKey }) })`. An embedder is any function `(texts: string[], signal?: AbortSignal) => Promise<number[][]>` that returns 128-dimension vectors. For offline tests, use `createFauxEmbedder()` from `@glows777/vela/testing`.
 

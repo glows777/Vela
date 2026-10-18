@@ -73,6 +73,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Feature | Drive | Check |
 |---|---|---|
 | MCP | `home/mcp.json` → `{"mcpServers":{"echo":{"command":"bun","args":["$PWD/test/fixtures/mcp-echo-server.ts"]}}}`; faux `tool_search` then `mcp__echo__echo` | `Loaded 1 tool`, then the echoed text |
+| Unconfigured RAG | `run $RUN p -p "hello"`; in the TUI, `/extensions` then `/rag` | Ordinary startup is quiet; the listing includes `/rag`; `/rag` explains missing settings without a model call or database |
 | memory | faux `memory` with `{"action":"save",…}` | `Saved to memory: …`; the file under `home/projects/*/memory/` |
 | web_fetch | Serve a page locally (`python3 -m http.server`), faux `web_fetch` with its URL | The page as Markdown |
 | Retry | `-p "test retry"` | `Retry succeeded!` after two 429s |
