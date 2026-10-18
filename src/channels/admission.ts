@@ -25,7 +25,7 @@ export class TopicAdmission {
     const exists = this.resumed.has(session)
       ? session.getEntries().length > 0
       : await session.resume()
-    if (msg.requireExistingSession && !exists) {
+    if (msg.requireExistingSession && !exists && !this.directory.get(id)) {
       await session.close()
       return
     }

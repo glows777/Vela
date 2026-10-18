@@ -77,6 +77,36 @@ export class ChannelDirectory {
   get(key: string): ChannelRecord | undefined {
     return this.records.get(key)
   }
+  sessionId(key: string): string {
+    return this.records.get(key)?.activeSessionId ?? key
+  }
+  keyForSession(id: string): string {
+    return (
+      [...this.records.values()].find((record) => record.activeSessionId === id)
+        ?.key ?? id
+    )
+  }
+
+  async restart(key: string): Promise<void> {
+    const record = this.records.get(key)
+    if (!record) throw new Error(`Unknown channel session ${key}`)
+    const next = {
+      ...record,
+      activeSessionId: `channel-${crypto.randomUUID()}`,
+      previousSessionIds: [
+        ...record.previousSessionIds,
+        record.activeSessionId,
+      ],
+      state: 'done' as const,
+    }
+    this.records.set(key, next)
+    try {
+      await this.save(next)
+    } catch (error) {
+      this.records.set(key, record)
+      throw error
+    }
+  }
   entries(channel: string): ChannelRecord[] {
     return [...this.records.values()].filter(
       (record) => record.channel === channel,

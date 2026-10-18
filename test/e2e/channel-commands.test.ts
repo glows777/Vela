@@ -1,10 +1,19 @@
 import { afterEach, expect, test } from 'bun:test'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import { fauxHang, fauxText } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
-afterEach(cleanupTestVelas)
+const roots: string[] = []
+afterEach(async () => {
+  await cleanupTestVelas()
+  await Promise.all(
+    roots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  )
+})
 
 async function until(check: () => boolean) {
   const deadline = Date.now() + 1500
@@ -23,9 +32,159 @@ function message(text: string, mentioned = true) {
   })
 }
 
-async function setup(response = fauxText('original answer')) {
+test.each([false, true])(
+  'active !restart drains the old run and stale Stop cannot cancel its successor (mentioned=%s)',
+  async (mentioned) => {
+    const { fake, t } = await setup(fauxHang('old work'))
+    fake.deliver(message('old task'))
+    await until(() => t.model.calls.length === 1)
+    fake.deliver(message('!restart', mentioned))
+    // An immediately following event must wait for the generation switch, not steer old work.
+    t.model.push(fauxHang('new work'))
+    fake.deliver(message('new task', false))
+    await until(() => t.model.calls.length === 2)
+    const index = JSON.parse(await t.readData('channels/index.json'))
+    const fresh = t.vela.session(index.records[0].activeSessionId)
+    expect(fresh.id).not.toBe('feishu-oc_group-root')
+    expect(fake.sent.map((m) => m.text)).toEqual([
+      expect.stringContaining('Stopped the current run'),
+      expect.stringContaining('Restarted with a fresh session'),
+    ])
+    expect(fake.click(0, 'stop')).toMatchObject({ toast: { type: 'info' } })
+    expect(fresh.isRunning).toBe(true)
+    expect(fake.click(1, 'stop')).toMatchObject({ toast: { type: 'success' } })
+    await until(
+      () => fake.sent.filter((m) => m.text.includes('Stopped')).length === 2,
+    )
+    expect(t.model.calls[1]?.lastUserText).toContain('new task')
+    expect(JSON.stringify(t.model.calls[1]?.prompt)).not.toContain('!restart')
+  },
+)
+
+test.each(['!stop', '!restart'])(
+  'an unmentioned %s in an unowned topic has no writes or feedback',
+  async (command) => {
+    const fake = fakeFeishu()
+    let loads = 0
+    let writes = 0
+    const t = createTestVela({
+      responses: [],
+      sessionStorage: {
+        load: async () => {
+          loads++
+          return undefined
+        },
+        append: async () => {
+          writes++
+        },
+      },
+      extensions: [
+        feishu({
+          owners: ['ou_alice'],
+          chats: ['oc_group'],
+          transport: fake.transport,
+        }),
+      ],
+    })
+    await t.vela.ready()
+    await t.vela.startChannels()
+    fake.deliver(message(command, false))
+    await until(() => loads === 1)
+    await t.internals.gateway.stopAll()
+    expect(fake.sent).toEqual([])
+    expect(fake.reactions).toEqual([])
+    expect(t.model.calls).toEqual([])
+    expect(t.exists('channels/index.json')).toBe(false)
+    expect(writes).toBe(0)
+    expect(await readdir(t.dataPath('sessions')).catch(() => [])).toEqual([])
+  },
+)
+
+test('an interrupted successor recovers under the same logical topic after process reconstruction', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vela-generations-'))
+  roots.push(cwd)
+  const first = await setup(fauxText('old answer'), cwd)
+  first.fake.deliver(message('old task'))
+  await until(() => first.fake.sent.length === 1)
+  first.fake.deliver(message('!restart'))
+  await until(() => first.fake.sent.length === 2)
+  const index = JSON.parse(await first.t.readData('channels/index.json'))
+  const freshId = index.records[0].activeSessionId
+  first.t.model.push(fauxHang('new work'))
+  first.fake.deliver(message('new cobalt task', false))
+  await until(() => first.t.model.calls.length === 2)
+  await first.t.cleanup({ keepDir: true })
+  const second = await setup(fauxText('recovered successor'), cwd)
+  await until(() =>
+    second.fake.sent.some((m) => m.text.includes('recovered successor')),
+  )
+  expect(second.fake.sent[0]?.text).toContain('interrupted')
+  expect(second.t.model.calls).toHaveLength(1)
+  expect(second.t.model.calls[0]?.lastUserText).toContain('new cobalt task')
+  expect(second.t.eventsIn(freshId).some((e) => e.type === 'agent_start')).toBe(
+    true,
+  )
+  await second.t.internals.gateway.stopAll()
+  const recovered = JSON.parse(await second.t.readData('channels/index.json'))
+    .records[0]
+  expect(recovered).toMatchObject({
+    activeSessionId: freshId,
+    state: 'done',
+    pendingMessageIds: [],
+    previousSessionIds: ['feishu-oc_group-root'],
+  })
+})
+
+test.each(['history', 'controls'])(
+  '!restart received during %s preparation prevents the old input from starting',
+  async (phase) => {
+    const fake = fakeFeishu()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let loading = false
+    if (phase === 'history')
+      fake.transport.listTopicMessages = async () => {
+        loading = true
+        await held
+        return { items: [] }
+      }
+    else {
+      const sendCard = fake.transport.sendCard!
+      fake.transport.sendCard = async (...args) => {
+        loading = true
+        await held
+        return sendCard(...args)
+      }
+    }
+    const t = createTestVela({
+      responses: [],
+      extensions: [
+        feishu({
+          owners: ['ou_alice'],
+          chats: ['oc_group'],
+          transport: fake.transport,
+        }),
+      ],
+    })
+    await t.vela.ready()
+    await t.vela.startChannels()
+    fake.deliver(message('old task'))
+    await until(() => loading)
+    fake.deliver(message('!restart', false))
+    release()
+    await until(() =>
+      fake.sent.some((m) => m.text.includes('Restarted with a fresh session')),
+    )
+    expect(t.model.calls).toHaveLength(0)
+  },
+)
+
+async function setup(response = fauxText('original answer'), cwd?: string) {
   const fake = fakeFeishu()
   const t = createTestVela({
+    cwd,
     responses: [response],
     extensions: [
       feishu({

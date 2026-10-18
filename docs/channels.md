@@ -188,6 +188,16 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 - `topicCoverage()`: describes when directory coverage began and the pre-M2 topic boundary.
 - `dispatch(sourceSessionId, message)`: enqueue a handoff without waiting for the destination task. The source run must still be live or this throws. It transfers input-feedback ownership, observes a new topic immediately and suppresses the source's duplicate final reply. A running topic target steers; an idle target queues normally. The channel must enforce its destination authorization before dispatching.
 
+### Topic commands
+
+In an owned Feishu topic, send `!stop` or `!restart` with or without an @-mention. Commands must be the whole message; they bypass model input and automatic steering. Unmentioned commands in unowned topics are ignored without feedback or writes.
+
+`!stop` uses the progress card's Stop operation and keeps the session and its history. It also cancels input still preparing to start. An idle topic replies that no run is active.
+
+`!restart` stops and drains the old run, retains its session file, and atomically switches the directory's `activeSessionId`, appending the old ID to `previousSessionIds`. It replies "Restarted with a fresh session" without calling the model. The next topic message, including an unmentioned one, starts the new session and reads the full topic history. The logical topic and its listing stay the same; expired Stop controls cannot affect the new generation.
+
+Model/context and durable topic/group spend reporting through `!status` is the remaining M2 usage phase.
+
 ### Restart recovery
 
 The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `feishu_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues.

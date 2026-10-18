@@ -29,7 +29,7 @@ export class ChannelRecovery {
   private saves = new WeakMap<VelaSession, Promise<void>[]>()
   constructor(private directory: ChannelDirectory) {}
 
-  track(session: VelaSession, msg: IncomingMessage): void {
+  track(key: string, session: VelaSession, msg: IncomingMessage): void {
     const inputs = this.inputs.get(session) ?? []
     inputs.push(msg)
     this.inputs.set(session, inputs)
@@ -44,7 +44,7 @@ export class ChannelRecovery {
       session.appendEntry(INPUT_MARKER, { messageId })
       const save = session
         .save()
-        .then(() => this.directory.forget(session.id, [messageId]))
+        .then(() => this.directory.forget(key, [messageId]))
       // Keep the failure for the run's awaited drain; do not create an unhandled rejection.
       void save.catch(() => {})
       const saves = this.saves.get(session) ?? []
