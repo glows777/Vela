@@ -12,6 +12,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
+- **Channel feedback uses one experimental lifecycle.** Replace `acknowledge`, `showTopicControls` and `showRunControls` with `startRun(message, { acknowledge })`, returning `event(update)` and `finish(outcome)`. Move controls and agent progress into the corresponding updates, and combine terminal card/reaction handling in `finish`; channel hooks remain experimental until M4. See [migration guidance](docs/channels.md#migrating-existing-feedback-hooks). Feishu behavior and session data are preserved.
+
 - **Feishu topic runs now show live feedback.** Group inputs receive `OnIt` then `DONE`/`CrossMark`; one shared Stop card shows bounded tool progress and a 15-second heartbeat. Topic results and decision questions @-mention the original requester. Custom `FeishuTransport` implementations must return a message ID from `sendCard` and implement `patchCard`, `addReaction` and `removeReaction`. See [task feedback and permissions](docs/channels.md#task-feedback).
 
 - **Feishu group tasks can now open topics.** The channel prompt distinguishes short direct answers from work handed off through `feishu_start_topic`; task execution does not block the channel. Original messages can be forwarded into same-group owned topics, and dispatch tools are hidden from topic sessions and DMs. Custom transports must implement `startTopic(messageId, task)` with a root/thread receipt and `forward(messageId, threadId)` with a message receipt. Existing send permission covers both; see [channel dispatch](docs/channels.md#channel-dispatch).

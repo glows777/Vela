@@ -3,7 +3,7 @@ import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { channelSessionId } from '../../channels/gateway.ts'
 import type {
-  ChannelAcknowledgement,
+  ChannelFeedbackUpdate,
   ChannelOutcome,
   ChannelRunFeedback,
 } from '../../channels/types.ts'
@@ -144,9 +144,9 @@ export class FeishuChannel implements ChannelDefinition {
 
   private async createControls(
     msg: IncomingMessage,
-    controls: Parameters<NonNullable<ChannelDefinition['showRunControls']>>[1],
+    controls: Extract<ChannelFeedbackUpdate, { type: 'controls' }>,
     report?: (error: unknown) => Promise<void>,
-  ): Promise<ChannelRunFeedback | void> {
+  ): Promise<FeishuProgress | void> {
     if (
       this.stopped ||
       controls.signal.aborted ||
@@ -178,44 +178,44 @@ export class FeishuChannel implements ChannelDefinition {
     }
   }
 
-  async showRunControls(
+  async startRun(
     msg: IncomingMessage,
-    controls: Parameters<NonNullable<ChannelDefinition['showRunControls']>>[1],
-  ): Promise<void> {
-    await this.createControls(msg, controls)
-  }
-
-  async showTopicControls(
-    msg: IncomingMessage,
-    controls: Parameters<
-      NonNullable<ChannelDefinition['showTopicControls']>
-    >[1],
-  ): Promise<ChannelRunFeedback | void> {
-    return this.createControls(
-      msg,
-      {
-        signal: controls.signal,
-        choose: (action) => action === 'stop' && controls.stop(),
-      },
-      controls.error,
-    )
-  }
-
-  async acknowledge(
-    msg: IncomingMessage,
-  ): Promise<ChannelAcknowledgement | void> {
-    const event = msg.raw as FeishuMessageEvent | undefined
-    const messageId = event?.message.message_id
+    { acknowledge }: { acknowledge: boolean },
+  ): Promise<ChannelRunFeedback> {
     const transport = this.transport
-    if (!transport || !messageId || event?.message.chat_type !== 'group') return
-    const reactionId = await transport.addReaction(messageId, 'OnIt')
+    // Group reply targets are normalized service IDs; no live receive event is needed.
+    const messageId = acknowledge ? msg.replyToId : undefined
+    const reactionId =
+      transport && messageId
+        ? await transport.addReaction(messageId, 'OnIt')
+        : undefined
+    let progress: FeishuProgress | undefined
+    let report: ((error: unknown) => Promise<void>) | undefined
     return {
+      event: (update) => {
+        if (update.type === 'agent') return progress?.event(update.event)
+        report = update.error
+        return this.createControls(
+          update.message,
+          update,
+          update.message.topic ? update.error : undefined,
+        ).then((value) => {
+          progress = value || undefined
+        })
+      },
       finish: async (outcome: ChannelOutcome) => {
-        await transport.removeReaction(messageId, reactionId)
-        await transport.addReaction(
-          messageId,
-          outcome === 'done' ? 'DONE' : 'CrossMark',
-        )
+        try {
+          await progress?.finish(outcome)
+        } catch (error) {
+          await report?.(error)
+        }
+        if (transport && messageId && reactionId) {
+          await transport.removeReaction(messageId, reactionId)
+          await transport.addReaction(
+            messageId,
+            outcome === 'done' ? 'DONE' : 'CrossMark',
+          )
+        }
       },
     }
   }
@@ -243,13 +243,9 @@ export class FeishuChannel implements ChannelDefinition {
       event.context?.open_chat_id !== entry.msg.channelId
     )
       return ignored
-    const original = entry.msg.raw as FeishuMessageEvent
     if (
       !this.config.chats?.includes(entry.msg.channelId) &&
-      !(
-        original.message.chat_type === 'p2p' &&
-        this.config.owners.includes(operator)
-      )
+      !(!entry.msg.replyToId && this.config.owners.includes(operator))
     )
       return ignored
     if (entry.msg.topic && action !== 'stop') return ignored
