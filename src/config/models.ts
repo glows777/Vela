@@ -315,14 +315,13 @@ function createProvider(
           break
       }
       const transform = oauthRequests?.transformParams
-      // DeepSeek Responses is stateless and ignores item_reference inputs.
-      // Keep earlier answers inline without changing store or reasoning settings.
+      // DeepSeek Responses is stateless: let the SDK serialize history inline.
       // https://api-docs.deepseek.com/guides/responses_api/
-      const inlineAnswers =
+      const statelessResponses =
         api === 'openai-responses' &&
         settings.baseURL != null &&
         new URL(settings.baseURL).hostname === 'api.deepseek.com'
-      if ((!transform && !inlineAnswers) || typeof model === 'string')
+      if ((!transform && !statelessResponses) || typeof model === 'string')
         return model
       return wrapLanguageModel({
         model,
@@ -333,29 +332,13 @@ function createProvider(
               transform && (await ctx.credential())?.type === 'oauth'
                 ? transform(params)
                 : params
-            if (!inlineAnswers) return request
+            if (!statelessResponses) return request
             return {
               ...request,
-              prompt: request.prompt.map((message) =>
-                message.role !== 'assistant'
-                  ? message
-                  : {
-                      ...message,
-                      content: message.content.map((part) => {
-                        if (
-                          part.type !== 'text' ||
-                          !part.providerOptions?.openai?.itemId
-                        )
-                          return part
-                        const openai = { ...part.providerOptions.openai }
-                        delete openai.itemId
-                        return {
-                          ...part,
-                          providerOptions: { ...part.providerOptions, openai },
-                        }
-                      }),
-                    },
-              ),
+              providerOptions: {
+                ...request.providerOptions,
+                openai: { ...request.providerOptions?.openai, store: false },
+              },
             }
           },
         },
