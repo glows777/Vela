@@ -23,12 +23,7 @@ export interface RagOptions {
 export function rag(options: RagOptions = {}): VelaExtension {
   return function rag(vela) {
     const embedder = options.embedder ?? embedderFromConfig(vela.config)
-    if (!embedder) {
-      vela.logger.info(
-        '[rag] embedding (baseUrl / model / apiKey) not configured; knowledge base disabled',
-      )
-      return
-    }
+    if (!embedder) return
     const dir = join(vela.dataDir, 'rag')
     mkdirSync(dir, { recursive: true })
     const store = new SqliteVectorStore(join(dir, 'knowledge.db'), {
