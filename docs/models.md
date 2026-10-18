@@ -36,7 +36,7 @@ The part after the first `/` is the model id, so ids that contain `/` work: `ope
 
 Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `models.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `models.json`, or add it as its own provider.
 
-For Responses endpoints hosted at `api.deepseek.com`, Vela sends earlier assistant answers inline. [DeepSeek's stateless Responses API](https://api-docs.deepseek.com/guides/responses_api/) ignores server-side item references; sending only their IDs would lose the prior answers. This compatibility handling preserves local history and does not change `store` or thinking settings.
+For `openai-responses` endpoints whose hostname is exactly `api.deepseek.com`, Vela sets `providerOptions.openai.store: false` before SDK serialization. [DeepSeek's Responses API](https://api-docs.deepseek.com/guides/responses_api/) is stateless and does not support server-side item references. This option lets the SDK send earlier assistant answers inline, retaining their phase and ordinary function call/result pairs without manually rewriting history. Local history, user messages and other providers are unchanged. This does not fix reasoning-event parsing or establish complete reasoning-history replay support.
 
 ## Credentials and /login
 

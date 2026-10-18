@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import { memoryCredentialStore } from '../../../src/auth/store.ts'
 import type { Credential } from '../../../src/auth/types.ts'
 import { loadModels } from '../../../src/config/index.ts'
@@ -27,7 +28,7 @@ const registryOf = (
   credentials: Record<string, Credential> = {},
 ) => new ModelRegistry(providers, memoryCredentialStore(credentials))
 
-/** Captures the requests a model sends and answers each with a minimal successful response */
+/** Captures serialized requests, then returns a non-retryable stub error. */
 function captureRequests() {
   const requests: {
     url: string
@@ -64,6 +65,7 @@ test.each([
   ['https://api.deepseek.com', false],
   ['https://api.deepseek.com/v1', false],
   ['https://api.openai.com/v1', true],
+  [undefined, true],
   ['https://api.deepseek.com.example/v1', true],
 ] as const)(
   'Responses history at %s preserves earlier answers',
@@ -76,7 +78,8 @@ test.each([
       }),
     )
     const model = registry.resolve('openai/deepseek-flash').model
-    if (typeof model === 'string') throw new Error('Expected a provider model')
+    if (typeof model === 'string' || model.specificationVersion !== 'v4')
+      throw new Error('Expected a v4 provider model')
     const priorAnswer = {
       type: 'text' as const,
       text: 'The completed report is cobalt.',
@@ -84,23 +87,53 @@ test.each([
         openai: { itemId: 'msg_report', phase: 'final_answer' },
       },
     }
-    await Promise.resolve(
-      model.doGenerate({
-        prompt: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: 'Summarize the file.' }],
-          },
-          { role: 'assistant', content: [priorAnswer] },
-          { role: 'user', content: [{ type: 'text', text: 'hi' }] },
-        ],
-      }),
-    ).catch(() => {})
+    const options: LanguageModelV4CallOptions = {
+      prompt: [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'Summarize the file.' }],
+        },
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_read',
+              toolName: 'read_file',
+              input: { path: 'a.txt' },
+              providerOptions: { openai: { itemId: 'fc_read' } },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_read',
+              toolName: 'read_file',
+              output: { type: 'text', value: 'cobalt' },
+            },
+          ],
+        },
+        { role: 'assistant', content: [priorAnswer] },
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      ],
+    }
+    const original = structuredClone(options)
+    await Promise.resolve(model.doGenerate(options)).catch(() => {})
     expect(requests.at(-1)?.body.input).toEqual([
       {
         role: 'user',
         content: [{ type: 'input_text', text: 'Summarize the file.' }],
       },
+      {
+        type: 'function_call',
+        call_id: 'call_read',
+        name: 'read_file',
+        arguments: '{"path":"a.txt"}',
+      },
+      { type: 'function_call_output', call_id: 'call_read', output: 'cobalt' },
       references
         ? { type: 'item_reference', id: 'msg_report' }
         : {
@@ -110,8 +143,45 @@ test.each([
           },
       { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
     ])
-    expect(priorAnswer.providerOptions.openai.itemId).toBe('msg_report')
-    expect(requests.at(-1)?.body).not.toHaveProperty('store')
+    expect(options).toEqual(original)
+    if (references) expect(requests.at(-1)?.body).not.toHaveProperty('store')
+    else expect(requests.at(-1)?.body.store).toBe(false)
+  },
+)
+
+test.each([
+  ['openai-responses', 'https://api.deepseek.com', false],
+  ['openai-responses', 'https://api.openai.com/v1', true],
+  ['openai-completions', 'https://api.deepseek.com', true],
+] as const)(
+  '%s at %s scopes the effective store option without mutating caller options',
+  async (api, baseUrl, expectedStore) => {
+    const requests = captureRequests()
+    const registry = registryOf(
+      loadModels({
+        agentDir: agentDir({
+          providers: { local: { api, baseUrl, apiKey: 'test-key' } },
+        }),
+        env: {},
+      }),
+    )
+    const model = registry.resolve('local/deepseek-flash').model
+    if (typeof model === 'string' || model.specificationVersion !== 'v4')
+      throw new Error('Expected a v4 provider model')
+    const options: LanguageModelV4CallOptions = {
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      providerOptions: {
+        openai: { store: true, parallelToolCalls: false },
+        other: { flag: 'keep' },
+      },
+    }
+    const original = structuredClone(options)
+    await Promise.resolve(model.doGenerate(options)).catch(() => {})
+    expect(requests.at(-1)?.body).toMatchObject({
+      store: expectedStore,
+      parallel_tool_calls: false,
+    })
+    expect(options).toEqual(original)
   },
 )
 
