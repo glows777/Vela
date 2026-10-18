@@ -72,7 +72,10 @@ const event = (
     content: JSON.stringify({ text: 'hi' }),
     ...message,
   },
-  sender: { sender_id: openId ? { open_id: openId } : undefined },
+  sender: {
+    sender_type: 'user',
+    sender_id: openId ? { open_id: openId } : undefined,
+  },
 })
 
 async function startedChannel(fake = fakeTransport()) {

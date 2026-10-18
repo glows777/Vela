@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Feishu evaluates untagged human group discussion by default.** Set `readUntagged: false` per group for mention-only top-level intake. Each unique supported message is queued; `feishu_skip_reply` keeps unnecessary answers silent. Bot/disabled-chat events have no content side effects; passive work is not resumed after restart. Silence still incurs model cost, with no spend cap. Group history now stops at any own-app message, including cards after restart.
+
 - **Feishu group overview and bounded history search.** Topic lists include requester, activity and durable waiting/done/stopped state. `feishu_wait_for_input` marks a required decision until the next accepted topic input. `feishu_search_history` searches only the current channel/topic's group, with explicit scan/result limits and topic-root coverage. Custom Feishu transports now implement `searchMessages`; experimental topic state replaces `idle` with `done`, `waiting` or `stopped`.
 
 - **Feishu groups have their own workspace, memory and tool selection.** Group topics share these resources across idle reopen, process restart and `!restart`; existing attachments stay in place. Groups read/search shared global notes but write only their own memory through the memory API. Object-form chat configuration validates exact tool names before connecting, with channel controls retained. Cwd is not a security sandbox.
@@ -23,6 +25,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - DeepSeek Responses requests use `store: false` before SDK serialization so follow-ups receive earlier assistant answers as text instead of unsupported server-side item references. Local history and other providers are unchanged; reasoning-event parsing and replay support are outside this fix.
 
 ### Breaking Changes
+
+- **Feishu top-level intake defaults to on.** Use `{ id, readUntagged: false }` to retain mention-only behavior. Custom transports must include `sender.sender_type: "user"` for human events. Before downgrading, stop Vela, remove object-shaped passive entries from `pendingMessageIds` and mark active passive records done; older directory readers accept only string IDs.
 
 - **Channel feedback uses one experimental lifecycle.** Replace `acknowledge`, `showTopicControls` and `showRunControls` with `startRun(message, { acknowledge })`, returning `event(update)` and `finish(outcome)`. Move controls and agent progress into the corresponding updates, and combine terminal card/reaction handling in `finish`; channel hooks remain experimental until M4. See [migration guidance](docs/channels.md#migrating-existing-feedback-hooks). Feishu behavior and session data are preserved.
 

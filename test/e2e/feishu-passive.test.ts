@@ -8,6 +8,7 @@ import {
   feishu,
 } from '../../src/extensions/feishu/index.ts'
 import { silentLogger } from '../../src/logger.ts'
+import { fileSessionStorage } from '../../src/session/storage.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -87,6 +88,7 @@ test('default-on intake queues each unique message, skips silently, treats comma
           return fauxToolCall('feishu_skip_reply', {})
         },
         fauxText('also silent'),
+        fauxText('explicit while busy'),
       ],
       extensions: [
         (api) => {
@@ -114,20 +116,24 @@ test('default-on intake queues each unique message, skips silently, treats comma
     first.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
     first.fake.deliver(passive('answer', 'a useful short question'))
     first.fake.deliver(passive('command', '/danger'))
+    first.fake.deliver(feishuEvent({ message_id: 'explicit-busy' }))
   } finally {
     release()
   }
-  await until(() => first.t.model.calls.length === 5)
+  await until(() => first.t.model.calls.length === 6)
   await first.t.internals.gateway.stopAll()
   expect(first.fake.sent).toEqual([
     { messageId: 'answer', text: 'A useful short answer' },
+    { messageId: 'explicit-busy', text: 'explicit while busy' },
   ])
   expect(first.fake.cards).toEqual([])
-  expect(first.fake.reactions).toEqual([])
-  expect(first.fake.historyCalls).toEqual([])
+  expect(
+    first.fake.reactions.every((item) => item.messageId === 'explicit-busy'),
+  ).toBe(true)
+  expect(first.fake.historyCalls).toHaveLength(1)
   expect(commands).toBe(0)
   expect(first.t.events.filter((e) => e.type === 'channel_reply')).toHaveLength(
-    1,
+    2,
   )
   const stored = await first.t.readData('sessions/feishu-oc_group.jsonl')
   expect(stored).toContain('Alice: colleagues discussing lunch')
@@ -241,7 +247,11 @@ test('a top-level card answer is a history boundary after process restart regard
   first.fake.transport.reply = async (messageId, text) => {
     await first.fake.transport.sendCard(
       'oc_group',
-      { schema: '2.0', body: { elements: [] } },
+      {
+        schema: '2.0',
+        header: { title: { tag: 'plain_text', content: 'Answer' } },
+        body: { elements: [] },
+      },
       messageId,
     )
     first.fake.sent.push({ messageId, text })
@@ -281,4 +291,38 @@ test('a top-level card answer is a history boundary after process restart regard
   )
   await until(() => second.fake.sent.length > 0)
   expect(second.fake.sent.at(-1)?.text).toBe('second answer')
+})
+
+test('a passive session blocked by repeated storage failures stays operator-only', async () => {
+  const cwd = await root()
+  const storage = fileSessionStorage(join(cwd, 'sessions'))
+  let failing = true
+  const run = setup({
+    cwd,
+    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
+    sessionStorage: {
+      ...storage,
+      append: async (...args) => {
+        if (failing) throw new Error('disk full')
+        await storage.append(...args)
+      },
+    },
+  })
+  await run.start()
+  try {
+    for (const id of ['first', 'second', 'third', 'blocked'])
+      run.fake.deliver(passive(id, id))
+    await until(
+      () =>
+        run.fake.sent.some((item) => item.text.includes("can't be saved")) ||
+        run.logs.some((line) => line.includes('Passive evaluation paused')),
+    )
+    // The channel's stop waits for all accepted queue entries and operator diagnostics.
+    await run.t.internals.gateway.stopAll()
+    expect(run.t.model.calls).toHaveLength(3)
+    expect(run.fake.sent).toEqual([])
+    expect(run.logs.join('\n')).toContain('disk full')
+  } finally {
+    failing = false
+  }
 })

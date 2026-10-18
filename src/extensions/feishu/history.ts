@@ -1,16 +1,11 @@
 import type { ImageContent } from '../../messages.ts'
 import { messageText } from './messages.ts'
-import type {
-  FeishuHistoryMessage,
-  FeishuMessageEvent,
-  FeishuSentMessage,
-} from './transport.ts'
+import type { FeishuHistoryMessage, FeishuMessageEvent } from './transport.ts'
 
 interface GroupContextOptions {
   chatId: string
   message: FeishuMessageEvent['message']
   activeTrigger?: FeishuMessageEvent['message']
-  previous?: FeishuSentMessage
   appId: string
   question: { name: string; text: string }
   senderName: (id: string) => Promise<string>
@@ -26,7 +21,6 @@ export async function readGroupContext(
     chatId,
     message,
     activeTrigger,
-    previous,
     appId,
     question,
     senderName,
@@ -44,12 +38,7 @@ export async function readGroupContext(
       (activeTrigger?.create_time &&
         item.create_time &&
         Number(item.create_time) < Number(activeTrigger.create_time)) ||
-      (previous &&
-        (item.message_id === previous.messageId ||
-          Number(item.create_time) <= Number(previous.createTime))) ||
-      (item.sender?.sender_type === 'app' &&
-        item.sender.id === appId &&
-        (item.msg_type === 'text' || item.msg_type === 'post'))
+      (item.sender?.sender_type === 'app' && item.sender.id === appId)
     )
       break
     if (

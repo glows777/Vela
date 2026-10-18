@@ -385,7 +385,7 @@ test('Stop consumes only its own trigger and preserves the other queued message'
   }
 })
 
-test('a control card in Feishu history is not mistaken for the last answer during Steer', async () => {
+test('any own-app message, including a control card, bounds Feishu history during Steer', async () => {
   const f = await runningChat()
   try {
     await until(() => f.cards.length === 1)
@@ -410,7 +410,7 @@ test('a control card in Feishu history is not mistaken for the last answer durin
     f.release()
   }
   await until(() => f.sent.length === 1)
-  expect(f.t.model.calls[1]?.lastUserText).toContain('Alice: keep this context')
+  expect(f.t.model.calls[1]?.lastUserText).not.toContain('keep this context')
   expect(f.t.model.calls[1]?.lastUserText).not.toContain('exclude this context')
 })
 

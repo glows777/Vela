@@ -446,7 +446,13 @@ test('restart drops active and queued passive work with operator diagnostics and
       }),
     )
   fake.deliver(feishuEvent({ message_id: 'explicit-after' }))
-  await until(() => fake.sent.length > 0)
+  await until(() =>
+    fake.sent.some(
+      (item) =>
+        item.messageId === 'explicit-after' &&
+        item.text === 'explicit after restart',
+    ),
+  )
   await t.internals.gateway.stopAll()
   expect(t.model.calls).toHaveLength(1)
   expect(fake.sent).toEqual([

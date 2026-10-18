@@ -35,6 +35,7 @@ async function until(check: () => boolean) {
 async function setup(
   responses = [fauxText('answer')],
   extensions: VelaExtension[] = [],
+  readUntagged = true,
 ) {
   const fake = fakeFeishu()
   const t = createTestVela({
@@ -44,7 +45,7 @@ async function setup(
       feishu({
         appId: 'cli_bot',
         owners: ['ou_alice'],
-        chats: ['oc_group'],
+        chats: [{ id: 'oc_group', readUntagged }],
         transport: fake.transport,
       }),
       ...extensions,
@@ -92,8 +93,8 @@ test('Feishu rich post with only an img element triggers an image request', asyn
   expect(imageParts(f.t.model.calls[0]!.prompt)).toHaveLength(1)
 })
 
-test('Feishu group image then @text attaches the four most recent images and does not download historical files', async () => {
-  const f = await setup()
+test('with passive intake off, group image then @text attaches four recent images without downloading historical files', async () => {
+  const f = await setup(undefined, [], false)
   for (let i = 6; i >= 1; i--) {
     f.resources.set(`img${i}`, [png])
     f.history.push({

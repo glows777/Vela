@@ -79,6 +79,7 @@ interface ChannelRun {
   stopped: boolean
   inputs: MessageFeedback[]
   handedOff?: boolean
+  skipReply?: boolean
   steering?: Promise<void>
 }
 
@@ -111,6 +112,7 @@ export class RunFeedback {
     msg: IncomingMessage,
     admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
+    if (msg.passive) return async () => false
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
     if (
@@ -157,7 +159,7 @@ export class RunFeedback {
           if (run.stopped) consumed = true
         })
     }
-    if (run && this.runIsLive(run) && channel) {
+    if (run && !run.trigger.passive && this.runIsLive(run) && channel) {
       if (msg.topic) {
         decision = (run.steering ?? Promise.resolve()).then(() =>
           apply('steer'),
@@ -295,6 +297,7 @@ export class RunFeedback {
     msg: IncomingMessage,
     acknowledge = true,
   ): MessageFeedback[] {
+    if (msg.passive) return []
     let inputs = this.acknowledgements.get(msg)
     if (!inputs) {
       inputs = [
@@ -328,6 +331,7 @@ export class RunFeedback {
     this.options.logger.error(
       `[${channelName}] Feedback failed: ${errorMessage(error)}`,
     )
+    if (msg.passive) return
     try {
       await this.options.channel(channelName)?.send({
         ...msg,
@@ -366,10 +370,11 @@ export class RunFeedback {
       feedbackErrorReported = true
       await this.feedbackError(channelName, msg, error)
     }
-    const feedback = channel
-      ? (inputs.find((item) => item.message === input) ??
-        new MessageFeedback(channel, msg, report, false))
-      : undefined
+    const feedback =
+      channel && !msg.passive
+        ? (inputs.find((item) => item.message === input) ??
+          new MessageFeedback(channel, msg, report, false))
+        : undefined
     await feedback?.ready
     const pending: Promise<void>[] = []
     const unsubscribe = session.subscribe((event) => {
@@ -440,8 +445,13 @@ export class RunFeedback {
           : 'failed'
       interrupted = this.options.stopped() && !run.stopped
       executionFailed = promptStarted && outcome === 'failed'
-      if (outcome === 'failed' && !failureReported)
-        answer = `Task failed: ${errorMessage(error)}`
+      if (outcome === 'failed' && !failureReported) {
+        if (msg.passive)
+          this.options.logger.error(
+            `[${channelName}] Passive evaluation failed: ${errorMessage(error)}`,
+          )
+        else answer = `Task failed: ${errorMessage(error)}`
+      }
       session.emit({
         type: 'channel_error',
         channel: channelName,
@@ -465,6 +475,7 @@ export class RunFeedback {
     if (run.stopped) outcome = 'stopped'
     if (outcome === 'stopped')
       answer = msg.topic ? 'Stopped the current run.' : ''
+    if (run.skipReply) answer = ''
     const delivered =
       !answer || (await this.options.reply(session, channelName, msg, answer))
     if (!delivered) outcome = 'failed'

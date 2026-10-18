@@ -18,7 +18,13 @@ const recordSchema = z
     previousSessionIds: z.array(z.string()),
     state: z.enum(['running', 'waiting', 'done', 'stopped']),
     waitingReason: z.string().optional(),
-    pendingMessageIds: z.array(z.string()),
+    passive: z.boolean().optional(),
+    pendingMessageIds: z.array(
+      z.union([
+        z.string(),
+        z.object({ id: z.string(), passive: z.literal(true) }),
+      ]),
+    ),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -32,6 +38,13 @@ const indexSchema = z.object({
   records: z.array(recordSchema),
 })
 export type ChannelRecord = z.infer<typeof recordSchema>
+
+/** Passive metadata travels with the existing pending ID, never in a second ID registry. */
+export function pendingMessageId(
+  input: ChannelRecord['pendingMessageIds'][number],
+): string {
+  return typeof input === 'string' ? input : input.id
+}
 
 /** One directory for recovery and topic discovery. No input text is copied here except the task label. */
 export class ChannelDirectory {
@@ -151,8 +164,15 @@ export class ChannelDirectory {
     const record = this.observe(key, channel, msg)
     record.waitingReason = undefined
     if (record.state === 'waiting') record.state = 'done'
-    if (msg.replyToId && !record.pendingMessageIds.includes(msg.replyToId))
-      record.pendingMessageIds.push(msg.replyToId)
+    if (
+      msg.replyToId &&
+      !record.pendingMessageIds.some(
+        (input) => pendingMessageId(input) === msg.replyToId,
+      )
+    )
+      record.pendingMessageIds.push(
+        msg.passive ? { id: msg.replyToId, passive: true } : msg.replyToId,
+      )
     await this.save(record)
   }
 
@@ -160,6 +180,7 @@ export class ChannelDirectory {
     const record = this.records.get(key)
     if (!record) return
     record.state = 'running'
+    record.passive = msg.passive
     if (!record.rootId || record.requester.id === msg.senderId)
       record.requester = { id: msg.senderId, name: msg.senderName }
     record.replyTarget = msg.replyToId
@@ -168,10 +189,15 @@ export class ChannelDirectory {
 
   async forget(key: string, ids: string[]): Promise<void> {
     const record = this.records.get(key)
-    if (!record || !ids.some((id) => record.pendingMessageIds.includes(id)))
+    if (
+      !record ||
+      !record.pendingMessageIds.some((input) =>
+        ids.includes(pendingMessageId(input)),
+      )
+    )
       return
     record.pendingMessageIds = record.pendingMessageIds.filter(
-      (id) => !ids.includes(id),
+      (input) => !ids.includes(pendingMessageId(input)),
     )
     await this.save(record)
   }
