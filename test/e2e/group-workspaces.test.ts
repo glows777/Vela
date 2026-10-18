@@ -93,7 +93,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
   for (const [chat, value] of [
     ['oc_alpha', 'ALPHA'],
     ['oc_beta', 'BETA'],
-  ]) {
+  ] as const) {
     await turn(run, chat!, 'root', 'Save this group note and file', [
       save(value!),
       fauxToolCall('write_file', { path: 'same.txt', content: value }),
@@ -218,8 +218,10 @@ test.each([
   { chats: ['oc_alpha', { id: 'oc_alpha' }] },
   { chats: [{ id: 'oc_alpha', readUntagged: 'yes' }] },
 ])('malformed group configuration fails loading: %j', async ({ chats }) => {
-  const { t } = setup(chats)
-  await expect(t.vela.ready()).rejects.toThrow()
+  await expect(async () => {
+    const { t } = setup(chats)
+    await t.vela.ready()
+  }).toThrow()
 })
 
 test('an empty tool list retains channel controls, hides memory and cannot invoke a removed file tool after restart', async () => {
@@ -247,7 +249,7 @@ test('an empty tool list retains channel controls, hides memory and cannot invok
     ])
     const events = run.t.eventsOf('tool_execution_end')
     expect(JSON.stringify(events.at(-1))).toMatch(
-      /denied|not available|not found|not allowed/i,
+      /denied|unavailable|not available|not found|not allowed/i,
     )
     expect(
       existsSync(

@@ -38,8 +38,10 @@ export function createCoreTools({
     return resolveCwd
       ? {
           ...tool,
-          execute: (args, context) =>
-            create(resolveCwd(context)).execute(args, context),
+          execute: (args, context) => {
+            const dir = resolveCwd(context)
+            return (dir === cwd ? tool : create(dir)).execute(args, context)
+          },
         }
       : tool
   })

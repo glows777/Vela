@@ -4,11 +4,9 @@ A channel connects a chat service to Vela. The gateway keeps **one shared sessio
 
 **Enabling a chat means trusting everyone in it with this machine.** Feishu gives every member of an enabled chat the `owner` role, including bash, files, memory and extension tools. There is no sandbox or per-member guest boundary. See [Security](security.md#channel-senders) before enabling a group.
 
-### Planned M3 isolation scope
+### Isolation scope
 
-PR1 adds the SDK cwd option only; the following describes the intended M3 channel boundary, not functionality shipped by PR1.
-
-**Isolation scope:** cwd is a default path, **not a security sandbox**. Absolute paths, traversal, symlinks outside managed storage, bash, shared extensions and credentials can still reach host resources. Memory/global-write restrictions apply to the memory API, not OS access. Enabled chats remain the trust boundary; topics share their group's workspace/notes, and all groups intentionally read global notes. This plan claims routine workspace/context separation, not hostile-user containment.
+Each group's workspace is a default path, **not a security sandbox**. Absolute paths, traversal, symlinks, bash, shared extensions and credentials can still reach host resources. Memory/global-write restrictions apply to the memory API, not OS access. Enabled chats remain the trust boundary; topics share their group's workspace and notes, and all groups intentionally read global notes. Vela provides routine workspace/context separation, not hostile-user containment.
 
 ## Feishu
 
@@ -32,7 +30,7 @@ The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no
    }
    ```
 
-   `owners` and `chats` accept string arrays or comma-separated strings. `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_OWNERS` remain environment defaults; settings take precedence. To supply chat ids from an environment variable, set `"chats": "$FEISHU_CHATS"` in settings.
+   `owners` and legacy `chats` accept string arrays or comma-separated strings. `chats` also accepts objects with `id` and an optional `tools` list (see below). `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_OWNERS` remain environment defaults; settings take precedence. To supply chat ids from an environment variable, set `"chats": "$FEISHU_CHATS"` in settings.
 
 5. Start `vela` in interactive mode and keep it running. The SDK equivalent is `feishu({ appId, appSecret, owners, chats })`, followed by `await vela.ready()` and `await vela.startChannels()`.
 
@@ -50,9 +48,19 @@ The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no
 - Audio, video, stickers and merged forwards remain unsupported and receive a short reply saying text, images and files are supported, only in an enabled DM or when this bot is mentioned in an enabled group.
 - The last 1000 incoming message ids are remembered to suppress duplicate event delivery.
 
+### Group workspaces, memory and tools
+
+Each enabled group uses `<dataDir>/channels/<channelSessionId("feishu", chatId)>/` with `workspace/`, `memory/` and the existing `files/` attachment directory. The existing encoder keeps chat IDs path-safe; topic roots and physical session generations do not affect this folder. No files are moved or deleted. Relative file/search/bash calls and automatic AGENTS/CLAUDE discovery use the workspace. Skills, templates, extensions/config, session storage and relative exports remain Vela-wide.
+
+The channel and every topic in a group share its memory. The memory tool and `/memory` / `/dream` use that group's store for changes. Global notes remain at `<dataDir>/memory`; group sessions may only `read` or `search` them with `scope: "global"`. Other global actions fail clearly. Reads retain normal usage timestamp updates. The prompt shows a labeled group index and global index, each capped at 4,000 characters with truncation disclosed; note contents are read on demand. Local SDK/CLI sessions and owner DMs keep global memory.
+
+For example, `"chats": ["oc_example_all", { "id": "oc_example_limited", "tools": ["read_file", "memory"] }]` keeps all tools for the first group and selects exact registered tool names for the second. Omit `tools` for all tools; `[]` removes optional tools. The three channel controls `feishu_start_topic`, `feishu_forward_to_topic`, and `feishu_list_topics` remain available in top-level group sessions; their existing denial in topics/DMs is unchanged. Without the memory tool, the memory prompt is omitted and its commands report that memory is unavailable. Malformed/duplicate chat entries fail loading. Unknown tool names reject `startChannels()` after all extensions load and before any channel transport or recovery starts.
+
+Current chat configuration is applied from the logical directory record before opening/resuming a session, including idle reopen, process recovery, topic handoff and the fresh physical ID created by `!restart`. Restart retains the workspace, group notes and attachments. The configuration parser also validates an optional boolean `readUntagged`; this PR does not change top-level mention-only triggering.
+
 ### Topics
 
-An @ inside a Feishu topic opens its own session, identified by channel, chat and root message ID. Different topics run concurrently without sharing transcripts; top-level messages and DMs retain one session per chat. This separates conversation context, not the filesystem or global memory.
+An @ inside a Feishu topic opens its own session, identified by channel, chat and root message ID. Different topics run concurrently without sharing transcripts; top-level messages and DMs retain one session per chat. Topics keep separate transcripts while sharing their group workspace and memory. Different groups use different default workspace and memory directories.
 
 A topic is owned when its session exists. After restart or idle eviction, the gateway opens and resumes it through its per-session queue before preparing an untagged input. An unknown untagged topic is ignored without resolving names, reading platform history, downloading attachments or writing an empty session file. Existing history is loaded once for the next run; interrupted work does not resume automatically.
 
@@ -157,7 +165,7 @@ Before automatically closing an idle session, the gateway saves it. If that save
 
 Channel sessions have no UI: permissions set to `ask` are rejected, and extension UI calls fall back to events. Sessions close after 10 idle minutes and resume on the next message; `createVela({ channelIdleMs })` changes that wait (`0` closes after each completed queue). Running sessions or queued chats are not closed prematurely.
 
-**SDK:** `await vela.startChannels()` starts registered channels. `vela.channels()` lists them. `vela.dispose()` aborts running sessions, waits for pending work and stops channels. A failed channel `start()` is logged without stopping other channels.
+**SDK:** `await vela.startChannels()` starts registered channels. `vela.channels()` lists them. `vela.dispose()` aborts running sessions, waits for pending work and stops channels. Tool-policy validation errors reject startup before transport/recovery; a failed channel `start()` is logged without stopping other channels.
 
 **CLI:** channels start with interactive mode, and stop on exit. Incoming messages, replies and errors appear in the terminal; channel tool calls are not displayed there. Print, JSON and RPC modes do not start channels. `/channel` lists them.
 
@@ -177,7 +185,8 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
 | `roleFor(message)` | No | Select the shared session's role for each prepared input; defaults to `owner`. Roles change tools and permissions, not who can read earlier transcript content. |
 | `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
-| `sessionOptions(message)` | No | Select `{ permissions? }` when opening the session. Topic ownership admission uses these options before preparation; ordinary chats open after preparation. |
+| `sessionOptions(message)` | No | Select `{ cwd?, tools?, permissions? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. |
+| `validateTools(names)` | No | Check configured names against all registered tools after extension loading. A thrown error rejects startup before transport or recovery. |
 | `prepareMessage(message, activeMessage?)` | No | Asynchronously resolve names/history/attachments when the input is ready. Return the prepared message, or `undefined` when handled without a prompt. A steer receives its active run's original trigger as the second argument; queued inputs do not. Exclude context already present in that trigger. |
 | `startRun(message, { acknowledge })` | No | Begin feedback after admission and before preparation; return a lifecycle with `event(update)` and `finish(outcome)`, or no handle. `acknowledge: false` creates presentation for a handed-off task whose original input already owns feedback. See below. |
 
