@@ -1,6 +1,11 @@
+import type { VelaLogger } from '../logger.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import type { VelaSession } from '../vela-session.ts'
-import type { ChannelDirectory, ChannelRecord } from './directory.ts'
+import {
+  type ChannelDirectory,
+  type ChannelRecord,
+  pendingMessageId,
+} from './directory.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
 export const INTERRUPTION_NOTICE =
@@ -16,6 +21,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
     senderName: record.requester.name,
     replyToId: record.replyTarget,
     text: '',
+    passive: record.passive,
     ...(record.rootId && record.threadId
       ? { topic: { rootId: record.rootId, threadId: record.threadId } }
       : {}),
@@ -27,7 +33,21 @@ export class ChannelRecovery {
   private inputs = new WeakMap<VelaSession, IncomingMessage[]>()
   private subscribed = new WeakSet<VelaSession>()
   private saves = new WeakMap<VelaSession, Promise<void>[]>()
-  constructor(private directory: ChannelDirectory) {}
+  constructor(
+    private directory: ChannelDirectory,
+    private logger: VelaLogger,
+  ) {}
+
+  hasInput(session: VelaSession, id: string): boolean {
+    return session
+      .getEntries()
+      .some(
+        (entry) =>
+          entry.type === 'custom' &&
+          entry.customType === INPUT_MARKER &&
+          (entry.data as { messageId?: string })?.messageId === id,
+      )
+  }
 
   track(key: string, session: VelaSession, msg: IncomingMessage): void {
     const inputs = this.inputs.get(session) ?? []
@@ -41,7 +61,11 @@ export class ChannelRecovery {
       const input = this.inputs.get(session)?.shift()
       if (!input?.replyToId) return
       const messageId = input.replyToId
-      session.appendEntry(INPUT_MARKER, { messageId })
+      session.appendEntry(INPUT_MARKER, {
+        messageId,
+        passive: input.passive,
+        timestamp: Date.now(),
+      })
       const save = session
         .save()
         .then(() => this.directory.forget(key, [messageId]))
@@ -66,6 +90,33 @@ export class ChannelRecovery {
     session: VelaSession,
     run: (msg: IncomingMessage) => Promise<void>,
   ): Promise<void> {
+    const dropped = record.pendingMessageIds
+      .filter((input) => typeof input !== 'string')
+      .map(pendingMessageId)
+    if (
+      record.passive &&
+      record.state === 'running' &&
+      record.replyTarget &&
+      !dropped.includes(record.replyTarget)
+    )
+      dropped.push(record.replyTarget)
+    if (dropped.length) {
+      for (const messageId of dropped)
+        if (!this.hasInput(session, messageId))
+          session.appendEntry(INPUT_MARKER, {
+            messageId,
+            passive: true,
+            timestamp: Date.now(),
+          })
+      await session.save()
+      await this.directory.forget(record.key, dropped)
+      record.pendingMessageIds = record.pendingMessageIds.filter(
+        (input) => !dropped.includes(pendingMessageId(input)),
+      )
+      this.logger.info(
+        `[${record.channel}] Dropped ${dropped.length} passive input(s) after restart; no unsolicited work resumed`,
+      )
+    }
     const msg = storedMessage(record)
     const entries = session.getEntries()
     const savedIds = new Set(
@@ -79,9 +130,12 @@ export class ChannelRecovery {
     )
     const missingTrigger =
       record.replyTarget &&
-      record.pendingMessageIds.includes(record.replyTarget) &&
+      record.pendingMessageIds.some(
+        (input) => pendingMessageId(input) === record.replyTarget,
+      ) &&
       !savedIds.has(record.replyTarget)
-    for (const id of [...record.pendingMessageIds]) {
+    for (const input of [...record.pendingMessageIds]) {
+      const id = pendingMessageId(input)
       if (!savedIds.has(id))
         await channel.send({
           ...msg,
@@ -90,7 +144,7 @@ export class ChannelRecovery {
         })
       await this.directory.forget(record.key, [id])
     }
-    if (missingTrigger) {
+    if (missingTrigger || record.passive) {
       await this.directory.finish(record.key, 'done')
       return
     }
