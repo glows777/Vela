@@ -35,13 +35,18 @@ export interface ChannelTopic {
   rootId: string
   threadId: string
   task: string
-  state: 'running' | 'queued' | 'idle'
+  state: 'running' | 'queued' | 'waiting' | 'done' | 'stopped'
+  requester: { id: string; name: string }
+  updatedAt: string
+  waitingReason?: string
 }
 
 export interface ChannelRuntime {
   context(sessionId: string): IncomingMessage | undefined
   topics(chatId: string): ChannelTopic[]
   topicCoverage(): string
+  /** Record a required human decision; waiting becomes visible after successful delivery. */
+  waitForInput(sessionId: string, reason: string): Promise<void>
   /** Hand off without waiting for the target run; suppress the source run's duplicate reply. */
   dispatch(sourceSessionId: string, message: IncomingMessage): void
 }

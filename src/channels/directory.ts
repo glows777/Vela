@@ -16,7 +16,8 @@ const recordSchema = z
     task: z.string(),
     activeSessionId: z.string(),
     previousSessionIds: z.array(z.string()),
-    state: z.enum(['running', 'done', 'stopped']),
+    state: z.enum(['running', 'waiting', 'done', 'stopped']),
+    waitingReason: z.string().optional(),
     pendingMessageIds: z.array(z.string()),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -98,6 +99,7 @@ export class ChannelDirectory {
         record.activeSessionId,
       ],
       state: 'done' as const,
+      waitingReason: undefined,
     }
     await this.save(next, true)
   }
@@ -147,6 +149,8 @@ export class ChannelDirectory {
     msg: IncomingMessage,
   ): Promise<void> {
     const record = this.observe(key, channel, msg)
+    record.waitingReason = undefined
+    if (record.state === 'waiting') record.state = 'done'
     if (msg.replyToId && !record.pendingMessageIds.includes(msg.replyToId))
       record.pendingMessageIds.push(msg.replyToId)
     await this.save(record)
@@ -156,7 +160,8 @@ export class ChannelDirectory {
     const record = this.records.get(key)
     if (!record) return
     record.state = 'running'
-    record.requester = { id: msg.senderId, name: msg.senderName }
+    if (!record.rootId || record.requester.id === msg.senderId)
+      record.requester = { id: msg.senderId, name: msg.senderName }
     record.replyTarget = msg.replyToId
     await this.save(record)
   }
@@ -171,10 +176,18 @@ export class ChannelDirectory {
     await this.save(record)
   }
 
+  async waitForInput(key: string, reason: string): Promise<void> {
+    const record = this.records.get(key)
+    if (!record?.rootId) throw new Error('Waiting requires a topic')
+    record.waitingReason = reason
+    await this.save(record)
+  }
+
   async finish(key: string, state: ChannelRecord['state']): Promise<void> {
     const record = this.records.get(key)
     if (!record) return
-    record.state = state
+    record.state = state === 'done' && record.waitingReason ? 'waiting' : state
+    if (state === 'stopped') record.waitingReason = undefined
     await this.save(record)
   }
 
@@ -191,6 +204,9 @@ export class ChannelDirectory {
               threadId: record.threadId,
               task: record.task,
               state: state(record.key),
+              requester: record.requester,
+              updatedAt: record.updatedAt,
+              waitingReason: record.waitingReason,
             },
           ]
         : [],
