@@ -6,7 +6,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
-- Feishu topic prompts now prioritize the latest message after a task finishes, avoiding unsolicited repetitions of completed reports while preserving context for requested follow-ups and ongoing work.
+- Feishu topic prompts now ask the model to respond to the latest message and treat earlier results as delivered, without repeating them unless asked.
 - DeepSeek Responses requests use `store: false` before SDK serialization so follow-ups receive earlier assistant answers as text instead of unsupported server-side item references. Local history and other providers are unchanged; reasoning-event parsing and replay support are outside this fix.
 
 ### Breaking Changes
