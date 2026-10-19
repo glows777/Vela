@@ -29,6 +29,7 @@ export function feishu(options: FeishuOptions = {}): VelaExtension {
       logger: vela.logger,
       dataDir: vela.dataDir,
       transport: options.transport,
+      timezone: vela.config.timezone,
     })
     vela.registerChannel(channel)
     channel.topics.register(vela)

@@ -75,12 +75,14 @@
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
+    prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; }) | undefined
     start: () => Promise<void> | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
+    timezone?: unknown
     validateTools?: ((names: readonly string[]) => void) | undefined
   interface CompactionEntry
     firstKeptEntryId: string
@@ -241,7 +243,7 @@
     removeReaction: (messageId: string, reactionId: string) => Promise<void>
     reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
     searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: FeishuHistoryMessage[]; pageToken?: string; }>
-    send: (chatId: string, text: string) => Promise<void>
+    send: (chatId: string, text: string) => Promise<void | FeishuSentMessage>
     sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<string>
     start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>
     startTopic: (messageId: string, task: string) => Promise<FeishuSentMessage & { rootId: string; threadId: string; }>
@@ -272,6 +274,7 @@
     raw?: unknown
     replyToId?: string | undefined
     requireExistingSession?: boolean | undefined
+    routine?: { id: string; scheduledAt: string; } | undefined
     senderId: string
     senderName: string
     text: string
@@ -416,6 +419,7 @@
     channelId: string
     recipientId?: string | undefined
     replyToId?: string | undefined
+    routine?: { id: string; scheduledAt: string; } | undefined
     text: string
     topic?: { rootId: string; threadId: string; } | undefined
   type PermissionDecision = 'allow' | 'deny' | 'ask'
