@@ -10,6 +10,9 @@ const ENTRY = join(ROOT, 'src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
 
+const hasScript =
+  process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
+
 // Every test spawns a CLI process and they run concurrently; with a dozen processes starting at once on slow CI machines, the default 5 s is not enough
 setDefaultTimeout(30_000)
 
@@ -401,22 +404,25 @@ test.concurrent('@file directory exits 1', async () => {
   expect(result.stdout).toBe('')
 })
 
-test.concurrent('interactive @file arguments send an initial image prompt and show a placeholder', async () => {
-  const result = await cli(
-    [`@${join(ROOT, 'test/fixtures/images/blue.png')}`, 'Describe this'],
-    {
-      model: `faux:${scenario('hello')}`,
-      terminal: [['Hello, this is Vela (faux replay).', '\x04']],
-    },
-  )
-  expect(result.code).toBe(0)
-  expect(result.stdout).toContain('[image png ')
-  expect(result.stdout).not.toContain(
-    readFileSync(join(ROOT, 'test/fixtures/images/blue.png')).toString(
-      'base64',
-    ),
-  )
-})
+test.concurrent.if(hasScript)(
+  'interactive @file arguments send an initial image prompt and show a placeholder',
+  async () => {
+    const result = await cli(
+      [`@${join(ROOT, 'test/fixtures/images/blue.png')}`, 'Describe this'],
+      {
+        model: `faux:${scenario('hello')}`,
+        terminal: [['Hello, this is Vela (faux replay).', '\x04']],
+      },
+    )
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('[image png ')
+    expect(result.stdout).not.toContain(
+      readFileSync(join(ROOT, 'test/fixtures/images/blue.png')).toString(
+        'base64',
+      ),
+    )
+  },
+)
 
 test.concurrent('-p prints only the final answer to stdout and saves a new session', async () => {
   const { stdout, stderr, code, dataDir } = await cli(['-p', 'hello'], {
@@ -939,9 +945,6 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
 
 // Interactive mode (TUI) only appears in a terminal (piped input uses print mode, like pi): util-linux `script` gives the child a pseudo-terminal.
 // TUI behavior itself is tested with a fake terminal in e2e/tui; here we only check that it starts, chats and exits in a real terminal
-const hasScript =
-  process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
-
 test.if(hasScript)(
   'interactive mode shows loaded context files at startup and in /status',
   async () => {
