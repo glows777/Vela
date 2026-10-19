@@ -160,6 +160,11 @@ export {
   summarizeSession,
   type ThinkingLevelChangeEntry,
 } from './session/entries.ts'
+export type {
+  ForkOptions,
+  NavigateTreeOptions,
+  QueueMode,
+} from './session/options.ts'
 export {
   fileSessionStorage,
   memorySessionStorage,
@@ -182,11 +187,8 @@ export { ToolExecutionResult } from './tools/types.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'
 export {
-  type ForkOptions,
   type ForkResult,
-  type NavigateTreeOptions,
   type PromptOptions,
-  type QueueMode,
   type SessionOptions,
   VelaSession,
 } from './vela-session.ts'

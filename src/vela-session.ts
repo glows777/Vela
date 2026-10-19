@@ -1,5 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
 import type {
@@ -30,12 +29,7 @@ import type {
 } from './extensions/types.ts'
 import type { VelaLimits } from './limits.ts'
 import type { VelaLogger } from './logger.ts'
-import {
-  type ImageContent,
-  type ModelMessage,
-  normalizeUserMessage,
-  type TextContent,
-} from './messages.ts'
+import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
 import {
   clampThinkingLevel,
   supportedThinkingLevels,
@@ -51,29 +45,33 @@ import {
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
 import type { PermissionRules, Role } from './security/roles.ts'
 import {
-  type BashExecutionEntry,
   type BranchSummaryEntry,
-  bashExecutionToText,
   messageText as contentText,
   type NestedToolCalls,
-  type NewEntry,
-  SESSION_FORMAT_VERSION,
   type SessionContext,
   type SessionEntry,
-  type SessionHeader,
   type SessionTreeNode,
 } from './session/entries.ts'
+import { branchJsonl, writeExport } from './session/export.ts'
 import { renderSessionHtml } from './session/export-html.ts'
 import { SessionStore } from './session/index.ts'
+import { MessageQueue, messageText } from './session/message-queue.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
+import {
+  assertSessionId,
+  type ForkOptions,
+  type NavigateTreeOptions,
+  type QueueMode,
+} from './session/options.ts'
 import { newSessionId } from './session/session-id.ts'
 import {
   type SessionPersistence,
   type SessionStorage,
   sessionArtifactsUseDataDir,
 } from './session/storage.ts'
+import { UserBash } from './session/user-bash.ts'
 import type { ToolRegistry } from './tools/registry.ts'
-import { type BashResult, runBash } from './tools/shell.ts'
+import type { BashResult } from './tools/shell.ts'
 import {
   CONTEXT_WINDOW,
   type TokenStatus,
@@ -95,9 +93,6 @@ export interface PromptOptions {
   source?: InputSource
 }
 
-/** How queued messages are taken: one at a time (default, like pi) or all at once. */
-export type QueueMode = 'one-at-a-time' | 'all'
-
 /** Options for `vela.session(id, options)`; only apply when the session is first opened. */
 export interface SessionOptions {
   /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
@@ -116,24 +111,6 @@ export interface SessionOptions {
   thinkingLevel?: ThinkingLevel
   /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
   autoCompaction?: boolean
-}
-
-/** Options for `session.navigateTree()` (like pi's). */
-export interface NavigateTreeOptions {
-  /** Summarize the branch being left; the summary is attached where the session goes */
-  summarize?: boolean
-  /** What the summary should prefer to keep (pi's customInstructions) */
-  focus?: string
-  /** Label for the target entry (or for the summary entry when summarizing) */
-  label?: string
-}
-
-/** Options for `session.fork()` / `clone()`. */
-export interface ForkOptions {
-  /** `before` (default): the new session ends before this user message; `at`: it includes the entry */
-  position?: 'before' | 'at'
-  /** Id of the new session; default a new time-based id like the CLI's */
-  sessionId?: string
 }
 
 /** What `fork()` / `clone()` returns. */
@@ -195,16 +172,6 @@ export interface SessionExtensionHooks {
     headers: Record<string, string>,
   ): Promise<void>
   providerStreamEvent(session: VelaSession, event: ProviderStreamEvent): void
-}
-
-/** Session ids become file names: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
-const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/
-
-export function assertSessionId(id: string): void {
-  if (!SESSION_ID.test(id))
-    throw new Error(
-      `Invalid session id "${id}": use only letters, digits, . _ -, do not start with ., at most 128 characters`,
-    )
 }
 
 /** Shared parts createVela() hands to every session. */
@@ -281,12 +248,7 @@ export class VelaSession {
   private readonly nestedCalls = new NestedCallLog()
   /** Tools' display data from `tool_execution_end`, recorded on their tool message like nestedCalls */
   private readonly toolDetails = new Map<string, unknown>()
-  /** The running `executeBash()` command */
-  private bashController?: AbortController
-  /** The running `executeBash()` call, which close() waits for so its result is saved */
-  private bashRun?: Promise<unknown>
-  /** `!` commands that finished while the agent ran, recorded when it stops (like pi) */
-  private readonly pendingBash: NewEntry<BashExecutionEntry>[] = []
+  private readonly userBash: UserBash
   private readonly builder: PromptPipeline
   private readonly deps: SessionDeps
   /** Options the session was opened with (a fork opens with the same) */
@@ -298,17 +260,7 @@ export class VelaSession {
   private running?: Promise<void>
   /** Extension sections collected by this turn's before_agent_start */
   private sections: Record<string, string> = {}
-  private readonly steeringQueue: ModelMessage[] = []
-  private readonly followUpQueue: ModelMessage[] = []
-  /** Extensions' custom messages in the history or queues, and what they carry (pi's custom message fields) */
-  private readonly customMessages = new WeakMap<
-    ModelMessage,
-    CustomMessageInfo
-  >()
-  /** Custom messages sent while running without triggering a turn: appended once the step's tool results are in (like pi) */
-  private readonly pendingCustom: ModelMessage[] = []
-  /** Custom messages for the next prompt (`deliverAs: 'nextTurn'`) */
-  private readonly nextTurnMessages: ModelMessage[] = []
+  private readonly messageQueue = new MessageQueue((event) => this.emit(event))
   /** How steer messages are taken (default one-at-a-time, like pi) */
   steeringMode: QueueMode = 'one-at-a-time'
   /** How followUp messages are taken (default one-at-a-time, like pi) */
@@ -363,6 +315,17 @@ export class VelaSession {
       this.limits,
     )
     this.timestamps = this.contextManager.state.timestamps
+    this.userBash = new UserBash({
+      store: this.store,
+      cwd: this.cwd,
+      shellPath: deps.shellPath,
+      emit: this.emit,
+      busy: this.busy,
+      save: () => this.saveOrReport(),
+      messages: this.messages,
+      tracker: this.tracker,
+      timestamps: this.timestamps,
+    })
     this.contextManager.autoCompaction =
       options.autoCompaction ?? deps.autoCompaction
     // Like pi: a new session starts with its model and thinking level (written with the first message)
@@ -545,7 +508,7 @@ export class VelaSession {
       (event.type === 'message_start' || event.type === 'message_end') &&
       !event.custom
     ) {
-      const custom = this.customMessages.get(event.message)
+      const custom = this.messageQueue.customMessages.get(event.message)
       if (custom) event = { ...event, custom }
     }
     this.nestedCalls.observe(event)
@@ -685,7 +648,7 @@ export class VelaSession {
     } finally {
       if (this.running === running) this.running = undefined
       this.flushPendingCustom()
-      while (this.flushBash()) await this.saveOrReport()
+      while (this.userBash.flush()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
     }
@@ -817,7 +780,7 @@ export class VelaSession {
   private async loadBranch(context: SessionContext): Promise<void> {
     this.contextManager.restore(context)
     for (const [message, info] of context.custom)
-      this.customMessages.set(message, info)
+      this.messageQueue.customMessages.set(message, info)
     if (
       context.thinkingLevel &&
       THINKING_LEVELS.includes(context.thinkingLevel)
@@ -922,45 +885,18 @@ export class VelaSession {
     await this.store.flush()
   }
 
-  /** The current branch as JSONL lines (like pi's exportToJsonl): a header, then the entries re-chained. */
-  private branchJsonl(): string {
-    const header: SessionHeader = {
-      type: 'session',
-      version: SESSION_FORMAT_VERSION,
-      id: this.id,
-      timestamp: new Date().toISOString(),
-      cwd: this.cwd,
-    }
-    const lines: object[] = [header]
-    let parentId: string | null = null
-    for (const entry of this.store.getBranch()) {
-      lines.push({ ...entry, parentId })
-      parentId = entry.id
-    }
-    return lines.map((line) => `${JSON.stringify(line)}\n`).join('')
-  }
-
-  private async writeExport(
-    path: string | undefined,
-    extension: string,
-    content: string,
-  ): Promise<string> {
-    const target = resolve(
-      this.deps.cwd ?? process.cwd(),
-      path ??
-        `vela-session-${this.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
-    )
-    await mkdir(dirname(target), { recursive: true })
-    await writeFile(target, content, { mode: 0o600 })
-    return target
-  }
-
   /**
    * Writes the current branch as JSONL (like pi's exportToJsonl; the session file format, one branch).
    * Relative paths resolve against Vela's cwd; returns the path written.
    */
   exportJsonl(path?: string): Promise<string> {
-    return this.writeExport(path, 'jsonl', this.branchJsonl())
+    return writeExport(
+      this.id,
+      this.deps.cwd,
+      path,
+      'jsonl',
+      branchJsonl(this.id, this.cwd, this.store.getBranch()),
+    )
   }
 
   /**
@@ -969,7 +905,9 @@ export class VelaSession {
    * everything the session saw, including tool output.
    */
   exportHtml(path?: string): Promise<string> {
-    return this.writeExport(
+    return writeExport(
+      this.id,
+      this.deps.cwd,
       path,
       'html',
       renderSessionHtml({
@@ -1006,7 +944,7 @@ export class VelaSession {
   /** Appends a message that entered the history to the session; a tool message carries its tools' nested calls and details. */
   private record(message: ModelMessage): void {
     this.timestamps.set(message, Date.now())
-    const custom = this.customMessages.get(message)
+    const custom = this.messageQueue.customMessages.get(message)
     if (custom && message.role === 'user') {
       this.store.appendCustomMessage(message, custom)
       return
@@ -1028,7 +966,7 @@ export class VelaSession {
 
   /** Whether an `executeBash()` command is running */
   get isBashRunning(): boolean {
-    return this.bashController !== undefined
+    return this.userBash.isRunning
   }
 
   /**
@@ -1051,82 +989,12 @@ export class VelaSession {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
     if (this.role !== 'owner')
       throw new Error('Only the session owner can run shell commands')
-    if (this.bashController)
-      throw new Error(
-        'A shell command is already running: wait for it or call abortBash()',
-      )
-    const controller = new AbortController()
-    this.bashController = controller
-    const run = this.runUserBash(command, controller, options)
-    this.bashRun = run
-    return run
-  }
-
-  private async runUserBash(
-    command: string,
-    controller: AbortController,
-    options: {
-      excludeFromContext?: boolean
-      onUpdate?: (output: string) => void
-      id?: string
-    },
-  ): Promise<BashResult> {
-    try {
-      // Appending to a saved session that was not resumed would mix two conversations in one log
-      await this.store.assertNew()
-      const result = await runBash(command, {
-        results: this.store.results,
-        cwd: this.cwd,
-        shellPath: this.deps.shellPath,
-        signal: controller.signal,
-        onUpdate: options.onUpdate,
-        onDelta: (delta) =>
-          this.emit({
-            type: 'bash_execution_update',
-            ...(options.id === undefined ? {} : { id: options.id }),
-            delta,
-          }),
-      })
-      this.pendingBash.push({
-        type: 'bash_execution',
-        command,
-        output: result.output,
-        ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
-        cancelled: result.cancelled,
-        truncated: result.truncated,
-        ...(result.fullOutputPath
-          ? { fullOutputPath: result.fullOutputPath }
-          : {}),
-        ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
-      })
-      if (!this.busy.locked && this.flushBash()) await this.saveOrReport()
-      return result
-    } finally {
-      this.bashController = undefined
-      this.bashRun = undefined
-    }
+    return this.userBash.execute(command, options)
   }
 
   /** Cancels the running `executeBash()` command (pi's abortBash); it is still recorded, as cancelled. */
   abortBash(): void {
-    this.bashController?.abort()
-  }
-
-  /** Records `!` commands that finished while the agent ran; returns whether there were any. */
-  private flushBash(): boolean {
-    const pending = this.pendingBash.splice(0)
-    for (const execution of pending) {
-      const message: ModelMessage | undefined = execution.excludeFromContext
-        ? undefined
-        : { role: 'user', content: bashExecutionToText(execution) }
-      if (message) {
-        this.messages.push(message)
-        this.tracker.addMessage(message)
-        this.timestamps.set(message, Date.now())
-      }
-      this.store.appendBashExecution(execution, message)
-    }
-    return pending.length > 0
+    this.userBash.abort()
   }
 
   /**
@@ -1245,20 +1113,19 @@ export class VelaSession {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
     const entry = this.customMessage(message)
     if (options.deliverAs === 'nextTurn') {
-      this.nextTurnMessages.push(entry)
+      this.messageQueue.nextTurnMessages.push(entry)
       return
     }
     if (this.prompting && options.triggerTurn !== false) {
-      ;(options.deliverAs === 'followUp'
-        ? this.followUpQueue
-        : this.steeringQueue
-      ).push(entry)
-      this.emitQueue()
+      this.messageQueue.enqueue(
+        options.deliverAs === 'followUp' ? 'followUp' : 'steering',
+        entry,
+      )
       return
     }
     if (options.triggerTurn) return this.promptMessage(entry, {})
     if (this.busy.locked) {
-      this.pendingCustom.push(entry)
+      this.messageQueue.pendingCustom.push(entry)
       return
     }
     this.append(entry)
@@ -1309,7 +1176,7 @@ export class VelaSession {
 
   /** The custom message fields of a history message an extension sent with sendMessage(); undefined for other messages. */
   customMessageOf(message: ModelMessage): CustomMessageInfo | undefined {
-    return this.customMessages.get(message)
+    return this.messageQueue.customMessages.get(message)
   }
 
   /** Builds the user message a custom message becomes and remembers its fields. */
@@ -1318,7 +1185,7 @@ export class VelaSession {
     if (typeof message.content !== 'string' && !Array.isArray(message.content))
       throw new Error('A custom message needs content (a string or parts)')
     const entry: ModelMessage = { role: 'user', content: message.content }
-    this.customMessages.set(entry, {
+    this.messageQueue.customMessages.set(entry, {
       customType: message.customType,
       display: message.display === true,
       ...(message.details === undefined ? {} : { details: message.details }),
@@ -1327,32 +1194,18 @@ export class VelaSession {
   }
 
   private flushPendingCustom(): void {
-    for (const message of this.pendingCustom.splice(0)) this.append(message)
+    for (const message of this.messageQueue.pendingCustom.splice(0))
+      this.append(message)
   }
 
   /** Clears queued messages and returns the user inputs among them (the TUI puts them back in the input box before aborting). */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = this.steeringQueue.splice(0)
-    const followUp = this.followUpQueue.splice(0)
-    if (steering.length || followUp.length) this.emitQueue()
-    return {
-      steering: this.inputTexts(steering),
-      followUp: this.inputTexts(followUp),
-    }
+    return this.messageQueue.clear()
   }
 
   /** Currently queued user inputs (a copy; queued custom messages are not listed) */
   get queue(): { steering: string[]; followUp: string[] } {
-    return {
-      steering: this.inputTexts(this.steeringQueue),
-      followUp: this.inputTexts(this.followUpQueue),
-    }
-  }
-
-  private inputTexts(messages: ModelMessage[]): string[] {
-    return messages
-      .filter((message) => !this.customMessages.has(message))
-      .map(messageText)
+    return this.messageQueue.queue
   }
 
   /** Whether an agent loop is running (including loops for queued messages and manual compaction) */
@@ -1368,19 +1221,12 @@ export class VelaSession {
     while (this.running) await this.running
   }
 
-  private emitQueue(): void {
-    this.emit({ type: 'queue_update', ...this.queue })
-  }
-
   /** Takes from the queues by mode: steer first, then followUp. */
   private dequeue(kind: 'steering' | 'followUp'): ModelMessage[] {
-    const [queue, mode] =
-      kind === 'steering'
-        ? [this.steeringQueue, this.steeringMode]
-        : [this.followUpQueue, this.followUpMode]
-    const taken = queue.splice(0, mode === 'all' ? queue.length : 1)
-    if (taken.length) this.emitQueue()
-    return taken
+    return this.messageQueue.dequeue(
+      kind,
+      kind === 'steering' ? this.steeringMode : this.followUpMode,
+    )
   }
 
   /** `/xxx` that is not an extension command, or plain input: runs when idle, queued by streamingBehavior while running. */
@@ -1410,11 +1256,10 @@ export class VelaSession {
             'A task is already running: queue with steer() / followUp() (or streamingBehavior), or wait for it to finish',
           ),
         )
-      ;(options.streamingBehavior === 'steer'
-        ? this.steeringQueue
-        : this.followUpQueue
-      ).push(message)
-      this.emitQueue()
+      this.messageQueue.enqueue(
+        options.streamingBehavior === 'steer' ? 'steering' : 'followUp',
+        message,
+      )
       return Promise.resolve()
     }
     const run = this.run(message, options)
@@ -1486,7 +1331,7 @@ export class VelaSession {
       this.toolDetails.clear()
       if (!saved) await this.saveOrReport()
       // Until the last flush finds nothing there is no await before unlocking: a later `!` command records itself
-      while (this.flushBash()) await this.saveOrReport()
+      while (this.userBash.flush()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
       this.prompting = false
@@ -1505,15 +1350,6 @@ export class VelaSession {
     }
   }
 
-  /** Preserve extension display metadata when normalization replaces an input object. */
-  private async normalizeInput(message: ModelMessage): Promise<ModelMessage> {
-    const normalized = await normalizeUserMessage(message)
-    const custom = this.customMessages.get(message)
-    if (custom && normalized !== message)
-      this.customMessages.set(normalized, custom)
-    return normalized
-  }
-
   /** One agent loop: the inputs are appended in order, then next-turn custom messages and before_agent_start's. */
   private async runLoop(
     inputs: ModelMessage[],
@@ -1530,7 +1366,7 @@ export class VelaSession {
     }
     const reasoning = reasoningOption(this.thinkingLevel, info)
     inputs = await Promise.all(
-      inputs.map((message) => this.normalizeInput(message)),
+      inputs.map((message) => this.messageQueue.normalizeInput(message)),
     )
     signal.throwIfAborted()
     const input = inputs.map(messageText).join('\n\n')
@@ -1541,13 +1377,13 @@ export class VelaSession {
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
     // `!` commands that finished during an earlier loop of this run come before the new input
-    this.flushBash()
+    this.userBash.flush()
     this.flushPendingCustom()
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
     for (const message of [
       ...inputs,
-      ...this.nextTurnMessages.splice(0),
+      ...this.messageQueue.nextTurnMessages.splice(0),
       ...added,
     ]) {
       this.append(message)
@@ -1576,13 +1412,13 @@ export class VelaSession {
       takeSteering: () =>
         Promise.all(
           this.dequeue('steering').map((message) =>
-            this.normalizeInput(message),
+            this.messageQueue.normalizeInput(message),
           ),
         ),
       takeFollowUp: () =>
         Promise.all(
           this.dequeue('followUp').map((message) =>
-            this.normalizeInput(message),
+            this.messageQueue.normalizeInput(message),
           ),
         ),
       onMessage: (message) => this.record(message),
@@ -1669,7 +1505,7 @@ export class VelaSession {
     await Promise.allSettled(this.commands.values())
     await this.running
     // A cancelled `!` command still records itself; wait for that before the final save
-    await this.bashRun?.catch(() => {})
+    await this.userBash.running?.catch(() => {})
     await this.registry.waitForIdle().catch(() => {})
     const errors: unknown[] = []
     // Only sessions that fired session_start emit session_shutdown.
@@ -1719,13 +1555,6 @@ function withDefaults(ui: SessionUI): ExtensionUI {
     setStatus: (key, text) => ui.setStatus?.(key, text),
     setWidget: (key, lines) => ui.setWidget?.(key, lines),
   }
-}
-
-/** Text of a user message (its text parts joined). */
-function messageText(message: ModelMessage): string {
-  const { content } = message
-  if (typeof content === 'string') return content
-  return content.map((part) => (part.type === 'text' ? part.text : '')).join('')
 }
 
 function assertCustomType(customType: unknown): void {
