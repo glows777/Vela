@@ -120,7 +120,7 @@ export interface ChannelRunFeedback {
   finish(outcome: ChannelOutcome): Promise<void>
 }
 
-/** Channel hooks are experimental until the channel milestones reach M4. */
+/** Channel hooks remain experimental: only Feishu is implemented so far; stabilization waits for a second channel implementation. */
 export interface ChannelDefinition {
   name: string
   description: string
@@ -161,7 +161,7 @@ export interface ChannelDefinition {
     activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
 
-  /** Experimental until M4. Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
+  /** Remains experimental pending a second channel implementation. Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
   startRun?: (
     message: IncomingMessage,
     options: { acknowledge: boolean },
