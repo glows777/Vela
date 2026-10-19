@@ -21,6 +21,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- Feishu routine management no longer fails on Responses-compatible providers that require an object-root tool schema; operation-specific validation and chat scoping are preserved.
+
 - **An unconfigured knowledge base printed a notice on every CLI start.** Startup is now quiet when embedding is not configured; `/rag` explains the missing configuration and `/extensions` lists the command. Configured knowledge-base warnings and errors are unchanged.
 - DeepSeek Responses plaintext thinking (`response.reasoning_text.delta`) is now displayed and saved for `api.deepseek.com`; the SDK previously dropped these deltas. Reasoning replay remains unsupported.
 - Feishu topic prompts now ask the model to respond to the latest message and treat earlier results as delivered, without repeating them unless asked; completion notices call for a brief acknowledgment without restating the task or result.

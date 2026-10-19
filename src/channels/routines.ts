@@ -37,21 +37,28 @@ const scheduleSchema = z.union([
   recurringSchema,
 ])
 
-/** Management input deliberately has no chat, target or creator arguments. */
-export const routineToolSchema = z.discriminatedUnion('action', [
-  z
-    .object({
-      action: z.literal('create'),
-      message: z.string().trim().min(1),
-      schedule: z.union([
-        z.object({ at: z.string() }).strict(),
-        recurringSchema,
-      ]),
-    })
-    .strict(),
-  z.object({ action: z.literal('list') }).strict(),
-  z.object({ action: z.literal('cancel'), id: z.string().min(1) }).strict(),
-])
+const createRoutineSchema = z
+  .object({
+    action: z.literal('create'),
+    message: z.string().trim().min(1),
+    schedule: z.union([z.object({ at: z.string() }).strict(), recurringSchema]),
+  })
+  .strict()
+
+/** Provider input must have an object root; the pipe retains strict operation validation. */
+export const routineToolSchema = createRoutineSchema
+  .extend({
+    action: z.enum(['create', 'list', 'cancel']),
+    id: z.string().min(1).optional(),
+  })
+  .partial({ message: true, schedule: true })
+  .pipe(
+    z.discriminatedUnion('action', [
+      createRoutineSchema,
+      z.object({ action: z.literal('list') }).strict(),
+      z.object({ action: z.literal('cancel'), id: z.string().min(1) }).strict(),
+    ]),
+  )
 const routineSchema = z
   .object({
     id: z.string().min(1),
