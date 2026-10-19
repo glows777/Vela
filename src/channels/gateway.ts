@@ -5,6 +5,7 @@ import { TopicCommands } from './commands.ts'
 import { ChannelDirectory } from './directory.ts'
 import { RunFeedback } from './feedback.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
+import { ChannelRoutines } from './routines.ts'
 import { channelSessionId } from './session-id.ts'
 import { ChannelSessions } from './sessions.ts'
 import type {
@@ -34,6 +35,7 @@ const BUSY_RECHECK_MS = 1000
 const MAX_SAVE_FAILURES = 3
 
 export class ChannelGateway {
+  readonly routines: ChannelRoutines
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
   private readonly sessions: ChannelSessions
@@ -58,7 +60,21 @@ export class ChannelGateway {
     this.logger = options.logger ?? silentLogger
     this.directory = new ChannelDirectory(options.dataDir)
     this.usage = new ChannelUsage(options.dataDir, this.directory)
-    this.recovery = new ChannelRecovery(this.directory, this.logger)
+    this.routines = new ChannelRoutines(
+      options.dataDir,
+      this.directory,
+      (name) => this.channels.get(name),
+      (name, msg) => this.handleIncoming(name, msg),
+      async (key, name, msg) => {
+        await this.queues.get(key)
+        if (this.stopped) return
+        return this.admission.admit(key, this.channels.get(name), msg)
+      },
+      this.logger,
+    )
+    this.recovery = new ChannelRecovery(this.directory, this.logger, (msg) =>
+      this.routines.confirmed(msg),
+    )
     this.sessions = new ChannelSessions(
       this.directory,
       (name) => this.channels.get(name),
@@ -102,6 +118,11 @@ export class ChannelGateway {
     this.channels.set(channel.name, channel)
 
     channel.connect?.({
+      routines: this.routines.scoped(
+        channel.name,
+        (id) =>
+          this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
+      ),
       context: (id) =>
         this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
       topicCoverage: () => this.directory.coverage,
@@ -155,6 +176,7 @@ export class ChannelGateway {
     for (const channel of this.channels.values())
       channel.validateTools?.(toolNames)
     await this.directory.load()
+    await this.routines.load(this.channels.values())
     this.usage.load()
     this.stopped = false
     for (const [name, ch] of this.channels) {
@@ -202,6 +224,7 @@ export class ChannelGateway {
           throw error
         }
         this.logger.info(`[gateway] ✓ ${name} started`)
+        this.routines.start(name)
       } catch (err) {
         this.logger.error(
           `[gateway] ✗ ${name} failed to start: ${errorMessage(err)}`,
@@ -212,6 +235,7 @@ export class ChannelGateway {
 
   async stopAll(): Promise<void> {
     this.stopped = true
+    this.routines.stop()
     for (const timer of this.idleTimers.values()) clearTimeout(timer)
     this.idleTimers.clear()
     // Drain all active work before stopping its channels, even if an independent close fails.
@@ -222,6 +246,7 @@ export class ChannelGateway {
       ...this.admitting.values(),
       ...this.commands.active,
       ...this.closing.values(),
+      ...this.routines.active,
     ])
     this.saveFailures.clear()
     for (const result of drained)
@@ -517,6 +542,12 @@ export class ChannelGateway {
       await session.resume()
       this.admission.resumed.add(session)
     }
+    if (
+      msg.routine &&
+      !recovered &&
+      !(await this.routines.shouldRun(msg, session))
+    )
+      return 'done'
     session.emit({
       type: 'channel_message',
       channel: channelName,
@@ -561,6 +592,7 @@ export class ChannelGateway {
     const channel = this.channels.get(channelName)
     if (!replyText || !channel) return false
     const reply: OutgoingMessage = {
+      routine: msg.routine,
       topic: msg.topic,
       channelId: msg.channelId,
       recipientId: msg.senderId,

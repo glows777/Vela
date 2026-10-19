@@ -47,6 +47,7 @@ export interface FeishuChannelConfig {
   logger: VelaLogger
   /** Default: lark's long connection with appId / appSecret */
   transport?: FeishuTransport
+  timezone?: unknown
 }
 
 /** Feishu may deliver an event more than once; this many recent message ids are remembered to drop repeats */
@@ -58,6 +59,24 @@ export const UNSUPPORTED_MESSAGE =
 export class FeishuChannel implements ChannelDefinition {
   name = 'feishu'
   description = 'Feishu bot message channel (long-connection mode)'
+  get timezone(): unknown {
+    return this.config.timezone
+  }
+
+  async prepareRoutine(
+    msg: IncomingMessage,
+    chatKind: 'group' | 'direct',
+  ): Promise<IncomingMessage | undefined> {
+    if (msg.topic || chatKind === 'direct') return msg
+    const receipt = await this.transport?.send(msg.channelId, msg.text)
+    if (!receipt) {
+      this.config.logger.warn(
+        '[feishu] Routine skipped: top-level delivery requires a transport send receipt',
+      )
+      return
+    }
+    return { ...msg, replyToId: receipt.messageId }
+  }
 
   readonly topics = new FeishuTopics(() => {
     if (!this.transport) throw new Error('Feishu is not connected')
@@ -317,18 +336,17 @@ export class FeishuChannel implements ChannelDefinition {
       )
       return
     }
+    const text =
+      message.recipientId && (message.topic || message.routine)
+        ? `<at user_id="${message.recipientId}"></at> ${message.text}`
+        : message.text
     // A failed send throws: the gateway reports it as channel_error instead of a channel_reply that never arrived
     if (message.replyToId) {
-      const receipt = await this.transport.reply(
-        message.replyToId,
-        message.topic && message.recipientId
-          ? `<at user_id="${message.recipientId}"></at> ${message.text}`
-          : message.text,
-      )
+      const receipt = await this.transport.reply(message.replyToId, text)
       if (!this.config.appId && !message.topic)
         this.lastReplies.set(message.channelId, receipt)
     } else {
-      await this.transport.send(message.channelId, message.text)
+      await this.transport.send(message.channelId, text)
     }
   }
 

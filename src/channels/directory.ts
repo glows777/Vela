@@ -1,6 +1,7 @@
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { z } from 'zod'
+import { writeAtomicJson } from './atomic-json.ts'
 import type { ChannelTopic, IncomingMessage } from './types.ts'
 
 const recordSchema = z
@@ -19,6 +20,7 @@ const recordSchema = z
     state: z.enum(['running', 'waiting', 'done', 'stopped']),
     waitingReason: z.string().optional(),
     passive: z.boolean().optional(),
+    routine: z.object({ id: z.string(), scheduledAt: z.string() }).optional(),
     pendingMessageIds: z.array(
       z.union([
         z.string(),
@@ -166,6 +168,7 @@ export class ChannelDirectory {
     if (record.state === 'waiting') record.state = 'done'
     if (
       msg.replyToId &&
+      !msg.routine &&
       !record.pendingMessageIds.some(
         (input) => pendingMessageId(input) === msg.replyToId,
       )
@@ -181,7 +184,8 @@ export class ChannelDirectory {
     if (!record) return
     record.state = 'running'
     record.passive = msg.passive
-    if (!record.rootId || record.requester.id === msg.senderId)
+    record.routine = msg.routine
+    if (msg.routine || !record.rootId || record.requester.id === msg.senderId)
       record.requester = { id: msg.senderId, name: msg.senderName }
     record.replyTarget = msg.replyToId
     await this.save(record)
@@ -259,28 +263,13 @@ export class ChannelDirectory {
       .catch(() => {})
       .then(async () => {
         // Later saves see only generations whose index write succeeded.
-        const text =
-          JSON.stringify({
-            version: 1,
-            createdAt: this.createdAt,
-            records: [...this.records.values()].map((current) =>
-              replace && current.key === record.key ? record : current,
-            ),
-          }) + '\n'
-        await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-        const temporary = `${path}.${crypto.randomUUID()}.tmp`
-        try {
-          const file = await open(temporary, 'wx', 0o600)
-          try {
-            await file.writeFile(text)
-            await file.sync()
-          } finally {
-            await file.close()
-          }
-          await rename(temporary, path)
-        } finally {
-          await rm(temporary, { force: true })
-        }
+        await writeAtomicJson(path, {
+          version: 1,
+          createdAt: this.createdAt,
+          records: [...this.records.values()].map((current) =>
+            replace && current.key === record.key ? record : current,
+          ),
+        })
         if (replace) this.records.set(record.key, record)
       })
     this.writing = write
