@@ -2,6 +2,7 @@ import {
   Box,
   type Component,
   Container,
+  Input,
   Markdown,
   Spacer,
   stripTerminalSequences,
@@ -9,7 +10,8 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import { isToolContent } from '../../messages.ts'
+import type { VelaEvent } from '../../agent/events.ts'
+import { isToolContent, type ModelMessage } from '../../messages.ts'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
@@ -470,10 +472,6 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${total % 60}s`
 }
 
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ')
-}
-
 /**
  * A notice line in the chat log (errors, retries, compaction, extension notifications, command output, ...).
  * `raw`: the CLI command's own output (e.g. /context colors); color sequences are kept.
@@ -600,4 +598,96 @@ export function sanitize(text: string): string {
       // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
       .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\uFFF9-\uFFFB]/g, '')
   )
+}
+
+export function dialogBox(
+  title: string,
+  body: Component,
+  hint: string,
+): Component {
+  const box = new Container()
+  box.addChild(new Spacer(1))
+  box.addChild(new Text(theme.fg('border', '─'.repeat(3)), 0, 0))
+  box.addChild(new Text(theme.bold(title), 1, 0))
+  box.addChild(new Spacer(1))
+  box.addChild(body)
+  box.addChild(new Spacer(1))
+  box.addChild(new Text(theme.fg('dim', hint), 1, 0))
+  return box
+}
+
+export function compactionLine(
+  event: Extract<VelaEvent, { type: 'compaction_end' }>,
+): string {
+  const result = event.result
+  if (!result) return ''
+  switch (event.reason) {
+    case 'threshold':
+      return `[context] Summarized ${result.tokensBefore} → ${result.tokensAfter} tokens`
+    case 'manual':
+      return `[context] Manually compacted ${result.tokensBefore} → ${result.tokensAfter} tokens`
+    case 'overflow':
+      return `[context] The model said the context is too long; summarized ${result.tokensBefore} → ${result.tokensAfter} tokens and retrying`
+  }
+}
+
+export function contextLine(
+  event: Extract<VelaEvent, { type: 'context_prepare' }>,
+): string {
+  switch (event.action) {
+    case 'micro':
+      return `[context] Folded old tool results ${event.before} → ${event.after} tokens`
+    case 'summary-required':
+      return `[context] ${event.before} tokens, summarizing before the next request`
+  }
+}
+
+/** Text of the last assistant message that has any (tool-call-only steps are skipped). */
+export function lastAnswer(messages: readonly ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as ModelMessage
+    if (message.role !== 'assistant') continue
+    const text =
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+            .map((part) => (part.type === 'text' ? part.text : ''))
+            .join('')
+    if (text.trim()) return text
+  }
+  return ''
+}
+
+/** EIO: tty reads / writes after hangup; ENOTTY: the tty was revoked (same set as pi). */
+const DEAD_TERMINAL_ERROR_CODES = new Set([
+  'EIO',
+  'EPIPE',
+  'ENOTCONN',
+  'ENOTTY',
+])
+
+export function isDeadTerminalError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' && DEAD_TERMINAL_ERROR_CODES.has(code)
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ')
+}
+
+/** An Input that draws `*` for each character (API keys in `/login`); the cursor stays in place since lengths match */
+export class SecretInput extends Input {
+  override render(width: number): string[] {
+    const value = this.getValue()
+    this.setValue('*'.repeat(value.length))
+    try {
+      return super.render(width)
+    } finally {
+      this.setValue(value)
+    }
+  }
 }

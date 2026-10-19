@@ -17,15 +17,9 @@ import {
   Text,
   TruncatedText,
   TuiMainScreen,
-  truncateToWidth,
-  visibleWidth,
 } from '@earendil-works/pi-tui'
 import type { VelaEvent } from '../agent/events.ts'
-import type {
-  AuthInteraction,
-  AuthPrompt,
-  LoginOptions,
-} from '../auth/types.ts'
+import type { LoginOptions } from '../auth/types.ts'
 import type { SessionUI } from '../extensions/types.ts'
 import { imageMimeType } from '../images/metadata.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
@@ -33,11 +27,9 @@ import type { ThinkingLevel } from '../models/index.ts'
 import {
   branchSummaryMessageText,
   contextEntries,
-  messageText,
   type SessionEntry,
   summaryMessageText,
 } from '../session/entries.ts'
-import { formatUsd } from '../usage/format.ts'
 import { type Vela, velaInternals } from '../vela.ts'
 import type { VelaSession } from '../vela-session.ts'
 import {
@@ -46,23 +38,32 @@ import {
   readClipboardText,
 } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
-import { openBrowser } from './login.ts'
-import { nextModel, scopedModels } from './model-cycle.ts'
 import { formatContextFileList } from './status-display.ts'
+import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
+import { CLI_COMMANDS, HOTKEYS, TUI_COMMANDS } from './tui/commands.ts'
 import {
   AssistantMessage,
   BashExecution,
   CustomMessageBlock,
+  compactionLine,
+  contextLine,
+  dialogBox,
+  errorMessage,
   imagePlaceholder,
+  isDeadTerminalError,
+  lastAnswer,
   notice,
+  oneLine,
+  SecretInput,
   sanitize,
   ToolBlock,
   UserMessage,
 } from './tui/components.ts'
 import { VelaEditor } from './tui/editor.ts'
-import { SearchSelect } from './tui/search-select.ts'
+import { Footer } from './tui/footer.ts'
+import { cycleModel, selectModel } from './tui/model-selector.ts'
+import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
-import { nearestShown, treeItems } from './tui/tree-selector.ts'
 
 export interface InteractiveOptions {
   vela: Vela
@@ -104,59 +105,6 @@ export interface InteractiveOptions {
 }
 
 type LogLevel = 'info' | 'warning' | 'error'
-
-/** Commands the TUI handles itself (besides extension and CLI slash commands), for autocomplete */
-const TUI_COMMANDS = [
-  { name: 'new', description: 'Start a new session' },
-  { name: 'resume', description: 'Resume a saved session' },
-  { name: 'name', description: 'Set the session name' },
-  {
-    name: 'model',
-    description: 'Select model (/model provider/id switches directly)',
-  },
-  { name: 'thinking', description: 'Select thinking level' },
-  { name: 'login', description: 'Sign in to a provider or store its API key' },
-  { name: 'logout', description: "Remove a provider's stored credential" },
-  { name: 'tree', description: 'Move to another point in the session tree' },
-  {
-    name: 'fork',
-    description: 'Start a new session from before an earlier message',
-  },
-  { name: 'clone', description: 'Copy the current branch into a new session' },
-  {
-    name: 'export',
-    description: 'Write the current branch as HTML (or .jsonl) [path]',
-  },
-  {
-    name: 'compact',
-    description: 'Manually compact the session context (optional focus)',
-  },
-  { name: 'copy', description: 'Copy the last answer to the clipboard' },
-  { name: 'hotkeys', description: 'Show keyboard shortcuts' },
-  { name: 'quit', description: 'Quit Vela' },
-]
-const CLI_COMMANDS = [
-  { name: 'status', description: 'Session overview' },
-  { name: 'context', description: 'Context usage' },
-  { name: 'usage', description: 'Token usage and cost' },
-  { name: 'skill', description: 'List skills (run one with /skill:<name>)' },
-  { name: 'extensions', description: 'Loaded extensions' },
-  { name: 'channel', description: 'Channels' },
-  { name: 'role', description: 'Show / switch role' },
-  { name: 'hooks', description: 'Registered hooks' },
-]
-
-const HOTKEYS = [
-  'Enter send; while running, Enter = steer (inserted after the current step)',
-  'Alt+Enter while running, queue a follow-up (after the task finishes)',
-  'Alt+Up move queued messages back to the editor',
-  'Esc interrupt (queued messages go back to the editor), or cancel a ! command',
-  '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',
-  'Shift+Tab cycle thinking level · Ctrl+L select model · Ctrl+P / Shift+Ctrl+P cycle models',
-  'Ctrl+O expand / collapse tool output · Ctrl+T show / hide thinking',
-  `${process.platform === 'win32' ? 'Alt+V' : 'Ctrl+V'} paste a clipboard image as a file path for read_file`,
-  'Ctrl+C clear editor, twice to exit · Ctrl+D exit when editor is empty',
-]
 
 /**
  * Interactive mode (TUI, like pi's interactive mode): pi-tui provides components and rendering.
@@ -1202,135 +1150,29 @@ export class InteractiveMode {
   }
 
   /** `/tree` (like pi): pick an entry, choose whether to summarize the branch being left, then move. */
-  private async treeCommand(): Promise<void> {
-    if (this.busyNotice()) return
-    const session = this.session
-    const branch = session.getBranch()
-    const items = treeItems(
-      session.getTree(),
-      new Set(branch.map((entry) => entry.id)),
-      null,
-    )
-    if (!items.length) {
-      this.addNotice('No messages in this session yet', 'dim')
-      return
-    }
-    const current = nearestShown(branch, items)
-    for (const item of items)
-      if (item.value === current) item.description = '← current'
-    const targetId = await this.select('Session Tree', items, current)
-    if (!targetId) return
-    const action = await this.select('Move here', [
-      { value: 'go', label: 'No summary' },
-      { value: 'summarize', label: 'Summarize the branch I leave' },
-      { value: 'focus', label: 'Summarize with a focus…' },
-      { value: 'label', label: 'Set a label on this entry…' },
-    ])
-    if (!action) return
-    if (action === 'label') {
-      const label = await this.input('Label', 'empty clears the label')
-      try {
-        session.setLabel(targetId, label)
-        await session.save()
-        this.addNotice(label ? `Label set: ${label}` : 'Label cleared', 'dim')
-      } catch (error) {
-        this.addNotice(errorMessage(error), 'error')
-      }
-      return
-    }
-    let focus: string | undefined
-    if (action === 'focus') {
-      focus = await this.input('Summary focus', 'what the summary should keep')
-      if (focus === undefined) return
-    }
-    const atLeaf =
-      targetId === session.getLeafId() &&
-      !session
-        .getBranch()
-        .some(
-          (entry) =>
-            entry.id === targetId &&
-            entry.type === 'message' &&
-            entry.message.role === 'user',
-        )
-    if (atLeaf) {
-      this.addNotice('Already at this point', 'dim')
-      return
-    }
-    if (action !== 'go') this.startLoader('Summarizing branch…')
-    try {
-      const result = await session.navigateTree(targetId, {
-        summarize: action !== 'go',
-        focus,
-      })
-      if (result.cancelled) {
-        this.addNotice('Navigation cancelled', 'dim')
-        return
-      }
-      this.resetChat()
-      this.renderHistory(session.getBranch())
-      if (result.editorText !== undefined)
-        this.editor.setText(result.editorText)
-      this.addNotice('Moved in the session tree', 'dim')
-    } catch (error) {
-      this.addNotice(`Navigation failed: ${errorMessage(error)}`, 'error')
-    } finally {
-      this.stopLoader()
-      this.updateBorder()
-      this.tui.requestRender()
+  private treeHost() {
+    return {
+      session: this.session,
+      options: this.options,
+      select: this.select.bind(this),
+      input: this.input.bind(this),
+      addNotice: this.addNotice.bind(this),
+      busyNotice: this.busyNotice.bind(this),
+      startLoader: this.startLoader.bind(this),
+      stopLoader: this.stopLoader.bind(this),
+      resetChat: this.resetChat.bind(this),
+      renderHistory: this.renderHistory.bind(this),
+      updateBorder: this.updateBorder.bind(this),
+      switchSession: this.switchSession.bind(this),
+      editor: this.editor,
+      tui: this.tui,
     }
   }
-
-  /** `/fork` (pick an earlier user message) and `/clone` (the current branch), like pi: switch to the copy. */
-  private async forkCommand(clone = false): Promise<void> {
-    if (this.busyNotice()) return
-    const session = this.session
-    let entryId: string | undefined
-    if (!clone) {
-      const users = session
-        .getEntries()
-        .flatMap((entry) =>
-          entry.type === 'message' && entry.message.role === 'user'
-            ? [{ id: entry.id, text: messageText(entry.message.content) }]
-            : [],
-        )
-      if (!users.length) {
-        this.addNotice('No messages to fork from', 'dim')
-        return
-      }
-      entryId = await this.select(
-        'Fork from before',
-        users.map((user) => ({
-          value: user.id,
-          label: oneLine(sanitize(user.text)).slice(0, 80),
-        })),
-        users.at(-1)?.id,
-      )
-      if (!entryId) return
-    }
-    try {
-      const result = clone
-        ? await session.clone({ sessionId: this.options.newSessionId() })
-        : await session.fork(entryId as string, {
-            sessionId: this.options.newSessionId(),
-          })
-      if (result.cancelled || !result.session) {
-        this.addNotice(`${clone ? 'Clone' : 'Fork'} cancelled`, 'dim')
-        return
-      }
-      await this.switchSession(result.session.id, false)
-      this.editor.setText(result.selectedText ?? '')
-      this.addNotice(
-        clone ? 'Cloned to a new session' : 'Forked to a new session',
-        'dim',
-      )
-    } catch (error) {
-      this.addNotice(
-        `${clone ? 'Clone' : 'Fork'} failed: ${errorMessage(error)}`,
-        'error',
-      )
-    }
-    this.tui.requestRender()
+  private treeCommand(): Promise<void> {
+    return treeCommand(this.treeHost())
+  }
+  private forkCommand(clone = false): Promise<void> {
+    return forkCommand(this.treeHost(), clone)
   }
 
   /** `/copy` (like pi): the last assistant answer with text goes to the clipboard */
@@ -1380,218 +1222,42 @@ export class InteractiveMode {
     this.updateBorder()
   }
 
-  private currentModelRef(): string | undefined {
-    try {
-      return this.session.modelInfo.ref
-    } catch {}
-  }
-
-  /** `/model` and Ctrl+L: pick from the models of providers with a credential, with search (like pi) */
-  private async selectModel(): Promise<void> {
-    const current = this.currentModelRef()
-    const models = this.vela.models()
-    if (!models.length) {
-      this.addNotice(
-        'No models available: sign in with /login, set a provider API key (e.g. ANTHROPIC_API_KEY), or switch directly with /model provider/id',
-        'dim',
-      )
-      return
-    }
-    const ref = await this.dialog<string | undefined>((done) => {
-      const list = new SearchSelect(
-        models.map((m) => ({
-          value: m.ref,
-          label: m.ref === current ? `${m.ref} ✓` : m.ref,
-          description: [
-            m.name,
-            m.contextWindow && `${Math.round(m.contextWindow / 1000)}k`,
-            m.reasoning === false && 'no thinking',
-          ]
-            .filter(Boolean)
-            .join(' · '),
-        })),
-        10,
-        selectListTheme,
-        current,
-      )
-      list.onSelect = (item) => done(item.value)
-      list.onCancel = () => done(undefined)
-      return {
-        component: dialogBox(
-          'Select Model',
-          list,
-          'Type to search · ↑↓ navigate · Enter select · Esc cancel',
-        ),
-        focus: list,
-      }
-    })
-    if (ref) this.switchModel(ref)
-  }
-
-  private switchModel(ref: string): void {
-    try {
-      this.session.setModel(ref)
-      this.addNotice(
-        `Model: ${this.session.modelInfo.ref} · thinking: ${this.session.thinkingLevel}`,
-        'dim',
-      )
-      this.renderHeader(true)
-    } catch (error) {
-      this.addNotice(errorMessage(error), 'error')
-    }
-    this.updateBorder()
-  }
-
-  /** Ctrl+P / Shift+Ctrl+P (like pi): the next model of settings `enabledModels`, or of all available models */
-  private cycleModel(direction: 1 | -1): void {
-    const models = scopedModels(this.vela.models(), this.options.enabledModels)
-    const next = nextModel(models, this.currentModelRef(), direction)
-    if (!next) {
-      this.addNotice(
-        models.length
-          ? 'Only one model to cycle through (see enabledModels in settings)'
-          : 'No models available: sign in with /login or set a provider API key',
-        'dim',
-      )
-      return
-    }
-    this.switchModel(next.ref)
-  }
-
-  /** `/login [provider]` (like pi): pick a provider and a method, then run its sign-in or ask for an API key */
-  private async loginCommand(args: string): Promise<void> {
-    const providers = this.vela.loginProviders()
-    let provider = args.trim() || undefined
-    if (!provider) {
-      if (!providers.length) {
-        this.addNotice('No provider supports /login', 'dim')
-        return
-      }
-      provider = await this.select(
-        'Sign in to',
-        providers.map((p) => ({
-          value: p.provider,
-          label: p.provider,
-          description: [p.oauth, p.source && `using ${p.source}`]
-            .filter(Boolean)
-            .join(' · '),
-        })),
-      )
-      if (!provider) return
-    }
-    const found = providers.find((p) => p.provider === provider)
-    if (!found) {
-      this.addNotice(
-        `Unknown provider ${provider} (can sign in to: ${providers.map((p) => p.provider).join(', ') || 'none'})`,
-        'error',
-      )
-      return
-    }
-    const methods = [
-      ...(found.oauth ? [{ value: 'oauth', label: found.oauth }] : []),
-      ...(found.apiKey
-        ? [{ value: 'api_key', label: 'Enter an API key' }]
-        : []),
-    ]
-    const method =
-      methods.length === 1
-        ? methods[0]?.value
-        : await this.select(`Sign in to ${provider}`, methods)
-    if (method !== 'oauth' && method !== 'api_key') return
-    const controller = new AbortController()
-    const interaction: AuthInteraction = {
-      signal: controller.signal,
-      prompt: (prompt) => this.authPrompt(prompt, controller),
-      notify: (event) => {
-        if (event.type === 'auth_url') {
-          this.addNotice(
-            `${event.instructions ?? 'Open this URL to sign in:'}\n${event.url}`,
-            'info',
-          )
-          ;(this.options.openBrowser ?? openBrowser)(event.url)
-        } else this.addNotice(event.message, 'dim')
+  private modelHost() {
+    const mode = this
+    return {
+      vela: this.vela,
+      get session() {
+        return mode.session
       },
+      options: this.options,
+      addNotice: this.addNotice.bind(this),
+      dialog: this.dialog.bind(this),
+      renderHeader: this.renderHeader.bind(this),
+      updateBorder: this.updateBorder.bind(this),
     }
-    try {
-      await this.vela.login(
-        provider,
-        method,
-        interaction,
-        this.options.loginOptions,
-      )
-      this.addNotice(
-        `Signed in to ${provider}; the credential is saved for later sessions`,
-        'info',
-      )
-    } catch (error) {
-      this.addNotice(
-        controller.signal.aborted
-          ? 'Login cancelled'
-          : `Login to ${provider} failed: ${errorMessage(error)}`,
-        controller.signal.aborted ? 'dim' : 'error',
-      )
-    } finally {
-      controller.abort()
-    }
-    this.renderHeader(true)
+  }
+  private selectModel(): Promise<void> {
+    return selectModel(this.modelHost())
+  }
+  private cycleModel(direction: 1 | -1): void {
+    cycleModel(this.modelHost(), direction)
   }
 
-  /** One login question as a dialog; Esc cancels the whole login, the prompt's own signal closes just the dialog */
-  private async authPrompt(
-    prompt: AuthPrompt,
-    login: AbortController,
-  ): Promise<string> {
-    let answer: string | undefined
-    if (prompt.type === 'select')
-      answer = await this.select(
-        prompt.message,
-        prompt.options.map((o) => ({ value: o.id, label: o.label })),
-      )
-    else
-      answer = await this.input(
-        prompt.message,
-        prompt.placeholder,
-        prompt.signal,
-        prompt.type === 'secret',
-      )
-    if (prompt.signal?.aborted) throw new Error('Prompt closed')
-    if (answer === undefined) {
-      login.abort()
-      throw new Error('Login cancelled')
+  private authHost() {
+    return {
+      vela: this.vela,
+      options: this.options,
+      select: this.select.bind(this),
+      input: this.input.bind(this),
+      addNotice: this.addNotice.bind(this),
+      renderHeader: this.renderHeader.bind(this),
     }
-    return answer
   }
-
-  /** `/logout [provider]`: removes the stored credential (environment variables and models.json keys stay) */
-  private async logoutCommand(args: string): Promise<void> {
-    const stored = this.vela
-      .loginProviders()
-      .filter(
-        (p) => p.source === 'auth.json' || p.source === 'OAuth (auth.json)',
-      )
-    const provider =
-      args.trim() ||
-      (stored.length
-        ? await this.select(
-            'Sign out of',
-            stored.map((p) => ({ value: p.provider, label: p.provider })),
-          )
-        : undefined)
-    if (!provider) {
-      if (!stored.length) this.addNotice('No stored credentials', 'dim')
-      return
-    }
-    try {
-      this.addNotice(
-        (await this.vela.logout(provider))
-          ? `Removed the stored credential for ${provider}`
-          : `No stored credential for ${provider}`,
-        'dim',
-      )
-    } catch (error) {
-      this.addNotice(errorMessage(error), 'error')
-    }
-    this.renderHeader(true)
+  private loginCommand(args: string): Promise<void> {
+    return loginCommand(this.authHost(), args)
+  }
+  private logoutCommand(args: string): Promise<void> {
+    return logoutCommand(this.authHost(), args)
   }
 
   // ---------------------------------------------------------------- Dialogs
@@ -1769,150 +1435,3 @@ export class InteractiveMode {
 }
 
 /** Footer (like pi): directory and session name; usage, context percentage, model and thinking; extension statuses. */
-class Footer implements Component {
-  private readonly statuses = new Map<string, string>()
-
-  constructor(
-    private readonly cwd: string,
-    private readonly session: () => VelaSession | undefined,
-  ) {}
-
-  setStatus(key: string, text?: string): void {
-    if (text) this.statuses.set(key, text)
-    else this.statuses.delete(key)
-  }
-
-  invalidate(): void {}
-
-  render(width: number): string[] {
-    const session = this.session()
-    if (!session) return []
-    const home = homedir()
-    const dir = this.cwd.startsWith(home)
-      ? `~${this.cwd.slice(home.length)}`
-      : this.cwd
-    const usage = session.usage
-    const totals = usage.totals
-    let model = '(no model)'
-    try {
-      model = session.modelInfo.ref
-    } catch {}
-    const left = [
-      `↑${compact(totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens)}`,
-      `↓${compact(totals.outputTokens)}`,
-      typeof totals.cost === 'number' ? formatUsd(totals.cost) : undefined,
-      `${usage.percent}%`,
-    ]
-      .filter(Boolean)
-      .join(' ')
-    const right = `${model} · ${session.thinkingLevel}`
-    const gap = Math.max(
-      1,
-      width - visibleWidth(left) - visibleWidth(right) - 2,
-    )
-    const lines = [
-      truncateToWidth(
-        ` ${dir} · ${sanitize(session.name ?? session.id)}`,
-        width,
-      ),
-      truncateToWidth(` ${left}${' '.repeat(gap)}${right}`, width),
-    ]
-    if (this.statuses.size)
-      lines.push(
-        truncateToWidth(` ${[...this.statuses.values()].join(' · ')}`, width),
-      )
-    return lines.map((line) => theme.fg('dim', line))
-  }
-}
-
-function dialogBox(title: string, body: Component, hint: string): Component {
-  const box = new Container()
-  box.addChild(new Spacer(1))
-  box.addChild(new Text(theme.fg('border', '─'.repeat(3)), 0, 0))
-  box.addChild(new Text(theme.bold(title), 1, 0))
-  box.addChild(new Spacer(1))
-  box.addChild(body)
-  box.addChild(new Spacer(1))
-  box.addChild(new Text(theme.fg('dim', hint), 1, 0))
-  return box
-}
-
-function compactionLine(
-  event: Extract<VelaEvent, { type: 'compaction_end' }>,
-): string {
-  const result = event.result
-  if (!result) return ''
-  switch (event.reason) {
-    case 'threshold':
-      return `[context] Summarized ${result.tokensBefore} → ${result.tokensAfter} tokens`
-    case 'manual':
-      return `[context] Manually compacted ${result.tokensBefore} → ${result.tokensAfter} tokens`
-    case 'overflow':
-      return `[context] The model said the context is too long; summarized ${result.tokensBefore} → ${result.tokensAfter} tokens and retrying`
-  }
-}
-
-function contextLine(
-  event: Extract<VelaEvent, { type: 'context_prepare' }>,
-): string {
-  switch (event.action) {
-    case 'micro':
-      return `[context] Folded old tool results ${event.before} → ${event.after} tokens`
-    case 'summary-required':
-      return `[context] ${event.before} tokens, summarizing before the next request`
-  }
-}
-
-/** Text of the last assistant message that has any (tool-call-only steps are skipped). */
-function lastAnswer(messages: readonly ModelMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i] as ModelMessage
-    if (message.role !== 'assistant') continue
-    const text =
-      typeof message.content === 'string'
-        ? message.content
-        : message.content
-            .map((part) => (part.type === 'text' ? part.text : ''))
-            .join('')
-    if (text.trim()) return text
-  }
-  return ''
-}
-
-/** EIO: tty reads / writes after hangup; ENOTTY: the tty was revoked (same set as pi). */
-const DEAD_TERMINAL_ERROR_CODES = new Set([
-  'EIO',
-  'EPIPE',
-  'ENOTCONN',
-  'ENOTTY',
-])
-
-function isDeadTerminalError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code
-  return typeof code === 'string' && DEAD_TERMINAL_ERROR_CODES.has(code)
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ')
-}
-
-function compact(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n)
-}
-
-/** An Input that draws `*` for each character (API keys in `/login`); the cursor stays in place since lengths match */
-class SecretInput extends Input {
-  override render(width: number): string[] {
-    const value = this.getValue()
-    this.setValue('*'.repeat(value.length))
-    try {
-      return super.render(width)
-    } finally {
-      this.setValue(value)
-    }
-  }
-}
