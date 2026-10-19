@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import z from 'zod'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
-import {
-  type ToolDefinition,
-  ToolRegistry,
-} from '../../../src/tools/registry.ts'
+import type { ToolDefinition } from '../../../src/tools/registry.ts'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { registerToolSearchTool } from '../../../src/tools/tool-search.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-registry-test-'))

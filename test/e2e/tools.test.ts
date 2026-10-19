@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import z from 'zod'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
-import { ToolExecutionResult } from '../../src/tools/registry.ts'
+import { ToolExecutionResult } from '../../src/tools/types.ts'
 import {
   captureConsole,
   cleanupTestVelas,

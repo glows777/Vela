@@ -9,7 +9,7 @@ import {
   editFileToolParamSchema,
 } from '../../../src/tools/file.ts'
 import { withFileMutationQueue } from '../../../src/tools/file-mutation-queue.ts'
-import type { ToolExecutionResult } from '../../../src/tools/registry.ts'
+import type { ToolExecutionResult } from '../../../src/tools/types.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-file-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
