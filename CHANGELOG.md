@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Fixed
+
+- Routine lists show a readable topic task without its opaque root message id; routine ids remain available for cancellation.
+
 ## [0.3.0] - 2026-10-19
 
 ### Added
