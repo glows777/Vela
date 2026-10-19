@@ -23,7 +23,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../models/index.ts'
-import { assertSessionId } from '../vela-session.ts'
+import { assertSessionId } from '../session/options.ts'
 
 type Env = Record<string, string | undefined>
 
