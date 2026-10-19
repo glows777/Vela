@@ -1,6 +1,6 @@
 # Core: using and verifying the SDK
 
-For agents that build on Vela or change its core (agent loop, sessions, context, extensions API). The first half gets you running; the second half lists the core behaviors, how to see each one through the public SDK, and which e2e test already covers it. Every recipe below was run on 2026-10-15.
+For agents that build on Vela or change its core (agent loop, sessions, context, extensions API). The first half gets you running; the second half lists the core behaviors, how to see each one through the public SDK, and which e2e test already covers it. Every recipe below was run on 2026-10-15, except the session cwd row (2026-10-19).
 
 ## Getting started
 
@@ -73,6 +73,7 @@ Write a script in the run's `work/` that imports `$REPO/src/index.ts` and `$REPO
 | Persistence | `createVela({ cwd, dataDir: '.d', model })`, prompt, `dispose()`; a new Vela, `session(id).resume()` | Resumed history; `listSessions()`; with `sessionStorage: memorySessionStorage()`, `session.persistence.type` is `memory` | e2e/session, e2e/sessions, e2e/sdk |
 | Image inputs | Load a fixture as `{ type: 'image', data: base64, mimeType }`; `session.prompt('describe', { images })`, then steer/follow-up, resume/clone/fork; switch between text-only and vision model metadata | Provider receives an image file; oversized images become <=2000px / <=4.5 MiB; text-only request has a placeholder but history still has image data; invalid images have a text reason; summaries contain no base64 text | e2e/images, e2e/rpc |
 | Tool image results | Run `examples/sdk/06-tool-images.ts`; call read_file on a misleading image extension; replace tool content in a hook; change to a text-only model, dispose and resume | Canonical inline image, post-hook resize, text-only omission, resumed vision image; no base64 in caption files or summary text | e2e/tool-images, e2e/tool-image-file-limits, e2e/tool-image-providers |
+| Session cwd | `proj-b/AGENTS.md` exists; `vela.session('b', { cwd: 'proj-b' })`; faux `write_file` `out.txt`, then `(req) => fauxText(req.system.includes('<B rule>') ? 'yes' : 'no')` | `session.cwd` is the absolute `proj-b`; `proj-b/out.txt` exists and the Vela cwd has no `out.txt`; the system prompt carries proj-b's AGENTS.md | e2e/session-cwd |
 | Many sessions | `Promise.all([a.prompt('A'), b.prompt('B')])` | Separate histories | e2e/sessions |
 | User bash, dispose | `session.executeBash('echo X')`, then `run` | `exitCode` 0; `vela.session()` throws after `dispose()` | e2e/user-bash, e2e/disposal |
 
