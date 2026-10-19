@@ -72,7 +72,7 @@ test('a member creates a local-time topic routine with mandatory tools, lists af
   )
   expect(created.timezone).toBe('America/New_York')
   expect(created.nextRun).toBe('2026-01-05 09:00')
-  expect(created.target).toContain('root')
+  expect(created.target).toBe('Topic: Manage reminders')
   const [record] = await r.stored()
   expect(record.schedule).toEqual({ at: '2026-01-05T14:00:00.000Z' })
   expect(record.targetKey).toBe(channelSessionId('feishu', 'oc_group', 'root'))
@@ -156,6 +156,10 @@ test.each(['group', 'topic', 'direct'] as const)(
         '2026-01-05 09:00',
       ])
         expect(text).toContain(value)
+      if (target === 'topic') {
+        expect(text).toContain('Topic: Manage reminders')
+        expect(text).not.toContain('Topic root:')
+      }
       expect(r.t.model.calls).toHaveLength(before.calls)
       expect(session.getEntries()).toHaveLength(before.entries)
     }
