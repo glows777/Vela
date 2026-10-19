@@ -13,7 +13,8 @@ import {
   splitBom,
 } from './edit-diff.ts'
 import { withFileMutationQueue } from './file-mutation-queue.ts'
-import { type ToolDefinition, ToolExecutionResult } from './registry.ts'
+import type { ToolDefinition } from './registry.ts'
+import { ToolExecutionResult } from './types.ts'
 
 /** Default page of read_file, same as pi: 2000 lines or 50KB, whichever comes first */
 export const READ_MAX_LINES = 2000

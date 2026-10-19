@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import z from 'zod'
 import type { ImageContent, ToolContent } from '../../src/messages.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
-import { ToolExecutionResult } from '../../src/tools/registry.ts'
+import { ToolExecutionResult } from '../../src/tools/types.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

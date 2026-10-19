@@ -6,7 +6,6 @@ import { silentLogger, type VelaLogger } from '../logger.ts'
 import {
   isToolContent,
   normalizeToolContent,
-  type ToolContent,
   toAIToolOutput,
   toolContentText,
 } from '../messages.ts'
@@ -18,46 +17,21 @@ import {
   type PermissionRules,
   type Role,
 } from '../security/roles.ts'
-import type {
-  ExecutionMetadata,
-  ResultRecord,
-} from '../session/tool-history.ts'
-import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
+import type { ResultRecord } from '../session/tool-history.ts'
+import { ToolResultStore } from '../session/tool-results.ts'
+import { prepareCallResult } from './call-result.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
-
-/** A tool's native details plus model-facing text or canonical text/image content. */
-export class ToolExecutionResult {
-  readonly text: string
-  readonly content?: ToolContent
-  constructor(
-    readonly value: unknown,
-    content: string | ToolContent,
-    readonly execution: ExecutionMetadata = {},
-  ) {
-    this.text = typeof content === 'string' ? content : toolContentText(content)
-    if (typeof content !== 'string') this.content = content
-  }
-}
-
-/** What a tool call ended with (`ctx.executeTool()`, like pi's `AgentToolCallOutcome`). */
-export interface ToolCallOutcome {
-  toolCallId: string
-  toolName: string
-  /** The tool's output, or the error message when `isError` */
-  result: unknown
-  /** Unknown or uncallable tool, invalid arguments, rejected or blocked call, thrown error, or an error result */
-  isError: boolean
-  /** How long the tool ran; absent when it did not run */
-  durationMs?: number
-}
-
-/** Options for `ctx.executeTool()` (like pi's `ExecuteToolOptions`). */
-export interface ExecuteToolOptions {
-  /** Defaults to the calling tool's signal */
-  signal?: AbortSignal
-  /** Receives the nested tool's partial results, in addition to `tool_execution_update` events */
-  onUpdate?: (partialResult: unknown) => void
-}
+import {
+  type ExecuteToolOptions,
+  type ToolAnnotations,
+  type ToolCallOutcome,
+  type ToolExecutionMode,
+  ToolExecutionResult,
+  type ToolExposure,
+  type ToolNamespace,
+  type ToolRegistryForkOptions,
+  ToolResultError,
+} from './types.ts'
 
 /** Context passed to a tool's execute. */
 export interface ToolContext {
@@ -117,46 +91,6 @@ export interface ToolDefinition {
   searchHint?: string // Hint shown next to the name in the deferred tool list
 }
 
-export type ToolExecutionMode = 'sequential' | 'parallel'
-
-/**
- * How the model reaches a tool (same values and meaning as pi). "Callable" means callable from
- * other tools through `ctx.executeTool()`.
- * - `direct`: declared to the model and callable.
- * - `model-only`: declared to the model, never callable (orchestrating or interactive tools).
- * - `deferred`: named in the system prompt; declared once `tool_search` loads it; always callable.
- * - `codemode`: never declared and not listed; callable (for tools that orchestrate other tools).
- * - `hidden`: registered but unreachable.
- */
-export type ToolExposure =
-  | 'direct'
-  | 'model-only'
-  | 'codemode'
-  | 'deferred'
-  | 'hidden'
-
-/** MCP-style hints about a tool (same fields as pi's `ToolAnnotations`). */
-export interface ToolAnnotations {
-  /** The tool does not modify its environment */
-  readOnlyHint?: boolean
-  /** The tool may delete or overwrite data, rather than only add to it. Meaningful when not read-only */
-  destructiveHint?: boolean
-  /** Repeating a call with the same arguments has no further effect. Meaningful when not read-only */
-  idempotentHint?: boolean
-  /** The tool reaches an open world of external entities, such as the web */
-  openWorldHint?: boolean
-}
-
-/** A group of related tools, such as the tools of one MCP server (same fields as pi's `ToolNamespace`). */
-export interface ToolNamespace {
-  /** For example `mcp__docs` */
-  name: string
-  /** Short summary shown once with the group in the deferred tool list */
-  description?: string
-  /** Longer usage guidance, such as MCP server instructions; returned by tool_search with the group's tools */
-  instructions?: string
-}
-
 const EXPOSURES: readonly ToolExposure[] = [
   'direct',
   'model-only',
@@ -170,19 +104,6 @@ class ToolRejection {
   constructor(readonly reason: string) {}
 }
 
-/**
- * A tool reported an error result (e.g. bash exiting non-zero): like pi's `isError`, the model gets
- * the output as an error result.
- */
-export class ToolResultError extends Error {
-  constructor(
-    message: string,
-    readonly content?: ToolContent,
-  ) {
-    super(message)
-  }
-}
-
 /** Per call: how the call was issued */
 interface CallOptions {
   toolCallId?: string
@@ -191,8 +112,6 @@ interface CallOptions {
   parentToolCallId?: string
   onUpdate?: (partialResult: unknown) => void
 }
-
-const DEFAULT_MAX_RESULT_CHARS = 3000 // Beyond this, the full result is saved and only a preview returned
 
 /**
  * State shared by all sessions of one Vela: tool definitions and hooks.
@@ -237,15 +156,6 @@ class ExecutionGate {
       release()
     }
   }
-}
-
-export interface ToolRegistryForkOptions {
-  /** This session's event callback (e.g. security_warning for moderate-risk bash) */
-  onEvent?: VelaEventListener
-  /** Session id passed to hooks */
-  sessionId?: string
-  /** Asks the user when the decision is ask; without it, ask means deny */
-  confirm?: (toolName: string, input: unknown) => Promise<boolean>
 }
 
 export class ToolRegistry {
@@ -614,105 +524,23 @@ export class ToolRegistry {
         throw error
       }
       settled = true
-      // Persist native results before formatting/truncating the model response.
-      const value = raw instanceof ToolExecutionResult ? raw.value : raw
       if (raw instanceof ToolExecutionResult && options.toolCallId)
         this.details.set(options.toolCallId, raw.value)
-      const execution =
-        raw instanceof ToolExecutionResult || raw instanceof StoredToolResult
-          ? (raw.execution ?? {})
-          : {}
-      const maxChars = tool.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS
-      let stored = raw instanceof StoredToolResult ? raw : undefined
-      let text: string
-      try {
-        text =
-          raw instanceof ToolExecutionResult
-            ? raw.text
-            : typeof raw === 'string'
-              ? raw
-              : (JSON.stringify(raw, null, 2) ?? String(raw))
-        // Only what the model gets decides: a string is the text itself (its JSON escaping
-        // doesn't count), and a ToolExecutionResult's value is structured data for the
-        // history (e.g. edit_file's diff)
-        if (
-          !stored &&
-          (text.length > maxChars ||
-            (typeof value !== 'string' &&
-              !(raw instanceof ToolExecutionResult) &&
-              JSON.stringify(value)?.length > maxChars))
-        ) {
-          stored = await this.results.save(
-            raw instanceof ToolExecutionResult && raw.content
-              ? text
-              : typeof value === 'string'
-                ? value
-                : (JSON.stringify(value, null, 2) ?? String(value)),
-            name,
-            truncateResult(text, maxChars),
-            options.toolCallId,
-            call.callId,
-          )
-        }
-        const record = await history.append<ResultRecord>({
-          type: 'tool_result',
-          callId: call.callId,
-          status: signal?.aborted
-            ? 'cancelled'
-            : execution.isError
-              ? 'failed'
-              : 'completed',
-          durationMs: performance.now() - started,
-          ...execution,
-          ...(stored && raw instanceof ToolExecutionResult && raw.content
-            ? {
-                output: value ?? null,
-                modelTextPath: stored.path,
-                modelTextBytes: stored.bytes,
-              }
-            : stored
-              ? {
-                  outputPath: stored.path,
-                  bytes: stored.bytes,
-                  format:
-                    raw instanceof StoredToolResult ||
-                    typeof value === 'string' ||
-                    (raw instanceof ToolExecutionResult &&
-                      raw.content !== undefined)
-                      ? ('text' as const)
-                      : ('json' as const),
-                }
-              : { output: value ?? null }),
-        })
-        if (stored) {
-          stored.callId = call.callId
-          stored.historySeq = record.seq
-          stored.execution = execution
-        }
-      } catch (error) {
-        // Do not invent a terminal result when the result could not be recorded.
-        const location = stored
-          ? raw instanceof ToolExecutionResult && raw.content
-            ? `full model text saved at: ${stored.path}; native result details remain unconfirmed`
-            : `full output saved at: ${stored.path}`
-          : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
-        const status =
-          execution.exitCode === undefined
-            ? ''
-            : ` exitCode=${execution.exitCode}`
-        this.persistenceFailure = new Error(
-          `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. The output location is also recorded in tool_call.plannedOutputPath; verify it is complete, and do not treat the call as successful because of it. ${error}`,
-        )
-        throw this.persistenceFailure
-      }
-      let output: string | ToolContent =
-        raw instanceof ToolExecutionResult && raw.content
-          ? stored
-            ? previewToolContent(raw.content, maxChars, stored)
-            : raw.content
-          : stored
-            ? stored.preview
-            : text
+      const result = await prepareCallResult({
+        raw,
+        name,
+        results: this.results,
+        call,
+        started,
+        signal,
+        toolCallId: options.toolCallId,
+        maxResultChars: tool.maxResultChars,
+        onPersistenceFailure: (error) => {
+          this.persistenceFailure = error
+        },
+      })
+      let { output } = result
+      const { execution, stored } = result
       if (pipeline) {
         const post = await pipeline.runPost(name, input, output, hookContext)
         if (post.modifiedOutput !== undefined)
@@ -977,51 +805,4 @@ function untilAborted(
       resolve(value)
     })
   })
-}
-
-function previewToolContent(
-  content: ToolContent,
-  maxChars: number,
-  stored: StoredToolResult,
-): ToolContent {
-  // Share the text budget without moving captions away from their images.
-  const captions = content.filter((part) => part.type === 'text').length
-  const captionChars = Math.floor(maxChars / Math.max(1, captions))
-  return [
-    ...content.map((part) =>
-      part.type === 'text'
-        ? { ...part, text: truncateResult(part.text, captionChars, true) }
-        : part,
-    ),
-    {
-      type: 'text',
-      text: `Full text saved at: ${stored.path}\n${stored.read}`,
-    },
-  ]
-}
-
-function truncateResult(text: string, maxChars: number, compact = false) {
-  if (text.length <= maxChars) return text
-
-  // In ordered content, count the ellipsis in the budget and share one recovery note.
-  const previewChars = compact ? Math.max(0, maxChars - 1) : maxChars
-  let headSize = Math.floor(previewChars * 0.6)
-  const tailSize = previewChars - headSize
-  if (
-    text.charCodeAt(headSize - 1) >= 0xd800 &&
-    text.charCodeAt(headSize - 1) <= 0xdbff
-  )
-    headSize--
-  let tailStart = text.length - tailSize
-  if (
-    text.charCodeAt(tailStart) >= 0xdc00 &&
-    text.charCodeAt(tailStart) <= 0xdfff
-  )
-    tailStart++
-  const head = text.slice(0, headSize)
-  const tail = text.slice(tailStart)
-  if (compact) return maxChars > 0 ? `${head}…${tail}` : ''
-  const dropped = text.length - head.length - tail.length
-
-  return `${head}\n\n[preview: first ${head.length} and last ${tail.length} of ${text.length} UTF-16 code units; ${dropped} omitted here, full output saved]\n\n${tail}`
 }

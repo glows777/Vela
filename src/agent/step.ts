@@ -8,7 +8,7 @@ import {
 } from 'ai'
 import type { ToolModelMessage, ToolResultPart } from '../messages.ts'
 import { isToolContent, type ModelMessage } from '../messages.ts'
-import { ToolResultError } from '../tools/registry.ts'
+import { ToolResultError } from '../tools/types.ts'
 import type { AssistantMessageEvent, StopReason, VelaEvent } from './events.ts'
 
 /** The assistant parts Vela streams */
