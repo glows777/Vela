@@ -44,6 +44,14 @@ export interface ChannelRoutine {
   lastFiredAt: string | null
 }
 
+/** A persisted routine with deployment-local display metadata. */
+export interface ChannelRoutineInfo extends ChannelRoutine {
+  timezone: string
+  scheduleText: string
+  target: string
+  nextRun: string | null
+}
+
 export interface OutgoingMessage {
   routine?: IncomingMessage['routine']
   topic?: IncomingMessage['topic']
@@ -67,13 +75,17 @@ export interface ChannelTopic {
 
 export interface ChannelRuntime {
   routines: {
+    /** One-off at is deployment-local YYYY-MM-DDTHH:mm; recurring times are local too. */
     create(
       sessionId: string,
       message: string,
       schedule: RoutineSchedule,
-    ): Promise<ChannelRoutine>
-    list(sessionId: string): ChannelRoutine[]
-    cancel(sessionId: string, id: string): Promise<void>
+    ): Promise<ChannelRoutineInfo>
+    list(sessionId: string): {
+      timezone: string
+      routines: ChannelRoutineInfo[]
+    }
+    cancel(sessionId: string, id: string): Promise<boolean>
   }
   context(sessionId: string): IncomingMessage | undefined
   topics(chatId: string): ChannelTopic[]
