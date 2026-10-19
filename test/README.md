@@ -155,7 +155,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 
 | File | Scenarios |
 |---|---|
-| e2e/channel-routines | Fake-clock one-off topic/group/DM delivery and creator mentions; recurrence across process and logical restart with marker alignment; cancellation; latest-only late catch-up; disabled-chat skip; queued routine isolation; malformed-file rejection and input save failure |
+| e2e/channel-routines | Fake-clock one-off topic/group/DM delivery and creator mentions; recurrence across process and logical restart with marker alignment; cancellation; latest-only late catch-up; disabled-chat skip; queued routine isolation; original requester retained in topic overview and routine/human recovery; malformed-file rejection and input save failure |
 | unit/channels/routine-time | Local weekday recurrence and latest occurrence; DST gap shift and first repeated instant |
 | e2e/images | image request payloads, resize and invalid-image hints; model-capability switching; image history resume/fork/clone; input-hook replacement; queued images; summary safety |
 | e2e/tool-images, e2e/tool-image-file-limits | canonical tool images, hook replacement, normalization, five read_file formats, native MCP transport, non-vision fallback, resume, error-image retention, native history, microcompaction and safe file limits |
