@@ -286,6 +286,9 @@ export class ChannelGateway {
       })
     const next = previous
       .then(async () => {
+        this.logger.debug(
+          `[${channelName}] input ${msg.replyToId ?? '-'} dequeued at=${new Date().toISOString()}`,
+        )
         if (!(await (await consumed)()))
           await this.process(id, channelName, msg)
       })
@@ -313,6 +316,9 @@ export class ChannelGateway {
           if (!(await this.admission.admit(id, channel, msg))) return false
         }
         await this.directory.admit(id, channelName, msg)
+        this.logger.debug(
+          `[${channelName}] input ${msg.replyToId ?? '-'} admitted at=${new Date().toISOString()}`,
+        )
         return true
       },
     )
@@ -428,6 +434,9 @@ export class ChannelGateway {
     recovered = false,
   ): Promise<ChannelOutcome | undefined> {
     if (this.stopped) return 'stopped'
+    this.logger.debug(
+      `[${channelName}] input ${msg.replyToId ?? '-'} preparing at=${new Date().toISOString()}`,
+    )
     await this.closing.get(id)
     const channel = this.channels.get(channelName)
     const topicSession =
@@ -448,12 +457,18 @@ export class ChannelGateway {
       ? this.feedback.acknowledge(channel, msg, !recovered)
       : []
     await Promise.all(inputs.map((input) => input.ready))
+    this.logger.debug(
+      `[${channelName}] input ${msg.replyToId ?? '-'} acknowledged at=${new Date().toISOString()}`,
+    )
     const input = msg
     const task = msg.text
     const prepared =
       !processing.stopped && !recovered && channel?.prepareMessage
         ? await channel.prepareMessage(msg)
         : msg
+    this.logger.debug(
+      `[${channelName}] input ${msg.replyToId ?? '-'} prepared at=${new Date().toISOString()}`,
+    )
     if (processing.stopped) {
       await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
       await this.directory.finish(id, 'stopped')

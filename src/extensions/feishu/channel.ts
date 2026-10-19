@@ -620,6 +620,9 @@ export class FeishuChannel implements ChannelDefinition {
     const text = messageText(message)
     if (text === '' || (passive && text === undefined) || !this.messageHandler)
       return
+    this.config.logger.debug(
+      `[feishu] input ${message.message_id ?? '-'} received at=${new Date().toISOString()} created=${message.create_time ?? '-'}`,
+    )
     // Deliver immediately so the gateway can show run controls, then serialize preparation and replies there.
     const next = Promise.resolve(
       this.messageHandler({

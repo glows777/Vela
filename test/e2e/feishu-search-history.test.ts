@@ -113,8 +113,8 @@ test('history search bounds pages, matches and characters and uses the logical g
   expect(scan.matches[0].text).toBe('COBALT chosen')
   expect(scan.truncated).toBe(true)
   expect(scan.scannedRange).toEqual({
-    newest: '1760000099000',
-    oldest: '1759999850000',
+    newest: '2025-10-09T08:54:59.000Z',
+    oldest: '2025-10-09T08:50:50.000Z',
   })
   expect(scan.coverage).toContain('topic roots')
   expect(scan.coverage).toContain('end_time')
@@ -170,4 +170,49 @@ test('history search bounds pages, matches and characters and uses the logical g
   ).toBe(true)
   mode = 'denied'
   expect(await run()).toContain('history permission denied')
+})
+
+test('history reports exact returned sender counts and ISO times without implying thread-reply coverage', async () => {
+  const fake = fakeFeishu()
+  fake.transport.searchMessages = async () => ({
+    items: [
+      {
+        ...historyMessage('bot-result', 'bot', 'cobalt', '1792342356643'),
+        sender: { id: 'bot', sender_type: 'app' },
+      },
+      historyMessage('human', 'ou_alice', 'cobalt', '1792340069462'),
+      {
+        ...historyMessage('unknown', 'unclassified', 'cobalt', '1792340069000'),
+        sender: undefined,
+      },
+      historyMessage('nonmatch', 'ou_bob', 'other', '1792340068000'),
+    ],
+  })
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('feishu_search_history', { keyword: 'cobalt' }),
+      (req) => fauxText(req.toolResults.at(-1)!.output),
+    ],
+    extensions: [
+      feishu({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  await until(() => fake.sent.length === 1)
+  const result = JSON.parse(fake.sent[0]!.text.replace(/^<at[^>]*><\/at> /, ''))
+  expect(result.matchCounts).toEqual({ total: 3, user: 1, app: 1, unknown: 1 })
+  expect(
+    result.matches.map((item: { senderType?: string }) => item.senderType),
+  ).toEqual(['app', 'user', undefined])
+  expect(result.matches[0].createTime).toBe('2026-10-18T16:52:36.643Z')
+  expect(result.scannedRange.oldest).toBe('2026-10-18T16:14:28.000Z')
+  expect(result.coverage).toContain('not evidence of indexing delay')
+  expect(result.scanned).toBe(4)
 })
