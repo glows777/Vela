@@ -354,7 +354,10 @@ export class ChannelRoutines {
         return
     }
     if (channel.prepareRoutine) {
-      const prepared = await channel.prepareRoutine(msg, record.chatKind)
+      const prepared = await channel.prepareRoutine(msg, record.chatKind, {
+        message: routine.message,
+        lateByMs: late,
+      })
       if (!prepared) return
       msg = prepared
     }

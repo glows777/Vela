@@ -118,6 +118,7 @@ export interface ChannelDefinition {
   prepareRoutine?: (
     msg: IncomingMessage,
     chatKind: 'group' | 'direct',
+    reminder: { message: string; lateByMs: number },
   ) => Promise<IncomingMessage | undefined>
 
   connect?: (runtime: ChannelRuntime) => void

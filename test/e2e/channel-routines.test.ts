@@ -205,8 +205,19 @@ test.each(['topic', 'group', 'direct'] as const)(
       text: '<at user_id="ou_bob"></at> Review reminder',
     })
     expect(r.fake.sent).toHaveLength(target === 'group' ? 2 : 1)
+    if (target === 'group') {
+      expect(r.fake.sent[0]).toEqual({
+        chatId: 'oc_group',
+        text: '⏰ Review the report (set by Bob)',
+      })
+    }
     expect(r.t.model.calls).toHaveLength(1)
-    expect(r.t.model.calls[0]!.lastUserText).toContain('Scheduled wake-up')
+    expect(r.t.model.calls[0]!.lastUserText).toContain(
+      'Scheduled wake-up reminder',
+    )
+    expect(r.t.model.calls[0]!.lastUserText).toContain(
+      '2026-01-05T09:00:00.000Z (UTC)',
+    )
     expect(await r.stored()).toEqual([])
     const entries = r.t.vela.session(key).getEntries()
     expect(
@@ -274,13 +285,17 @@ test.each([{ time: '09:00' }, { at: '2026-01-05T09:00:00.000Z' }])(
   'missed %j wakes once with a late notice, not once per missed occurrence',
   async (schedule) => {
     const r = setup()
-    await r.seed(schedule)
+    await r.seed(schedule, 'group')
     r.clock.advance('2026-01-08T10:00:00Z')
     r.t.model.push(fauxText('Late reminder'))
     await r.t.vela.startChannels()
     await r.t.internals.gateway.routines.drain()
     expect(r.t.model.calls).toHaveLength(1)
     expect(r.t.model.calls[0]!.lastUserText).toContain('late by')
+    expect(r.fake.sent[0]).toEqual({
+      chatId: 'oc_group',
+      text: `⏰ Review the report (set by Bob; late by ${'at' in schedule ? 262800 : 3600} seconds)`,
+    })
     expect(r.fake.sent.some((m) => m.text.includes('send it again'))).toBe(
       false,
     )
