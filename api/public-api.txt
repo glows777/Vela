@@ -75,7 +75,7 @@
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
-    prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct") => Promise<IncomingMessage | undefined>) | undefined
+    prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     roleFor?: ((msg: IncomingMessage) => Role) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; }) | undefined

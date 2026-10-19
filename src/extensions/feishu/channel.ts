@@ -66,9 +66,15 @@ export class FeishuChannel implements ChannelDefinition {
   async prepareRoutine(
     msg: IncomingMessage,
     chatKind: 'group' | 'direct',
+    reminder: { message: string; lateByMs: number },
   ): Promise<IncomingMessage | undefined> {
     if (msg.topic || chatKind === 'direct') return msg
-    const receipt = await this.transport?.send(msg.channelId, msg.text)
+    const late =
+      reminder.lateByMs > 0
+        ? `; late by ${Math.ceil(reminder.lateByMs / 1000)} seconds`
+        : ''
+    const text = `⏰ ${reminder.message} (set by ${msg.senderName}${late})`
+    const receipt = await this.transport?.send(msg.channelId, text)
     if (!receipt) {
       this.config.logger.warn(
         '[feishu] Routine skipped: top-level delivery requires a transport send receipt',
