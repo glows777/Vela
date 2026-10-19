@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Feishu scheduled wake-ups and management.** `feishu_routines` creates, lists and cancels persisted one-off or daily/selected-weekday routines in the deployment timezone for the current logical topic, group or DM. `!routines` lists the chat's schedules and next runs without a model call, even with `readUntagged: false`. Wake-ups survive restarts, queue behind active work and mention their creator; startup catches up the latest missed run once with a late notice, and cancellation only prevents future submissions.
+
 - **Feishu evaluates untagged human group discussion by default.** Set `readUntagged: false` per group for mention-only top-level intake. Each unique supported message is queued; `feishu_skip_reply` keeps unnecessary answers silent. Bot/disabled-chat events have no content side effects; passive work is not resumed after restart. Silence still incurs model cost, with no spend cap. Group history now stops at any own-app message, including cards after restart.
 
 - **Feishu group overview and bounded history search.** Topic lists include requester, activity and durable waiting/done/stopped state. `feishu_wait_for_input` marks a required decision until the next accepted topic input. `feishu_search_history` searches only the current channel/topic's group, with explicit scan/result limits and topic-root coverage. Custom Feishu transports now implement `searchMessages`; experimental topic state replaces `idle` with `done`, `waiting` or `stopped`.
