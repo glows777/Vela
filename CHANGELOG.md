@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-19
+
 ### Added
 
 - **Feishu scheduled wake-ups and management.** `feishu_routines` creates, lists and cancels persisted one-off or daily/selected-weekday routines in the deployment timezone for the current logical topic, group or DM. `!routines` lists the chat's schedules and next runs without a model call, even with `readUntagged: false`. Wake-ups survive restarts, queue behind active work and mention their creator; startup catches up the latest missed run once with a late notice, and cancellation only prevents future submissions.
