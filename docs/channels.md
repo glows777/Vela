@@ -217,7 +217,7 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 
 ## Writing a channel
 
-**Channel hooks are experimental until M4 of the channel milestones.** Their signatures may change while the milestones are in progress; consult the migration notes when upgrading. This does not change the stability policy for the rest of the SDK.
+**Channel hooks remain experimental.** Feishu is the only channel implementation so far; the hooks will be stabilized once a second channel is implemented. Their signatures may change in the meantime; consult the migration notes when upgrading. This does not change the stability policy for the rest of the SDK.
 
 Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway defaults to owner access and a shared transcript.
 
