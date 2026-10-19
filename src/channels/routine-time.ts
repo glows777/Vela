@@ -78,6 +78,26 @@ function occurrence(day: number, time: string, zone: string): number {
     .sort((a, b) => localWall(a, zone) - localWall(b, zone) || a - b)[0]!
 }
 
+/** A tool's date/time is local to the deployment, never the host's Date parser. */
+export function localRoutineInstant(value: string, zone: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T((?:[01]\d|2[0-3]):[0-5]\d)$/.exec(
+    value,
+  )
+  if (!match) throw new Error('Invalid local date/time; use YYYY-MM-DDTHH:mm')
+  const [, year, month, date, time] = match
+  const day = Date.UTC(Number(year), Number(month) - 1, Number(date))
+  if (new Date(day).toISOString().slice(0, 10) !== value.slice(0, 10))
+    throw new Error('Invalid local calendar date')
+  return new Date(occurrence(day, time!, zone)).toISOString()
+}
+
+export function routineLocalTime(at: number, zone: string): string {
+  return new Date(localWall(at, zone))
+    .toISOString()
+    .slice(0, 16)
+    .replace('T', ' ')
+}
+
 function matches(
   day: number,
   schedule: Extract<RoutineSchedule, { time: string }>,

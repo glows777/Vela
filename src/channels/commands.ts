@@ -5,12 +5,13 @@ import type { RunFeedback } from './feedback.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 import type { ChannelUsage } from './usage.ts'
 
-type TopicCommand = 'stop' | 'restart' | 'status'
+type TopicCommand = 'stop' | 'restart' | 'status' | 'routines'
 
 /** Match only a complete normalized topic message, before history or sender decoration. */
 function topicCommand(msg: IncomingMessage): TopicCommand | undefined {
-  if (!msg.topic) return
   const text = msg.text.trim()
+  if (text === '!routines') return 'routines'
+  if (!msg.topic) return
   if (text === '!stop') return 'stop'
   if (text === '!restart') return 'restart'
   if (text === '!status') return 'status'
@@ -25,6 +26,7 @@ interface CommandOptions {
   channel: (name: string) => ChannelDefinition | undefined
   find: (key: string) => VelaSession | undefined
   closing: (key: string) => Promise<void> | undefined
+  routines: (name: string, chatId: string) => string
 }
 
 /** Topic command barriers and preparation cancellation; the gateway owns normal message queues. */
@@ -54,9 +56,12 @@ export class TopicCommands {
   ) {
     const command = topicCommand(msg)
     const barrier = this.commands.get(key)
-    // Only Stop/Restart cancel preparation; Status must leave the live run alone.
+    // Only Stop/Restart cancel preparation; read-only commands leave live work alone.
     const processing =
-      !barrier && command && command !== 'status' && this.processing.get(key)
+      !barrier &&
+      command &&
+      (command === 'stop' || command === 'restart') &&
+      this.processing.get(key)
     if (processing && !this.options.stopped()) processing.stopped = true
     const stopping = processing ? this.options.feedback.stop(key) : undefined
     void stopping?.catch(() => {})
@@ -72,7 +77,7 @@ export class TopicCommands {
         barrier,
         stopping,
       )
-      const blocks = command !== 'status'
+      const blocks = command === 'stop' || command === 'restart'
       this.commands.set(key, next)
       this.active.add(next)
       void next.then(() => {
@@ -107,7 +112,7 @@ export class TopicCommands {
       await barrier
       if (o.stopped()) return
       let stopped = false
-      if (command !== 'status') {
+      if (command === 'stop' || command === 'restart') {
         const processing = this.processing.get(key)
         if (processing) processing.stopped = true
         stopped = (await (stopping ?? o.feedback.stop(key))) || !!processing
@@ -149,6 +154,8 @@ export class TopicCommands {
         directory.observe(key, channel.name, msg)
         await directory.restart(key)
         text = 'Restarted with a fresh session'
+      } else if (command === 'routines') {
+        text = this.options.routines(channel.name, msg.channelId)
       } else if (command === 'status' && session) {
         text = usage.status(key, channel.name, msg.channelId, session)
       }
