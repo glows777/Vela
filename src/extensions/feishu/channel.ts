@@ -630,10 +630,12 @@ export class FeishuChannel implements ChannelDefinition {
       !!this.botId &&
       !!message.mentions?.some((mention) => mention.id?.open_id === this.botId)
     const passive = group && !mentioned && !message.thread_id
+    if (group && !this.botId) return
+    const text = messageText(message)
     if (
-      group &&
-      (!this.botId ||
-        (passive && this.chats.get(message.chat_id)?.readUntagged === false))
+      passive &&
+      this.chats.get(message.chat_id)?.readUntagged === false &&
+      text?.trim() !== '!routines'
     )
       return
     // A group reply needs its actual trigger; never accidentally post an unthreaded answer.
@@ -641,7 +643,6 @@ export class FeishuChannel implements ChannelDefinition {
     // Normalized replyToId identifies a group input, including during recovery.
     const replyToId = group ? message.message_id : undefined
     const requireExistingSession = group && !!message.thread_id && !mentioned
-    const text = messageText(message)
     if (text === '' || (passive && text === undefined) || !this.messageHandler)
       return
     this.config.logger.debug(
