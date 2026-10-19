@@ -1,0 +1,205 @@
+// Offline drive of the Feishu channel journeys: topic handoff, untagged topic replies, the group
+// workspace, passive top-level chatter, the topic overview and routines across a restart.
+// The extension, gateway, files and timers are real; only the model (a router) and the Feishu
+// transport are fake. Run it from a verify-vela run (about 90 s: the last step waits past a real
+// due time):  $H exec $RUN feishu bun $REPO/.skills/verify-vela/scripts/feishu-journeys.ts
+// It prints one line per check; adapt the router and steps to the change being verified.
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { feishu } from '../../../src/extensions/feishu/index.ts'
+import { createVela } from '../../../src/index.ts'
+import {
+  createFauxModel,
+  type FauxRequest,
+  type FauxResponse,
+} from '../../../src/testing/index.ts'
+import { fakeFeishu, feishuEvent } from '../../../test/support/feishu.ts'
+
+type Fake = ReturnType<typeof fakeFeishu>
+const zone = 'Asia/Shanghai'
+const log = (label: string, value: unknown) =>
+  console.log(
+    `${label}: ${typeof value === 'string' ? value : JSON.stringify(value)}`,
+  )
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
+async function until(what: string, ok: () => boolean, ms = 5000) {
+  const end = Date.now() + ms
+  while (!ok()) {
+    if (Date.now() > end) throw new Error(`timeout: ${what}`)
+    await sleep(10)
+  }
+}
+/** Deployment-local YYYY-MM-DDTHH:mm, the format feishu_routines expects for a one-off. */
+function local(ms: number): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(ms)
+      .map((part) => [part.type, part.value]),
+  )
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`
+}
+
+// Answer by what each request is, so concurrent channel and topic sessions never race a queue.
+function router(req: FauxRequest): FauxResponse {
+  const last = req.toolResults.at(-1)
+  if (last)
+    return { text: `after ${last.toolName}: ${last.output.slice(0, 80)}` }
+  const text = req.lastUserText
+  const call = (name: string, input: unknown): FauxResponse => ({
+    toolCalls: [{ name, input }],
+  })
+  if (/investigate/i.test(text) && req.tools.includes('feishu_start_topic'))
+    return call('feishu_start_topic', { task: 'Investigate the flaky test' })
+  if (text.includes('Investigate the flaky test'))
+    return call('write_file', { path: 'notes.md', content: 'cause: timing' })
+  if (/remind/i.test(text))
+    return call('feishu_routines', {
+      action: 'create',
+      message: 'Check the PR',
+      schedule: { at: local(Date.now() + 60_000) },
+    })
+  if (text.includes('Scheduled wake-up'))
+    return { text: 'Reminder: check the PR' }
+  if (/list topics/i.test(text)) return call('feishu_list_topics', {})
+  if (/lunch/i.test(text) && req.tools.includes('feishu_skip_reply'))
+    return call('feishu_skip_reply', {})
+  return { text: `ok: ${text.slice(-40)}` }
+}
+
+const model = createFauxModel({
+  responses: Array.from({ length: 200 }, () => router),
+})
+const start = async (fake: Fake) => {
+  const vela = createVela({
+    dataDir: '.vela-data',
+    model,
+    extensionConfig: { feishu: { timezone: zone } },
+    extensions: [
+      feishu({
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await vela.startChannels()
+  return vela
+}
+const sent = (fake: Fake, part: string) =>
+  fake.sent.find((message) => message.text.includes(part))?.text
+
+let fake = fakeFeishu()
+let vela = await start(fake)
+
+// 1. Top-level @ hands the task to a topic
+const root = feishuEvent({
+  content: JSON.stringify({ text: '@_user_1 investigate the flaky test' }),
+})
+const rootId = root.message.message_id
+const topic = { root_id: rootId, thread_id: `thread_${rootId}` }
+fake.deliver(root)
+await until('topic result', () => !!sent(fake, 'after write_file'))
+await sleep(300)
+log(
+  'topics opened',
+  fake.topics.map((t) => t.task),
+)
+log(
+  'reactions',
+  fake.reactions.map((r) => `${r.emoji}${r.removed ? '(removed)' : ''}`),
+)
+log('cards, patches', [fake.cards.length, fake.patches.length])
+log('topic reply', sent(fake, 'after write_file'))
+const workspaceFile = join(
+  '.vela-data/channels/feishu-oc_group/workspace/notes.md',
+)
+log('file in group workspace', existsSync(workspaceFile))
+
+// 2. Another member replies in the topic without @
+let before = fake.sent.length
+fake.deliver(
+  feishuEvent(
+    {
+      ...topic,
+      mentions: [],
+      content: JSON.stringify({ text: 'also check CI' }),
+    },
+    'ou_bob',
+  ),
+)
+await until('untagged topic reply', () => fake.sent.length > before)
+log('untagged topic reply', fake.sent.at(-1)?.text)
+
+// 3. Untagged top-level chatter stays silent
+before = fake.sent.length
+fake.deliver(
+  feishuEvent(
+    { mentions: [], content: JSON.stringify({ text: 'lunch at 12?' }) },
+    'ou_bob',
+  ),
+)
+await sleep(500)
+log('messages sent for chatter', fake.sent.length - before)
+
+// 4. Topic overview at top level
+fake.deliver(
+  feishuEvent({ content: JSON.stringify({ text: '@_user_1 list topics' }) }),
+)
+await until('topic list', () => !!sent(fake, 'after feishu_list_topics'))
+log('topic list', sent(fake, 'after feishu_list_topics'))
+
+// 5. A routine in the topic, then !routines without @ (no model call)
+fake.deliver(
+  feishuEvent({
+    ...topic,
+    content: JSON.stringify({ text: '@_user_1 remind me in a minute' }),
+  }),
+)
+await until('routine created', () => !!sent(fake, 'after feishu_routines'))
+log('routine created', sent(fake, 'after feishu_routines'))
+const calls = model.calls.length
+fake.deliver(
+  feishuEvent({
+    ...topic,
+    mentions: [],
+    content: JSON.stringify({ text: '!routines' }),
+  }),
+)
+await until('!routines', () => !!sent(fake, 'Routines ('))
+log('!routines', sent(fake, 'Routines ('))
+log('model calls for !routines', model.calls.length - calls)
+
+// 6. Stop before the due time, start again after it: one late delivery
+await vela.dispose()
+console.log('stopped; waiting past the due time')
+await sleep(75_000)
+fake = fakeFeishu()
+vela = await start(fake)
+await until(
+  'late routine',
+  () => !!sent(fake, 'Reminder: check the PR'),
+  10_000,
+)
+log(
+  'late deliveries',
+  fake.sent.filter((m) => m.text.includes('Reminder')).map((m) => m.text),
+)
+log(
+  'late note in model input',
+  model.calls.some((c) => c.lastUserText.includes('late by')),
+)
+log(
+  'one-offs left in routines.json',
+  JSON.parse(readFileSync('.vela-data/channels/routines.json', 'utf8')).routines
+    .length,
+)
+await vela.dispose()
+console.log('DONE')
