@@ -435,6 +435,9 @@ export class RunFeedback {
         throw new DOMException('Stopped before prompting', 'AbortError')
       this.options.recovery.track(id, session, msg)
       promptStarted = true
+      this.options.logger.debug(
+        `[${channelName}] input ${msg.replyToId ?? '-'} prompt at=${new Date().toISOString()}`,
+      )
       await session.prompt(msg.text, { source: 'channel', images: msg.images })
       if (session.messages.at(-1) !== previous)
         answer = lastAssistantText(session.messages)
