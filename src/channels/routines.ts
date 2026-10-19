@@ -240,7 +240,7 @@ export class ChannelRoutines {
       target: !target
         ? 'Unavailable target'
         : target.rootId
-          ? `Topic ${target.rootId}: ${target.task}`
+          ? `Topic: ${target.task}`
           : target.chatKind === 'group'
             ? 'Group channel'
             : 'Direct chat',
