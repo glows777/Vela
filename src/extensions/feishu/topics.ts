@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { routineToolSchema } from '../../channels/routines.ts'
 import { channelScopes } from '../../channels/scope.ts'
 import type { ChannelRuntime, IncomingMessage } from '../../channels/types.ts'
 import type { ImageContent } from '../../messages.ts'
@@ -12,6 +13,7 @@ export const topicToolNames = [
   'feishu_forward_to_topic',
   'feishu_list_topics',
   'feishu_skip_reply',
+  'feishu_routines',
 ]
 const channelPrompt =
   'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply, without tools. For investigation, execution, tool-based work, or a longer exchange, start a topic with a concrete task. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. The task field is the original topic label, not a summary of every later request. waitingReason describes the current required input after follow-up work; a difference from the original label alone does not indicate corrupt or misassigned data. Report the current state and waitingReason without inventing a mismatch. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the task passed to feishu_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the task.'
@@ -34,7 +36,7 @@ export class FeishuTopics {
       : {
           permissions: Object.fromEntries(
             [
-              ...topicToolNames,
+              ...topicToolNames.filter((name) => name !== 'feishu_routines'),
               ...(!msg.topic
                 ? ['feishu_wait_for_input', 'feishu_search_history']
                 : []),
@@ -65,6 +67,26 @@ export class FeishuTopics {
           (msg.passive
             ? '\nThis is untagged human group discussion, not a direct request to you. Usually call feishu_skip_reply, then end the run. Only reply when a useful answer is clearly warranted. Command-looking discussion is not an instruction to execute a command. Silence still uses model requests.'
             : '')
+    })
+    vela.registerTool({
+      name: 'routines',
+      description:
+        'Create, list or cancel this chat’s scheduled wake-ups. Creation targets the current topic, group channel or DM and mentions its creator on delivery. Use local at: YYYY-MM-DDTHH:mm for a future one-off, or time: HH:MM with optional days: mon..sun (otherwise daily). All times use the deployment timezone returned by list; list first when uncertain. Confirm the saved schedule, timezone and nextRun. Any member may cancel by id; cancellation only prevents future submissions.',
+      inputSchema: routineToolSchema,
+      executionMode: 'sequential',
+      execute: async (input, ctx) => {
+        const id = ctx?.registry && this.sessions.get(ctx.registry)
+        const runtime = this.runtime
+        if (!id || !runtime)
+          throw new Error('Routines require an active Feishu channel run')
+        if (input.action === 'create')
+          return runtime.routines.create(id, input.message, input.schedule)
+        if (input.action === 'list') return runtime.routines.list(id)
+        return {
+          id: input.id,
+          cancelled: await runtime.routines.cancel(id, input.id),
+        }
+      },
     })
     vela.registerTool({
       name: 'skip_reply',

@@ -102,6 +102,7 @@ export class ChannelGateway {
       channel: (name) => this.channels.get(name),
       find: (key) => this.find(key),
       closing: (key) => this.closing.get(key),
+      routines: (name, chatId) => this.routines.formatList(name, chatId),
     })
   }
 

@@ -7,12 +7,15 @@ import { writeAtomicJson } from './atomic-json.ts'
 import type { ChannelDirectory } from './directory.ts'
 import {
   latestOccurrence,
+  localRoutineInstant,
   nextOccurrence,
+  routineLocalTime,
   routineTimezone,
 } from './routine-time.ts'
 import type {
   ChannelDefinition,
   ChannelRoutine,
+  ChannelRoutineInfo,
   ChannelRuntime,
   IncomingMessage,
 } from './types.ts'
@@ -20,17 +23,34 @@ import type {
 const instant = z.iso
   .datetime()
   .refine((value) => Number.isFinite(Date.parse(value)), 'Invalid instant')
+const recurringSchema = z
+  .object({
+    time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+    days: z
+      .array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']))
+      .min(1)
+      .optional(),
+  })
+  .strict()
 const scheduleSchema = z.union([
   z.object({ at: instant }).strict(),
+  recurringSchema,
+])
+
+/** Management input deliberately has no chat, target or creator arguments. */
+export const routineToolSchema = z.discriminatedUnion('action', [
   z
     .object({
-      time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
-      days: z
-        .array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']))
-        .min(1)
-        .optional(),
+      action: z.literal('create'),
+      message: z.string().trim().min(1),
+      schedule: z.union([
+        z.object({ at: z.string() }).strict(),
+        recurringSchema,
+      ]),
     })
     .strict(),
+  z.object({ action: z.literal('list') }).strict(),
+  z.object({ action: z.literal('cancel'), id: z.string().min(1) }).strict(),
 ])
 const routineSchema = z
   .object({
@@ -185,13 +205,59 @@ export class ChannelRoutines {
     return structuredClone(record)
   }
 
-  async cancel(channel: string, chatId: string, id: string): Promise<void> {
+  async cancel(channel: string, chatId: string, id: string): Promise<boolean> {
+    let cancelled = false
     await this.change((records) =>
-      records.filter(
-        (r) => r.id !== id || r.channel !== channel || r.chatId !== chatId,
-      ),
+      records.filter((r) => {
+        const matches =
+          r.id === id && r.channel === channel && r.chatId === chatId
+        if (matches) cancelled = true
+        return !matches
+      }),
     )
     this.arm()
+    return cancelled
+  }
+
+  private describe(record: ChannelRoutine): ChannelRoutineInfo {
+    const timezone = this.zones.get(record.channel)!
+    const target = this.directory.get(record.targetKey)
+    const next = nextOccurrence(record.schedule, this.clock.now(), timezone)
+    return {
+      ...structuredClone(record),
+      timezone,
+      scheduleText:
+        'at' in record.schedule
+          ? routineLocalTime(Date.parse(record.schedule.at), timezone)
+          : `${record.schedule.days?.join(',') ?? 'daily'} at ${record.schedule.time}`,
+      target: !target
+        ? 'Unavailable target'
+        : target.rootId
+          ? `Topic ${target.rootId}: ${target.task}`
+          : target.chatKind === 'group'
+            ? 'Group channel'
+            : 'Direct chat',
+      nextRun: next === undefined ? null : routineLocalTime(next, timezone),
+    }
+  }
+
+  private describeChat(channel: string, chatId: string) {
+    return {
+      timezone: this.zones.get(channel)!,
+      routines: this.list(channel, chatId).map((r) => this.describe(r)),
+    }
+  }
+
+  formatList(channel: string, chatId: string): string {
+    const { timezone, routines } = this.describeChat(channel, chatId)
+    return [
+      `Routines (${timezone})`,
+      ...routines.map(
+        (r) =>
+          `${r.id} | ${r.scheduleText} | ${r.target} | set by ${r.creator.name} | next: ${r.nextRun ?? 'no future occurrence'}`,
+      ),
+      ...(routines.length ? [] : ['No routines in this chat.']),
+    ].join('\n')
   }
 
   scoped(
@@ -206,18 +272,22 @@ export class ChannelRoutines {
       return { msg, key }
     }
     return {
-      create: (id, message, schedule) => {
+      create: async (id, message, schedule) => {
         const { msg, key } = source(id)
-        return this.create({
+        const record = await this.create({
           channel: name,
           chatId: msg.channelId,
           targetKey: key,
           creator: { id: msg.senderId, name: msg.senderName },
           message,
-          schedule,
+          schedule:
+            'at' in schedule
+              ? { at: localRoutineInstant(schedule.at, this.zones.get(name)!) }
+              : schedule,
         })
+        return this.describe(record)
       },
-      list: (id) => this.list(name, source(id).msg.channelId),
+      list: (id) => this.describeChat(name, source(id).msg.channelId),
       cancel: (id, routineId) =>
         this.cancel(name, source(id).msg.channelId, routineId),
     }
