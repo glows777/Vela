@@ -112,7 +112,7 @@ export class RunFeedback {
     msg: IncomingMessage,
     admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
-    if (msg.passive) return async () => false
+    if (msg.passive || msg.routine) return async () => false
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
     if (

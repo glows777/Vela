@@ -51,7 +51,7 @@ export interface FeishuTransport {
     task: string,
   ): Promise<FeishuSentMessage & { rootId: string; threadId: string }>
   forward(messageId: string, threadId: string): Promise<FeishuSentMessage>
-  send(chatId: string, text: string): Promise<void>
+  send(chatId: string, text: string): Promise<void | FeishuSentMessage>
   reply(messageId: string, text: string): Promise<FeishuSentMessage>
   sendCard(
     chatId: string,
@@ -160,7 +160,7 @@ export function larkTransport(
       return { messageId: data.message_id, createTime: data.create_time }
     },
     async send(chatId, text) {
-      checked(
+      const { data } = checked(
         await client.im.message.create({
           params: { receive_id_type: 'chat_id' },
           data: {
@@ -170,6 +170,9 @@ export function larkTransport(
           },
         }),
       )
+      if (!data?.message_id || !data.create_time)
+        throw new Error('Feishu send returned no message receipt')
+      return { messageId: data.message_id, createTime: data.create_time }
     },
     async sendCard(chatId, card, replyToId) {
       const data = { msg_type: 'interactive', content: JSON.stringify(card) }

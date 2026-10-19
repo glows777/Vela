@@ -95,6 +95,10 @@ export function fakeFeishu() {
     },
     send: async (chatId, text) => {
       sent.push({ chatId, text })
+      return {
+        messageId: `sent_${sent.length}`,
+        createTime: String(Date.now()),
+      }
     },
     sendCard: async (chatId: string, card: Card, replyToId?: string) => {
       cards.push({ chatId, replyToId, card })

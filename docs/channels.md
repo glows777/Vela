@@ -70,6 +70,16 @@ Normalized attributed input and model/tool responses live in the existing sessio
 
 **Silence still costs model calls.** Use actual recorded input/output/cache tokens and the configured rates, including control-tool continuation, tool loops and compaction. For illustration only, 1,000 requests/day × (8,000 input tokens × $3/million + 50 output tokens × $15/million) = **$24.75/day**, before extra requests, tools or compaction and without cache discounts. These are hypothetical rates, not a current provider quote or measured spend. Compared with 100 mention-triggered requests under the same assumptions, that is about 10×; growing context can cost more. There is no spend cap. The existing topic `!status` includes group-wide recorded usage, with unknown prices disclosed.
 
+### Scheduled wake-ups (M4 delivery foundation)
+
+The channel runtime persists routines in `<dataDir>/channels/routines.json` and delivers one-off or daily/selected-weekday wake-ups to their original logical session, including after `!restart`. The model tool and `!routines` command are a separate M4 change; this foundation does not expose them yet. `extensionConfig.feishu.timezone` selects one IANA deployment timezone, defaulting to the process timezone; invalid configuration or a malformed routine file rejects channel startup. Recurring schedules retain local wall time: a DST gap shifts forward by its length and a repeated time uses its first occurrence. Changing the deployment timezone changes recurring local-time schedules, while one-off UTC instants stay fixed.
+
+Wake-ups queue behind current work and never steer it. Topic runs reply to the topic root; top-level group runs first post one announcement and then use that real message as their reply/topic anchor; DMs use their existing send path. Results mention the routine's creator. Custom Feishu transports may keep `send(): Promise<void>`, but top-level routines require a returned `{ messageId, createTime }` receipt and otherwise skip with an operator diagnostic. Disabled chats retain their routines and log once per startup without running them.
+
+The saved occurrence's scheduled time is the `lastFiredAt` watermark. Startup catches up only the latest missed occurrence, once, with a late notice. A failed enqueue/save keeps the watermark unchanged and arms only the next future occurrence; a failed one-off therefore waits until a later startup for another attempt. Cancelling prevents future submissions and does not recall an input already submitted to the gateway.
+
+Recovery is at least once from the saved input; session markers align the routine watermark after restart. Session persistence, routine-file replacement and remote delivery are not one transaction, so crashes can repeat work or delivery and there is no end-to-end exactly-once guarantee.
+
 ### Topics
 
 An @ inside a Feishu topic opens its own session, identified by channel, chat and root message ID. Different topics run concurrently without sharing transcripts; top-level messages and DMs retain one session per chat. Topics keep separate transcripts while sharing their group workspace and memory. Different groups use different default workspace and memory directories.

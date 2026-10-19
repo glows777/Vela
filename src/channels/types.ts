@@ -20,10 +20,32 @@ export interface IncomingMessage {
   isNewTopic?: boolean
   /** Unsolicited group discussion: queue quietly and never recover work after restart. */
   passive?: boolean
+  /** Scheduled inputs have no incoming service message ID and always queue. */
+  routine?: { id: string; scheduledAt: string }
   raw?: unknown
 }
 
+export type RoutineSchedule =
+  | { at: string }
+  | {
+      time: string
+      days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
+    }
+
+export interface ChannelRoutine {
+  id: string
+  channel: string
+  chatId: string
+  targetKey: string
+  creator: { id: string; name: string }
+  message: string
+  schedule: RoutineSchedule
+  createdAt: string
+  lastFiredAt: string | null
+}
+
 export interface OutgoingMessage {
+  routine?: IncomingMessage['routine']
   topic?: IncomingMessage['topic']
   channelId: string
   /** Optional person to mention; a reply target alone addresses a service message. */
@@ -44,6 +66,15 @@ export interface ChannelTopic {
 }
 
 export interface ChannelRuntime {
+  routines: {
+    create(
+      sessionId: string,
+      message: string,
+      schedule: RoutineSchedule,
+    ): Promise<ChannelRoutine>
+    list(sessionId: string): ChannelRoutine[]
+    cancel(sessionId: string, id: string): Promise<void>
+  }
   context(sessionId: string): IncomingMessage | undefined
   topics(chatId: string): ChannelTopic[]
   topicCoverage(): string
@@ -81,6 +112,13 @@ export interface ChannelRunFeedback {
 export interface ChannelDefinition {
   name: string
   description: string
+  /** Deployment-local schedule zone, validated before transport startup. */
+  timezone?: unknown
+  /** Adapt scheduled input routing; undefined skips a wake-up with operator diagnostics. */
+  prepareRoutine?: (
+    msg: IncomingMessage,
+    chatKind: 'group' | 'direct',
+  ) => Promise<IncomingMessage | undefined>
 
   connect?: (runtime: ChannelRuntime) => void
   sessionOptions?: (msg: IncomingMessage) => {

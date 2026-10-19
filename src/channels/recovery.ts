@@ -22,6 +22,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
     replyToId: record.replyTarget,
     text: '',
     passive: record.passive,
+    routine: record.routine,
     ...(record.rootId && record.threadId
       ? { topic: { rootId: record.rootId, threadId: record.threadId } }
       : {}),
@@ -36,6 +37,9 @@ export class ChannelRecovery {
   constructor(
     private directory: ChannelDirectory,
     private logger: VelaLogger,
+    private routineSaved: (
+      msg: IncomingMessage,
+    ) => Promise<void> = async () => {},
   ) {}
 
   hasInput(session: VelaSession, id: string): boolean {
@@ -59,16 +63,21 @@ export class ChannelRecovery {
       if (event.type !== 'message_start' || event.message.role !== 'user')
         return
       const input = this.inputs.get(session)?.shift()
-      if (!input?.replyToId) return
+      if (!input || (!input.replyToId && !input.routine)) return
       const messageId = input.replyToId
       session.appendEntry(INPUT_MARKER, {
-        messageId,
+        messageId: input.routine ? undefined : messageId,
         passive: input.passive,
+        routine: input.routine,
         timestamp: Date.now(),
       })
       const save = session
         .save()
-        .then(() => this.directory.forget(key, [messageId]))
+        .then(() =>
+          input.routine
+            ? this.routineSaved(input)
+            : this.directory.forget(key, [messageId!]),
+        )
       // Keep the failure for the run's awaited drain; do not create an unhandled rejection.
       void save.catch(() => {})
       const saves = this.saves.get(session) ?? []
