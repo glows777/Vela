@@ -327,3 +327,27 @@ test.each([
     expect(await r.stored()).toEqual([])
   },
 )
+
+test('routine management keeps operation-specific fields required and rejects fields from other operations', async () => {
+  const r = setup()
+  await r.t.vela.startChannels()
+  for (const input of [
+    { action: 'create', message: 'Missing schedule' },
+    { action: 'create', schedule: { time: '09:00' } },
+    { action: 'create', message: '', schedule: { time: '09:00' } },
+    { action: 'cancel' },
+    { action: 'list', id: 'unexpected' },
+    { action: 'cancel', id: 'unknown', message: 'unexpected' },
+    {
+      action: 'create',
+      message: 'Unexpected id',
+      schedule: { time: '09:00' },
+      id: 'unexpected',
+    },
+  ]) {
+    expect(await r.ask(input)).toMatch(
+      /Invalid|invalid|Unrecognized|unrecognized|small/,
+    )
+  }
+  expect(r.t.internals.gateway.routines.list('feishu', 'oc_group')).toEqual([])
+})
