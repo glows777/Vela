@@ -168,18 +168,17 @@ export {
 } from './session/storage.ts'
 export type { ExecutionMetadata } from './session/tool-history.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
+export type { ToolContext, ToolDefinition } from './tools/registry.ts'
+export type { BashResult } from './tools/shell.ts'
 export type {
   ExecuteToolOptions,
   ToolAnnotations,
   ToolCallOutcome,
-  ToolContext,
-  ToolDefinition,
   ToolExecutionMode,
   ToolExposure,
   ToolNamespace,
-} from './tools/registry.ts'
-export { ToolExecutionResult } from './tools/registry.ts'
-export type { BashResult } from './tools/shell.ts'
+} from './tools/types.ts'
+export { ToolExecutionResult } from './tools/types.ts'
 export type { ModelPricing, TokenStatus, UsageTotals } from './usage/tracker.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'
 export {

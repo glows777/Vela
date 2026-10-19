@@ -16,9 +16,9 @@ import {
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
   type ToolDefinition,
-  ToolExecutionResult,
   ToolRegistry,
 } from '../../../src/tools/registry.ts'
+import { ToolExecutionResult } from '../../../src/tools/types.ts'
 import { cleanupTestVelas, createTestVela } from '../../support/vela.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-security-acceptance-'))
