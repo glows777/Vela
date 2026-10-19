@@ -20,7 +20,13 @@ const recordSchema = z
     state: z.enum(['running', 'waiting', 'done', 'stopped']),
     waitingReason: z.string().optional(),
     passive: z.boolean().optional(),
-    routine: z.object({ id: z.string(), scheduledAt: z.string() }).optional(),
+    routine: z
+      .object({
+        id: z.string(),
+        scheduledAt: z.string(),
+        creator: z.object({ id: z.string(), name: z.string() }).optional(),
+      })
+      .optional(),
     pendingMessageIds: z.array(
       z.union([
         z.string(),
@@ -185,7 +191,9 @@ export class ChannelDirectory {
     record.state = 'running'
     record.passive = msg.passive
     record.routine = msg.routine
-    if (msg.routine || !record.rootId || record.requester.id === msg.senderId)
+      ? { ...msg.routine, creator: { id: msg.senderId, name: msg.senderName } }
+      : undefined
+    if (!record.rootId || record.requester.id === msg.senderId)
       record.requester = { id: msg.senderId, name: msg.senderName }
     record.replyTarget = msg.replyToId
     await this.save(record)

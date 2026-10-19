@@ -15,10 +15,11 @@ export const RESEND_NOTICE =
 const INPUT_MARKER = 'channel.input'
 
 export function storedMessage(record: ChannelRecord): IncomingMessage {
+  const sender = record.routine?.creator ?? record.requester
   return {
     channelId: record.chatId,
-    senderId: record.requester.id,
-    senderName: record.requester.name,
+    senderId: sender.id,
+    senderName: sender.name,
     replyToId: record.replyTarget,
     text: '',
     passive: record.passive,

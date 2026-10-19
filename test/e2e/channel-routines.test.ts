@@ -7,7 +7,7 @@ import { channelSessionId } from '../../src/channels/session-id.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { VelaSession } from '../../src/vela-session.ts'
-import { fakeFeishu } from '../support/feishu.ts'
+import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
 import { RoutineClock } from '../support/routine-clock.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -84,6 +84,109 @@ function setup(cwd?: string, chats = ['oc_group']) {
   }
   return { t, fake, clock, logs, path, seed, stored, advance }
 }
+
+test.each(['routine', 'human'] as const)(
+  'a routine preserves the original topic requester and recovers the %s run recipient',
+  async (recovering) => {
+    const first = setup()
+    const key = channelSessionId('feishu', 'oc_group', 'root')
+    const topic = { root_id: 'root', thread_id: 'thread' }
+    async function deliver(text: string, answer: string) {
+      const done = Promise.withResolvers<void>()
+      const unsubscribe = first.t.vela.subscribe((event) => {
+        if (event.type === 'channel_reply' && event.text === answer)
+          done.resolve()
+      })
+      first.fake.deliver(
+        feishuEvent({ ...topic, content: JSON.stringify({ text }) }),
+      )
+      try {
+        await done.promise
+      } finally {
+        unsubscribe()
+      }
+    }
+    first.t.model.push(fauxText('Original result'))
+    await first.t.vela.startChannels()
+    await deliver('Investigate the original task', 'Original result')
+    await first.t.internals.gateway.routines.create({
+      channel: 'feishu',
+      chatId: 'oc_group',
+      targetKey: key,
+      creator: { id: 'ou_bob', name: 'Bob' },
+      message: 'Review the report',
+      schedule: { at: '2026-01-05T09:00:00.000Z' },
+    })
+    first.t.model.push(fauxText('Reminder result'))
+    if (recovering === 'routine') first.fake.failReply()
+    await first.advance('2026-01-05T09:00:00Z')
+    let overviewRequester: unknown
+    if (recovering === 'human') {
+      first.t.model.push(
+        fauxToolCall('feishu_list_topics', {}),
+        fauxText('Overview'),
+      )
+      const overviewDone = Promise.withResolvers<void>()
+      const unsubscribe = first.t.vela.subscribe((event) => {
+        if (event.type === 'channel_reply' && event.text === 'Overview')
+          overviewDone.resolve()
+      })
+      first.fake.deliver(
+        feishuEvent({ content: '{"text":"List this group\u0027s topics"}' }),
+      )
+      await overviewDone.promise
+      unsubscribe()
+      overviewRequester = JSON.parse(
+        first.t.model.calls.at(-1)!.toolResults.at(-1)!.output,
+      ).topics[0].requester
+      first.fake.failReply()
+      first.t.model.push(fauxText('Human follow-up'))
+      const failed = Promise.withResolvers<void>()
+      const unsubscribeFailure = first.t.vela.subscribe((event) => {
+        if (event.type === 'channel_error' && event.senderId === 'ou_alice')
+          failed.resolve()
+      })
+      first.fake.deliver(
+        feishuEvent({
+          ...topic,
+          content: '{"text":"Continue my original task"}',
+        }),
+      )
+      await failed.promise
+      unsubscribeFailure()
+    }
+    await first.t.cleanup({ keepDir: true })
+    const second = setup(first.t.cwd)
+    second.clock.advance('2026-01-05T10:00:00Z')
+    const answer =
+      recovering === 'routine' ? 'Reminder result' : 'Human follow-up'
+    const recovered = Promise.withResolvers<void>()
+    const reply = second.fake.transport.reply
+    second.fake.transport.reply = async (id, text) => {
+      const result = await reply(id, text)
+      if (text.includes(answer)) recovered.resolve()
+      return result
+    }
+    await second.t.vela.startChannels()
+    await recovered.promise
+    await second.t.cleanup({ keepDir: true })
+    const directory = new ChannelDirectory(second.t.vela.dataDir)
+    await directory.load()
+    expect({
+      requester: directory.get(key)!.requester,
+      ...(recovering === 'human' ? { overviewRequester } : {}),
+      reply: second.fake.sent.find((message) => message.text.includes(answer))
+        ?.text,
+    }).toEqual({
+      requester: { id: 'ou_alice', name: 'Alice' },
+      ...(recovering === 'human'
+        ? { overviewRequester: { id: 'ou_alice', name: 'Alice' } }
+        : {}),
+      reply: `<at user_id="${recovering === 'routine' ? 'ou_bob' : 'ou_alice'}"></at> ${answer}`,
+    })
+    expect(second.t.model.calls).toHaveLength(0)
+  },
+)
 
 test.each(['topic', 'group', 'direct'] as const)(
   'a one-off fires once into its %s and mentions its creator',
