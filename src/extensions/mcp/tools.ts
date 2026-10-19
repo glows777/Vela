@@ -10,12 +10,9 @@ import type {
   Tool as McpTool,
 } from '@modelcontextprotocol/sdk/types.js'
 import { jsonSchema } from 'ai'
-import type {
-  ToolAnnotations,
-  ToolDefinition,
-  ToolNamespace,
-} from '../../tools/registry.ts'
-import { ToolExecutionResult } from '../../tools/registry.ts'
+import type { ToolDefinition } from '../../tools/registry.ts'
+import type { ToolAnnotations, ToolNamespace } from '../../tools/types.ts'
+import { ToolExecutionResult } from '../../tools/types.ts'
 import type { McpExposure } from './config.ts'
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */

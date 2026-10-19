@@ -13,7 +13,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
-import { ToolExecutionResult } from '../../src/tools/registry.ts'
+import { ToolExecutionResult } from '../../src/tools/types.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

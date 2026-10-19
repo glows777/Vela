@@ -6,13 +6,13 @@ import z from 'zod'
 import type { VelaEvent } from '../../../src/agent/events.ts'
 import { HookPipeline } from '../../../src/security/hooks.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
-import {
-  type ToolCallOutcome,
-  type ToolContext,
-  type ToolDefinition,
-  ToolRegistry,
+import type {
+  ToolContext,
+  ToolDefinition,
 } from '../../../src/tools/registry.ts'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { createBashTool } from '../../../src/tools/shell.ts'
+import type { ToolCallOutcome } from '../../../src/tools/types.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-execute-tool-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))

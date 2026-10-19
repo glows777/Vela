@@ -6,7 +6,7 @@ import { simulateStreamingMiddleware, wrapLanguageModel } from 'ai'
 import { z } from 'zod'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import type { ImageContent, ModelMessage } from '../../src/messages.ts'
-import { ToolExecutionResult } from '../../src/tools/registry.ts'
+import { ToolExecutionResult } from '../../src/tools/types.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

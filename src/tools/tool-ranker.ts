@@ -3,7 +3,7 @@
  * `extensions/tool-search/tool.ts`.
  */
 
-import type { ToolNamespace } from './registry.ts'
+import type { ToolNamespace } from './types.ts'
 
 /** A tool as the ranker sees it: its name and its search text. */
 export interface ToolSearchDocument {

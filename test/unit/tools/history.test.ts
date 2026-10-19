@@ -15,11 +15,9 @@ import {
   fauxText,
   fauxToolCall,
 } from '../../../src/testing/faux.ts'
-import {
-  ToolExecutionResult,
-  ToolRegistry,
-} from '../../../src/tools/registry.ts'
+import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { bashTool } from '../../../src/tools/shell.ts'
+import { ToolExecutionResult } from '../../../src/tools/types.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-tool-history-'))
