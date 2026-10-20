@@ -1,9 +1,38 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import {
+  fileSessionStorage,
+  type SessionStorage,
+} from '../../src/session/storage.ts'
 import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
-import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
+import {
+  cleanupTestVelas,
+  createTestVela,
+  type TestVela,
+  tempDir,
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
+
+/**
+ * Roles of the messages in the session file. A run appends a record as it goes, and appendFile() creates the
+ * file before writing it, so a record caught mid-write has no trailing newline yet: nothing to parse until it
+ * is complete (storage.load() ends such a line the same way).
+ */
+async function savedRoles(t: TestVela): Promise<string[]> {
+  const text = t.exists('sessions/default.jsonl')
+    ? await t.readData('sessions/default.jsonl')
+    : ''
+  if (!text.endsWith('\n')) return []
+  return text
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.type === 'message')
+    .map((entry) => entry.message.role as string)
+}
 
 test('a resumed Vela continues the saved conversation', async () => {
   const first = createTestVela({ responses: [fauxText('First answer')] })
@@ -38,19 +67,60 @@ test('each message is written as it enters the history, so a killed process keep
     responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxHang('…')],
   })
   const running = t.run('Read a.txt')
-  const messages = async () =>
-    (t.exists('sessions/default.jsonl')
-      ? (await t.readData('sessions/default.jsonl')).trim().split('\n')
-      : []
-    )
-      .map((line) => JSON.parse(line))
-      .filter((entry) => entry.type === 'message')
-      .map((entry) => entry.message.role)
   // The second request is still running: the first step is already on disk
-  while ((await messages()).length < 3) await Bun.sleep(1)
-  expect(await messages()).toEqual(['user', 'assistant', 'tool'])
+  while ((await savedRoles(t)).length < 3) await Bun.sleep(1)
+  expect(await savedRoles(t)).toEqual(['user', 'assistant', 'tool'])
   await t.session.abort()
   await expect(running).rejects.toThrow()
+})
+
+test('a session file caught mid-write is not parsed until its record is complete', async () => {
+  const dir = tempDir()
+  // appendFile() creates the file, then writes it. Hold the first write so a reader sees a file with no record yet
+  const sessions = join(dir.path, 'data', 'sessions')
+  const storage = fileSessionStorage(sessions)
+  let release!: () => void
+  const holding = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let held = false
+  const pausing: SessionStorage = {
+    persistence: (id) => storage.persistence!(id),
+    load: (id) => storage.load(id),
+    list: () => storage.list!(),
+    async append(id, entries) {
+      if (!held) {
+        held = true
+        await mkdir(sessions, { recursive: true, mode: 0o700 })
+        await writeFile(join(sessions, `${id}.jsonl`), '', { mode: 0o600 })
+        await holding
+      }
+      await storage.append(id, entries)
+    },
+  }
+  const t = createTestVela({
+    cwd: dir.path,
+    dataDir: 'data',
+    sessionStorage: pausing,
+    files: { 'a.txt': 'A' },
+    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxHang('…')],
+  })
+  const running = t.run('Read a.txt')
+  running.catch(() => {})
+  try {
+    // The file exists, but its first record is still being written
+    while (!t.exists('sessions/default.jsonl')) await Bun.sleep(1)
+    expect(await savedRoles(t)).toEqual([])
+    release()
+    while ((await savedRoles(t)).length < 3) await Bun.sleep(1)
+    expect(await savedRoles(t)).toEqual(['user', 'assistant', 'tool'])
+  } finally {
+    release()
+    await t.session.abort()
+    await running.catch(() => {})
+    await t.cleanup({ keepDir: true })
+    dir.cleanup()
+  }
 })
 
 test('prompting a saved session that was not resumed fails instead of mixing two conversations', async () => {
