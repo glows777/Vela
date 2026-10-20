@@ -131,7 +131,7 @@ export class MemoryStore {
     return entries
   }
 
-  search(query: string, topK = 5): SearchHit[] {
+  search(query: string, topK = 5): SearchHit<MemoryEntry>[] {
     return bm25Search(this.list(), query, topK)
   }
 
@@ -196,7 +196,7 @@ export class MemoryStore {
     return true
   }
 
-  lint(): ValidationReport[] {
+  lint(): ValidationReport<MemoryEntry>[] {
     return lintAll(this.list(), this.projectDir)
   }
 

@@ -1,7 +1,5 @@
-import type { MemoryEntry } from './store.ts'
-
-export interface SearchHit {
-  entry: MemoryEntry
+export interface SearchHit<T> {
+  entry: T
   score: number
 }
 
@@ -43,11 +41,9 @@ const B = 0.75
  * - idf: common terms weigh less, rare terms weigh more
  * - length normalization: long documents do not rank first just for having more text
  */
-export function bm25Search(
-  entries: MemoryEntry[],
-  query: string,
-  topK = 5,
-): SearchHit[] {
+export function bm25Search<
+  T extends { name: string; description: string; content: string },
+>(entries: T[], query: string, topK = 5): SearchHit<T>[] {
   if (entries.length === 0 || !query.trim()) return []
 
   const queryTokens = tokenize(query)
@@ -69,7 +65,7 @@ export function bm25Search(
     for (const t of seen) df.set(t, (df.get(t) || 0) + 1)
   }
 
-  const hits: SearchHit[] = entries.map((entry, i) => {
+  const hits: SearchHit<T>[] = entries.map((entry, i) => {
     const doc = docs[i]!
     const dl = doc.length
     let score = 0

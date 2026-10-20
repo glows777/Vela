@@ -293,7 +293,7 @@ export class SqliteVectorStore {
     embedFn: EmbeddingFn,
     query: string,
     topK: number = 5,
-  ): Promise<SearchResult[]> {
+  ): Promise<SearchResult<StoredChunk>[]> {
     const candidateCount = Math.min(topK * 4, this.size())
     if (candidateCount === 0) return []
     this.assertEmbedder()
@@ -314,7 +314,7 @@ export class SqliteVectorStore {
     const vecScores = normalizeMinMax(vectorResults.map((r) => r.score))
     const kwScores = normalizeMinMax(keywordResults.map((r) => r.score))
 
-    const candidates = new Map<string, SearchResult>()
+    const candidates = new Map<string, SearchResult<StoredChunk>>()
     for (let i = 0; i < vectorResults.length; i++) {
       const id = vectorResults[i]!.chunk.id
       candidates.set(id, {
