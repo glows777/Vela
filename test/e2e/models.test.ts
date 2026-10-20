@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
 import { wrapLanguageModel } from 'ai'
-import type { VelaEvent } from '../../src/agent/events.ts'
 import { DEFAULT_LIMITS } from '../../src/limits.ts'
 import type { VelaLogger } from '../../src/logger.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'

@@ -31,7 +31,7 @@ test.each([8191, 65535])(
   'read_file preserves UTF-8 split across byte %i while seeking a line',
   async (padding) => {
     const t = createTestVela({
-      files: { 'notes.txt': 'x'.repeat(padding - 1) + '\n中文 😀' },
+      files: { 'notes.txt': `${'x'.repeat(padding - 1)}\n中文 😀` },
       responses: [
         fauxToolCall('read_file', { path: 'notes.txt', offset: 2 }),
         fauxText('Done'),
@@ -46,7 +46,7 @@ test.each([0, 8191, 8192])(
   'read_file rejects a NUL at byte %i before pagination',
   async (nulOffset) => {
     const t = createTestVela({
-      files: { 'document.pdf': 'x'.repeat(nulOffset) + '\0binary payload' },
+      files: { 'document.pdf': `${'x'.repeat(nulOffset)}\0binary payload` },
       responses: [
         fauxToolCall('read_file', { path: 'document.pdf' }),
         fauxText('Use bash to inspect the document'),

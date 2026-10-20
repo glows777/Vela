@@ -87,14 +87,7 @@ export const createBashTool = (
     if (tail.truncated)
       preview += `\n\n[Showing the last ${tail.lines} lines${tail.partialLine ? ' (the last line is cut)' : ''} of ${size} bytes of output. Full output: ${path}]`
     if (status) preview += `${preview ? '\n\n' : ''}${status}`
-    return results.reference(
-      path,
-      'bash',
-      preview,
-      context?.toolCallId,
-      execution,
-      context?.callId,
-    )
+    return results.reference(path, preview, context?.callId, execution)
   },
 })
 

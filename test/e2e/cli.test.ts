@@ -351,7 +351,7 @@ test.concurrent('@file with a slash skill reports ignored attachments and still 
 test.each([
   ['NUL', Buffer.from('%PDF-1.4\n\0binary payload')],
   ['ASCII PDF', readFileSync(join(ROOT, 'test/fixtures/files/ascii.pdf'))],
-  ['late NUL', Buffer.from('x'.repeat(8192) + '\0binary payload')],
+  ['late NUL', Buffer.from(`${'x'.repeat(8192)}\0binary payload`)],
   ['invalid UTF-8', Buffer.from([0x62, 0x69, 0x6e, 0xff, 0xfe])],
   [
     'late invalid UTF-8',

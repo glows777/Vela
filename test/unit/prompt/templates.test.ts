@@ -35,9 +35,13 @@ test('substituteArgs supports positional, all, defaults and slices like pi', () 
   expect(substituteArgs('$@ | $ARGUMENTS', args)).toBe(
     'one two three | one two three',
   )
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: ${...} is the prompt-template placeholder syntax under test
   expect(substituteArgs('${4:-none} ${1:-x}', args)).toBe('none one')
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: ${...} is the prompt-template placeholder syntax under test
   expect(substituteArgs('${@:-empty}', [])).toBe('empty')
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: ${...} is the prompt-template placeholder syntax under test
   expect(substituteArgs('${@:2}', args)).toBe('two three')
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: ${...} is the prompt-template placeholder syntax under test
   expect(substituteArgs('${@:2:1}', args)).toBe('two')
   // values are not substituted again
   expect(substituteArgs('$1', ['$2', 'x'])).toBe('$2')
@@ -71,6 +75,7 @@ test('templates load from directories and files; description from frontmatter or
 })
 
 test('expandPromptTemplate replaces /<name> args and leaves other text alone', () => {
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: ${@:2} is prompt-template placeholder syntax in this fixture
   const root = setup({ 'p/fix.md': 'Fix $1 in ${@:2}' })
   const { templates } = loadPromptTemplates([join(root, 'p')])
   expect(expandPromptTemplate('/fix "the bug" a.ts b.ts', templates)).toBe(

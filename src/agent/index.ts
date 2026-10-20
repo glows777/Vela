@@ -1,10 +1,4 @@
-import {
-  type AssistantModelMessage,
-  type LanguageModel,
-  streamText,
-  type Tool,
-  type ToolSet,
-} from 'ai'
+import { type AssistantModelMessage, type LanguageModel, streamText } from 'ai'
 import {
   createRequestSnapshot,
   estimateRequestTokens,
@@ -82,28 +76,6 @@ interface AgentLoopParameter {
     message: AssistantModelMessage,
     stopReason: 'aborted' | 'error',
   ) => void
-}
-
-// support tools as array or object, if array, convert to object with title as key
-const resolveTools = (tools: ToolSet | Tool[]): ToolSet => {
-  if (!Array.isArray(tools)) {
-    return tools
-  }
-
-  return tools.reduce<ToolSet>((resolvedTools, tool) => {
-    const title = tool.title?.trim()
-
-    if (!title) {
-      throw new Error('Tool arrays require every tool to have a title.')
-    }
-
-    if (Object.hasOwn(resolvedTools, title)) {
-      throw new Error(`Duplicate tool title: ${title}`)
-    }
-
-    resolvedTools[title] = tool
-    return resolvedTools
-  }, {})
 }
 
 export const agentLoop = async ({

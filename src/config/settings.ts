@@ -18,8 +18,6 @@ import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
 
-type Env = Record<string, string | undefined>
-
 /** Contents of settings.json (user: `~/.vela/settings.json`, project: `<cwd>/.vela/settings.json`). */
 export interface VelaSettings {
   /** Default model `provider/id` (pi splits this into defaultProvider + defaultModel) */

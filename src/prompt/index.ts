@@ -1,6 +1,6 @@
 import type { ToolResultStore } from '../session/tool-results.ts'
 import { type ContextFile, renderContextFiles } from './context-files.ts'
-import type { PipeFn, PromptContext } from './pipeline.ts'
+import type { PipeFn } from './pipeline.ts'
 
 export * from './pipeline.ts'
 

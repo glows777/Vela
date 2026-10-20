@@ -12,7 +12,7 @@ export function isRetryable(error: unknown): boolean {
 
   const statusMatch = message.match(/(\d{3})/)
   if (statusMatch) {
-    const status = parseInt(statusMatch[1]!)
+    const status = parseInt(statusMatch[1]!, 10)
     // 429 Too Many Requests, 529 Site is overloaded, 408 Request Timeout: transient, retry
     if ([429, 529, 408].includes(status)) return true
 

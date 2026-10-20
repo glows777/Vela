@@ -513,6 +513,7 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
     await until(
       () =>
         f.sent.length >= 1 &&
+        // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
         !t.internals.gateway['queues'].has('feishu-oc_group'),
     )
     expect(t.vela.session('feishu-oc_group').queue).toEqual({
@@ -630,6 +631,7 @@ test('Queue immediately followed by Stop on another card keeps the explicitly qu
     await until(
       () =>
         f.sent.length >= 1 &&
+        // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
         !f.t.internals.gateway['queues'].has('feishu-oc_group'),
     )
     expect(f.sent.map((reply) => reply.messageId)).toEqual(['stop', 'second'])

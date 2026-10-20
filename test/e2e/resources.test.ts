@@ -59,6 +59,7 @@ test('prompt templates from .vela/prompts expand with arguments; unknown /names 
   const t = createTestVela({
     files: {
       '.vela/prompts/fix.md':
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: ${@:2} is prompt-template placeholder syntax in this test fixture
         '---\ndescription: Fix a bug\n---\nFix $1 in ${@:2}',
     },
     responses: [fauxText('fixed'), fauxText('unknown')],

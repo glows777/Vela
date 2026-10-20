@@ -868,6 +868,7 @@ for (const persistedBaseline of [false, true]) {
     sdk.appendEntry('sdk-repair', { healthy: true })
     await sdk.save()
     // Saving through the SDK clears failures without scheduling a close during SDK work.
+    // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
     expect(t.internals.gateway['idleTimers'].has(id)).toBe(false)
     expect(t.vela.session(id)).toBe(original)
     await deliver('u1', 'after SDK recovery')
@@ -928,6 +929,7 @@ test('a message queued during idle saving keeps the current session open', async
   blockWrites = true
   session.appendEntry('idle-write', {})
   // Synchronize on the idle save operation rather than assuming a timer duration.
+  // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
   await waitFor(() => t.internals.gateway['closing'].has(session.id))
   const queued = deliver('u1', 'queued while saving')
   blockWrites = false

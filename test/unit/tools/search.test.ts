@@ -36,7 +36,7 @@ test('grep: matches with paths relative to the search dir, respecting .gitignore
   const output = await run(createGrepTool(dir), { pattern: 'needle' })
   expect(sorted(output)).toEqual(
     [
-      'long.txt:1: needle ' + 'x'.repeat(493) + '... [truncated]',
+      `long.txt:1: needle ${'x'.repeat(493)}... [truncated]`,
       'src/.hidden/c.ts:1: needle hidden',
       'src/a.ts:1: needle a',
       'src/b.test.ts:1: needle b',

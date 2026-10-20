@@ -68,14 +68,12 @@ function renderContextMatrix(snapshot: ContextSnapshot): string {
 
   // Convert each slice's tokens to a cell count (round up so small slices don't vanish)
   const cells: number[] = [] // ANSI color for each cell, or -1 for free, -2 for buffer
-  let used = 0
   for (const s of slices) {
     if (s.tokens <= 0) continue
     const n = Math.max(1, Math.round(s.tokens / tokensPerCell))
     for (let i = 0; i < n && cells.length < TOTAL_CELLS; i++) {
       cells.push(s.color)
     }
-    used += n
   }
   const bufferCells = Math.max(
     0,
@@ -106,7 +104,7 @@ function renderContextLegend(snapshot: ContextSnapshot): string {
   const lines: string[] = []
 
   lines.push(
-    fg(COLORS.text, fg(255, '\x1b[1m') + snapshot.modelName + '\x1b[0m'),
+    fg(COLORS.text, `${fg(255, '\x1b[1m')}${snapshot.modelName}\x1b[0m`),
   )
   lines.push(fg(COLORS.dim, snapshot.modelId))
   lines.push(
@@ -145,7 +143,7 @@ export function renderContextView(snapshot: ContextSnapshot): string {
     const right = legend[i] || ''
     out.push(`  ${left}  ${right}`)
   }
-  return '\n' + out.join('\n') + '\n'
+  return `\n${out.join('\n')}\n`
 }
 
 // ── Snapshot: token slices from the message list plus known sizes ─────────
@@ -315,5 +313,5 @@ export function renderUsageView(tracker: TokenTracker): string {
     )
   }
 
-  return '\n' + lines.join('\n') + '\n'
+  return `\n${lines.join('\n')}\n`
 }
