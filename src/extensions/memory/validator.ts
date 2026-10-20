@@ -38,7 +38,10 @@ const TTL_BY_TYPE: Record<string, number> = {
   reference: 14, // external references need frequent refreshing
 }
 
-function validateEntry(entry: ValidatableEntry, baseDir = '.'): ValidationIssue[] {
+function validateEntry(
+  entry: ValidatableEntry,
+  baseDir = '.',
+): ValidationIssue[] {
   const issues: ValidationIssue[] = []
 
   const paths = extractPaths(entry.content)
