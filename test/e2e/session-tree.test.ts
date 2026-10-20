@@ -48,9 +48,17 @@ const texts = (messages: { content: unknown }[]) =>
     typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
   )
 
+/**
+ * The conversation the last stream request carried. The system prompt is left out:
+ * it embeds the session's absolute temp path (`/tmp/vela-test-<random>`), which must
+ * neither satisfy nor break an assertion about what the model saw.
+ */
 const lastStream = (t: ReturnType<typeof createTestVela>) =>
   JSON.stringify(
-    t.model.calls.filter((c) => c.kind === 'stream').at(-1)!.prompt,
+    t.model.calls
+      .filter((c) => c.kind === 'stream')
+      .at(-1)!
+      .prompt.filter((m) => m.role !== 'system'),
   )
 
 /** Two rounds: q1 → a1, q2 → a2. */
