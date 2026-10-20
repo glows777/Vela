@@ -413,7 +413,7 @@ export interface SessionTreeNode {
 }
 
 /** Current label of each entry (the latest `label` entry for it wins). */
-export function resolveLabels(entries: SessionEntry[]): Map<string, string> {
+function resolveLabels(entries: SessionEntry[]): Map<string, string> {
   const labels = new Map<string, string>()
   for (const entry of entries) {
     if (entry.type !== 'label') continue

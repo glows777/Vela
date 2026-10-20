@@ -1,7 +1,7 @@
 import z from 'zod'
 import type { ToolDefinition, ToolRegistry } from './registry.ts'
 
-export const DEFAULT_TOOL_SEARCH_LIMIT = 8
+const DEFAULT_TOOL_SEARCH_LIMIT = 8
 
 const toolSearchToolSchema = z.object({
   query: z

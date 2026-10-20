@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises'
 import type { VelaLogger } from '../logger.ts'
 
 /** External programs the search tools run (same as pi: grep → ripgrep, find → fd). */
-export type ToolBinary = 'rg' | 'fd'
+type ToolBinary = 'rg' | 'fd'
 
 interface BinarySpec {
   name: string

@@ -1,4 +1,4 @@
-export type RiskLevel = 'safe' | 'moderate' | 'dangerous'
+type RiskLevel = 'safe' | 'moderate' | 'dangerous'
 
 interface ClassifyResult {
   level: RiskLevel

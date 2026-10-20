@@ -463,7 +463,7 @@ function editDiff(name: string, details: unknown): string | undefined {
 }
 
 /** Like pi's bash renderer: `3.2s`, `2m 5s`, `1h 2m 5s`. */
-export function formatDuration(ms: number): string {
+function formatDuration(ms: number): string {
   const seconds = ms / 1000
   if (seconds < 60) return `${seconds.toFixed(1)}s`
   const total = Math.floor(seconds)
@@ -514,7 +514,7 @@ class NoticeText implements Component {
 }
 
 /** A tool's key argument: bash command, file path, search pattern; other tools show compact JSON. */
-export function summarizeInput(name: string, input: unknown): string {
+function summarizeInput(name: string, input: unknown): string {
   if (input && typeof input === 'object') {
     const record = input as Record<string, unknown>
     for (const key of ['command', 'path', 'pattern', 'query', 'url'])

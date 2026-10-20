@@ -1,7 +1,7 @@
 import type { VelaEvent } from '../agent/events.ts'
 import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
 
-export type HookAction = 'allow' | 'block' | 'modify'
+type HookAction = 'allow' | 'block' | 'modify'
 
 /** Session info passed to hooks; a hook can emit events into the calling session. */
 export interface HookContext {

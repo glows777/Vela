@@ -7,8 +7,6 @@ export interface CatalogModel extends ModelSpec {
   api: string
 }
 
-export { MODEL_CATALOG }
-
 /** Catalog models of one provider (empty for providers the catalog doesn't know). */
 export function catalogModels(provider: string): CatalogModel[] {
   return MODEL_CATALOG[provider] ?? []

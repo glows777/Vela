@@ -9,7 +9,6 @@ import { velaInternals } from '../../src/vela.ts'
 
 export {
   cleanupTestVelas,
-  type FixtureSkill,
   tempDir,
 } from '../../src/testing/test-vela.ts'
 

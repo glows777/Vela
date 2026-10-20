@@ -29,7 +29,7 @@ interface GatewayOptions {
   logger?: VelaLogger
 }
 
-export const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
+const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
 /** With `idleMs` 0, how often a session that is busy at its deadline is checked again */
 const BUSY_RECHECK_MS = 1000
 const MAX_SAVE_FAILURES = 3

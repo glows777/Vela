@@ -110,7 +110,7 @@ export interface LoginProvider {
 }
 
 /** Default model of each built-in provider, in pi's preference order */
-export const DEFAULT_PROVIDER_ORDER = ['anthropic', 'openai', 'openrouter']
+const DEFAULT_PROVIDER_ORDER = ['anthropic', 'openai', 'openrouter']
 
 export interface ResolvedModel {
   model: LanguageModel
@@ -307,7 +307,7 @@ export function reasoningOption(
 }
 
 /** Tokens reserved for output (pi compaction's default reserveTokens) */
-export const RESERVE_TOKENS = 16_384
+const RESERVE_TOKENS = 16_384
 
 /**
  * Derives compaction thresholds and the input cap from the model's context window (a 200k

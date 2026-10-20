@@ -3,7 +3,7 @@ import { InteractiveMode } from '../../src/cli/interactive.ts'
 import type { Vela } from '../../src/vela.ts'
 
 /** Fake implementation of pi-tui's Terminal interface: writes nothing and sends keys straight to the TUI. */
-export class FakeTerminal implements Terminal {
+class FakeTerminal implements Terminal {
   private onInput?: (data: string) => void
   columns = 100
   rows = 40
