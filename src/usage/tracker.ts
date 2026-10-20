@@ -166,9 +166,15 @@ export class TokenTracker {
       : this.estimatedTokens
   }
 
-  /** Current model's price (overrides the built-in table); undefined uses the built-in table, and a model in neither has no cost. Only affects later requests. */
-  setPricing(pricing: ModelPricing | undefined): void {
+  /**
+   * Switches to the model with this window and price (undefined uses the built-in table). Its tokenizer may
+   * count differently, so the previous model's reported prompt size is dropped: thresholds fall back to the
+   * local request estimate until this model reports usage. Only later requests are priced with it.
+   */
+  setModel(contextWindow: number, pricing: ModelPricing | undefined): void {
+    this.contextWindow = contextWindow
     this.pricing = pricing
+    this.reportedPromptTokens = undefined
   }
 
   /** Current context status relative to the model window (default 200k). */

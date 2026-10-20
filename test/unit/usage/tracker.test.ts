@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test'
 import type { LanguageModelUsage } from 'ai'
-import { normalizeUsage, TokenTracker } from '../../../src/usage/tracker.ts'
+import {
+  CONTEXT_WINDOW,
+  normalizeUsage,
+  TokenTracker,
+} from '../../../src/usage/tracker.ts'
 
 test('normalizes AI SDK usage detail fields', () => {
   const usage: LanguageModelUsage = {
@@ -68,7 +72,7 @@ test('the mock model keeps its demo price', () => {
 
 test('totals add up only the priced requests', () => {
   const tracker = new TokenTracker()
-  tracker.setPricing({
+  tracker.setModel(CONTEXT_WINDOW, {
     input: 1_000_000,
     output: 0,
     cacheRead: 0,
@@ -80,7 +84,7 @@ test('totals add up only the priced requests', () => {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
   })
-  tracker.setPricing(undefined)
+  tracker.setModel(CONTEXT_WINDOW, undefined)
   tracker.record('unpriced', {
     inputTokens: 5,
     outputTokens: 0,
@@ -92,4 +96,21 @@ test('totals add up only the priced requests', () => {
   expect(totals.inputTokens).toBe(8)
   expect(totals.cost).toBeCloseTo(3)
   expect(totals.baselineCost).toBeCloseTo(3)
+})
+
+test('the reported prompt size anchors the context until that model is replaced', () => {
+  const tracker = new TokenTracker()
+  expect(tracker.reportedContextTokens).toBeUndefined()
+
+  tracker.updateFromAPI(1_000)
+  tracker.addMessage({ role: 'user', content: 'x'.repeat(400) })
+  expect(tracker.reportedContextTokens).toBe(1_100)
+
+  tracker.setEstimatedTokens(500)
+  expect(tracker.reportedContextTokens).toBeUndefined()
+
+  tracker.updateFromAPI(1_000)
+  tracker.setModel(8_000, undefined)
+  expect(tracker.reportedContextTokens).toBeUndefined()
+  expect(tracker.contextWindow).toBe(8_000)
 })

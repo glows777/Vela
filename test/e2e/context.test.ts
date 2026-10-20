@@ -4,6 +4,7 @@ import {
   estimateRequestTokens,
 } from '../../src/context/request.ts'
 import {
+  createFauxModel,
   fauxError,
   fauxHang,
   fauxSummary,
@@ -171,6 +172,33 @@ test('provider-reported usage above the summary threshold summarizes even when t
   expect(summary?.result?.tokensBefore).toBeGreaterThanOrEqual(60_000)
   expect(summary?.result?.messages).toBe(2)
   expect(t.lastAssistantText()).toBe('Answer 4')
+})
+
+test('a model switch drops the size the previous model reported', async () => {
+  const before = createFauxModel({ modelId: 'before' })
+  const after = createFauxModel({ modelId: 'after' })
+  before.push(fauxText('Answer 0', { usage: { input: 60_000 } }))
+  after.push(fauxText('Answer 1'))
+  const t = createTestVela({
+    model: 'switch/before',
+    providers: {
+      switch: {
+        models: [{ id: 'before' }, { id: 'after' }],
+        createModel: (id) => (id === 'before' ? before : after),
+      },
+    },
+    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+  })
+  await t.run('Question 0')
+  expect(t.tracker().reportedContextTokens).toBeGreaterThan(50_000)
+
+  t.session.setModel('switch/after')
+  expect(t.tracker().reportedContextTokens).toBeUndefined()
+
+  // The new model's tokenizer counts differently: the old model's report no longer triggers a summary
+  await t.run('Question 1')
+  expect(t.eventsOf('compaction_start')).toEqual([])
+  expect(t.lastAssistantText()).toBe('Answer 1')
 })
 
 test('a summary that fails validation stops the turn and leaves history untouched', async () => {
