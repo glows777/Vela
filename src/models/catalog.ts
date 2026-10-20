@@ -1,31 +1,54 @@
-import { MODEL_CATALOG } from './catalog.generated.ts'
-import type { ModelSpec, ThinkingLevel } from './index.ts'
+import type { ModelPricing } from '../usage/tracker.ts'
+
+/** Thinking level (like pi). Maps to the AI SDK `reasoning` call option. */
+export type ThinkingLevel =
+  | 'off'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]
+
+/** Default thinking level (like pi). */
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'
+
+/** Model metadata (a models.json model entry or a catalog entry, same field names as pi). */
+export interface ModelSpec {
+  id: string
+  /** Display name */
+  name?: string
+  /** Context window in tokens; when set, compaction thresholds and the input cap derive from it */
+  contextWindow?: number
+  /** Maximum output tokens */
+  maxTokens?: number
+  /** Whether thinking is supported; false limits the thinking level to `off` */
+  reasoning?: boolean
+  /**
+   * Provider value per thinking level (pi's thinkingLevelMap); `null` marks a level the model doesn't support.
+   * `xhigh` and `max` are only offered when listed here.
+   */
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>
+  /** Input types (`text`, `image`) */
+  input?: string[]
+  /** Price in $ / 1M tokens; used for usage stats when set */
+  cost?: ModelPricing
+}
 
 /** One model of the built-in catalog (pi's model metadata, see scripts/update-models.ts). */
 export interface CatalogModel extends ModelSpec {
   /** Wire protocol: `anthropic-messages`, `openai-responses` or `openai-completions` */
   api: string
-}
-
-/** Catalog models of one provider (empty for providers the catalog doesn't know). */
-export function catalogModels(provider: string): CatalogModel[] {
-  return MODEL_CATALOG[provider] ?? []
-}
-
-/**
- * Catalog metadata for a model: the same provider and id first, then the same id under any catalog provider
- * (so a models.json provider serving a well-known model still gets its context window and price).
- */
-export function catalogLookup(
-  provider: string,
-  id: string,
-): CatalogModel | undefined {
-  const own = MODEL_CATALOG[provider]?.find((m) => m.id === id)
-  if (own) return own
-  for (const models of Object.values(MODEL_CATALOG)) {
-    const found = models.find((m) => m.id === id)
-    if (found) return found
-  }
 }
 
 /**
