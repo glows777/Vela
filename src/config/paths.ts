@@ -24,7 +24,7 @@ export function projectDataDir(agentDir: string, cwd: string): string {
 }
 
 /** Expands `~` / `~/x` to the home directory */
-export function expandHome(path: string): string {
+function expandHome(path: string): string {
   if (path === '~') return homedir()
   if (path.startsWith('~/') || path.startsWith('~\\'))
     return join(homedir(), path.slice(2))

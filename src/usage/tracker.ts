@@ -291,7 +291,7 @@ export function estimateMessageTokens(messages: ModelMessage[]): number {
   return Math.ceil((chars / 4) * 1.2)
 }
 
-export function computeCost(usage: StepUsage, p: ModelPricing): number {
+function computeCost(usage: StepUsage, p: ModelPricing): number {
   return (
     (usage.inputTokens * p.input +
       usage.outputTokens * p.output +

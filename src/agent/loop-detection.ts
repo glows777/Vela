@@ -37,7 +37,7 @@ function hash(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 16)
 }
 
-export function hashToolCall(toolName: string, params: unknown): string {
+function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${hash(stringifyValue(params))}`
 }
 

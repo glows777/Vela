@@ -29,7 +29,7 @@ export const failedToolCallResult = (errorMessage: string) =>
   `Tool call was not executed: the response failed (${errorMessage}).`
 
 /** AI SDK only runs tools when the model stopped normally (`stop` / `tool-calls`). */
-export const executesTools = (finishReason: FinishReason) =>
+const executesTools = (finishReason: FinishReason) =>
   finishReason === 'stop' || finishReason === 'tool-calls'
 
 export const errorMessageOf = (error: unknown): string =>

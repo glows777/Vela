@@ -38,7 +38,7 @@ export function restoreLineEndings(
  * - Normalize Unicode dashes/hyphens to ASCII hyphen
  * - Normalize special Unicode spaces to regular space
  */
-export function normalizeForFuzzyMatch(text: string): string {
+function normalizeForFuzzyMatch(text: string): string {
   return (
     text
       .normalize('NFKC')
@@ -148,7 +148,7 @@ function applyReplacements(
  * from `originalContent`. The actual replacement ranges drive preservation so
  * duplicate normalized lines cannot be aligned to the wrong occurrence.
  */
-export function applyReplacementsPreservingUnchangedLines(
+function applyReplacementsPreservingUnchangedLines(
   originalContent: string,
   baseContent: string,
   replacements: TextReplacement[],
@@ -199,7 +199,7 @@ export function applyReplacementsPreservingUnchangedLines(
   return result
 }
 
-export interface FuzzyMatchResult {
+interface FuzzyMatchResult {
   /** Whether a match was found */
   found: boolean
   /** The index where the match starts (in the content that should be used for replacement) */
@@ -231,10 +231,7 @@ export interface AppliedEditsResult {
  * fuzzy-normalized version of the content (trailing whitespace stripped,
  * Unicode quotes/dashes normalized to ASCII).
  */
-export function fuzzyFindText(
-  content: string,
-  oldText: string,
-): FuzzyMatchResult {
+function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
   // Try exact match first
   const exactIndex = content.indexOf(oldText)
   if (exactIndex !== -1) {

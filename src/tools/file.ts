@@ -17,8 +17,8 @@ import type { ToolDefinition } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
 
 /** Default page of read_file, same as pi: 2000 lines or 50KB, whichever comes first */
-export const READ_MAX_LINES = 2000
-export const READ_MAX_BYTES = 50 * 1024
+const READ_MAX_LINES = 2000
+const READ_MAX_BYTES = 50 * 1024
 
 // 96 MiB of bytes encode to the normalizer's 128 MiB base64 input limit.
 const READ_MAX_IMAGE_BYTES = 96 * 1024 * 1024
@@ -376,6 +376,3 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
 })
 
 export const readFileTool = createReadFileTool()
-export const writeFileTool = createWriteFileTool()
-export const listDirectoryTool = createListDirectoryTool()
-export const editFileTool = createEditFileTool()
