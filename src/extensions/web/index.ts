@@ -1,5 +1,5 @@
-import type { VelaExtension } from '../../index.ts'
 import { configString } from '../config.ts'
+import type { VelaExtension } from '../types.ts'
 import { serperSearchTool, tavilySearchTool, webFetchTool } from './tools.ts'
 
 export interface WebOptions {

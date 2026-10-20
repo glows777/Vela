@@ -4,20 +4,17 @@ import { join, resolve } from 'node:path'
 import { channelSessionId } from '../../channels/gateway.ts'
 import { groupWorkspace } from '../../channels/scope.ts'
 import type {
+  ChannelDefinition,
   ChannelFeedbackUpdate,
   ChannelOutcome,
   ChannelRunFeedback,
-} from '../../channels/types.ts'
-import { imageMimeType } from '../../images/metadata.ts'
-import type {
-  ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-  Role,
-  VelaLogger,
-} from '../../index.ts'
-import { errorMessage } from '../../logger.ts'
+} from '../../channels/types.ts'
+import { imageMimeType } from '../../images/metadata.ts'
+import { errorMessage, type VelaLogger } from '../../logger.ts'
 import type { ImageContent } from '../../messages.ts'
+import type { Role } from '../../security/roles.ts'
 import {
   type FeishuCardAction,
   type FeishuCardResponse,

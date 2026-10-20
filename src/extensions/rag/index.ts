@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { VelaExtension } from '../../index.ts'
+import type { VelaExtension } from '../types.ts'
 import { createEmbedder, type EmbeddingFn } from './embedder.ts'
 import { SqliteVectorStore } from './sqlite-store.ts'
 import { createRagTools, ingestDocument } from './tools.ts'

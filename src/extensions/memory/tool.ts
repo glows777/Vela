@@ -1,6 +1,5 @@
 import z from 'zod'
-import type { ToolDefinition } from '../../index.ts'
-import type { ToolContext } from '../../tools/registry.ts'
+import type { ToolContext, ToolDefinition } from '../../tools/registry.ts'
 import type { MemoryStore } from './store.ts'
 
 const memoryToolParamSchema = z

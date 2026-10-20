@@ -1,5 +1,5 @@
-import type { VelaExtension } from '../../index.ts'
 import { configString, configStrings } from '../config.ts'
+import type { VelaExtension } from '../types.ts'
 import { FeishuChannel } from './channel.ts'
 import type { FeishuChat } from './chats.ts'
 import type { FeishuTransport } from './transport.ts'

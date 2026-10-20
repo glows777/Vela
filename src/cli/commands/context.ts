@@ -4,7 +4,7 @@ import {
   renderUsageView,
 } from '../../context/view.ts'
 import type { VelaSession } from '../../vela-session.ts'
-import type { CommandHandler } from './index.ts'
+import type { CommandHandler } from './handler.ts'
 
 export const contextCommands: CommandHandler[] = [
   (cmd, { print, session, internals }) => {
