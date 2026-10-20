@@ -1,5 +1,5 @@
 import type { AssistantModelMessage, ToolCallPart } from 'ai'
-import type { ModelMessage, ToolResultPart } from '../messages.ts'
+import type { ModelMessage, ToolResultPart, UserContent } from '../messages.ts'
 import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 
 /**
@@ -29,6 +29,18 @@ export interface CompactionResult {
  */
 export interface CustomMessageInfo {
   customType: string
+  display: boolean
+  details?: unknown
+}
+
+/**
+ * A message an extension adds to a session's conversation (pi's custom message), for
+ * `session.sendMessage()` and `before_agent_start` results. The model sees `content` as a user message;
+ * `display` says whether UIs show it; `details` is the extension's own data, saved but never sent to the model.
+ */
+export interface CustomMessage {
+  customType: string
+  content: UserContent
   display: boolean
   details?: unknown
 }

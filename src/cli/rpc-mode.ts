@@ -1,4 +1,4 @@
-import type { SessionUI } from '../extensions/types.ts'
+import type { SessionUI } from '../extensions/ui.ts'
 import type { ImageContent } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import { messageText } from '../session/entries.ts'

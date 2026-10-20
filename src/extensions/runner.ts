@@ -1,5 +1,5 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import type { VelaEvent } from '../agent/events.ts'
+import type { CustomMessage, VelaEvent } from '../agent/events.ts'
 import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
@@ -16,12 +16,7 @@ import type {
   AfterProviderResponseEvent,
   BeforeAgentStartEventResult,
   ContextEventResult,
-  CustomMessage,
-  ExtensionAPI,
-  ExtensionCommand,
-  ExtensionContext,
   ExtensionEventName,
-  ExtensionHandler,
   InputEventResult,
   InputSource,
   ProviderStreamEvent,
@@ -31,6 +26,12 @@ import type {
   ToolCallEventResult,
   ToolResultEventResult,
   TreePreparation,
+} from './events.ts'
+import type {
+  ExtensionAPI,
+  ExtensionCommand,
+  ExtensionContext,
+  ExtensionHandler,
   VelaExtension,
 } from './types.ts'
 

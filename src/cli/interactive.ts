@@ -20,7 +20,7 @@ import {
 } from '@earendil-works/pi-tui'
 import type { VelaEvent } from '../agent/events.ts'
 import type { LoginOptions } from '../auth/types.ts'
-import type { SessionUI } from '../extensions/types.ts'
+import type { SessionUI } from '../extensions/ui.ts'
 import { imageMimeType } from '../images/metadata.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
