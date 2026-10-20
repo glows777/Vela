@@ -46,6 +46,9 @@ jobs:
       # biome check: formatting, import order and lint
       - name: Lint
         run: bun run lint
+      # quality ratchet: no new dead code, no new circular dependencies, no file over its line ceiling
+      - name: Quality
+        run: bun run quality
       # Build, pack and install into empty Node and Bun projects; import, type-check and run the CLI like a consumer (needs network)
       - name: Consumer smoke test
         run: bun run smoke:consumer
