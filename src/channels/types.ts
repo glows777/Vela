@@ -165,6 +165,7 @@ export interface ChannelDefinition {
   startRun?: (
     message: IncomingMessage,
     options: { acknowledge: boolean },
+    // biome-ignore lint/suspicious/noConfusingVoidType: public shape: `undefined` would reject channel implementations whose async startRun returns nothing (Promise<void>)
   ) => Promise<ChannelRunFeedback | void>
 
   /**

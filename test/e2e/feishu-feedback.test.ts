@@ -469,7 +469,7 @@ test('Stop finalizes an untagged steer still downloading its attachment', async 
 
 test('a held bash call shows a bounded single-line command head', async () => {
   let release!: () => void
-  const command = "printf 'checking logs\\n'\n# " + 'context '.repeat(15)
+  const command = `printf 'checking logs\\n'\n# ${'context '.repeat(15)}`
   const { fake, t, start } = setup(
     [fauxToolCall('bash', { command }), fauxText('checked')],
     [

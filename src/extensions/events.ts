@@ -196,6 +196,7 @@ export interface SessionBeforeForkEventResult {
   cancel?: boolean
 }
 
+// biome-ignore-start lint/suspicious/noConfusingVoidType: the second tuple member is a handler return type; `void` keeps async handlers that return nothing assignable (their type is Promise<void>, which `undefined` would reject)
 type InterceptEvents = {
   tool_call: [ToolCallEvent, ToolCallEventResult]
   tool_result: [ToolResultEvent, ToolResultEventResult]
@@ -222,6 +223,7 @@ type NotifyEvents = {
     void,
   ]
 }
+// biome-ignore-end lint/suspicious/noConfusingVoidType: end of handler return-type tuples
 
 export type ExtensionEvents = InterceptEvents & NotifyEvents
 export type ExtensionEventName = keyof ExtensionEvents

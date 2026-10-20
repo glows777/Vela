@@ -129,11 +129,9 @@ export class ToolResultStore {
 
   async reference(
     path: string,
-    toolName: string,
     preview: string,
-    toolCallId?: string,
-    execution?: ExecutionMetadata,
     callId?: string,
+    execution?: ExecutionMetadata,
   ): Promise<StoredToolResult> {
     const { size } = await stat(path)
     const reference = new StoredToolResult(path, this.indexPath, size, preview)
@@ -207,10 +205,7 @@ export class ToolResultStore {
     }
     return this.reference(
       result.path,
-      toolName,
       result.preview,
-      toolCallId,
-      undefined,
       callId ?? recorded?.callId,
     )
   }

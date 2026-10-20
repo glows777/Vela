@@ -78,6 +78,7 @@ test('project mcp.json is read only when trusted; an entry without command/url/t
       mcpServers: {
         docs: {
           url: 'https://docs/mcp',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: ${TOKEN} is mcp config interpolation syntax in this fixture
           headers: { Authorization: 'Bearer ${TOKEN}' },
         },
         tools: { command: 'tools' },
@@ -131,6 +132,7 @@ test('an unset variable or a broken file is an error, not an empty value', () =>
       mcpServers: {
         docs: {
           url: 'https://docs/mcp',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: ${TOKEN} is mcp config interpolation syntax in this fixture
           headers: { Authorization: 'Bearer ${TOKEN}' },
         },
         ok: { command: 'x', env: { A: '$$literal' } },
@@ -149,6 +151,7 @@ test('an unset variable or a broken file is an error, not an empty value', () =>
     ok: { command: 'x', env: { A: '$literal' } },
   })
   expect(result.errors[0]).toBe(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the expected message quotes the ${TOKEN} placeholder
     'MCP server "docs" headers "Authorization" uses ${TOKEN}, which is not set',
   )
   expect(result.errors[1]).toStartWith(`${join(projectDir, 'mcp.json')}: `)

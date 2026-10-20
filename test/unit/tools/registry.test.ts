@@ -237,7 +237,7 @@ test('sequential tools run one at a time within a session', async () => {
     }),
   )
   const wrapped = registry.toAISDKFormat()
-  const body = wrapped['exclusive']
+  const body = wrapped.exclusive
   if (!body) throw new Error('exclusive tool expected in tool set')
 
   const execute = body.execute!

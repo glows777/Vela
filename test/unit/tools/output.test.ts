@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ModelMessage, ToolResultPart } from 'ai'
+import type { ModelMessage } from 'ai'
 import { generateText, stepCountIs } from 'ai'
 import z from 'zod'
 import { summarize } from '../../../src/context/compressor.ts'
@@ -28,8 +28,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 test('oversized result is saved before returning a preview and can be read through the registry', async () => {
   const registry = new ToolRegistry(new ToolResultStore(join(dir, 'results')))
-  const raw =
-    'head\n'.repeat(1000) + 'MIDDLE_EVIDENCE\n' + 'tail\n'.repeat(1000)
+  const raw = `${'head\n'.repeat(1000)}MIDDLE_EVIDENCE\n${'tail\n'.repeat(1000)}`
   registry.register(
     {
       name: 'large',
@@ -232,7 +231,7 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
     description: 'large',
     inputSchema: z.object({}),
     execute: async () =>
-      'header\n'.repeat(1000) + 'SDK_MIDDLE_EVIDENCE\n' + 'tail\n'.repeat(1000),
+      `${'header\n'.repeat(1000)}SDK_MIDDLE_EVIDENCE\n${'tail\n'.repeat(1000)}`,
   })
   const model = createFauxModel({
     responses: [
