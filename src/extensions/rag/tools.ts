@@ -6,11 +6,11 @@ import { chunkDocument } from './chunker.ts'
 import { type EmbeddingFn, embed } from './embedder.ts'
 import type { SqliteVectorStore } from './sqlite-store.ts'
 
-export const createRagToolsInputSchema = z.object({
+const createRagToolsInputSchema = z.object({
   path: z.string().describe('Document path'),
 })
 
-export const ragSearchToolInputSchema = z.object({
+const ragSearchToolInputSchema = z.object({
   query: z.string().describe('Search query'),
   top_k: z.coerce
     .number()

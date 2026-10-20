@@ -3,10 +3,6 @@ import { getStoredResult } from '../session/tool-results.ts'
 
 export type ToolResultOutput = ToolResultPart['output']
 
-export function textToolResultOutput(value: string): ToolResultOutput {
-  return { type: 'text', value }
-}
-
 export function toolResultOutputToText(output: ToolResultOutput): string {
   const stored = getStoredResult(output)
   if (stored) return stored.preview
