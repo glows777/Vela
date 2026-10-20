@@ -4,6 +4,7 @@ import {
   estimateRequestTokens,
 } from '../../src/context/request.ts'
 import {
+  createFauxModel,
   fauxError,
   fauxHang,
   fauxSummary,
@@ -73,15 +74,16 @@ test('microcompact folds old tool results once more than five calls have complet
 
 test('summary compaction replaces old history with a grounded summary and keeps recent messages', async () => {
   const filler = (i: number) => `Question ${i}: ${'Background. '.repeat(100)}`
-  const probe = createTestVela()
-  const base = await requestTokens(probe)
-  await probe.cleanup()
-
   const t = createTestVela({
     // Summary triggers on the 5th question, after 4 rounds (8 messages)
-    limits: { microcompactThreshold: 1e9, summaryThreshold: base + 4 * 400 },
+    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
     responses: [
-      ...Array.from({ length: 5 }, (_, i) => fauxText(`Answer ${i}`)),
+      fauxText('Answer 0'),
+      fauxText('Answer 1'),
+      fauxText('Answer 2'),
+      // The provider reports the prompt size; the local estimate for this short history is far below it
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+      fauxText('Answer 4'),
     ],
     generate: [fauxSummary()],
   })
@@ -141,13 +143,73 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   )
 })
 
-test('a summary that fails validation stops the turn and leaves history untouched', async () => {
-  const probe = createTestVela()
-  const base = await requestTokens(probe)
-  await probe.cleanup()
+test('provider-reported usage above the summary threshold summarizes even when the local estimate is below it', async () => {
+  const threshold = 50_000
   const t = createTestVela({
-    limits: { microcompactThreshold: 1e9, summaryThreshold: base + 4 * 400 },
-    responses: Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
+    // Only the provider's number crosses the threshold; chars × 0.3 stays far below it
+    limits: { microcompactThreshold: 1e9, summaryThreshold: threshold },
+    responses: [
+      fauxText('Answer 0'),
+      fauxText('Answer 1'),
+      fauxText('Answer 2'),
+      // The provider reports a prompt far larger than the local estimate
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+      fauxText('Answer 4'),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
+  expect(await requestTokens(t)).toBeLessThan(threshold)
+  expect(t.eventsOf('compaction_start')).toEqual([])
+
+  await t.run('Question 4')
+
+  expect(t.eventsOf('compaction_start')).toEqual([
+    { type: 'compaction_start', reason: 'threshold' },
+  ])
+  const summary = t.eventsOf('compaction_end')[0]
+  // tokensBefore is what the provider reported, not the smaller local estimate
+  expect(summary?.result?.tokensBefore).toBeGreaterThanOrEqual(60_000)
+  expect(summary?.result?.messages).toBe(2)
+  expect(t.lastAssistantText()).toBe('Answer 4')
+})
+
+test('a model switch drops the size the previous model reported', async () => {
+  const before = createFauxModel({ modelId: 'before' })
+  const after = createFauxModel({ modelId: 'after' })
+  before.push(fauxText('Answer 0', { usage: { input: 60_000 } }))
+  after.push(fauxText('Answer 1'))
+  const t = createTestVela({
+    model: 'switch/before',
+    providers: {
+      switch: {
+        models: [{ id: 'before' }, { id: 'after' }],
+        createModel: (id) => (id === 'before' ? before : after),
+      },
+    },
+    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+  })
+  await t.run('Question 0')
+  expect(t.tracker().reportedContextTokens).toBeGreaterThan(50_000)
+
+  t.session.setModel('switch/after')
+  expect(t.tracker().reportedContextTokens).toBeUndefined()
+
+  // The new model's tokenizer counts differently: the old model's report no longer triggers a summary
+  await t.run('Question 1')
+  expect(t.eventsOf('compaction_start')).toEqual([])
+  expect(t.lastAssistantText()).toBe('Answer 1')
+})
+
+test('a summary that fails validation stops the turn and leaves history untouched', async () => {
+  const t = createTestVela({
+    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+    responses: [
+      fauxText('Answer 0'),
+      fauxText('Answer 1'),
+      fauxText('Answer 2'),
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+    ],
     generate: [fauxText('OK, the summary is ready.')],
   })
   for (let i = 0; i < 4; i++)

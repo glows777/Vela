@@ -95,6 +95,8 @@ export class TokenTracker {
   private logPath?: string
   /** Full prompt token count from the last API response. */
   private lastPreciseCount = 0
+  /** Prompt tokens of the latest response, while the estimate is anchored to a provider report. */
+  private reportedPromptTokens?: number
   /** Message chars added since the last API calibration, not yet reflected in the API count. */
   private pendingChars = 0
   /** Price from the current model config (cost in models.json); overrides the built-in table and updates on model switch. */
@@ -113,12 +115,20 @@ export class TokenTracker {
 
   /** Calibrates the current context baseline with the full prompt token count from the API. */
   updateFromAPI(promptTokens: number): void {
+    this.reportedPromptTokens = promptTokens
     this.lastPreciseCount = promptTokens
     this.pendingChars = 0
   }
 
-  /** Builds the initial context estimate from the loaded message history. */
+  /** Builds a local context estimate (e.g. from loaded history); the request estimate is used until a provider reports usage. */
   setEstimatedTokens(tokens: number): void {
+    this.reportedPromptTokens = undefined
+    this.lastPreciseCount = Math.max(0, tokens)
+    this.pendingChars = 0
+  }
+
+  /** Lowers the current estimate by a locally measured reduction (microcompaction) without dropping the provider baseline. */
+  reduceEstimatedTokens(tokens: number): void {
     this.lastPreciseCount = Math.max(0, tokens)
     this.pendingChars = 0
   }
@@ -145,9 +155,26 @@ export class TokenTracker {
     return Math.max(0, this.lastPreciseCount + Math.ceil(this.pendingChars / 4))
   }
 
-  /** Current model's price (overrides the built-in table); undefined uses the built-in table, and a model in neither has no cost. Only affects later requests. */
-  setPricing(pricing: ModelPricing | undefined): void {
+  /**
+   * Context size for thresholds: the prompt tokens the provider reported for the latest response plus the
+   * local estimate of messages added since. Undefined before any provider report; callers then use their own
+   * request estimate.
+   */
+  get reportedContextTokens(): number | undefined {
+    return this.reportedPromptTokens === undefined
+      ? undefined
+      : this.estimatedTokens
+  }
+
+  /**
+   * Switches to the model with this window and price (undefined uses the built-in table). Its tokenizer may
+   * count differently, so the previous model's reported prompt size is dropped: thresholds fall back to the
+   * local request estimate until this model reports usage. Only later requests are priced with it.
+   */
+  setModel(contextWindow: number, pricing: ModelPricing | undefined): void {
+    this.contextWindow = contextWindow
     this.pricing = pricing
+    this.reportedPromptTokens = undefined
   }
 
   /** Current context status relative to the model window (default 200k). */
