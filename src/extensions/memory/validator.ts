@@ -1,14 +1,21 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { MemoryEntry } from './store.ts'
+
+/** The fields lint reads; MemoryStore's entry satisfies it. */
+interface ValidatableEntry {
+  name: string
+  type: string
+  content: string
+  lastReadAt?: number
+}
 
 interface ValidationIssue {
   kind: 'stale_path' | 'never_used' | 'duplicate_name'
   message: string
 }
 
-export interface ValidationReport {
-  entry: MemoryEntry
+export interface ValidationReport<T> {
+  entry: T
   issues: ValidationIssue[]
 }
 
@@ -31,7 +38,10 @@ const TTL_BY_TYPE: Record<string, number> = {
   reference: 14, // external references need frequent refreshing
 }
 
-function validateEntry(entry: MemoryEntry, baseDir = '.'): ValidationIssue[] {
+function validateEntry(
+  entry: ValidatableEntry,
+  baseDir = '.',
+): ValidationIssue[] {
   const issues: ValidationIssue[] = []
 
   const paths = extractPaths(entry.content)
@@ -59,11 +69,11 @@ function validateEntry(entry: MemoryEntry, baseDir = '.'): ValidationIssue[] {
   return issues
 }
 
-export function lintAll(
-  entries: MemoryEntry[],
+export function lintAll<T extends ValidatableEntry>(
+  entries: T[],
   baseDir = '.',
-): ValidationReport[] {
-  const reports: ValidationReport[] = []
+): ValidationReport<T>[] {
+  const reports: ValidationReport<T>[] = []
 
   const nameCount = new Map<string, number>()
   for (const e of entries) {

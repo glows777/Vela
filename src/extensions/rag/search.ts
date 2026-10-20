@@ -1,7 +1,5 @@
-import type { StoredChunk } from './sqlite-store.ts'
-
-export interface SearchResult {
-  chunk: StoredChunk
+export interface SearchResult<T> {
+  chunk: T
   score: number
   vectorScore: number
   keywordScore: number
@@ -34,13 +32,13 @@ export function normalizeMinMax(scores: number[]): number[] {
 }
 
 // ── MMR deduplication ──────────────────────
-export function mmrSelect(
-  results: SearchResult[],
+export function mmrSelect<T extends { text: string }>(
+  results: SearchResult<T>[],
   topK: number,
-): SearchResult[] {
+): SearchResult<T>[] {
   if (results.length <= topK) return results
 
-  const selected: SearchResult[] = [results[0]!]
+  const selected: SearchResult<T>[] = [results[0]!]
   const remaining = results.slice(1)
 
   while (selected.length < topK && remaining.length > 0) {

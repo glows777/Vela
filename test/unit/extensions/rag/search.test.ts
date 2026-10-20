@@ -5,8 +5,13 @@ import {
   normalizeMinMax,
   type SearchResult,
 } from '../../../../src/extensions/rag/search.ts'
+import type { StoredChunk } from '../../../../src/extensions/rag/sqlite-store.ts'
 
-function makeResult(id: string, text: string, score: number): SearchResult {
+function makeResult(
+  id: string,
+  text: string,
+  score: number,
+): SearchResult<StoredChunk> {
   return {
     chunk: {
       id,
