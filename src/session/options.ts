@@ -28,3 +28,14 @@ export function assertSessionId(id: string): void {
       `Invalid session id "${id}": use only letters, digits, . _ -, do not start with ., at most 128 characters`,
     )
 }
+
+/** How `session.sendMessage()` delivers a custom message (same as pi). */
+export interface SendMessageOptions {
+  /** When idle: run the agent loop with the message as its input. Default false (the message is only appended) */
+  triggerTurn?: boolean
+  /**
+   * `steer` / `followUp`: while running, queue it like steer() / followUp() (default steer).
+   * `nextTurn`: hold it and add it after the user message of the next prompt.
+   */
+  deliverAs?: 'steer' | 'followUp' | 'nextTurn'
+}
