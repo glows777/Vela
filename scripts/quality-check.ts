@@ -56,7 +56,8 @@ async function checkDeadCode() {
   report(false, 'knip: unused code found (the ratchet allows none)', [
     ...output.split('\n'),
     '',
-    'Remove what knip lists. A file only scripts, examples or tests use belongs in knip.json.',
+    'Remove what knip lists. If the code is really reached from an entry knip cannot see, declare that',
+    'entry in knip.json and say why in the PR; do not configure away a finding that is actually unused.',
   ])
 }
 
@@ -79,7 +80,8 @@ async function checkCycles() {
         return [...path, path[0]].join(' → ')
       }),
       '',
-      'Two modules that import each other cannot be built, tested or deleted one at a time.',
+      'These modules now depend on each other, so a change in one reaches the other and neither can be',
+      'reasoned about, tested or deleted on its own.',
       'Move the shared code into a module both import, or pass the value in (#131 removed the last cycle).',
     ],
   )
