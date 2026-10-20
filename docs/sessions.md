@@ -93,11 +93,11 @@ In interactive mode the queue is shown above the editor. Alt+Up moves queued mes
 
 ## Compaction
 
-Vela estimates the size of each request before sending it (system prompt, tool definitions and messages, about 0.3 tokens per character) and compacts when it gets too large. The check runs before every model request, including requests that continue after tool calls. Compaction has two stages.
+Before every model request, including requests that continue after tool calls, Vela measures the context and compacts when it gets too large. The size is the prompt tokens the provider reported for the latest response plus a local estimate for the messages added since (like pi). Until a provider reports usage, Vela estimates the whole request from the system prompt, tool definitions and messages (about 0.3 tokens per character). Compaction has two stages.
 
 ### Microcompaction
 
-When the estimate reaches `microcompactThreshold`, Vela folds old tool results: their text is replaced by a reference to a file holding the full output (`[tool result preview omitted; original available at path]`). The model can read it back with `read_file`.
+When the size reaches `microcompactThreshold`, Vela folds old tool results: their text is replaced by a reference to a file holding the full output (`[tool result preview omitted; original available at path]`). The model can read it back with `read_file`.
 
 - Only results of `read_file`, `bash`, `grep`, `find`, `list_directory`, `edit_file` and `write_file` are folded.
 - The five most recent tool calls are kept as they are.
@@ -107,7 +107,7 @@ Microcompaction is applied only if it saves at least `minMicroSavings` tokens an
 
 ### Summary
 
-When the estimate reaches `summaryThreshold` and there is an earlier turn to summarize (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
+When the size reaches `summaryThreshold` and there is an earlier turn to summarize (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
 2. It sends the full current request plus one instruction asking for a JSON summary: the user's goal and lists of completed work, pending work, constraints and key facts. Every item must be a verbatim quote from a removed message; quotes that don't match the original text are rejected.
