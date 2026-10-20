@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { channelScopes, chatDirectory } from '../../channels/scope.ts'
-import type { VelaExtension } from '../../index.ts'
+import type { VelaExtension } from '../types.ts'
 import { MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
 
