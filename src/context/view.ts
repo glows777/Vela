@@ -13,7 +13,7 @@ import {
 import { formatUsd } from '../usage/format.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
 
-export interface ContextSlice {
+interface ContextSlice {
   name: string
   tokens: number
   color: number // ANSI 256 color code
@@ -61,7 +61,7 @@ function fmtTokens(n: number): string {
  * Draws a 16×16 = 256 cell grid; each cell stands for window/256 tokens.
  * Used cells are filled with colored ● in slice order, free with ○, autocompact buffer with ▢.
  */
-export function renderContextMatrix(snapshot: ContextSnapshot): string {
+function renderContextMatrix(snapshot: ContextSnapshot): string {
   const { windowTokens, slices, autocompactBufferTokens } = snapshot
   const TOTAL_CELLS = 256
   const tokensPerCell = windowTokens / TOTAL_CELLS
@@ -101,7 +101,7 @@ export function renderContextMatrix(snapshot: ContextSnapshot): string {
   return lines.join('\n')
 }
 
-export function renderContextLegend(snapshot: ContextSnapshot): string {
+function renderContextLegend(snapshot: ContextSnapshot): string {
   const { slices, autocompactBufferTokens, windowTokens, usedTokens } = snapshot
   const lines: string[] = []
 

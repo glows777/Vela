@@ -29,7 +29,7 @@ interface ChunkRow {
 }
 
 /** Embedder id used when the embedding function has none */
-export const UNNAMED_EMBEDDER = 'custom'
+const UNNAMED_EMBEDDER = 'custom'
 
 export class SqliteVectorStore {
   private db: SqliteDatabase
