@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test'
 import {
-  catalogLookup,
-  catalogModels,
   clampThinkingLevel,
   supportedThinkingLevels,
 } from '../../../src/models/catalog.ts'
-import { THINKING_LEVELS } from '../../../src/models/index.ts'
+import {
+  catalogLookup,
+  catalogModels,
+  THINKING_LEVELS,
+} from '../../../src/models/index.ts'
 
 test('the catalog has the built-in providers, with pi metadata', () => {
   for (const provider of ['anthropic', 'openai', 'openrouter']) {

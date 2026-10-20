@@ -10,11 +10,12 @@ import {
 } from '../auth/oauth/openai-chatgpt.ts'
 import { openRouterLogin } from '../auth/oauth/openrouter.ts'
 import type { Credential, FetchFunction, OAuthLogin } from '../auth/types.ts'
-import { catalogLookup, catalogModels } from '../models/catalog.ts'
-import type {
-  ModelSpec,
-  ProviderContext,
-  ProviderDefinition,
+import {
+  catalogLookup,
+  catalogModels,
+  type ModelSpec,
+  type ProviderContext,
+  type ProviderDefinition,
 } from '../models/index.ts'
 import { deepseekReasoningStream } from './deepseek-responses.ts'
 import { interpolate, isPlainObject } from './interpolate.ts'
