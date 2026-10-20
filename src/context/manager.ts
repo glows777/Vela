@@ -85,6 +85,23 @@ export class ContextManager {
     await this.store.flush()
   }
 
+  /**
+   * Context size for thresholds: what the provider reported for the latest prompt plus the local estimate
+   * of messages added since (like pi); the full request estimate until a provider reports usage.
+   */
+  private contextTokens(
+    request: RequestSnapshot,
+    estimate = estimateRequestTokens(request),
+  ): number {
+    return this.tracker.reportedContextTokens ?? estimate
+  }
+
+  /** Keeps the tracker's displayed estimate in sync when no provider report anchors it. */
+  private syncContextEstimate(tokens: number): void {
+    if (this.tracker.reportedContextTokens === undefined)
+      this.tracker.setEstimatedTokens(tokens)
+  }
+
   /** Folded tool output: each changed message is recorded as a context edit (the original stays in the session). */
   private applyMicrocompact(messages: ModelMessage[]): void {
     messages.forEach((message, index) => {
@@ -110,7 +127,7 @@ export class ContextManager {
   ): Promise<void> {
     this.onEvent?.({ type: 'compaction_start', reason })
     try {
-      const before = estimateRequestTokens(request)
+      const before = this.contextTokens(request)
       const compacted = await summarize(
         request,
         this.store.results,
@@ -180,13 +197,14 @@ export class ContextManager {
     options: { allowSummary?: boolean } = {},
   ): Promise<void> {
     request.abortSignal?.throwIfAborted()
-    const before = estimateRequestTokens(request)
+    const estimate = estimateRequestTokens(request)
+    const before = this.contextTokens(request, estimate)
     if (!this.autoCompaction) {
       if (before > this.limits.maxInputTokens)
         throw new Error(
           'Context exceeds the safe input size and automatic compaction is off; compact manually or start a new session.',
         )
-      this.tracker.setEstimatedTokens(before)
+      this.syncContextEstimate(before)
       return
     }
     const micro =
@@ -194,7 +212,7 @@ export class ContextManager {
         ? planMicrocompact(request.messages, this.store.results)
         : null
     const microAfter = micro
-      ? estimateRequestTokens(request, micro.messages)
+      ? before - (estimate - estimateRequestTokens(request, micro.messages))
       : before
     const savings = before - microAfter
     if (
@@ -205,7 +223,7 @@ export class ContextManager {
       await persistMicrocompact(micro.candidates, this.store.results)
       request.abortSignal?.throwIfAborted()
       this.applyMicrocompact(micro.messages)
-      this.tracker.setEstimatedTokens(microAfter)
+      this.tracker.reduceEstimatedTokens(microAfter)
       this.onEvent?.({
         type: 'context_prepare',
         action: 'micro',
@@ -237,6 +255,6 @@ export class ContextManager {
       throw new Error(
         'Context exceeds the safe input size; this turn was stopped and the original history kept.',
       )
-    this.tracker.setEstimatedTokens(before)
+    this.syncContextEstimate(before)
   }
 }

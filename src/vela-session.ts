@@ -365,9 +365,8 @@ export class VelaSession {
     const limits = limitsForModel(resolved.info, this.deps.limitOverrides)
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
-    this.tracker.contextWindow = resolved.info.contextWindow ?? CONTEXT_WINDOW
-    // Price follows the current model (not keyed by modelId: same-named models from different providers cost differently)
-    this.tracker.setPricing(resolved.info.cost)
+    const window = resolved.info.contextWindow ?? CONTEXT_WINDOW
+    this.tracker.setModel(window, resolved.info.cost)
   }
 
   /** The current model wrapped with the extension provider hooks (what requests go through) */
