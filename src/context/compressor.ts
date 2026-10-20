@@ -7,7 +7,6 @@ import {
   type ToolSet,
 } from 'ai'
 import z from 'zod'
-import { DEFAULT_LIMITS } from '../limits.ts'
 import type { ToolResultPart } from '../messages.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
 import {
@@ -29,9 +28,6 @@ import {
 } from './request.ts'
 import { toolResultOutputToText } from './tool-result-output.ts'
 
-export const MICROCOMPACT_TOKEN_THRESHOLD = DEFAULT_LIMITS.microcompactThreshold
-export const SUMMARY_TOKEN_THRESHOLD = DEFAULT_LIMITS.summaryThreshold
-export const MIN_MICRO_SAVINGS = DEFAULT_LIMITS.minMicroSavings
 const KEEP_RECENT_CALLS = 5
 const KEEP_RECENT_MESSAGES = 6
 const CLEARABLE_TOOLS = new Set([

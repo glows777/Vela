@@ -65,7 +65,7 @@ const stringRecord = (value: unknown): value is Record<string, string> =>
   Object.values(value).every((item) => typeof item === 'string')
 
 /** Validates one `mcpServers` entry; throws a message naming the problem. */
-export function parseServerConfig(name: string, raw: unknown): McpServerConfig {
+function parseServerConfig(name: string, raw: unknown): McpServerConfig {
   const fail = (message: string): never => {
     throw new Error(`MCP server "${name}": ${message}`)
   }

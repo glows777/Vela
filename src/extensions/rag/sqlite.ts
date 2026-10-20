@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 /** Minimal common surface of synchronous SQLite: bun:sqlite on Bun, node:sqlite on Node. */
-export interface SqliteStatement {
+interface SqliteStatement {
   run(...params: unknown[]): unknown
   all(...params: unknown[]): unknown[]
   get(...params: unknown[]): unknown

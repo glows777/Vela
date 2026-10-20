@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { MemoryEntry } from './store.ts'
 
-export interface ValidationIssue {
+interface ValidationIssue {
   kind: 'stale_path' | 'never_used' | 'duplicate_name'
   message: string
 }
@@ -15,7 +15,7 @@ export interface ValidationReport {
 const PATH_RE =
   /(?<![\w/])([\w./-]+\.(?:ts|tsx|js|jsx|json|md|mdx|sql|yml|yaml|toml|env|sh|py))/g
 
-export function extractPaths(content: string): string[] {
+function extractPaths(content: string): string[] {
   const paths = new Set<string>()
   for (const match of content.matchAll(PATH_RE)) {
     paths.add(match[1]!)
@@ -31,10 +31,7 @@ const TTL_BY_TYPE: Record<string, number> = {
   reference: 14, // external references need frequent refreshing
 }
 
-export function validateEntry(
-  entry: MemoryEntry,
-  baseDir = '.',
-): ValidationIssue[] {
+function validateEntry(entry: MemoryEntry, baseDir = '.'): ValidationIssue[] {
   const issues: ValidationIssue[] = []
 
   const paths = extractPaths(entry.content)
