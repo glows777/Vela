@@ -1,5 +1,5 @@
 import type { DemoModel } from '../../testing/demo-model.ts'
-import type { CommandHandler } from './index.ts'
+import type { CommandHandler } from './handler.ts'
 
 export const debugCommands: CommandHandler[] = [
   (cmd, { print, vela }) => {
