@@ -24,7 +24,7 @@ const ESCAPES: Record<string, string> = {
 }
 
 /** Escapes text for HTML content and attribute values. */
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => ESCAPES[char] as string)
 }
 

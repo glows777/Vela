@@ -8,8 +8,8 @@ import { ToolResultStore } from '../session/tool-results.ts'
 import type { ToolDefinition } from './registry.ts'
 
 /** What the model gets of the output, same as pi: the last 2000 lines or 50KB, whichever is smaller */
-export const BASH_MAX_LINES = 2000
-export const BASH_MAX_BYTES = 50 * 1024
+const BASH_MAX_LINES = 2000
+const BASH_MAX_BYTES = 50 * 1024
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000 // setTimeout's limit
 /** How often a running command's output tail is sent to onUpdate (pi's BASH_UPDATE_THROTTLE_MS) */
 const BASH_UPDATE_INTERVAL_MS = 100

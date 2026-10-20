@@ -8,9 +8,9 @@ import {
 } from './directory.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
-export const INTERRUPTION_NOTICE =
+const INTERRUPTION_NOTICE =
   'The previous run was interrupted. Continuing from the last saved input.'
-export const RESEND_NOTICE =
+const RESEND_NOTICE =
   'This message arrived just before the restart and was not saved. Please send it again.'
 const INPUT_MARKER = 'channel.input'
 

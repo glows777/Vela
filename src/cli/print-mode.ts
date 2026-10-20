@@ -5,7 +5,7 @@ import type { VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
 
 /** Text of the last assistant message (the output of -p). */
-export function lastAssistantText(messages: ModelMessage[]): string {
+function lastAssistantText(messages: ModelMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i] as ModelMessage
     if (message.role !== 'assistant') continue

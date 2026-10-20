@@ -124,7 +124,7 @@ export interface ForkResult {
 }
 
 /** What the extension runtime does during the session lifecycle (provided by createVela). */
-export interface SessionExtensionHooks {
+interface SessionExtensionHooks {
   /** All extensions have loaded */
   ready: Promise<void>
   sessionStart(session: VelaSession): Promise<void>

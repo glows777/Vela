@@ -6,7 +6,7 @@ import type { NestedToolCallRecord, NestedToolCalls } from './entries.ts'
  * per-call or total size are omitted, calls beyond the count are dropped, and the record is marked
  * incomplete when any of that happens.
  */
-export const NESTED_CALL_LIMITS = {
+const NESTED_CALL_LIMITS = {
   maxCalls: 256,
   maxArgumentBytesPerCall: 8 * 1024,
   maxArgumentBytesTotal: 32 * 1024,

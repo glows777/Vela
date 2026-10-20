@@ -17,12 +17,7 @@ import {
   summarizeSession,
 } from './entries.ts'
 
-export {
-  migrateSessionV1,
-  SESSION_FORMAT_VERSION,
-  type SessionSummary,
-  summarizeSession,
-} from './entries.ts'
+export { type SessionSummary } from './entries.ts'
 
 /**
  * Where a session's history is kept.

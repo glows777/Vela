@@ -15,7 +15,7 @@ export type AppAction =
   | 'toggleThinking'
   | 'pasteImage'
 
-export const APP_KEYS: Record<AppAction, KeyId> = {
+const APP_KEYS: Record<AppAction, KeyId> = {
   interrupt: 'escape',
   clear: 'ctrl+c',
   exit: 'ctrl+d',

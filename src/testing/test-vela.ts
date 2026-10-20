@@ -229,7 +229,7 @@ export function tempDir(prefix = 'vela-test-'): {
   return { path, cleanup: () => rmSync(path, { recursive: true, force: true }) }
 }
 
-export function lastAssistantText(messages: readonly ModelMessage[]): string {
+function lastAssistantText(messages: readonly ModelMessage[]): string {
   const last = [...messages].reverse().find((m) => m.role === 'assistant')
   if (!last) return ''
   if (typeof last.content === 'string') return last.content
