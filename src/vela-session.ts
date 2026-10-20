@@ -2,6 +2,7 @@ import { join, resolve } from 'node:path'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
 import type {
+  CustomMessage,
   CustomMessageInfo,
   VelaEvent,
   VelaEventListener,
@@ -14,19 +15,16 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
-import { withProviderHooks } from './extensions/provider-hooks.ts'
 import type {
-  CustomMessage,
   ExtensionEventName,
-  ExtensionUI,
   InputSource,
   ProviderStreamEvent,
-  SendMessageOptions,
   SessionBeforeTreeEventResult,
   SessionTreeEvent,
-  SessionUI,
   TreePreparation,
-} from './extensions/types.ts'
+} from './extensions/events.ts'
+import { withProviderHooks } from './extensions/provider-hooks.ts'
+import type { ExtensionUI, SessionUI } from './extensions/ui.ts'
 import type { VelaLimits } from './limits.ts'
 import type { VelaLogger } from './logger.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
@@ -57,6 +55,7 @@ import { renderSessionHtml } from './session/export-html.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
+import type { SendMessageOptions } from './session/options.ts'
 import {
   assertSessionId,
   type ForkOptions,
