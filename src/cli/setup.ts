@@ -239,8 +239,10 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--list-models') {
       // Like pi: the next argument is the search unless it is an option
       const next = argv[i + 1]
-      args.listModels =
-        next !== undefined && !next.startsWith('-') ? (i++, next) : true
+      if (next !== undefined && !next.startsWith('-')) {
+        args.listModels = next
+        i++
+      } else args.listModels = true
     } else if (arg === '--thinking') {
       const level = value()
       if (!THINKING_LEVELS.includes(level as ThinkingLevel))

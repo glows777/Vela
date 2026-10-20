@@ -325,6 +325,7 @@ test('models.json adds providers and merges into built-in ones', () => {
       local: {
         api: 'openai-responses',
         baseUrl: 'http://localhost:1234/v1',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: ${LOCAL_KEY} is settings interpolation syntax, kept literal here
         apiKey: '${LOCAL_KEY}',
         models: [
           { id: 'm', name: 'Local M', reasoning: false },

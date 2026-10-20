@@ -215,6 +215,7 @@ export class FeishuChannel implements ChannelDefinition {
     msg: IncomingMessage,
     controls: Extract<ChannelFeedbackUpdate, { type: 'controls' }>,
     report?: (error: unknown) => Promise<void>,
+    // biome-ignore lint/suspicious/noConfusingVoidType: mirrors ChannelDefinition.startRun, which returns `| void`
   ): Promise<FeishuProgress | void> {
     if (
       this.stopped ||

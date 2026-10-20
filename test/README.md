@@ -35,7 +35,7 @@ The faux model, the demo model and createTestVela live in `src/testing/` rather 
 | `bun test <file or dir>` | a targeted subset | |
 | `bun run typecheck` | `tsc --noEmit`; must report 0 errors | |
 | `bun run smoke:consumer` | runs `bun run build`, packs a tarball and installs it into an empty Node project (strict NodeNext tsconfig, no @types/bun) and an empty Bun project; in each, type-checks like a consumer, runs a faux session and `vela -p`. Needs network; CI runs it as its own step (on Node 22.18) | ~30 s |
-| `bun run lint` | `biome check` (formatting, import order, lint); must report 0 errors (warnings don't block); `bun run lint:fix` fixes formatting and imports | |
+| `bun run lint` | `biome check --error-on-warnings` (formatting, import order, lint); must report 0 errors and 0 warnings (infos don't block); `bun run lint:fix` fixes formatting and imports | |
 
 The suite never touches the network and needs no environment variables, but it needs ripgrep and fd installed: the `grep` / `find` tools run the real `rg` / `fd` (macOS `brew install ripgrep fd`, Ubuntu `apt install ripgrep fd-find`). The test Vela passes no `binDir`, so it only looks on PATH and never downloads. Every test runs in its own temp directory, isolated from the others and removed afterwards.
 

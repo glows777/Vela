@@ -33,7 +33,7 @@ export function memory(): VelaExtension {
     const groups = new Map<string, MemoryStore>()
     const forSession = (registry?: object): MemoryStore => {
       const scope = registry && channelScopes.get(registry)
-      if (!scope || scope.chatKind !== 'group') return store
+      if (scope?.chatKind !== 'group') return store
       const dir = chatDirectory(vela.dataDir, scope.channel, scope.chatId)
       let group = groups.get(dir)
       if (!group) {

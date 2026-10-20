@@ -44,7 +44,7 @@ function history(count: number, size: number): ModelMessage[] {
             toolName: 'read_file',
             output: {
               type: 'text',
-              value: `evidence-${i}\n` + 'x'.repeat(size),
+              value: `evidence-${i}\n${'x'.repeat(size)}`,
             },
           },
         ],
@@ -176,7 +176,7 @@ test('summary chosen directly when a profitable micro still leaves >=150k', asyn
   const messages = history(10, 16000)
   messages[0] = {
     role: 'user',
-    content: 'preserved decisions\n' + 'x'.repeat(440000),
+    content: `preserved decisions\n${'x'.repeat(440000)}`,
   }
   messages.push(
     ...Array.from(

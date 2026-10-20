@@ -17,7 +17,6 @@ export interface MemoryEntry {
 const INDEX_FILE = 'MEMORY.md'
 const MAX_INDEX_LINES = 200
 const MAX_FILE_CHARS = 4000
-const STALE_DAYS = 30
 
 /** Writes a memory file readable only by the owner (0600, like session files); also tightens an existing file. */
 function writePrivate(filePath: string, content: string): void {
@@ -139,7 +138,7 @@ export class MemoryStore {
     this.init()
     const raw = fs.readFileSync(this.indexPath, 'utf-8')
     return raw.length > MAX_FILE_CHARS
-      ? raw.slice(0, MAX_FILE_CHARS) + '\n...(truncated)'
+      ? `${raw.slice(0, MAX_FILE_CHARS)}\n...(truncated)`
       : raw
   }
 
@@ -167,7 +166,7 @@ export class MemoryStore {
     this.touchReadAt(filePath)
     const raw = fs.readFileSync(filePath, 'utf-8')
     return raw.length > MAX_FILE_CHARS
-      ? raw.slice(0, MAX_FILE_CHARS) + '\n...(truncated)'
+      ? `${raw.slice(0, MAX_FILE_CHARS)}\n...(truncated)`
       : raw
   }
 

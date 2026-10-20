@@ -193,7 +193,7 @@ export class TokenTracker {
     this.steps.push(record)
 
     if (this.logPath) {
-      appendFileSync(this.logPath, JSON.stringify(record) + '\n')
+      appendFileSync(this.logPath, `${JSON.stringify(record)}\n`)
     }
     return record
   }

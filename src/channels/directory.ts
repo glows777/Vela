@@ -202,8 +202,7 @@ export class ChannelDirectory {
   async forget(key: string, ids: string[]): Promise<void> {
     const record = this.records.get(key)
     if (
-      !record ||
-      !record.pendingMessageIds.some((input) =>
+      !record?.pendingMessageIds.some((input) =>
         ids.includes(pendingMessageId(input)),
       )
     )

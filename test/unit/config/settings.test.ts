@@ -160,10 +160,12 @@ test('mistakes in settings are reported with the file name', () => {
   expect(() => loadConfig(badModels)).toThrow('providers.x.api must be one of')
 })
 
+// biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} names the interpolation syntax under test
 test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal dollar', () => {
   const { agentDir, cwd } = setup({
     'home/settings.json': json({
       extensionConfig: {
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: ${OWNER} is interpolation syntax in this fixture
         feishu: { appSecret: '$SECRET', owners: ['${OWNER}', 'x'] },
         price: { text: 'costs $$5, $MISSING!' },
       },
@@ -179,6 +181,7 @@ test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal doll
     owners: ['ou_1', 'x'],
   })
   expect(config.extensionConfig.price).toEqual({ text: 'costs $5, !' })
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: ${A} is interpolation syntax in the input under test
   expect(interpolate('${A}-$A', { A: '1' })).toBe('1-1')
 })
 

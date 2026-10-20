@@ -36,7 +36,7 @@
     "test:e2e": "bun test test/e2e",
     "test:live": "VELA_LIVE=1 bun test test/live",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check",
+    "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write",
     "knip": "knip",
     "api:update": "bun scripts/api-report.ts",

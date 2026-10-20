@@ -17,7 +17,7 @@ import {
   summarizeSession,
 } from './entries.ts'
 
-export { type SessionSummary } from './entries.ts'
+export type { SessionSummary } from './entries.ts'
 
 /**
  * Where a session's history is kept.

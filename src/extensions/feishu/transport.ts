@@ -51,6 +51,7 @@ export interface FeishuTransport {
     task: string,
   ): Promise<FeishuSentMessage & { rootId: string; threadId: string }>
   forward(messageId: string, threadId: string): Promise<FeishuSentMessage>
+  // biome-ignore lint/suspicious/noConfusingVoidType: public shape: callers may ignore the sent message (Promise<void>)
   send(chatId: string, text: string): Promise<void | FeishuSentMessage>
   reply(messageId: string, text: string): Promise<FeishuSentMessage>
   sendCard(
