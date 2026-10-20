@@ -18,7 +18,7 @@ import type { McpExposure } from './config.ts'
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */
 const MAX_TOOL_NAME_LENGTH = 64
 /** Model-facing text beyond this is saved to a file and previewed (pi cuts MCP text at 20KB). */
-export const MCP_MAX_RESULT_CHARS = 20_000
+const MCP_MAX_RESULT_CHARS = 20_000
 
 type ContentBlock = CallToolResult['content'][number]
 
