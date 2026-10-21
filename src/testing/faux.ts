@@ -74,6 +74,11 @@ export interface FauxRequest {
     /** Raw tool-result output ({ type, value }) */
     raw: unknown
   }[]
+  /**
+   * Tokens this request would send (prompt and tool definitions), estimated like `maxRequestTokens`:
+   * chars / 4. Compare requests to see which one a provider would accept.
+   */
+  inputTokens: number
   /** JSON output the request asks for (e.g. Output.json() for the compaction summary) */
   responseFormat?: LanguageModelV4CallOptions['responseFormat']
   /** The request's reasoning setting (mapped from the thinking level) */
@@ -99,12 +104,22 @@ export interface FauxModelOptions {
   chunkDelayMs?: number
   /** Simulates prompt caching: cacheRead while the system prefix is unchanged, cacheWrite when it changes */
   cache?: boolean
+  /**
+   * A request larger than this many estimated tokens (@see FauxRequest.inputTokens) fails like a provider
+   * whose context window is full. The failed request is recorded but uses no scripted response.
+   */
+  maxRequestTokens?: number
   modelId?: string
 }
 
 export interface FauxModel extends LanguageModelV4 {
   /** Record of every request, in order */
   readonly calls: FauxRequest[]
+  /**
+   * Requests larger than this many estimated tokens fail like a provider context overflow. Change it
+   * mid-test to gate requests only after a size was measured from an accepted request.
+   */
+  maxRequestTokens?: number
   /** Appends responses to the main queue */
   push(...steps: FauxStep[]): void
   /** Appends responses to the generate queue */
@@ -189,6 +204,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
   const chunkSize = options.chunkSize ?? 8
   const chunkDelayMs = options.chunkDelayMs ?? 0
   let lastPrefix: string | undefined
+  let model: FauxModel
 
   const next = (
     kind: FauxRequest['kind'],
@@ -196,6 +212,11 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
   ) => {
     const req = describeRequest(calls.length + 1, kind, opts)
     calls.push(req)
+    const limit = model.maxRequestTokens
+    if (limit !== undefined && req.inputTokens > limit)
+      throw new Error(
+        `400 prompt is too long: ${req.inputTokens} tokens > ${limit} maximum`,
+      )
     const queue = kind === 'generate' && generate ? generate : main
     const step = queue.shift()
     if (!step)
@@ -239,11 +260,12 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
     }
   }
 
-  return {
+  model = {
     specificationVersion: 'v4',
     provider: 'faux',
     modelId: options.modelId ?? 'faux',
     supportedUrls: {},
+    maxRequestTokens: options.maxRequestTokens,
     calls,
     push: (...steps) => main.push(...steps),
     pushGenerate: (...steps) => (generate ?? main).push(...steps),
@@ -318,6 +340,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
       return { stream, response: { headers: fauxHeaders(req) } }
     },
   }
+  return model
 }
 
 /** Response headers of a faux request: `x-faux-request` is the request's index. */
@@ -454,12 +477,16 @@ function describeRequest(
           raw: part.output,
         })
   }
+  const tools = opts.tools ?? []
   return {
     index,
     kind,
     system,
     prompt,
-    tools: (opts.tools ?? []).map((t) => t.name),
+    inputTokens:
+      approxTokens(JSON.stringify(prompt)) +
+      approxTokens(JSON.stringify(tools)),
+    tools: tools.map((t) => t.name),
     lastUserText: lastUser ? textOf(lastUser.content) : '',
     toolResults,
     responseFormat: opts.responseFormat,

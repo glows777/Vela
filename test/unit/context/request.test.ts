@@ -16,7 +16,7 @@ import { TokenTracker } from '../../../src/usage/tracker.ts'
 const dir = mkdtempSync(join(tmpdir(), 'vela-prefix-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-test('summary preserves the exact serialized main prefix and tool schemas, appending only its control message', async () => {
+test('summary sends only the dropped messages as text, without tool definitions', async () => {
   const requests: {
     messages: unknown[]
     tools: unknown[]
@@ -133,16 +133,14 @@ test('summary preserves the exact serialized main prefix and tool schemas, appen
   expect(requests[1]!.messages.slice(0, requests[0]!.messages.length)).toEqual(
     requests[0]!.messages,
   )
-  expect(
-    JSON.stringify(
-      requests[2]!.messages.slice(0, requests[1]!.messages.length),
-    ),
-  ).toBe(JSON.stringify(requests[1]!.messages))
-  expect(requests[2]!.messages).toHaveLength(requests[1]!.messages.length + 1)
-  expect(JSON.stringify(requests[2]!.tools)).toBe(
-    JSON.stringify(requests[1]!.tools),
-  )
-  expect(requests[2]!.tool_choice).toEqual(requests[1]!.tool_choice)
+  // The summary request does not reuse the main prefix: the conversation and the control message only
+  expect(requests[2]!.messages).toHaveLength(3)
+  expect(requests[2]!.tools).toBeUndefined()
+  expect(requests[2]!.tool_choice).toBeUndefined()
+  const conversation = JSON.stringify(requests[2]!.messages[1])
+  expect(conversation).toContain('old')
+  expect(conversation).toContain('response')
+  expect(conversation).not.toContain('next-0')
   expect(requests[1]!.response_format).toBeUndefined()
   expect(requests[2]!.response_format).toEqual({ type: 'json_object' })
   registry.searchTools('later')

@@ -4,7 +4,6 @@ import {
   type LanguageModelUsage,
   NoObjectGeneratedError,
   Output,
-  type ToolSet,
 } from 'ai'
 import z from 'zod'
 import type { ToolResultPart } from '../messages.ts'
@@ -249,11 +248,17 @@ export async function summarize(
   const index = end - start
   request.abortSignal?.throwIfAborted()
   const removed = request.messages.slice(start, end)
-  const sources = removed.map((message) =>
-    normalizeEvidence(sourceText(message)),
-  )
+  const texts = removed.map((message) => sourceText(message))
+  const sources = texts.map((text) => normalizeEvidence(text))
+  // Only the dropped messages, as text and without tool definitions: the summary request has to be
+  // smaller than the request that just overflowed, so the retained messages stay out too (like pi).
   const messages: ModelMessage[] = [
-    ...request.messages,
+    {
+      role: 'user',
+      content: `<conversation>\n${texts
+        .map((text, index) => `[${index}] ${removed[index]!.role}: ${text}`)
+        .join('\n\n')}\n</conversation>`,
+    },
     {
       role: 'user',
       content: JSON.stringify({
@@ -273,26 +278,11 @@ export async function summarize(
       }),
     },
   ]
-  // Preserve the wire schemas/order but remove all client execution hooks.
-  // Hosted tools cannot be made inert locally: stop instead of changing the prefix.
-  const tools: ToolSet = {}
-  for (const [name, tool] of Object.entries(request.tools)) {
-    if (tool.type === 'provider' || typeof tool.description === 'function')
-      throw new Error(
-        "Cannot disable this tool's execution while keeping the main request prefix; summary stopped and the original history kept.",
-      )
-    tools[name] = {
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      strict: tool.strict,
-      inputExamples: tool.inputExamples,
-      providerOptions: tool.providerOptions,
-    }
-  }
-  const summaryRequest = {
+  const summaryRequest: RequestSnapshot = {
     ...request,
     messages,
-    tools,
+    tools: {},
+    toolDefinitions: [],
   }
   if (estimateRequestTokens(summaryRequest) > maxInputTokens)
     throw new Error(
@@ -308,11 +298,10 @@ export async function summarize(
       durationMs: performance.now() - started,
     })
   const response = await generateText({
-    model: request.model,
-    instructions: request.systemPrompt,
-    messages: toModelMessages(messages, false),
-    tools,
-    abortSignal: request.abortSignal,
+    model: summaryRequest.model,
+    instructions: summaryRequest.systemPrompt,
+    messages: toModelMessages(summaryRequest.messages, false),
+    abortSignal: summaryRequest.abortSignal,
     output: Output.json(),
     maxOutputTokens: 8192,
     maxRetries: 0,

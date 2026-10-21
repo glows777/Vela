@@ -2,7 +2,6 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createOpenAI } from '@ai-sdk/openai'
 import type { ModelMessage } from 'ai'
 import { summarize } from '../../../src/context/compressor.ts'
 import { createRequestSnapshot } from '../../../src/context/request.ts'
@@ -88,7 +87,7 @@ test('literal acknowledgement cannot replace historical context', async () => {
   expect(JSON.stringify(messages)).toBe(before)
 })
 
-test('summary keeps the pending task untouched in its prefix and appends an explicit compaction scope', async () => {
+test('summary sends only the dropped messages, under an explicit compaction scope', async () => {
   const model = createFauxModel({
     responses: [
       fauxText(
@@ -132,7 +131,9 @@ test('summary keeps the pending task untouched in its prefix and appends an expl
     new TokenTracker(),
   )
   const request = model.calls[0]!
-  expect(JSON.stringify(request.prompt)).toContain('LIVE_ONLY_MARKER')
+  // System prompt, the dropped messages as text, and the control message; the retained messages stay out
+  expect(request.prompt).toHaveLength(3)
+  expect(JSON.stringify(request.prompt)).not.toContain('LIVE_ONLY_MARKER')
   const last = request.prompt.at(-1)
   const part =
     last?.role === 'user'
@@ -155,31 +156,6 @@ test('summary keeps the pending task untouched in its prefix and appends an expl
   expect(request.tools).toEqual([])
   expect(result.messages.slice(1)).toEqual(messages.slice(2))
   expect(result.summary).toContain('beta exit 7')
-})
-
-test('hosted tools stop summary rather than silently changing the main prefix', async () => {
-  const model = createFauxModel()
-  const messages = history()
-  const request = await createRequestSnapshot(
-    model,
-    'original system',
-    {
-      hosted: createOpenAI({ apiKey: 'synthetic-test-key' }).tools.webSearch(
-        {},
-      ),
-    },
-    messages,
-  )
-  await expect(
-    summarize(
-      request,
-      new SessionStore('hosted', dir).results,
-      new TokenTracker(),
-    ),
-  ).rejects.toThrow('keeping the main request prefix')
-  expect(model.calls).toHaveLength(0)
-  expect(request.systemPrompt).toBe('original system')
-  expect(request.messages).toEqual(messages)
 })
 
 for (const bad of [
