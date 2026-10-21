@@ -1,5 +1,6 @@
 // Offline drive of the Feishu channel journeys: topic handoff, untagged topic replies, the group
-// workspace, passive top-level chatter, the topic overview and routines across a restart.
+// workspace, passive top-level chatter (skip and a text answer), the topic overview and routines
+// across a restart.
 // The extension, gateway, files and timers are real; only the model (a router) and the Feishu
 // transport are fake. Run it from a verify-vela run (up to about 2 minutes: the last step waits
 // past a real due time):  $H exec $RUN feishu bun $REPO/.skills/verify-vela/scripts/feishu-journeys.ts
@@ -148,8 +149,9 @@ fake.deliver(
 await until('untagged topic reply', () => fake.sent.length > before)
 check('untagged topic reply', fake.sent.at(-1)?.text)
 
-// 3. Untagged top-level chatter stays silent
+// 3. Untagged top-level chatter stays silent, and a later text answer is marked
 before = fake.sent.length
+const reactionsBefore = fake.reactions.length
 fake.deliver(
   feishuEvent(
     { mentions: [], content: JSON.stringify({ text: 'lunch at 12?' }) },
@@ -159,6 +161,34 @@ fake.deliver(
 await sleep(500)
 const chatter = fake.sent.length - before
 check('messages sent for chatter', chatter, chatter === 0)
+const chatterReactions = fake.reactions.slice(reactionsBefore)
+check(
+  'chatter reactions',
+  chatterReactions.map(
+    (reaction) => `${reaction.emoji}${reaction.removed ? '(removed)' : ''}`,
+  ),
+  chatterReactions.every((reaction) => reaction.removed) &&
+    chatterReactions.every((reaction) => reaction.emoji !== 'DONE'),
+)
+before = fake.sent.length
+const answerMark = fake.reactions.length
+fake.deliver(
+  feishuEvent(
+    { mentions: [], content: JSON.stringify({ text: 'how is the build?' }) },
+    'ou_bob',
+  ),
+)
+await until('passive answer', () => fake.sent.length > before)
+const passive = fake.reactions.slice(answerMark)
+check('passive answer', fake.sent.at(-1)?.text)
+check(
+  'passive OnIt then DONE',
+  passive.map(
+    (reaction) => `${reaction.emoji}${reaction.removed ? '(removed)' : ''}`,
+  ),
+  passive.some((reaction) => reaction.emoji === 'OnIt' && reaction.removed) &&
+    passive.some((reaction) => reaction.emoji === 'DONE' && !reaction.removed),
+)
 
 // 4. Topic overview at top level
 fake.deliver(

@@ -42,9 +42,11 @@ REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date
 | `test edit` | `edit_file` on `sample-data.txt` (once per fixture) |
 | `test bash` / `test grep` / `test find` | `bash` echo / `grep` / `find` |
 | `test parallel` | three tools in one step |
-| `test loop` | a tool call every step, never answers: for Esc and steering |
+| `test loop` | `list_directory` every step while the last user message contains `test loop`. After 10 identical calls the agent inserts a warning and the next step is the canned reply, so press Esc while `Esc to interrupt` is showing |
 | `test retry` | two 429 errors, then an answer |
 | anything else | a canned greeting, streamed slowly |
+
+Keywords match the last user message. After a memory save, or once a knowledge base has sources, that index is appended after the prompt, so a later keyword in the same run no longer matches. Use a fresh run for keyword prompts after that.
 
 For anything else (extension or MCP tools, memory, web, errors, hangs, exact replies) write a faux scenario and pass `VERIFY_MODEL=faux:/abs/path.json`. Each response is used once, in order:
 
