@@ -110,7 +110,7 @@ Microcompaction is applied only if it saves at least `minMicroSavings` tokens an
 When the size reaches `summaryThreshold` and there is an earlier turn to summarize (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
-2. It sends the full current request plus one instruction asking for a JSON summary: the user's goal and lists of completed work, pending work, constraints and key facts. Every item must be a verbatim quote from a removed message; quotes that don't match the original text are rejected.
+2. It sends only the dropped messages, serialized as text in a `<conversation>` block, plus a `context_compaction` instruction. The instruction asks for a JSON summary with the user's goal and lists of completed work, pending work, constraints and key facts. Every item must be a verbatim quote from a removed message. Quotes that don't match the original text are rejected.
 3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary and a guide to the tool call history file, so the model can still look up earlier tool calls and outputs.
 4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized messages stay in the file. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
 
@@ -118,7 +118,7 @@ If there is no earlier turn to summarize, the request is sent as long as it is w
 
 If the summary fails (the model returns invalid JSON, tool calls, unverifiable quotes, or the result is still too large), the turn stops with an error and the original history is kept. Nothing is lost; fix the cause (for example switch to a model with a larger window) and try again.
 
-The summary request uses the same model, system prompt and tool definitions as the main request, so it reuses the prompt cache. Its token usage is recorded like any other request.
+The summary request uses the same model and system prompt as the main request. It leaves out the retained messages. It sends no tool definitions. It does not add `cache_control` breakpoints. It does not reuse the main request's prompt cache. Its token usage is recorded with `kind: 'summary'`.
 
 ### Manual compaction
 
@@ -178,7 +178,7 @@ The size estimate can be wrong. When the provider rejects a request because the 
 
 ## Prompt caching
 
-With Anthropic models, Vela marks the system prompt, the last tool definition and the last message as cache breakpoints (`cache_control: ephemeral`, the default 5-minute cache), like pi. Each request then reads the prefix the previous one wrote; `/usage` shows the cache hit rate. Other providers ignore the markers (OpenAI caches automatically).
+With Anthropic models, Vela marks the system prompt, the last tool definition and the last message as cache breakpoints (`cache_control: ephemeral`, the default 5-minute cache), like pi. Each model request in the agent loop then reads the prefix the previous one wrote. The summary request does not add these breakpoints. `/usage` shows the cache hit rate. Other providers ignore the markers (OpenAI caches automatically).
 
 The memory index and the RAG source list are sent as messages after the user message, so changing them appends to the prefix instead of rewriting the system prompt. Loading a deferred tool with `tool_search` adds a tool definition at the top of the request, which invalidates the cached prefix once; this is accepted rather than engineered away.
 
