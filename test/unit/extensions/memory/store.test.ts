@@ -2,7 +2,10 @@ import { afterAll, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { MemoryStore } from '../../../../src/extensions/memory/store.ts'
+import {
+  MEMORY_RULES,
+  MemoryStore,
+} from '../../../../src/extensions/memory/store.ts'
 
 const tempDirs: string[] = []
 function makeTempStore(): MemoryStore {
@@ -87,18 +90,21 @@ test('delete removes the file and cleans up the index line', () => {
   expect(store.loadIndex()).not.toContain('to-delete')
 })
 
-test('buildPromptSection outputs the memory index and usage guidance', () => {
+test('the changing index is separate from the fixed usage rules', () => {
   const store = makeTempStore()
+  expect(MEMORY_RULES).toContain('How to use memory:')
+  expect(store.buildIndex()).toBeNull()
+
   store.save({
     name: 'kept-memory',
     description: 'Important memory',
     type: 'project',
     content: 'Content',
   })
-  const section = store.buildPromptSection()
-  expect(section).toContain('[memory] 1 memories')
-  expect(section).toContain('kept-memory')
-  expect(section).toContain('How to use memory:')
+  const index = store.buildIndex()!
+  expect(index).toContain('[memory] 1 memories')
+  expect(index).toContain('kept-memory')
+  expect(index).not.toContain('How to use memory:')
 })
 
 test('memory files and the index are private (0600), the directory 0700', () => {

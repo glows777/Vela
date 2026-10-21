@@ -103,7 +103,7 @@ export interface FauxModelOptions {
   chunkSize?: number
   /** Delay between chunks in ms, default 0 */
   chunkDelayMs?: number
-  /** Simulates prompt caching: cacheRead while the system prefix is unchanged, cacheWrite when it changes */
+  /** Simulates prompt caching: the longest common prefix of tools + system + messages is a cacheRead, the rest a cacheWrite */
   cache?: boolean
   /**
    * A request larger than this many estimated tokens (@see FauxRequest.inputTokens) fails like a provider
@@ -228,12 +228,17 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
         `faux: no scripted response for request #${req.index} (${kind}); last user text: ${JSON.stringify(req.lastUserText.slice(0, 80))}`,
       )
     const resolved = typeof step === 'function' ? step(req) : step
-    return { req, response: mergeResponses(resolved) }
+    return {
+      req,
+      response: mergeResponses(resolved),
+      prefix: options.cache ? cachePrefix(opts) : '',
+    }
   }
 
   const usageFor = (
     req: FauxRequest,
     response: FauxResponse,
+    prefix: string,
   ): LanguageModelV4Usage => {
     const output =
       response.usage?.output ??
@@ -247,10 +252,10 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
     let cacheRead = response.usage?.cacheRead ?? 0
     let cacheWrite = response.usage?.cacheWrite ?? 0
     if (options.cache && response.usage?.input === undefined) {
-      const prefix = approxTokens(req.system)
-      if (lastPrefix === req.system) cacheRead = prefix
-      else cacheWrite = prefix
-      lastPrefix = req.system
+      const shared = commonPrefixLength(lastPrefix ?? '', prefix)
+      cacheRead = approxTokens(prefix.slice(0, shared))
+      cacheWrite = approxTokens(prefix.slice(shared))
+      lastPrefix = prefix
       input = Math.max(input, cacheRead + cacheWrite)
     }
     return {
@@ -277,7 +282,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
 
     async doGenerate(opts): Promise<LanguageModelV4GenerateResult> {
       opts.abortSignal?.throwIfAborted()
-      const { req, response } = next('generate', opts)
+      const { req, response, prefix } = next('generate', opts)
       if (response.error) throw toError(response.error)
       if (response.streamError) throw new Error(response.streamError)
       if (response.hang) await waitForAbort(opts.abortSignal)
@@ -291,7 +296,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
       return {
         content,
         finishReason: finishReason(response),
-        usage: usageFor(req, response),
+        usage: usageFor(req, response, prefix),
         warnings: [],
         response: { headers: fauxHeaders(req) },
       }
@@ -299,7 +304,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
 
     async doStream(opts) {
       opts.abortSignal?.throwIfAborted()
-      const { req, response } = next('stream', opts)
+      const { req, response, prefix } = next('stream', opts)
       if (response.error) throw toError(response.error)
       const normalized = streamParts(req.index, response, chunkSize)
       // With includeRawChunks, each part is preceded by a `raw` part carrying it (as a provider's raw chunk would)
@@ -335,7 +340,7 @@ export function createFauxModel(options: FauxModelOptions = {}): FauxModel {
           controller.enqueue({
             type: 'finish',
             finishReason: finishReason(response),
-            usage: usageFor(req, response),
+            usage: usageFor(req, response, prefix),
           })
           controller.close()
           i++
@@ -455,6 +460,34 @@ function toolOutputText(output: unknown): string {
   const o = output as { type?: string; value?: unknown }
   if (typeof o.value === 'string') return o.value
   return JSON.stringify(o.value ?? output)
+}
+
+/**
+ * The request as providers compare a cached prefix: tools, then system, then messages (the order Anthropic
+ * matches in). Serialized once so the longest common prefix with the previous request can be measured.
+ */
+function cachePrefix(opts: LanguageModelV4CallOptions): string {
+  const system = opts.prompt
+    .filter((m) => m.role === 'system')
+    .map((m) => m.content)
+    .join('\n')
+  // Provider options (cache markers, reasoning settings) are metadata, not part of what a provider
+  // hashes as the context; the last message's cache marker moves with every request.
+  return JSON.stringify(
+    {
+      tools: opts.tools ?? {},
+      system,
+      messages: opts.prompt.filter((m) => m.role !== 'system'),
+    },
+    (key, value) => (key === 'providerOptions' ? undefined : value),
+  )
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length)
+  let i = 0
+  while (i < max && a.charCodeAt(i) === b.charCodeAt(i)) i++
+  return i
 }
 
 function describeRequest(

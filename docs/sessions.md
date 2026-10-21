@@ -180,6 +180,8 @@ The size estimate can be wrong. When the provider rejects a request because the 
 
 With Anthropic models, Vela marks the system prompt, the last tool definition and the last message as cache breakpoints (`cache_control: ephemeral`, the default 5-minute cache), like pi. Each request then reads the prefix the previous one wrote; `/usage` shows the cache hit rate. Other providers ignore the markers (OpenAI caches automatically).
 
+The memory index and the RAG source list are sent as messages after the user message, so changing them appends to the prefix instead of rewriting the system prompt. Loading a deferred tool with `tool_search` adds a tool definition at the top of the request, which invalidates the cached prefix once; this is accepted rather than engineered away.
+
 ## Usage
 
 Every model request records input, output, cache-read and cache-write tokens and, when the price is known, a cost. The price comes from the model entry's `cost` in `models.json`, otherwise from a small built-in table of common models; a model in neither has no cost, so Vela shows its tokens without a dollar amount. Set `cost` for such a model to see its cost (see [Models](models.md#model-fields)).

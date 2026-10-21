@@ -1,8 +1,17 @@
 import { join } from 'node:path'
 import { channelScopes, chatDirectory } from '../../channels/scope.ts'
+import type { VelaSession } from '../../vela-session.ts'
+import {
+  customMessageIfChanged,
+  customMessageMissing,
+  lastCustomMessage,
+} from '../custom-message.ts'
 import type { VelaExtension } from '../types.ts'
-import { MemoryStore } from './store.ts'
+import { MEMORY_RULES, MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
+
+const EMPTY_MEMORY =
+  '[memory] No memories stored yet. Use the memory tool to save important information.'
 
 const DREAM_PROMPT = [
   'Do a full cleanup of the memory store (dream), in the following phases:',
@@ -51,19 +60,49 @@ export function memory(): VelaExtension {
       createMemoryTool(store, (context) => forSession(context?.registry)),
     )
 
-    vela.on('before_agent_start', (event, ctx) => {
-      if (ctx.session.registry.decide('memory') === 'deny') return
-      const local = forSession(ctx.session.registry)
-      event.sections.memory =
+    const contentFor = (session: VelaSession): string | null => {
+      const local = forSession(session.registry)
+      const index =
         local === store
-          ? store.buildPromptSection()
+          ? local.buildIndex()
           : [
               promptLayer('Group memory', local),
               promptLayer(
                 'Global notes (read/search with scope: global; group writes stay in group memory)',
                 store,
               ),
-            ].join('\n\n')
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+      // Deleting the last entry must replace the old index; a session that never had one stays quiet
+      return (
+        index || (lastCustomMessage(session, 'memory') ? EMPTY_MEMORY : null)
+      )
+    }
+
+    /** Sessions whose context carried an index when the prompt started: only those can lose one to compaction. */
+    const indexed = new WeakSet<VelaSession>()
+
+    vela.on('before_agent_start', (event, ctx) => {
+      if (ctx.session.registry.decide('memory') === 'deny') return
+      event.sections.memory = MEMORY_RULES
+      const content = contentFor(ctx.session)
+      const message = content
+        ? customMessageIfChanged(ctx.session, 'memory', content)
+        : undefined
+      if (message || lastCustomMessage(ctx.session, 'memory'))
+        indexed.add(ctx.session)
+      else indexed.delete(ctx.session)
+      return message ? { message } : undefined
+    })
+
+    // Automatic compaction can drop that message after the check above and before this request goes out
+    vela.on('context', (event, ctx) => {
+      if (!indexed.has(ctx.session)) return
+      const markers = ['[memory]', 'Group memory:', 'Global notes (']
+      if (!customMessageMissing(event.messages, markers)) return
+      const content = contentFor(ctx.session)
+      if (content) event.messages.push({ role: 'user', content })
     })
 
     vela.registerCommand('memory', {
@@ -107,8 +146,10 @@ export function memory(): VelaExtension {
   }
 }
 
-function promptLayer(label: string, store: MemoryStore): string {
-  const section = `${label}:\n${store.buildPromptSection()}`
+function promptLayer(label: string, store: MemoryStore): string | null {
+  const index = store.buildIndex()
+  if (!index) return null
+  const section = `${label}:\n${index}`
   const suffix = '\n...(truncated)'
   return section.length > 4000
     ? section.slice(0, 4000 - suffix.length) + suffix
