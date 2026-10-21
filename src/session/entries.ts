@@ -73,6 +73,8 @@ export interface SessionMessageEntry extends SessionEntryBase {
   nestedCalls?: Record<string, NestedToolCalls>
   /** On a tool message: each tool's display data (`tool_execution_end`'s `details`), by tool call id. Not sent to the model. */
   details?: Record<string, unknown>
+  /** On an assistant message: the model (`provider/id`) that produced it. Only that model gets its reasoning back. */
+  producedBy?: string
 }
 
 /**
@@ -245,6 +247,8 @@ export interface SessionContext {
   ids: Map<ModelMessage, string>
   /** When each context message entered the history */
   timestamps: Map<ModelMessage, number>
+  /** The model (`provider/id`) that produced each assistant message (see its entry's `producedBy`) */
+  producers: Map<ModelMessage, string>
   /** Context messages that are extensions' custom messages (from `custom_message` entries) */
   custom: Map<ModelMessage, CustomMessageInfo>
   /** Latest `model_change` on the branch */
@@ -336,6 +340,7 @@ export function buildSessionContext(
     messages: [],
     ids: new Map(),
     timestamps: new Map(),
+    producers: new Map(),
     custom: new Map(),
     summary: '',
   }
@@ -352,6 +357,8 @@ export function buildSessionContext(
     context.messages.push(message)
     context.ids.set(message, entry.id)
     context.timestamps.set(message, parseTime(entry.timestamp))
+    if (entry.type === 'message' && entry.producedBy)
+      context.producers.set(message, entry.producedBy)
   }
   const { compaction, entries: selected } = contextEntries(path)
   if (compaction) {

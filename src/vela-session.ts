@@ -362,6 +362,7 @@ export class VelaSession {
   private applyModel(resolved: ResolvedModel): void {
     this.resolved = resolved
     this.hooked = undefined
+    this.store.producer = resolved.info.ref
     const limits = limitsForModel(resolved.info, this.deps.limitOverrides)
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
@@ -777,6 +778,7 @@ export class VelaSession {
   /** Makes the store's current branch the session's context, model and thinking level. */
   private async loadBranch(context: SessionContext): Promise<void> {
     this.contextManager.restore(context)
+    this.registry.discoveredTools = new Set(this.store.loadedDeferredTools())
     for (const [message, info] of context.custom)
       this.messageQueue.customMessages.set(message, info)
     if (
@@ -1396,9 +1398,8 @@ export class VelaSession {
       messages: this.messages,
       tokenTracker: this.tracker,
       prepareContext: (request) => this.prepareContext(request),
-      transformContext: this.deps.extensions.hasHandlers('context')
-        ? (messages) => this.deps.extensions.transformContext(this, messages)
-        : undefined,
+      transformContext: (messages) =>
+        this.deps.extensions.transformContext(this, messages),
       // Like pi: with automatic compaction off, a context overflow is reported as is
       compactOnOverflow: this.autoCompaction
         ? (overflowSignal) => this.compactForOverflow(overflowSignal)

@@ -78,6 +78,41 @@ test('session.subscribe only sees its own events; vela.subscribe sees all with t
   })
 })
 
+test('a resumed session declares the deferred tools it loaded before', async () => {
+  const lookup = {
+    name: 'deferred_lookup',
+    description: 'look something up',
+    inputSchema: z.object({ id: z.string() }),
+    exposure: 'deferred' as const,
+    execute: async ({ id }: { id: string }) => `record ${id}`,
+  }
+  const first = createTestVela({
+    responses: [
+      fauxToolCall('tool_search', { query: 'deferred_lookup' }),
+      fauxText('Loaded it'),
+    ],
+  })
+  first.internals.registry.register(lookup)
+  await first.run('Load the lookup tool')
+
+  // A new process on the same data directory: rules load again, the session resumes
+  const second = createTestVela({
+    cwd: first.cwd,
+    responses: [
+      (req) => {
+        expect(req.tools).toContain('deferred_lookup')
+        return fauxText('Still there')
+      },
+    ],
+  })
+  second.internals.registry.register(lookup)
+  expect(await second.session.resume()).toBe(true)
+
+  await second.run('Use the lookup tool')
+
+  expect(second.lastAssistantText()).toBe('Still there')
+})
+
 test('tools discovered with tool_search are only active in the session that searched', async () => {
   const t = createTestVela({
     responses: [

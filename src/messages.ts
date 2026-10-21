@@ -253,6 +253,32 @@ export function toModelMessages(
   return result
 }
 
+/**
+ * One request's messages with reasoning another model produced dropped (pi's transform-messages): its
+ * signature and encrypted content are only valid for the model that wrote them, and a model that receives
+ * them can carry them into the visible answer. Text, tool calls and results stay, and the history the
+ * session keeps is untouched, so switching back to the earlier model sends its reasoning again.
+ * `producedBy` maps an assistant message to the model that produced it; unknown ones are left as they are.
+ */
+export function withoutForeignReasoning(
+  messages: ModelMessage[],
+  model: string,
+  producedBy: ReadonlyMap<ModelMessage, string>,
+): ModelMessage[] {
+  return messages.flatMap((message) => {
+    if (message.role !== 'assistant' || typeof message.content === 'string')
+      return [message]
+    const producer = producedBy.get(message)
+    if (producer === undefined || producer === model) return [message]
+    const content = message.content.filter(
+      (part) => part.type !== 'reasoning' && part.type !== 'reasoning-file',
+    )
+    if (content.length === message.content.length) return [message]
+    // A message that held nothing but reasoning would reach the provider empty
+    return content.length ? [{ ...message, content }] : []
+  })
+}
+
 /** JSON-envelope estimate that replaces image payloads instead of counting base64 as prose. */
 export function messageEnvelopeChars(messages: ModelMessage[]): number {
   let imageCount = 0

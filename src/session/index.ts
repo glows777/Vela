@@ -6,6 +6,7 @@ import type { CustomMessageInfo } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
+import { loadedToolNames } from '../tools/tool-search.ts'
 import {
   type BashExecutionEntry,
   type BranchSummaryEntry,
@@ -32,7 +33,7 @@ import {
   type SessionStorage,
   sessionArtifactsUseDataDir,
 } from './storage.ts'
-import { ToolResultStore } from './tool-results.ts'
+import { getStoredResult, ToolResultStore } from './tool-results.ts'
 
 export interface SessionState {
   messages: ModelMessage[]
@@ -63,6 +64,10 @@ export class SessionStore {
   private leafId: string | null = null
   /** Entry id of each message in the model context */
   private readonly ids = new Map<ModelMessage, string>()
+  /** The model (`provider/id`) that produced each assistant message in the model context */
+  producers = new Map<ModelMessage, string>()
+  /** The model the session produces messages with; stamped on each assistant message it appends */
+  producer?: string
   /** The header has gone into the write queue */
   private started = false
   /** Whether storage was checked for (or loaded) an earlier session with this id */
@@ -171,7 +176,29 @@ export class SessionStore {
     const context = buildSessionContext(this.entries, this.leafId, this.byId)
     this.ids.clear()
     for (const [message, id] of context.ids) this.ids.set(message, id)
+    this.producers = context.producers
     return context
+  }
+
+  /** Deferred tools the branch's recorded `tool_search` results loaded (a resumed session declares them again). */
+  loadedDeferredTools(): string[] {
+    return buildSessionPath(this.entries, this.leafId, this.byId).flatMap(
+      (entry) =>
+        entry.type === 'message' && entry.message.role === 'tool'
+          ? entry.message.content.flatMap((part) => {
+              if (
+                part.type !== 'tool-result' ||
+                part.toolName !== 'tool_search'
+              )
+                return []
+              const text =
+                part.output.type === 'text'
+                  ? part.output.value
+                  : getStoredResult(part.output)?.preview
+              return text ? loadedToolNames(text) : []
+            })
+          : [],
+    )
   }
 
   /**
@@ -345,6 +372,9 @@ export class SessionStore {
     const entry = this.append<SessionMessageEntry>({
       type: 'message',
       message,
+      ...(message.role === 'assistant' && this.producer
+        ? { producedBy: this.producer }
+        : {}),
       ...(extra.stopReason ? { stopReason: extra.stopReason } : {}),
       ...(extra.nestedCalls && Object.keys(extra.nestedCalls).length
         ? { nestedCalls: extra.nestedCalls }
@@ -354,6 +384,7 @@ export class SessionStore {
         : {}),
     })
     if (!extra.stopReason) this.ids.set(message, entry.id)
+    if (entry.producedBy) this.producers.set(message, entry.producedBy)
     return entry
   }
 
@@ -486,6 +517,7 @@ export class SessionStore {
     this.replaceEntries(entries)
     this.ids.clear()
     for (const [message, id] of context.ids) this.ids.set(message, id)
+    this.producers = context.producers
     this.started = true
     this.pending.length = 0
     return context

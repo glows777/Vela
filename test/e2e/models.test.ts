@@ -414,3 +414,47 @@ test('an extension provider reads its /login credential per request, and an expi
   expect(await t.vela.logout('fake')).toBe(true)
   expect(await t.vela.logout('fake')).toBe(false)
 })
+
+test('switching models drops an earlier model reasoning and keeps its own', async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const b = createFauxModel({ modelId: 'b' })
+  const providers = {
+    fake: {
+      createModel: (id: string) => {
+        if (id === 'a') return a
+        if (id === 'b') return b
+        throw new Error(`unknown model ${id}`)
+      },
+    },
+  }
+  a.push({ text: 'from a', reasoning: 'thinking of a' })
+  b.push(fauxText('from b'))
+  b.push(fauxText('from b after a resume'))
+  a.push(fauxText('from a again'))
+  const t = createTestVela({ model: 'fake/a', providers })
+
+  await t.run('one')
+  t.session.setModel('fake/b')
+  await t.run('two')
+
+  // A resumed session still knows which model wrote the reasoning of its history
+  const resumed = createTestVela({ cwd: t.cwd, model: 'fake/b', providers })
+  expect(await resumed.session.resume()).toBe(true)
+  await resumed.session.prompt('three')
+  resumed.session.setModel('fake/a')
+  await resumed.session.prompt('four')
+
+  const reasoningIn = (model: typeof a) =>
+    model.calls.flatMap((call) =>
+      call.prompt.flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.flatMap((part) =>
+              part.type === 'reasoning' ? [part.text] : [],
+            )
+          : [],
+      ),
+    )
+  // The other model never receives it; the model that wrote it still gets it back
+  expect(reasoningIn(b)).toEqual([])
+  expect(reasoningIn(a)).toEqual(['thinking of a'])
+})
