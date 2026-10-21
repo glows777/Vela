@@ -57,7 +57,7 @@ A guest has no file, shell or memory tools and no extension tools: extension too
 
 Note what each role can still reach:
 
-- A `collaborator` can read and write any file the Vela process can, sees the owner's memory index in its system prompt and can read and change memories with the `memory` tool, and can call extension tools, MCP server tools included.
+- A `collaborator` can read and write any file the Vela process can, sees the owner's memory index in its context and can read and change memories with the `memory` tool, and can call extension tools, MCP server tools included.
 - A `guest` cannot use MCP server tools: they are extension tools (`mcp__<server>__<tool>`), and `tool_search` does not find tools the role denies.
 - A `guest` can search the knowledge base with `rag_search`. Do not index private documents if untrusted SDK guests can use it.
 

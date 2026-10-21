@@ -90,7 +90,7 @@ test('ingest a document relative to cwd, then search it, offline with the faux e
       },
       (req) => {
         expect(req.toolResults[0]!.output).toContain('Ingested')
-        // The knowledge base overview is written into the system prompt at the start of each prompt and stays fixed for the round (keeps the prompt cache)
+        // The summary is decided at the start of each prompt and stays fixed for the round (keeps the prompt cache)
         expect(req.system).not.toContain('[knowledge base]')
         return fauxToolCall('rag_search', {
           query: 'how to roll back a deployment',
@@ -144,10 +144,15 @@ test('the knowledge base persists in the data dir across restarts', async () => 
     // A new session: the saved default session would need resume()
     sessionId: 'after-restart',
     embedder: true,
-    responses: [fauxText('ok')],
+    responses: [fauxText('ok'), fauxText('ok again')],
   })
   await again.run('What is in the knowledge base')
-  expect(again.model.calls[0]!.system).toContain('sources: docs/guide.md')
+  const call = again.model.calls[0]!
+  expect(call.system).not.toContain('[knowledge base]')
+  expect(call.lastUserText).toContain('sources: docs/guide.md')
+  // Unchanged sources are not sent again on the next turn
+  await again.run('Anything else?')
+  expect(again.model.calls[1]!.lastUserText).not.toContain('[knowledge base]')
 })
 
 // ---------- Commands (registered by the rag extension; output goes through ui.notify) ----------

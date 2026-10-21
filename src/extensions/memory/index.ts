@@ -1,7 +1,8 @@
 import { join } from 'node:path'
 import { channelScopes, chatDirectory } from '../../channels/scope.ts'
+import { customMessageIfChanged } from '../custom-message.ts'
 import type { VelaExtension } from '../types.ts'
-import { MemoryStore } from './store.ts'
+import { MEMORY_RULES, MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
 
 const DREAM_PROMPT = [
@@ -53,17 +54,23 @@ export function memory(): VelaExtension {
 
     vela.on('before_agent_start', (event, ctx) => {
       if (ctx.session.registry.decide('memory') === 'deny') return
+      event.sections.memory = MEMORY_RULES
       const local = forSession(ctx.session.registry)
-      event.sections.memory =
+      const content =
         local === store
-          ? store.buildPromptSection()
+          ? local.buildIndex()
           : [
               promptLayer('Group memory', local),
               promptLayer(
                 'Global notes (read/search with scope: global; group writes stay in group memory)',
                 store,
               ),
-            ].join('\n\n')
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+      if (!content) return
+      const message = customMessageIfChanged(ctx.session, 'memory', content)
+      return message ? { message } : undefined
     })
 
     vela.registerCommand('memory', {
@@ -107,8 +114,10 @@ export function memory(): VelaExtension {
   }
 }
 
-function promptLayer(label: string, store: MemoryStore): string {
-  const section = `${label}:\n${store.buildPromptSection()}`
+function promptLayer(label: string, store: MemoryStore): string | null {
+  const index = store.buildIndex()
+  if (!index) return null
+  const section = `${label}:\n${index}`
   const suffix = '\n...(truncated)'
   return section.length > 4000
     ? section.slice(0, 4000 - suffix.length) + suffix

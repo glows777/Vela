@@ -1,7 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { MemoryStore } from '../../src/extensions/memory/store.ts'
-import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import {
+  fauxHang,
+  fauxSummary,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
 import {
   captureConsole,
   cleanupTestVelas,
@@ -19,16 +24,23 @@ const save = {
   content: 'The user likes TypeScript best',
 }
 
-test('a memory saved through the tool shows up in the next system prompt and survives a restart', async () => {
+test('a memory saved through the tool shows up in the next prompt and survives a restart', async () => {
   const t = createTestVela({
     responses: [
       (req) => {
-        expect(req.system).toContain('No memories stored yet')
+        // An empty store adds no message; the rules explain how to save
+        expect(req.system).toContain('How to use memory:')
+        expect(req.lastUserText).toBe('Remember: TypeScript is my favorite')
         return fauxToolCall('memory', save)
       },
       fauxText('Got it'),
       (req) => {
-        expect(req.system).toContain("The user's favorite programming language")
+        expect(req.system).not.toContain(
+          "The user's favorite programming language",
+        )
+        expect(req.lastUserText).toContain(
+          "The user's favorite programming language",
+        )
         return fauxText('You like TypeScript')
       },
     ],
@@ -49,7 +61,90 @@ test('a memory saved through the tool shows up in the next system prompt and sur
     responses: [fauxText('ok')],
   })
   await restarted.run('Hello')
-  expect(restarted.model.calls[0]!.system).toContain(
+  expect(restarted.model.calls[0]!.system).not.toContain(
+    "The user's favorite programming language",
+  )
+  expect(restarted.model.calls[0]!.lastUserText).toContain(
+    "The user's favorite programming language",
+  )
+})
+
+test('a saved memory arrives after the cached prefix, and an unchanged index is not repeated', async () => {
+  const t = createTestVela({
+    faux: { cache: true },
+    responses: [
+      fauxToolCall('memory', save),
+      fauxText('Got it'),
+      fauxText('You like TypeScript'),
+      fauxToolCall('memory', save),
+      fauxText('Still there'),
+      fauxText('Yes'),
+    ],
+  })
+
+  await t.run('Remember: TypeScript is my favorite')
+  await t.run('What is my favorite language?')
+  const second = t.model.calls[2]!
+  expect(second.system).not.toContain(
+    "The user's favorite programming language",
+  )
+  expect(second.lastUserText).toContain(
+    "The user's favorite programming language",
+  )
+  // The first prompt's whole request is still inside the prefix the second one reads
+  const usage = t.eventsOf('usage').map((e) => e.usage)
+  expect(usage[0]!.cacheWriteTokens).toBeGreaterThan(0)
+  expect(usage[2]!.cacheReadTokens).toBeGreaterThanOrEqual(
+    usage[0]!.cacheWriteTokens,
+  )
+
+  // Saving the same memory again renders the same index: no second message
+  await t.run('Save the same memory again')
+  await t.run('Do you still know it?')
+  const memoryMessages = t.session.messages.filter(
+    (m) => t.session.customMessageOf(m)?.customType === 'memory',
+  )
+  expect(memoryMessages).toHaveLength(1)
+})
+
+test('after compaction the memory index is sent again, including after a resume', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('memory', save),
+      fauxText('Got it'),
+      fauxText('Answer 2'),
+      fauxText('Answer 3'),
+      fauxText('Answer 4'),
+      fauxText('Answer 5'),
+    ],
+    generate: [fauxSummary()],
+  })
+
+  await t.run('Remember: TypeScript is my favorite')
+  for (const question of [
+    'Question 2',
+    'Question 3',
+    'Question 4',
+    'Question 5',
+  ])
+    await t.run(question)
+
+  await t.session.compact()
+  expect(
+    t.session.messages.some(
+      (m) => t.session.customMessageOf(m)?.customType === 'memory',
+    ),
+  ).toBe(false)
+
+  const resumed = createTestVela({
+    cwd: t.cwd,
+    responses: [fauxText('Yes')],
+  })
+  expect(await resumed.session.resume()).toBe(true)
+  await resumed.run('What is my favorite language?')
+  const call = resumed.model.calls[0]!
+  expect(call.system).not.toContain("The user's favorite programming language")
+  expect(call.lastUserText).toContain(
     "The user's favorite programming language",
   )
 })
@@ -152,19 +247,19 @@ test('/dream hands the memory clean-up prompt to the model', async () => {
   const t = withMemory({ responses: [fauxText('Memories cleaned up')] })
   await t.run('/dream')
   expect(t.model.calls).toHaveLength(1)
-  expect(t.model.calls[0]!.lastUserText).toContain('memory lint')
+  expect(JSON.stringify(t.model.calls[0]!.prompt)).toContain('memory lint')
   expect(t.lastAssistantText()).toBe('Memories cleaned up')
   expect(notes(t)).toContain('[dream] Done')
   expect(t.session.busy.locked).toBe(false)
 })
 
-test('/context previews the memory section before the first prompt', async () => {
+test('/context shows the fixed memory rules while the index stays a message', async () => {
   const t = withMemory()
   // Sections are computed per prompt; before the first prompt this round is empty
   expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
   const sections = await t.session.previewSections()
-  expect(sections.memory).toContain('openai-null-chars')
-  expect(t.session.buildSystem(sections)).toContain('openai-null-chars')
+  expect(sections.memory).toContain('How to use memory:')
+  expect(t.session.buildSystem(sections)).not.toContain('openai-null-chars')
   // The preview does not replace this round's sections
   expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
   const { output } = await captureConsole(() => t.command('/context'))

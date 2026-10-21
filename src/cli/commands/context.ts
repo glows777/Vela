@@ -34,8 +34,9 @@ export const contextCommands: CommandHandler[] = [
 ]
 
 /**
- * The memory section and the skills index are part of the system prompt; they get their own slices, so the
- * System prompt slice is the rest. The autocompact buffer is the window above the summary threshold.
+ * The memory rules and the skills index are part of the system prompt; they get their own slices, so the System
+ * prompt slice is the rest. The memory index itself travels as a message and counts under messages. The autocompact
+ * buffer is the window above the summary threshold.
  */
 function contextSnapshot(
   session: VelaSession,

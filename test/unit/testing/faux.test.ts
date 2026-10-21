@@ -148,7 +148,7 @@ test('a separate generate queue serves generateText while the main queue serves 
   expect(model.pending()).toBe(1)
 })
 
-test('prompt cache simulation reads the unchanged system prefix from cache', async () => {
+test('prompt cache simulation reads the longest common prefix of tools, system and messages', async () => {
   const model = createFauxModel({
     cache: true,
     responses: [fauxText('a'), fauxText('b'), fauxText('c')],
@@ -162,10 +162,12 @@ test('prompt cache simulation reads the unchanged system prefix from cache', asy
     prompt: '3',
   })
   expect(a.usage.inputTokenDetails.cacheWriteTokens).toBeGreaterThan(0)
-  expect(b.usage.inputTokenDetails.cacheReadTokens).toBe(
-    a.usage.inputTokenDetails.cacheWriteTokens,
-  )
-  expect(c.usage.inputTokenDetails.cacheReadTokens).toBe(0)
+  expect(a.usage.inputTokenDetails.cacheReadTokens).toBe(0)
+  // b reuses tools and the whole system; only the user message differs
+  const bRead = b.usage.inputTokenDetails.cacheReadTokens ?? 0
+  expect(bRead).toBeGreaterThanOrEqual(Math.ceil(system.length / 4))
+  // Changing the system drops almost all of the reusable prefix
+  expect(c.usage.inputTokenDetails.cacheReadTokens ?? 0).toBeLessThan(bRead)
 })
 
 test('loads a JSON scenario file', async () => {
