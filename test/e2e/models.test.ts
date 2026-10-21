@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { wrapLanguageModel } from 'ai'
+import { z } from 'zod'
 import { DEFAULT_LIMITS } from '../../src/limits.ts'
 import type { VelaLogger } from '../../src/logger.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
@@ -457,4 +458,62 @@ test('switching models drops an earlier model reasoning and keeps its own', asyn
   // The other model never receives it; the model that wrote it still gets it back
   expect(reasoningIn(b)).toEqual([])
   expect(reasoningIn(a)).toEqual(['thinking of a'])
+})
+
+test('a model switched during a run keeps the reasoning with the model of that run', async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const b = createFauxModel({ modelId: 'b' })
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => (release = resolve))
+  const providers = {
+    fake: {
+      createModel: (id: string) => {
+        if (id === 'a') return a
+        if (id === 'b') return b
+        throw new Error(`unknown model ${id}`)
+      },
+    },
+  }
+  a.push({
+    reasoning: 'thinking of a',
+    toolCalls: [{ name: 'wait_tool', input: {} }],
+  })
+  a.push(fauxText('from a'))
+  const t = createTestVela({ model: 'fake/a', providers })
+  t.internals.registry.register({
+    name: 'wait_tool',
+    description: 'waits until the test lets it finish',
+    inputSchema: z.object({}),
+    execute: async () => {
+      await blocked
+      return 'done'
+    },
+  })
+
+  const running = t.run('go')
+  while (t.eventsOf('tool_execution_start').length === 0) await Bun.sleep(1)
+  // The run continues with the model it started with
+  t.session.setModel('fake/b')
+  release()
+  await running
+
+  // The second step still goes to A, and A gets its own reasoning back
+  expect(JSON.stringify(a.calls[1]!.prompt).includes('thinking of a')).toBe(
+    true,
+  )
+  // Both assistant messages of the run belong to A, not to the model chosen meanwhile
+  const producedBy = t.session
+    .getEntries()
+    .flatMap((entry) =>
+      entry.type === 'message' && entry.message.role === 'assistant'
+        ? [entry.producedBy]
+        : [],
+    )
+  expect(producedBy).toEqual(['fake/a', 'fake/a'])
+  // So the model chosen during the run does not get that run's reasoning afterwards
+  b.push(fauxText('from b'))
+  await t.session.prompt('after')
+  expect(JSON.stringify(b.calls[0]!.prompt).includes('thinking of a')).toBe(
+    false,
+  )
 })

@@ -66,8 +66,6 @@ export class SessionStore {
   private readonly ids = new Map<ModelMessage, string>()
   /** The model (`provider/id`) that produced each assistant message in the model context */
   producers = new Map<ModelMessage, string>()
-  /** The model the session produces messages with; stamped on each assistant message it appends */
-  producer?: string
   /** The header has gone into the write queue */
   private started = false
   /** Whether storage was checked for (or loaded) an earlier session with this id */
@@ -181,24 +179,31 @@ export class SessionStore {
   }
 
   /** Deferred tools the branch's recorded `tool_search` results loaded (a resumed session declares them again). */
-  loadedDeferredTools(): string[] {
-    return buildSessionPath(this.entries, this.leafId, this.byId).flatMap(
-      (entry) =>
-        entry.type === 'message' && entry.message.role === 'tool'
-          ? entry.message.content.flatMap((part) => {
-              if (
-                part.type !== 'tool-result' ||
-                part.toolName !== 'tool_search'
-              )
-                return []
-              const text =
-                part.output.type === 'text'
-                  ? part.output.value
-                  : getStoredResult(part.output)?.preview
-              return text ? loadedToolNames(text) : []
-            })
-          : [],
-    )
+  async loadedTools(): Promise<string[]> {
+    const names: string[] = []
+    for (const entry of buildSessionPath(
+      this.entries,
+      this.leafId,
+      this.byId,
+    )) {
+      if (entry.type !== 'message' || entry.message.role !== 'tool') continue
+      for (const part of entry.message.content) {
+        if (part.type !== 'tool-result' || part.toolName !== 'tool_search')
+          continue
+        if (part.output.type === 'text') {
+          names.push(...loadedToolNames(part.output.value))
+          continue
+        }
+        const stored = getStoredResult(part.output)
+        if (!stored) continue
+        // A long result keeps a head and tail preview in the entry: the file has the whole list
+        const text = await readFile(stored.path, 'utf8').catch(
+          () => stored.preview,
+        )
+        names.push(...loadedToolNames(text))
+      }
+    }
+    return names
   }
 
   /**
@@ -367,13 +372,15 @@ export class SessionStore {
       stopReason?: 'aborted' | 'error'
       nestedCalls?: Record<string, NestedToolCalls>
       details?: Record<string, unknown>
+      /** On an assistant message: the model that produced it */
+      producedBy?: string
     } = {},
   ): SessionMessageEntry {
     const entry = this.append<SessionMessageEntry>({
       type: 'message',
       message,
-      ...(message.role === 'assistant' && this.producer
-        ? { producedBy: this.producer }
+      ...(message.role === 'assistant' && extra.producedBy
+        ? { producedBy: extra.producedBy }
         : {}),
       ...(extra.stopReason ? { stopReason: extra.stopReason } : {}),
       ...(extra.nestedCalls && Object.keys(extra.nestedCalls).length
