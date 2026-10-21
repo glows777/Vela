@@ -1,4 +1,5 @@
 import type { CustomMessage } from '../agent/events.ts'
+import type { ModelMessage } from '../messages.ts'
 import { messageText } from '../session/message-queue.ts'
 import type { VelaSession } from '../vela-session.ts'
 
@@ -13,9 +14,17 @@ export function customMessageIfChanged(
   customType: string,
   content: string,
 ): CustomMessage | undefined {
-  const last = session.messages.findLast(
-    (message) => session.customMessageOf(message)?.customType === customType,
-  )
+  const last = lastCustomMessage(session, customType)
   if (last && messageText(last) === content) return undefined
   return { customType, content, display: false }
+}
+
+/** The last message of `customType` in the model-visible context, if any (used to announce that its content is now empty). */
+export function lastCustomMessage(
+  session: VelaSession,
+  customType: string,
+): ModelMessage | undefined {
+  return session.messages.findLast(
+    (message) => session.customMessageOf(message)?.customType === customType,
+  )
 }

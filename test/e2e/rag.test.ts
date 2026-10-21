@@ -157,6 +157,24 @@ test('the knowledge base persists in the data dir across restarts', async () => 
 
 // ---------- Commands (registered by the rag extension; output goes through ui.notify) ----------
 
+test('clearing the knowledge base replaces the old summary message', async () => {
+  const t = createTestVela({
+    embedder: true,
+    files: { 'docs/guide.md': GUIDE },
+    responses: [fauxText('Found it'), fauxText('Gone')],
+  })
+
+  await t.run('/rag ingest docs/guide.md')
+  await t.run('What is in the knowledge base?')
+  expect(t.model.calls[0]!.lastUserText).toContain('sources: docs/guide.md')
+
+  await t.run('/rag clear')
+  await t.run('What now?')
+  expect(t.model.calls[1]!.lastUserText).toContain(
+    'The knowledge base is empty',
+  )
+})
+
 const notes = (t: TestVela) =>
   t
     .eventsOf('notify')

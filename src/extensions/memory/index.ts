@@ -1,9 +1,12 @@
 import { join } from 'node:path'
 import { channelScopes, chatDirectory } from '../../channels/scope.ts'
-import { customMessageIfChanged } from '../custom-message.ts'
+import { customMessageIfChanged, lastCustomMessage } from '../custom-message.ts'
 import type { VelaExtension } from '../types.ts'
 import { MEMORY_RULES, MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
+
+const EMPTY_MEMORY =
+  '[memory] No memories stored yet. Use the memory tool to save important information.'
 
 const DREAM_PROMPT = [
   'Do a full cleanup of the memory store (dream), in the following phases:',
@@ -56,7 +59,7 @@ export function memory(): VelaExtension {
       if (ctx.session.registry.decide('memory') === 'deny') return
       event.sections.memory = MEMORY_RULES
       const local = forSession(ctx.session.registry)
-      const content =
+      const index =
         local === store
           ? local.buildIndex()
           : [
@@ -68,6 +71,10 @@ export function memory(): VelaExtension {
             ]
               .filter(Boolean)
               .join('\n\n')
+      // Deleting the last entry must replace the old index; a session that never had one stays quiet
+      const content =
+        index ||
+        (lastCustomMessage(ctx.session, 'memory') ? EMPTY_MEMORY : null)
       if (!content) return
       const message = customMessageIfChanged(ctx.session, 'memory', content)
       return message ? { message } : undefined

@@ -211,6 +211,32 @@ test('read and delete need a filename; with one they work', async () => {
   expect(new MemoryStore(join(t.dataDir, 'memory')).list()).toHaveLength(0)
 })
 
+test('deleting the last memory replaces the old index message', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('memory', save),
+      fauxText('Got it'),
+      fauxText('You like TypeScript'),
+      fauxToolCall('memory', {
+        action: 'delete',
+        filename: 'user_favorite-language.md',
+      }),
+      fauxText('Deleted it'),
+      (req) => {
+        expect(req.lastUserText).toContain('No memories stored yet')
+        expect(req.lastUserText).not.toContain('favorite-language')
+        return fauxText('I forgot it')
+      },
+    ],
+  })
+
+  await t.run('Remember: TypeScript is my favorite')
+  await t.run('What is my favorite language?')
+  await t.run('Forget it')
+  await t.run('What do you know now?')
+  expect(t.lastAssistantText()).toBe('I forgot it')
+})
+
 // ---------- Commands (registered by the memory extension; output goes through ui.notify) ----------
 
 function withMemory(options: Parameters<typeof createTestVela>[0] = {}) {

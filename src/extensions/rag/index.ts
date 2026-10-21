@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { customMessageIfChanged } from '../custom-message.ts'
+import { customMessageIfChanged, lastCustomMessage } from '../custom-message.ts'
 import type { VelaExtension } from '../types.ts'
 import { createEmbedder, type EmbeddingFn } from './embedder.ts'
 import { SqliteVectorStore } from './sqlite-store.ts'
@@ -54,8 +54,17 @@ export function rag(options: RagOptions = {}): VelaExtension {
 
     vela.on('before_agent_start', (_event, ctx) => {
       const size = store.size()
-      if (size === 0) return
-      const content = `[knowledge base] ${size} document chunks ingested (sources: ${store.sources().join(', ')}). Use the rag_search tool to search the knowledge base.`
+      const summary =
+        size === 0
+          ? null
+          : `[knowledge base] ${size} document chunks ingested (sources: ${store.sources().join(', ')}). Use the rag_search tool to search the knowledge base.`
+      // Clearing the knowledge base must replace the old summary; a session that never had one stays quiet
+      const content =
+        summary ||
+        (lastCustomMessage(ctx.session, 'rag')
+          ? '[knowledge base] The knowledge base is empty. Ingest documents with rag_ingest first.'
+          : null)
+      if (!content) return
       const message = customMessageIfChanged(ctx.session, 'rag', content)
       return message ? { message } : undefined
     })
