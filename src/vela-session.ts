@@ -161,6 +161,7 @@ interface SessionExtensionHooks {
   transformContext(
     session: VelaSession,
     messages: ModelMessage[],
+    producer: string,
   ): Promise<ModelMessage[]>
   beforeProviderRequest(
     session: VelaSession,
@@ -777,6 +778,7 @@ export class VelaSession {
   /** Makes the store's current branch the session's context, model and thinking level. */
   private async loadBranch(context: SessionContext): Promise<void> {
     this.contextManager.restore(context)
+    this.registry.discoveredTools = new Set(await this.store.loadedTools())
     for (const [message, info] of context.custom)
       this.messageQueue.customMessages.set(message, info)
     if (
@@ -940,7 +942,7 @@ export class VelaSession {
   }
 
   /** Appends a message that entered the history to the session; a tool message carries its tools' nested calls and details. */
-  private record(message: ModelMessage): void {
+  private record(message: ModelMessage, producedBy?: string): void {
     this.timestamps.set(message, Date.now())
     const custom = this.messageQueue.customMessages.get(message)
     if (custom && message.role === 'user') {
@@ -959,7 +961,7 @@ export class VelaSession {
           this.toolDetails.delete(part.toolCallId)
         }
       }
-    this.store.appendMessage(message, { nestedCalls, details })
+    this.store.appendMessage(message, { nestedCalls, details, producedBy })
   }
 
   /** Whether an `executeBash()` command is running */
@@ -1396,9 +1398,8 @@ export class VelaSession {
       messages: this.messages,
       tokenTracker: this.tracker,
       prepareContext: (request) => this.prepareContext(request),
-      transformContext: this.deps.extensions.hasHandlers('context')
-        ? (messages) => this.deps.extensions.transformContext(this, messages)
-        : undefined,
+      transformContext: (messages, producer) =>
+        this.deps.extensions.transformContext(this, messages, producer),
       // Like pi: with automatic compaction off, a context overflow is reported as is
       compactOnOverflow: this.autoCompaction
         ? (overflowSignal) => this.compactForOverflow(overflowSignal)
@@ -1419,7 +1420,7 @@ export class VelaSession {
             this.messageQueue.normalizeInput(message),
           ),
         ),
-      onMessage: (message) => this.record(message),
+      onMessage: (message, producer) => this.record(message, producer),
       injectNotice: (content) =>
         this.customMessage({
           customType: 'loop',

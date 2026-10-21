@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { wrapLanguageModel } from 'ai'
+import { z } from 'zod'
 import { DEFAULT_LIMITS } from '../../src/limits.ts'
 import type { VelaLogger } from '../../src/logger.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
+import { describeModel } from '../../src/models/index.ts'
 import { createFauxModel, fauxText } from '../../src/testing/faux.ts'
 import { createVela } from '../../src/vela.ts'
 import {
@@ -413,4 +415,179 @@ test('an extension provider reads its /login credential per request, and an expi
   expect(refreshes).toBe(1)
   expect(await t.vela.logout('fake')).toBe(true)
   expect(await t.vela.logout('fake')).toBe(false)
+})
+
+test('switching models drops an earlier model reasoning and keeps its own', async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const b = createFauxModel({ modelId: 'b' })
+  const providers = {
+    fake: {
+      createModel: (id: string) => {
+        if (id === 'a') return a
+        if (id === 'b') return b
+        throw new Error(`unknown model ${id}`)
+      },
+    },
+  }
+  a.push({ text: 'from a', reasoning: 'thinking of a' })
+  b.push(fauxText('from b'))
+  b.push(fauxText('from b after a resume'))
+  a.push(fauxText('from a again'))
+  const t = createTestVela({ model: 'fake/a', providers })
+
+  await t.run('one')
+  t.session.setModel('fake/b')
+  await t.run('two')
+
+  // A resumed session still knows which model wrote the reasoning of its history
+  const resumed = createTestVela({ cwd: t.cwd, model: 'fake/b', providers })
+  expect(await resumed.session.resume()).toBe(true)
+  await resumed.session.prompt('three')
+  resumed.session.setModel('fake/a')
+  await resumed.session.prompt('four')
+
+  const reasoningIn = (model: typeof a) =>
+    model.calls.flatMap((call) =>
+      call.prompt.flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.flatMap((part) =>
+              part.type === 'reasoning' ? [part.text] : [],
+            )
+          : [],
+      ),
+    )
+  // The other model never receives it; the model that wrote it still gets it back
+  expect(reasoningIn(b)).toEqual([])
+  expect(reasoningIn(a)).toEqual(['thinking of a'])
+})
+
+test('a model switched during a run keeps the reasoning with the model of that run', async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const b = createFauxModel({ modelId: 'b' })
+  let release!: () => void
+  const blocked = new Promise<void>((resolve) => (release = resolve))
+  const providers = {
+    fake: {
+      createModel: (id: string) => {
+        if (id === 'a') return a
+        if (id === 'b') return b
+        throw new Error(`unknown model ${id}`)
+      },
+    },
+  }
+  a.push({
+    reasoning: 'thinking of a',
+    toolCalls: [{ name: 'wait_tool', input: {} }],
+  })
+  a.push(fauxText('from a'))
+  const t = createTestVela({ model: 'fake/a', providers })
+  t.internals.registry.register({
+    name: 'wait_tool',
+    description: 'waits until the test lets it finish',
+    inputSchema: z.object({}),
+    execute: async () => {
+      await blocked
+      return 'done'
+    },
+  })
+
+  const running = t.run('go')
+  while (t.eventsOf('tool_execution_start').length === 0) await Bun.sleep(1)
+  // The run continues with the model it started with
+  t.session.setModel('fake/b')
+  release()
+  await running
+
+  // The second step still goes to A, and A gets its own reasoning back
+  expect(JSON.stringify(a.calls[1]!.prompt).includes('thinking of a')).toBe(
+    true,
+  )
+  // Both assistant messages of the run belong to A, not to the model chosen meanwhile
+  const producer = describeModel(a).ref
+  const producedBy = t.session
+    .getEntries()
+    .flatMap((entry) =>
+      entry.type === 'message' && entry.message.role === 'assistant'
+        ? [entry.producedBy]
+        : [],
+    )
+  expect(producedBy).toEqual([producer, producer])
+  // So the model chosen during the run does not get that run's reasoning afterwards
+  b.push(fauxText('from b'))
+  await t.session.prompt('after')
+  expect(JSON.stringify(b.calls[0]!.prompt).includes('thinking of a')).toBe(
+    false,
+  )
+})
+
+test('a model selected by a before_agent_start hook sends and records its own reasoning', async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const b = createFauxModel({ modelId: 'b' })
+  const providers = {
+    fake: {
+      createModel: (id: string) => {
+        if (id === 'a') return a
+        if (id === 'b') return b
+        throw new Error(`unknown model ${id}`)
+      },
+    },
+  }
+  a.push({ text: 'from a', reasoning: 'thinking of a' })
+  // The hook sends this prompt to B: B runs, so B's reasoning is B's
+  b.push({ text: 'from b', reasoning: 'thinking of b' })
+  a.push(fauxText('from a again'))
+  const t = createTestVela({
+    model: 'fake/a',
+    providers,
+    extensions: [
+      (vela) => {
+        vela.on('before_agent_start', (event, ctx) => {
+          if (event.prompt === 'route to b') ctx.session.setModel('fake/b')
+        })
+      },
+    ],
+  })
+
+  await t.run('one')
+  await t.run('route to b')
+  t.session.setModel('fake/a')
+  await t.run('three')
+
+  // B never got A's reasoning, and A never got B's
+  expect(JSON.stringify(b.calls[0]!.prompt)).not.toContain('thinking of a')
+  expect(JSON.stringify(a.calls[1]!.prompt)).not.toContain('thinking of b')
+  expect(JSON.stringify(a.calls[1]!.prompt)).toContain('thinking of a')
+  // Each message is recorded with the model that produced it
+  const identities = [describeModel(a).ref, describeModel(b).ref]
+  expect(
+    t.session
+      .getEntries()
+      .flatMap((entry) =>
+        entry.type === 'message' && entry.message.role === 'assistant'
+          ? [entry.producedBy]
+          : [],
+      ),
+  ).toEqual([identities[0], identities[1], identities[0]])
+})
+
+test('selecting the same model object again keeps its own reasoning', async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const providers = {
+    fake: {
+      createModel: (id: string) => {
+        if (id === 'a') return a
+        throw new Error(`unknown model ${id}`)
+      },
+    },
+  }
+  a.push({ text: 'from a', reasoning: 'thinking of a' })
+  a.push(fauxText('from a again'))
+  const t = createTestVela({ model: 'fake/a', providers })
+
+  await t.run('one')
+  // The same model, now chosen as the object it is: nothing changed for the provider
+  t.session.setModel(t.session.model)
+  await t.run('two')
+
+  expect(JSON.stringify(a.calls[1]!.prompt)).toContain('thinking of a')
 })

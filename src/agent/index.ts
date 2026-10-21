@@ -6,6 +6,7 @@ import {
 } from '../context/request.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
+import { describeModel } from '../models/index.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import { withPromptCache } from './cache.ts'
@@ -31,9 +32,13 @@ interface AgentLoopParameter {
   prepareContext?: (request: RequestSnapshot) => Promise<void>
   /**
    * Called before every model request, after `prepareContext` (the extension `context` event, like pi): returns
-   * the messages this request sends. The history in `messages` is not changed.
+   * the messages this request sends. The history in `messages` is not changed. `producer` is the identity of
+   * `model`, the model that sends the request.
    */
-  transformContext?: (messages: ModelMessage[]) => Promise<ModelMessage[]>
+  transformContext?: (
+    messages: ModelMessage[],
+    producer: string,
+  ) => Promise<ModelMessage[]>
   /**
    * Called once per step when the provider rejects the request because the context is too long (like pi's
    * overflow recovery): compacts the history, then the step is sent again. A second overflow fails the loop.
@@ -61,8 +66,11 @@ interface AgentLoopParameter {
   takeFollowUp?: () => ModelMessage[] | Promise<ModelMessage[]>
   /** Messages already added for this loop (e.g. the user input); agent_end reports them plus the loop's own. */
   newMessages?: ModelMessage[]
-  /** Called for every message the loop adds to `messages` (the session appends it to its log). */
-  onMessage?: (message: ModelMessage) => void
+  /**
+   * Called for every message the loop adds to `messages` (the session appends it to its log); `producer` is
+   * the identity of the model that answered.
+   */
+  onMessage?: (message: ModelMessage, producer: string) => void
   /**
    * Turns a loop-detection warning into the message appended after that step (pi's custom notice).
    * The model sees the returned message. Absent, the warning is only an event.
@@ -100,6 +108,9 @@ export const agentLoop = async ({
   injectNotice,
 }: AgentLoopParameter) => {
   const limits = resolveLimits(limitOverrides)
+  // The model that sends this loop's requests, as provider/modelId (pi's provider + api + model): the
+  // session stamps its messages with it and leaves other models' reasoning out of them.
+  const producer = describeModel(model).ref
   let turn = 0
   // Each agent loop has its own call history, so concurrent sessions don't interfere
   const loopDetector = new LoopDetector()
@@ -111,7 +122,7 @@ export const agentLoop = async ({
     messages.push(message)
     newMessages.push(message)
     tokenTracker.addMessage(message)
-    onMessage?.(message)
+    onMessage?.(message, producer)
     if (announce) {
       emit({ type: 'message_start', message })
       emit({ type: 'message_end', message })
@@ -141,7 +152,7 @@ export const agentLoop = async ({
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
       let requestMessages = transformContext
-        ? await transformContext(messages)
+        ? await transformContext(messages, producer)
         : messages
       abortSignal?.throwIfAborted()
       if (
@@ -313,7 +324,7 @@ export const agentLoop = async ({
               await compactOnOverflow(abortSignal)
               // The compacted history is sent again through the context handlers
               requestMessages = transformContext
-                ? await transformContext(messages)
+                ? await transformContext(messages, producer)
                 : messages
             } catch (compactError) {
               endTurnEmpty()
