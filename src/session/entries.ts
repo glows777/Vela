@@ -73,7 +73,7 @@ export interface SessionMessageEntry extends SessionEntryBase {
   nestedCalls?: Record<string, NestedToolCalls>
   /** On a tool message: each tool's display data (`tool_execution_end`'s `details`), by tool call id. Not sent to the model. */
   details?: Record<string, unknown>
-  /** On an assistant message: the model (`provider/id`) that produced it. Only that model gets its reasoning back. */
+  /** On an assistant message: the model that produced it, as its `provider/modelId` (pi's provider + api + model). Only that model gets its reasoning back. */
   producedBy?: string
 }
 

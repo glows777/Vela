@@ -258,18 +258,19 @@ export function toModelMessages(
  * signature and encrypted content are only valid for the model that wrote them, and a model that receives
  * them can carry them into the visible answer. Text, tool calls and results stay, and the history the
  * session keeps is untouched, so switching back to the earlier model sends its reasoning again.
- * `producedBy` maps an assistant message to the model that produced it; unknown ones are left as they are.
+ * `producedBy` maps an assistant message to the `producer` identity of the model that wrote it; unknown ones
+ * are left as they are.
  */
 export function withoutForeignReasoning(
   messages: ModelMessage[],
-  model: string,
+  producer: string,
   producedBy: ReadonlyMap<ModelMessage, string>,
 ): ModelMessage[] {
   return messages.flatMap((message) => {
     if (message.role !== 'assistant' || typeof message.content === 'string')
       return [message]
-    const producer = producedBy.get(message)
-    if (producer === undefined || producer === model) return [message]
+    const owner = producedBy.get(message)
+    if (owner === undefined || owner === producer) return [message]
     const content = message.content.filter(
       (part) => part.type !== 'reasoning' && part.type !== 'reasoning-file',
     )

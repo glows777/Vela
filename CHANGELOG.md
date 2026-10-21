@@ -14,7 +14,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
-- **Switching models no longer replays the previous model's reasoning.** An assistant message records the model that produced it (`producedBy`), and a request leaves out reasoning another model wrote — its signature or encrypted content is only valid for the model that wrote it, and the new model could carry it into the visible answer. Text and tool calls stay, the history keeps everything, and switching back sends the earlier model its own reasoning again, also after a resume.
+- **Switching models no longer replays the previous model's reasoning.** An assistant message records the model that produced it (`producedBy`, `provider/modelId` as the AI SDK names the model, so the same model chosen by name or as an object has one identity), and a request leaves out reasoning another model wrote — its signature or encrypted content is only valid for the model that wrote it, and the new model could carry it into the visible answer. Text and tool calls stay, the history keeps everything, and switching back sends the earlier model its own reasoning again, also after a resume.
 - **A resumed session declares the deferred tools it loaded.** `resume()` reads the session's `tool_search` results and declares the tools they loaded again, so the model goes on using them without searching a second time. Sessions without such results are unchanged.
 - Routine lists show a readable topic task without its opaque root message id; routine ids remain available for cancellation.
 

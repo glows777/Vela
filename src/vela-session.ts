@@ -161,7 +161,7 @@ interface SessionExtensionHooks {
   transformContext(
     session: VelaSession,
     messages: ModelMessage[],
-    model?: string,
+    producer: string,
   ): Promise<ModelMessage[]>
   beforeProviderRequest(
     session: VelaSession,
@@ -1398,8 +1398,8 @@ export class VelaSession {
       messages: this.messages,
       tokenTracker: this.tracker,
       prepareContext: (request) => this.prepareContext(request),
-      transformContext: (messages) =>
-        this.deps.extensions.transformContext(this, messages, info.ref),
+      transformContext: (messages, producer) =>
+        this.deps.extensions.transformContext(this, messages, producer),
       // Like pi: with automatic compaction off, a context overflow is reported as is
       compactOnOverflow: this.autoCompaction
         ? (overflowSignal) => this.compactForOverflow(overflowSignal)
@@ -1420,7 +1420,7 @@ export class VelaSession {
             this.messageQueue.normalizeInput(message),
           ),
         ),
-      onMessage: (message) => this.record(message, info.ref),
+      onMessage: (message, producer) => this.record(message, producer),
       injectNotice: (content) =>
         this.customMessage({
           customType: 'loop',

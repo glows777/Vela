@@ -456,19 +456,18 @@ export class ExtensionRunner {
 
   /**
    * context: each handler gets a copy of the messages the request will send, edits it in place or returns new
-   * ones (like pi). Reasoning another model produced is left out before the handlers see them (`model` is the
-   * one the request goes to, which a model switch during a run does not change); a throwing handler is logged
-   * and the previous result kept.
+   * ones (like pi). Reasoning another model produced is left out before the handlers see them; `producer` is
+   * the identity of the model that sends this request. A throwing handler is logged and the previous result kept.
    */
   async transformContext(
     session: VelaSession,
     messages: ModelMessage[],
-    model = session.modelInfo.ref,
+    producer: string,
   ): Promise<ModelMessage[]> {
     const handlers = this.list('context')
     let current = withoutForeignReasoning(
       messages,
-      model,
+      producer,
       session.store.producers,
     )
     if (!handlers.length) return current
