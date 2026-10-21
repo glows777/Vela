@@ -18,6 +18,16 @@ const INDEX_FILE = 'MEMORY.md'
 const MAX_INDEX_LINES = 200
 const MAX_FILE_CHARS = 4000
 
+/** Fixed usage rules for the system prompt; only the index (buildIndex) changes between turns. */
+export const MEMORY_RULES = [
+  '[memory] How to use memory:',
+  '- Save durable facts, preferences and decisions with the memory tool; saving the same name and type overwrites',
+  '- Memories are leads, not facts: verify with tools before relying on them (read_file, grep to confirm paths and content still exist)',
+  '- Do not store what the code shows (tech stack, directory layout), what git can tell (who changed what), or what docs already say',
+  '- Store only information from the conversation that cannot be derived elsewhere (user preferences, corrections, project decisions, external resources)',
+  "- Use the memory tool's read action to read a memory; search for BM25 search; lint to check the store's health.",
+].join('\n')
+
 /** Writes a memory file readable only by the owner (0600, like session files); also tightens an existing file. */
 function writePrivate(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 })
@@ -199,29 +209,16 @@ export class MemoryStore {
     return lintAll(this.list(), this.projectDir)
   }
 
-  buildPromptSection(): string {
-    this.init()
-    const index = this.loadIndex()
+  /** The changing part: count and index; null when the store is empty (the fixed rules explain how to save). */
+  buildIndex(): string | null {
     const entries = this.list()
-
-    if (entries.length === 0) {
-      return '[memory] No memories stored yet. Use the memory tool to save important information.'
-    }
-
-    const lines = [
+    if (entries.length === 0) return null
+    return [
       `[memory] ${entries.length} memories`,
       '',
       'Memory index:',
-      index,
-      '',
-      "Use the memory tool's read action to read a memory; search for BM25 search; lint to check the store's health.",
-      '',
-      'How to use memory:',
-      '- Memories are leads, not facts: verify with tools before relying on them (read_file, grep to confirm paths and content still exist)',
-      '- Do not store what the code shows (tech stack, directory layout), what git can tell (who changed what), or what docs already say',
-      '- Store only information from the conversation that cannot be derived elsewhere (user preferences, corrections, project decisions, external resources)',
-    ]
-    return lines.join('\n')
+      this.loadIndex(),
+    ].join('\n')
   }
 
   private parseFrontmatter(raw: string): Omit<MemoryEntry, 'filePath'> | null {

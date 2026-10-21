@@ -4,8 +4,8 @@ Vela ships five extensions: `memory`, `rag`, `web`, `feishu` and `mcp`. They use
 
 | Extension | Adds |
 |---|---|
-| `memory` | Cross-session memory: the `memory` tool, a memory index in the system prompt, `/memory` and `/dream` |
-| `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary in the system prompt, `/rag` |
+| `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
+| `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
 | `web` | `web_fetch`, and `web_search` when a search API key is set |
 | `feishu` | The Feishu bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
@@ -94,7 +94,7 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 
 `lint` reports paths mentioned in a memory that no longer exist, memories not read within their type's shelf life, and duplicate names.
 
-**Prompt section.** Before each turn, the memory index and short usage rules are added to the system prompt. Guest sessions get neither the section nor the tool.
+**Prompt.** The short usage rules stay in the system prompt. The index is sent as a message after the user message whenever it changed, so saving a memory does not rewrite the cached system prompt; it is sent again after compaction removed the old one (and restored right away in the request that compaction summarized it from), and deleting the last entry sends an empty-store update. Guest sessions get neither the rules, the index nor the tool.
 
 **Commands.**
 
@@ -120,7 +120,7 @@ A local knowledge base with hybrid search, stored in SQLite.
 | `rag_ingest` | `path` | Read a text file (relative to the working directory), chunk it, embed the chunks and store them |
 | `rag_search` | `query`, `top_k` (default 5) | Search the knowledge base; each result shows its source, scores and up to 500 characters |
 
-**Prompt section.** When the knowledge base is not empty, the system prompt says how many chunks it holds, lists the sources, and points the model to `rag_search`.
+**Prompt.** When the knowledge base is not empty, a message after the user message says how many chunks it holds, lists the sources, and points the model to `rag_search`. It is sent again only when the count or the sources change, so the cached system prompt stays stable.
 
 **Commands.** `/rag` shows the number of chunks, the sources and the embedder. `/rag ingest <path>` ingests a file. `/rag clear` deletes every chunk. Without embedding configuration, `/rag` (including `ingest` or `clear` arguments) explains how to configure it without calling a model or touching the database. `/extensions` lists the command through normal extension discovery.
 

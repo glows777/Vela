@@ -216,7 +216,7 @@ test('echo-channel: senders are guests unless listed as owners', async () => {
 
 // ---------- Runtime contracts ----------
 
-test('guest sessions do not get the owner memory in the system prompt', async () => {
+test('guest sessions do not get the owner memory in their context', async () => {
   const t = createTestVela({
     responses: [fauxText('owner'), fauxText('guest')],
   })
@@ -228,8 +228,11 @@ test('guest sessions do not get the owner memory in the system prompt', async ()
   })
   await t.run('Hello')
   await t.vela.session('g', { role: 'guest' }).prompt('Hello')
-  expect(t.model.calls[0]!.system).toContain('owner-private')
-  expect(t.model.calls[1]!.system).not.toContain('owner-private')
+  expect(t.model.calls[0]!.system).not.toContain('owner-private')
+  expect(t.model.calls[0]!.lastUserText).toContain('owner-private')
+  expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain(
+    'owner-private',
+  )
 })
 
 test('tool_call handlers can change the input in place; the changed input is validated', async () => {

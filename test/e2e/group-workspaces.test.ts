@@ -6,6 +6,7 @@ import { channelSessionId } from '../../src/channels/session-id.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import {
+  type FauxRequest,
   type FauxStep,
   fauxText,
   fauxToolCall,
@@ -70,6 +71,54 @@ const save = (value: string) =>
     content: value,
   })
 
+/** The latest tail message carrying the group's memory indexes */
+function memoryMessage(req: FauxRequest): string {
+  for (let i = req.prompt.length - 1; i >= 0; i--) {
+    const message = req.prompt[i]!
+    if (message.role !== 'user') continue
+    const text =
+      typeof message.content === 'string'
+        ? message.content
+        : message.content
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('')
+    if (text.startsWith('Group memory:')) return text
+  }
+  return ''
+}
+
+test('a group with only global notes gets its index once per request', async () => {
+  const run = setup()
+  const { t } = run
+  t.model.push(
+    fauxToolCall('memory', {
+      action: 'save',
+      name: 'global-guide',
+      description: 'Shared global guidance',
+      type: 'reference',
+      content: 'GLOBAL guidance',
+    }),
+    fauxText('saved global'),
+  )
+  await t.run('Save global guidance')
+  await t.vela.startChannels()
+
+  await turn(run, 'oc_alpha', 'root', 'Read the guide twice', [
+    fauxToolCall('read_file', { path: 'a.txt' }),
+    fauxToolCall('read_file', { path: 'a.txt' }),
+    fauxText('read'),
+  ])
+  const requests = t.model.calls.slice(2)
+  expect(requests.length).toBeGreaterThan(1)
+  for (const request of requests) {
+    // The group has no index of its own, so the message carries only the global notes
+    const prompt = JSON.stringify(request.prompt)
+    expect(prompt).toContain('Global notes (')
+    expect(prompt.match(/Global notes \(/g)).toHaveLength(1)
+  }
+})
+
 test('two groups keep same-name files and memory separate across topics, idle reopen, restart and a fresh Vela', async () => {
   const run = setup()
   const { t } = run
@@ -117,9 +166,10 @@ test('two groups keep same-name files and memory separate across topics, idle re
     const other = value === 'ALPHA' ? 'BETA' : 'ALPHA'
     await turn(current, chat, root, 'Read our saved work and shared guidance', [
       (req) => {
-        expect(req.system).toContain(`${value} note`)
-        expect(req.system).not.toContain(`${other} note`)
-        expect(req.system).toContain('Shared global guidance')
+        const memory = memoryMessage(req)
+        expect(memory).toContain(`${value} note`)
+        expect(memory).not.toContain(`${other} note`)
+        expect(memory).toContain('Shared global guidance')
         expect(req.system).toContain(
           current.t.dataPath(
             `channels/${channelSessionId('feishu', chat)}/workspace`,
