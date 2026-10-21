@@ -71,6 +71,60 @@ export class MessageFeedback {
   }
 }
 
+/**
+ * A passive input is marked only once the run starts writing an answer, so untagged
+ * group discussion stays unmarked unless Vela replies.
+ */
+class DeferredMessageFeedback {
+  /** There is no admission acknowledgement to await. */
+  readonly ready = Promise.resolve()
+  private feedback?: ChannelRunFeedback
+  private starting?: Promise<void>
+  private finished?: Promise<void>
+
+  constructor(
+    private channel: ChannelDefinition,
+    private message: IncomingMessage,
+    private report: (error: unknown) => Promise<void>,
+  ) {}
+
+  event(update: ChannelFeedbackUpdate): void | Promise<void> {
+    if (!this.starting) {
+      if (
+        update.type !== 'agent' ||
+        update.event.type !== 'message_update' ||
+        update.event.assistantMessageEvent.type !== 'text_delta' ||
+        update.event.assistantMessageEvent.delta === ''
+      )
+        return
+      this.starting = Promise.resolve()
+        .then(() =>
+          this.channel.startRun?.(this.message, { acknowledge: true }),
+        )
+        .then((feedback) => {
+          this.feedback = feedback || undefined
+        })
+        .catch(this.report)
+    }
+    const starting = this.starting
+    return starting.then(() => this.feedback?.event(update))
+  }
+
+  finish(outcome: ChannelOutcome): Promise<void> {
+    this.finished ??= this.complete(outcome)
+    return this.finished
+  }
+
+  private async complete(outcome: ChannelOutcome): Promise<void> {
+    await this.starting
+    try {
+      await this.feedback?.finish(outcome)
+    } catch (error) {
+      await this.report(error)
+    }
+  }
+}
+
 interface ChannelRun {
   key: string
   session: VelaSession
@@ -371,10 +425,12 @@ export class RunFeedback {
       await this.feedbackError(channelName, msg, error)
     }
     const feedback =
-      channel && !msg.passive
-        ? (inputs.find((item) => item.message === input) ??
-          new MessageFeedback(channel, msg, report, false))
-        : undefined
+      channel && msg.passive
+        ? new DeferredMessageFeedback(channel, msg, report)
+        : channel
+          ? (inputs.find((item) => item.message === input) ??
+            new MessageFeedback(channel, msg, report, false))
+          : undefined
     await feedback?.ready
     const pending: Promise<void>[] = []
     const unsubscribe = session.subscribe((event) => {
@@ -395,7 +451,7 @@ export class RunFeedback {
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
     try {
-      if (msg.topic && channel && feedback) {
+      if (msg.topic && channel && !msg.passive && feedback) {
         try {
           await feedback.event({
             type: 'controls',
@@ -473,6 +529,7 @@ export class RunFeedback {
     await this.options.recovery.settled(session)
     if (run.handedOff) {
       await this.options.directory.finish(id, 'done')
+      if (msg.passive) await feedback?.finish('silent')
       return
     }
     if (run.stopped) outcome = 'stopped'
@@ -482,7 +539,9 @@ export class RunFeedback {
     const delivered =
       !answer || (await this.options.reply(session, channelName, msg, answer))
     if (!delivered) outcome = 'failed'
-    await feedback?.finish(outcome)
+    await feedback?.finish(
+      msg.passive && outcome === 'done' && !answer ? 'silent' : outcome,
+    )
     // Shutdown is recoverable, including accepted steers not yet saved. A reported
     // execution failure is terminal; a failed delivery must remain recoverable.
     if (

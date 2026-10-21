@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Added
+
+- **Passive Feishu group messages show a reaction once Vela starts answering.** An untagged evaluation adds `OnIt` to the triggering message at the first non-empty assistant text delta, then `DONE` after delivery or `CrossMark` on failure or Stop. Silence, an empty answer or a topic handoff removes the marker with nothing left behind; passive input still gets no progress/control card. Custom channels receive the new `silent` value on `finish(outcome)`.
+
 ### Fixed
 
 - Routine lists show a readable topic task without its opaque root message id; routine ids remain available for cancellation.

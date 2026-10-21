@@ -274,17 +274,20 @@ export class FeishuChannel implements ChannelDefinition {
         })
       },
       finish: async (outcome: ChannelOutcome) => {
-        try {
-          await progress?.finish(outcome)
-        } catch (error) {
-          await report?.(error)
+        if (outcome !== 'silent') {
+          try {
+            await progress?.finish(outcome)
+          } catch (error) {
+            await report?.(error)
+          }
         }
         if (transport && messageId && reactionId) {
           await transport.removeReaction(messageId, reactionId)
-          await transport.addReaction(
-            messageId,
-            outcome === 'done' ? 'DONE' : 'CrossMark',
-          )
+          if (outcome !== 'silent')
+            await transport.addReaction(
+              messageId,
+              outcome === 'done' ? 'DONE' : 'CrossMark',
+            )
         }
       },
     }
