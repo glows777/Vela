@@ -267,7 +267,7 @@ export class ToolRegistry {
     this.shared.hookPipeline = pipeline
   }
 
-  private discoveredTools = new Set<string>()
+  discoveredTools = new Set<string>() // loaded with tool_search; a resumed session restores it from its history
 
   private readonly gate = new ExecutionGate()
   /** Sequential nested calls run one at a time (like pi's nested call queue) */

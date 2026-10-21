@@ -514,6 +514,7 @@
     message: ModelMessage
     nestedCalls?: Record<string, NestedToolCalls> | undefined
     parentId: string | null
+    producedBy?: string | undefined
     stopReason?: "error" | "aborted" | undefined
     timestamp: string
     type: "message"

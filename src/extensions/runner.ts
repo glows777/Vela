@@ -7,6 +7,7 @@ import {
   isToolContent,
   type ToolContent,
   toolContentText,
+  withoutForeignReasoning,
 } from '../messages.ts'
 import type { ModelRegistry } from '../models/index.ts'
 import type { HookPipeline } from '../security/hooks.ts'
@@ -455,16 +456,22 @@ export class ExtensionRunner {
 
   /**
    * context: each handler gets a copy of the messages the request will send, edits it in place or returns new
-   * ones (like pi). Returns `messages` itself when nobody handles the event; a throwing handler is logged and
-   * the previous result kept.
+   * ones (like pi). Reasoning another model produced is left out before the handlers see them; `producer` is
+   * the identity of the model that sends this request. A throwing handler is logged and the previous result kept.
    */
   async transformContext(
     session: VelaSession,
     messages: ModelMessage[],
+    producer: string,
   ): Promise<ModelMessage[]> {
     const handlers = this.list('context')
-    if (!handlers.length) return messages
-    let current = copyMessages(messages)
+    let current = withoutForeignReasoning(
+      messages,
+      producer,
+      session.store.producers,
+    )
+    if (!handlers.length) return current
+    current = copyMessages(current)
     const ctx = this.context(session)
     for (const { extension, fn } of handlers) {
       try {
