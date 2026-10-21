@@ -4,6 +4,7 @@ import type {
 } from '@ai-sdk/provider'
 import { type LanguageModel, simulateReadableStream } from 'ai'
 import { getStoredResult } from '../session/tool-results.ts'
+import { compactionSources, findConversation } from './compaction-request.ts'
 
 /**
  * Vela demo model (VELA_MODEL=mock): an offline, keyword-driven model that also simulates prompt caching.
@@ -385,31 +386,31 @@ function pickTextResponse(prompt: Prompt): string {
 }
 
 /**
- * The compactor sends a `context_compaction` JSON request (see src/context/compressor.ts) and accepts
- * only verbatim quotes of the removed messages. Quote each message's anchor: the first user message
- * as the goal, the rest as details.
+ * The compactor sends the dropped messages as a numbered `<conversation>` block plus a
+ * `context_compaction` JSON request (see src/context/compressor.ts), and accepts only verbatim quotes
+ * of the removed messages. Quote each message's text: the first user message as the goal, the rest as
+ * details.
  */
 function groundedSummary(prompt: Prompt): string | undefined {
   const last = prompt.at(-1)
   if (last?.role !== 'user') return undefined
-  let control: {
-    type?: string
-    sourceMessageCount: number
-    sourceCatalog: { index: number; role: string; anchor: string }[]
-  }
+  let control: { type?: string; sourceMessageCount: number }
   try {
     control = JSON.parse(messageText(last))
   } catch {
     return undefined
   }
   if (control?.type !== 'context_compaction') return undefined
-  const facts = control.sourceCatalog
-    .filter((s) => s.anchor.trim())
-    .map((s) => ({
+  const conversation = findConversation(
+    prompt.filter((m) => m.role === 'user').map(messageText),
+  )
+  const facts = (conversation ? compactionSources(conversation) : []).map(
+    (s) => ({
       sourceMessageIndex: s.index,
-      quote: s.anchor.trim(),
+      quote: s.text.trim().slice(0, 400),
       role: s.role,
-    }))
+    }),
+  )
   const goal = facts.find((f) => f.role === 'user') ?? facts[0]
   if (!goal) return undefined
   const fact = ({ sourceMessageIndex, quote }: (typeof facts)[number]) => ({

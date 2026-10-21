@@ -69,16 +69,19 @@ const model = createFauxModel({
   generate: [fauxSummary()],  // separate queue for generateText (context summaries); fauxSummary produces a summary that passes validation
   chunkSize: 8,               // stream text in 8-character chunks
   cache: true,                // simulate prompt caching: an unchanged system prompt counts as cacheRead
+  maxRequestTokens: 100_000,  // larger requests fail like a provider context overflow
 })
 
-model.calls      // every request: { index, kind, system, prompt, tools, lastUserText, toolResults, responseFormat, reasoning, headers }
+model.calls      // every request: { index, kind, system, prompt, tools, inputTokens, lastUserText, toolResults, responseFormat, reasoning, headers }
 model.pending()  // responses not used yet
 model.push(...)  // append responses
+model.maxRequestTokens = N  // change the size limit mid-test
 ```
 
 - Every response has the header `x-faux-request: <index>`; with `includeRawChunks` each stream part is preceded by a `raw` part carrying it (for the extension provider hooks).
 - A request after the script runs out throws right away (`faux: no scripted response for request #3 (stream)`) instead of hanging.
 - Usage is estimated from character counts by default, so it is deterministic; override `usage` when a test needs exact numbers.
+- `inputTokens` is the request's size (prompt and tool definitions, chars / 4). A request over `maxRequestTokens` fails with `400 prompt is too long: <size> tokens > <limit> maximum`, which the agent loop treats as a context overflow; the failed request is recorded but uses no scripted response, so the summary and the retried step take the next ones. Tests that need to know a size first set `model.maxRequestTokens` after measuring an accepted request.
 - Responses are JSON-serializable `FauxResponse` objects (`text`, `reasoning`, `toolCalls`, `finishReason`, `usage`, `error`, `streamError`, `hang`), so the same script can be saved as a scenario file for CLI replay.
 
 ## createTestVela()

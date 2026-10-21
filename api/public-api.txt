@@ -955,6 +955,7 @@
   interface FauxModel
     doGenerate: (options: LanguageModelV4CallOptions) => PromiseLike<LanguageModelV4GenerateResult>
     doStream: (options: LanguageModelV4CallOptions) => PromiseLike<LanguageModelV4StreamResult>
+    maxRequestTokens?: number | undefined
     pending: () => number
     push: (...steps: FauxStep[]) => void
     pushGenerate: (...steps: FauxStep[]) => void
@@ -968,12 +969,14 @@
     chunkDelayMs?: number | undefined
     chunkSize?: number | undefined
     generate?: FauxStep[] | undefined
+    maxRequestTokens?: number | undefined
     modelId?: string | undefined
     responses?: FauxStep[] | undefined
   interface FauxRequest
     abortSignal?: AbortSignal | undefined
     headers?: Record<string, string | undefined> | undefined
     index: number
+    inputTokens: number
     kind: "stream" | "generate"
     lastUserText: string
     prompt: LanguageModelV4Prompt

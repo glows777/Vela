@@ -238,6 +238,11 @@ test('session.compact() summarizes old history on demand, with an optional focus
   expect(compact?.result?.messages).toBe(2)
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
   expect(generate.lastUserText).toContain('Keep question 0')
+  // Manual compaction sends only the dropped messages, without tool definitions
+  const stream = t.model.calls.filter((c) => c.kind === 'stream').at(-1)!
+  expect(generate.tools).toEqual([])
+  expect(generate.inputTokens).toBeLessThan(stream.inputTokens)
+  expect(JSON.stringify(generate.prompt)).not.toContain('Question 1')
   expect(t.session.contextManager.state.summary).toContain('## User goal')
   expect(await t.readData('sessions/default.jsonl')).toContain('Question 0')
   expect(t.session.isRunning).toBe(false)
@@ -287,6 +292,72 @@ test('when the provider says the context is too long, Vela compacts once and sen
   expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
   expect(t.session.contextManager.state.summary).toContain('## User goal')
   expect(t.messages.at(-2)).toEqual({ role: 'user', content: 'Question 4' })
+})
+
+test('an overflow recovers by summarizing only the dropped messages, without tool definitions (like pi)', async () => {
+  const question = (i: number) => `Question ${i}: ${'Background. '.repeat(400)}`
+  const t = createTestVela({
+    // Only the provider's size limit drives compaction here
+    limits: {
+      microcompactThreshold: 1e9,
+      summaryThreshold: 1e9,
+      maxInputTokens: 1e9,
+    },
+    responses: [
+      ...Array.from({ length: 6 }, (_, i) => fauxText(`Answer ${i}`)),
+      fauxText('fits now'),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 6; i++) await t.run(question(i))
+
+  // The provider now rejects anything larger than the request that just fit
+  t.model.maxRequestTokens = t.model.calls.at(-1)!.inputTokens - 1
+
+  await t.run(question(6))
+
+  expect(t.lastAssistantText()).toBe('fits now')
+  const rejected = t.model.calls.at(-3)!
+  const summary = t.model.calls.at(-2)!
+  expect(rejected.kind).toBe('stream')
+  expect(summary.kind).toBe('generate')
+  // The summary request is smaller than the one the provider just rejected, so it gets through
+  expect(summary.tools).toEqual([])
+  expect(summary.inputTokens).toBeLessThan(rejected.inputTokens)
+  // Only the dropped messages are sent as source material, not the retained ones
+  const prompt = JSON.stringify(summary.prompt)
+  expect(prompt).toContain(question(0).slice(0, 40))
+  expect(prompt).not.toContain(question(5).slice(0, 40))
+  expect(t.eventsOf('compaction_end')).toEqual([
+    expect.objectContaining({ reason: 'overflow', willRetry: true }),
+  ])
+})
+
+test('the summary does not repeat the dropped text, so a long session of short turns can still recover', async () => {
+  const question = (i: number) => `Question ${i}: ${'Background. '.repeat(15)}`
+  const t = createTestVela({
+    limits: {
+      microcompactThreshold: 1e9,
+      summaryThreshold: 1e9,
+      maxInputTokens: 1e9,
+    },
+    responses: [
+      ...Array.from({ length: 40 }, (_, i) => fauxText(`Answer ${i}`)),
+      fauxText('fits now'),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 40; i++) await t.run(question(i))
+
+  t.model.maxRequestTokens = t.model.calls.at(-1)!.inputTokens - 1
+
+  await t.run(question(40))
+
+  expect(t.lastAssistantText()).toBe('fits now')
+  const rejected = t.model.calls.at(-3)!
+  const summary = t.model.calls.at(-2)!
+  expect(summary.tools).toEqual([])
+  expect(summary.inputTokens).toBeLessThan(rejected.inputTokens)
 })
 
 test('a second overflow in the same step fails the run with the provider error', async () => {

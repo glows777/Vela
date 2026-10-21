@@ -146,7 +146,7 @@ test('summarizing the branch left attaches a branch_summary the next request see
   // Like pi, the summary covers the old branch below the target: a2 (q2 itself goes back to the editor)
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
   expect(generate.lastUserText).toContain('"sourceMessageCount":1')
-  expect(generate.lastUserText).toContain('"anchor":"a2"')
+  expect(JSON.stringify(generate.prompt)).toContain('[0] assistant\\na2')
   expect(generate.lastUserText).toContain('keep q2')
   await t.run('q2b')
   expect(lastStream(t)).toContain('Summary of the conversation branch you left')
