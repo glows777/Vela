@@ -199,7 +199,9 @@ function sourceText(message: ModelMessage): string {
   return message.content
     .map((part) => {
       if (part.type === 'text') return part.text
-      if (part.type === 'tool-call') return JSON.stringify(part.input)
+      // Like pi's serialized conversation, keep the tool name so the summary can say what ran
+      if (part.type === 'tool-call')
+        return `${part.toolName}(${JSON.stringify(part.input)})`
       if (part.type === 'tool-result')
         return toolResultOutputToText(part.output)
       return ''
