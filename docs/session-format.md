@@ -146,9 +146,9 @@ A session where the user asked one question and the model read a file:
 {"type":"model_change","model":"openai/gpt-5","id":"5f1c2a90","parentId":null,"timestamp":"2026-10-08T10:50:32.570Z"}
 {"type":"thinking_level_change","thinkingLevel":"medium","id":"0b7e44d1","parentId":"5f1c2a90","timestamp":"2026-10-08T10:50:32.570Z"}
 {"type":"message","message":{"role":"user","content":"What does notes.txt say?"},"id":"a3c90e12","parentId":"0b7e44d1","timestamp":"2026-10-08T10:50:32.574Z"}
-{"type":"message","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]},"producedBy":"openai/gpt-5","id":"77d2f0b4","parentId":"a3c90e12","timestamp":"2026-10-08T10:50:32.640Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"}}]},"producedBy":"openai.responses/gpt-5","id":"77d2f0b4","parentId":"a3c90e12","timestamp":"2026-10-08T10:50:32.640Z"}
 {"type":"message","message":{"role":"tool","content":[{"type":"tool-result","toolCallId":"call_1","toolName":"read_file","output":{"type":"text","value":"Ship the docs on Friday.\n"}}]},"id":"c01b9a6e","parentId":"77d2f0b4","timestamp":"2026-10-08T10:50:32.646Z"}
-{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"The note says: ship the docs on Friday."}]},"producedBy":"openai/gpt-5","id":"e5a8d3f7","parentId":"c01b9a6e","timestamp":"2026-10-08T10:50:32.648Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"The note says: ship the docs on Friday."}]},"producedBy":"openai.responses/gpt-5","id":"e5a8d3f7","parentId":"c01b9a6e","timestamp":"2026-10-08T10:50:32.648Z"}
 {"type":"session_info","name":"notes","id":"19f04c2b","parentId":"e5a8d3f7","timestamp":"2026-10-08T10:51:02.000Z"}
 ```
 
