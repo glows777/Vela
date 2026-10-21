@@ -88,6 +88,37 @@ function memoryMessage(req: FauxRequest): string {
   return ''
 }
 
+test('a group with only global notes gets its index once per request', async () => {
+  const run = setup()
+  const { t } = run
+  t.model.push(
+    fauxToolCall('memory', {
+      action: 'save',
+      name: 'global-guide',
+      description: 'Shared global guidance',
+      type: 'reference',
+      content: 'GLOBAL guidance',
+    }),
+    fauxText('saved global'),
+  )
+  await t.run('Save global guidance')
+  await t.vela.startChannels()
+
+  await turn(run, 'oc_alpha', 'root', 'Read the guide twice', [
+    fauxToolCall('read_file', { path: 'a.txt' }),
+    fauxToolCall('read_file', { path: 'a.txt' }),
+    fauxText('read'),
+  ])
+  const requests = t.model.calls.slice(2)
+  expect(requests.length).toBeGreaterThan(1)
+  for (const request of requests) {
+    // The group has no index of its own, so the message carries only the global notes
+    const prompt = JSON.stringify(request.prompt)
+    expect(prompt).toContain('Global notes (')
+    expect(prompt.match(/Global notes \(/g)).toHaveLength(1)
+  }
+})
+
 test('two groups keep same-name files and memory separate across topics, idle reopen, restart and a fresh Vela', async () => {
   const run = setup()
   const { t } = run

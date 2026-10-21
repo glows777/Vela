@@ -99,8 +99,8 @@ export function memory(): VelaExtension {
     // Automatic compaction can drop that message after the check above and before this request goes out
     vela.on('context', (event, ctx) => {
       if (!indexed.has(ctx.session)) return
-      if (!customMessageMissing(event.messages, ['[memory]', 'Group memory:']))
-        return
+      const markers = ['[memory]', 'Group memory:', 'Global notes (']
+      if (!customMessageMissing(event.messages, markers)) return
       const content = contentFor(ctx.session)
       if (content) event.messages.push({ role: 'user', content })
     })
