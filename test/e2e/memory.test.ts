@@ -237,6 +237,35 @@ test('deleting the last memory replaces the old index message', async () => {
   expect(t.lastAssistantText()).toBe('I forgot it')
 })
 
+test('automatic compaction keeps the memory index in the request it summarizes', async () => {
+  const t = withMemory({
+    limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
+    responses: [
+      fauxText('Answer 0'),
+      fauxText('Answer 1'),
+      fauxText('Answer 2'),
+      // The provider reports a prompt above the threshold, so the next request compacts first
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+      fauxText('Answer 4'),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 5; i++) await t.run(`Question ${i}`)
+
+  expect(t.eventsOf('compaction_start')).toHaveLength(1)
+  // The message that carried the index was summarized away with the old history
+  expect(
+    t.session.messages.some(
+      (m) => t.session.customMessageOf(m)?.customType === 'memory',
+    ),
+  ).toBe(false)
+  // The request sent after that compaction still knows the index
+  const request = t.model.calls.filter((c) => c.kind === 'stream').at(-1)!
+  expect(request.system).not.toContain('openai-null-chars')
+  expect(request.lastUserText).toContain('openai-null-chars')
+  expect(t.lastAssistantText()).toBe('Answer 4')
+})
+
 // ---------- Commands (registered by the memory extension; output goes through ui.notify) ----------
 
 function withMemory(options: Parameters<typeof createTestVela>[0] = {}) {

@@ -28,3 +28,20 @@ export function lastCustomMessage(
     (message) => session.customMessageOf(message)?.customType === customType,
   )
 }
+
+/**
+ * Whether this request's messages lack the content of `customType`. Extensions pass the prefixes their message
+ * text can start with (`[memory]`, `Group memory:`): the request's messages are a copy without the custom
+ * metadata, so the text is what identifies one. An extension's `context` handler uses this to restore content
+ * that automatic compaction removed after `before_agent_start` decided not to send it again.
+ */
+export function customMessageMissing(
+  messages: readonly ModelMessage[],
+  markers: readonly string[],
+): boolean {
+  return !messages.some(
+    (message) =>
+      message.role === 'user' &&
+      markers.some((marker) => messageText(message).startsWith(marker)),
+  )
+}

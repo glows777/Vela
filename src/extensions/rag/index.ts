@@ -1,6 +1,11 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { customMessageIfChanged, lastCustomMessage } from '../custom-message.ts'
+import type { VelaSession } from '../../vela-session.ts'
+import {
+  customMessageIfChanged,
+  customMessageMissing,
+  lastCustomMessage,
+} from '../custom-message.ts'
 import type { VelaExtension } from '../types.ts'
 import { createEmbedder, type EmbeddingFn } from './embedder.ts'
 import { SqliteVectorStore } from './sqlite-store.ts'
@@ -52,21 +57,41 @@ export function rag(options: RagOptions = {}): VelaExtension {
     for (const tool of createRagTools(store, embedder, vela.cwd))
       vela.registerTool(tool)
 
-    vela.on('before_agent_start', (_event, ctx) => {
+    const contentFor = (session: VelaSession): string | null => {
       const size = store.size()
       const summary =
         size === 0
           ? null
           : `[knowledge base] ${size} document chunks ingested (sources: ${store.sources().join(', ')}). Use the rag_search tool to search the knowledge base.`
       // Clearing the knowledge base must replace the old summary; a session that never had one stays quiet
-      const content =
+      return (
         summary ||
-        (lastCustomMessage(ctx.session, 'rag')
+        (lastCustomMessage(session, 'rag')
           ? '[knowledge base] The knowledge base is empty. Ingest documents with rag_ingest first.'
           : null)
-      if (!content) return
-      const message = customMessageIfChanged(ctx.session, 'rag', content)
+      )
+    }
+
+    /** Sessions whose context carried a summary when the prompt started: only those can lose one to compaction. */
+    const summarized = new WeakSet<VelaSession>()
+
+    vela.on('before_agent_start', (_event, ctx) => {
+      const content = contentFor(ctx.session)
+      const message = content
+        ? customMessageIfChanged(ctx.session, 'rag', content)
+        : undefined
+      if (message || lastCustomMessage(ctx.session, 'rag'))
+        summarized.add(ctx.session)
+      else summarized.delete(ctx.session)
       return message ? { message } : undefined
+    })
+
+    // Automatic compaction can drop that message after the check above and before this request goes out
+    vela.on('context', (event, ctx) => {
+      if (!summarized.has(ctx.session)) return
+      if (!customMessageMissing(event.messages, ['[knowledge base]'])) return
+      const content = contentFor(ctx.session)
+      if (content) event.messages.push({ role: 'user', content })
     })
 
     vela.registerCommand('rag', {
