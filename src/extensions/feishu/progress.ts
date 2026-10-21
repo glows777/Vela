@@ -147,7 +147,7 @@ export class FeishuProgress {
       await new Promise((resolve) => setTimeout(resolve, delay))
   }
 
-  async finish(outcome: ChannelOutcome): Promise<void> {
+  async finish(outcome: Exclude<ChannelOutcome, 'silent'>): Promise<void> {
     await this.drain()
     if (this.failure) throw this.failure
     this.stage = { done: 'Finished', failed: 'Failed', stopped: 'Stopped' }[

@@ -10,7 +10,11 @@ import {
 import type { FeishuMessageEvent } from '../../src/index.ts'
 import { silentLogger } from '../../src/logger.ts'
 import { fileSessionStorage } from '../../src/session/storage.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import {
+  fauxStreamError,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -65,6 +69,15 @@ function setup(
 }
 const passive = (message_id: string, text: string) =>
   feishuEvent({ message_id, mentions: [], content: JSON.stringify({ text }) })
+const reactionLog = (run: ReturnType<typeof setup>) =>
+  run.fake.reactions.map(({ messageId, emoji, removed }) => ({
+    messageId,
+    emoji,
+    removed: !!removed,
+  }))
+async function idle(run: ReturnType<typeof setup>) {
+  await until(() => !run.t.vela.session('feishu-oc_group').isRunning)
+}
 
 test('default-on intake queues each unique message, skips silently, treats commands as discussion and deduplicates after restart', async () => {
   const cwd = await root()
@@ -122,14 +135,28 @@ test('default-on intake queues each unique message, skips silently, treats comma
     release()
   }
   await until(() => first.t.model.calls.length === 6)
+  await until(() =>
+    first.fake.reactions.some(
+      (item) => item.messageId === 'explicit-busy' && item.emoji === 'DONE',
+    ),
+  )
   await first.t.internals.gateway.stopAll()
   expect(first.fake.sent).toEqual([
     { messageId: 'answer', text: 'A useful short answer' },
     { messageId: 'explicit-busy', text: 'explicit while busy' },
   ])
   expect(first.fake.cards).toEqual([])
+  // Silent runs may flash a marker when they write text, but only the two replies
+  // leave a terminal reaction behind.
   expect(
-    first.fake.reactions.every((item) => item.messageId === 'explicit-busy'),
+    first.fake.reactions
+      .filter((item) => item.emoji !== 'OnIt')
+      .map((item) => item.messageId),
+  ).toEqual(['answer', 'explicit-busy'])
+  expect(
+    first.fake.reactions
+      .filter((item) => item.emoji === 'OnIt')
+      .every((item) => item.removed),
   ).toBe(true)
   expect(first.fake.historyCalls).toHaveLength(1)
   expect(commands).toBe(0)
@@ -214,7 +241,7 @@ test('supported passive files use the existing attachment store and preparation 
         expect(req.lastUserText).toContain('brief.txt')
         return fauxToolCall('feishu_skip_reply', {})
       },
-      fauxText('silent'),
+      fauxText(''),
     ],
   })
   run.fake.resources.set('brief', [Buffer.from('shared brief')])
@@ -385,4 +412,162 @@ test('a passive session blocked by repeated storage failures stays operator-only
   } finally {
     failing = false
   }
+})
+
+test('a passive evaluation that stays silent never marks its trigger', async () => {
+  const run = setup({
+    responses: [fauxToolCall('feishu_skip_reply', {}), fauxText('')],
+  })
+  await run.start()
+  run.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
+  await until(() => run.t.model.calls.length === 2)
+  await idle(run)
+  expect(run.fake.reactions).toEqual([])
+  expect(run.fake.sent).toEqual([])
+})
+
+test('a passive answer marks the trigger once text starts and leaves DONE on delivery', async () => {
+  const run = setup({
+    responses: [fauxText('A useful short answer')],
+    faux: { chunkSize: 1, chunkDelayMs: 30 },
+  })
+  await run.start()
+  run.fake.deliver(passive('answer', 'a useful question'))
+  await until(() => run.t.model.calls.length === 1)
+  // No reaction at admission: the marker waits for the first text delta.
+  expect(run.fake.reactions).toEqual([])
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'answer' && item.emoji === 'OnIt',
+    ),
+  )
+  expect(run.fake.sent).toEqual([])
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'answer' && item.emoji === 'DONE',
+    ),
+  )
+  expect(run.fake.sent).toEqual([
+    { messageId: 'answer', text: 'A useful short answer' },
+  ])
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'answer', emoji: 'OnIt', removed: true },
+    { messageId: 'answer', emoji: 'DONE', removed: false },
+  ])
+})
+
+test('a passive run that writes text and then stays silent removes the marker', async () => {
+  const run = setup({
+    responses: [
+      fauxToolCall('feishu_skip_reply', {}, { text: 'I considered answering' }),
+      fauxText(''),
+    ],
+  })
+  await run.start()
+  run.fake.deliver(passive('discussed', 'colleagues discussing lunch'))
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'discussed' && item.removed,
+    ),
+  )
+  await idle(run)
+  expect(run.fake.sent).toEqual([])
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'discussed', emoji: 'OnIt', removed: true },
+  ])
+})
+
+test('a passive run that hands off to a topic removes the marker', async () => {
+  const answer = (req: { lastUserText: string }) =>
+    req.lastUserText.includes('Investigate the pricing question')
+      ? fauxText('topic answer')
+      : fauxText('')
+  const run = setup({
+    responses: [
+      fauxToolCall(
+        'feishu_start_topic',
+        { task: 'Investigate the pricing question' },
+        { text: 'I will take this to a topic.' },
+      ),
+      answer,
+      answer,
+    ],
+  })
+  await run.start()
+  run.fake.deliver(passive('handoff', 'what about pricing?'))
+  await until(() => run.fake.sent.length === 1)
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'handoff' && item.removed,
+    ),
+  )
+  await until(
+    () =>
+      !run.t.vela.session('feishu-oc_group').isRunning &&
+      !run.t.vela.session('feishu-oc_group-handoff').isRunning,
+  )
+  expect(run.fake.sent).toHaveLength(1)
+  expect(run.fake.sent[0]?.messageId).toBe('topic_handoff')
+  expect(run.fake.sent[0]?.text).toContain('topic answer')
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'handoff', emoji: 'OnIt', removed: true },
+  ])
+})
+
+test('a passive failure after the answer started leaves CrossMark', async () => {
+  const run = setup({
+    responses: [fauxStreamError('stream dropped', 'Partial answer')],
+  })
+  await run.start()
+  run.fake.deliver(passive('flaky', 'a question'))
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'flaky' && item.emoji === 'CrossMark',
+    ),
+  )
+  expect(run.fake.sent).toEqual([])
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'flaky', emoji: 'OnIt', removed: true },
+    { messageId: 'flaky', emoji: 'CrossMark', removed: false },
+  ])
+})
+
+test('an explicit mention still acknowledges at admission', async () => {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const run = setup({
+    responses: [fauxText('explicit answer')],
+    extensions: [
+      (api) => {
+        api.on('before_agent_start', async () => {
+          await held
+        })
+      },
+    ],
+  })
+  await run.start()
+  try {
+    run.fake.deliver(feishuEvent({ message_id: 'explicit' }))
+    await until(() =>
+      run.fake.reactions.some(
+        (item) => item.messageId === 'explicit' && item.emoji === 'OnIt',
+      ),
+    )
+    expect(run.t.model.calls).toEqual([])
+    expect(run.fake.sent).toEqual([])
+  } finally {
+    release()
+  }
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'explicit' && item.emoji === 'DONE',
+    ),
+  )
+  expect(run.fake.sent).toHaveLength(1)
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'explicit', emoji: 'OnIt', removed: true },
+    { messageId: 'explicit', emoji: 'DONE', removed: false },
+  ])
 })

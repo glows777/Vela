@@ -98,7 +98,8 @@ export interface ChannelRuntime {
   dispatch(sourceSessionId: string, message: IncomingMessage): void
 }
 
-export type ChannelOutcome = 'done' | 'failed' | 'stopped'
+/** `silent` removes a deferred passive marker without adding an outcome reaction. */
+export type ChannelOutcome = 'done' | 'failed' | 'stopped' | 'silent'
 
 /** Channel-local lifecycle updates; agent events retain their core shape. */
 export type ChannelFeedbackUpdate =
