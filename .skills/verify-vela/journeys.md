@@ -12,12 +12,12 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | list / read / bash | `list files`, `read a.txt`, `test bash` | `[FILE] a.txt`; the fixture text; `Hello from bash!` |
 | Parallel tools | `send "test parallel"`, `wait 'parallel-2'` | `list_directory` and two `bash` calls, no error |
 | Interrupt | `send "test loop"`, then `keys Escape` while `Esc to interrupt` shows | `Interrupted`, the editor takes input, `doctor` still OK |
-| Steer / queue | During `test loop`: `send "STEER"`; type text then `keys M-Enter` | `Steering:` / `Follow-up:` lines; the steer reaches the model after the current step; Esc puts queued text back in the editor |
+| Steer / queue | During `test loop`: `send "STEER"`; type text then `keys M-Enter` | `Steering:` / `Follow-up:` lines. `wait` does not return while `Esc to interrupt` is showing, so snap during the run. The steer reaches the model after the current step. Esc puts queued text back in the editor |
 | `!cmd` | `send '!echo HI'`, `wait '^ HI'` | `$ echo HI` and its output; `!!cmd` runs without sending |
 | Thinking level | `keys BTab` | The footer level changes (`medium` → `high`) |
 | Tool selection | `run $RUN t -t read_file -p "read a.txt"`; `-p "list files"` with the same flag | The read works; the list fails because the tool is off |
-| grep / find | `test grep`, `test find` | Need `rg` / `fd` on PATH, otherwise a clear "not installed" error |
-| CLI image / text attachments | `run $RUN image --mode json @/abs/shot.png "Describe this"`; repeat with `@~/shot.png`, screenshot narrow-space names, two images, BOM/empty text, a slash command, image-only input, and a missing path | Image content by header (also with a misleading extension), escaped absolute filename references in attachment order, BOM stripped and empty text skipped, attachments on the first prompt only; slash commands show an ignored-attachment notice; missing file exits 1 before a model request |
+| grep / find | `test grep`, `test find` | With `rg` and `fd` on PATH, `test grep` searches `src` and the seeded work directory reports that path was not found. `test find` reports no matches. Without those binaries, `VELA_OFFLINE=1` makes the tool say they are not installed |
+| CLI image / text attachments | `run $RUN image --mode json @/abs/shot.png "Describe this"`; repeat with `@~/shot.png`, screenshot narrow-space names, two images, BOM/empty text, a slash command, image-only input, and a missing path | Image content by header (also with a misleading extension). A PNG whose longest side is over 2000px is delivered as JPEG. A small PNG stays `image/png`. Escaped absolute filename references in attachment order, BOM stripped and empty text skipped, attachments on the first prompt only. Slash commands show an ignored-attachment notice. A missing file exits 1 before a model request |
 | TUI clipboard image / text | Copy a fixture image to an isolated system clipboard, `launch $RUN`, type a request, `keys $RUN C-v` (Windows: Alt+V), wait for the inserted path, then submit; faux model calls `read_file`. Repeat with multiline clipboard text and delayed reads | Private temp file contains the image, request carries tool image content, history shows `[image …]` without base64; text fallback inserts at the cursor without submitting; Enter/Alt+Enter remain independent of a pending read; ordinary bracketed text paste works; temp file removed on exit. Report mocked clipboard separately when a system clipboard is unavailable |
 | TUI image history | `launch $RUN @/abs/shot.png "Describe this"`, then quit and `launch $RUN -c` | Initial and resumed user history shows a short image placeholder, including image-only prompts; tool images also use placeholders; no base64 on screen |
 
@@ -63,7 +63,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 |---|---|---|
 | Extension tool | faux `hello-tool_greet`; `run … --mode json -e $PWD/examples/extensions/hello-tool.ts "x"` | `tool_execution_end` result `Hello, Liam!` |
 | Extension command | `run … -e $PWD/examples/extensions/todo-command.ts -p "/todo buy milk"` | `Added: buy milk` |
-| `--no-extensions` | The same faux run with `--no-extensions` | The tool is unavailable; built-ins (memory, web, mcp) are gone |
+| `--no-extensions` | The greet faux with `--mode json --no-extensions` and no `-e` | The tool is unavailable and the available-tools list has no built-ins. `-e` still loads beside this flag, so the hello-tool run is the wrong check |
 | Project trust | Put `.vela/extensions/x.ts` or `.skills/<name>/SKILL.md` in `work/` | `-p` skips it with a `[trust]` note on stderr; `--approve` loads it; the TUI asks `(y/N)` |
 | Skills | Trusted `.skills/demo/SKILL.md`, then `/skill` and `/skill:demo` | Listed with its description; `/context` counts skill tokens |
 | Context files | `AGENTS.md` in `work/` and `home/AGENTS.md` | Startup shows `[context]` with `AGENTS.md` and `$VELA_DIR/AGENTS.md`. `/status` lists the same paths after `Context files:`. `--no-context-files` shows neither. |
@@ -74,7 +74,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 |---|---|---|
 | MCP | `home/mcp.json` → `{"mcpServers":{"echo":{"command":"bun","args":["$PWD/test/fixtures/mcp-echo-server.ts"]}}}`; faux `tool_search` then `mcp__echo__echo` | `Loaded 1 tool`, then the echoed text |
 | Unconfigured RAG | `run $RUN p -p "hello"`; in the TUI, `/extensions` then `/rag` | Ordinary startup is quiet; the listing includes `/rag`; `/rag` explains missing settings without a model call or database |
-| memory | faux `memory` with `{"action":"save",…}` | `Saved to memory: …`; the file under `home/projects/*/memory/` |
+| memory | faux `memory` with `{"action":"save",…}`, then a second prompt in that `--mode json` run | `Saved to memory: …` and the file under `home/projects/*/memory/`. The second prompt's `message_start` events are the user text, then `custom.customType` `memory` with `display` false. That index is now the last user message |
 | web_fetch | Serve a page locally (`python3 -m http.server`), faux `web_fetch` with its URL | The page as Markdown |
 | Retry | `-p "test retry"` | `Retry succeeded!` after two 429s |
 | Provider error | faux `{"error":"400 Bad Request: …"}` | exit 1, the error on stderr |
@@ -90,7 +90,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Feishu topic handoff | Top-level @ "investigate …": the channel session calls `feishu_start_topic`; the topic session does the work | One topic opened; `OnIt` replaced by `DONE`; one progress card created and patched; the topic result @-mentions the requester |
 | Feishu topic replies without @ | Another member replies in the topic without mentioning the bot | The topic session answers and @-mentions that member; no new topic |
 | Feishu group workspace | The topic task writes a file | The file lands in `<dataDir>/channels/feishu-<chat>/workspace/`, not in the Vela cwd |
-| Feishu untagged top-level chatter | Unmentioned group message ("lunch at 12?") with the default `readUntagged` | The model may call `feishu_skip_reply`; nothing is sent |
+| Feishu untagged top-level chatter | Unmentioned group message ("lunch at 12?") with the default `readUntagged`. The script then sends a passive message the model answers in text | `feishu_skip_reply` sends nothing. Text after that tool can add `OnIt`, and the silent finish removes it with no `DONE`. A text answer that is sent gets `OnIt`, then `DONE` |
 | Feishu topic overview | Top-level @ "list topics" | `feishu_list_topics` returns the topic with requester and state from the durable directory |
 | Feishu routines | In the topic: @ "remind me in a minute" (`feishu_routines` create with a deployment-local `at`), then `!routines` without @; dispose before the due time, wait past it, start a new Vela on the same dataDir | Create returns the timezone and next local run; `!routines` lists it with zero model calls; after restart the reminder arrives once in the topic, @-mentions the creator, the model input says `late by …`, and `routines.json` no longer holds the one-off |
 | Feishu attachments | SDK with the Feishu extension and fake resource streams: deliver a DM image, a group image followed by @text, a file, traversal filename, a file above 20MB and audio | Image request data, four-image history bound, actual saved file and its absolute path, directory containment, too-large and unsupported replies. Feishu transport and provider remain fake |

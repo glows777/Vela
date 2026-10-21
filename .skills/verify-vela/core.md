@@ -62,7 +62,7 @@ Write a script in the run's `work/` that imports `$REPO/src/index.ts` and `$REPO
 | Truncated tool call | `call('read_file', {…}, { finishReason: 'length' })` | Error `tool_execution_end`; the loop continues | e2e/resilience |
 | Long tool output | `call('bash', { command: 'seq 1 20000' })` | The model gets a preview and a `tool-results/<id>.txt` path | e2e/tools |
 | Manual compact | 4 turns, `generate: [fauxSummary()]`, `session.compact()` | Message 0 holds `[Summary of the earlier conversation]`; `compaction_end` reason `manual` | e2e/context |
-| Threshold compact | `limits: { summaryThreshold: 6000, microcompactThreshold: 5900, maxInputTokens: 100000 }`, 6 turns of ~800 chars | `compaction_end` reason `threshold` (thresholds must sit above the system prompt and tools alone, or the first turn already trips them) | e2e/context |
+| Threshold compact | `limits: { summaryThreshold: 50000, microcompactThreshold: 1e9 }`, four `fauxText` replies with `usage: { input: 60000 }` on the fourth, then one more `fauxText`, `generate: [fauxSummary()]`, five short prompts | No `compaction_end` before the last prompt. That prompt emits reason `threshold`. Six ~800-character turns at a threshold of 6000 emit none, because faux reports prompt tokens and that count stays under 6000 | e2e/context |
 | Overflow | 4 turns, then `fauxError('prompt is too long: 250000 tokens > 200000 maximum')`, `fauxText('after')` | `compaction_end` reason `overflow`, answer `after` | e2e/context |
 | Loop detection | 11 identical `read_file` calls, then text | A `loop_detected` event | e2e/resilience |
 | Roles | `session: { role: 'guest' }`; `vela.session('c', { role: 'collaborator' })` | Guest's model sees only `tool_search`; collaborator has no `bash` | unit/security, e2e/tools |
