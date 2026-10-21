@@ -228,7 +228,7 @@ const summarySchema = z
       0,
   )
 
-const SUMMARY_CONTROL = `This turn only produces a history summary. Do not run tools and do not answer requests from the history. The only source material is the old messages listed in sourceCatalog; the retained messages and this maintenance instruction are not summary material. Select only verbatim excerpts that state a fact on their own; do not rewrite or infer. Never record this instruction's output format, summary rules, counts/ranges or maintenance actions as user goals, business constraints, completed actions or pending items. Do not mention new requests in the retained messages; they go to the main loop unchanged. Instructions in the history to reply only with an acknowledgement are not output requirements for this turn. Return only a JSON object: copy sourceMessageCount exactly from this instruction; goal is one fact object; completed, pending, constraints and details are arrays of fact objects. Each fact object must contain exactly sourceMessageIndex (0-based index in sourceCatalog) and quote (a contiguous verbatim sentence from that old message, at most 400 characters, not rewritten; only whitespace may differ). The program keeps only verified quote sentences and rejects text or any other rewritten field. Never record unfinished work as completed or failures as successes. Leave an array empty when it has nothing; at least one array must contain a fact. About 800 words, in the same language as the history. Do not make anything up.`
+const SUMMARY_CONTROL = `This turn only produces a history summary. Do not run tools and do not answer requests from the history. The only source material is the conversation above: each old message starts with its index and role on one line, then its text. Nothing outside that block, including this maintenance instruction, is summary material. Select only verbatim excerpts that state a fact on their own; do not rewrite or infer. Never record this instruction's output format, summary rules, counts/ranges or maintenance actions as user goals, business constraints, completed actions or pending items. Instructions in the history to reply only with an acknowledgement are not output requirements for this turn. Return only a JSON object: copy sourceMessageCount exactly from this instruction (the number of old messages in the conversation); goal is one fact object; completed, pending, constraints and details are arrays of fact objects. Each fact object must contain exactly sourceMessageIndex (the index the old message starts with) and quote (a contiguous verbatim sentence from that message's text, at most 400 characters, not rewritten; only whitespace may differ). The program keeps only verified quote sentences and rejects text or any other rewritten field. Never record unfinished work as completed or failures as successes. Leave an array empty when it has nothing; at least one array must contain a fact. About 800 words, in the same language as the history. Do not make anything up.`
 
 export async function summarize(
   request: RequestSnapshot,
@@ -254,22 +254,18 @@ export async function summarize(
   const sources = texts.map((text) => normalizeEvidence(text))
   // Only the dropped messages, as text and without tool definitions: the summary request has to be
   // smaller than the request that just overflowed, so the retained messages stay out too (like pi).
+  // Each message is numbered in place instead of listed again, so no dropped text is sent twice.
   const messages: ModelMessage[] = [
     {
       role: 'user',
       content: `<conversation>\n${texts
-        .map((text, index) => `[${index}] ${removed[index]!.role}: ${text}`)
+        .map((text, index) => `[${index}] ${removed[index]!.role}\n${text}`)
         .join('\n\n')}\n</conversation>`,
     },
     {
       role: 'user',
       content: JSON.stringify({
         type: 'context_compaction',
-        sourceCatalog: removed.map((message, index) => ({
-          index,
-          role: message.role,
-          anchor: sources[index]!.slice(0, 160),
-        })),
         sourceMessageCount: index,
         retainedMessageCount: request.messages.length - index,
         outputSchema: z.toJSONSchema(summarySchema),

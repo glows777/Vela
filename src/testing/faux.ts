@@ -9,6 +9,7 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4Usage,
 } from '@ai-sdk/provider'
+import { compactionSources, findConversation } from './compaction-request.ts'
 
 /**
  * Scripted faux model (the counterpart of pi's faux provider).
@@ -170,17 +171,20 @@ export const fauxSummary =
     const control = findCompactionControl(req.prompt)
     if (!control)
       throw new Error('faux: fauxSummary used on a non-compaction request')
-    const catalog = control.sourceCatalog.filter((s) => s.anchor.trim())
+    const conversation = findConversation(
+      req.prompt.filter((m) => m.role === 'user').map((m) => textOf(m.content)),
+    )
+    const sources = conversation ? compactionSources(conversation) : []
     const goal =
-      catalog.find((s) => s.index === pick.goal) ??
-      catalog.find((s) => s.role === 'user') ??
-      catalog[0]
+      sources.find((s) => s.index === pick.goal) ??
+      sources.find((s) => s.role === 'user') ??
+      sources[0]
     if (!goal) throw new Error('faux: compaction request has no sources')
-    const fact = (s: { index: number; anchor: string }) => ({
+    const fact = (s: { index: number; text: string }) => ({
       sourceMessageIndex: s.index,
-      quote: s.anchor.trim().slice(0, 400),
+      quote: s.text.trim().slice(0, 400),
     })
-    const rest = catalog.filter((s) => s !== goal).map(fact)
+    const rest = sources.filter((s) => s !== goal).map(fact)
     return {
       text: JSON.stringify({
         sourceMessageCount: control.sourceMessageCount,
@@ -496,12 +500,9 @@ function describeRequest(
   }
 }
 
-function findCompactionControl(prompt: LanguageModelV4Prompt):
-  | {
-      sourceMessageCount: number
-      sourceCatalog: { index: number; role: string; anchor: string }[]
-    }
-  | undefined {
+function findCompactionControl(
+  prompt: LanguageModelV4Prompt,
+): { sourceMessageCount: number } | undefined {
   for (let i = prompt.length - 1; i >= 0; i--) {
     const m = prompt[i]!
     if (m.role !== 'user') continue

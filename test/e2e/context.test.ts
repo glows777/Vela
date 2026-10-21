@@ -333,6 +333,33 @@ test('an overflow recovers by summarizing only the dropped messages, without too
   ])
 })
 
+test('the summary does not repeat the dropped text, so a long session of short turns can still recover', async () => {
+  const question = (i: number) => `Question ${i}: ${'Background. '.repeat(15)}`
+  const t = createTestVela({
+    limits: {
+      microcompactThreshold: 1e9,
+      summaryThreshold: 1e9,
+      maxInputTokens: 1e9,
+    },
+    responses: [
+      ...Array.from({ length: 40 }, (_, i) => fauxText(`Answer ${i}`)),
+      fauxText('fits now'),
+    ],
+    generate: [fauxSummary()],
+  })
+  for (let i = 0; i < 40; i++) await t.run(question(i))
+
+  t.model.maxRequestTokens = t.model.calls.at(-1)!.inputTokens - 1
+
+  await t.run(question(40))
+
+  expect(t.lastAssistantText()).toBe('fits now')
+  const rejected = t.model.calls.at(-3)!
+  const summary = t.model.calls.at(-2)!
+  expect(summary.tools).toEqual([])
+  expect(summary.inputTokens).toBeLessThan(rejected.inputTokens)
+})
+
 test('a second overflow in the same step fails the run with the provider error', async () => {
   const overflow = '400 prompt is too long: 213462 tokens > 200000 maximum'
   const t = createTestVela({

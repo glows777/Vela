@@ -149,9 +149,12 @@ test('summary sends only the dropped messages, under an explicit compaction scop
     'sourceMessageIndex',
     'quote',
   ])
-  expect(
-    control.sourceCatalog.map((source: { index: number }) => source.index),
-  ).toEqual([0, 1])
+  // The old messages are numbered in place, so their text is sent once
+  const conversation = JSON.stringify(request.prompt[1])
+  expect(conversation).toContain('[0] user\\nCheck alpha and beta')
+  expect(conversation).toContain('[1] assistant\\nalpha exit 0')
+  expect(conversation).not.toContain('[2]')
+  expect(conversation.match(/Check alpha and beta/g)).toHaveLength(1)
   expect(JSON.stringify(request.prompt)).toContain('validation failed')
   expect(request.tools).toEqual([])
   expect(result.messages.slice(1)).toEqual(messages.slice(2))
