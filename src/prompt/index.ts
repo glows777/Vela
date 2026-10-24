@@ -1,20 +1,7 @@
-import type { ToolResultStore } from '../session/tool-results.ts'
 import { type ContextFile, renderContextFiles } from './context-files.ts'
 import type { PipeFn } from './pipeline.ts'
 
 export * from './pipeline.ts'
-
-/**
- * Without results, uses the current session's tool result store from PromptContext. Guests get none: they
- * have no file or shell tools to read the history with, and the guide holds absolute paths on this machine.
- */
-export function toolHistoryGuide(results?: ToolResultStore): PipeFn {
-  // No counters/timestamps in the system prefix; only the session's stable path/schema.
-  return (ctx) =>
-    ctx.role === 'guest'
-      ? null
-      : ((results ?? ctx.toolResults)?.readingGuide() ?? null)
-}
 
 /**
  * Core system prompt (same structure as pi: an intro paragraph + <rules>; `<cwd>` is its own section near the end).

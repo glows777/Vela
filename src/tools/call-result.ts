@@ -6,7 +6,7 @@ import {
 } from '../session/tool-results.ts'
 import { ToolExecutionResult } from './types.ts'
 
-const DEFAULT_MAX_RESULT_CHARS = 3000 // Beyond this, the full result is saved and only a preview returned
+const DEFAULT_MAX_RESULT_CHARS = 50 * 1024 // Beyond this, the full result is saved and only a preview returned
 
 /** Persist a completed call and build the model-facing preview before post hooks. */
 export async function prepareCallResult({
@@ -125,7 +125,9 @@ export async function prepareCallResult({
         ? previewToolContent(raw.content, maxChars, stored)
         : raw.content
       : stored
-        ? stored.preview
+        ? raw instanceof StoredToolResult
+          ? stored.preview
+          : `${stored.preview}\n\n${truncationNote(stored)}`
         : text
   return { output, execution, stored }
 }
@@ -146,33 +148,25 @@ function previewToolContent(
     ),
     {
       type: 'text',
-      text: `Full text saved at: ${stored.path}\n${stored.read}`,
+      text: truncationNote(stored),
     },
   ]
+}
+
+function truncationNote(stored: StoredToolResult): string {
+  return `[Full output: ${stored.path}; use read_file with offset to read the rest.]`
 }
 
 function truncateResult(text: string, maxChars: number, compact = false) {
   if (text.length <= maxChars) return text
 
-  // In ordered content, count the ellipsis in the budget and share one recovery note.
   const previewChars = compact ? Math.max(0, maxChars - 1) : maxChars
-  let headSize = Math.floor(previewChars * 0.6)
-  const tailSize = previewChars - headSize
+  let headSize = previewChars
   if (
     text.charCodeAt(headSize - 1) >= 0xd800 &&
     text.charCodeAt(headSize - 1) <= 0xdbff
   )
     headSize--
-  let tailStart = text.length - tailSize
-  if (
-    text.charCodeAt(tailStart) >= 0xdc00 &&
-    text.charCodeAt(tailStart) <= 0xdfff
-  )
-    tailStart++
   const head = text.slice(0, headSize)
-  const tail = text.slice(tailStart)
-  if (compact) return maxChars > 0 ? `${head}…${tail}` : ''
-  const dropped = text.length - head.length - tail.length
-
-  return `${head}\n\n[preview: first ${head.length} and last ${tail.length} of ${text.length} UTF-16 code units; ${dropped} omitted here, full output saved]\n\n${tail}`
+  return compact && maxChars > 0 ? `${head}…` : head
 }

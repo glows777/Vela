@@ -133,7 +133,6 @@ Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings
 
 - Timeout: none by default, as in pi; the model passes `timeout` for commands that may hang. On timeout or abort the whole process group is killed.
 - Before running, every command goes through a classifier: dangerous commands are rejected, and moderate-risk commands run but emit a `security_warning` event. See [Security](security.md).
-- A post-tool hook prefixes the output with an ISO timestamp.
 
 ## How tools run
 
@@ -156,11 +155,12 @@ Each tool has a result limit in characters:
 | `read_file` | one page (50KB) plus its continuation footer when needed, so a page is never saved again |
 | `grep`, `find` | 12,000 |
 | `bash` | its own tail preview, see above |
-| everything else | 3,000 (default) |
+| `web_fetch`, `web_search`, default | 51,200 |
+| MCP tools | 20,000 |
 
-When a result is longer than its limit, Vela saves the full result to a file under the session's data directory (`sessions/<id>/tool-results/`) and gives the model a preview instead: the first 60% and last 40% of the limit, joined by a line that says how much was omitted and that the full output was saved. The model can read the file with `read_file`.
+When a result is longer than its limit, Vela saves the full result to a file under the session's data directory (`sessions/<id>/tool-results/`) and gives the model a preview instead: the head up to the limit, followed by one line giving the full-output path and explaining that `read_file` with `offset` reads the rest. Bash retains its tail preview and adds a path only when truncated. Complete bash output is plain text with no timestamp or JSON wrapper.
 
-Every call and result is also recorded in a tool history log (JSONL) in the session's directory. The system prompt tells the model where the log is and how to query it, so it can find an earlier result after compaction.
+Every call and result is also recorded in a tool history log (JSONL) in the session's directory. The compaction summary keeps one line with the earlier-output snapshot location.
 
 ### Microcompaction
 

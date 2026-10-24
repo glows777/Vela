@@ -358,7 +358,7 @@ export async function summarize(
   const snapshot = await results.history.snapshot(request.abortSignal)
   const summary =
     summaryText +
-    `\n\n${results.history.readingGuide(snapshot.sequence, snapshot.path)}`
+    `\n\nEarlier tool output: ${snapshot.path} (through seq ${snapshot.sequence}).`
   return {
     messages: [
       {

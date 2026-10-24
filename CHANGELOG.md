@@ -10,6 +10,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **Tool results sent to the model are plain text.** Bash no longer adds a timestamp or a `StoredToolResult` JSON wrapper; only truncated output includes a full-output path. Default and web result limits are now 50K characters, with head previews for generic/web results and the existing bash tail. The system history guide is removed; compaction keeps the earlier-output location. Result files and crash-recovery history are retained, and old `StoredToolResult` sessions still load. SDK consumers reading tool messages should handle text results instead of expecting `StoredToolResult`.
+
 - **Memory and knowledge-base context arrives as messages after the cached prefix.** The memory index and the RAG source list are appended when they change instead of being rebuilt into the system prompt; the fixed memory usage rules stay there. Saving a memory, deleting entries or ingesting a document no longer rewrites the cached prompt prefix. Loading a deferred tool with `tool_search` still costs one cache miss.
 
 ### Fixed
