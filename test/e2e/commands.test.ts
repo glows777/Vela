@@ -50,7 +50,6 @@ test('/status reports the session, model and context usage', async () => {
   expect(plain).toContain(`Cwd: ${t.vela.cwd}`)
   expect(plain).toContain(`Model: ${t.session.modelInfo.ref}`)
   expect(plain).toContain(`Thinking: ${t.session.thinkingLevel}`)
-  expect(plain).toContain('Role: owner')
   expect(plain).toContain('Messages: 2')
   expect(plain).toMatch(
     new RegExp(`Context: .+ tokens \\(${t.session.usage.percent}% of .+\\)`),
@@ -74,7 +73,6 @@ test('/status on a fresh session shows identity and omits usage totals', async (
   expect(output).not.toContain(`Path: ${destination}`)
   expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
   expect(output).toContain('Thinking: low')
-  expect(output).toContain('Role: owner')
   expect(output).toContain('Channel: feishu')
   expect(output).toContain('Messages: 0')
   expect(output).toContain('Context:')
@@ -428,8 +426,6 @@ test('a message from a channel runs through the same model and tools, and the re
           onMessage: (handler) => {
             deliver = handler
           },
-          // This sender is the owner and can read files; enabled chats also default to owner
-          roleFor: () => 'owner',
         }),
     ],
   })

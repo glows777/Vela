@@ -126,7 +126,7 @@ vela -c
 - [Built-in extensions](built-in-extensions.md): memory, knowledge base, web, Feishu.
 - [Extensions](extensions.md): add your own tools, commands, providers and channels.
 - [SDK](sdk.md): embed Vela in your own program.
-- [Security](security.md): roles, permissions and what Vela does not protect against.
+- [Security](security.md): permissions and what Vela does not protect against.
 
 ## Uninstall
 

@@ -1,6 +1,6 @@
 import type { VelaEvent } from '../agent/events.ts'
 import type { ImageContent } from '../messages.ts'
-import type { PermissionRules, Role } from '../security/roles.ts'
+import type { PermissionRules } from '../security/permissions.ts'
 
 export interface IncomingMessage {
   /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
@@ -168,10 +168,4 @@ export interface ChannelDefinition {
     options: { acknowledge: boolean },
     // biome-ignore lint/suspicious/noConfusingVoidType: public shape: `undefined` would reject channel implementations whose async startRun returns nothing (Promise<void>)
   ) => Promise<ChannelRunFeedback | void>
-
-  /**
-   * The Vela role for the enabled chat. Defaults to owner: a channel must enforce
-   * its own chat enablement boundary before delivering messages.
-   */
-  roleFor?: (msg: IncomingMessage) => Role
 }

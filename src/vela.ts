@@ -95,7 +95,7 @@ export interface VelaOptions {
   /** Prompt template directories or `.md` files (`/<name> args` expands the template); first name wins. Default `<cwd>/.vela/prompts` */
   promptTemplateDirs?: string[]
   /**
-   * AGENTS.md / CLAUDE.md files put into the system prompt (owner and collaborator sessions). Default: found from cwd
+   * AGENTS.md / CLAUDE.md files put into the system prompt. Default: found from cwd
    * up to the filesystem root like pi (`loadContextFiles({ cwd })`; the CLI also passes `~/.vela/AGENTS.md`). `false` loads none.
    */
   contextFiles?: false | ContextFile[]
@@ -210,7 +210,7 @@ export function velaInternals(vela: Vela): VelaInternals {
 /**
  * Assembles a Vela: core tools (files, search, bash), hooks, prompt, skills, extensions and channels.
  * Conversations are opened with `vela.session(id)`; one Vela can have several sessions open at once.
- * They share tools and extensions, and each has its own message history, compaction, usage, role and run lock.
+ * They share tools and extensions, and each has its own message history, compaction, usage and run lock.
  */
 export function createVela(options: VelaOptions = {}): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())

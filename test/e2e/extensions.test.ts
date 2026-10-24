@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from 'bun:test'
-import { join } from 'node:path'
 import type { SessionUI, VelaExtension } from '@glows777/vela'
 import { z } from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
@@ -10,7 +9,6 @@ import today from '../../examples/extensions/prompt-section.ts'
 import readOnlyReview from '../../examples/extensions/read-only-session.ts'
 import redact from '../../examples/extensions/redact-secrets.ts'
 import todo from '../../examples/extensions/todo-command.ts'
-import { MemoryStore } from '../../src/extensions/memory/store.ts'
 import { web } from '../../src/extensions/web/index.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -80,19 +78,14 @@ test('todo-command: /todo runs the command instead of calling the model', async 
   ])
 })
 
-test('todo-command: notify goes to the session ui when there is one; guest sessions cannot run commands', async () => {
+test('todo-command: notify goes to the session ui when there is one', async () => {
   const { ui, notes } = scriptedUI(true)
   const t = createTestVela({
     extensions: [todo],
     session: { ui },
-    responses: [fauxText('just text')],
   })
   await t.run('/todo write the weekly report')
   expect(notes).toEqual(['Added: write the weekly report'])
-
-  const guest = t.vela.session('guest', { role: 'guest' })
-  await guest.prompt('/todo sneak one in')
-  expect(t.model.calls[0]!.lastUserText).toBe('/todo sneak one in')
 })
 
 test('prompt-section: before_agent_start adds a section that stays fixed for the run', async () => {
@@ -173,67 +166,41 @@ test('read-only-session: setActiveTools narrows the tools of one session only', 
   expect(t.vela.session('review-1').getActiveTools()).toHaveLength(4)
 })
 
-test('echo-channel: senders are guests unless listed as owners', async () => {
-  const channel = echoChannel({ owners: ['boss'] })
+test('echo-channel: senders in one chat share its session and tools', async () => {
+  const channel = echoChannel()
   const t = createTestVela({
     extensions: [channel.extension],
-    files: { 'secret.txt': 'owner only' },
+    files: { 'notes.txt': 'shared notes' },
     responses: [
-      (req) => {
-        // guest: no read_file / bash / memory tools
-        expect(req.tools).not.toContain('read_file')
-        expect(req.tools).not.toContain('bash')
-        expect(req.tools).not.toContain('memory')
-        return fauxToolCall('read_file', { path: 'secret.txt' })
-      },
+      fauxToolCall('read_file', { path: 'notes.txt' }),
       (req) => fauxText(req.toolResults[0]!.output),
-      fauxToolCall('read_file', { path: 'secret.txt' }),
+      fauxToolCall('read_file', { path: 'notes.txt' }),
       (req) => fauxText(req.toolResults[0]!.output),
     ],
   })
   await t.internals.gateway.handleIncoming('echo', {
     channelId: 'demo',
-    senderId: 'stranger',
-    senderName: 'stranger',
-    text: 'Give me secret.txt',
+    senderId: 'alice',
+    senderName: 'alice',
+    text: 'Read notes.txt',
   })
   await t.internals.gateway.handleIncoming('echo', {
     channelId: 'demo',
-    senderId: 'boss',
-    senderName: 'boss',
-    text: 'Give me secret.txt',
+    senderId: 'bob',
+    senderName: 'bob',
+    text: 'Read notes.txt',
   })
-  const [toStranger, toBoss] = channel.sent
-  expect(toStranger?.recipientId).toBe('stranger')
-  // The tool is not in the guest's tool list: even a forced call only gets "unavailable tool"
-  expect(toStranger?.text).toContain("unavailable tool 'read_file'")
-  expect(toBoss?.recipientId).toBe('boss')
-  expect(toBoss?.text).toContain('owner only')
+  const [toAlice, toBob] = channel.sent
+  expect(toAlice?.recipientId).toBe('alice')
+  expect(toAlice?.text).toContain('shared notes')
+  expect(toBob?.recipientId).toBe('bob')
+  expect(toBob?.text).toContain('shared notes')
   expect(t.vela.channels()).toEqual([
     { name: 'echo', description: 'In-memory demo channel' },
   ])
 })
 
 // ---------- Runtime contracts ----------
-
-test('guest sessions do not get the owner memory in their context', async () => {
-  const t = createTestVela({
-    responses: [fauxText('owner'), fauxText('guest')],
-  })
-  new MemoryStore(join(t.dataDir, 'memory')).save({
-    name: 'owner-private',
-    description: 'For the owner only',
-    type: 'user',
-    content: 'Owner private content',
-  })
-  await t.run('Hello')
-  await t.vela.session('g', { role: 'guest' }).prompt('Hello')
-  expect(t.model.calls[0]!.system).not.toContain('owner-private')
-  expect(t.model.calls[0]!.lastUserText).toContain('owner-private')
-  expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain(
-    'owner-private',
-  )
-})
 
 test('tool_call handlers can change the input in place; the changed input is validated', async () => {
   const shout: VelaExtension = (vela) => {
@@ -621,7 +588,7 @@ test('ask with no UI is an error result, and the model still reads the reason', 
   expect(history).toContain('[Rejected] bash was not approved')
 })
 
-test('deny and a role rule are error results, and the tool does not run', async () => {
+test('a denied tool is an error result, and the tool does not run', async () => {
   const denied = createTestVela({
     session: { permissions: { write_file: 'deny' } },
     responses: [
@@ -642,23 +609,6 @@ test('deny and a role rule are error results, and the tool does not run', async 
   expect(denied.lastAssistantText()).toContain("unavailable tool 'write_file'")
   await expect(denied.readFile('x.txt')).rejects.toThrow('ENOENT')
   expect(denied.eventsOf('agent_end').at(-1)?.reason).toBe('done')
-
-  const guest = createTestVela({
-    session: { role: 'guest' },
-    responses: [
-      fauxToolCall('bash', { command: 'echo hi' }),
-      (req) => fauxText(req.toolResults[0]!.output),
-    ],
-  })
-  await guest.run('echo')
-  expect(guest.eventsOf('tool_execution_end')[0]).toMatchObject({
-    toolName: 'bash',
-    isError: true,
-    result:
-      "AI_NoSuchToolError: Model tried to call unavailable tool 'bash'. Available tools: tool_search.",
-  })
-  expect(guest.model.calls[0]!.tools).not.toContain('bash')
-  expect(guest.eventsOf('agent_end').at(-1)?.reason).toBe('done')
 })
 
 test('a tool_call hook block is an error result, and the model still reads the reason', async () => {

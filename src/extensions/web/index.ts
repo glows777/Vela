@@ -12,7 +12,6 @@ export interface WebOptions {
 /**
  * Web tools: `web_fetch` fetches a page as Markdown; `web_search` is added when a search key is given.
  * Options not passed are read from the config section (`extensionConfig.web`).
- * A guest session can use web_search but not web_fetch. A channel chat defaults to owner.
  */
 export function web(options: WebOptions = {}): VelaExtension {
   return function web(vela) {
