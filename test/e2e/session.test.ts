@@ -270,5 +270,9 @@ test('prompt cache simulation: a stable system prompt is read from cache on the 
   await t.run('2')
   const usage = t.eventsOf('usage').map((e) => e.usage)
   expect(usage[0]!.cacheWriteTokens).toBeGreaterThan(0)
-  expect(usage[1]!.cacheReadTokens).toBe(usage[0]!.cacheWriteTokens)
+  expect(t.model.calls[1]!.system).toBe(t.model.calls[0]!.system)
+  // The closing JSON delimiters of the first request are outside the shared prefix.
+  expect(
+    Math.abs(usage[1]!.cacheReadTokens - usage[0]!.cacheWriteTokens),
+  ).toBeLessThanOrEqual(1)
 })

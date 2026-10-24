@@ -108,7 +108,7 @@ test('AGENTS.md and skills go into the system prompt in pi order; guests get nei
   expect(guestSystem).not.toContain(t.cwd)
   expect(guestSystem).not.toContain(t.vela.dataDir)
   expect(guestSystem).not.toContain('[Tool call history]')
-  expect(system).toContain('[Tool call history]')
+  expect(system).not.toContain('[Tool call history]')
   // Guests can't run skills or templates either: the text goes to the model as typed
   t.model.push(fauxText('hi'))
   await guest.prompt('/skill:review')
