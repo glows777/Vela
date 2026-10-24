@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import z from 'zod'
-import { toolResultOutputToText } from '../../src/context/tool-result-output.ts'
 import { web } from '../../src/extensions/web/index.ts'
 import { fauxSummary, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -159,6 +158,7 @@ test('a pre-change StoredToolResult session resumes with its original result tex
   const first = createTestVela({
     responses: [
       fauxToolCall('bash', { command: 'echo legacy' }),
+      fauxToolCall('bash', { command: "printf 'failed\\n'; exit 7" }),
       fauxText('done'),
     ],
   })
@@ -182,7 +182,11 @@ test('a pre-change StoredToolResult session resumes with its original result tex
     .split('\n')
     .map((line) => JSON.parse(line))
   for (const entry of entries)
-    if (entry.type === 'message' && entry.message.role === 'tool')
+    if (
+      entry.type === 'message' &&
+      entry.message.role === 'tool' &&
+      entry.message.content[0].output.type === 'text'
+    )
       entry.message.content[0].output = { type: 'json', value: legacy }
   writeFileSync(
     saved,
@@ -192,11 +196,15 @@ test('a pre-change StoredToolResult session resumes with its original result tex
     cwd: first.cwd,
     responses: [
       (req) => {
-        const output = req.prompt
+        const outputs = req.prompt
           .flatMap((m) => (m.role === 'tool' ? m.content : []))
-          .find((p) => p.type === 'tool-result')!.output
-        expect(toolResultOutputToText(output)).toBe('legacy\n')
-        expect(JSON.stringify(output)).toContain('legacy')
+          .filter((p) => p.type === 'tool-result')
+          .map((p) => p.output)
+        expect(outputs[0]).toEqual({ type: 'text', value: 'legacy\n' })
+        expect(outputs[1]).toEqual({
+          type: 'error-text',
+          value: 'failed\n\n\nCommand exited with code 7',
+        })
         return fauxText('remembered')
       },
     ],
@@ -204,6 +212,11 @@ test('a pre-change StoredToolResult session resumes with its original result tex
   expect(await second.session.resume()).toBe(true)
   await second.run('Remember the command output')
   expect(second.lastAssistantText()).toBe('remembered')
+  const savedResult = second.messages
+    .flatMap((m) => (m.role === 'tool' ? m.content : []))
+    .find((p) => p.type === 'tool-result')!.output
+  expect(savedResult).toEqual({ type: 'json', value: legacy })
+  expect(readFileSync(saved, 'utf8')).toContain(JSON.stringify(legacy))
 })
 
 test('compaction keeps the earlier-output snapshot location without the history guide', async () => {

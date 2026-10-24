@@ -7,6 +7,7 @@ import {
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
 import { describeModel } from '../models/index.ts'
+import { getStoredResult } from '../session/tool-results.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import { withPromptCache } from './cache.ts'
@@ -182,17 +183,34 @@ export const agentLoop = async ({
         shouldBreak = false
         loopWarning = undefined
         try {
+          const modelMessages = toModelMessages(
+            requestMessages,
+            supportsImages,
+            typeof model !== 'string' && model.provider.endsWith('.chat'),
+          )
+          for (const message of modelMessages) {
+            if (message.role !== 'tool') continue
+            for (const part of message.content) {
+              if (part.type !== 'tool-result') continue
+              const stored = getStoredResult(part.output)
+              if (stored)
+                part.output = {
+                  type: 'text',
+                  value: stored.preview.includes(
+                    '[tool result preview omitted; original available at path]',
+                  )
+                    ? `${stored.preview}\n\n[Full output: ${stored.path}; use read_file with offset to read the rest.]`
+                    : stored.preview,
+                }
+            }
+          }
           const result = streamText({
             model,
             // Messages are copied here, so compaction or an abort never sees cache markers in history
             ...withPromptCache({
               system: inferenceSystem,
               tools: request.tools,
-              messages: toModelMessages(
-                requestMessages,
-                supportsImages,
-                typeof model !== 'string' && model.provider.endsWith('.chat'),
-              ),
+              messages: modelMessages,
             }),
             maxRetries: 0, // No retries inside streamText; the loop below handles retries
             ...(reasoning ? { reasoning } : {}),
