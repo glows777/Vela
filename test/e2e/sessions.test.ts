@@ -142,8 +142,9 @@ test('a resumed session declares deferred tools whose tool_search result was off
     responses: [
       (req) => {
         expect(req.tools).toEqual(expect.arrayContaining(names))
-        return fauxText('Still there')
+        return fauxToolCall(names.at(-1)!, { id: 'resumed' })
       },
+      fauxText('Still there'),
     ],
   })
   for (const tool of lookups) second.internals.registry.register(tool)
@@ -152,6 +153,20 @@ test('a resumed session declares deferred tools whose tool_search result was off
   await second.run('Use the lookup tools')
 
   expect(second.lastAssistantText()).toBe('Still there')
+
+  // A new faux provider restarts its call IDs; a later lookup can share the search's SDK ID.
+  const third = createTestVela({
+    cwd: first.cwd,
+    responses: [
+      (req) => {
+        expect(req.tools).toEqual(expect.arrayContaining(names))
+        return fauxText('Still loaded after another restart')
+      },
+    ],
+  })
+  for (const tool of lookups) third.internals.registry.register(tool)
+  expect(await third.session.resume()).toBe(true)
+  await third.run('Keep using the loaded tools')
 })
 
 test('tools discovered with tool_search are only active in the session that searched', async () => {

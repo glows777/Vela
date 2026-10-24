@@ -191,10 +191,10 @@ export class SessionStore {
         if (part.type !== 'tool-result' || part.toolName !== 'tool_search')
           continue
         if (part.output.type === 'text') {
-          const result = await this.results.history.completed(part.toolCallId)
-          const text = result?.outputPath
-            ? await readFile(result.outputPath, 'utf8')
-            : part.output.value
+          const path = part.output.value.match(
+            /\n\n\[Full output: (.+); use read_file with offset to read the rest\.\]$/,
+          )?.[1]
+          const text = path ? await readFile(path, 'utf8') : part.output.value
           names.push(...loadedToolNames(text))
           continue
         }
