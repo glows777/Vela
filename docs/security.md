@@ -8,21 +8,21 @@ This page describes what Vela protects and what it does not. To report a vulnera
 
 | Who | Trusted? | What they can do |
 |---|---|---|
-| The user running `vela` (owner) | Yes | Everything the operating-system user can do, through the model's tool calls |
+| The user running `vela` | Yes | Everything the operating-system user can do, through the model's tool calls |
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
 | Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
-| `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt of owner and collaborator sessions |
-| Members of an enabled Feishu chat | Yes, all members | Full owner access: bash, files, memory and extension tools |
+| `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt |
+| Members of an enabled Feishu chat | Yes, all members | Full access: bash, files, memory and extension tools |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
 
-Feishu enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with owner access. This is not a sandbox, a per-member boundary, or protection against extensions or the model acting for an owner.
+Feishu enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with the same access as the user running Vela. This is not a sandbox, a per-member boundary, or protection against extensions or the model acting for that user.
 
 ## Tools run as you
 
 The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `grep`, `find`, `bash`) run in the Vela process with your user's permissions. See [Tools](tools.md).
 
 - The working directory is where relative paths resolve and where `bash` starts. It is not a jail: file tools accept absolute paths and `..`, and `bash` can reach anything your user can.
-- Before running, `bash` commands are checked against a short list of dangerous patterns (`rm -rf`, `sudo`, `mkfs`, `curl ... | sh`, `eval`, writes to `/etc` or disk devices, and a few others). Matches are rejected for every role. Medium-risk commands (`rm`, `mv`, `chmod`, `kill`, `git push`, `git reset --hard`, ...) run and emit a `security_warning` event. This is a heuristic to catch mistakes, not a security control; it is easy to get around.
+- Before running, `bash` commands are checked against a short list of dangerous patterns (`rm -rf`, `sudo`, `mkfs`, `curl ... | sh`, `eval`, writes to `/etc` or disk devices, and a few others). Matches are rejected for every session. Medium-risk commands (`rm`, `mv`, `chmod`, `kill`, `git push`, `git reset --hard`, ...) run and emit a `security_warning` event. This is a heuristic to catch mistakes, not a security control; it is easy to get around.
 - Vela does not ask before each tool call unless you set a session permission to `ask` (see [Per-session permissions](#per-session-permissions)) or load an extension that asks.
 
 To contain what Vela can do, run it as a dedicated user, or inside a container or virtual machine with only the files, credentials and network access the task needs.
@@ -31,7 +31,7 @@ To contain what Vela can do, run it as a dedicated user, or inside a container o
 
 An extension is a function that runs inside the Vela process. It can read and write any file, start processes, open network connections, see every prompt, message and tool call, change tool input and output, and register tools that any session can call. Vela does not sandbox extensions and does not try to; this is by design, as in pi.
 
-Session roles and permissions do not restrict extension code. They only decide which tools a session's model can call and whether that session can run extension commands.
+Session permissions do not restrict extension code. They only decide which tools a session's model can call.
 
 Review an extension before you load it, and load only extensions from sources you trust. The CLI loads extensions from `~/.vela/extensions/`, from settings, from `-e`, and from the project's `.vela/extensions/` once the project is trusted. See [Extensions](extensions.md).
 
@@ -43,39 +43,23 @@ Interactive mode asks once per project and saves the answer in `~/.vela/trust.js
 
 Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model.
 
-## Core SDK session roles
+## Channels and permissions
 
-Every session has a role. The role decides which tools the session's model can call.
-
-| Role | Tools | Extension commands | Owner's memory |
-|---|---|---|---|
-| `owner` | All | Yes | Injected into the system prompt; `memory` tool available |
-| `collaborator` | All except `bash` | No | Injected into the system prompt; `memory` tool available |
-| `guest` | Only `rag_search`, `web_search` and `tool_search` | No | Not injected; no `memory` tool |
-
-A guest has no file, shell or memory tools and no extension tools: extension tool names carry an `<extension>_` prefix, so only an extension named `rag` or `web` can register `rag_search` and `web_search`. Don't load third-party extensions with those names. A guest's system prompt does not include the file rules, the working directory, `AGENTS.md` / `CLAUDE.md` or the skills list, and `/skill:<name>` and prompt templates are not expanded for guests. The appended system prompt (`APPEND_SYSTEM.md`, `--append-system-prompt`, `appendSystemPrompt`) is the owner's own text and goes to every role, guests included, so keep anything a guest shouldn't see out of it. A tool the role denies is left out of the tool list, and a call to it is rejected and recorded in the tool history.
-
-Note what each role can still reach:
-
-- A `collaborator` can read and write any file the Vela process can, sees the owner's memory index in its context and can read and change memories with the `memory` tool, and can call extension tools, MCP server tools included.
-- A `guest` cannot use MCP server tools: they are extension tools (`mcp__<server>__<tool>`), and `tool_search` does not find tools the role denies.
-- A `guest` can search the knowledge base with `rag_search`. Do not index private documents if untrusted SDK guests can use it.
-
-The terminal session is `owner`. In the SDK, `vela.session(id, { role })` sets the role (default `owner`). In interactive mode, `/role [owner|collaborator|guest]` shows or changes the current session's role, which is useful for testing the SDK role restrictions.
+There are no roles (like pi): every session has the same tools, prompt and commands. A channel's enabled-chat list is its trust boundary.
 
 ### Channel senders
 
 Feishu accepts only chats listed in `extensionConfig.feishu.chats`, plus direct chats from the open_ids in `owners` (or `FEISHU_OWNERS`). Unlisted groups and DMs are ignored, even when an owner speaks in an unlisted group. Empty `chats` means owners' DMs only.
 
-**Everyone in an enabled chat is an owner.** They share one session and its history, and can ask the agent to read/write files, run bash, access memory and use extension/MCP tools. Group members added later inherit this access. Enable only chats whose entire membership you trust, and restrict what the operating-system account can reach. Group @-mention gating controls when the bot runs; it is not a tool-permission boundary. Earlier group messages are sent to the model as context when someone mentions the bot.
+**Everyone in an enabled chat shares one session and its full access.** They share its history, and can ask the agent to read/write files, run bash, access memory and use extension/MCP tools. Group members added later inherit this access. Enable only chats whose entire membership you trust, and restrict what the operating-system account can reach. Group @-mention gating controls when the bot runs; it is not a tool-permission boundary. Earlier group messages are sent to the model as context when someone mentions the bot.
 
 Channel ids now omit the sender id. Old per-sender sessions are not automatically combined into shared sessions; see [migration](channels.md#migration). Different chats have separate transcripts but still share the same machine, tools, memory and extensions.
 
-The core SDK role system remains available through `vela.session(id, { role })`; the built-in Feishu channel no longer creates guests. Custom channels default to owner and must enforce their boundary before delivering messages. A custom `roleFor` can restrict tools but cannot hide earlier turns in a shared chat transcript.
+Every sender in a chat gets the same session and the same tools. A custom channel must enforce its own enablement boundary before delivering messages; there is no per-sender restriction, and it cannot hide earlier turns in a shared chat transcript.
 
 ### Per-session permissions
 
-The SDK can layer tool rules over a session's role. The role is the upper bound; session rules can only tighten it:
+The SDK sets tool rules per session; a tool without a rule is allowed:
 
 ```ts
 const session = vela.session('ci', { permissions: { bash: 'ask', write_file: 'deny' } })
@@ -87,13 +71,13 @@ const session = vela.session('ci', { permissions: { bash: 'ask', write_file: 'de
 | `deny` | The tool is not offered to the model, and calls are rejected |
 | `ask` | The session's `ui.confirm` is asked first, after extension `tool_call` handlers have run (so it sees the final input). With no UI the call is rejected |
 
-Keys are tool names, or `*` for all other tools; an exact name beats `*`. `ask` and `deny` apply to tools the role allows, while `allow` on a tool the role denies has no effect: `vela.session(id, { role: 'guest', permissions: { bash: 'allow' } })` still has no `bash`. `vela.session(id, { tools })` and `session.setActiveTools()` further limit the tools to a list and cannot add tools the role denies either. The same holds when the role changes later (`session.role = ...`, `/role`, or a channel's `roleFor`). See [SDK](sdk.md).
+Keys are tool names, or `*` for all other tools; an exact name beats `*`. `vela.session(id, { tools })` and `session.setActiveTools()` further limit the tools to a list. See [SDK](sdk.md).
 
 ## Prompt injection
 
 The model reads text from many places: files, command output, web pages from the `web` extension, knowledge base results, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
 
-SDK guest roles limit direct tool access because a guest model has no tools that touch the machine. Enabled Feishu chats have owner access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts)).
+Enabled Feishu chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts)).
 
 ## Secrets on disk
 
@@ -118,7 +102,7 @@ Review sessions and recordings before you share them. Keep API keys out of confi
 - Use version control or backups before larger changes.
 - Give Vela only the credentials it needs, and prefer short-lived, narrowly scoped ones.
 - Review extensions before loading them and trust only projects you know.
-- Enable only Feishu chats whose entire membership you trust with bash and files. Use separate restricted SDK sessions when serving untrusted people, and keep private data out of the knowledge base when guests can reach it.
+- Enable only Feishu chats whose entire membership you trust with bash and files. Use separate restricted SDK sessions (`tools` / `permissions`) when serving untrusted people, and keep private data out of the knowledge base when those people can reach it.
 - Use `permissions: { bash: 'ask' }` or a confirming extension for sessions where a person should approve commands.
 
 ## Reporting a vulnerability

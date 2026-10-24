@@ -39,7 +39,7 @@ async function run(args: string[]) {
 const sdkExamples: [file: string, expected: string][] = [
   ['01-minimal.ts', 'messages: 2'],
   ['02-events.ts', '[agent_settled]'],
-  ['03-multi-session.ts', 'bob: role=guest'],
+  ['03-multi-session.ts', 'bob: 2 messages, 1 from the user'],
   ['04-custom-storage.ts', 'answer: You are Ada.'],
 ]
 
