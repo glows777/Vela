@@ -191,12 +191,16 @@ export class SessionStore {
         if (part.type !== 'tool-result' || part.toolName !== 'tool_search')
           continue
         if (part.output.type === 'text') {
-          names.push(...loadedToolNames(part.output.value))
+          const result = await this.results.history.completed(part.toolCallId)
+          const text = result?.outputPath
+            ? await readFile(result.outputPath, 'utf8')
+            : part.output.value
+          names.push(...loadedToolNames(text))
           continue
         }
         const stored = getStoredResult(part.output)
         if (!stored) continue
-        // A long result keeps a head and tail preview in the entry: the file has the whole list
+        // The saved file has the complete list.
         const text = await readFile(stored.path, 'utf8').catch(
           () => stored.preview,
         )

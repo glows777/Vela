@@ -196,11 +196,12 @@ export const agentLoop = async ({
               if (stored)
                 part.output = {
                   type: 'text',
-                  value: stored.preview.includes(
-                    '[tool result preview omitted; original available at path]',
-                  )
-                    ? `${stored.preview}\n\n[Full output: ${stored.path}; use read_file with offset to read the rest.]`
-                    : stored.preview,
+                  value:
+                    stored.preview.includes(
+                      '[tool result preview omitted; original available at path]',
+                    ) || stored.preview.includes('[preview: first ')
+                      ? `${stored.preview}\n\n[Full output: ${stored.path}; use read_file with offset to read the rest.]`
+                      : stored.preview,
                 }
             }
           }

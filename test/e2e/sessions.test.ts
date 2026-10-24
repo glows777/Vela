@@ -114,11 +114,10 @@ test('a resumed session declares the deferred tools it loaded before', async () 
 })
 
 test('a resumed session declares deferred tools whose tool_search result was offloaded', async () => {
-  // Eight long descriptions: the tool_search result is over the 3,000-character limit, so only a
-  // head/tail preview stays in the session and the complete list is in a file
+  // The loaded-tool list crosses the 51,200-character cap before its last name.
   const lookups = Array.from({ length: 8 }, (_, index) => ({
     name: `deferred_lookup_${index}`,
-    description: `[MCP:fake] look something up ${'x'.repeat(400)}`,
+    description: `[MCP:fake] look something up ${'x'.repeat(8000)}`,
     inputSchema: z.object({ id: z.string() }),
     exposure: 'deferred' as const,
     execute: async ({ id }: { id: string }) => `record ${id}`,
@@ -132,6 +131,11 @@ test('a resumed session declares deferred tools whose tool_search result was off
   })
   for (const tool of lookups) first.internals.registry.register(tool)
   await first.run('Load the lookup tools')
+  expect(first.model.calls[1]!.tools).toEqual(expect.arrayContaining(names))
+  const preview = first.model.calls[1]!.toolResults[0]!
+  expect(preview.raw).toMatchObject({ type: 'text' })
+  expect(preview.output).toContain('Full output: ')
+  expect(preview.output).not.toContain(`- ${names.at(-1)}:`)
 
   const second = createTestVela({
     cwd: first.cwd,

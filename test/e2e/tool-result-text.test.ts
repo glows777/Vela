@@ -219,6 +219,78 @@ test('a pre-change StoredToolResult session resumes with its original result tex
   expect(readFileSync(saved, 'utf8')).toContain(JSON.stringify(legacy))
 })
 
+test('a resumed truncated legacy generic result keeps its full-output recovery path', async () => {
+  const body = `HEAD\n${'body\n'.repeat(800)}MIDDLE_EVIDENCE\n${'tail\n'.repeat(800)}TAIL\n`
+  const first = createTestVela({
+    extensions: [
+      function report(v) {
+        v.registerTool({
+          name: 'legacy',
+          description: 'Return a long report',
+          inputSchema: z.object({}),
+          maxResultChars: 3000,
+          execute: async () => body,
+        })
+      },
+    ],
+    responses: [fauxToolCall('report_legacy', {}), fauxText('saved')],
+  })
+  await first.run('Get the report')
+  await first.session.close()
+  const history = readFileSync(first.session.registry.results.indexPath, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  const legacy = {
+    kind: 'vela-tool-result',
+    path: history[1].outputPath,
+    indexPath: first.session.registry.results.indexPath,
+    bytes: Buffer.byteLength(body),
+    preview: `${body.slice(0, 1800)}\n\n[preview: first 1800 and last 1200 of ${body.length} UTF-16 code units; ${body.length - 3000} omitted here, full output saved]\n\n${body.slice(-1200)}`,
+    read: 'Only a preview is shown. Use read_file with path, offset, limit and column to read more.',
+  }
+  const saved = `${first.dataDir}/sessions/default.jsonl`
+  const entries = readFileSync(saved, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  for (const entry of entries)
+    if (entry.type === 'message' && entry.message.role === 'tool')
+      entry.message.content[0].output = { type: 'json', value: legacy }
+  writeFileSync(
+    saved,
+    `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+  )
+  const second = createTestVela({
+    cwd: first.cwd,
+    responses: [
+      (req) => {
+        const output = req.prompt
+          .flatMap((m) => (m.role === 'tool' ? m.content : []))
+          .filter((p) => p.type === 'tool-result')[0]!.output
+        expect(output.type).toBe('text')
+        const text = (output as { type: 'text'; value: string }).value
+        expect(text).toStartWith(legacy.preview)
+        expect(text.match(/Full output:/g)).toHaveLength(1)
+        expect(text).not.toContain('MIDDLE_EVIDENCE')
+        return fauxToolCall('read_file', {
+          path: text.match(/Full output: (.+?);/)![1]!,
+          offset: 802,
+          limit: 1,
+        })
+      },
+      (req) => {
+        expect(req.toolResults[0]!.output).toContain('MIDDLE_EVIDENCE')
+        return fauxText('recovered')
+      },
+    ],
+  })
+  expect(await second.session.resume()).toBe(true)
+  await second.run('Recover the omitted middle')
+  expect(second.lastAssistantText()).toBe('recovered')
+  expect(readFileSync(saved, 'utf8')).toContain(JSON.stringify(legacy))
+})
+
 test('compaction keeps the earlier-output snapshot location without the history guide', async () => {
   const t = createTestVela({
     responses: Array.from({ length: 5 }, () => fauxText('answer')),
