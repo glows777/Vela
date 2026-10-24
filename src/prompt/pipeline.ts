@@ -6,7 +6,7 @@ export interface PromptContext {
   deferredToolSummary: string
   sessionMessageCount: number
   sessionId: string
-  /** Current session's tool result store (used by toolHistoryGuide) */
+  /** Current session's tool result store */
   toolResults?: ToolResultStore
   /** Names of the tools the model can call this turn (the skills index needs read_file or bash) */
   activeTools?: readonly string[]

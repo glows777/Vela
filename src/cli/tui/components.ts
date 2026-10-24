@@ -213,7 +213,7 @@ export class ToolBlock implements Component {
   }
 
   private get displayOutput(): string {
-    // The model's copy of bash output starts with a `[<ISO time>]` line (the bash-timestamp hook); the block has its own clock
+    // Older sessions may carry the removed bash timestamp hook's prefix; the block has its own clock
     return this.name === 'bash'
       ? this.output.replace(/^\[\d{4}-\d\d-\d\dT[\d:.]+Z\]\n/, '')
       : this.output

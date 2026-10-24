@@ -540,7 +540,7 @@ export class ToolRegistry {
         },
       })
       let { output } = result
-      const { execution, stored } = result
+      const { execution } = result
       if (pipeline) {
         const post = await pipeline.runPost(name, input, output, hookContext)
         if (post.modifiedOutput !== undefined)
@@ -557,11 +557,7 @@ export class ToolRegistry {
             'Tool reported an error',
           typeof output === 'string' ? undefined : output,
         )
-      return typeof output !== 'string'
-        ? output
-        : stored
-          ? { ...stored, preview: output }
-          : output
+      return output
     })
   }
 

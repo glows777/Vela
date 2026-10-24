@@ -8,7 +8,6 @@ import type {
   SessionTreeNode,
 } from '../../src/session/entries.ts'
 import { memorySessionStorage } from '../../src/session/storage.ts'
-import { getStoredResult } from '../../src/session/tool-results.ts'
 import {
   fauxError,
   fauxSummary,
@@ -452,7 +451,7 @@ test('a fork holds the run lock: a prompt sent while it copies the branch is ref
   ])
 })
 
-const ZEROS = '0'.repeat(4000)
+const ZEROS = '0\n'.repeat(2100)
 
 function fileNames(dir: string): string[] {
   if (!existsSync(dir)) return []
@@ -466,8 +465,10 @@ function storedToolPath(messages: ModelMessage[]): string {
     if (message.role !== 'tool') continue
     for (const part of message.content) {
       if (part.type !== 'tool-result') continue
-      const stored = getStoredResult(part.output)
-      if (stored) return stored.path
+      if (part.output.type === 'text') {
+        const path = part.output.value.match(/Full output: (.+)\]/)?.[1]
+        if (path) return path
+      }
     }
   }
   throw new Error('no stored tool result')
@@ -492,9 +493,9 @@ test('a clone of an in-memory session still reads a long tool result after the s
   const t = createTestVela({
     sessionStorage: memorySessionStorage(),
     responses: [
-      fauxToolCall('bash', { command: "printf '%04000d' 0" }),
+      fauxToolCall('bash', { command: "printf '0\\n%.0s' {1..2100}" }),
       fauxText('saved'),
-      () => fauxToolCall('read_file', { path: inherited }),
+      () => fauxToolCall('read_file', { path: inherited, offset: 101 }),
       fauxText('read'),
     ],
   })
@@ -518,7 +519,7 @@ test('a clone of an in-memory session still reads a long tool result after the s
   expect(outputPath).toBe(inherited)
   expect(await Bun.file(inherited).text()).toBe(ZEROS)
   await copy.prompt('read the saved output')
-  expect(latestToolText(copy.messages)).toBe(ZEROS)
+  expect(latestToolText(copy.messages)).toBe(ZEROS.slice(200))
   expect(
     fileNames(t.dataDir).filter(
       (name) => name === 'tool-history.jsonl' || name === 'today.jsonl',

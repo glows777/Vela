@@ -127,3 +127,50 @@ test('a guest can use web_search but not web_fetch', async () => {
   // Only the search API was called, never the page
   expect(fetched).toEqual(['https://api.tavily.com/search'])
 })
+
+test.each(['tavily', 'serper'] as const)(
+  '%s web_search sends a 20KB result through the SDK whole',
+  async (provider) => {
+    const content = 'search content '.repeat(1500)
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      Response.json(
+        provider === 'tavily'
+          ? {
+              results: [
+                { title: 'Result', url: 'https://example.com', content },
+              ],
+            }
+          : {
+              organic: [
+                {
+                  title: 'Result',
+                  link: 'https://example.com',
+                  snippet: content,
+                },
+              ],
+            },
+      ),
+    )
+    try {
+      const t = createTestVela({
+        extensions: [
+          web(
+            provider === 'tavily'
+              ? { tavilyKey: 'faux-key' }
+              : { serperKey: 'faux-key' },
+          ),
+        ],
+        responses: [
+          fauxToolCall('web_search', { query: 'example' }),
+          fauxText('done'),
+        ],
+      })
+      await t.run('Search the web')
+      expect(t.model.calls[1]!.toolResults[0]!.output).toBe(
+        `### Result\nhttps://example.com\n${content}\n`,
+      )
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  },
+)
