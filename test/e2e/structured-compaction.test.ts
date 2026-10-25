@@ -101,6 +101,77 @@ test('free-text checkpoint appends tool-derived file lists and reaches a resumed
   expect(context).toContain('<modified-files>')
 })
 
+for (const nestedBranch of [false, true]) {
+  test(`computed file lists survive ${nestedBranch ? 'nested branch summaries' : 'a branch summary'}, resume and later compaction`, async () => {
+    const t = createTestVela({
+      files: { 'reference.txt': 'reference' },
+      responses: [
+        fauxToolCall('write_file', { path: 'x.txt', content: 'finished' }),
+        fauxText('x.txt written'),
+        ...(nestedBranch
+          ? [
+              fauxToolCall('read_file', { path: 'reference.txt' }),
+              fauxText('reference read'),
+            ]
+          : []),
+      ],
+      generate: [
+        fauxText(checkpoint),
+        ...(nestedBranch ? [fauxText(checkpoint)] : []),
+      ],
+    })
+    await t.run('Write x.txt')
+    const rootQuestion = t.session
+      .getEntries()
+      .find((entry) => entry.type === 'message')!
+    await t.session.navigateTree(rootQuestion.id, { summarize: true })
+    const branchSummary = t.session
+      .getEntries()
+      .find((entry) => entry.type === 'branch_summary')!
+    expect(
+      branchSummary.type === 'branch_summary' && branchSummary.summary,
+    ).toContain('<modified-files>\nx.txt\n</modified-files>')
+    if (nestedBranch) {
+      await t.run('Read reference.txt')
+      // Leaving the new branch must carry the file calls behind its earlier summary too.
+      await t.session.navigateTree(rootQuestion.id, { summarize: true })
+      const latest = t.session
+        .getEntries()
+        .filter((entry) => entry.type === 'branch_summary')
+        .at(-1)!
+      expect(latest.type === 'branch_summary' && latest.summary).toContain(
+        '<modified-files>\nx.txt\n</modified-files>',
+      )
+    }
+    const resumed = createTestVela({
+      cwd: t.cwd,
+      responses: [
+        ...Array.from({ length: 4 }, () => fauxText('noted')),
+        fauxText('Repair beta next.'),
+      ],
+      generate: [fauxText(checkpoint), fauxText(checkpoint)],
+    })
+    expect(await resumed.session.resume()).toBe(true)
+    for (let i = 0; i < 3; i++) await resumed.run(`Recent question ${i}`)
+    await resumed.session.compact()
+    const first = resumed.session.contextManager.state.summary
+    expect(first).toContain('<modified-files>\nx.txt\n</modified-files>')
+    if (nestedBranch)
+      expect(first).toContain('<read-files>\nreference.txt\n</read-files>')
+    expect(first.match(/Earlier tool output:/g)).toHaveLength(1)
+    // A compaction entry must keep the branch-summary provenance on the next compaction.
+    await resumed.run('Continue')
+    await resumed.session.compact()
+    expect(resumed.session.contextManager.state.summary).toContain(
+      '<modified-files>\nx.txt\n</modified-files>',
+    )
+    await resumed.run('where were we?')
+    expect(JSON.stringify(resumed.model.calls.at(-1)!.prompt)).toContain(
+      '<modified-files>',
+    )
+  })
+}
+
 for (const [label, response, error] of [
   [
     'provider error',

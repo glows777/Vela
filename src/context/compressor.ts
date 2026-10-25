@@ -4,7 +4,6 @@ import type { ToolResultPart } from '../messages.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
 import {
   branchSummaryMessageText,
-  type SessionMessageEntry,
   summaryMessageText,
 } from '../session/entries.ts'
 import type { SessionStore } from '../session/index.ts'
@@ -305,44 +304,50 @@ export async function summarize(
     throw new Error(
       'Summary was not fully generated or returned tool calls; this turn was stopped and the original history kept.',
     )
-  // Re-read prior compacted calls from the append-only session, rather than asking the model to
-  // preserve file lists. This also survives resume without new compaction metadata.
+  // Follow recorded compaction and branch-summary provenance, rather than asking the model
+  // to preserve file lists. Shared entries are visited once, including after resume.
   const read = new Set<string>()
   const modified = new Set<string>()
   const calls: { toolName: string; input: unknown }[] = []
-  for (const message of removed) {
+  const fileMessages: ModelMessage[] = []
+  const entries = removed.flatMap((message) => {
     const id = store.idOf(message)
     const entry = id ? store.getEntry(id) : undefined
-    const entries =
-      entry?.type === 'compaction' ? store.getBranch(entry.id) : []
-    const kept =
-      entry?.type === 'compaction'
-        ? entries.findIndex((item) => item.id === entry.firstKeptEntryId)
-        : 0
-    const originals = entries
-      .slice(0, kept)
-      .filter(
-        (item): item is SessionMessageEntry =>
-          item.type === 'message' && !item.stopReason,
+    if (entry) return [entry]
+    fileMessages.push(message)
+    return []
+  })
+  const visited = new Set<string>()
+  for (const entry of entries) {
+    if (visited.has(entry.id)) continue
+    visited.add(entry.id)
+    if (entry.type === 'compaction') {
+      const branch = store.getBranch(entry.id)
+      const kept = branch.findIndex(
+        (item) => item.id === entry.firstKeptEntryId,
       )
-    const messages = originals.length
-      ? originals.map((item) => item.message)
-      : [message]
-    for (const original of messages) {
-      if (original.role !== 'assistant' || !Array.isArray(original.content))
-        continue
-      for (const part of original.content)
-        if (part.type === 'tool-call') calls.push(part)
-    }
-    for (const item of [
-      ...originals,
-      ...(entry?.type === 'message' ? [entry] : []),
-    ]) {
-      for (const nested of Object.values(item.nestedCalls ?? {})) {
+      entries.push(...branch.slice(0, kept))
+    } else if (entry.type === 'branch_summary') {
+      const retained = new Set(
+        store.getBranch(entry.parentId).map((item) => item.id),
+      )
+      const branch = store.getBranch(
+        entry.fromId === 'root' ? null : entry.fromId,
+      )
+      entries.push(...branch.filter((item) => !retained.has(item.id)))
+    } else if (entry.type === 'message' && !entry.stopReason) {
+      fileMessages.push(entry.message)
+      for (const nested of Object.values(entry.nestedCalls ?? {})) {
         for (const call of nested.calls)
           calls.push({ toolName: call.name, input: call.arguments })
       }
     }
+  }
+  for (const message of fileMessages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content))
+      continue
+    for (const part of message.content)
+      if (part.type === 'tool-call') calls.push(part)
   }
   for (const call of calls) {
     const input = call.input as { path?: unknown } | undefined
