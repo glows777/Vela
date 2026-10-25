@@ -4,7 +4,7 @@ Vela is an AI agent you can run in your terminal or embed in a TypeScript app.
 
 Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. The same agent is a small SDK: open as many sessions as you need in one process, subscribe to their events, and connect them to chat apps through channels. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels, or connect [MCP servers](docs/mcp.md).
 
-Vela's design follows [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). It adds concurrent sessions, session roles for untrusted senders, and built-in memory and knowledge base extensions.
+Vela's design follows [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). It adds concurrent sessions, enabled-chat lists for channels, per-chat `tools`, per-session `permissions`, and built-in memory and knowledge base extensions.
 
 ## Getting started
 
