@@ -94,7 +94,7 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 
 `lint` reports paths mentioned in a memory that no longer exist, memories not read within their type's shelf life, and duplicate names.
 
-**Prompt.** The short usage rules stay in the system prompt. The index is sent as a message after the user message whenever it changed, so saving a memory does not rewrite the cached system prompt; it is sent again after compaction removed the old one (and restored right away in the request that compaction summarized it from), and deleting the last entry sends an empty-store update. Guest sessions get neither the rules, the index nor the tool.
+**Prompt.** The short usage rules stay in the system prompt. The index is sent as a message after the user message whenever it changed, so saving a memory does not rewrite the cached system prompt; it is sent again after compaction removed the old one (and restored right away in the request that compaction summarized it from), and deleting the last entry sends an empty-store update. If a session's tools omit `memory`, or its permissions deny `memory`, that session gets none of the rules, the index, or the tool.
 
 **Commands.**
 

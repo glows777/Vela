@@ -23,8 +23,7 @@ export interface RagOptions {
 
 /**
  * Local knowledge base (`<dataDir>/rag/knowledge.db`): the `rag_ingest` / `rag_search` tools, a knowledge
- * base summary as a message after the user message, and the `/rag [ingest <path>]` command. Guest sessions can also
- * use rag_search.
+ * base summary as a message after the user message, and the `/rag [ingest <path>]` command.
  * Without an embedder or `embedding` config, registers only /rag to explain how to configure it.
  */
 export function rag(options: RagOptions = {}): VelaExtension {
