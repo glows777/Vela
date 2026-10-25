@@ -101,15 +101,23 @@ Messages are Vela `ModelMessage` values. Assistant messages and text-only user m
 
 Vela adds two conventions on top:
 
-**Stored tool results.** When a tool result is too long, or was folded by microcompaction, its output is a JSON reference to a file with the full text:
+**Stored tool results.** A new result that is too long is plain text. Vela saves the full output under `tool-results/`. The tool message keeps a preview plus one recovery line:
+
+```json
+{"type":"text","value":"first part of the output ...\n\n[Full output: /.../sessions/demo/tool-results/0b6c....txt; use read_file with offset to read the rest.]"}
+```
+
+The model sees that text. Bash keeps its tail preview and adds a path only when truncated. See [Result size and truncation](tools.md#result-size-and-truncation).
+
+Both an older session file and a microcompaction `context_edit` can hold this JSON reference:
 
 ```json
 {"type":"json","value":{"kind":"vela-tool-result","path":"/.../sessions/demo/tool-results/0b6c....txt","indexPath":"/.../tool-history.jsonl","bytes":48213,"preview":"first and last part of the output ...","read":"Only a preview is shown. Use read_file with path, offset ..."}}
 ```
 
-`preview` is what the model sees; `path` is the full output.
+Resume loads that JSON. In the model request, Vela sends `preview` as text. When that preview contains `[preview: first ` or `[tool result preview omitted; original available at path]`, Vela appends the Full-output recovery line.
 
-**Summaries.** After a compaction, the model context starts with a user message whose content is `[Summary of the earlier conversation]` followed by the `compaction` entry's summary: the summary sections (User goal, Completed, Pending, Constraints, Key facts) and a guide to the tool call history. This message is not stored as a `message` entry; it is rebuilt from the `compaction` entry.
+**Summaries.** After a compaction, the model context starts with a user message whose content is `[Summary of the earlier conversation]` followed by the `compaction` entry's summary. The summary has the sections User goal, Completed, Pending, Constraints, and Key facts, then one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).` This message is not stored as a `message` entry. It is rebuilt from the `compaction` entry.
 
 Loop-detection reminders are user messages starting with `[system message]`.
 
