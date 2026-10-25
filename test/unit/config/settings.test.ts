@@ -123,6 +123,31 @@ test('built-in extensions load by default; -builtin: turns one off and a project
   ).toEqual(['memory', 'web'])
 })
 
+test('defaultOffBuiltins stays off until +builtin: enables it', () => {
+  const builtins = ['memory', 'permission-gate']
+  const off = setup({})
+  expect(
+    loadConfig({
+      cwd: off.cwd,
+      agentDir: off.agentDir,
+      builtins,
+      defaultOffBuiltins: ['permission-gate'],
+    }).extensions.map((e) => e.name),
+  ).toEqual(['memory'])
+
+  const on = setup({
+    'home/settings.json': json({ extensions: ['+builtin:permission-gate'] }),
+  })
+  expect(
+    loadConfig({
+      cwd: on.cwd,
+      agentDir: on.agentDir,
+      builtins,
+      defaultOffBuiltins: ['permission-gate'],
+    }).extensions.map((e) => e.name),
+  ).toEqual(['memory', 'permission-gate'])
+})
+
 test('mistakes in settings are reported with the file name', () => {
   const broken = setup({ 'home/settings.json': '{ nope' })
   expect(() => loadConfig(broken)).toThrow(

@@ -90,7 +90,7 @@ export class ToolResultError extends Error {
 }
 
 export interface ToolRegistryForkOptions {
-  /** This session's event callback (e.g. security_warning for moderate-risk bash) */
+  /** This session's event callback */
   onEvent?: VelaEventListener
   /** Session id passed to hooks */
   sessionId?: string

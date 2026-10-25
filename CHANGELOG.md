@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Built-in `permission-gate` extension, off by default.** It confirms a few dangerous `bash` patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) through the session UI and blocks them when there is no UI, like pi's `permission-gate` example. Enable it with `+builtin:permission-gate` in settings or `-e builtin:permission-gate`; the SDK adds `permissionGate()`. `loadConfig` gains `defaultOffBuiltins` for callers that pass `builtins` themselves. See [Built-in extensions](docs/built-in-extensions.md#permission-gate).
+
 - **Passive Feishu group messages show a reaction once Vela starts answering.** An untagged evaluation adds `OnIt` to the triggering message at the first non-empty assistant text delta, then `DONE` after delivery or `CrossMark` on failure or Stop. Silence, an empty answer or a topic handoff removes the marker with nothing left behind; passive input still gets no progress/control card. Custom channels receive the new `silent` value on `finish(outcome)`.
 
 ### Changed
@@ -22,6 +24,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - Routine lists show a readable topic task without its opaque root message id; routine ids remain available for cancellation.
 
 ### Breaking Changes
+
+- **The built-in bash gate is gone, and so is `security_warning`.** Vela no longer rejects bash commands that match its old pattern list: a command runs unless a session `permissions` rule, a hook or a `tool_call` extension blocks it. `src/security/bash-classifier.ts` and the `security_warning` event are removed; listeners should drop that branch. For a confirmation prompt on a smaller pattern list, enable the new opt-in `permission-gate` extension. Commands the old gate rejected for no good reason (a harmless recursive force-delete under a temporary directory, a `grep` whose pattern contains such a command) now run. See [Security](docs/security.md).
 
 - **Session roles are gone (like pi).** `Role`, `ChannelDefinition.roleFor`, `session.role` / `vela.session(id, { role })`, the `/role` command and the `Role` line of `/status` are removed. Every session has the same tools, prompt and commands, and an enabled chat is trusted as a whole. Restrict a session with `permissions` (`{ bash: 'ask', write_file: 'deny' }`) and `tools` instead; a tool without a rule is allowed. Guest and collaborator sessions, and their prompt differences, no longer exist. See [Security](docs/security.md#per-session-permissions).
 

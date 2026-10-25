@@ -9,7 +9,6 @@ import {
   toAIToolOutput,
   toolContentText,
 } from '../messages.ts'
-import { classifyBashCommand } from '../security/bash-classifier.ts'
 import type { HookPipeline } from '../security/hooks.ts'
 import {
   decidePermission,
@@ -421,19 +420,6 @@ export class ToolRegistry {
       const command = (input as { command?: unknown } | null)?.command
       if (typeof command !== 'string')
         return await reject('[Rejected] bash command must be a string')
-      const risk = classifyBashCommand(command)
-      if (risk.level === 'dangerous') {
-        return await reject(
-          `[Rejected] Dangerous operation detected: ${risk.reason}\nCommand: ${command}`,
-        )
-      }
-      if (risk.level === 'moderate')
-        this.onEvent?.({
-          type: 'security_warning',
-          toolName: name,
-          reason: risk.reason ?? 'Moderate-risk command',
-          command,
-        })
     }
     // ask runs after hooks, on the final input, so input changed by extensions still needs approval
     if (decision === 'ask') {

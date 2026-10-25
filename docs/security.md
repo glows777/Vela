@@ -22,7 +22,7 @@ Feishu enforces a chat allowlist before invoking the model. Enabling a chat trus
 The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `grep`, `find`, `bash`) run in the Vela process with your user's permissions. See [Tools](tools.md).
 
 - The working directory is where relative paths resolve and where `bash` starts. It is not a jail: file tools accept absolute paths and `..`, and `bash` can reach anything your user can.
-- Before running, `bash` commands are checked against a short list of dangerous patterns (`rm -rf`, `sudo`, `mkfs`, `curl ... | sh`, `eval`, writes to `/etc` or disk devices, and a few others). Matches are rejected for every session. Medium-risk commands (`rm`, `mv`, `chmod`, `kill`, `git push`, `git reset --hard`, ...) run and emit a `security_warning` event. This is a heuristic to catch mistakes, not a security control; it is easy to get around.
+- Vela does not filter `bash` commands by default: a command the model writes runs. The built-in [`permission-gate`](built-in-extensions.md#permission-gate) extension is off by default; enable it to confirm a short list of dangerous patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) in interactive mode, and to block them when no UI can ask. This is a heuristic to catch mistakes, not a security control; it is easy to get around.
 - Vela does not ask before each tool call unless you set a session permission to `ask` (see [Per-session permissions](#per-session-permissions)) or load an extension that asks.
 
 To contain what Vela can do, run it as a dedicated user, or inside a container or virtual machine with only the files, credentials and network access the task needs.
@@ -77,7 +77,7 @@ Keys are tool names, or `*` for all other tools; an exact name beats `*`. `vela.
 
 The model reads text from many places: files, command output, web pages from the `web` extension, knowledge base results, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
 
-Enabled Feishu chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts)).
+Enabled Feishu chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider the built-in `permission-gate` (`"extensions": ["+builtin:permission-gate"]` in [settings](settings.md)) or an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts) for writing your own).
 
 ## Secrets on disk
 
