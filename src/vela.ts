@@ -30,7 +30,6 @@ import {
   deferredTools,
   extensionSections,
   projectContext,
-  toolHistoryGuide,
   workingDirectory,
 } from './prompt/index.ts'
 import { PromptPipeline } from './prompt/pipeline.ts'
@@ -280,15 +279,6 @@ export function createVela(options: VelaOptions = {}): Vela {
   )
 
   const hooks = new HookPipeline(logger)
-  hooks.registerPost('bash-timestamp', (toolName, _input, output) => {
-    if (toolName === 'bash') {
-      return {
-        action: 'modify',
-        modifiedOutput: `[${new Date().toISOString()}]\n${output}`,
-      }
-    }
-    return { action: 'allow' }
-  })
   registry.setHookPipeline(hooks)
   registerToolSearchTool(registry)
 
@@ -315,7 +305,6 @@ export function createVela(options: VelaOptions = {}): Vela {
   // Same order as pi: intro + rules, addendum, project context, skills, cwd, then extension sections
   const builder = new PromptPipeline()
     .pipe('coreRules', coreRules())
-    .pipe('toolHistoryGuide', toolHistoryGuide())
     .pipe('deferredTools', deferredTools())
     .pipe('appendSystemPrompt', addendum(options.appendSystemPrompt))
     .pipe('projectContext', (ctx) =>

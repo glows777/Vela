@@ -406,23 +406,14 @@ for (const preStored of [false, true]) {
         },
       }),
     )
-    const result = (await invoke(registry, 'read_file')) as Record<
-      string,
-      unknown
-    >
-    expect(result.kind).toBe('vela-tool-result')
-    expect(result.preview).toBe('custom preview')
-    expect(result.execution).toEqual({ exitCode: 0 })
-    expect(result.bytes).toBe(Buffer.byteLength(original))
-    expect(result.indexPath).toBe(registry.results.history.path)
-    expect(typeof result.read).toBe('string')
-    expect(await Bun.file(String(result.path)).text()).toBe(original)
+    const result = await invoke(registry, 'read_file')
+    expect(result).toBe('custom preview')
     const record = (await rows(registry)).find(
       (row) => row.type === 'tool_result',
     )
-    expect(result.callId).toBe(record?.callId)
-    expect(result.historySeq).toBe(record?.seq)
-    expect(result.path).toBe(record?.outputPath)
+    expect(record?.exitCode).toBe(0)
+    expect(record?.bytes).toBe(Buffer.byteLength(original))
+    expect(await Bun.file(String(record?.outputPath)).text()).toBe(original)
     expect(record?.status).toBe('completed')
   })
 }

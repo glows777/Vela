@@ -201,7 +201,7 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
   expect(t.eventsOf('tool_execution_end').filter((e) => e.isError)).toEqual([])
 })
 
-test('bash runs in cwd and its output carries the timestamp post-hook', async () => {
+test('bash runs in cwd and returns plain output', async () => {
   const t = createTestVela({
     files: { 'marker.txt': 'here' },
     responses: [
@@ -215,7 +215,8 @@ test('bash runs in cwd and its output carries the timestamp post-hook', async ()
   const output = t.model.calls[1]!.toolResults[0]!.output
   expect(output).toContain('marker.txt')
   expect(output).toContain('BASH_OK')
-  expect(output).toMatch(/\[\d{4}-\d{2}-\d{2}T[^\]]+Z\]\\n/)
+  expect(output).not.toContain('vela-tool-result')
+  expect(output).not.toMatch(/\[\d{4}-\d{2}-\d{2}T/)
 })
 
 test('a dangerous bash command is refused before it runs and the model sees why', async () => {

@@ -124,7 +124,7 @@ test('result storage failure leaves an unfinished call and prevents further exec
     inputSchema: z.object({}),
     execute: async () => {
       executions++
-      return 'x'.repeat(5000)
+      return 'x'.repeat(60_000)
     },
   })
   await expect(
@@ -397,7 +397,7 @@ for (const kind of ['bash', 'generic'] as const) {
                 { command: "printf 'RECOVERY_EVIDENCE\\n'" },
                 context,
               )
-            : 'RECOVERY_EVIDENCE\n'.repeat(500)
+            : 'RECOVERY_EVIDENCE\n'.repeat(4000)
         await rename(results.indexPath, backup)
         await mkdir(results.indexPath)
         return result
