@@ -16,7 +16,7 @@ export type InputSource =
 
 /**
  * User input arrived (prompt / steer / followUp), after extension commands and before `/skill:` and prompt
- * template expansion (like pi). Fires in sessions of every role; check `ctx.session.role`.
+ * template expansion (like pi).
  */
 export interface InputEvent {
   type: 'input'

@@ -20,6 +20,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **A resumed session declares the deferred tools it loaded.** `resume()` reads the session's `tool_search` results and declares the tools they loaded again, so the model goes on using them without searching a second time. Sessions without such results are unchanged.
 - Routine lists show a readable topic task without its opaque root message id; routine ids remain available for cancellation.
 
+### Breaking Changes
+
+- **Session roles are gone (like pi).** `Role`, `ChannelDefinition.roleFor`, `session.role` / `vela.session(id, { role })`, the `/role` command and the `Role` line of `/status` are removed. Every session has the same tools, prompt and commands, and an enabled chat is trusted as a whole. Restrict a session with `permissions` (`{ bash: 'ask', write_file: 'deny' }`) and `tools` instead; a tool without a rule is allowed. Guest and collaborator sessions, and their prompt differences, no longer exist. See [Security](docs/security.md#per-session-permissions).
+
 ## [0.3.0] - 2026-10-19
 
 ### Added

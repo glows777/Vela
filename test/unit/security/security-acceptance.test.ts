@@ -7,12 +7,7 @@ import { z } from 'zod'
 import type { VelaEvent } from '../../../src/agent/events.ts'
 import { classifyBashCommand } from '../../../src/security/bash-classifier.ts'
 import { HookPipeline } from '../../../src/security/hooks.ts'
-import {
-  canUseTool,
-  decidePermission,
-  filterToolsForRole,
-  type Role,
-} from '../../../src/security/roles.ts'
+import { decidePermission } from '../../../src/security/permissions.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
   type ToolDefinition,
@@ -91,63 +86,16 @@ async function rejected(registry: ToolRegistry, attempt: Promise<unknown>) {
   ).toEqual(['rejected'])
 }
 
-test('roles: owner all, collaborator excludes bash, guest only tools that do not touch the machine', () => {
-  const names = [
-    'bash',
-    'read_file',
-    'list_directory',
-    'find',
-    'grep',
-    'rag_search',
-    'web_search',
-    'tool_search',
-    'write_file',
-    'memory',
-    'arbitrary',
-  ]
-  expect(filterToolsForRole(names, 'owner')).toEqual(names)
-  expect(filterToolsForRole(names, 'collaborator')).toEqual(names.slice(1))
-  expect(filterToolsForRole(names, 'guest')).toEqual([
-    'rag_search',
-    'web_search',
-    'tool_search',
-  ])
-  for (const role of ['owner', 'collaborator', 'guest'] as Role[]) {
-    const { registry } = fixture()
-    registry.register(...names.map((name) => fake(name)))
-    expect(registry.getRole()).toBe('owner')
-    registry.setRole(role)
-    expect(registry.getRole()).toBe(role)
-    expect(Object.keys(registry.toAISDKFormat())).toEqual(
-      names.filter((name) => canUseTool(role, name)),
-    )
-  }
-})
-
-test('session rules can only tighten the role: exact names first, then *', () => {
-  // The role is the upper bound: allow / ask on a tool the role forbids stays deny
-  expect(decidePermission('guest', 'bash', { bash: 'allow' })).toBe('deny')
-  expect(decidePermission('guest', 'read_file', { read_file: 'ask' })).toBe(
-    'deny',
-  )
-  expect(decidePermission('guest', 'read_file', { '*': 'allow' })).toBe('deny')
-  expect(decidePermission('collaborator', 'bash', { '*': 'allow' })).toBe(
-    'deny',
-  )
-  expect(decidePermission('collaborator', 'bash', { bash: 'allow' })).toBe(
-    'deny',
-  )
-  // ask and deny still apply to tools the role allows
-  expect(decidePermission('owner', 'bash', { '*': 'ask' })).toBe('ask')
-  expect(decidePermission('guest', 'rag_search', { rag_search: 'ask' })).toBe(
-    'ask',
-  )
-  expect(decidePermission('guest', 'rag_search', { '*': 'deny' })).toBe('deny')
-  // An exact session rule beats the session's *
+test('session permission rules: no rule means allow; exact names beat *', () => {
+  expect(decidePermission('bash')).toBe('allow')
+  expect(decidePermission('bash', {})).toBe('allow')
+  expect(decidePermission('bash', { bash: 'deny' })).toBe('deny')
+  expect(decidePermission('rag_search', { rag_search: 'ask' })).toBe('ask')
+  expect(decidePermission('rag_search', { '*': 'deny' })).toBe('deny')
+  expect(decidePermission('bash', { '*': 'ask' })).toBe('ask')
   expect(
-    decidePermission('owner', 'read_file', { '*': 'deny', read_file: 'allow' }),
+    decidePermission('read_file', { '*': 'deny', read_file: 'allow' }),
   ).toBe('allow')
-  expect(decidePermission('owner', 'bash', { '*': 'allow' })).toBe('allow')
 })
 
 test('ask runs the confirm callback with the final input; no callback means deny', async () => {
@@ -180,7 +128,7 @@ test('ask runs the confirm callback with the final input; no callback means deny
   expect(asked).toEqual([{ command: 'echo hello' }])
 })
 
-test('role change rejects an already exposed tool and records rejection', async () => {
+test('a permission change rejects an already exposed tool and records rejection', async () => {
   const { registry } = fixture()
   let calls = 0
   registry.register(
@@ -192,7 +140,7 @@ test('role change rejects an already exposed tool and records rejection', async 
     }),
   )
   const execute = registry.toAISDKFormat().bash!.execute!
-  registry.setRole('collaborator')
+  registry.setPermissions({ bash: 'deny' })
   await rejected(
     registry,
     Promise.resolve(
@@ -495,24 +443,13 @@ test('pre-aborted call never executes and existing cancelled history survives', 
   ).toBe('cancelled')
 })
 
-test('/role changes only the current session and /hooks lists registered hooks', async () => {
+test('/hooks lists registered hooks', async () => {
   const t = createTestVela()
-  const other = t.vela.session('other')
   t.internals.hooks.registerPre('acceptance-pre', () => ({ action: 'allow' }))
   t.internals.hooks.registerPost('acceptance-post', () => ({ action: 'allow' }))
   const log = quiet('log')
-  expect(t.dispatch('/role')).toBe(true)
-  expect(log.mock.calls.flat().join(' ')).toContain('owner')
-  for (const role of ['guest', 'collaborator', 'owner'] as const) {
-    expect(t.dispatch(`/role ${role}`)).toBe(true)
-    expect(t.session.role).toBe(role)
-  }
-  t.dispatch('/role guest')
-  expect(other.role).toBe('owner')
   expect(t.dispatch('/hooks')).toBe(true)
   expect(log.mock.calls.flat().join(' ')).toContain('acceptance-pre')
   expect(log.mock.calls.flat().join(' ')).toContain('acceptance-post')
-  expect(t.dispatch('/role invalid')).toBe(false)
-  expect(t.session.role).toBe('guest')
   expect(t.dispatch('/unrelated')).toBe(false)
 })

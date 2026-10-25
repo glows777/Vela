@@ -41,7 +41,7 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
-import type { PermissionRules, Role } from './security/roles.ts'
+import type { PermissionRules } from './security/permissions.ts'
 import {
   type BranchSummaryEntry,
   messageText as contentText,
@@ -96,11 +96,9 @@ export interface PromptOptions {
 export interface SessionOptions {
   /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
   cwd?: string
-  /** Session role, default owner (custom channels can choose a role for their shared chat) */
-  role?: Role
-  /** Tool permissions layered on top of the role, e.g. `{ bash: 'ask' }` */
+  /** Tool permissions, e.g. `{ bash: 'ask' }`; tools without a rule are allowed */
   permissions?: PermissionRules
-  /** Enable only these tools (still limited by the role); default all */
+  /** Enable only these tools; default all */
   tools?: string[]
   /** UI extensions use to interact with the user; without it there is no UI (confirm always returns false) */
   ui?: SessionUI
@@ -213,7 +211,7 @@ export interface SessionDeps {
 }
 
 /**
- * One conversation: its own message history, compaction state, usage, tool results, role and run lock.
+ * One conversation: its own message history, compaction state, usage, tool results and run lock.
  * Tool definitions, extensions, memory, knowledge base, skills and channels are shared by all sessions in the same Vela.
  */
 export class VelaSession {
@@ -297,7 +295,6 @@ export class VelaSession {
           JSON.stringify(input, null, 2) ?? '',
         ),
     })
-    this.registry.setRole(options.role ?? 'owner')
     this.registry.setPermissions(options.permissions)
     this.registry.setSelection(options.tools)
     // --no-session keeps usage in memory. /usage and /status still read the tracker;
@@ -465,21 +462,12 @@ export class VelaSession {
    */
   channel?: string
 
-  /** Session role (owner / collaborator / guest): decides which tools are available and whether extension commands can run. */
-  get role(): Role {
-    return this.registry.getRole()
-  }
-
-  set role(role: Role) {
-    this.registry.setRole(role)
-  }
-
-  /** Tool names the model can currently see (after role, tool selection and deferred loading). */
+  /** Tool names the model can currently see (after tool selection and deferred loading). */
   getActiveTools(): string[] {
     return this.registry.getActiveTools().map((tool) => tool.name)
   }
 
-  /** Enable only these tools (still limited by the role); pass undefined to restore all. Like pi's setActiveTools. */
+  /** Enable only these tools; pass undefined to restore all. Like pi's setActiveTools. */
   setActiveTools(names: string[] | undefined): void {
     this.registry.setSelection(names)
   }
@@ -527,7 +515,6 @@ export class VelaSession {
   /** @internal `sections` defaults to the sections collected by this turn's before_agent_start */
   promptContext(sections = this.sections): PromptContext {
     return {
-      role: this.role,
       extensionSections: sections,
       toolCount: this.registry.getActiveTools().length,
       deferredToolSummary: this.registry.getDeferredToolSummary(),
@@ -836,7 +823,6 @@ export class VelaSession {
         options.sessionId ?? newSessionId(),
         {
           ...this.options,
-          role: this.role,
           model: this.modelChoice,
           thinkingLevel: this.thinking,
           autoCompaction: this.autoCompaction,
@@ -987,8 +973,6 @@ export class VelaSession {
     } = {},
   ): Promise<BashResult> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    if (this.role !== 'owner')
-      throw new Error('Only the session owner can run shell commands')
     return this.userBash.execute(command, options)
   }
 
@@ -1047,12 +1031,11 @@ export class VelaSession {
   }
 
   /**
-   * Expands `/skill:<name>` and prompt templates, then prompts (or queues). Like extension commands, only for the
-   * session's owner. A skill file that can't be read rejects instead of sending the raw command.
+   * Expands `/skill:<name>` and prompt templates, then prompts (or queues). A skill file that can't be
+   * read rejects instead of sending the raw command.
    */
   private promptExpanded(input: string, options: PromptOptions): Promise<void> {
-    if (this.role !== 'owner' || !input.startsWith('/'))
-      return this.promptModel(input, options)
+    if (!input.startsWith('/')) return this.promptModel(input, options)
     let expanded: string
     try {
       expanded = this.deps.expandInput(input)

@@ -630,7 +630,7 @@ export class ExtensionRunner {
     if (!match) return false
     await this.ready
     const entry = this.commandMap.get(match[1] ?? '')
-    if (!entry || session.role !== 'owner') return false
+    if (!entry) return false
     await entry.command.handler(
       (match[2] ?? '').trim(),
       this.context(session, signal),

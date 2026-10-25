@@ -62,7 +62,7 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 
 Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
-Only `rag_search` and `web_search` (and `tool_search`) are available to `guest` sessions; MCP tools are not. See [Security](security.md#core-sdk-session-roles).
+Deny any of them with session `permissions`; see [Security](security.md#per-session-permissions).
 
 ## Data
 
@@ -105,7 +105,7 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 | `/memory lint` | Show the lint report |
 | `/dream` | Ask the model to clean up the store: delete stale entries, merge duplicates, fix descriptions |
 
-Extension commands run only in `owner` sessions; in other sessions the text goes to the model as a normal message.
+Extension commands run in every session; an input naming a registered command runs it instead of going to the model.
 
 **SDK.** `memory()` takes no options.
 
@@ -158,20 +158,20 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 
 `web_search` is registered only when a key is set. With a Tavily key it uses [Tavily](https://tavily.com) and returns an answer summary plus page content; with a Serper key it uses [Serper](https://serper.dev) and returns Google result snippets. If both are set, Tavily is used.
 
-A `guest` session can use `web_search` but not `web_fetch`. An enabled channel chat defaults to `owner` and can call `web_fetch`.
+Enabled channel chats can call both tools. Deny either one with session `permissions`.
 
 **SDK.** `web({ tavilyKey, serperKey })`; both are optional.
 
 ## feishu
 
-Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each enabled chat has one shared owner session. All members are trusted with bash, files, memory and extension tools.
+Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each enabled chat has one shared session. All members are trusted with bash, files, memory and extension tools.
 
 | Option | Config key | Description |
 |---|---|---|
 | `appId` | `extensionConfig.feishu.appId` | Feishu app id |
 | `appSecret` | `extensionConfig.feishu.appSecret` | Feishu app secret |
 | `owners` | `extensionConfig.feishu.owners` | `open_id`s whose direct chats are always enabled; array or comma-separated string |
-| `chats` | `extensionConfig.feishu.chats` | Enabled chat_ids; array or comma-separated string. All members get owner access |
+| `chats` | `extensionConfig.feishu.chats` | Enabled chat_ids; array or comma-separated string. All members get full access |
 | `transport` | | SDK only: the connection to Feishu (`FeishuTransport`); default Feishu's long connection. Tests pass a fake |
 
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#feishu).
