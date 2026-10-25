@@ -181,7 +181,7 @@ It registers no tools or commands. Setup and behavior are described in [Channels
 
 ## permission-gate
 
-Asks before running a `bash` command that matches one of three patterns (the list and behavior follow pi's `permission-gate` example): `rm` with a recursive or force flag, `sudo`, and `chmod`/`chown` with `777`. In interactive mode it shows the command and runs it only when you choose `Yes`; in a session without a UI (SDK, `-p`, JSON, RPC without a client answer, channel sessions) it blocks the call, and the model gets `Dangerous command blocked (no UI for confirmation)` as the tool result.
+Asks before running a `bash` command that matches one of three patterns (the list and behavior follow pi's `permission-gate` example): `rm` with a recursive or force flag, `sudo`, and `chmod`/`chown` with `777`. In interactive mode it shows the command and runs it only when you choose `Yes`. A session without a UI (SDK, `-p`, JSON, channel sessions) blocks the call instead, and the model gets `Dangerous command blocked (no UI for confirmation)` as the tool result. RPC mode has a UI: the question is an [extension UI request](rpc.md#extension-ui) and the call waits for the client's answer.
 
 It is off by default because it is a heuristic, not a security control: it catches mistakes, not a hostile command (`find -delete`, a script, a renamed binary). Enable it per user or per project:
 
@@ -189,7 +189,7 @@ It is off by default because it is a heuristic, not a security control: it catch
 { "extensions": ["+builtin:permission-gate"] }
 ```
 
-Or for one run: `vela -e builtin:permission-gate`. The SDK loads it explicitly: `createVela({ extensions: [permissionGate()] })`. `--no-extensions` drops it. Requests are answered through the session UI: in RPC mode they are [extension UI requests](rpc.md#extension-ui).
+Or for one run: `vela -e builtin:permission-gate`. The SDK loads it explicitly: `createVela({ extensions: [permissionGate()] })`. `--no-extensions` drops it.
 
 ## mcp
 
