@@ -10,7 +10,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -167,6 +167,54 @@ test('starting a topic returns its receipt and frees the channel while its task 
     await until(() => fake.sent.some((item) => item.text === 'second answer'))
     expect(topic.isRunning).toBe(true)
     expect(fake.topics).toHaveLength(1)
+  } finally {
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('a topic handoff keeps the handled mention out of the next group input and keeps later peer messages', async () => {
+  const handled = 'do issue 127'
+  const respond = (req: FauxRequest) => {
+    if (req.lastUserText.includes('new question'))
+      return fauxText('second answer')
+    if (req.toolResults.length) return fauxText('handed off')
+    if (req.tools.includes('feishu_start_topic'))
+      return fauxToolCall('feishu_start_topic', { task: 'Handle the request' })
+    return fauxText('topic done')
+  }
+  const { fake, t, start } = setup(Array(6).fill(respond))
+  await start()
+  try {
+    fake.deliver(
+      feishuEvent({
+        message_id: 'first',
+        create_time: '3000',
+        content: JSON.stringify({ text: handled }),
+      }),
+    )
+    await until(() => fake.topics.length === 1)
+    await until(() => !t.vela.session('feishu-oc_group').isRunning)
+    fake.history.push(
+      historyMessage('peer', 'ou_bob', 'check the tests', '4000'),
+      historyMessage('first', 'ou_alice', handled, '3000'),
+      historyMessage('stale', 'ou_bob', 'ancient note', '1000'),
+    )
+    fake.deliver(
+      feishuEvent({
+        message_id: 'second',
+        create_time: '5000',
+        content: '{"text":"new question"}',
+      }),
+    )
+    await until(() => fake.sent.some((item) => item.text === 'second answer'))
+    const second = t.model.calls.find(
+      (call) =>
+        call.lastUserText.includes('new question') &&
+        call.tools.includes('feishu_start_topic'),
+    )
+    expect(second?.lastUserText).toBe(
+      '[Chat since last reply]\nBob: check the tests\n\n[Question]\nAlice: new question',
+    )
   } finally {
     await t.internals.gateway.stopAll()
   }

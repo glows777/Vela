@@ -28,7 +28,20 @@ export class FeishuTopics {
   runtime?: ChannelRuntime
   readonly triggerImages = new WeakMap<FeishuMessageEvent, ImageContent[]>()
   private sessions = new WeakMap<ToolRegistry, string>()
-  constructor(private transport: () => FeishuTransport) {}
+  constructor(
+    private transport: () => FeishuTransport,
+    private onHandled?: (
+      chatId: string,
+      messageId: string,
+      createTime: string,
+    ) => void,
+  ) {}
+
+  private markHandled(msg: IncomingMessage): void {
+    const message = (msg.raw as FeishuMessageEvent | undefined)?.message
+    if (!message?.message_id || !message.create_time) return
+    this.onHandled?.(msg.channelId, message.message_id, message.create_time)
+  }
 
   sessionOptions(msg: IncomingMessage) {
     return isChannel(msg)
@@ -147,6 +160,7 @@ export class FeishuTopics {
           replyToId: receipt.messageId,
           topic: { rootId: receipt.rootId, threadId: receipt.threadId },
         })
+        this.markHandled(msg)
         return receipt
       },
     })
@@ -190,6 +204,7 @@ export class FeishuTopics {
               }
             : undefined,
         })
+        this.markHandled(msg)
         return receipt
       },
     })
