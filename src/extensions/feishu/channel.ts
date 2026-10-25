@@ -81,10 +81,14 @@ export class FeishuChannel implements ChannelDefinition {
     return { ...msg, replyToId: receipt.messageId }
   }
 
-  readonly topics = new FeishuTopics(() => {
-    if (!this.transport) throw new Error('Feishu is not connected')
-    return this.transport
-  })
+  readonly topics = new FeishuTopics(
+    () => {
+      if (!this.transport) throw new Error('Feishu is not connected')
+      return this.transport
+    },
+    (chatId, messageId, createTime) =>
+      this.noteHandled(chatId, messageId, createTime),
+  )
   connect: NonNullable<ChannelDefinition['connect']> = (runtime) => {
     this.topics.runtime = runtime
   }
@@ -147,6 +151,7 @@ export class FeishuChannel implements ChannelDefinition {
   private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
   // Custom transports without appId cannot identify own-app history items.
   private readonly lastReplies = new Map<string, FeishuSentMessage>()
+  private readonly handledTriggers = new Map<string, FeishuSentMessage>()
 
   constructor(config: FeishuChannelConfig) {
     this.config = config
@@ -336,6 +341,26 @@ export class FeishuChannel implements ChannelDefinition {
     }
   }
 
+  private noteHandled(
+    chatId: string,
+    messageId: string,
+    createTime: string,
+  ): void {
+    const current = this.handledTriggers.get(chatId)
+    if (current && Number(createTime) < Number(current.createTime)) return
+    this.handledTriggers.set(chatId, { messageId, createTime })
+  }
+
+  private groupBoundary(chatId: string): FeishuSentMessage | undefined {
+    const reply = this.lastReplies.get(chatId)
+    const handled = this.handledTriggers.get(chatId)
+    if (!reply) return handled
+    if (!handled) return reply
+    return Number(handled.createTime) >= Number(reply.createTime)
+      ? handled
+      : reply
+  }
+
   async send(message: OutgoingMessage): Promise<void> {
     if (!this.transport) {
       this.config.logger.warn(
@@ -475,7 +500,7 @@ export class FeishuChannel implements ChannelDefinition {
           chatId: msg.channelId,
           message: event.message,
           activeTrigger,
-          previous: this.lastReplies.get(msg.channelId),
+          previous: this.groupBoundary(msg.channelId),
           appId: this.config.appId,
           question,
           senderName: (id) => this.senderName(id),
