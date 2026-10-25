@@ -97,9 +97,9 @@ Text content reaches the model as text. Image blocks reach the model as normaliz
 
 ## Permissions
 
-MCP tools go through the same pipeline as every tool: the session's role and permissions, extensions' `tool_call` and `tool_result` handlers, confirmation for `ask`, and the tool history. The server's `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` annotations are on each tool's `annotations` for permission extensions to use; Vela itself does not act on them.
+MCP tools go through the same pipeline as every tool: the session's permissions, extensions' `tool_call` and `tool_result` handlers, confirmation for `ask`, and the tool history. The server's `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` annotations are on each tool's `annotations` for permission extensions to use; Vela itself does not act on them.
 
-`owner` and `collaborator` sessions can use MCP tools. A `guest` session cannot. The tools are not listed, `tool_search` does not find them, a call is rejected, and the system prompt does not name the servers. A channel chat is `owner` unless `roleFor` returns another role. See [Security](security.md#core-sdk-session-roles).
+All sessions can use MCP tools. Deny them with session `permissions` (see [Security](security.md#per-session-permissions)): a denied tool is not listed, `tool_search` does not find it, a call is rejected, and the system prompt does not name the server.
 
 An MCP server runs with your permissions (stdio) or acts with the credentials you give it (HTTP), and its tool descriptions and results are text the model reads. Add only servers you trust.
 

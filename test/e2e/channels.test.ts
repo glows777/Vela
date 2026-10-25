@@ -377,7 +377,7 @@ test('Feishu ignores unlisted chats and stranger DMs without a model call, reply
   expect(f.historyCalls).toEqual([])
 })
 
-test('Feishu enabled group members share a persisted owner session and both display names reach the model', async () => {
+test('Feishu enabled group members share a persisted session and both display names reach the model', async () => {
   const f = await feishuGateway()
   f.deliver(feishuEvent({ message_id: 'alice', content: '{"text":"first"}' }))
   await waitFor(() => f.sent.length === 1)
@@ -389,8 +389,8 @@ test('Feishu enabled group members share a persisted owner session and both disp
     f.t.vela
       .sessions()
       .filter((s) => s.channel === 'feishu')
-      .map((s) => [s.id, s.role]),
-  ).toEqual([['feishu-oc_group', 'owner']])
+      .map((s) => s.id),
+  ).toEqual(['feishu-oc_group'])
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Alice: first')
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Bob: second')
   expect(f.t.model.calls[1]?.tools).toContain('bash')
@@ -469,7 +469,6 @@ test('Feishu owner DM works with empty chats, prefixes the name, and announces t
   await waitFor(() => f.sent.length === 1)
   expect(f.sent).toEqual([{ chatId: 'oc_dm', text: 'answer' }])
   expect(f.t.model.calls[0]?.lastUserText).toBe('Alice: @_user_1 hello')
-  expect(f.t.vela.session('feishu-oc_dm').role).toBe('owner')
   expect(f.logs).toContain(
     '[feishu] chats is empty; only owners’ direct chats are enabled',
   )

@@ -43,7 +43,7 @@ export interface McpOptions {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-/** The built-in MCP extension. Its tools are `mcp__<server>__<tool>`; guests can't use them. */
+/** The built-in MCP extension. Its tools are `mcp__<server>__<tool>`. */
 export function mcp(options: McpOptions = {}): VelaExtension {
   return function mcp(vela) {
     const fromConfig = isRecord(vela.config.mcpServers)
@@ -164,9 +164,8 @@ export function mcp(options: McpOptions = {}): VelaExtension {
 
     // The first prompt waits (up to 10s) only for servers with direct tools, which must be declared
     // in its request; deferred tools are waited for by tool_search (like pi)
-    vela.on('before_agent_start', async (event, ctx) => {
-      // Guests can't use MCP tools, so they neither wait for servers nor see their names
-      if (!started || ctx.session.role === 'guest') return
+    vela.on('before_agent_start', async (event) => {
+      if (!started) return
       let timer: ReturnType<typeof setTimeout> | undefined
       await Promise.race([
         directReady,
@@ -193,14 +192,9 @@ export function mcp(options: McpOptions = {}): VelaExtension {
         ].join('\n')
     })
 
-    vela.on('tool_call', async (event, ctx) => {
-      // Guests can't use MCP tools, so their searches don't wait for servers
-      if (
-        event.toolName === 'tool_search' &&
-        started &&
-        ctx.session.role !== 'guest'
-      )
-        await started
+    vela.on('tool_call', async (event) => {
+      // tool_search waits for servers that are still connecting, so it can find their tools
+      if (event.toolName === 'tool_search' && started) await started
     })
 
     vela.registerCommand('mcp', {

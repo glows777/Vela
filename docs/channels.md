@@ -2,7 +2,7 @@
 
 A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `feishu-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history. Messages queue in order by default; Feishu also offers Steer and Stop during a run.
 
-**Enabling a chat means trusting everyone in it with this machine.** Feishu gives every member of an enabled chat the `owner` role, including bash, files, memory and extension tools. There is no sandbox or per-member guest boundary. See [Security](security.md#channel-senders) before enabling a group.
+**Enabling a chat means trusting everyone in it with this machine.** Feishu gives every member of an enabled chat full access, including bash, files, memory and extension tools. There is no sandbox or per-member boundary. See [Security](security.md#channel-senders) before enabling a group.
 
 ### Isolation scope
 
@@ -36,7 +36,7 @@ The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no
 
 ### Enablement and replies
 
-- `chats` lists the chat_ids that may use the bot. Every member of a listed chat has owner access. A listed DM also works.
+- `chats` lists the chat_ids that may use the bot. Every member of a listed chat has full access. A listed DM also works.
 - `owners` contains people's open_ids. Their **direct chats** are always enabled, including when `chats` is empty. Being an owner does not enable a group they happen to speak in.
 - Every other group or DM is dropped before content parsing, per-message logging, disk writes, name/history lookup or model work. Restart after changing settings; there is no in-chat `/enable` command.
 - Empty `chats` produces one startup notice: only owners' direct chats are enabled.
@@ -139,7 +139,7 @@ For top-level channel sessions and DMs, when a new text, post, image or file mes
 - **Steer**: prepare the new message with its sender name and group context, then pass it to the current task with `streamingBehavior: 'steer'`. History excludes the active trigger and messages older than its `create_time`, since the session already has that context. Other messages at the same millisecond are retained; timestamps alone cannot order them. The current run sends one final reply to its original trigger, covering the original and steered inputs. The steered message does not start its own answer.
 - **Stop**: abort the current run, discard this card's queued input and pending SDK inputs belonging to that run, and send `Stopped the current run.` to this card's triggering message. Other messages waiting in the gateway's default queue remain queued.
 
-Any member of an enabled chat may use its controls, matching the shared owner session. In a DM enabled only through `owners`, the operator must be one of those owners. A callback must include the matching chat, an operator open_id, a recognized action and the opaque token issued for that card. The first valid choice wins. Repeated clicks and controls from a completed run or a previous process are ignored with an informational toast; they cannot affect a later run. Cards expire when Stop is accepted or the run settles.
+Any member of an enabled chat may use its controls, matching the shared session. In a DM enabled only through `owners`, the operator must be one of those owners. A callback must include the matching chat, an operator open_id, a recognized action and the opaque token issued for that card. The first valid choice wins. Repeated clicks and controls from a completed run or a previous process are ignored with an informational toast; they cannot affect a later run. Cards expire when Stop is accepted or the run settles.
 
 The callback reserves the choice and returns its toast immediately; it does not wait for name/history APIs, model work or abort cleanup. If the run finishes during Steer preparation, the message remains in its default queue. A failed card send is logged and also leaves the message queued. Any message from this app, including a control card, bounds the subsequent group-history scan.
 
@@ -182,9 +182,9 @@ Use application (`tenant_access_token`) permissions. The bot must be enabled/pub
 
 ### Migration
 
-This is a breaking channel change. A deployment that sets only `owners` now answers **only those owners' DMs**. Add each trusted group's chat_id to `chats` before expecting group replies. All members of that group receive full owner access; review the membership first.
+This is a breaking channel change. A deployment that sets only `owners` now answers **only those owners' DMs**. Add each trusted group's chat_id to `chats` before expecting group replies. All members of that group receive full access; review the membership first.
 
-Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id>`. Old per-sender files remain on disk and are not automatically combined or resumed as shared history. The new chat starts a separate persisted session; keep old files if you need their transcripts. This avoids silently exposing a previous private sender history to the whole group. Existing core SDK sessions and roles are unchanged.
+Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id>`. Old per-sender files remain on disk and are not automatically combined or resumed as shared history. The new chat starts a separate persisted session; keep old files if you need their transcripts. This avoids silently exposing a previous private sender history to the whole group.
 
 Custom `FeishuTransport` implementations must provide `getBotId`, `getSenderName`, `listMessages`, `listTopicMessages`, `reply`, `startTopic` and `forward`. `listTopicMessages(threadId, pageToken?)` returns `{ items, pageToken? }` in ascending creation order, with a next token only when more pages remain; use a thread container, page size 50 and no time filters. `listMessages` returns newest-first history with millisecond `create_time`; `reply` returns `{ messageId, createTime }` from the service's successful reply receipt. Sends/replies and API errors must reject, so the gateway reports failure instead of a successful reply.
 
@@ -202,7 +202,7 @@ On receiving a message, the gateway:
 
 1. Selects the shared session from `(channel name, channelId)` or `(channel name, channelId, topic.rootId)`. Non-plain or long ids get a hash suffix to prevent collisions.
 2. Serializes messages per session. Active topic inputs steer automatically; channel/DM inputs can offer Queue/Steer/Stop controls. Queued preparation and unsupported-message replies stay serialized, so a later reply cannot change the context boundary of an earlier question.
-3. For topics, opens/resumes before preparation and rejects unowned input marked `requireExistingSession` without writing an empty file. Opens/resumes the selected persisted session and sets its role from `roleFor(message)`, defaulting to `owner`. A channel must reject untrusted chats **before** delivering them.
+3. For topics, opens/resumes before preparation and rejects unowned input marked `requireExistingSession` without writing an empty file. Opens/resumes the selected persisted session. A channel must reject untrusted chats **before** delivering them.
 4. Starts the optional `startRun` feedback lifecycle for admitted input before preparation, binds controls at the appropriate run boundary, and subscribes to agent events before prompting. Drains pending feedback events before the terminal reply and calls `finish(outcome)` after delivery. Emits `channel_message`, prompts the session, and sends the last assistant text through `send({ channelId, recipientId, text, replyToId?, topic? })`. It emits `channel_reply` after success or `channel_error` after a failed turn/send. Empty answers and input handled by an extension do not resend an earlier answer.
 
 Session save failures are logged at error level with the session id. After three consecutive reported save failures, new messages receive a reply that the session can't be saved, without running another prompt. A successful storage write resets the count, including an explicit SDK `await session.save()` after storage is repaired. Empty saves do not clear the count.
@@ -219,7 +219,7 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 
 **Channel hooks remain experimental.** Feishu is the only channel implementation so far; the hooks will be stabilized once a second channel is implemented. Their signatures may change in the meantime; consult the migration notes when upgrading. This does not change the stability policy for the rest of the SDK.
 
-Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway defaults to owner access and a shared transcript.
+Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
 
 | Member | Required | Contract |
 | --- | --- | --- |
@@ -229,7 +229,6 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
 | `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
 | `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
-| `roleFor(message)` | No | Select the shared session's role for each prepared input; defaults to `owner`. Roles change tools and permissions, not who can read earlier transcript content. |
 | `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
 | `sessionOptions(message)` | No | Select `{ cwd?, tools?, permissions? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. |
 | `validateTools(names)` | No | Check configured names against all registered tools after extension loading. A thrown error rejects startup before transport or recovery. |

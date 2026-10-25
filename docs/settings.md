@@ -180,7 +180,7 @@ Trust only controls what loads at startup. It does not limit what tools can do a
 
 Like pi, Vela puts project instructions from `AGENTS.md` or `CLAUDE.md` into the system prompt. It looks in `~/.vela/` first, then in every directory from the filesystem root down to the working folder, and takes at most one file per directory, the first of `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. Files closer to the working folder come later, so their instructions read as more specific. In a git worktree nested inside its main checkout, the main checkout's file is skipped when the worktree has its own.
 
-The files are read at startup and are not gated by project trust (same as pi): they are text for the model, which would read them anyway when it reads the project. Treat a folder's instructions as untrusted input even when you decline trust. `--no-context-files` turns them off. Guest sessions never get them. A channel chat defaults to `owner` and receives these files, unless `roleFor` returns `guest`. In the SDK, pass `contextFiles` to `createVela()`; see [SDK](sdk.md#createvela-options).
+The files are read at startup and are not gated by project trust (same as pi): they are text for the model, which would read them anyway when it reads the project. Treat a folder's instructions as untrusted input even when you decline trust. `--no-context-files` turns them off. In the SDK, pass `contextFiles` to `createVela()`; see [SDK](sdk.md#createvela-options).
 
 The CLI prints the paths it loaded. Print, JSON and RPC mode write one `[context]` line to stderr. Interactive mode writes that line into the chat log at startup, and `/status` lists the same paths after `Context files:`. A file in the working folder is shown relative to that folder (`AGENTS.md`). A file under the home directory is shown with `~`. A file under the agent directory that is outside the home directory is shown with `$VELA_DIR`. With `--no-context-files`, or when no file was found, there is no line.
 
@@ -209,7 +209,7 @@ Read the diff with `git diff`, then go through checklist.md ...
 | `description` | Required (a skill without one is skipped with a warning). Says what the skill does and when to use it; the model decides from this. |
 | `disable-model-invocation` | `true` hides the skill from the model; only `/skill:<name>` runs it. |
 
-The system prompt lists each skill's name, description and the path of its `SKILL.md`, and tells the model to read the file with `read_file` when a task matches. The body is not in the system prompt. Sessions without `read_file` or `bash` (such as guests) get no list. Relative paths in a skill resolve against its directory.
+The system prompt lists each skill's name, description and the path of its `SKILL.md`, and tells the model to read the file with `read_file` when a task matches. The body is not in the system prompt. Sessions without `read_file` or `bash` get no list. Relative paths in a skill resolve against its directory.
 
 You can also send a skill yourself: `/skill:<name> [instruction]` sends the skill's body, wrapped in a `<skill>` block, followed by your instruction, as your message. This works in every mode and in the SDK's `session.prompt()`. `/skill` lists the skills.
 
@@ -238,7 +238,7 @@ Review $1. Focus on ${2:-correctness}.
 
 `/review src/app.ts "error handling"` sends `Review src/app.ts. Focus on error handling.` Arguments are split like a shell (quotes group words). Placeholders: `$1`, `$2`, … for one argument, `$@` or `$ARGUMENTS` for all of them, `${N:-default}` and `${@:-default}` for a fallback, `${@:N}` for the arguments from the Nth on and `${@:N:L}` for L of them. Without a `description`, the first line of the body is shown in completion.
 
-Templates load from `<project>/.vela/prompts/` (trusted projects only), the `prompts` setting and `~/.vela/prompts/`, one level deep; the first template with a name wins. Extension commands with the same name run instead of a template. Templates and `/skill:` only expand for the session's owner, like extension commands. The SDK takes template paths through `createVela({ promptTemplateDirs })`.
+Templates load from `<project>/.vela/prompts/` (trusted projects only), the `prompts` setting and `~/.vela/prompts/`, one level deep; the first template with a name wins. Extension commands with the same name run instead of a template. The SDK takes template paths through `createVela({ promptTemplateDirs })`.
 
 ## Appending to the system prompt
 

@@ -102,7 +102,7 @@ The built-in memory extension is always loaded, like in the CLI; the RAG extensi
 | `model`, `providers` | Use a real model or `provider/id` instead of faux (`t.model` then throws). |
 | `extensions` | Extensions to load after the built-ins. |
 | `extensionConfig` | Per-extension config sections (`vela.config`), keyed by extension name. |
-| `session` | Options for the default session: `role`, `permissions`, `tools`, `ui`. |
+| `session` | Options for the default session: `permissions`, `tools`, `ui`. |
 | `sessionId` | Id of the default session (default `default`). |
 | `files` | Files to create in `cwd`, as relative path to content. |
 | `skills` | Skills to write to `cwd/.skills/<name>/SKILL.md` (`name`, `description`, `body`, `disableModelInvocation?`). |

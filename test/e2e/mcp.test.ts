@@ -199,30 +199,6 @@ test('progress notifications become tool_execution_update events', async () => {
   ).toEqual(['compiling'])
 })
 
-test('guests get no MCP tools', async () => {
-  const fake = servers({ docs })
-  const t = createTestVela({
-    session: { role: 'guest' },
-    extensions: [
-      mcp({
-        servers: { docs: { command: 'unused' } },
-        createTransport: fake.createTransport,
-      }),
-    ],
-    responses: [
-      fauxToolCall('tool_search', { query: 'mcp__docs__search_pages' }),
-      (req) => {
-        expect(req.toolResults[0]!.output).toBe('No matching tools found.')
-        expect(req.system).not.toContain('mcp__docs (')
-        expect(req.tools).not.toContain('mcp__docs__search_pages')
-        return fauxText('no access')
-      },
-    ],
-  })
-  await t.run('search docs')
-  expect(t.session.registry.decide('mcp__docs__search_pages')).toBe('deny')
-})
-
 test('tools/list_changed registers new tools; a dropped connection reconnects on the next call', async () => {
   let withNewTool = false
   const newTool = (server: McpServer) =>
@@ -323,7 +299,7 @@ test('configuration errors and failed servers are reported once; /mcp shows stat
   expect(closed).toBe(true)
 })
 
-test('only non-guest sessions see servers still connecting, after the direct wait; guests never wait; dispose stops a connect in progress', async () => {
+test('servers still connecting are listed after the direct wait; dispose stops a connect in progress', async () => {
   // Servers that never answer initialize
   const closed: string[] = []
   const hanging = async (entry: { name: string }): Promise<Transport> => {
@@ -370,16 +346,9 @@ test('only non-guest sessions see servers still connecting, after the direct wai
         expect(req.tools).toContain('mcp__docs__search_pages')
         return fauxText('owner')
       },
-      fauxToolCall('tool_search', { query: 'docs' }),
-      (req) => {
-        expect(req.system).not.toContain('mcp__slow')
-        expect(req.toolResults[0]!.output).toBe('No matching tools found.')
-        return fauxText('guest')
-      },
     ],
   })
   await t.run('hi')
-  await t.vela.session('g', { role: 'guest' }).prompt('Hello')
   expect(closed).toEqual([])
   await t.vela.dispose()
   expect(closed.sort()).toEqual(['gone', 'partly', 'slow'])

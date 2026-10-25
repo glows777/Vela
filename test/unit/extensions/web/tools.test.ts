@@ -97,7 +97,7 @@ test('Tavily and Serper results are formatted for the model; HTTP errors are rep
   }
 })
 
-test('a guest can use web_search but not web_fetch', async () => {
+test('a denied tool is unavailable while the other web tools still run', async () => {
   const t = createTestVela({
     responses: [
       [
@@ -107,7 +107,7 @@ test('a guest can use web_search but not web_fetch', async () => {
       fauxText('done'),
     ],
     extensions: [web({ tavilyKey: 'key' })],
-    session: { role: 'guest' },
+    session: { permissions: { web_fetch: 'deny' } },
   })
   const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
     Response.json({ results: [{ title: 'Bun', url: 'https://bun.sh' }] }),

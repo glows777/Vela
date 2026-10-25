@@ -519,11 +519,11 @@ test('terminal control sequences in tool output and channel messages are not wri
   // A message from someone in a channel (untrusted)
   await t.internals.gateway.handleIncoming('fake', {
     channelId: 'c1',
-    senderId: 'guest',
-    senderName: 'guest',
+    senderId: 'visitor',
+    senderName: 'visitor',
     text: 'hi\x1b]0;PWNED\x07there',
   })
-  await tui.until('[fake] guest: hithere')
+  await tui.until('[fake] visitor: hithere')
   const raw = tui.mode.tui.render(100).join('\n')
   expect(raw).not.toContain(']0;PWNED')
   expect(raw).not.toContain(']52;')

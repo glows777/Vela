@@ -14,7 +14,6 @@ import type {
 import { imageMimeType } from '../../images/metadata.ts'
 import { errorMessage, type VelaLogger } from '../../logger.ts'
 import type { ImageContent } from '../../messages.ts'
-import type { Role } from '../../security/roles.ts'
 import {
   type FeishuCardAction,
   type FeishuCardResponse,
@@ -38,7 +37,7 @@ export interface FeishuChannelConfig {
   appSecret: string
   /** These senders (open_id) always have their direct chats enabled. */
   owners: readonly string[]
-  /** Every member of these chats is trusted with owner access. */
+  /** Every member of these chats is trusted with full access. */
   chats?: unknown
   dataDir: string
   logger: VelaLogger
@@ -161,10 +160,6 @@ export class FeishuChannel implements ChannelDefinition {
       (this.chats.has(msg.channelId) ||
         (chatKind === 'direct' && this.config.owners.includes(msg.senderId)))
     )
-  }
-
-  roleFor(): Role {
-    return 'owner'
   }
 
   onMessage(handler: (msg: IncomingMessage) => void | Promise<void>): void {

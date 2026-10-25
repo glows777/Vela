@@ -196,13 +196,12 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 
 | Command | Description |
 |---|---|
-| `/status` | Session overview: id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, loaded context files, model, thinking level, role, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
+| `/status` | Session overview: id, where the session file is (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, loaded context files, model, thinking level, message count, context estimate and token usage. The dollar amount uses the same rounding as the footer. A channel session also shows its channel; a fork shows the session it was copied from. |
 | `/context` | Context window usage by category (system prompt, tools, memory, skills index, messages) and the autocompact buffer (the window above the summary threshold). |
 | `/usage` | Token usage, cache hits and cost for this session. |
 | `/skill`, `/skills` | List skills. |
 | `/extensions` | Loaded extensions and the tools, commands and channels each registered. |
 | `/channel`, `/channel list` | Registered channels. See [Channels](channels.md). |
-| `/role [owner\|collaborator\|guest]` | Show or set this session's role. See [Security](security.md). |
 | `/hooks` | Registered pre- and post-tool hooks. |
 | `/cache on`, `/cache off` | Turn the prompt cache simulation of the demo model on or off (`VELA_MODEL=mock` only). |
 
@@ -220,7 +219,7 @@ Two more kinds of `/` input are expanded by the session itself, so they also wor
 | `/rag ingest <path>` | `rag` | Ingest a document into the knowledge base. |
 | `/rag clear` | `rag` | Delete every chunk, for example after changing the embedding model. |
 
-Extension commands run only in sessions with the `owner` role. Other extensions add their own; `/extensions` lists them. See [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md).
+Other extensions add their own commands; `/extensions` lists them. See [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md).
 
 ## Debug output
 

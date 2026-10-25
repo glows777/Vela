@@ -43,7 +43,7 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 | `sessionStorage` | see [Session storage](#session-storage) | Where session history is stored. |
 | `skillDirs` | `<cwd>/.vela/skills`, `<cwd>/.skills` | Skill directories or files in the [Agent Skills format](settings.md#skills). The first skill with a name wins. |
 | `promptTemplateDirs` | `<cwd>/.vela/prompts` | Prompt template directories or files; `/<name> args` expands one. See [Prompt templates](settings.md#prompt-templates). |
-| `contextFiles` | `loadContextFiles({ cwd })` | `AGENTS.md` / `CLAUDE.md` files (`{ path, content }[]`) put into the system prompt of owner and collaborator sessions; `false` for none. `loadContextFiles({ cwd, agentDir })` finds them like the CLI. See [Context files](settings.md#context-files). |
+| `contextFiles` | `loadContextFiles({ cwd })` | `AGENTS.md` / `CLAUDE.md` files (`{ path, content }[]`) put into the system prompt; `false` for none. `loadContextFiles({ cwd, agentDir })` finds them like the CLI. See [Context files](settings.md#context-files). |
 | `appendSystemPrompt` | none | Text appended to the system prompt in an `<addendum>` section. |
 | `channelIdleMs` | `600000` | A channel session with no new message for this long is closed and resumed on the next message; `0` closes it after each reply; at most `2147483647` (other values throw). See [Channels](channels.md#running-channels). |
 | `extensionConfig` | `{}` | Config section per extension, keyed by extension name. An extension reads its own section as `vela.config`. |
@@ -79,7 +79,6 @@ All [SDK examples](../examples/sdk/) run offline with the faux model from `@glow
 
 ```typescript
 const session = vela.session('support-42', {
-  role: 'collaborator',
   permissions: { write_file: 'ask' },
   model: 'anthropic/<model-id>',
 })
@@ -94,9 +93,8 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | Option | Default | Description |
 |---|---|---|
 | `cwd` | Vela's cwd | Base for file/search/bash tools (also `executeBash`), the cwd prompt and automatic AGENTS/CLAUDE discovery; relative values resolve against Vela's cwd. `session.cwd` exposes the resolved path. A different cwd reloads its own instruction chain instead of a supplied `contextFiles` array; `contextFiles: false` still disables loading. Skills, templates, extensions/config, `dataDir`, storage and relative export destinations stay Vela-wide. Fork/clone preserves cwd; callers must pass it again when reopening/resuming. This is a default path, not a security sandbox. |
-| `role` | `owner` | `owner`, `collaborator` or `guest`. Decides which tools are available and whether extension commands run. See [Security](security.md). |
-| `permissions` | none | Per-tool rules that tighten the role: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`. They cannot grant a tool the role denies (`allow` on it stays denied). `ask` calls `ui.confirm`; without a UI it refuses. |
-| `tools` | all | Enable only these tools (still limited by the role) |
+| `permissions` | none | Per-tool rules: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`; a tool without a rule is allowed. `ask` calls `ui.confirm`; without a UI it refuses. See [Security](security.md#per-session-permissions). |
+| `tools` | all | Enable only these tools |
 | `ui` | none | A `SessionUI` extensions use to talk to the user (`notify`, `confirm`, `select`, `input`, optional `setStatus`, `setWidget`). Without it `confirm` answers no, `select`/`input` answer nothing, and `notify` becomes a `notify` event. |
 | `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
 | `thinkingLevel` | Vela's level | Thinking level for this session |
@@ -143,15 +141,14 @@ Images are normalized once, when they enter: `prompt`, `steer`, `followUp`, `sen
 | `abort(reason?)` | Aborts the running loop and extension commands, and waits until the loop has stopped. Queued messages stay queued. |
 | `waitForIdle()` | Waits for the running loop (including queued messages and manual compaction) without aborting it |
 | `isRunning` | Whether an agent loop or compaction holds the run lock |
-| `executeBash(command, options?)` | Runs a shell command for the user, like the TUI's `!cmd` (pi's `executeBash`): in the working directory with the `shellPath` shell, without tool permissions or hooks, owner sessions only, one at a time. Resolves to `{ output, exitCode, cancelled, truncated, fullOutputPath? }` (`output` is the last 2,000 lines or 50 KB; `exitCode` is undefined when cancelled) and rejects if the command can't start. The result is saved as a `bash_execution` entry and reaches the model as a user message with the next prompt; `excludeFromContext: true` (`!!cmd`) saves it without sending it. While the agent runs, it is recorded when the run ends. `onUpdate(output)` gets the output's tail while it runs, and `bash_execution_update` events carry each new piece of output with the `id` option. |
+| `executeBash(command, options?)` | Runs a shell command for the user, like the TUI's `!cmd` (pi's `executeBash`): in the working directory with the `shellPath` shell, without tool permissions or hooks, one at a time. Resolves to `{ output, exitCode, cancelled, truncated, fullOutputPath? }` (`output` is the last 2,000 lines or 50 KB; `exitCode` is undefined when cancelled) and rejects if the command can't start. The result is saved as a `bash_execution` entry and reaches the model as a user message with the next prompt; `excludeFromContext: true` (`!!cmd`) saves it without sending it. While the agent runs, it is recorded when the run ends. `onUpdate(output)` gets the output's tail while it runs, and `bash_execution_update` events carry each new piece of output with the `id` option. |
 | `isBashRunning`, `abortBash()` | Whether an `executeBash()` command is running; cancel it (it is still recorded, as cancelled) |
 | `compact(focus?)` | Summarizes earlier history now and saves. `focus` says what the summary should prefer to keep. Throws while running. |
 | `resume()` | Replaces the in-memory history with the saved one; returns `false` if nothing was saved. Restores the name, thinking level and (if resolvable) model. Throws while running. |
 | `model`, `modelInfo` | Current `LanguageModel` and its `ModelInfo` |
 | `setModel(model)` | Switches the model from the next prompt. Compaction limits are recomputed from the new context window. Throws, keeping the current model, if the name cannot be resolved. A model chosen by name is saved with the session. |
 | `thinkingLevel`, `setThinkingLevel(level)` | Current level; set it from the next request. A level the model doesn't support is clamped to the nearest supported one (like pi); the getter returns the level in effect. `availableThinkingLevels()` lists the supported levels. See [Thinking levels](models.md#thinking-levels). |
-| `role` | Get or set the role |
-| `getActiveTools()` | Tool names the model can currently see (after role, selection and deferred loading) |
+| `getActiveTools()` | Tool names the model can currently see (after selection and deferred loading) |
 | `setActiveTools(names)` | Enable only these tools; `undefined` restores all |
 | `name`, `setName(name)` | Display name, saved with the next save and shown in session lists |
 | `persistence` | Where history is kept: `{ type: 'file', path }` (the jsonl path; the file may not exist until the first message), `{ type: 'memory' }` when it is not saved, or `{ type: 'unknown' }` when a custom storage does not say |
@@ -214,7 +211,7 @@ session.prompt('Then write a changelog entry', { streamingBehavior: 'followUp' }
 
 `steer(input)` and `followUp(input)` are shortcuts. While running they resolve as soon as the input is queued. `PromptOptions.signal` aborts the run like `abort()`. `PromptOptions.source` tells extensions' `input` handlers where the input came from (`interactive`, `rpc`, `extension`, `channel`; default `sdk`).
 
-Input starting with `/` that names an extension command runs the command instead of going to the model, in owner sessions, even while a loop is running. See [Extensions](extensions.md).
+Input starting with `/` that names an extension command runs the command instead of going to the model, even while a loop is running. See [Extensions](extensions.md).
 
 ## Events
 
@@ -279,11 +276,11 @@ See [02-events.ts](../examples/sdk/02-events.ts).
 
 ```typescript
 const alice = vela.session('alice')
-const bob = vela.session('bob', { role: 'guest' })
+const bob = vela.session('bob', { permissions: { bash: 'ask' } })
 await Promise.all([alice.prompt('Hi'), bob.prompt('Hello')])
 ```
 
-Sessions in one Vela run concurrently. Tool definitions, extensions, skills, memory and channels are shared; history, queues, compaction, usage, tool results, role and the run lock are per session. Channels rely on this: the gateway opens one shared session per conversation (`<channel>-<channelId>`). See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [Sessions](sessions.md#multiple-sessions).
+Sessions in one Vela run concurrently. Tool definitions, extensions, skills, memory and channels are shared; history, queues, compaction, usage, tool results and the run lock are per session. Channels rely on this: the gateway opens one shared session per conversation (`<channel>-<channelId>`). See [03-multi-session.ts](../examples/sdk/03-multi-session.ts) and [Sessions](sessions.md#multiple-sessions).
 
 ## Session storage
 

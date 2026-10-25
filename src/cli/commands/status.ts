@@ -42,7 +42,6 @@ export const statusCommands: CommandHandler[] = [
     lines.push(
       `  Model: ${plain(model)}`,
       `  Thinking: ${session.thinkingLevel}`,
-      `  Role: ${session.role}`,
     )
     const channel = session.channel ? plain(session.channel) : ''
     if (channel) lines.push(`  Channel: ${channel}`)

@@ -2,7 +2,7 @@
 
 Tools are the functions the model can call. Vela ships seven core tools for files, search and shell, plus `tool_search` for loading deferred tools. Extensions add more (see [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md)).
 
-Every tool runs inside the Vela process with the operating-system permissions of the user who started it. Roles and permission rules decide which tools a session's model can see and call; they are not a sandbox. See [Security](security.md).
+Every tool runs inside the Vela process with the operating-system permissions of the user who started it. Permission rules decide which tools a session's model can see and call; they are not a sandbox. See [Security](security.md).
 
 ## Core tools
 
@@ -193,24 +193,23 @@ A query of exact tool names loads those tools. Any other query ranks the deferre
 
 All core tools are direct. Deferred exposure is for extensions that register many tools, so their schemas do not fill the context until needed. See [Extensions](extensions.md).
 
-## Roles and tool access
+## Tool access
 
-Every session has a role (`owner`, `collaborator` or `guest`) that decides which tools the model sees: an owner gets all tools, a collaborator all but `bash`, and a guest only `tool_search`, `rag_search` and `web_search`. CLI sessions are `owner`. A channel chat is `owner` unless its `roleFor` returns another role. A tool the role denies is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. The full rules are in [Security](security.md#core-sdk-session-roles).
+Every session gets all tools; there are no roles (like pi). A denied tool is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#per-session-permissions).
 
 ## Choosing tools per session (SDK)
 
-The CLI has no flag to select tools. With the SDK, pass `tools` (an allowlist) and `permissions` (rules layered over the role) when opening a session:
+The CLI has no flag to select tools. With the SDK, pass `tools` (an allowlist) and `permissions` (per-tool rules) when opening a session:
 
 ```ts
 const session = vela.session('review', {
-  role: 'collaborator',
   tools: ['read_file', 'list_directory', 'grep', 'find'],
   permissions: { write_file: 'ask' },
 })
 ```
 
-- `tools` limits the session to the named tools; the role still applies. `session.setActiveTools(names)` changes the selection later, and `session.setActiveTools(undefined)` removes it. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
-- `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`. The role is the upper bound: session rules can only make a tool stricter (`allow` → `ask` → `deny`), never allow a tool the role forbids. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
+- `tools` limits the session to the named tools. `session.setActiveTools(names)` changes the selection later, and `session.setActiveTools(undefined)` removes it. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
+- `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`; a tool without a rule is allowed. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
 
 See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session.ts](../examples/extensions/read-only-session.ts) for an extension that sets the selection per session.
 

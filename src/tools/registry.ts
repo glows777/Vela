@@ -15,8 +15,7 @@ import {
   decidePermission,
   type PermissionDecision,
   type PermissionRules,
-  type Role,
-} from '../security/roles.ts'
+} from '../security/permissions.ts'
 import type { ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import { prepareCallResult } from './call-result.ts'
@@ -115,7 +114,7 @@ interface CallOptions {
 
 /**
  * State shared by all sessions of one Vela: tool definitions and hooks.
- * Role and permissions, tool selection, discovered deferred tools, the tool result store,
+ * Permissions, tool selection, discovered deferred tools, the tool result store,
  * persistence failure state and the execution gate are per session.
  */
 interface SharedToolState {
@@ -233,21 +232,12 @@ export class ToolRegistry {
     return this.shared.tools
   }
 
-  private role: Role = 'owner'
   private permissions?: PermissionRules
-  /** Tools selected for the session; undefined means no limit (the role still applies) */
+  /** Tools selected for the session; undefined means no limit */
   private selection?: ReadonlySet<string>
   private confirm?: (toolName: string, input: unknown) => Promise<boolean>
 
-  setRole(role: Role): void {
-    this.role = role
-  }
-
-  getRole(): Role {
-    return this.role
-  }
-
-  /** The session's own permission rules, layered over the role's */
+  /** This session's permission rules; without them every tool is allowed */
   setPermissions(rules: PermissionRules | undefined): void {
     this.permissions = rules
   }
@@ -260,7 +250,7 @@ export class ToolRegistry {
   /** This session's permission decision for a tool; unselected tools are always deny */
   decide(toolName: string): PermissionDecision {
     if (this.selection && !this.selection.has(toolName)) return 'deny'
-    return decidePermission(this.role, toolName, this.permissions)
+    return decidePermission(toolName, this.permissions)
   }
 
   setHookPipeline(pipeline: HookPipeline): void {
@@ -397,7 +387,7 @@ export class ToolRegistry {
       return await reject(
         this.selection && !this.selection.has(name)
           ? `[Rejected] ${name} is not enabled in this session`
-          : `[Rejected] Role ${this.role} may not use ${name}`,
+          : `[Rejected] ${name} is denied by this session's permissions`,
       )
     }
     const pipeline = this.shared.hookPipeline

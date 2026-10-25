@@ -53,7 +53,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | `/status` | `send "/status"`, `wait '\[status\]'` | Session, path (`not written yet` before the first save, `in-memory` with `--no-session`), model, context, usage matching the footer |
 | `/usage`, `/cache off` | Two turns, then `/usage` | Input / cache write / cache read / output and a hit rate; `/cache off` stops cache reads |
 | `/context` | `send "/context"` | Category breakdown (system prompt, tools, memory, skills, messages) |
-| `/hotkeys`, `/hooks`, `/channel`, `/role`, `/extensions` | One each | A block per command; no model call |
+| `/hotkeys`, `/hooks`, `/channel`, `/extensions` | One each | A block per command; no model call |
 | `/model`, `/login` | `send "/model"`; `send "/login"` | Offline `/model` explains there are no models; `/login` lists anthropic / openai / openrouter (Esc to leave) |
 | Unknown flags | `run … --thinking huge -p hi`; `run … --model nope/x -p hi` | exit 2 with usage; exit 1 naming the available providers |
 
@@ -85,7 +85,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 |---|---|---|
 | Examples | `exec $RUN ex bun $PWD/examples/sdk/01-minimal.ts` (01–04) | Each exits 0 |
 | Your own script | `work/consumer.ts` importing `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, run with `exec`; recipes in [core.md](core.md) | Whatever the change promises, with its edge cases |
-| Channels and guests | `echoChannel({ owners: ['boss'] })` from `examples/extensions/echo-channel.ts`. That example's `roleFor` returns `guest` unless the sender is an owner. Channels that omit `roleFor` default to `owner` on one shared session. `receive('stranger', …)` and `receive('boss', …)` | The guest's model sees only `tool_search`; the owner's read works |
+| Channels | `echoChannel()` from `examples/extensions/echo-channel.ts`: one shared session per chat. `receive('alice', …)` and `receive('bob', …)` | Both senders use the same session and can read a file |
 | Feishu channel journeys | `exec $RUN feishu bun $REPO/.skills/verify-vela/scripts/feishu-journeys.ts` (up to about 2 minutes, exits 1 if a check fails; see [the script](scripts/feishu-journeys.ts)). It drives the real extension and gateway with `fakeFeishu()` / `feishuEvent()` from `test/support/feishu.ts` and a router faux model; adapt it for the change you made | Below, one row per journey; the script prints one line per check |
 | Feishu topic handoff | Top-level @ "investigate …": the channel session calls `feishu_start_topic`; the topic session does the work | One topic opened; `OnIt` replaced by `DONE`; one progress card created and patched; the topic result @-mentions the requester |
 | Feishu topic replies without @ | Another member replies in the topic without mentioning the bot | The topic session answers and @-mentions that member; no new topic |

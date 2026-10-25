@@ -1,6 +1,6 @@
 # Sessions and context
 
-A session is one conversation: its message history, queued messages, compaction state, token usage, tool results, role and run lock. Like pi, Vela appends each message to the session file as it enters the history, so a crash loses at most the step in progress, and you can continue the session later. This page covers where sessions live, how to continue them, and how Vela keeps a long session within the model's context window.
+A session is one conversation: its message history, queued messages, compaction state, token usage, tool results and run lock. Like pi, Vela appends each message to the session file as it enters the history, so a crash loses at most the step in progress, and you can continue the session later. This page covers where sessions live, how to continue them, and how Vela keeps a long session within the model's context window.
 
 For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session format](session-format.md).
 
@@ -72,7 +72,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 ## Multiple sessions
 
-One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results, role and run lock. This is a difference from pi, where one process holds one active session. A channel like Feishu needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
+One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Feishu needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
 The CLI shows one session at a time, but channels started from it run their own sessions in the same process. In the SDK, open as many as you need with `vela.session(id)`; see [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 
@@ -186,7 +186,7 @@ The memory index and the RAG source list are sent as messages after the user mes
 
 Every model request records input, output, cache-read and cache-write tokens and, when the price is known, a cost. The price comes from the model entry's `cost` in `models.json`, otherwise from a small built-in table of common models; a model in neither has no cost, so Vela shows its tokens without a dollar amount. Set `cost` for such a model to see its cost (see [Models](models.md#model-fields)).
 
-- `/status` shows a short overview: session id and file (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, role, message count, the context estimate and this session's token usage. The dollar amount matches the footer. A channel session also shows its channel, and a fork shows the session it was copied from. Paths under your home directory are shown with `~`, and paths under the configured agent directory (`VELA_DIR`, or `~/.vela`) with `$VELA_DIR`. The Path line is fitted to the terminal's display columns, so a session id is not broken across lines. An unsaved session keeps `not written yet` even when the destination is too long to show.
+- `/status` shows a short overview: session id and file (not written yet until the first save; in-memory when the session is not saved; custom storage when the location is not reported), working directory, model, thinking level, message count, the context estimate and this session's token usage. The dollar amount matches the footer. A channel session also shows its channel, and a fork shows the session it was copied from. Paths under your home directory are shown with `~`, and paths under the configured agent directory (`VELA_DIR`, or `~/.vela`) with `$VELA_DIR`. The Path line is fitted to the terminal's display columns, so a session id is not broken across lines. An unsaved session keeps `not written yet` even when the destination is too long to show.
 - `/usage` shows the session's totals, cache hit rate, the cost and what it would have cost without caching. The cost lines only appear when at least one request had a known price.
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.

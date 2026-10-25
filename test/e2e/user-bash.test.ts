@@ -169,11 +169,8 @@ test('long output keeps its end and points to the full output file; events strea
   )
 })
 
-test('only the owner can run commands, and not on a saved session that was not resumed', async () => {
+test('executeBash refuses a saved session that was not resumed', async () => {
   const t = createTestVela()
-  const guest = t.vela.session('guest-chat', { role: 'guest' })
-  await expect(guest.executeBash('echo hi')).rejects.toThrow('owner')
-
   await t.session.executeBash('echo saved')
   await t.cleanup({ keepDir: true })
   const second = createTestVela({ cwd: t.cwd })

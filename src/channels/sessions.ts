@@ -33,7 +33,6 @@ export class ChannelSessions {
       channel.sessionOptions?.(msg),
     )
     session.channel = channel.name
-    session.role = channel.roleFor?.(msg) ?? 'owner'
     channelScopes.set(session.registry, {
       channel: channel.name,
       chatId: msg.channelId,

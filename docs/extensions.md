@@ -158,9 +158,9 @@ The `.text` property remains the joined text caption. `.content` is present for 
 
 `ctx.onUpdate(partialResult)` reports partial output while the tool runs. Each call becomes a `tool_execution_update` event (pi's event and field names), so print, JSON and RPC modes see it; updates after the tool returned are ignored. `bash` sends `{ content: [{ type: 'text', text }] }` with the tail of its output.
 
-`ctx.executeTool(name, args, { signal?, onUpdate? })` runs another tool from inside a tool, same as pi. The call goes through everything a model call goes through: the session's role and permissions, extensions' `tool_call` hooks, the dangerous-command check for `bash`, confirmation for `ask`, the tool history and `tool_result` hooks. It can run the session's `direct` tools and every `deferred` or `codemode` tool the session may use, never `model-only` or `hidden` ones. The call's id is `<parent id>/<n>`, its `tool_execution_*` events carry `parentToolCallId`, and it is recorded in the tool history but not added to the conversation. It does not throw for tool failures: an unknown tool, invalid arguments, a refusal and an error all return `{ toolCallId, toolName, result, isError: true }`, with the reason/error message as `result`, or canonical content when a failed tool supplied images. `signal` defaults to the calling tool's signal. A nested call does not wait for the calling tool's `executionMode`.
+`ctx.executeTool(name, args, { signal?, onUpdate? })` runs another tool from inside a tool, same as pi. The call goes through everything a model call goes through: the session's permissions, extensions' `tool_call` hooks, the dangerous-command check for `bash`, confirmation for `ask`, the tool history and `tool_result` hooks. It can run the session's `direct` tools and every `deferred` or `codemode` tool the session may use, never `model-only` or `hidden` ones. The call's id is `<parent id>/<n>`, its `tool_execution_*` events carry `parentToolCallId`, and it is recorded in the tool history but not added to the conversation. It does not throw for tool failures: an unknown tool, invalid arguments, a refusal and an error all return `{ toolCallId, toolName, result, isError: true }`, with the reason/error message as `result`, or canonical content when a failed tool supplied images. `signal` defaults to the calling tool's signal. A nested call does not wait for the calling tool's `executionMode`.
 
-Tools are shared by all sessions, and an extension can register and unregister them at any time (the mcp extension does when a server connects or changes its tool list). The session's role and permissions decide which sessions can call them; a `guest` session cannot call extension tools, except `rag_search` and `web_search` from the built-in extensions (see [Security](security.md#core-sdk-session-roles)). See [Tools](tools.md) for the built-in tools.
+Tools are shared by all sessions, and an extension can register and unregister them at any time (the mcp extension does when a server connects or changes its tool list). The session's permissions decide which of its tools the model can call (see [Security](security.md#per-session-permissions)). See [Tools](tools.md) for the built-in tools.
 
 ### registerCommand
 
@@ -176,8 +176,6 @@ vela.registerCommand('todo', {
 ```
 
 `session.prompt('/todo buy milk')` runs the handler with `args` set to `buy milk` (the text after the name, trimmed) instead of sending the text to the model. Commands run immediately, even while the session is busy. Names must match `[A-Za-z0-9][\w-]*`; a name already registered by another extension throws.
-
-Commands only run in `owner` sessions. In a `collaborator` or `guest` session, `/todo` is plain text for the model. Open that session with `vela.session(id, { role })`, or return the role from a channel `roleFor`. A channel that omits `roleFor` is `owner`, so a sender in that chat can run the command.
 
 In interactive mode, Vela's own commands (`/model`, `/extensions`, ...) are checked first, so an extension cannot override them. Extension commands appear in autocomplete. In print mode, `vela -p "/todo buy milk"` runs the command. In RPC mode, send commands with the `prompt` command.
 
@@ -244,11 +242,10 @@ vela.registerChannel({
   stop: () => {},
   send: async (message) => { /* deliver message.text to message.recipientId */ },
   onMessage: (handler) => { /* call handler(msg) for each incoming message */ },
-  roleFor: (msg) => (owners.includes(msg.senderId) ? 'owner' : 'guest'),
 })
 ```
 
-`roleFor` is optional. The gateway checks it on every message. When you omit it, every sender in the chat is `owner`. When you return `guest` or `collaborator`, the role changes tools, permissions, and prompt and command behavior. Earlier turns stay in the shared transcript. See [Session roles](security.md#core-sdk-session-roles) and [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
+Every sender in the chat shares one session, its history and its tools. A channel must reject untrusted chats before delivering messages; see [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
 
 ### on
 
@@ -276,7 +273,7 @@ Some events let a handler change what happens; the rest are notifications.
 Details:
 
 - `before_agent_start`: sections are computed once per agent loop (normally once per `prompt()`) and stay the same for every model request in that turn, which keeps the prompt cache prefix stable. Sections appear in the system prompt in the order they were written. Example: [prompt-section.ts](../examples/extensions/prompt-section.ts).
-- `input` (like pi): `event` has `text`, optional `images` (`ImageContent[]`), `source` (`interactive` for the TUI and `-p`, `rpc`, `extension` for `sendUserMessage()`, `channel` for channel senders, `sdk` by default; set it with `prompt(text, { source })`) and `streamingBehavior` (`steer` / `followUp` while the session is running). It fires in sessions of every role, so check `ctx.session.role`. Transforms chain; omitted `images` preserves the current attachments, while `images: []` removes them. Images are normalized after the input hooks. `handled` stops the remaining handlers and `prompt()` resolves without running. Extension commands run before it and never reach it. A throwing handler is logged and skipped.
+- `input` (like pi): `event` has `text`, optional `images` (`ImageContent[]`), `source` (`interactive` for the TUI and `-p`, `rpc`, `extension` for `sendUserMessage()`, `channel` for channel senders, `sdk` by default; set it with `prompt(text, { source })`) and `streamingBehavior` (`steer` / `followUp` while the session is running). Transforms chain; omitted `images` preserves the current attachments, while `images: []` removes them. Images are normalized after the input hooks. `handled` stops the remaining handlers and `prompt()` resolves without running. Extension commands run before it and never reach it. A throwing handler is logged and skipped.
 - `before_agent_start` messages: like pi, a returned `{ message: { customType, content, display, details? } }` is added as a custom message (see [Messages](#messages)) after the user message and any `nextTurn` messages. Unlike a section it is part of the conversation, so it does not change the cached system prompt.
 - `context` (like pi): `event.messages` is a copy of the messages the request sends, without the system prompt; handlers chain. The history, the session file and later requests are unchanged. Images a handler adds are sent as given, without normalization (like pi). After an overflow compaction the request is built again and handlers run again. A throwing handler is logged and the previous result is used.
 - Provider hooks (like pi's, with one difference): pi's providers are its own, so pi passes the provider's JSON body; Vela uses the AI SDK, which builds the body inside the provider, so `before_provider_request` gets the AI SDK call options (`prompt`, `tools`, `providerOptions`, `headers`, `maxOutputTokens`, ...). Add request headers through `event.params.headers`. `after_provider_response` gets the response headers but no status: the AI SDK reports a failed response as the request's error. Errors in either are logged and the request goes on.
@@ -330,13 +327,13 @@ Handlers and command handlers receive a context as their second argument:
 
 | Field | Description |
 |---|---|
-| `ctx.session` | The session that fired the event: `id`, `role`, `name`, `model`, `messages`, `getActiveTools()`, `setActiveTools(names)`, `setModel()`, `prompt()`, ... (see [SDK](sdk.md)) |
+| `ctx.session` | The session that fired the event: `id`, `name`, `model`, `messages`, `getActiveTools()`, `setActiveTools(names)`, `setModel()`, `prompt()`, ... (see [SDK](sdk.md)) |
 | `ctx.ui` | How to talk to the user (below) |
 | `ctx.hasUI` | Whether `confirm`, `select` and `input` can actually ask someone |
 | `ctx.cwd` | Working directory |
 | `ctx.signal` | Abort signal of the running turn; `undefined` when the session is idle. In a command handler it is the command's own signal |
 
-`ctx.session.setActiveTools(names)` limits the tools of that one session (still within its role); `undefined` restores all. Unknown names are ignored. `ctx.session.role` is `owner`, `collaborator` or `guest`; check it before doing something a guest should not trigger.
+`ctx.session.setActiveTools(names)` limits the tools of that one session; `undefined` restores all. Unknown names are ignored.
 
 ### ctx.ui
 
