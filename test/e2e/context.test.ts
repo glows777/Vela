@@ -86,7 +86,7 @@ test('microcompact folds old tool results once more than five calls have complet
   expect(t.lastAssistantText()).toBe('Read them all')
 })
 
-test('summary compaction replaces old history with a grounded summary and keeps recent messages', async () => {
+test('summary compaction replaces old history with a structured summary and keeps recent messages', async () => {
   const filler = (i: number) => `Question ${i}: ${'Background. '.repeat(100)}`
   const t = createTestVela({
     // Summary triggers on the 5th question, after 4 rounds (8 messages)
@@ -125,7 +125,7 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   // The summary request goes through generateText and sees the compaction control instruction
   const generate = t.model.calls.find((c) => c.kind === 'generate')!
   expect(generate.lastUserText).toContain('context_compaction')
-  expect(generate.responseFormat?.type).toBe('json')
+  expect(generate.responseFormat?.type).not.toBe('json')
 
   // The main request after the summary: the first message is the summary, recent messages are kept as is
   const after = t.model.calls.at(-1)!
@@ -136,7 +136,7 @@ test('summary compaction replaces old history with a grounded summary and keeps 
   )
   expect(JSON.stringify(firstUser.content)).toContain('Question 0')
   expect(after.lastUserText).toContain('Question 4')
-  expect(t.session.contextManager.state.summary).toContain('## User goal')
+  expect(t.session.contextManager.state.summary).toContain('## Goal')
   expect(
     t
       .tracker()
@@ -215,7 +215,7 @@ test('a model switch drops the size the previous model reported', async () => {
   expect(t.lastAssistantText()).toBe('Answer 1')
 })
 
-test('a summary that fails validation stops the turn and leaves history untouched', async () => {
+test('an incomplete summary stops the turn and leaves history untouched', async () => {
   const t = createTestVela({
     limits: { microcompactThreshold: 1e9, summaryThreshold: 50_000 },
     responses: [
@@ -224,7 +224,9 @@ test('a summary that fails validation stops the turn and leaves history untouche
       fauxText('Answer 2'),
       fauxText('Answer 3', { usage: { input: 60_000 } }),
     ],
-    generate: [fauxText('OK, the summary is ready.')],
+    generate: [
+      fauxText('## Goal\nPartial summary', { finishReason: 'length' }),
+    ],
   })
   for (let i = 0; i < 4; i++)
     await t.run(`Question ${i}: ${'Background. '.repeat(100)}`)
@@ -257,7 +259,7 @@ test('session.compact() summarizes old history on demand, with an optional focus
   expect(generate.tools).toEqual([])
   expect(generate.inputTokens).toBeLessThan(stream.inputTokens)
   expect(JSON.stringify(generate.prompt)).not.toContain('Question 1')
-  expect(t.session.contextManager.state.summary).toContain('## User goal')
+  expect(t.session.contextManager.state.summary).toContain('## Goal')
   expect(await t.readData('sessions/default.jsonl')).toContain('Question 0')
   expect(t.session.isRunning).toBe(false)
 })
@@ -304,7 +306,7 @@ test('when the provider says the context is too long, Vela compacts once and sen
   ])
   // Not a retry: the failed request ends as an error, compaction runs, then the same step is sent again
   expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
-  expect(t.session.contextManager.state.summary).toContain('## User goal')
+  expect(t.session.contextManager.state.summary).toContain('## Goal')
   expect(t.messages.at(-2)).toEqual({ role: 'user', content: 'Question 4' })
 })
 

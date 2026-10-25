@@ -39,22 +39,8 @@ test('summary sends only the dropped messages as text, without tool definitions'
               index: 0,
               message: {
                 role: 'assistant',
-                content: JSON.stringify({
-                  sourceMessageCount: 2,
-                  goal: {
-                    sourceMessageIndex: 0,
-                    quote: 'old',
-                  },
-                  completed: [
-                    {
-                      sourceMessageIndex: 1,
-                      quote: 'response',
-                    },
-                  ],
-                  pending: [],
-                  constraints: [],
-                  details: [],
-                }),
+                content:
+                  '## Goal\nContinue the old task.\n\n## Progress\n### Done\n- response\n\n## Next Steps\n1. Continue.',
               },
               finish_reason: 'stop',
             },
@@ -129,7 +115,7 @@ test('summary sends only the dropped messages as text, without tool definitions'
     registry.toAISDKFormat(),
     restored,
   )
-  await summarize(snapshot, store.results, new TokenTracker())
+  await summarize(snapshot, store, new TokenTracker())
   expect(requests[1]!.messages.slice(0, requests[0]!.messages.length)).toEqual(
     requests[0]!.messages,
   )
@@ -142,7 +128,7 @@ test('summary sends only the dropped messages as text, without tool definitions'
   expect(conversation).toContain('response')
   expect(conversation).not.toContain('next-0')
   expect(requests[1]!.response_format).toBeUndefined()
-  expect(requests[2]!.response_format).toEqual({ type: 'json_object' })
+  expect(requests[2]!.response_format).toBeUndefined()
   registry.searchTools('later')
   const discovered = await createRequestSnapshot(
     model,

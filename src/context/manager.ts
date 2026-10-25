@@ -71,7 +71,7 @@ export class ContextManager {
   ): Promise<string> {
     const result = await summarize(
       request,
-      this.store.results,
+      this.store,
       this.tracker,
       this.limits.maxInputTokens,
       focus,
@@ -130,7 +130,7 @@ export class ContextManager {
       const before = this.contextTokens(request)
       const compacted = await summarize(
         request,
-        this.store.results,
+        this.store,
         this.tracker,
         this.limits.maxInputTokens,
         focus,

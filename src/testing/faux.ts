@@ -80,7 +80,7 @@ export interface FauxRequest {
    * chars / 4. Compare requests to see which one a provider would accept.
    */
   inputTokens: number
-  /** JSON output the request asks for (e.g. Output.json() for the compaction summary) */
+  /** Output format the request asks for. */
   responseFormat?: LanguageModelV4CallOptions['responseFormat']
   /** The request's reasoning setting (mapped from the thinking level) */
   reasoning?: LanguageModelV4CallOptions['reasoning']
@@ -160,11 +160,7 @@ export const fauxHang = (partialText = ''): FauxResponse => ({
   hang: true,
 })
 
-/**
- * Builds a valid history summary JSON from a compaction request, quoting only text from the
- * removed messages, so it passes the compressor's structure and quote checks.
- * Use it in the `generate` queue.
- */
+/** Builds a structured free-text checkpoint from a compaction request. Use it in the generate queue. */
 export const fauxSummary =
   (pick: { goal?: number } = {}) =>
   (req: FauxRequest): FauxResponse => {
@@ -180,20 +176,20 @@ export const fauxSummary =
       sources.find((s) => s.role === 'user') ??
       sources[0]
     if (!goal) throw new Error('faux: compaction request has no sources')
-    const fact = (s: { index: number; text: string }) => ({
-      sourceMessageIndex: s.index,
-      quote: s.text.trim().slice(0, 400),
-    })
-    const rest = sources.filter((s) => s !== goal).map(fact)
     return {
-      text: JSON.stringify({
-        sourceMessageCount: control.sourceMessageCount,
-        goal: fact(goal),
-        completed: [],
-        pending: [],
-        constraints: [],
-        details: rest.length ? rest : [fact(goal)],
-      }),
+      text: [
+        `## Goal\n${goal.text.trim().slice(0, 400)}`,
+        '## Constraints & Preferences\n(none)',
+        '## Progress\n### Done\n(none)\n### In Progress\n(none)\n### Blocked\n(none)',
+        '## Key Decisions\n(none)',
+        '## Next Steps\n1. Continue the task.',
+        `## Critical Context\n${
+          sources
+            .filter((s) => s !== goal)
+            .map((s) => s.text.trim().slice(0, 400))
+            .join('\n') || '(none)'
+        }`,
+      ].join('\n\n'),
     }
   }
 

@@ -117,7 +117,7 @@ Both an older session file and a microcompaction `context_edit` can hold this JS
 
 Resume loads that JSON. In the model request, Vela sends `preview` as text. When that preview contains `[preview: first ` or `[tool result preview omitted; original available at path]`, Vela appends the Full-output recovery line.
 
-**Summaries.** After a compaction, the model context starts with a user message whose content is `[Summary of the earlier conversation]` followed by the `compaction` entry's summary. The summary has the sections User goal, Completed, Pending, Constraints, and Key facts, then one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).` This message is not stored as a `message` entry. It is rebuilt from the `compaction` entry.
+**Summaries.** After a compaction, the model context starts with a user message whose content is `[Summary of the earlier conversation]` followed by the `compaction` entry's summary. The free-text summary has the sections Goal, Constraints & Preferences, Progress (Done / In Progress / Blocked), Key Decisions, Next Steps and Critical Context. Code appends nonempty `<read-files>` and `<modified-files>` lists from recorded tool calls, then one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).` This message is not stored as a `message` entry. It is rebuilt from the `compaction` entry.
 
 Loop-detection reminders are user messages starting with `[system message]`.
 
