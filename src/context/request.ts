@@ -9,6 +9,8 @@ export interface RequestSnapshot {
   messages: ModelMessage[]
   toolDefinitions: unknown[]
   abortSignal?: AbortSignal
+  /** Model output limit for summarization, independent of compaction thresholds. */
+  maxOutputTokens?: number
 }
 
 export async function createRequestSnapshot(

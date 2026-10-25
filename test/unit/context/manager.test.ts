@@ -90,7 +90,7 @@ test('micro protects five completed calls even when results share one message', 
   expect(parts.slice(3)).toEqual(results.slice(3))
 })
 
-/** Summary model: by default produces a valid quote-based summary; with '' it returns empty text. */
+/** Summary model: by default produces a structured free-text summary; with '' it returns empty text. */
 function summaryModel(text?: string) {
   return createFauxModel({
     responses: [text === undefined ? fauxSummary() : fauxText(text)],
