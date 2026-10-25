@@ -111,7 +111,7 @@ When the size reaches `summaryThreshold` and there is an earlier turn to summari
 
 1. It picks a split point at a user message, at least six messages from the end, where every tool call before it has its result.
 2. It sends only the dropped messages, serialized as text in a `<conversation>` block, plus a `context_compaction` instruction. The instruction asks for a JSON summary with the user's goal and lists of completed work, pending work, constraints and key facts. Every item must be a verbatim quote from a removed message. Quotes that don't match the original text are rejected.
-3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary and a guide to the tool call history file, so the model can still look up earlier tool calls and outputs.
+3. In the context, the removed messages are replaced by one user message, `[Summary of the earlier conversation]`, followed by the summary. The summary keeps one line with the earlier-output snapshot location, `Earlier tool output: /.../snapshots/through-<seq>.jsonl (through seq <seq>).`, so the model can still look up earlier tool output.
 4. Like pi, a `compaction` entry is appended to the session (summary and the first kept message); the summarized messages stay in the file. `compaction_start` and `compaction_end` events (`reason: 'threshold'`) are emitted around it.
 
 If there is no earlier turn to summarize, the request is sent as long as it is within `maxInputTokens`.
