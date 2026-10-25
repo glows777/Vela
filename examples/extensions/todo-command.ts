@@ -1,6 +1,5 @@
 /**
  * registerCommand + ctx.ui.notify: `/todo buy milk` adds a todo, `/todo` lists them.
- * Commands run only in owner sessions. In a guest or collaborator session, `/todo` is plain text.
  * With no UI, notify becomes a `notify` event.
  */
 import type { VelaExtension } from '@glows777/vela'

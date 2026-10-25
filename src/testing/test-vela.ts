@@ -76,7 +76,7 @@ export interface TestVelaOptions {
   extensionConfig?: Record<string, Record<string, unknown>>
   /** Extensions to load (the ones under test), after the built-in memory (and rag, with embedder) */
   extensions?: VelaExtension[]
-  /** Options for the default session (role, permissions, tool selection, ui) */
+  /** Options for the default session (permissions, tool selection, ui) */
   session?: SessionOptions
   /** Same as createVela's `channelIdleMs` */
   channelIdleMs?: number

@@ -4,11 +4,7 @@ import { join } from 'node:path'
 import z from 'zod'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { ToolExecutionResult } from '../../src/tools/types.ts'
-import {
-  captureConsole,
-  cleanupTestVelas,
-  createTestVela,
-} from '../support/vela.ts'
+import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -328,58 +324,6 @@ test('a deferred tool only reaches the model after tool_search discovers it', as
   await t.run('Look up 42')
 
   expect(t.lastAssistantText()).toBe('Found: record 42')
-})
-
-test('a guest cannot use bash: the call is refused and recorded', async () => {
-  const t = createTestVela({
-    responses: [
-      (req) => {
-        // A guest does not get bash, but the model may still call it from history
-        expect(req.tools).not.toContain('bash')
-        return fauxToolCall('bash', { command: 'echo hi' })
-      },
-      fauxText('No permission'),
-    ],
-  })
-  await captureConsole(() => t.dispatch('/role guest'))
-
-  await t.run('Run echo')
-
-  expect(
-    t.eventsOf('tool_execution_end').filter((e) => !e.isError),
-  ).toHaveLength(0)
-  expect(
-    t.eventsOf('tool_execution_end').filter((e) => e.isError),
-  ).toHaveLength(1)
-  expect(t.lastAssistantText()).toBe('No permission')
-})
-
-test('session permissions cannot grant a guest a tool its role forbids', async () => {
-  const t = createTestVela({
-    session: { role: 'guest', permissions: { bash: 'allow', '*': 'allow' } },
-    responses: [
-      (req) => {
-        // The role is the upper bound: 'allow' does not add bash or read_file
-        expect(req.tools).not.toContain('bash')
-        expect(req.tools).not.toContain('read_file')
-        return fauxToolCall('bash', { command: 'echo hi' })
-      },
-      fauxText('No permission'),
-    ],
-  })
-  // Selecting the tool explicitly does not grant it either
-  t.session.setActiveTools(['bash', 'read_file'])
-  expect(t.session.getActiveTools()).toEqual([])
-
-  await t.run('Run echo')
-
-  expect(
-    t.eventsOf('tool_execution_end').filter((e) => !e.isError),
-  ).toHaveLength(0)
-  expect(
-    t.eventsOf('tool_execution_end').filter((e) => e.isError),
-  ).toHaveLength(1)
-  expect(t.lastAssistantText()).toBe('No permission')
 })
 
 test('bash has no default timeout; the model can pass one and sees that the command timed out', async () => {

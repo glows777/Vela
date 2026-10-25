@@ -133,8 +133,7 @@ export {
 export type {
   PermissionDecision,
   PermissionRules,
-  Role,
-} from './security/roles.ts'
+} from './security/permissions.ts'
 export {
   type BashExecutionEntry,
   type BranchSummaryEntry,

@@ -335,13 +335,3 @@ test('aborting the prompt signal of /dream stops the model run it started', asyn
   expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('aborted')
   expect(t.session.busy.locked).toBe(false)
 })
-
-test('guest sessions cannot run memory commands; the text goes to the model', async () => {
-  const t = withMemory({
-    responses: [fauxText('Plain answer')],
-    session: { role: 'guest' },
-  })
-  await t.run('/memory')
-  expect(notes(t)).not.toContain('openai-null-chars')
-  expect(t.model.calls).toHaveLength(1)
-})

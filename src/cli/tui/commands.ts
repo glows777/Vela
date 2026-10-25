@@ -35,7 +35,6 @@ export const CLI_COMMANDS = [
   { name: 'skill', description: 'List skills (run one with /skill:<name>)' },
   { name: 'extensions', description: 'Loaded extensions' },
   { name: 'channel', description: 'Channels' },
-  { name: 'role', description: 'Show / switch role' },
   { name: 'hooks', description: 'Registered hooks' },
 ]
 
