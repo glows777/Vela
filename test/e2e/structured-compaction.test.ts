@@ -172,6 +172,53 @@ for (const nestedBranch of [false, true]) {
   })
 }
 
+for (const copy of ['clone', 'fork'] as const) {
+  test(`${copy} preserves branch-summary files through resumed compaction`, async () => {
+    const t = createTestVela({
+      files: { 'reference.txt': 'reference' },
+      responses: [
+        fauxToolCall('read_file', { path: 'reference.txt' }),
+        fauxToolCall('write_file', { path: 'x.txt', content: 'finished' }),
+        fauxText('done'),
+        fauxText('new branch'),
+        fauxText('next turn'),
+      ],
+      generate: [fauxText(checkpoint)],
+    })
+    await t.run('Read reference and write x.txt')
+    const root = t.session.getEntries().find((e) => e.type === 'message')!
+    await t.session.navigateTree(root.id, { summarize: true })
+    await t.run('Continue on this branch')
+    await t.run('Fork here')
+    const question = t.session
+      .getEntries()
+      .find((e) => e.type === 'message' && e.message.content === 'Fork here')!
+    if (copy === 'clone') await t.session.clone({ sessionId: 'copied' })
+    else await t.session.fork(question.id, { sessionId: 'copied' })
+    const resumed = createTestVela({
+      cwd: t.cwd,
+      sessionId: 'copied',
+      responses: [...replies(), fauxText('continue with x.txt')],
+      generate: [fauxText(checkpoint), fauxText(checkpoint)],
+    })
+    expect(await resumed.session.resume()).toBe(true)
+    for (let i = 0; i < 3; i++) await resumed.run(`Recent ${i}`)
+    await resumed.session.compact()
+    await resumed.run('Continue')
+    await resumed.session.compact()
+    expect(resumed.session.contextManager.state.summary).toContain(
+      '<read-files>\nreference.txt\n</read-files>',
+    )
+    expect(resumed.session.contextManager.state.summary).toContain(
+      '<modified-files>\nx.txt\n</modified-files>',
+    )
+    await resumed.run('where were we?')
+    expect(JSON.stringify(resumed.model.calls.at(-1)!.prompt)).toContain(
+      'x.txt',
+    )
+  })
+}
+
 for (const [label, response, error] of [
   [
     'provider error',

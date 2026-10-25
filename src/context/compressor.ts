@@ -304,8 +304,8 @@ export async function summarize(
     throw new Error(
       'Summary was not fully generated or returned tool calls; this turn was stopped and the original history kept.',
     )
-  // Follow recorded compaction and branch-summary provenance, rather than asking the model
-  // to preserve file lists. Shared entries are visited once, including after resume.
+  // Recover recorded calls behind compactions and portable file lists from branch summaries.
+  // Shared entries are visited once, including after resume.
   const read = new Set<string>()
   const modified = new Set<string>()
   const calls: { toolName: string; input: unknown }[] = []
@@ -328,13 +328,17 @@ export async function summarize(
       )
       entries.push(...branch.slice(0, kept))
     } else if (entry.type === 'branch_summary') {
-      const retained = new Set(
-        store.getBranch(entry.parentId).map((item) => item.id),
-      )
-      const branch = store.getBranch(
-        entry.fromId === 'root' ? null : entry.fromId,
-      )
-      entries.push(...branch.filter((item) => !retained.has(item.id)))
+      // Fork/clone keeps the summary but not its abandoned source branch. Its
+      // code-appended lists are the portable record of those file operations.
+      for (const [tag, files] of [
+        ['read-files', read],
+        ['modified-files', modified],
+      ] as const) {
+        const list = entry.summary.match(
+          new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`),
+        )?.[1]
+        if (list) for (const path of list.split('\n')) files.add(path)
+      }
     } else if (entry.type === 'message' && !entry.stopReason) {
       fileMessages.push(entry.message)
       for (const nested of Object.values(entry.nestedCalls ?? {})) {
