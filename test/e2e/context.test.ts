@@ -66,6 +66,20 @@ test('microcompact folds old tool results once more than five calls have complet
   const last = JSON.stringify(t.model.calls.at(-1)!.prompt)
   expect(last).toContain('tool result preview omitted')
   expect(last).toContain('// file 7')
+  const omitted = t.model.calls
+    .at(-1)!
+    .prompt.flatMap((message) =>
+      message.role === 'tool' ? message.content : [],
+    )
+    .filter((part) => part.type === 'tool-result')
+    .find((part) =>
+      JSON.stringify(part.output).includes('tool result preview omitted'),
+    )!
+  expect(omitted.output.type).toBe('text')
+  const text = (omitted.output as { type: 'text'; value: string }).value
+  expect(text).toContain('Full output: ')
+  const path = text.match(/Full output: (.+?);/)![1]!
+  expect(await Bun.file(path).text()).toContain('// file 0')
   // Folded results can be recovered from their path
   const saved = await t.readData('sessions/default.jsonl')
   expect(saved).toContain('tool result preview omitted')

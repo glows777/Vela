@@ -99,7 +99,7 @@ test('AGENTS.md and skills go into the system prompt in pi order', async () => {
   )
   expect(order).toEqual([...order].sort((a, b) => a - b))
   expect(order.every((i) => i >= 0)).toBe(true)
-  expect(system).toContain('[Tool call history]')
+  expect(system).not.toContain('[Tool call history]')
 })
 
 test('SDK options: contextFiles false loads none, appendSystemPrompt adds an <addendum>', async () => {

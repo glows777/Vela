@@ -48,7 +48,7 @@ test.each(['before', 'after'] as const)(
         fauxToolCall('pictures_ordered', {}),
         (request) => {
           const path = JSON.stringify(request.toolResults).match(
-            /Full text saved at: ([^\\]+)/,
+            /Full output: (.+?);/,
           )?.[1]
           if (!path) throw new Error('The caption recovery path is missing')
           return fauxToolCall('read_file', { path })
@@ -83,7 +83,7 @@ test.each(['before', 'after'] as const)(
       expect(caption.text).not.toContain(index === 0 ? 'Image B:' : 'Image A:')
       if (index === 0) {
         expect(caption.text.length).toBeLessThan(captions[0]!.length)
-        expect(caption.text).toContain('End of image A.')
+        expect(caption.text).not.toContain('End of image A.')
       }
     }
     const saved = t.messages
@@ -149,7 +149,7 @@ test('many ordered captions share a bounded preview and one recovery notice', as
   const texts = output.value.flatMap((part) =>
     part.type === 'text' ? [part.text] : [],
   )
-  const notices = texts.filter((text) => text.includes('Full text saved at:'))
+  const notices = texts.filter((text) => text.includes('Full output:'))
   expect(notices).toHaveLength(1)
   const totalTextChars = texts.reduce((total, text) => total + text.length, 0)
   expect(totalTextChars).toBeLessThanOrEqual(

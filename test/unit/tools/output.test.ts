@@ -34,6 +34,7 @@ test('oversized result is saved before returning a preview and can be read throu
       name: 'large',
       description: 'large',
       inputSchema: z.object({}),
+      maxResultChars: 3000,
       execute: async () => raw,
     },
     readFileTool,
@@ -43,11 +44,10 @@ test('oversized result is saved before returning a preview and can be read throu
     {},
     { toolCallId: 'large', messages: [], context: {} },
   )
-  const stored = getStoredResult({ type: 'json', value: result as never })!
-  expect(stored).toBeDefined()
-  expect(await Bun.file(stored.path).text()).toBe(raw)
+  const path = String(result).match(/Full output: (.+?);/)![1]!
+  expect(await Bun.file(path).text()).toBe(raw)
   const page = await tools.read_file!.execute!(
-    { path: stored.path, offset: 1001, limit: 1 },
+    { path, offset: 1001, limit: 1 },
     { toolCallId: 'read', messages: [], context: {} },
   )
   expect(String(page)).toContain('MIDDLE_EVIDENCE')
@@ -82,7 +82,7 @@ test('storage failure rejects the result instead of returning an unreadable refe
     name: 'large',
     description: 'large',
     inputSchema: z.object({}),
-    execute: async () => 'x'.repeat(4000),
+    execute: async () => 'x'.repeat(60_000),
   })
   await expect(
     registry.toAISDKFormat().large!.execute!(
@@ -230,6 +230,7 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
     name: 'large',
     description: 'large',
     inputSchema: z.object({}),
+    maxResultChars: 3000,
     execute: async () =>
       `${'header\n'.repeat(1000)}SDK_MIDDLE_EVIDENCE\n${'tail\n'.repeat(1000)}`,
   })
@@ -237,10 +238,11 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
     responses: [
       fauxToolCall('large', {}),
       (req) => {
-        const reference = getStoredResult(req.toolResults[0]!.raw as never)
-        expect(reference).toBeDefined()
+        const path =
+          req.toolResults[0]!.output.match(/Full output: (.+?);/)![1]!
+        expect(req.toolResults[0]!.raw).toMatchObject({ type: 'text' })
         return fauxToolCall('read_file', {
-          path: reference!.path,
+          path,
           offset: 1001,
           limit: 1,
         })
