@@ -385,13 +385,8 @@ function pickTextResponse(prompt: Prompt): string {
   return TEXT_RESPONSES.default
 }
 
-/**
- * The compactor sends the dropped messages as a numbered `<conversation>` block plus a
- * `context_compaction` JSON request (see src/context/compressor.ts), and accepts only verbatim quotes
- * of the removed messages. Quote each message's text: the first user message as the goal, the rest as
- * details.
- */
-function groundedSummary(prompt: Prompt): string | undefined {
+/** A deterministic free-text checkpoint for the offline compaction demo. */
+function checkpointSummary(prompt: Prompt): string | undefined {
   const last = prompt.at(-1)
   if (last?.role !== 'user') return undefined
   let control: { type?: string; sourceMessageCount: number }
@@ -404,28 +399,22 @@ function groundedSummary(prompt: Prompt): string | undefined {
   const conversation = findConversation(
     prompt.filter((m) => m.role === 'user').map(messageText),
   )
-  const facts = (conversation ? compactionSources(conversation) : []).map(
-    (s) => ({
-      sourceMessageIndex: s.index,
-      quote: s.text.trim().slice(0, 400),
-      role: s.role,
-    }),
-  )
-  const goal = facts.find((f) => f.role === 'user') ?? facts[0]
+  const sources = conversation ? compactionSources(conversation) : []
+  const goal = sources.find((source) => source.role === 'user') ?? sources[0]
   if (!goal) return undefined
-  const fact = ({ sourceMessageIndex, quote }: (typeof facts)[number]) => ({
-    sourceMessageIndex,
-    quote,
-  })
-  const rest = facts.filter((f) => f !== goal).map(fact)
-  return JSON.stringify({
-    sourceMessageCount: control.sourceMessageCount,
-    goal: fact(goal),
-    completed: [],
-    pending: [],
-    constraints: [],
-    details: rest.length ? rest : [fact(goal)],
-  })
+  return [
+    `## Goal\n${goal.text.trim().slice(0, 400)}`,
+    '## Constraints & Preferences\n(none)',
+    '## Progress\n### Done\n(none)\n### In Progress\n(none)\n### Blocked\n(none)',
+    '## Key Decisions\n(none)',
+    '## Next Steps\n1. Continue the task.',
+    `## Critical Context\n${
+      sources
+        .filter((source) => source !== goal)
+        .map((source) => source.text.trim().slice(0, 400))
+        .join('\n') || '(none)'
+    }`,
+  ].join('\n\n')
 }
 
 function makeToolCallChunks(
@@ -478,7 +467,7 @@ export function createMockModel(): DemoModel {
 
     async doGenerate({ prompt }: { prompt: Prompt }) {
       // Summary compaction: answer with a grounded summary that quotes the removed messages
-      const summary = groundedSummary(prompt)
+      const summary = checkpointSummary(prompt)
       if (summary) {
         return {
           content: [{ type: 'text' as const, text: summary }],

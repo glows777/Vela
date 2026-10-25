@@ -544,6 +544,7 @@ export class VelaSession {
     request: RequestSnapshot,
     options?: { allowSummary?: boolean },
   ): Promise<void> {
+    request.maxOutputTokens = this.modelInfo.maxTokens
     return this.contextManager.prepare(request, options)
   }
 
@@ -759,6 +760,7 @@ export class VelaSession {
       this.messages,
       signal,
     )
+    request.maxOutputTokens = this.modelInfo.maxTokens
     return this.contextManager.summarizeBranch(request, start, focus)
   }
 
@@ -1427,6 +1429,7 @@ export class VelaSession {
     )
     if (!canSummarize(request.messages))
       throw new Error('Nothing to compact (session too small)')
+    request.maxOutputTokens = this.modelInfo.maxTokens
     await this.contextManager.compact(request, undefined, 'overflow')
   }
 
@@ -1448,6 +1451,7 @@ export class VelaSession {
       // Like pi: say so plainly when there is no earlier turn to summarize
       if (!canSummarize(request.messages))
         throw new Error('Nothing to compact (session too small)')
+      request.maxOutputTokens = this.modelInfo.maxTokens
       await this.contextManager.compact(request, focus)
       await this.saveOrReport()
     })

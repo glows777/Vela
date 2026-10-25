@@ -163,7 +163,8 @@ test('small results stay inline and invalid read cursors fail clearly', async ()
 })
 
 test('summary keeps a readable index even if the summarizer omits every file reference', async () => {
-  const results = new ToolResultStore(join(dir, 'summary-results'))
+  const summaryStore = new SessionStore('summary-results', dir)
+  const results = summaryStore.results
   const model = createFauxModel({ responses: [fauxSummary(), fauxSummary()] })
   const history: ModelMessage[] = [
     { role: 'user', content: 'old request' },
@@ -185,7 +186,7 @@ test('summary keeps a readable index even if the summarizer omits every file ref
   ]
   const compacted = await summarize(
     await createRequestSnapshot(model, 'stable', {}, history),
-    results,
+    summaryStore,
     new TokenTracker(),
   )
   expect(compacted.compressedCount).toBe(2)
@@ -216,7 +217,7 @@ test('summary keeps a readable index even if the summarizer omits every file ref
         (): ModelMessage => ({ role: 'user', content: 'next' }),
       ),
     ]),
-    results,
+    summaryStore,
     new TokenTracker(),
   )
   expect(repeated.summary).toContain('/snapshots/through-')
