@@ -71,6 +71,41 @@ test('project settings override user settings: objects merge deeply, resource li
   ])
 })
 
+test('defaultTools: project plain names replace the user list, +name / -name entries append to it', () => {
+  const appended = setup({
+    'home/settings.json': json({ defaultTools: ['read_file', 'bash'] }),
+    'project/.vela/settings.json': json({ defaultTools: ['-bash', '+grep'] }),
+  })
+  expect(
+    loadConfig({ ...appended, trusted: true }).settings.defaultTools,
+  ).toEqual(['read_file', 'bash', '-bash', '+grep'])
+  const replaced = setup({
+    'home/settings.json': json({ defaultTools: ['+grep'] }),
+    'project/.vela/settings.json': json({ defaultTools: ['read_file'] }),
+  })
+  expect(
+    loadConfig({ ...replaced, trusted: true }).settings.defaultTools,
+  ).toEqual(['read_file'])
+  // An empty project list turns the user's tools off; it does not append nothing
+  const emptied = setup({
+    'home/settings.json': json({ defaultTools: ['read_file'] }),
+    'project/.vela/settings.json': json({ defaultTools: [] }),
+  })
+  expect(
+    loadConfig({ ...emptied, trusted: true }).settings.defaultTools,
+  ).toEqual([])
+  const bad = setup({ 'home/settings.json': json({ defaultTools: '+grep' }) })
+  expect(() => loadConfig(bad)).toThrow(
+    'defaultTools must be an array of strings',
+  )
+  const pattern = setup({
+    'home/settings.json': json({ defaultTools: ['-ba*'] }),
+  })
+  expect(() => loadConfig(pattern)).toThrow(
+    '+name and -name entries take exact tool names, not patterns: -ba*',
+  )
+})
+
 test('an untrusted project only gets the user settings and user extensions', () => {
   const { agentDir, cwd } = setup({
     'home/extensions/mine.ts': 'export default () => {}',

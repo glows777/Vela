@@ -47,8 +47,9 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
     ],
   })
   try {
-    const sa = vela.session('a', { cwd: '../a', model: modelA })
-    const sb = vela.session('b', { cwd: b, model: modelB })
+    const search = { tools: ['+list_directory', '+grep', '+find'] }
+    const sa = vela.session('a', { cwd: '../a', model: modelA, ...search })
+    const sb = vela.session('b', { cwd: b, model: modelB, ...search })
     expect(sa.cwd).toBe(a)
     expect(sb.cwd).toBe(b)
     expect(vela.session('a', { cwd: b })).toBe(sa)

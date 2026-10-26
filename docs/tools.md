@@ -19,9 +19,11 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not decide permissions from them; a permission extension can.
 
+The default set is `read_file`, `write_file`, `edit_file` and `bash`, plus `tool_search`. `list_directory`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+list_directory`) or the [`defaultTools`](settings.md#defaulttools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
+
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
 
-Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. All core tools are enabled by default, and there is no `--tools` flag, `powershell` tool or `codemode` tool.
+Compared with pi: Vela's names are `read_file`, `write_file`, `edit_file` and `list_directory` instead of `read`, `write`, `edit` and `ls`; `grep`, `find` and `bash` match pi's. Vela has no `powershell` or `codemode` tool, and `--tools` and `defaultTools` take the same `+name` / `-name` entries as pi's.
 
 ### read_file
 
@@ -195,20 +197,25 @@ All core tools are direct. Deferred exposure is for extensions that register man
 
 ## Tool access
 
-Every session gets all tools; there are no roles (like pi). A denied tool is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#per-session-permissions).
+Every session starts with the default tools; there are no roles (like pi). Change the set for a run with `--tools`, for the CLI's sessions with the `defaultTools` setting, or per session through the SDK; an extension can call `setActiveTools()` on its session. A tool that is off or denied is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#per-session-permissions).
 
-## Choosing tools per session (SDK)
+## Choosing tools per session
 
-The CLI has no flag to select tools. With the SDK, pass `tools` (an allowlist) and `permissions` (per-tool rules) when opening a session:
+`--tools` on the command line and `tools` in the SDK take either an allowlist or a list of `+name` / `-name` entries (like pi):
+
+- A list with plain names enables exactly those tools; every other tool, built-in or from an extension, is off. On the command line the names may be `*` patterns (`read_*`), and `--exclude-tools` then removes names or patterns from the result; the SDK option takes exact names.
+- A list of only `+name` / `-name` entries takes exact names, cannot be mixed with plain names, and changes the default set instead, so tools from extensions stay on. `--tools +grep` enables `grep`; `--tools -bash` turns `bash` off.
+
+The `defaultTools` setting takes plain names (`*` patterns work there) and `+name` / `-name` entries, and is described in [Settings](settings.md#defaulttools). With the SDK, pass `tools` and `permissions` (per-tool rules) when opening a session:
 
 ```ts
 const session = vela.session('review', {
-  tools: ['read_file', 'list_directory', 'grep', 'find'],
+  tools: ['+grep', '+find'],
   permissions: { write_file: 'ask' },
 })
 ```
 
-- `tools` limits the session to the named tools. `session.setActiveTools(names)` changes the selection later, and `session.setActiveTools(undefined)` removes it. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
+- `tools` sets the session's tools. `session.setActiveTools(names)` replaces them with an allowlist later, and `session.setActiveTools(undefined)` removes the selection. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
 - `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`; a tool without a rule is allowed. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
 
 See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session.ts](../examples/extensions/read-only-session.ts) for an extension that sets the selection per session.

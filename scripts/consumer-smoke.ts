@@ -103,6 +103,7 @@ if (!JSON.stringify(r.model.calls[2]?.prompt).includes('Vela runs on Node and Bu
 
 // grep / find run ripgrep / fd as child processes (src/tools/search.ts)
 const s = createTestVela({
+  session: { tools: ['+find', '+grep'] },
   files: { 'src/a.ts': 'export const answer = 42' },
   responses: [
     [fauxToolCall('find', { pattern: '*.ts' }), fauxToolCall('grep', { pattern: 'answer' })],

@@ -135,6 +135,7 @@ test('read_file keeps byte-cap continuation within a Unicode line and sends only
 
 test('several tool calls in one response all run and all results go back together', async () => {
   const t = createTestVela({
+    session: { tools: ['+find', '+grep'] },
     files: {
       'src/a.ts': 'export const a = 1\n',
       'src/b.ts': 'export const b = 2\n',

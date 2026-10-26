@@ -604,6 +604,7 @@
     signal?: AbortSignal | undefined
     toolCallId?: string | undefined
   interface ToolDefinition
+    activeByDefault?: false | undefined
     annotations?: ToolAnnotations | undefined
     channel?: string | undefined
     description: string
@@ -925,6 +926,7 @@
     dataDir?: string | undefined
     defaultModel?: string | undefined
     defaultThinkingLevel?: ThinkingLevel | undefined
+    defaultTools?: string[] | undefined
     enabledModels?: string[] | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: string[] | undefined

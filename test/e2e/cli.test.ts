@@ -644,6 +644,49 @@ test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stop
   expect(typo.stderr).toContain('Unknown tool: read. Available: read_file')
 })
 
+test.concurrent('+name / -name change the default tools, from --tools or defaultTools', async () => {
+  const run = (args: string[], agentDir?: string) =>
+    cli(['--mode', 'json', ...args, 'test grep'], {
+      model: 'mock',
+      files: { 'src/a.ts': 'export const a = 1\n' },
+      agentDir,
+    })
+  const grepEnd = (stdout: string) =>
+    stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find(
+        (event) =>
+          event.type === 'tool_execution_end' && event.toolName === 'grep',
+      )
+
+  const off = await run([])
+  expect(off.code).toBe(0)
+  expect(JSON.stringify(grepEnd(off.stdout).result)).toContain(
+    "unavailable tool 'grep'",
+  )
+  const enabled = await run(['--tools', '+grep'])
+  expect(grepEnd(enabled.stdout)).toMatchObject({ isError: false })
+  expect(grepEnd(enabled.stdout).result).toContain('export const a = 1')
+
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(
+    join(home.path, 'settings.json'),
+    JSON.stringify({ defaultTools: ['+grep'] }),
+  )
+  const fromSettings = await run([], home.path)
+  expect(fromSettings.code).toBe(0)
+  expect(grepEnd(fromSettings.stdout)).toMatchObject({ isError: false })
+
+  const mixed = await run(['--tools', '+grep,read_file'])
+  expect(mixed.code).toBe(2)
+  expect(mixed.stderr).toContain(
+    'tool names cannot be mixed with +name or -name entries',
+  )
+})
+
 test.concurrent('--list-models lists the models of providers with a credential and exits', async () => {
   const home = tempDir('vela-home-')
   dirs.push(home)

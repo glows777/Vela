@@ -601,7 +601,7 @@ test('a denied tool is an error result, and the tool does not run', async () => 
     toolName: 'write_file',
     isError: true,
     result:
-      "AI_NoSuchToolError: Model tried to call unavailable tool 'write_file'. Available tools: read_file, edit_file, list_directory, grep, find, bash, tool_search, memory.",
+      "AI_NoSuchToolError: Model tried to call unavailable tool 'write_file'. Available tools: read_file, edit_file, bash, tool_search, memory.",
   })
   expect(denied.model.calls[1]!.toolResults[0]!.raw).toMatchObject({
     type: 'error-text',
