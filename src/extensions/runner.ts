@@ -1,5 +1,4 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
-import { z } from 'zod'
 import type { CustomMessage, VelaEvent } from '../agent/events.ts'
 import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
@@ -174,7 +173,14 @@ export class ExtensionRunner {
         loaded.providers.push(providerName)
       },
       registerTool: (tool) => {
-        if (!(tool.inputSchema instanceof z.ZodType) && !isMcpTool(tool))
+        const schema = tool.inputSchema
+        // Match the AI SDK's Zod detection across supported versions and package copies.
+        const isZod =
+          typeof schema === 'object' &&
+          schema !== null &&
+          '~standard' in schema &&
+          schema['~standard'].vendor === 'zod'
+        if (!isZod && !isMcpTool(tool))
           throw new Error(
             `Extension "${name}": tool "${tool.name}" inputSchema must be a Zod schema`,
           )
