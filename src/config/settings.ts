@@ -65,6 +65,8 @@ export interface LoadConfigOptions {
   homeDir?: string
   /** Built-in extension names; all load by default, `-builtin:<name>` in settings disables one */
   builtins?: readonly string[]
+  /** Built-ins in `builtins` that stay off until settings enable them with `+builtin:<name>` */
+  defaultOffBuiltins?: readonly string[]
 }
 
 /** Result of loadConfig(), ready to wire into createVela(). */
@@ -123,9 +125,9 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   }
   const settings = layers.reduce<VelaSettings>(mergeSettings, {})
 
-  // Built-ins: all by default; apply ±builtin: in user → project order
+  // Built-ins: all by default except defaultOffBuiltins; apply ±builtin: in user → project order
   const builtins = new Set(options.builtins ?? [])
-  const disabled = new Set<string>()
+  const disabled = new Set(options.defaultOffBuiltins ?? [])
   const paths: string[] = [
     ...discoverExtensions(join(agentDir, 'extensions')),
     ...(trusted ? discoverExtensions(join(projectDir, 'extensions')) : []),

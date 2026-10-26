@@ -1,6 +1,6 @@
 # Built-in extensions
 
-Vela ships five extensions: `memory`, `rag`, `web`, `feishu` and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
+Vela ships six extensions: `memory`, `rag`, `web`, `feishu`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
 
 | Extension | Adds |
 |---|---|
@@ -9,12 +9,13 @@ Vela ships five extensions: `memory`, `rag`, `web`, `feishu` and `mcp`. They use
 | `web` | `web_fetch`, and `web_search` when a search API key is set |
 | `feishu` | The Feishu bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
+| `permission-gate` | Confirms a few dangerous `bash` commands; off by default |
 
 ## Loading
 
-**CLI.** All five load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** Five load by default, before any discovered or `-e` extensions; `permission-gate` stays off until you enable it. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
-To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. `--no-extensions` skips them, and `-e builtin:<name>` loads a single one for a run. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
+To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. To enable `permission-gate`, add `+builtin:permission-gate` the same way, or load it for one run with `-e builtin:permission-gate`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
@@ -177,6 +178,18 @@ Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each enabled
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#feishu).
 
 **SDK.** `feishu({ appId, appSecret, owners, chats })`.
+
+## permission-gate
+
+Asks before running a `bash` command that matches one of three patterns (the list and behavior follow pi's `permission-gate` example): `rm` with a recursive or force flag, `sudo`, and `chmod`/`chown` with `777`. In interactive mode it shows the command and runs it only when you choose `Yes`. A session without a UI (SDK, `-p`, JSON, channel sessions) blocks the call instead, and the model gets `Dangerous command blocked (no UI for confirmation)` as the tool result. RPC mode has a UI: the question is an [extension UI request](rpc.md#extension-ui) and the call waits for the client's answer.
+
+It is off by default because it is a heuristic, not a security control: it catches mistakes, not a hostile command (`find -delete`, a script, a renamed binary). Enable it per user or per project:
+
+```json
+{ "extensions": ["+builtin:permission-gate"] }
+```
+
+Or for one run: `vela -e builtin:permission-gate`. The SDK loads it explicitly: `createVela({ extensions: [permissionGate()] })`. `--no-extensions` drops it.
 
 ## mcp
 

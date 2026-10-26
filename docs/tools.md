@@ -132,7 +132,7 @@ Without `binDir`, only `PATH` is searched and nothing is downloaded.
 Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another shell; a path that does not exist is an error). stdout and stderr are combined and written to a file in the session's tool results directory as the command runs. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read_file`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
 
 - Timeout: none by default, as in pi; the model passes `timeout` for commands that may hang. On timeout or abort the whole process group is killed.
-- Before running, every command goes through a classifier: dangerous commands are rejected, and moderate-risk commands run but emit a `security_warning` event. See [Security](security.md).
+- Vela does not filter commands; the built-in `permission-gate` extension (off by default) can confirm or block a few dangerous patterns. See [Security](security.md).
 
 ## How tools run
 

@@ -101,7 +101,7 @@ A 128k window gives `111616`, `96000`, `76800` and `12800`. Without `contextWind
 
 ### extensions
 
-A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:web"`, `"+builtin:web"`). Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
+A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:web"`, `"+builtin:web"`). `+builtin:` also enables `permission-gate`, which is off by default. Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
 
 ### extensionConfig
 

@@ -221,13 +221,6 @@ export type VelaEvent =
   | { type: 'session_save_failed'; error: unknown }
   /** Audit record before a file-writing tool call (emitted by a pre hook) */
   | { type: 'audit'; toolName: string; path: string }
-  /** A bash command was rated medium risk; it still runs, with a warning */
-  | {
-      type: 'security_warning'
-      toolName: string
-      reason: string
-      command: string
-    }
   /** An extension called ui.notify() in a session without a UI */
   | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
   /** A channel received a message (channel session) */

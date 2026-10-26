@@ -219,21 +219,19 @@ test('bash runs in cwd and returns plain output', async () => {
   expect(output).not.toMatch(/\[\d{4}-\d{2}-\d{2}T/)
 })
 
-test('a dangerous bash command is refused before it runs and the model sees why', async () => {
+test('a force-delete bash command runs by default: there is no built-in classifier gate', async () => {
   const t = createTestVela({
-    files: { 'keep.txt': 'important' },
+    files: { 'junk/keep.txt': 'important' },
     responses: [
-      fauxToolCall('bash', { command: 'rm -rf /' }),
-      fauxText('OK, not deleting'),
+      fauxToolCall('bash', { command: 'rm -rf junk' }),
+      fauxText('Deleted junk'),
     ],
   })
 
   await t.run('Clean up')
 
-  expect(await t.readFile('keep.txt')).toBe('important')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
-    '[Rejected] Dangerous operation detected',
-  )
+  expect(await Bun.file(t.path('junk/keep.txt')).exists()).toBe(false)
+  expect(t.model.calls[1]!.toolResults[0]!.output).not.toContain('[Rejected]')
   expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
     type: 'agent_end',
     reason: 'done',

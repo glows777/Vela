@@ -39,7 +39,7 @@ The factory can be synchronous or `async`. It runs once per Vela instance, not o
 
 The CLI loads extensions in this order:
 
-1. Built-in extensions (`memory`, `rag`, `web`, `feishu`). All are on by default.
+1. Built-in extensions (`memory`, `rag`, `web`, `feishu`, `mcp`). All are on by default except `permission-gate`, which stays off until you enable it.
 2. `~/.vela/extensions/` (or `$VELA_DIR/extensions/`).
 3. `<cwd>/.vela/extensions/`, only when the project is trusted (see [Project trust](settings.md#project-trust)).
 4. Paths listed in the `extensions` array of `settings.json`, user settings before project settings.
@@ -60,7 +60,7 @@ In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension 
 | `path/to/file.ts` | Load this `.ts`, `.js` or `.mjs` file |
 | `path/to/dir` | Load the directory as one extension if it has an index file, otherwise each extension found in it (as for discovered directories) |
 | `-builtin:<name>` | Do not load this built-in |
-| `builtin:<name>` or `+builtin:<name>` | Load this built-in again, for example in a project after the user settings disabled it |
+| `builtin:<name>` or `+builtin:<name>` | Load this built-in again, for example in a project after the user settings disabled it, or enable a built-in that is off by default (`permission-gate`) |
 
 The `builtin:` switches apply in order, user settings first, so a project can re-enable what the user disabled and the other way round. An unknown built-in name is a config error.
 

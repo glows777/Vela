@@ -37,6 +37,7 @@ import { runRpcMode } from './rpc-mode.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
+  DEFAULT_OFF_BUILTINS,
   extensionConfigFromEnv,
   formatModelList,
   HELP,
@@ -152,6 +153,7 @@ try {
     env,
     trusted: trust.trusted,
     builtins: Object.keys(BUILTIN_EXTENSIONS),
+    defaultOffBuiltins: DEFAULT_OFF_BUILTINS,
   })
 } catch (error) {
   console.error(`[config] ${error instanceof Error ? error.message : error}`)

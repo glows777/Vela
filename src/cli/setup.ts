@@ -15,6 +15,7 @@ import { deepMerge } from '../config/interpolate.ts'
 import { feishu } from '../extensions/feishu/index.ts'
 import { mcp } from '../extensions/mcp/index.ts'
 import { memory } from '../extensions/memory/index.ts'
+import { permissionGate } from '../extensions/permission-gate/index.ts'
 import { rag } from '../extensions/rag/index.ts'
 import type { VelaExtension } from '../extensions/types.ts'
 import { web } from '../extensions/web/index.ts'
@@ -27,14 +28,18 @@ import { assertSessionId } from '../session/options.ts'
 
 type Env = Record<string, string | undefined>
 
-/** Built-in extensions shipped with the CLI (`builtin:<name>`), all loaded by default; config comes from `extensionConfig.<name>`. */
+/** Built-in extensions shipped with the CLI (`builtin:<name>`); DEFAULT_OFF_BUILTINS stay off unless enabled. Config comes from `extensionConfig.<name>`. */
 export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   memory: () => memory(),
   rag: () => rag(),
   web: () => web(),
   feishu: () => feishu(),
   mcp: () => mcp(),
+  'permission-gate': () => permissionGate(),
 }
+
+/** Built-ins that stay off until `+builtin:<name>` in settings or `-e builtin:<name>` enables one */
+export const DEFAULT_OFF_BUILTINS: readonly string[] = ['permission-gate']
 
 export interface CliArgs {
   /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
