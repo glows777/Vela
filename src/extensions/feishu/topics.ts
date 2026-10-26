@@ -16,7 +16,7 @@ export const topicToolNames = [
   'feishu_routines',
 ]
 const channelPrompt =
-  'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply, without tools. Manage scheduled wake-ups directly with feishu_routines in the conversation where they should run; do not start a topic just to create, list or cancel a wake-up. For other investigation, execution, tool-based work, or a longer exchange, start a topic with a concrete task. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. The task field is the original topic label, not a summary of every later request. waitingReason describes the current required input after follow-up work; a difference from the original label alone does not indicate corrupt or misassigned data. Report the current state and waitingReason without inventing a mismatch. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the task passed to feishu_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the task.'
+  'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply, without tools. Manage scheduled wake-ups directly with feishu_routines in the conversation where they should run; do not start a topic just to create, list or cancel a wake-up. For other investigation, execution, tool-based work, or a longer exchange, start a topic with a concrete title and brief: the title is posted as the first visible message of the topic, so keep it one short plain line; the brief is sent only to the topic session and holds the goal of the requester and the facts it needs. Neither holds a plan or method. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. The task field is the original title of the topic, not a summary of every later request. waitingReason describes the current required input after follow-up work; a difference from the original title alone does not indicate corrupt or misassigned data. Report the current state and waitingReason without inventing a mismatch. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the title passed to feishu_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the brief.'
 const topicPrompt =
   'This topic contains a conversation about one task. Progress is shown to people automatically, so do not narrate progress in separate replies. Continue unfinished work and apply requested additions or corrections using the topic context. When completing requested work, give its result once. When you need a decision, call feishu_wait_for_input with the required decision as its reason, then ask one clear question and end the run.\n\nRespond to the latest user message. Earlier tasks and completed reports are context, not a standing request to repeat them. Treat completed answers in the history as already reported, not as pending delivery. Once a result has been delivered, do not repeat or resume the task unless the latest user asks for that. A greeting should receive only a brief greeting. Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
 
@@ -144,22 +144,33 @@ export class FeishuTopics {
     vela.registerTool({
       name: 'start_topic',
       description:
-        'Start a topic under the current message. The task is posted as its first message and is the topic session’s whole text brief: state the requester’s goal and include the facts it needs from this conversation. Trigger images are carried over; the channel transcript is not. Returns after enqueueing without waiting for the task.',
-      inputSchema: z.object({ task: z.string().trim().min(1) }),
+        'Start a topic under the current message. The title is posted as the first visible message of the topic: one short plain line that names the request. The brief is sent only to the topic session as its first input, with the sender’s name: state the requester’s goal and include the facts it needs from this conversation. Neither holds a plan or method. Trigger images are carried over; the channel transcript is not. Returns after enqueueing without waiting for the task.',
+      inputSchema: z.object({
+        title: z.string().trim().min(1),
+        brief: z.string().trim().min(1),
+      }),
       executionMode: 'sequential',
-      execute: async ({ task }: { task: string }, ctx) => {
+      execute: async (
+        { title, brief }: { title: string; brief: string },
+        ctx,
+      ) => {
         const { id, msg, runtime, messageId } = this.source(ctx)
-        const receipt = await this.transport().startTopic(messageId, task)
-        runtime.dispatch(id, {
-          channelId: msg.channelId,
-          senderId: msg.senderId,
-          senderName: msg.senderName,
-          text: `${msg.senderName}: ${task}`,
-          images:
-            this.triggerImages.get(msg.raw as FeishuMessageEvent) ?? msg.images,
-          replyToId: receipt.messageId,
-          topic: { rootId: receipt.rootId, threadId: receipt.threadId },
-        })
+        const receipt = await this.transport().startTopic(messageId, title)
+        runtime.dispatch(
+          id,
+          {
+            channelId: msg.channelId,
+            senderId: msg.senderId,
+            senderName: msg.senderName,
+            text: `${msg.senderName}: ${brief}`,
+            images:
+              this.triggerImages.get(msg.raw as FeishuMessageEvent) ??
+              msg.images,
+            replyToId: receipt.messageId,
+            topic: { rootId: receipt.rootId, threadId: receipt.threadId },
+          },
+          title,
+        )
         this.markHandled(msg)
         return receipt
       },

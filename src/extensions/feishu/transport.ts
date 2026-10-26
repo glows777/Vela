@@ -48,7 +48,7 @@ export interface FeishuTransport {
   stop(): void
   startTopic(
     messageId: string,
-    task: string,
+    title: string,
   ): Promise<FeishuSentMessage & { rootId: string; threadId: string }>
   forward(messageId: string, threadId: string): Promise<FeishuSentMessage>
   // biome-ignore lint/suspicious/noConfusingVoidType: public shape: callers may ignore the sent message (Promise<void>)
@@ -123,13 +123,13 @@ export function larkTransport(
     stop() {
       wsClient?.close()
     },
-    async startTopic(messageId, task) {
+    async startTopic(messageId, title) {
       const { data } = checked(
         await client.im.message.reply({
           path: { message_id: messageId },
           data: {
             msg_type: 'text',
-            content: JSON.stringify({ text: task }),
+            content: JSON.stringify({ text: title }),
             reply_in_thread: true,
           },
         }),

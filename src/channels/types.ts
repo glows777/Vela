@@ -94,8 +94,12 @@ export interface ChannelRuntime {
   skipReply(sessionId: string): void
   /** Record a required human decision; waiting becomes visible after successful delivery. */
   waitForInput(sessionId: string, reason: string): Promise<void>
-  /** Hand off without waiting for the target run; suppress the source run's duplicate reply. */
-  dispatch(sourceSessionId: string, message: IncomingMessage): void
+  /** Hand off without waiting for the target run; suppress the source run's duplicate reply. `label` is the topic list entry when the message text is a longer brief. */
+  dispatch(
+    sourceSessionId: string,
+    message: IncomingMessage,
+    label?: string,
+  ): void
 }
 
 /** `silent` removes a deferred passive marker without adding an outcome reaction. */
