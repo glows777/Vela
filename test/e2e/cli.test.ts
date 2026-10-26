@@ -863,6 +863,51 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   expect(stderr).toBe('  [extra] loaded {}\n')
 })
 
+test.concurrent('an invalid extension schema names the tool and leaves other extensions usable', async () => {
+  const dir = tempDir('vela-ext-schema-')
+  dirs.push(dir)
+  const bad = join(dir.path, 'bad.ts')
+  await Bun.write(
+    bad,
+    `export default (vela) => {
+    vela.registerTool({ name: 'x', description: 'x', inputSchema: { type: 'object', properties: {} }, execute: async () => 'bad' })
+  }`,
+  )
+  const { stdout, stderr, code } = await cli(
+    [
+      '--mode',
+      'json',
+      'Greet Ada',
+      '--no-extensions',
+      '-e',
+      bad,
+      '-e',
+      join(ROOT, 'examples/extensions/hello-tool.ts'),
+    ],
+    {
+      model: 'faux:replies.json',
+      files: {
+        'replies.json': JSON.stringify({
+          responses: [
+            {
+              toolCalls: [{ name: 'hello-tool_greet', input: { name: 'Ada' } }],
+            },
+            { text: 'Greeting succeeded' },
+          ],
+        }),
+      },
+    },
+  )
+  expect(stderr).toContain(
+    `Extension "bad": tool "x" inputSchema must be a Zod schema`,
+  )
+  expect(stderr).toContain('[extensions] Failed to load')
+  expect(code).toBe(0)
+  expect(stdout).toContain('Greeting succeeded')
+  expect(stdout).toContain('Hello, Ada!')
+  expect(stdout).not.toContain('"isError":true')
+})
+
 test.concurrent('permission-gate is off by default and -e builtin:permission-gate blocks a dangerous command', async () => {
   const files = {
     'replies.json': JSON.stringify({

@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { SessionUI, VelaExtension } from '@glows777/vela'
+import { jsonSchema } from 'ai'
 import { z } from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import { echoChannel } from '../../examples/extensions/echo-channel.ts'
@@ -30,6 +31,31 @@ function scriptedUI(answer: boolean) {
   }
   return { ui, asked, notes }
 }
+
+test.each([
+  { type: 'object', properties: {} },
+  jsonSchema({ type: 'object', properties: {} }),
+])(
+  'SDK extension tools reject non-Zod schemas during registration',
+  (inputSchema) => {
+    expect(() =>
+      createTestVela({
+        extensions: [
+          function invalidSchema(vela) {
+            vela.registerTool({
+              name: 'x',
+              description: 'x',
+              inputSchema: inputSchema as never,
+              execute: async () => 'bad',
+            })
+          },
+        ],
+      }),
+    ).toThrow(
+      'Extension "invalidSchema": tool "x" inputSchema must be a Zod schema',
+    )
+  },
+)
 
 // ---------- Each example extension ----------
 
