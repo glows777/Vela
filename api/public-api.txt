@@ -245,7 +245,7 @@
     send: (chatId: string, text: string) => Promise<void | FeishuSentMessage>
     sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<string>
     start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>
-    startTopic: (messageId: string, task: string) => Promise<FeishuSentMessage & { rootId: string; threadId: string; }>
+    startTopic: (messageId: string, title: string) => Promise<FeishuSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
   type FetchFunction = (
       input: string | URL | Request,

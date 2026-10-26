@@ -51,7 +51,7 @@ test('overview explains a reused topic label while preserving its current waitin
     state: 'waiting',
     waitingReason: 'Choose the title color',
   })
-  expect(t.model.calls.at(-1)!.system).toContain('original topic label')
+  expect(t.model.calls.at(-1)!.system).toContain('original title of the topic')
   expect(t.model.calls.at(-1)!.system).toContain(
     'waitingReason describes the current required input',
   )

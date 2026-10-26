@@ -19,7 +19,7 @@ export function fakeFeishu() {
     id: string
     removed?: boolean
   }[] = []
-  const topics: { messageId: string; task: string }[] = []
+  const topics: { messageId: string; title: string }[] = []
   const forwards: { messageId: string; threadId: string }[] = []
   const names = new Map<string, string>([
     ['ou_alice', 'Alice'],
@@ -39,9 +39,9 @@ export function fakeFeishu() {
     type: 'image' | 'file'
   }[] = []
   const transport: FeishuTransport = {
-    startTopic: async (messageId, task) => {
+    startTopic: async (messageId, title) => {
       if (failReply) throw new Error('topic permission denied')
-      topics.push({ messageId, task })
+      topics.push({ messageId, title })
       return {
         messageId: `topic_${messageId}`,
         rootId: messageId,
