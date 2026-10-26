@@ -37,7 +37,7 @@ export const chars = (text: string) => Array.from(text.trim()).length
 const normalized = (text: string) => text.replace(/\s+/gu, ' ').trim()
 
 /** Any longer shared span also contains a shared thirty-codepoint window. */
-export function overlaps(a: string, b: string): boolean {
+function overlaps(a: string, b: string): boolean {
   const left = Array.from(normalized(a))
   const right = normalized(b)
   for (let i = 0; i <= left.length - 30; i++)

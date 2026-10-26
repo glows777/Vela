@@ -45,7 +45,7 @@ export interface Attempt {
   toolCalls: number
   artifactDir: string
 }
-export function median(values: number[]): number | undefined {
+function median(values: number[]): number | undefined {
   if (!values.length) return undefined
   const sorted = [...values].sort((a, b) => a - b)
   const middle = Math.floor(sorted.length / 2)
