@@ -89,7 +89,12 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or newer
       - run: npm install -g npm@11.16.0 --ignore-scripts
       # prepublishOnly builds dist/
-      - run: npm publish --provenance --access public
+      - run: |
+          if [[ "${TAG}" == *-* ]]; then
+            npm publish --provenance --access public --tag next
+          else
+            npm publish --provenance --access public
+          fi
 
   github-release:
     needs: [prepare, publish]
@@ -98,10 +103,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      # The workflow's own commit: the tag on a tag push, main when run by hand. Either has the
-      # version's CHANGELOG section and the script that extracts it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.TAG }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -113,4 +117,8 @@ jobs:
         run: |
           set -euo pipefail
           bun scripts/changelog.ts notes "${VERSION}" > "${RUNNER_TEMP}/notes.md"
-          gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md"
+          if [[ "${TAG}" == *-* ]]; then
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md" --prerelease
+          else
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md"
+          fi

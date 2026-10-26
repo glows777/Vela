@@ -211,7 +211,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | unit/testing/record | record then replay yields the same events; recording errors, broken streams, retries, aborts (hang) and the generate queue |
 | unit/boundary | core modules contain no console, process.stdout/stderr/exit/env or readline |
 | unit/public-api | the public API of `@glows777/vela` and `@glows777/vela/testing` matches `api/public-api.txt`; after changing the public surface run `bun run api:update` |
-| unit/scripts | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version |
+| unit/scripts | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version; a candidate retry reads the tag snapshot rather than main after that snapshot's entries are stamped |
 | unit/security | session permission rules (default allow, exact names before `*`, deny and ask), ask goes through confirm, the hook chain, bash classification, `/hooks` lists registered hooks |
 | unit/… | other module-level rules; see each file |
 

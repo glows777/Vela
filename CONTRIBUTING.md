@@ -53,9 +53,10 @@ Maintainers release from an up-to-date `main` with entries under `## [Unreleased
 
 ```bash
 bun run release patch   # or minor, major, or an exact version like 0.2.0
+bun run release 0.4.0-rc.1
 ```
 
-The script bumps the version, dates the changelog section, runs the checks, commits, tags `vX.Y.Z` and pushes. The tag starts the Release workflow, which runs CI on the tagged commit, publishes to npm with provenance through trusted publishing, and creates the GitHub release from the changelog section. If the script's checks fail, nothing is committed: `git checkout -- package.json CHANGELOG.md`, fix, and run it again. If the push fails, run `git push --atomic origin main vX.Y.Z` again. If the workflow fails partway, run the Release workflow by hand with the tag; a version already on npm skips to the GitHub release.
+The script bumps the version, runs the checks, commits, tags `vX.Y.Z` and pushes. A final version dates the changelog section. A release candidate leaves the entries under `## [Unreleased]` for that final version, and the workflow publishes the candidate on npm's `next` dist-tag (`npm i @glows777/vela@next`). The tag starts the Release workflow, which runs CI on the tagged commit, publishes to npm with provenance through trusted publishing, and creates the GitHub release from the changelog section. If the script's checks fail, nothing is committed: `git checkout -- package.json CHANGELOG.md`, fix, and run it again. If the push fails, run `git push --atomic origin main vX.Y.Z` again. If the workflow fails partway, run the Release workflow by hand with the tag; a version already on npm skips to the GitHub release.
 
 ## API stability
 
