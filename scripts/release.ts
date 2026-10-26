@@ -1,10 +1,10 @@
 /**
  * Cuts a release, like pi's scripts/release.mjs:
- *   bun run release <patch|minor|major|x.y.z>
+ *   bun run release <patch|minor|major|x.y.z|x.y.z-rc.N>
  *
  * 1. Checks the working tree is clean, on main and up to date with origin/main
  * 2. Checks CHANGELOG.md has entries under ## [Unreleased]
- * 3. Sets the version and stamps its changelog entries, keeping an empty ## [Unreleased]
+ * 3. Sets the version. Only a final release stamps CHANGELOG.md.
  * 4. Runs the same checks as CI
  * 5. Commits "Release vx.y.z" and tags it vx.y.z
  * 6. Pushes main and the tag; the tag starts .github/workflows/release.yml, which
@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path'
 import { $ } from 'bun'
 import {
   nextVersion,
-  stampRelease,
+  releaseChangelog,
   UNRELEASED,
   unreleasedEntries,
 } from './changelog.ts'
@@ -27,7 +27,7 @@ $.cwd(ROOT)
 
 const target = process.argv[2]
 if (!target) {
-  console.error('Usage: bun run release <patch|minor|major|x.y.z>')
+  console.error('Usage: bun run release <patch|minor|major|x.y.z|x.y.z-rc.N>')
   process.exit(1)
 }
 
@@ -64,14 +64,16 @@ await writeFile(
   pkgText.replace(`"version": "${current}"`, `"version": "${version}"`),
 )
 const date = new Date().toISOString().slice(0, 10)
-await writeFile(CHANGELOG, stampRelease(changelog, version, date))
+const released = releaseChangelog(changelog, version, date)
+if (released !== changelog) await writeFile(CHANGELOG, released)
 
 await $`bun run test`
 await $`bun run typecheck`
 await $`bun run lint`
 await $`bun run smoke:consumer`
 
-await $`git add package.json CHANGELOG.md`
+if (released !== changelog) await $`git add package.json CHANGELOG.md`
+else await $`git add package.json`
 await $`git commit -m ${`Release ${tag}`}`
 await $`git tag -a ${tag} -m ${tag}`
 

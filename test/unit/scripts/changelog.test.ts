@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import {
   nextVersion,
+  releaseChangelog,
   releaseNotes,
   stampRelease,
   unreleasedEntries,
@@ -74,5 +75,37 @@ describe('changelog', () => {
     expect(() => nextVersion('0.1.3', '0.1.3')).toThrow('not newer')
     expect(() => nextVersion('0.1.3', '0.0.9')).toThrow('not newer')
     expect(() => nextVersion('0.1.3', 'next')).toThrow('Not a version')
+  })
+
+  test('an explicit release candidate sorts by triple, then final, then counter', () => {
+    expect(nextVersion('0.3.0', '0.4.0-rc.1')).toBe('0.4.0-rc.1')
+    expect(nextVersion('0.4.0-rc.1', '0.4.0-rc.2')).toBe('0.4.0-rc.2')
+    expect(nextVersion('0.4.0-rc.2', '0.4.0-rc.10')).toBe('0.4.0-rc.10')
+    expect(nextVersion('0.4.0-rc.2', '0.4.0')).toBe('0.4.0')
+    expect(nextVersion('0.4.0-rc.9', '0.4.1-rc.1')).toBe('0.4.1-rc.1')
+    expect(() => nextVersion('0.4.0', '0.4.0-rc.1')).toThrow('not newer')
+    expect(() => nextVersion('0.4.0-rc.2', '0.4.0-rc.1')).toThrow('not newer')
+    expect(() => nextVersion('0.4.0-rc.1', '0.4.0-rc.1')).toThrow('not newer')
+    expect(() => nextVersion('0.4.0-rc.1', 'patch')).toThrow('explicit version')
+    expect(() => nextVersion('0.4.0-rc.1', 'minor')).toThrow('explicit version')
+    expect(() => nextVersion('0.4.0-rc.1', 'major')).toThrow('explicit version')
+    expect(() => nextVersion('0.3.0', '0.4.0-alpha.1')).toThrow('Not a version')
+    expect(() => nextVersion('0.3.0', '0.4.0-beta.1')).toThrow('Not a version')
+    expect(() => nextVersion('0.3.0', '0.4.0-rc')).toThrow('Not a version')
+  })
+
+  test('a release candidate leaves the changelog text unchanged', () => {
+    expect(releaseChangelog(CHANGELOG, '0.4.0-rc.1', '2026-10-26')).toBe(
+      CHANGELOG,
+    )
+    expect(releaseChangelog(CHANGELOG, '0.4.0', '2026-10-26')).toContain(
+      '## [Unreleased]\n\n## [0.4.0] - 2026-10-26',
+    )
+  })
+
+  test('release notes for a release candidate are the Unreleased entries', () => {
+    expect(releaseNotes(CHANGELOG, '0.4.0-rc.1')).toBe(
+      '### Fixed\n\n- A fix, see [Sessions](https://github.com/glows777/Vela/blob/v0.4.0-rc.1/docs/sessions.md#saving) and [pi](https://github.com/earendil-works/pi).',
+    )
   })
 })

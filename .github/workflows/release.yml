@@ -89,7 +89,12 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or newer
       - run: npm install -g npm@11.16.0 --ignore-scripts
       # prepublishOnly builds dist/
-      - run: npm publish --provenance --access public
+      - run: |
+          if [[ "${TAG}" == *-* ]]; then
+            npm publish --provenance --access public --tag next
+          else
+            npm publish --provenance --access public
+          fi
 
   github-release:
     needs: [prepare, publish]
@@ -113,4 +118,8 @@ jobs:
         run: |
           set -euo pipefail
           bun scripts/changelog.ts notes "${VERSION}" > "${RUNNER_TEMP}/notes.md"
-          gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md"
+          if [[ "${TAG}" == *-* ]]; then
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md" --prerelease
+          else
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md"
+          fi
