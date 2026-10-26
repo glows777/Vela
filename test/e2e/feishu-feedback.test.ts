@@ -176,7 +176,10 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
     if (request.tools.includes('feishu_start_topic'))
       return request.toolResults.length
         ? fauxText('handed off')
-        : fauxToolCall('feishu_start_topic', { task: 'investigate' })
+        : fauxToolCall('feishu_start_topic', {
+            title: 'investigate',
+            brief: 'investigate',
+          })
     return request.toolResults.length
       ? fauxText('resolved')
       : fauxToolCall('hold_pause', {})

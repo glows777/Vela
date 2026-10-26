@@ -111,7 +111,10 @@ test('starting a topic returns its receipt and frees the channel while its task 
     if (req.lastUserText.includes('second question'))
       return fauxText('second answer')
     if (req.toolResults.length) return fauxText('handed off')
-    return fauxToolCall('feishu_start_topic', { task: 'Investigate cobalt' })
+    return fauxToolCall('feishu_start_topic', {
+      title: 'Investigate cobalt',
+      brief: 'Investigate cobalt',
+    })
   }
   let entered = false
   const { fake, t, start } = setup(Array(6).fill(respond), [
@@ -142,7 +145,7 @@ test('starting a topic returns its receipt and frees the channel while its task 
     )
     await until(() => t.eventsOf('tool_execution_end').length === 1)
     expect(fake.topics).toEqual([
-      { messageId: 'task', task: 'Investigate cobalt' },
+      { messageId: 'task', title: 'Investigate cobalt' },
     ])
     await until(() => !t.vela.session('feishu-oc_group').isRunning)
     await until(() => entered)
@@ -172,6 +175,59 @@ test('starting a topic returns its receipt and frees the channel while its task 
   }
 })
 
+test('a topic start posts only the short title and sends the long brief to the topic session', async () => {
+  const title = 'Fix the cobalt import'
+  const brief =
+    'Alice wants the cobalt import fixed. Facts: the import fails on the second row of data/cobalt.csv, the same file imports cleanly in staging, and production reports a duplicate key. Use these facts; do not ask for them again.'
+  const respond = (req: FauxRequest) => {
+    if (req.lastUserText.includes('list the topics'))
+      return req.toolResults.length
+        ? fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
+        : fauxToolCall('feishu_list_topics', {})
+    if (!req.tools.includes('feishu_start_topic'))
+      return fauxText('topic result')
+    return req.toolResults.length
+      ? fauxText('handed off')
+      : fauxToolCall('feishu_start_topic', { title, brief })
+  }
+  const { fake, t, start } = setup(Array(6).fill(respond))
+  await start()
+  try {
+    fake.deliver(
+      feishuEvent({
+        message_id: 'long_brief',
+        content: '{"text":"fix the cobalt import"}',
+      }),
+    )
+    await until(() => fake.topics.length === 1)
+    expect(fake.topics).toEqual([{ messageId: 'long_brief', title }])
+    await until(() =>
+      t.model.calls.some((call) => !call.tools.includes('feishu_start_topic')),
+    )
+    const topicCall = t.model.calls.find(
+      (call) => !call.tools.includes('feishu_start_topic'),
+    )!
+    expect(topicCall.lastUserText).toContain(`Alice: ${brief}`)
+    fake.deliver(
+      feishuEvent({
+        message_id: 'list',
+        content: '{"text":"list the topics"}',
+      }),
+    )
+    await until(() =>
+      fake.sent.some((item) => item.text.includes('"coverage"')),
+    )
+    const listing = JSON.parse(
+      fake.sent.find((item) => item.text.includes('"coverage"'))!.text,
+    )
+    expect(listing.topics).toEqual([
+      expect.objectContaining({ rootId: 'long_brief', task: title }),
+    ])
+  } finally {
+    await t.internals.gateway.stopAll()
+  }
+})
+
 test('a topic handoff keeps the handled mention out of the next group input and keeps later peer messages', async () => {
   const handled = 'do issue 127'
   const respond = (req: FauxRequest) => {
@@ -179,7 +235,10 @@ test('a topic handoff keeps the handled mention out of the next group input and 
       return fauxText('second answer')
     if (req.toolResults.length) return fauxText('handed off')
     if (req.tools.includes('feishu_start_topic'))
-      return fauxToolCall('feishu_start_topic', { task: 'Handle the request' })
+      return fauxToolCall('feishu_start_topic', {
+        title: 'Handle the request',
+        brief: 'Handle the request',
+      })
     return fauxText('topic done')
   }
   const { fake, t, start } = setup(Array(6).fill(respond))
@@ -260,7 +319,10 @@ test('forwarding a channel message feeds the same-group topic once with original
 
 test('a failed topic creation reports the API cause without starting a task', async () => {
   const { fake, t, start } = setup([
-    fauxToolCall('feishu_start_topic', { task: 'Investigate' }),
+    fauxToolCall('feishu_start_topic', {
+      title: 'Investigate',
+      brief: 'Investigate',
+    }),
     (req) => fauxText(JSON.stringify(req.toolResults)),
   ])
   fake.failReply()
@@ -488,7 +550,7 @@ test('an earlier-work follow-up has a disclosure instruction and puts its notice
     'The earlier topic could not be found. Continue investigating cobalt.'
   const { fake, t, start } = setup([
     listCall(),
-    fauxToolCall('feishu_start_topic', { task: notice }),
+    fauxToolCall('feishu_start_topic', { title: notice, brief: notice }),
     (req) =>
       req.tools.includes('feishu_start_topic')
         ? fauxText('handed off')
@@ -514,12 +576,12 @@ test('an earlier-work follow-up has a disclosure instruction and puts its notice
     'earlier work missing from the list',
   )
   expect(t.model.calls[1]?.system).toContain(
-    'include that notice at the beginning of the task',
+    'include that notice at the beginning of the title',
   )
   expect(t.model.calls[1]?.system).toContain(
     'An empty list does not mean there are no tasks',
   )
-  expect(fake.topics).toEqual([{ messageId: 'followup', task: notice }])
+  expect(fake.topics).toEqual([{ messageId: 'followup', title: notice }])
   expect(fake.sent.some((item) => item.messageId === 'followup')).toBe(false)
 })
 
@@ -534,7 +596,10 @@ test.each(['start', 'forward'] as const)(
     const { fake, t, start } = setup([
       ...(operation === 'forward' ? [fauxText('target established')] : []),
       operation === 'start'
-        ? fauxToolCall('feishu_start_topic', { task: 'cancelled task' })
+        ? fauxToolCall('feishu_start_topic', {
+            title: 'cancelled task',
+            brief: 'cancelled task',
+          })
         : fauxToolCall('feishu_forward_to_topic', { root_id: 'target' }),
       fauxText('must not run'),
     ])
@@ -591,7 +656,8 @@ test.each(['start', 'forward'] as const)(
 test('a screenshot post handoff carries trigger images without copying group history images', async () => {
   const { fake, t, start } = setup([
     fauxToolCall('feishu_start_topic', {
-      task: 'Fix the broken page in this screenshot',
+      title: 'Fix the broken page in this screenshot',
+      brief: 'Fix the broken page in this screenshot',
     }),
     (req) =>
       req.tools.includes('feishu_start_topic')
@@ -667,7 +733,10 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
   const storage = memorySessionStorage()
   const { fake, t, start } = setup(
     [
-      fauxToolCall('feishu_start_topic', { task: 'Investigate cobalt' }),
+      fauxToolCall('feishu_start_topic', {
+        title: 'Investigate cobalt',
+        brief: 'Investigate cobalt',
+      }),
       listCall(),
       fauxText('listed'),
       fauxToolCall('feishu_forward_to_topic', { root_id: 'source' }),

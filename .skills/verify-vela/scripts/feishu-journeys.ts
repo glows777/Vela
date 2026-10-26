@@ -66,7 +66,10 @@ function router(req: FauxRequest): FauxResponse {
     toolCalls: [{ name, input }],
   })
   if (/investigate/i.test(text) && req.tools.includes('feishu_start_topic'))
-    return call('feishu_start_topic', { task: 'Investigate the flaky test' })
+    return call('feishu_start_topic', {
+      title: 'Investigate the flaky test',
+      brief: 'Investigate the flaky test and write down the likely cause.',
+    })
   if (text.includes('Investigate the flaky test'))
     return call('write_file', { path: 'notes.md', content: 'cause: timing' })
   if (/remind/i.test(text))
@@ -117,8 +120,21 @@ const topic = { root_id: rootId, thread_id: `thread_${rootId}` }
 fake.deliver(root)
 await until('topic result', () => !!sent(fake, 'after write_file'))
 await sleep(300)
-const opened = fake.topics.map((t) => t.task)
+const opened = fake.topics.map((t) => t.title)
 check('topics opened', opened, opened.length === 1)
+check(
+  'topic opener is the title only',
+  opened[0],
+  opened[0] === 'Investigate the flaky test',
+)
+const topicBrief = model.calls.find((entry) =>
+  entry.system.includes('This topic contains a conversation about one task.'),
+)?.lastUserText
+check(
+  'topic session brief',
+  topicBrief,
+  topicBrief?.includes('write down the likely cause'),
+)
 const reactions = fake.reactions.map(
   (r) => `${r.emoji}${r.removed ? '(removed)' : ''}`,
 )

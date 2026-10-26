@@ -153,7 +153,7 @@ export class ChannelGateway {
           throw new Error('The topic run has ended')
         return this.directory.waitForInput(key, reason)
       },
-      dispatch: (id, msg) => {
+      dispatch: (id, msg, label) => {
         const source = this.feedback.runs.get(this.directory.keyForSession(id))
         if (!source || !this.feedback.runIsLive(source))
           throw new Error('The source channel run has ended')
@@ -162,7 +162,7 @@ export class ChannelGateway {
           msg.channelId,
           msg.topic?.rootId,
         )
-        this.admission.observe(targetId, channel.name, msg)
+        this.admission.observe(targetId, channel.name, msg, label)
         this.feedback.acknowledgements.set(msg, source.inputs)
         source.handedOff = true
         void this.handleIncoming(channel.name, msg)

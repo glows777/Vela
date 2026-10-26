@@ -486,7 +486,10 @@ test('a passive run that hands off to a topic removes the marker', async () => {
     responses: [
       fauxToolCall(
         'feishu_start_topic',
-        { task: 'Investigate the pricing question' },
+        {
+          title: 'Investigate the pricing question',
+          brief: 'Investigate the pricing question',
+        },
         { text: 'I will take this to a topic.' },
       ),
       answer,
