@@ -17,6 +17,7 @@ export interface Call {
   args: Record<string, unknown>
   phase: number
   success: boolean
+  output?: unknown
 }
 export interface Evidence {
   answers: string[]
@@ -35,6 +36,91 @@ export interface Check {
 }
 export const chars = (text: string) => Array.from(text.trim()).length
 const normalized = (text: string) => text.replace(/\s+/gu, ' ').trim()
+
+export interface Repetition {
+  turns: {
+    turn: number
+    answerCodepoints: number
+    sharedCodepoints: number
+    percent: number
+  }[]
+  maxPercent: number
+}
+/** Preserve whitespace-normalized matching while counting positions in the actual answer. */
+export function repetition(answers: string[]): Repetition {
+  const priorWindows = new Set<string>()
+  const turns: Repetition['turns'] = []
+  for (const [index, answer] of answers.entries()) {
+    const original = Array.from(answer.trim())
+    const points: { text: string; start: number; end: number }[] = []
+    for (const [position, text] of original.entries()) {
+      const previous = points.at(-1)
+      if (/\s/u.test(text) && previous?.text === ' ')
+        previous.end = position + 1
+      else
+        points.push({
+          text: /\s/u.test(text) ? ' ' : text,
+          start: position,
+          end: position + 1,
+        })
+    }
+    const covered = new Uint8Array(original.length)
+    const windows: string[] = []
+    for (let start = 0; start <= points.length - 30; start++) {
+      const window = points
+        .slice(start, start + 30)
+        .map((point) => point.text)
+        .join('')
+      windows.push(window)
+      if (priorWindows.has(window))
+        covered.fill(1, points[start]!.start, points[start + 29]!.end)
+    }
+    if (index > 0) {
+      const sharedCodepoints = covered.reduce((sum, value) => sum + value, 0)
+      turns.push({
+        turn: index + 1,
+        answerCodepoints: original.length,
+        sharedCodepoints,
+        percent: original.length
+          ? (sharedCodepoints / original.length) * 100
+          : 0,
+      })
+    }
+    for (const window of windows) priorWindows.add(window)
+  }
+  return {
+    turns,
+    maxPercent: Math.max(0, ...turns.map((turn) => turn.percent)),
+  }
+}
+
+/** Observe Bun's completed runner output, independent of shell spelling or a preceding cd. */
+export function observedBunTest(result: unknown, target: string): boolean {
+  const output =
+    typeof result === 'string'
+      ? result
+      : result &&
+          typeof result === 'object' &&
+          'kind' in result &&
+          result.kind === 'vela-tool-result' &&
+          'preview' in result &&
+          typeof result.preview === 'string'
+        ? result.preview
+        : ''
+  const basename = target.split('/').at(-1)!
+  return (
+    /^bun test v/m.test(output) &&
+    /^Ran [1-9]\d* tests? across [1-9]\d* files?\./m.test(output) &&
+    output.split('\n').some((line) => {
+      const name = line.trim()
+      return (
+        name === `${target}:` ||
+        name === `${basename}:` ||
+        name.endsWith(`/${target}:`)
+      )
+    })
+  )
+}
 
 /** Any longer shared span also contains a shared thirty-codepoint window. */
 function overlaps(a: string, b: string): boolean {
@@ -132,12 +218,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
     case 'C4':
       check(
         'no repetition',
-        e.answers.length === 4 &&
-          e.answers.every((text, index) =>
-            e.answers
-              .slice(0, index)
-              .every((previous) => !overlaps(previous, text)),
-          ),
+        e.answers.length === 4 && repetition(e.answers).maxPercent <= 15,
       )
       check('three sentences', chars(answer) > 0 && sentences(answer) <= 3)
       break
@@ -148,7 +229,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       check(
         'automatic compaction',
-        e.compactions.some((phase) => phase < 4),
+        e.compactions.some((phase) => phase < 3),
       )
       check(
         'progress recalled',

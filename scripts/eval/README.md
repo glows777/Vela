@@ -76,17 +76,36 @@ answers are saved. G2 group/topic deliveries are separately scoped.
 
 `scenarios.ts` holds exact prompts/fixtures. C1/C4 preserve historical Chinese
 prompts; C2/C6 use seeded projects and independent probes; C3 uses a local page.
+C2/C6 observe successful Bash results containing Bun's runner header, target test
+file and nonzero executed-test summary, including the baseline's stored preview.
+This accepts `cd task && bun test limits.test.ts` without parsing shell commands;
+the grader's independent verification run does not count as the model running tests.
 C6 observes actual test inputs through a local Bun preload, allowing equivalent
 test syntax while requiring empty, specified mixed and frozen inputs.
-C5 uses staged turns, padded notes and a shared reduced provider window recorded
-in `results.json`; it observes automatic compaction, recalls progress and finishes
-without recreating completed files. No manual compaction is used.
+C5 fixture `user-ballast-v2` puts inert reference ballast in the first three staged
+user-message bodies, with unpadded notes and the same shared 40,000-token provider
+window. Its version and padding sizes are recorded in `results.json`. Pagination
+cannot omit this context. Both arms are calibrated offline with one-line note
+reads; successful automatic compaction must occur before the status turn (phase
+0–2). It then recalls progress and finishes without recreating completed files.
+No manual compaction is used. Preserve the original live batches when changing a
+fixture or grader; any targeted rerun is a separate batch with its own metadata.
 
 G1–G5 fake only Feishu transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
 
 Overlap means a whitespace-normalized shared contiguous span of at least 30 Unicode
-code points. Sentence boundaries are `。！？.!?` followed by whitespace or end of
+code points. C4 counts the union of positions covered by these spans against all
+earlier answers, once per position, and divides by that answer's trimmed Unicode
+codepoint length. Normalized whitespace matches map back to the actual answer's
+positions. Per-turn counts/percentages and the scenario maximum are stored in
+`results.json`; the column beside character medians shows each arm's worst observed
+T2/T3/T4 percentages across valid runs, then its overall maximum. JSON and grading
+use unrounded percentages; the table rounds to two decimals. Passing requires
+every turn to be at most 15%. **15% is Claude's provisional judgment, not an
+empirically calibrated threshold.** Report the actual measurements so it can be
+revisited. Turn 4's three-sentence check is unchanged. G2/G5 still use the original
+any-shared-span predicate. Sentence boundaries are `。！？.!?` followed by whitespace or end of
 text; code spans/blocks and list markers are ignored, and each numbered list item
 counts once. Lengths count trimmed visible Unicode code points, excluding reasoning.
 

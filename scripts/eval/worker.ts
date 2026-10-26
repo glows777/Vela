@@ -9,6 +9,8 @@ import {
   chars,
   type Evidence,
   grade,
+  observedBunTest,
+  repetition,
   type ScenarioId,
 } from './graders.ts'
 import { type Attempt, emptyUsage, pricing } from './report.ts'
@@ -315,7 +317,6 @@ export async function runAttempt(
   let channelStarted = false
   let channelError: unknown
   const calls = new Map<string, Call>()
-  const completedCommands: string[] = []
   t.vela.subscribe((event: VelaEvent, sessionId) => {
     if (event.type === 'agent_start' && sessionId.startsWith('feishu-'))
       channelStarted = true
@@ -334,8 +335,12 @@ export async function runAttempt(
       const call = calls.get(event.toolCallId)
       if (call) {
         call.success = !event.isError
-        if (call.name === 'bash' && call.success)
-          completedCommands.push(String(call.args.command))
+        if (
+          call.name === 'bash' &&
+          call.success &&
+          ['C2', 'C6'].includes(config.scenario)
+        )
+          call.output = event.result
       }
     }
   })
@@ -420,11 +425,11 @@ export async function runAttempt(
     if (config.scenario === 'C2' || config.scenario === 'C6') {
       const target =
         config.scenario === 'C2' ? 'task/limits.test.ts' : 'task/total.test.ts'
-      evidence.validation.testRun = completedCommands.some(
-        (text) =>
-          text.includes('bun') &&
-          /\btest\b/.test(text) &&
-          text.includes(target),
+      evidence.validation.testRun = evidence.calls.some(
+        (call) =>
+          call.name === 'bash' &&
+          call.success &&
+          observedBunTest(call.output ?? '', target),
       )
       const tested = await bun('test', target)
       evidence.validation.testPassed = tested.ok
@@ -527,6 +532,8 @@ mock.module(${JSON.stringify(modulePath)}, () => ({ ...actual, sumPositive(numbe
           relative(config.artifactDir, join(sessions, name)),
         )
     result.finalChars = chars(evidence.answers.at(-1) ?? '')
+    if (config.scenario === 'C4')
+      result.repetition = repetition(evidence.answers)
     result.toolCalls = evidence.calls.length
     result.durationMs = performance.now() - started
     await checkpoint()

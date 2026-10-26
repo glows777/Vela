@@ -3,6 +3,7 @@ import type { ScenarioId } from './graders.ts'
 export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
+  version: 'user-ballast-v2',
   contextWindow: 40_000,
   paddingBytes: [10_240, 10_240, 47_104, 0, 0, 0],
 }
@@ -39,7 +40,11 @@ export function prompts(id: ScenarioId, url = ''): string[] {
         'Do the next step only, then pause.',
         'Where were we? State the number of completed steps and the next step number. Do not change files.',
         'Continue and finish the remaining steps in order. Do not recreate completed files.',
-      ]
+      ].map((prompt, index) =>
+        index < 3
+          ? `${prompt}\n\n[Inert reference ballast]\n${ballast(index)}\n[/Inert reference ballast]`
+          : prompt,
+      )
     case 'C6':
       return [
         'Fulfill all six requirements: (1) Create task/total.ts exporting sumPositive(numbers: readonly number[]): number, summing only positive numbers, returning 0 for an empty input and never mutating the input. (2) Create task/total.test.ts covering empty input and [2,-3,0,5], including frozen input. (3) Run that test with Bun. (4) Append exactly one line "sumPositive ignores nonpositive values." to task/README.md. (5) Do not touch task/protected.txt. (6) Change only task/total.ts, task/total.test.ts and task/README.md.',
@@ -72,16 +77,7 @@ export function fixtures(id: ScenarioId): Record<string, string> {
     return Object.fromEntries(
       Array.from({ length: 6 }, (_, i) => [
         `task/note-${i + 1}.txt`,
-        `Step ${i + 1}: create task/step-${i + 1}.txt with step=${i + 1} followed by a newline.\n` +
-          (i < 3
-            ? Array.from(
-                { length: 1000 },
-                (_, index) =>
-                  `Reference ${index}: item alpha beta gamma delta epsilon zeta eta theta.\n`,
-              )
-                .join('')
-                .slice(0, compactionFixture.paddingBytes[i])
-            : ''),
+        `Step ${i + 1}: create task/step-${i + 1}.txt with step=${i + 1} followed by a newline.\n`,
       ]),
     )
   if (id === 'C6')
@@ -90,4 +86,14 @@ export function fixtures(id: ScenarioId): Record<string, string> {
       'task/protected.txt': 'Leave this file unchanged.\n',
     }
   return {}
+}
+
+function ballast(index: number): string {
+  return Array.from(
+    { length: 1000 },
+    (_, line) =>
+      `Reference ${line}: item alpha beta gamma delta epsilon zeta eta theta.\n`,
+  )
+    .join('')
+    .slice(0, compactionFixture.paddingBytes[index])
 }

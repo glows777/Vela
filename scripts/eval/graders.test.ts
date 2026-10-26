@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test'
 import { savedGraderAnswers } from './fixtures/saved-grader-answers.ts'
+import { savedTestRuns } from './fixtures/saved-test-runs.ts'
+import * as graders from './graders.ts'
 import { type Evidence, grade, type ScenarioId } from './graders.ts'
+import { type Attempt, emptyUsage, table } from './report.ts'
+import { compactionFixture, fixtures, prompts } from './scenarios.ts'
 
 function evidence(overrides: Partial<Evidence> = {}): Evidence {
   return {
@@ -214,6 +218,9 @@ fails('C5', 'automatic compaction', (e) => {
 fails('C5', 'automatic compaction', (e) => {
   e.compactions = [4]
 })
+fails('C5', 'automatic compaction', (e) => {
+  e.compactions = [3]
+})
 fails('C5', 'progress recalled', (e) => {
   e.answers[3] = '2 steps completed; next is step 3.'
 })
@@ -339,4 +346,109 @@ test('sentence counting ignores code and counts numbered items once', () => {
       }).find((c) => c.name === 'three sentences')?.pass,
     ).toBe(true)
   }
+})
+
+const sharedThirty = '0123456789ABCDEFGHIJKLMNOPQRST'
+test('C4: metrics count shared Unicode positions once and report every turn and maximum', () => {
+  const answers = [
+    `${sharedThirty}X`,
+    `${sharedThirty}X${'a'.repeat(176)}`,
+    'Different.',
+    'Done.',
+  ]
+  const repetition = graders.repetition(answers)
+  expect(repetition.turns).toEqual([
+    {
+      turn: 2,
+      answerCodepoints: 207,
+      sharedCodepoints: 31,
+      percent: (31 / 207) * 100,
+    },
+    { turn: 3, answerCodepoints: 10, sharedCodepoints: 0, percent: 0 },
+    { turn: 4, answerCodepoints: 5, sharedCodepoints: 0, percent: 0 },
+  ])
+  expect(repetition.maxPercent).toBe((31 / 207) * 100)
+  const attempt: Attempt = {
+    scenario: 'C4',
+    arm: 'old',
+    run: 1,
+    attempt: 1,
+    status: 'pass',
+    checks: [],
+    evidence: evidence({ answers }),
+    usage: emptyUsage(),
+    durationMs: 0,
+    sessionFiles: [],
+    finalChars: 5,
+    toolCalls: 0,
+    artifactDir: '',
+    repetition,
+  }
+  const output = table([attempt], ['C4'], 1)
+  expect(output).toContain('Repeat % old/new (T2/T3/T4; max)')
+  expect(output).toContain('14.98/0/0; max 14.98')
+})
+for (const saved of savedTestRuns) {
+  test(`${saved.source}: observes the target test execution after cd`, () => {
+    expect(graders.observedBunTest(saved.output, saved.target)).toBe(true)
+    expect(
+      graders.observedBunTest(saved.output, 'task/unrelated.test.ts'),
+    ).toBe(false)
+  })
+}
+test.each([
+  'bun test task/limits.test.ts',
+  'bun test v1.4.2\n\nlimits.test.ts:\nRan 0 tests across 1 file.',
+])(
+  'a command mention or zero executed tests is not a test run: %s',
+  (output) => {
+    expect(graders.observedBunTest(output, 'task/limits.test.ts')).toBe(false)
+  },
+)
+test.each([
+  [sharedThirty, `${sharedThirty}${'a'.repeat(170)}`, true],
+  [sharedThirty, `${sharedThirty}${'a'.repeat(169)}`, false],
+  [`${sharedThirty}X`, `${sharedThirty}X${'a'.repeat(176)}`, true],
+  ['😀'.repeat(30), `${'😀'.repeat(30)}${'a'.repeat(170)}`, true],
+])(
+  'C4: shared-position union at the 15 percent boundary: %s',
+  (prior, answer, pass) => {
+    const input = evidence({
+      answers: [String(prior), String(answer), 'Different.', 'Done.'],
+    })
+    expect(
+      grade('C4', input).find((c) => c.name === 'no repetition')?.pass,
+    ).toBe(pass)
+  },
+)
+test('C4: distinct spans shared with different earlier answers both count', () => {
+  const other = 'abcdefghijklmnopqrstuvwxyzABCD'
+  const input = evidence({
+    answers: [
+      sharedThirty,
+      other,
+      `${sharedThirty}${'!'.repeat(140)}${other}`,
+      'Done.',
+    ],
+  })
+  expect(grade('C4', input).find((c) => c.name === 'no repetition')?.pass).toBe(
+    false,
+  )
+})
+test('C5: ballast is admitted in staged user messages, not paginated notes', () => {
+  const staged = prompts('C5')
+  const notes = fixtures('C5')
+  for (let i = 0; i < 3; i++) {
+    expect(staged[i]).toContain('[Inert reference ballast]')
+    expect(staged[i]!.length).toBeGreaterThan(
+      compactionFixture.paddingBytes[i]!,
+    )
+    expect(notes[`task/note-${i + 1}.txt`]).not.toContain('Reference')
+  }
+  expect(staged[3]).toBe(
+    'Where were we? State the number of completed steps and the next step number. Do not change files.',
+  )
+  expect(staged[4]).toBe(
+    'Continue and finish the remaining steps in order. Do not recreate completed files.',
+  )
 })

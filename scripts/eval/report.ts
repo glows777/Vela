@@ -1,4 +1,10 @@
-import { type Check, chars, type Evidence, type ScenarioId } from './graders.ts'
+import {
+  type Check,
+  chars,
+  type Evidence,
+  type Repetition,
+  type ScenarioId,
+} from './graders.ts'
 
 export interface Usage {
   input: number
@@ -30,6 +36,7 @@ export const pricing = {
   basis: 'peak USD per million tokens',
 }
 export interface Attempt {
+  repetition?: Repetition
   scenario: ScenarioId
   arm: 'old' | 'new'
   run: number
@@ -61,8 +68,8 @@ export function table(
   runs: number,
 ): string {
   const lines = [
-    '| Scenario | Old pass/valid | New pass/valid | Median chars old/new (Δ) | Median tools old/new (Δ) | Estimated $ old/new | Notes |',
-    '|---|---:|---:|---:|---:|---:|---|',
+    '| Scenario | Old pass/valid | New pass/valid | Median chars old/new (Δ) | Repeat % old/new (T2/T3/T4; max) | Median tools old/new (Δ) | Estimated $ old/new | Notes |',
+    '|---|---:|---:|---:|---|---:|---:|---|',
   ]
   for (const id of ids) {
     const arms = (['old', 'new'] as const).map((arm) => {
@@ -99,8 +106,24 @@ export function table(
     if (id === 'C6') notes.push('recorded only')
     const pair = (a: number | undefined, b: number | undefined) =>
       `${display(a)}/${display(b)} (${display(a === undefined || b === undefined ? undefined : b - a)})`
+    const repeats = arms.map(({ valid }) => {
+      const metrics = valid.flatMap((attempt) =>
+        attempt.repetition ? [attempt.repetition] : [],
+      )
+      if (!metrics.length) return '—'
+      const perTurn = [2, 3, 4].map((turn) =>
+        Math.max(
+          ...metrics.flatMap((metric) =>
+            metric.turns
+              .filter((item) => item.turn === turn)
+              .map((item) => item.percent),
+          ),
+        ),
+      )
+      return `${perTurn.map(display).join('/')}; max ${display(Math.max(...metrics.map((metric) => metric.maxPercent)))}`
+    })
     lines.push(
-      `| ${id} | ${old.passes}/${old.valid.length} | ${current.passes}/${current.valid.length} | ${pair(old.chars, current.chars)} | ${pair(old.tools, current.tools)} | ${old.cost.toFixed(4)}/${current.cost.toFixed(4)} | ${notes.join('; ')} |`,
+      `| ${id} | ${old.passes}/${old.valid.length} | ${current.passes}/${current.valid.length} | ${repeats.join(' / ')} | ${pair(old.tools, current.tools)} | ${old.cost.toFixed(4)}/${current.cost.toFixed(4)} | ${notes.join('; ')} |`,
     )
   }
   for (const arm of ['old', 'new']) {
