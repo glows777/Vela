@@ -43,6 +43,8 @@ export class ChannelGateway {
   private readonly commands: TopicCommands
   private readonly usage: ChannelUsage
   private channels = new Map<string, ChannelDefinition>()
+  /** Channels whose `start()` reported a connection; `serve` refuses to idle when this is empty */
+  private started = new Set<string>()
   /** Messages are processed serially per session: the next message in a chat waits for the previous reply */
   private queues = new Map<string, Promise<void>>()
   private subscribed = new WeakSet<VelaSession>()
@@ -226,6 +228,7 @@ export class ChannelGateway {
           throw error
         }
         if (started) {
+          this.started.add(name)
           this.logger.info(`[gateway] ✓ ${name} started`)
           this.routines.start(name)
         }
@@ -239,6 +242,7 @@ export class ChannelGateway {
 
   async stopAll(): Promise<void> {
     this.stopped = true
+    this.started.clear()
     this.routines.stop()
     for (const timer of this.idleTimers.values()) clearTimeout(timer)
     this.idleTimers.clear()
@@ -630,5 +634,10 @@ export class ChannelGateway {
       name: ch.name,
       description: ch.description,
     }))
+  }
+
+  /** Channels whose last `start()` reported a connection (not `false`, and it did not throw) */
+  running(): string[] {
+    return [...this.started]
   }
 }

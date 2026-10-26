@@ -495,39 +495,50 @@ test('slash commands: CLI command output, extension commands and /hotkeys go to 
   await tui.until('Alt+Up move queued messages back to the editor')
 })
 
-test('terminal control sequences in tool output and channel messages are not written to the terminal', async () => {
+test('terminal control sequences in tool output are not written to the terminal', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'x\x1b]0;PWNED\x07y\x1b[31mred\x1b]52;c;ZXZpbA==\x07' },
-    responses: [
-      fauxToolCall('read_file', { path: 'a.txt' }),
-      fauxText('done'),
-      fauxText('reply'),
-    ],
-  })
-  t.internals.gateway.register({
-    name: 'fake',
-    description: 'test channel',
-    start: () => {},
-    stop: () => {},
-    send: async () => {},
+    responses: [fauxToolCall('read_file', { path: 'a.txt' }), fauxText('done')],
   })
   const tui = await startTui(t.vela)
   await tui.started
   tui.submit('read a.txt')
   await tui.until('done')
-  await tui.until(() => !t.vela.session('tui').isRunning)
-  // A message from someone in a channel (untrusted)
-  await t.internals.gateway.handleIncoming('fake', {
-    channelId: 'c1',
-    senderId: 'visitor',
-    senderName: 'visitor',
-    text: 'hi\x1b]0;PWNED\x07there',
-  })
-  await tui.until('[fake] visitor: hithere')
   const raw = tui.mode.tui.render(100).join('\n')
   expect(raw).not.toContain(']0;PWNED')
   expect(raw).not.toContain(']52;')
   expect(tui.screen()).toContain('xyred')
+})
+
+test('the TUI neither starts channels nor shows their traffic', async () => {
+  const t = createTestVela({ responses: [fauxText('reply')] })
+  let started = false
+  const sent: string[] = []
+  t.internals.gateway.register({
+    name: 'fake',
+    description: 'test channel',
+    start: () => {
+      started = true
+    },
+    stop: () => {},
+    send: async (message) => {
+      sent.push(message.text)
+    },
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+  expect(started).toBe(false)
+  // Channel traffic still works through the SDK gateway; it just has no UI here
+  await t.internals.gateway.handleIncoming('fake', {
+    channelId: 'c1',
+    senderId: 'visitor',
+    senderName: 'visitor',
+    text: 'hello from the group',
+  })
+  await tui.until(() => sent.length === 1)
+  expect(sent).toEqual(['reply'])
+  expect(tui.screen()).not.toContain('visitor')
+  expect(tui.screen()).not.toContain('hello from the group')
 })
 
 test('SIGTERM shuts the TUI down like Ctrl+D', async () => {
