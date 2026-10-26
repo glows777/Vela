@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { messageTime } from '../../src/extensions/feishu/history.ts'
 import {
   type FeishuOptions,
   feishu,
@@ -69,6 +70,9 @@ function setup(
 }
 const passive = (message_id: string, text: string) =>
   feishuEvent({ message_id, mentions: [], content: JSON.stringify({ text }) })
+
+/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+const at = (ms: string) => `[${messageTime(ms)}] `
 const reactionLog = (run: ReturnType<typeof setup>) =>
   run.fake.reactions.map(({ messageId, emoji, removed }) => ({
     messageId,
@@ -78,6 +82,17 @@ const reactionLog = (run: ReturnType<typeof setup>) =>
 async function idle(run: ReturnType<typeof setup>) {
   await until(() => !run.t.vela.session('feishu-oc_group').isRunning)
 }
+
+test('a passive group input carries the message send time', async () => {
+  const run = setup({ responses: [fauxText('ok')] })
+  await run.start()
+  const event = passive('timed', 'how is the build?')
+  run.fake.deliver(event)
+  await until(() => run.t.model.calls.length === 1)
+  expect(run.t.model.calls[0]?.lastUserText).toBe(
+    `${at(event.message.create_time!)}Alice: how is the build?`,
+  )
+})
 
 test('default-on intake queues each unique message, skips silently, treats commands as discussion and deduplicates after restart', async () => {
   const cwd = await root()

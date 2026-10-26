@@ -21,7 +21,12 @@ import {
   topicRunCard,
 } from './cards.ts'
 import { type FeishuChat, parseChats } from './chats.ts'
-import { messageTime, readGroupContext, readTopicContext } from './history.ts'
+import {
+  formatGroupContext,
+  messageTime,
+  readGroupContext,
+  readTopicContext,
+} from './history.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { FeishuProgress } from './progress.ts'
 import { FeishuTopics, topicToolNames } from './topics.ts'
@@ -443,12 +448,17 @@ export class FeishuChannel implements ChannelDefinition {
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (!msg.passive && msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
+    // A top-level group message keeps its send time even when no history is read (passive intake, a failed
+    // fetch); topic history has no times yet, so topic input and DMs stay as they are.
     const question = {
       name,
       text: msg.text,
-      time: messageTime(event.message.create_time),
+      time:
+        event.message.chat_type === 'group' && !msg.topic
+          ? messageTime(event.message.create_time)
+          : undefined,
     }
-    let text = `${name}: ${msg.text}`
+    let text = formatGroupContext([], question)
     if (msg.passive || (msg.topic && !msg.isNewTopic))
       return { ...msg, senderName: name, text }
     if (msg.topic && this.transport) {
