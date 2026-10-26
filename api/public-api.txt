@@ -78,7 +78,7 @@
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
     sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; }) | undefined
-    start: () => Promise<void> | void
+    start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
     timezone?: unknown
@@ -605,6 +605,7 @@
     toolCallId?: string | undefined
   interface ToolDefinition
     annotations?: ToolAnnotations | undefined
+    channel?: string | undefined
     description: string
     execute: (input: any, context?: ToolContext) => Promise<unknown>
     executionMode?: ToolExecutionMode | undefined

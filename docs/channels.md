@@ -225,7 +225,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | --- | --- | --- |
 | `name`, `description` | Yes | Stable channel name (part of session identity) and description shown in channel listings. |
 | `canRecover(message, chatKind)` | No | Recheck current access for a stored group/direct conversation. Return false to leave it untouched during startup recovery. |
-| `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. A rejected start is logged without preventing other channels from starting. |
+| `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. Return `false` when the channel is not configured to connect; the gateway then skips its startup line, routines and recovery. A rejected start is logged without preventing other channels from starting. |
 | `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
 | `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
 | `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |

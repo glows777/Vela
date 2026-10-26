@@ -33,6 +33,7 @@ export class ChannelSessions {
       channel.sessionOptions?.(msg),
     )
     session.channel = channel.name
+    session.registry.setChannel(channel.name)
     channelScopes.set(session.registry, {
       channel: channel.name,
       chatId: msg.channelId,

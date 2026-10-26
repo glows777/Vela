@@ -217,15 +217,18 @@ export class ChannelGateway {
           this.queues.set(record.key, task)
           this.releaseQueue(record.key, task)
         }
+        let started = false
         try {
-          await ch.start()
-          connected(true)
+          started = (await ch.start()) !== false
+          connected(started)
         } catch (error) {
           connected(false)
           throw error
         }
-        this.logger.info(`[gateway] ✓ ${name} started`)
-        this.routines.start(name)
+        if (started) {
+          this.logger.info(`[gateway] ✓ ${name} started`)
+          this.routines.start(name)
+        }
       } catch (err) {
         this.logger.error(
           `[gateway] ✗ ${name} failed to start: ${errorMessage(err)}`,

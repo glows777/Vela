@@ -171,7 +171,7 @@ export class FeishuChannel implements ChannelDefinition {
     this.messageHandler = handler
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<boolean | undefined> {
     this.stopped = false
     this.botId = undefined
     const transport =
@@ -183,7 +183,7 @@ export class FeishuChannel implements ChannelDefinition {
       this.config.logger.warn(
         '[feishu] appId / appSecret not configured; channel will not connect to Feishu',
       )
-      return
+      return false
     }
     if (!this.chats.size)
       this.config.logger.info(

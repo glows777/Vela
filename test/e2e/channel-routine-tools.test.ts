@@ -296,12 +296,10 @@ test('routine tools enforce validation, a per-chat cap and same-chat cancellatio
     }),
   ).toContain('20 routines')
   expect(await r.stored()).toHaveLength(20)
-  r.t.model.push(
-    fauxToolCall('feishu_routines', { action: 'list' }),
-    fauxText('SDK done'),
-  )
+  r.t.model.push(fauxText('SDK done'))
   await r.t.run('List channel routines')
-  expect(r.t.model.calls.at(-1)!.toolResults.at(-1)!.output).toContain('active')
+  // A plain SDK session is not a channel session, so it never sees the routine tool.
+  expect(r.t.model.calls.at(-1)!.tools).not.toContain('feishu_routines')
 })
 
 test.each([

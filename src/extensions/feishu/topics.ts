@@ -83,6 +83,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'routines',
+      channel: 'feishu',
       description:
         'Create, list or cancel this chat’s scheduled wake-ups. Creation targets the current topic, group channel or DM and mentions its creator on delivery. Use local at: YYYY-MM-DDTHH:mm for a future one-off, or time: HH:MM with optional days: mon..sun (otherwise daily). All times use the deployment timezone returned by list; list first when uncertain. Confirm the saved schedule, timezone and nextRun. Any member may cancel by id; cancellation only prevents future submissions.',
       inputSchema: routineToolSchema,
@@ -103,6 +104,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'skip_reply',
+      channel: 'feishu',
       description:
         'Remain silent for this untagged group discussion. Call this when no useful reply is warranted, then end the run.',
       inputSchema: z.object({}),
@@ -115,6 +117,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'wait_for_input',
+      channel: 'feishu',
       description:
         'Mark this topic as waiting for required human input. Supply the reason, then ask the question and end the run. The next accepted topic message clears waiting.',
       inputSchema: z.object({ reason: z.string().trim().min(1).max(2000) }),
@@ -129,6 +132,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'search_history',
+      channel: 'feishu',
       maxResultChars: 20000,
       description:
         'Search older messages in this group by keyword or time range (default last seven days). Chat listing includes topic roots, not every thread reply; absence does not establish indexing delay. Report the returned matchCounts, senderType, ISO UTC times, coverage and truncation accurately; use an earlier end_time to search further.',
@@ -143,6 +147,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'start_topic',
+      channel: 'feishu',
       description:
         'Start a topic under the current message. The title is posted as the first visible message of the topic: one short plain line that names the request. The brief is sent only to the topic session as its first input, with the sender’s name: state the requester’s goal and include the facts it needs from this conversation. Neither holds a plan or method. Trigger images are carried over; the channel transcript is not. Returns after enqueueing without waiting for the task.',
       inputSchema: z.object({
@@ -177,6 +182,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'forward_to_topic',
+      channel: 'feishu',
       description:
         'Forward the current original message into an owned topic in this group, with its sender attribution, and enqueue it once.',
       inputSchema: z.object({ root_id: z.string().min(1) }),
@@ -221,6 +227,7 @@ export class FeishuTopics {
     })
     vela.registerTool({
       name: 'list_topics',
+      channel: 'feishu',
       description:
         'List this group’s recorded owned topics and their current state, including earlier process runs. Topics from before M2 join when next observed.',
       inputSchema: z.object({}),
