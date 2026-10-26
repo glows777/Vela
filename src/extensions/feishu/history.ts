@@ -6,13 +6,20 @@ import type {
   FeishuSentMessage,
 } from './transport.ts'
 
+/** One named line of chat history; `time` is the local send time when the message has one */
+export interface ContextLine {
+  name: string
+  text: string
+  time?: string
+}
+
 interface GroupContextOptions {
   chatId: string
   message: FeishuMessageEvent['message']
   activeTrigger?: FeishuMessageEvent['message']
   previous?: FeishuSentMessage
   appId: string
-  question: { name: string; text: string }
+  question: ContextLine
   senderName: (id: string) => Promise<string>
   downloadImages: (
     message: FeishuMessageEvent['message'],
@@ -33,7 +40,7 @@ export async function readGroupContext(
     downloadImages,
   }: GroupContextOptions,
 ): Promise<{ text: string; images: ImageContent[] }> {
-  const earlier: { name: string; text: string }[] = []
+  const earlier: ContextLine[] = []
   const seen = new Set<string>()
   const historyImages: ImageContent[][] = []
   let imageCount = 0
@@ -75,6 +82,7 @@ export async function readGroupContext(
     earlier.push({
       name: await senderName(item.sender?.id ?? 'unknown'),
       text: body,
+      time: messageTime(item.create_time),
     })
   }
   return {
@@ -83,13 +91,24 @@ export async function readGroupContext(
   }
 }
 
+/** The local `HH:MM` for a Feishu `create_time` in milliseconds. */
+export function messageTime(
+  createTime: string | undefined,
+): string | undefined {
+  if (!createTime) return undefined
+  const date = new Date(Number(createTime))
+  if (Number.isNaN(date.getTime())) return undefined
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 /** Already-resolved names and plain text, in chronological order. */
 export function formatGroupContext(
-  history: readonly { name: string; text: string }[],
-  question: { name: string; text: string },
+  history: readonly ContextLine[],
+  question: ContextLine,
 ): string {
-  const named = (item: { name: string; text: string }) =>
-    `${item.name}: ${item.text}`
+  const named = (item: ContextLine) =>
+    `${item.time ? `[${item.time}] ` : ''}${item.name}: ${item.text}`
   return history.length
     ? `[Chat since last reply]\n${history.slice(-50).map(named).join('\n')}\n\n[Question]\n${named(question)}`
     : named(question)

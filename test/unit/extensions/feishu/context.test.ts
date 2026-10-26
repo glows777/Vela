@@ -3,7 +3,10 @@ import type {
   ChannelDefinition,
   IncomingMessage,
 } from '../../../../src/channels/types.ts'
-import { formatGroupContext } from '../../../../src/extensions/feishu/history.ts'
+import {
+  formatGroupContext,
+  messageTime,
+} from '../../../../src/extensions/feishu/history.ts'
 import { feishu } from '../../../../src/extensions/feishu/index.ts'
 import { silentLogger } from '../../../../src/logger.ts'
 import { fakeFeishu, feishuEvent } from '../../../support/feishu.ts'
@@ -15,17 +18,30 @@ test('group context puts named history before the named question and keeps only 
   const history = Array.from({ length: 52 }, (_, i) => ({
     name: 'Bob',
     text: `message ${i}`,
+    time: '10:32',
   }))
   const result = formatGroupContext(history, {
     name: 'Alice',
     text: 'question',
+    time: '10:33',
   })
-  expect(result).toStartWith('[Chat since last reply]\nBob: message 2\n')
-  expect(result).toEndWith('Bob: message 51\n\n[Question]\nAlice: question')
-  expect(result.match(/Bob:/g)).toHaveLength(50)
+  expect(result).toStartWith(
+    '[Chat since last reply]\n[10:32] Bob: message 2\n',
+  )
+  expect(result).toEndWith(
+    '[10:32] Bob: message 51\n\n[Question]\n[10:33] Alice: question',
+  )
+  expect(result.match(/\[10:32\] Bob:/g)).toHaveLength(50)
   expect(formatGroupContext([], { name: 'Alice', text: 'question' })).toBe(
     'Alice: question',
   )
+})
+
+test('a Feishu create_time becomes a local HH:MM label', () => {
+  const local = new Date(2026, 0, 2, 10, 32, 15)
+  expect(messageTime(String(local.getTime()))).toBe('10:32')
+  expect(messageTime(undefined)).toBeUndefined()
+  expect(messageTime('not a time')).toBeUndefined()
 })
 
 test.each([{ chats: ['oc_group'] }, { chats: ' oc_group , oc_other ' }])(
