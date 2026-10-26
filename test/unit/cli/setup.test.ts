@@ -38,6 +38,7 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
       '--continue',
     ]),
   ).toEqual({
+    serve: false,
     print: true,
     messages: ['hi'],
     continue: true,
@@ -82,6 +83,27 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
   expect(() => parseArgs(['--session', '.bad'])).toThrow(
     'Invalid session id ".bad"',
   )
+  // `serve` is a subcommand only as the first argument; later it stays a prompt
+  expect(parseArgs(['serve', '--model', 'mock'])).toMatchObject({
+    serve: true,
+    model: 'mock',
+    messages: [],
+  })
+  expect(parseArgs(['mock', 'serve'])).toMatchObject({
+    serve: false,
+    messages: ['mock', 'serve'],
+  })
+  for (const args of [
+    ['serve', '-p'],
+    ['serve', '--mode', 'json'],
+    ['serve', '--export', 'x'],
+    ['serve', '--list-models'],
+    ['serve', '-c'],
+    ['serve', '--fork', 'x'],
+    ['serve', '--tools', 'read_file'],
+    ['serve', 'hi'],
+  ])
+    expect(() => parseArgs(args)).toThrow('vela serve runs channels only')
 })
 
 test('the untrusted-project notice names the real trust.json under VELA_DIR', async () => {

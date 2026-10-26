@@ -34,6 +34,7 @@ import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
 import { installationId } from './login.ts'
 import { runPrintMode } from './print-mode.ts'
 import { runRpcMode } from './rpc-mode.ts'
+import { runServe } from './serve.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -74,11 +75,12 @@ const env = process.env
 const cwd = process.cwd()
 
 /**
- * Run mode (like pi): `--mode rpc` / `--mode json` pick explicitly; `-p`, `--mode text` or redirected stdin / stdout
- * mean print mode; otherwise (in a terminal) interactive mode.
+ * Run mode (like pi): `serve` runs channels only; `--mode rpc` / `--mode json` pick explicitly; `-p`, `--mode text`
+ * or redirected stdin / stdout mean print mode; otherwise (in a terminal) interactive mode.
  */
-const mode: 'interactive' | 'print' | 'json' | 'rpc' =
-  args.mode === 'rpc'
+const mode: 'serve' | 'interactive' | 'print' | 'json' | 'rpc' = args.serve
+  ? 'serve'
+  : args.mode === 'rpc'
     ? 'rpc'
     : args.mode === 'json'
       ? 'json'
@@ -109,7 +111,7 @@ let attachments: { text: string; images: ImageContent[] } = {
   text: '',
   images: [],
 }
-if (mode !== 'rpc' && !args.listModels && !args.export) {
+if (mode !== 'rpc' && mode !== 'serve' && !args.listModels && !args.export) {
   try {
     attachments = await readAttachments(
       args.messages
@@ -292,14 +294,16 @@ if (args.listModels) {
   )
 }
 
-// --tools / --no-tools / --exclude-tools and defaultTools: checked once extensions have registered their tools
+// --tools / --no-tools / --exclude-tools and defaultTools: checked once extensions have registered their tools.
+// `serve` refuses those flags, and the setting does not reach channel sessions: it has no single session to apply them to.
 let toolLoadout: ReturnType<typeof selectTools>
 try {
   if (
-    args.tools ||
-    args.noTools ||
-    args.excludeTools.length ||
-    config.settings.defaultTools
+    mode !== 'serve' &&
+    (args.tools ||
+      args.noTools ||
+      args.excludeTools.length ||
+      config.settings.defaultTools)
   ) {
     await vela.ready().catch(() => {})
     toolLoadout = selectTools(
@@ -415,10 +419,10 @@ function readPromptInput(input: string): string {
     : input
 }
 
-// Print, JSON and RPC modes (interactive mode handles its own): on a signal, abort the running turn so the
-// commands the model started are killed (bash runs them in their own process group, which would outlive
-// Vela), save the sessions and exit with the signal's code. A second signal exits right away.
-if (mode !== 'interactive') {
+// Print, JSON and RPC modes (interactive mode and `serve` handle their own): on a signal, abort the running
+// turn so the commands the model started are killed (bash runs them in their own process group, which would
+// outlive Vela), save the sessions and exit with the signal's code. A second signal exits right away.
+if (mode !== 'interactive' && mode !== 'serve') {
   const signals: [NodeJS.Signals, number][] = [
     ['SIGINT', 130],
     ['SIGTERM', 143],
@@ -471,6 +475,13 @@ if (mode === 'print' || mode === 'json') {
     enabledModels: config.settings.enabledModels,
   })
   await exit(0)
+} else if (mode === 'serve') {
+  await exit(
+    await runServe({
+      vela,
+      write: (line) => process.stderr.write(`${line}\n`),
+    }),
+  )
 } else {
   await runInteractive({
     vela,
