@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { savedGraderAnswers } from './fixtures/saved-grader-answers.ts'
 import { type Evidence, grade, type ScenarioId } from './graders.ts'
 
 function evidence(overrides: Partial<Evidence> = {}): Evidence {
@@ -126,6 +127,36 @@ function fails(
     )
   })
 }
+for (const saved of savedGraderAnswers) {
+  test(`${saved.source}: saved answer satisfies ${saved.check}`, () => {
+    const input = structuredClone(good[saved.scenario])
+    input.answers[saved.scenario === 'C1' ? 0 : 3] = saved.answer
+    expect(
+      grade(saved.scenario, input).find((check) => check.name === saved.check)
+        ?.pass,
+    ).toBe(true)
+  })
+}
+test('C1: incidental bash facts cannot override an explicit incorrect bash section', () => {
+  const input = evidence({
+    answers: [
+      'Other tools: compare bash at 2000 lines / 50KB.\n## bash\n3000 lines / 40KB.',
+    ],
+  })
+  expect(grade('C1', input)[0]?.pass).toBe(false)
+})
+test.each([
+  '2 of 6 steps completed. Next step number: 4.',
+  '3 of 6 steps completed. Next step number: 5.',
+  '3 steps not completed. Next step number: 4.',
+])('C5: incorrect progress remains rejected: %s', (answer) => {
+  const input = structuredClone(good.C5)
+  input.answers[3] = answer
+  expect(
+    grade('C5', input).find((check) => check.name === 'progress recalled')
+      ?.pass,
+  ).toBe(false)
+})
 fails('C1', 'bash limits', (e) => {
   e.answers = ['bash: 3000 lines / 50KB']
 })

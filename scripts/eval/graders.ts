@@ -74,7 +74,13 @@ const allowed = (paths: string[], names: string[]) =>
 
 function bashSection(answer: string): string {
   const lines = answer.replace(/[*`]/g, '').split('\n')
-  const start = lines.findIndex((line) => /\bbash\b/i.test(line))
+  // An explicit section takes precedence over an incidental prose mention.
+  let start = lines.findIndex((line) => /^\s*#{1,6}\s+.*\bbash\b/i.test(line))
+  if (start < 0)
+    start = lines.findIndex((line) =>
+      /^\s*(?:[-+]\s+)?bash\s*[:：]/i.test(line),
+    )
+  if (start < 0) start = lines.findIndex((line) => /\bbash\b/i.test(line))
   if (start < 0) return ''
   const level = lines[start]!.match(/^\s*(#{1,6})\s+/)?.[1]?.length ?? 6
   const section = [lines[start]!.slice(lines[start]!.search(/\bbash\b/i))]
@@ -136,6 +142,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       check('three sentences', chars(answer) > 0 && sentences(answer) <= 3)
       break
     case 'C5': {
+      const progress = (e.answers[3] ?? '').replace(/[*`]/g, '')
       const writes = calls('write_file').filter((call) =>
         /^task\/step-[1-6]\.txt$/.test(String(call.args.path)),
       )
@@ -145,9 +152,12 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       check(
         'progress recalled',
-        /(?:3|three|三)\s*(?:steps?\s*)?(?:are\s+)?(?:complete[ds]?|done|已完成)|(?:complete[ds]?|done|已完成)\D{0,12}(?:3|three|三)/i.test(
-          e.answers[3] ?? '',
-        ) && /(?:step\s*4|第四|第\s*4|next\D{0,8}4)/i.test(e.answers[3] ?? ''),
+        /(?:3|three|三)\s*(?:of\s+(?:6|six)\s+)?(?:steps?\s*)?(?:are\s+)?(?:complete[ds]?|done|已完成)|(?:complete[ds]?|done|已完成)\D{0,12}(?:3|three|三)/i.test(
+          progress,
+        ) &&
+          /(?:step\s*4\b|第四|第\s*4|next(?:\s+step)?(?:\s+number)?\s*[:：]?\s*(?:is\s+)?4\b|next\D{0,8}4\b)/i.test(
+            progress,
+          ),
       )
       check(
         'no recreation',
