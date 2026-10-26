@@ -1,5 +1,7 @@
 # Agent lessons
 
+After a miss is confirmed, write a lesson. Record the trigger path, the layer that should have caught it, and the mechanism patch. The layer is pre-PR, AI/bot review, CI, human, or post-merge. The patch is a line in [REVIEW.md](../REVIEW.md), a lint, or a verify-vela journey. A lesson with no mechanism change is not closed.
+
 ## A disappearing diagnostic does not prove a fix
 
 ### Incident
