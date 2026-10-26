@@ -97,6 +97,25 @@ recorded provider usage and the entire continuation, including final verificatio
 calls, through both revisions' real context managers and local request guards;
 observing compaction alone does not establish that the fixture can finish.
 
+V3 investigation (saved-cloud artifacts, not part of a fresh checkout):
+
+```sh
+# Offline; uses saved responses/usage and both revisions' native estimators.
+C5_REPLAY_PADDING=10240,10240,47104,0,0,0 bun --no-env-file .vela-eval/c5-v3-calibration/replay.ts C5 recorded
+# Above reproduces the old allocation's failure; below completes both arms.
+bun --no-env-file .vela-eval/c5-v3-calibration/replay.ts C5 recorded
+```
+
+The recorded continuation reaches 23,745 tokens with the old allocation (cap
+23,616). V3 completes with maxima 21,751 / 20,626 on old/new. Ballast-only usage
+adjustments are simulated and bracketed at 0.20–0.26 tokens/character; they are
+not real-provider measurements. A separate real v3 pilot and three-slot-per-arm
+run finish C5 on both revisions: targeted old 1/1 valid (four structure errors),
+new 3/3, with zero input-cap errors. The baseline errors are independently
+captured JSON objects in fields that its unchanged schema requires to be arrays;
+they remain errors. See the local calibration guide for commands and safe
+diagnostic-helper source. This investigation does not change any grade threshold.
+
 G1–G5 fake only Feishu transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
 
