@@ -87,6 +87,8 @@ export interface ToolDefinition {
   /** Group the tool belongs to, for example its MCP server (like pi) */
   namespace?: ToolNamespace
   searchHint?: string // Hint shown next to the name in the deferred tool list
+  /** Only sessions of this channel see or can call the tool; undefined means every session */
+  channel?: string
 }
 
 const EXPOSURES: readonly ToolExposure[] = [
@@ -234,6 +236,7 @@ export class ToolRegistry {
   private permissions?: PermissionRules
   /** Tools selected for the session; undefined means no limit */
   private selection?: ReadonlySet<string>
+  private channel?: string
   private confirm?: (toolName: string, input: unknown) => Promise<boolean>
 
   /** This session's permission rules; without them every tool is allowed */
@@ -246,9 +249,17 @@ export class ToolRegistry {
     this.selection = names ? new Set(names) : undefined
   }
 
+  /** Binds this session to a channel; tools declared for another channel are denied */
+  setChannel(name: string): void {
+    this.channel = name
+  }
+
   /** This session's permission decision for a tool; unselected tools are always deny */
   decide(toolName: string): PermissionDecision {
     if (this.selection && !this.selection.has(toolName)) return 'deny'
+    const tool = this.tools.get(toolName)
+    if (tool?.channel !== undefined && tool.channel !== this.channel)
+      return 'deny'
     return decidePermission(toolName, this.permissions)
   }
 
