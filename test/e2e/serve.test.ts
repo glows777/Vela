@@ -141,6 +141,54 @@ test('serve answers a channel message on stderr and stops cleanly on SIGTERM', a
   expect(sessions).toHaveLength(1)
 })
 
+test('a stop signal during channel startup still disposes instead of dying', async () => {
+  const dir = tempDir('vela-serve-')
+  dirs.push(dir)
+  const home = tempDir('vela-serve-home-')
+  dirs.push(home)
+  const connecting = join(dir.path, 'connecting')
+  const stopped = join(dir.path, 'stopped')
+  const extension = join(dir.path, 'slow-channel.ts')
+  // A transport connect that takes a moment, like the Feishu socket: the signal arrives while start() runs
+  await Bun.write(
+    extension,
+    `import { appendFileSync } from 'node:fs'
+export default (vela) => {
+  vela.registerChannel({
+    name: 'slow',
+    description: 'slow to connect',
+    start: async () => {
+      appendFileSync(${JSON.stringify(connecting)}, 'connecting\\n')
+      await Bun.sleep(400)
+    },
+    stop: () => appendFileSync(${JSON.stringify(stopped)}, 'stopped\\n'),
+    send: async () => {},
+    onMessage: () => {},
+  })
+}
+`,
+  )
+  const proc = spawnServe(
+    ['serve', '--no-extensions', '-e', extension],
+    dir.path,
+    home.path,
+  )
+  const reading = (async () => {
+    for await (const _ of proc.stderr) {
+      // Drain, so a full pipe never blocks the child
+    }
+  })()
+  const deadline = Date.now() + 15_000
+  while (!existsSync(connecting) && Date.now() < deadline) await Bun.sleep(10)
+  expect(existsSync(connecting)).toBe(true)
+  proc.kill('SIGTERM')
+  const code = await proc.exited
+  await reading
+  // Exit 0 means dispose() ran: the channel was stopped, not killed by the default signal handler
+  expect(code).toBe(0)
+  expect(existsSync(stopped)).toBe(true)
+})
+
 test('serve exits 1 instead of idling when no channel started', async () => {
   const dir = tempDir('vela-serve-')
   dirs.push(dir)

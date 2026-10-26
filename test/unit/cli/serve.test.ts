@@ -73,3 +73,20 @@ test('long channel text is cut to one screen line, errors included', () => {
     ),
   ).toBe('2026-10-26 08:05:03 channel_error feishu ou_1: Turn aborted')
 })
+
+test('terminal control sequences from chat text and names never reach the log', () => {
+  // OSC 52 would write the operator's clipboard, and a CSI can repaint the terminal it logs to
+  const clipboard = '\x1b]52;c;ZXZpbA==\x07'
+  expect(
+    formatChannelEvent(
+      {
+        type: 'channel_message',
+        channel: 'feishu',
+        senderId: 'ou_1',
+        senderName: `Ada${clipboard}`,
+        text: `hi${clipboard}\x1b[31mred\x1b]0;PWNED\x07there\x00`,
+      },
+      at,
+    ),
+  ).toBe('2026-10-26 08:05:03 channel_message feishu Ada: hiredthere')
+})

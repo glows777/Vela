@@ -1,6 +1,7 @@
 import type { VelaEvent } from '../agent/events.ts'
 import { errorMessage } from '../logger.ts'
 import { type Vela, velaInternals } from '../vela.ts'
+import { sanitize } from './tui/components.ts'
 
 /** Channel text is cut to one line of this many characters, like the TUI cut replies */
 const LINE_LIMIT = 80
@@ -12,9 +13,12 @@ function localTime(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-/** One log line per event: untrusted chat text must not break the line or run longer than a screen */
+/**
+ * One log line for untrusted text (chat messages, sender names): terminal sequences are stripped first,
+ * because a participant could otherwise write the operator's clipboard or repaint the terminal this logs to.
+ */
 function oneLine(text: string): string {
-  const collapsed = text.replace(/\s*\n\s*/g, ' ').trim()
+  const collapsed = sanitize(text).replace(/\s+/g, ' ').trim()
   return collapsed.length > LINE_LIMIT
     ? `${collapsed.slice(0, LINE_LIMIT)}…`
     : collapsed
@@ -28,11 +32,11 @@ export function formatChannelEvent(
   const time = localTime(at)
   switch (event.type) {
     case 'channel_message':
-      return `${time} channel_message ${event.channel} ${event.senderName}: ${oneLine(event.text)}`
+      return `${time} channel_message ${oneLine(event.channel)} ${oneLine(event.senderName)}: ${oneLine(event.text)}`
     case 'channel_reply':
-      return `${time} channel_reply ${event.channel} → ${oneLine(event.text)}`
+      return `${time} channel_reply ${oneLine(event.channel)} → ${oneLine(event.text)}`
     case 'channel_error':
-      return `${time} channel_error ${event.channel} ${event.senderId}: ${
+      return `${time} channel_error ${oneLine(event.channel)} ${oneLine(event.senderId)}: ${
         event.aborted
           ? 'Turn aborted'
           : `Turn stopped: ${oneLine(errorMessage(event.error))}`
@@ -52,18 +56,26 @@ export async function runServe(options: {
   write: (line: string) => void
 }): Promise<number> {
   const { vela, write } = options
-  // Before startChannels(): a recovered message can be answered while channels are still starting
+  // Before starting: a stop request while a transport is still connecting must reach dispose() too
+  const shutdown = shutdownSignals()
+  // Also before starting: a recovered message can be answered while later channels are still connecting
   const unsubscribe = vela.subscribe((event) => {
     const line = formatChannelEvent(event)
     if (line !== undefined) write(line)
   })
+  const stop = () => {
+    unsubscribe()
+    return 0
+  }
   try {
     await vela.startChannels()
   } catch (error) {
+    if (shutdown.requested()) return stop()
     unsubscribe()
     write(`[serve] failed to start channels: ${errorMessage(error)}`)
     return 1
   }
+  if (shutdown.requested()) return stop()
   if (velaInternals(vela).gateway.running().length === 0) {
     unsubscribe()
     write(
@@ -71,16 +83,18 @@ export async function runServe(options: {
     )
     return 1
   }
-  await stopSignal()
-  unsubscribe()
-  return 0
+  await shutdown.stopped
+  return stop()
 }
 
 /**
- * Resolves on the first SIGINT / SIGTERM / SIGHUP. The handlers stay installed while the channels
- * close, so a second signal exits right away instead of waiting for a slow shutdown.
+ * Installs the stop handlers and returns the first stop request. They stay installed for the rest of
+ * the run, so a second signal exits right away instead of waiting for a slow shutdown.
  */
-async function stopSignal(): Promise<void> {
+function shutdownSignals(): {
+  stopped: Promise<void>
+  requested: () => boolean
+} {
   const signals: [NodeJS.Signals, number][] = [
     ['SIGINT', 130],
     ['SIGTERM', 143],
@@ -89,12 +103,15 @@ async function stopSignal(): Promise<void> {
       : ([['SIGHUP', 129]] as [NodeJS.Signals, number][])),
   ]
   let stopping = false
-  await new Promise<void>((resolve) => {
-    for (const [signal, code] of signals)
-      process.on(signal, () => {
-        if (stopping) process.exit(code)
-        stopping = true
-        resolve()
-      })
+  let stop!: () => void
+  const stopped = new Promise<void>((resolve) => {
+    stop = resolve
   })
+  for (const [signal, code] of signals)
+    process.on(signal, () => {
+      if (stopping) process.exit(code)
+      stopping = true
+      stop()
+    })
+  return { stopped, requested: () => stopping }
 }
