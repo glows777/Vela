@@ -268,7 +268,6 @@ export class ToolHistoryStore {
   }
 }
 
-/** File size, or undefined if the file does not exist. */
 async function fileSize(path: string): Promise<number | undefined> {
   try {
     return (await stat(path)).size
