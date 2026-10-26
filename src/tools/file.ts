@@ -232,6 +232,7 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   description: 'Lists the files and subdirectories in a directory.',
   inputSchema: listDirectoryToolParamSchema,
   annotations: { readOnlyHint: true },
+  activeByDefault: false,
   execute: async ({ path = '.' }: { path?: string }) => {
     const resolved = resolveIn(cwd, path)
     return readdirSync(resolved, { withFileTypes: true })

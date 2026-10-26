@@ -25,6 +25,13 @@ import {
   type ThinkingLevel,
 } from '../models/index.ts'
 import { assertSessionId } from '../session/options.ts'
+import {
+  applyToolModifiers,
+  getToolListError,
+  isToolModifier,
+  resolveDefaultTools,
+  type ToolLoadout,
+} from '../tools/tool-selection.ts'
 
 type Env = Record<string, string | undefined>
 
@@ -115,7 +122,8 @@ Options:
   --append-system-prompt <text> Append text or a file's contents to the system prompt (repeatable;
                                 replaces ~/.vela/APPEND_SYSTEM.md and .vela/APPEND_SYSTEM.md)
   -nc, --no-context-files       Don't load AGENTS.md / CLAUDE.md
-  -t, --tools <tools>           Comma-separated tools to enable (names or * patterns); all others are off
+  -t, --tools <tools>           Comma-separated tools: names or * patterns enable only those, +name / -name
+                                entries change the default set (repeatable)
   -nt, --no-tools               Start with no tools (--tools still enables the ones it names)
   -xt, --exclude-tools <tools>  Comma-separated tools to disable (names or * patterns)
   --list-models [search]        List the configured models (optional fuzzy search) and exit
@@ -279,16 +287,37 @@ function toolList(value: string): string[] {
 }
 
 /**
- * The tools a session enables for `--tools / --no-tools / --exclude-tools` (like pi), or undefined
- * for all. Entries are names or `*` patterns; one that matches no registered tool is an error
- * (pi ignores it; a typo would silently leave a tool on or off).
+ * The tools a session starts with, from `--tools / --no-tools / --exclude-tools` and the
+ * `defaultTools` setting (like pi), or undefined for the default set. Plain entries are names or
+ * `*` patterns and replace the setting; `+name` / `-name` entries adjust the default set instead.
+ * One entry that matches no registered tool is an error (pi ignores it; a typo would silently
+ * leave a tool on or off).
  */
 export function selectTools(
   available: readonly string[],
   args: Pick<CliArgs, 'tools' | 'noTools' | 'excludeTools'>,
-): string[] | undefined {
-  if (!args.tools && !args.noTools && !args.excludeTools.length) return
-  const unknown = [...(args.tools ?? []), ...args.excludeTools].filter(
+  defaultTools?: readonly string[],
+): ToolLoadout | undefined {
+  const entries = args.tools ?? []
+  const listError = getToolListError(entries)
+  if (listError) throw new Error(`Invalid --tools list: ${listError}`)
+  const plain = entries.filter((entry) => !isToolModifier(entry))
+  const modifiers = entries.filter(isToolModifier)
+  const settings = defaultTools ? resolveDefaultTools(defaultTools) : undefined
+  const fromSetting =
+    settings?.selection ??
+    settings?.modifiers?.map((entry) => entry.slice(1)) ??
+    []
+  // A plain --tools list replaces the setting; otherwise both lists name tools here
+  const requested =
+    plain.length > 0
+      ? [...plain, ...args.excludeTools]
+      : [
+          ...fromSetting,
+          ...modifiers.map((entry) => entry.slice(1)),
+          ...args.excludeTools,
+        ]
+  const unknown = requested.filter(
     (entry) => !available.some(toolMatcher(entry)),
   )
   if (unknown.length)
@@ -297,12 +326,28 @@ export function selectTools(
     )
   const matches = (entries: readonly string[]) => (name: string) =>
     entries.some((entry) => toolMatcher(entry)(name))
-  const enabled = args.tools
-    ? available.filter(matches(args.tools))
-    : args.noTools
-      ? []
-      : [...available]
-  return enabled.filter((name) => !matches(args.excludeTools)(name))
+  let selection: string[] | undefined
+  let adjusted = modifiers
+  if (modifiers.length > 0) {
+    if (args.noTools) selection = applyToolModifiers([], modifiers)
+    else if (settings?.selection)
+      selection = applyToolModifiers(settings.selection, modifiers)
+    else adjusted = [...(settings?.modifiers ?? []), ...modifiers]
+  } else if (plain.length > 0) {
+    selection = available.filter(matches(plain))
+  } else if (args.noTools) {
+    selection = []
+  } else if (settings?.selection) {
+    selection = [...settings.selection]
+  } else if (settings?.modifiers) {
+    adjusted = [...settings.modifiers]
+  }
+  const excluded = available.filter(matches(args.excludeTools))
+  if (selection)
+    selection = selection.filter((name) => !excluded.includes(name))
+  else adjusted = [...adjusted, ...excluded.map((name) => `-${name}`)]
+  if (selection) return { selection }
+  return adjusted.length > 0 ? { modifiers: adjusted } : undefined
 }
 
 function toolMatcher(entry: string): (name: string) => boolean {

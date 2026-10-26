@@ -33,7 +33,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--no-extensions`, `-ne` | Skip the built-in extensions and every discovered or configured extension. Extensions given with `-e` still load. |
 | `--append-system-prompt <text>` | Append text, or the contents of the file at that path, to the system prompt. Repeatable. Replaces `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` for this run. See [Settings](settings.md#appending-to-the-system-prompt). |
 | `--no-context-files`, `-nc` | Don't put `AGENTS.md` / `CLAUDE.md` into the system prompt. See [Settings](settings.md#context-files). |
-| `--tools`, `-t <tools>` | Enable only these tools: a comma-separated list of names or `*` patterns (`read_*`), repeatable. Every other tool, built-in or from an extension, is off. |
+| `--tools`, `-t <tools>` | Tools for this run: a comma-separated list of names or `*` patterns (`read_*`), repeatable, which enables only those; or a list of only `+name` / `-name` entries (exact names), which turns default tools on or off and leaves the other tools alone. |
 | `--no-tools`, `-nt` | Start with no tools; `--tools` still enables the ones it names. |
 | `--exclude-tools`, `-xt <tools>` | Turn these tools off (names or `*` patterns), after `--tools`. |
 | `--list-models [search]` | Print the models listed in `models.json` and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. If an extension failed to load, the models that did load are still listed, but the exit code is 1. |
@@ -45,6 +45,8 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 `-c`, `-r`, `--session` and `--fork` are mutually exclusive.
 
 The tool options apply to every session the CLI opens (also after `/new` and `/resume`) and are checked after extensions load: an entry that matches no tool stops the CLI with exit code 2 and lists the available tools. pi ignores unknown names; Vela reports them so that a typo can't leave a tool on or off. Like pi, they set the tools each session starts with: an extension can still change them with `setActiveTools()`.
+
+`read_file`, `write_file`, `edit_file` and `bash` are on by default; `grep`, `find` and `list_directory` are registered but off (like pi's `ls`, `grep` and `find`). `--tools +grep` turns one on, and `--tools -bash` turns a default tool off. Plain names and patterns replace the `defaultTools` setting, while `+name` / `-name` entries apply on top of it. See [Tools](tools.md) and [Settings](settings.md#defaulttools).
 
 An extension that fails to load is reported on stderr (or in the chat log) and skipped; Vela still starts. Extension loading, discovery and the `builtin:` names are described in [Extensions](extensions.md#where-extensions-load-from) and [Built-in extensions](built-in-extensions.md).
 

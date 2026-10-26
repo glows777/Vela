@@ -361,11 +361,15 @@ test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (li
     'grep',
     'web_search',
   ]
-  expect(selectTools(all, args)).toEqual(['read_file', 'edit_file'])
+  expect(selectTools(all, args)).toEqual({
+    selection: ['read_file', 'edit_file'],
+  })
   expect(
     selectTools(all, { noTools: false, excludeTools: ['bash', 'web_*'] }),
-  ).toEqual(['read_file', 'write_file', 'edit_file', 'grep'])
-  expect(selectTools(all, { noTools: true, excludeTools: [] })).toEqual([])
+  ).toEqual({ modifiers: ['-bash', '-web_search'] })
+  expect(selectTools(all, { noTools: true, excludeTools: [] })).toEqual({
+    selection: [],
+  })
   expect(selectTools(all, { noTools: false, excludeTools: [] })).toBeUndefined()
   // A typo fails loudly instead of leaving a tool on or off
   expect(() =>
@@ -375,6 +379,59 @@ test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (li
       excludeTools: ['nope*'],
     }),
   ).toThrow('Unknown tools: read, nope*. Available: read_file')
+})
+
+test('+name / -name adjust the default set and defaultTools applies like pi', () => {
+  const all = ['read_file', 'write_file', 'edit_file', 'bash', 'grep']
+  const settings = ['+grep']
+  expect(
+    selectTools(all, { noTools: false, excludeTools: [] }, settings),
+  ).toEqual({ modifiers: ['+grep'] })
+  expect(
+    selectTools(
+      all,
+      { tools: ['-bash'], noTools: false, excludeTools: [] },
+      settings,
+    ),
+  ).toEqual({ modifiers: ['+grep', '-bash'] })
+  expect(
+    selectTools(all, {
+      tools: ['+grep'],
+      noTools: false,
+      excludeTools: ['write_*'],
+    }),
+  ).toEqual({ modifiers: ['+grep', '-write_file'] })
+  // A plain --tools list replaces the setting; modifiers adjust a plain setting
+  expect(
+    selectTools(
+      all,
+      { tools: ['read_file'], noTools: false, excludeTools: [] },
+      settings,
+    ),
+  ).toEqual({ selection: ['read_file'] })
+  expect(
+    selectTools(all, { tools: ['+grep'], noTools: false, excludeTools: [] }, [
+      'read_file',
+      'bash',
+    ]),
+  ).toEqual({ selection: ['read_file', 'bash', 'grep'] })
+  expect(() =>
+    selectTools(all, { noTools: false, excludeTools: [] }, ['nope']),
+  ).toThrow('Unknown tool: nope')
+  expect(() =>
+    selectTools(all, {
+      tools: ['+grep', 'read_file'],
+      noTools: false,
+      excludeTools: [],
+    }),
+  ).toThrow('tool names cannot be mixed')
+  expect(() =>
+    selectTools(all, {
+      tools: ['+read_*'],
+      noTools: false,
+      excludeTools: [],
+    }),
+  ).toThrow('exact tool names, not patterns')
 })
 
 test('--list-models prints the configured models sorted, with a fuzzy search (like pi)', () => {

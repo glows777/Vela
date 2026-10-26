@@ -292,16 +292,22 @@ if (args.listModels) {
   )
 }
 
-// --tools / --no-tools / --exclude-tools: checked once extensions have registered their tools
-let toolSelection: string[] | undefined
+// --tools / --no-tools / --exclude-tools and defaultTools: checked once extensions have registered their tools
+let toolLoadout: ReturnType<typeof selectTools>
 try {
-  if (args.tools || args.noTools || args.excludeTools.length) {
+  if (
+    args.tools ||
+    args.noTools ||
+    args.excludeTools.length ||
+    config.settings.defaultTools
+  ) {
     await vela.ready().catch(() => {})
-    toolSelection = selectTools(
+    toolLoadout = selectTools(
       velaInternals(vela)
         .registry.getAllTools()
         .map((tool) => tool.name),
       args,
+      config.settings.defaultTools,
     )
   }
 } catch (error) {
@@ -372,7 +378,9 @@ if (recorder)
  */
 function applyModelArgs(target: VelaSession): boolean {
   recordedSession = target.id
-  if (toolSelection) target.setActiveTools(toolSelection)
+  if (toolLoadout?.selection) target.setActiveTools(toolLoadout.selection)
+  else if (toolLoadout?.modifiers)
+    target.registry.setDefaultToolModifiers(toolLoadout.modifiers)
   if (args.thinking) target.setThinkingLevel(args.thinking)
   // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
   const override =
