@@ -28,6 +28,7 @@ Project settings are applied on top of user settings:
 
 - Objects (`limits`, `extensionConfig`) are merged key by key, recursively.
 - `extensions`, `skills` and `prompts` lists are concatenated: user entries first, then project entries.
+- `defaultTools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [defaultTools](#defaulttools)).
 - Every other value is replaced by the project's value.
 
 Relative paths in `extensions`, `skills` and `prompts` resolve from the directory of the settings file that lists them. `~` expands to the home directory.
@@ -38,6 +39,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 {
   "defaultModel": "anthropic/<model-id>",
   "defaultThinkingLevel": "medium",
+  "defaultTools": ["+grep", "+find"],
   "dataDir": ".vela-data",
   "shellPath": "/bin/zsh",
   "limits": { "maxRetries": 5 },
@@ -55,6 +57,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 | `defaultModel` | `"provider/id"` | none | Model for new sessions. See [Models](models.md#selecting-a-model). |
 | `enabledModels` | string[] | none | Models Ctrl+P (and RPC `cycle_model`) cycles through, like pi's `enabledModels`. See [Enabled models](#enabled-models). |
 | `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. |
+| `defaultTools` | string[] | `read_file`, `write_file`, `edit_file`, `bash` | Tools a new CLI session starts with. Plain names (or `*` patterns) select exactly those; `+name` / `-name` entries turn default tools on or off. See [defaultTools](#defaulttools). |
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
 | `shellPath` | string | `bash` on `PATH` | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. A path that does not exist makes every `bash` call fail with an error. |
 | `limits` | object | see below | Overrides runtime limits. |
@@ -63,6 +66,18 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 | `skills` | string[] | `[]` | Extra skill directories or files. |
 | `prompts` | string[] | `[]` | Extra prompt template directories or files. |
 | `extensionConfig` | object | `{}` | Per-extension configuration, keyed by extension name. |
+
+### defaultTools
+
+`defaultTools` sets the tools a session starts with, using the same `+name` / `-name` syntax as `--tools` (like pi). A list of only modifiers changes the default set and leaves tools from extensions alone:
+
+```json
+{ "defaultTools": ["+grep", "+find"] }
+```
+
+The default set is `read_file`, `write_file`, `edit_file` and `bash`; `grep`, `find` and `list_directory` are registered but off. A list with plain names (or `*` patterns) replaces the default set and is an allowlist: tools from extensions are off unless the list names them.
+
+User and project settings combine like pi: a project list with plain names replaces the user list, while a list of only `+name` / `-name` entries is appended to it. The merged list is resolved in one pass: plain names and `*` patterns select tools first, then the modifiers apply in order, so a project's `-bash` removes a tool the user selected with `*`. A user-level `["+grep"]` can therefore be narrowed by a project-level `["-grep"]`. An empty project list replaces the user list with no tools, so a project can turn the default tools off (pi appends an empty list and keeps the user's tools). `--tools` on the command line replaces the setting; its `+name` / `-name` entries apply on top of the setting's list.
 
 ### Enabled models
 

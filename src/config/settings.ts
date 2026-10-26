@@ -14,6 +14,7 @@ import {
   type ThinkingLevel,
 } from '../models/index.ts'
 import { type ContextFile, loadContextFiles } from '../prompt/context-files.ts'
+import { isToolModifier, mergeDefaultTools } from '../tools/tool-selection.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
@@ -33,6 +34,11 @@ export interface VelaSettings {
   dataDir?: string
   /** Shell the bash tool runs commands with (like pi); default bash on PATH */
   shellPath?: string
+  /**
+   * Tools a new session starts with: plain names (or `*` patterns) replace the default set, while
+   * `+name` / `-name` entries adjust it (like pi's `defaultTools`).
+   */
+  defaultTools?: string[]
   /** Overrides any subset of VelaLimits */
   limits?: Partial<VelaLimits>
   /** Automatic compaction (like pi's `compaction.enabled`); default true. Manual /compact works either way */
@@ -304,6 +310,19 @@ function readSettings(file: string): VelaSettings | undefined {
   )
     throw new Error(`${file}: enabledModels must be an array of strings`)
   if (
+    settings.defaultTools !== undefined &&
+    (!Array.isArray(settings.defaultTools) ||
+      settings.defaultTools.some((item) => typeof item !== 'string'))
+  )
+    throw new Error(`${file}: defaultTools must be an array of strings`)
+  const toolPattern = settings.defaultTools?.find(
+    (entry) => isToolModifier(entry) && entry.includes('*'),
+  )
+  if (toolPattern)
+    throw new Error(
+      `${file}: +name and -name entries take exact tool names, not patterns: ${toolPattern}`,
+    )
+  if (
     settings.defaultThinkingLevel !== undefined &&
     !THINKING_LEVELS.includes(settings.defaultThinkingLevel)
   )
@@ -323,6 +342,11 @@ function mergeSettings(
     const list = [...(base[key] ?? []), ...(override[key] ?? [])]
     if (list.length) merged[key] = list
   }
+  const defaultTools = mergeDefaultTools(
+    base.defaultTools,
+    override.defaultTools,
+  )
+  if (defaultTools !== undefined) merged.defaultTools = defaultTools
   return merged
 }
 

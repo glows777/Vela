@@ -89,6 +89,8 @@ export interface ToolDefinition {
   searchHint?: string // Hint shown next to the name in the deferred tool list
   /** Only sessions of this channel see or can call the tool; undefined means every session */
   channel?: string
+  /** Whether the tool is on without being named (like pi's `defaultActive`); default true. `false` keeps it registered but off until a session names it */
+  activeByDefault?: false
 }
 
 const EXPOSURES: readonly ToolExposure[] = [
@@ -236,6 +238,7 @@ export class ToolRegistry {
   private permissions?: PermissionRules
   /** Tools selected for the session; undefined means no limit */
   private selection?: ReadonlySet<string>
+  private defaultToolStates?: ReadonlyMap<string, boolean> // +name / -name overrides from --tools or defaultTools
   private channel?: string
   private confirm?: (toolName: string, input: unknown) => Promise<boolean>
 
@@ -249,18 +252,32 @@ export class ToolRegistry {
     this.selection = names ? new Set(names) : undefined
   }
 
+  /** `+name` / `-name` changes to the default tool set for this session (like pi); a later entry wins */
+  setDefaultToolModifiers(entries: readonly string[]): void {
+    this.defaultToolStates = new Map(
+      entries.map((entry) => [entry.slice(1), entry.startsWith('+')]),
+    )
+  }
+
   /** Binds this session to a channel; tools declared for another channel are denied */
   setChannel(name: string): void {
     this.channel = name
   }
 
-  /** This session's permission decision for a tool; unselected tools are always deny */
+  /** This session's permission decision for a tool; tools it does not enable are always deny */
   decide(toolName: string): PermissionDecision {
-    if (this.selection && !this.selection.has(toolName)) return 'deny'
+    if (!this.isEnabled(toolName)) return 'deny'
     const tool = this.tools.get(toolName)
     if (tool?.channel !== undefined && tool.channel !== this.channel)
       return 'deny'
     return decidePermission(toolName, this.permissions)
+  }
+
+  /** Whether the session's selection or default-tool modifiers allow the tool (permissions aside) */
+  private isEnabled(toolName: string): boolean {
+    if (this.selection) return this.selection.has(toolName)
+    const enabled = this.defaultToolStates?.get(toolName)
+    return enabled ?? this.tools.get(toolName)?.activeByDefault !== false
   }
 
   setHookPipeline(pipeline: HookPipeline): void {
@@ -395,9 +412,9 @@ export class ToolRegistry {
     const decision = this.decide(name)
     if (decision === 'deny') {
       return await reject(
-        this.selection && !this.selection.has(name)
-          ? `[Rejected] ${name} is not enabled in this session`
-          : `[Rejected] ${name} is denied by this session's permissions`,
+        this.isEnabled(name)
+          ? `[Rejected] ${name} is denied by this session's permissions`
+          : `[Rejected] ${name} is not enabled in this session`,
       )
     }
     const pipeline = this.shared.hookPipeline

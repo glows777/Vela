@@ -71,6 +71,7 @@ import {
 import { UserBash } from './session/user-bash.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { BashResult } from './tools/shell.ts'
+import { getToolListError, isToolModifier } from './tools/tool-selection.ts'
 import {
   CONTEXT_WINDOW,
   type TokenStatus,
@@ -98,7 +99,10 @@ export interface SessionOptions {
   cwd?: string
   /** Tool permissions, e.g. `{ bash: 'ask' }`; tools without a rule are allowed */
   permissions?: PermissionRules
-  /** Enable only these tools; default all */
+  /**
+   * Tools for this session: plain names (or `*` patterns) enable only those; a list of only
+   * `+name` / `-name` entries adjusts the default set instead (like pi).
+   */
   tools?: string[]
   /** UI extensions use to interact with the user; without it there is no UI (confirm always returns false) */
   ui?: SessionUI
@@ -296,7 +300,13 @@ export class VelaSession {
         ),
     })
     this.registry.setPermissions(options.permissions)
-    this.registry.setSelection(options.tools)
+    const toolListError = options.tools
+      ? getToolListError(options.tools)
+      : undefined
+    if (toolListError) throw new Error(`Invalid tools option: ${toolListError}`)
+    if (options.tools?.some(isToolModifier))
+      this.registry.setDefaultToolModifiers(options.tools)
+    else this.registry.setSelection(options.tools)
     // --no-session keeps usage in memory. /usage and /status still read the tracker;
     // they must not append usage/today.jsonl under the data directory.
     this.tracker = new TokenTracker(
