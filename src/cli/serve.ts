@@ -76,7 +76,10 @@ export async function runServe(options: {
   return 0
 }
 
-/** Resolves on the first SIGINT / SIGTERM / SIGHUP; a second signal exits right away */
+/**
+ * Resolves on the first SIGINT / SIGTERM / SIGHUP. The handlers stay installed while the channels
+ * close, so a second signal exits right away instead of waiting for a slow shutdown.
+ */
 async function stopSignal(): Promise<void> {
   const signals: [NodeJS.Signals, number][] = [
     ['SIGINT', 130],
@@ -86,19 +89,12 @@ async function stopSignal(): Promise<void> {
       : ([['SIGHUP', 129]] as [NodeJS.Signals, number][])),
   ]
   let stopping = false
-  let stop!: () => void
-  const stopped = new Promise<void>((resolve) => {
-    stop = resolve
+  await new Promise<void>((resolve) => {
+    for (const [signal, code] of signals)
+      process.on(signal, () => {
+        if (stopping) process.exit(code)
+        stopping = true
+        resolve()
+      })
   })
-  const handlers = signals.map(([signal, code]) => {
-    const handler = () => {
-      if (stopping) process.exit(code)
-      stopping = true
-      stop()
-    }
-    process.on(signal, handler)
-    return () => process.off(signal, handler)
-  })
-  await stopped
-  for (const off of handlers) off()
 }
