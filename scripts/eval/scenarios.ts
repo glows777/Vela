@@ -3,9 +3,11 @@ import type { ScenarioId } from './graders.ts'
 export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
-  version: 'user-ballast-v2',
+  version: 'user-ballast-v3',
   contextWindow: 40_000,
-  paddingBytes: [10_240, 10_240, 47_104, 0, 0, 0],
+  // Preserve pressure before turn 3, but let the checkpoint remove more ballast
+  // with the completed first step instead of retaining it through continuation.
+  paddingBytes: [19_456, 1_024, 47_104, 0, 0, 0],
 }
 export const previousReport =
   'Completed the release checklist and archived the deployment evidence for the team. The documentation is updated and the handover is complete.'

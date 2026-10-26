@@ -82,7 +82,7 @@ This accepts `cd task && bun test limits.test.ts` without parsing shell commands
 the grader's independent verification run does not count as the model running tests.
 C6 observes actual test inputs through a local Bun preload, allowing equivalent
 test syntax while requiring empty, specified mixed and frozen inputs.
-C5 fixture `user-ballast-v2` puts inert reference ballast in the first three staged
+C5 fixture `user-ballast-v3` puts inert reference ballast in the first three staged
 user-message bodies, with unpadded notes and the same shared 40,000-token provider
 window. Its version and padding sizes are recorded in `results.json`. Pagination
 cannot omit this context. Both arms are calibrated offline with one-line note
@@ -90,6 +90,12 @@ reads; successful automatic compaction must occur before the status turn (phase
 0–2). It then recalls progress and finishes without recreating completed files.
 No manual compaction is used. Preserve the original live batches when changing a
 fixture or grader; any targeted rerun is a separate batch with its own metadata.
+V3 keeps the total 67,584 ballast bytes and the first two turns' combined 20,480
+bytes, but distributes them as 19,456 / 1,024 / 47,104. The first checkpoint can
+discard 9,216 more bytes with the completed first step. Calibration must replay
+recorded provider usage and the entire continuation, including final verification
+calls, through both revisions' real context managers and local request guards;
+observing compaction alone does not establish that the fixture can finish.
 
 G1–G5 fake only Feishu transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
