@@ -1,0 +1,114 @@
+name: Wake route
+
+# actions: write saves the debounce cache. Issue and pull request writes stay off.
+on:
+  issues:
+    types: [labeled, assigned]
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize, labeled]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: wake-${{ github.repository_id }}-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .wake-state
+          key: wake-v1-${{ github.repository_id }}-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            wake-v1-${{ github.repository_id }}-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event_name }}-
+      - id: post
+        env:
+          WAKE_EVENT_NAME: ${{ github.event_name }}
+          WAKE_EVENT_PATH: ${{ github.event_path }}
+          WAKE_STATE_PATH: .wake-state/buckets.json
+          WAKE_GROK_FORGE_WEBHOOK_URL: ${{ secrets.WAKE_GROK_FORGE_WEBHOOK_URL }}
+          WAKE_GROK_FORGE_WEBHOOK_KEY: ${{ secrets.WAKE_GROK_FORGE_WEBHOOK_KEY }}
+          WAKE_FEISHU_VELA_WEBHOOK_URL: ${{ secrets.WAKE_FEISHU_VELA_WEBHOOK_URL }}
+          WAKE_FORK: ${{ github.event.pull_request.head.repo.full_name && github.event.pull_request.head.repo.full_name != github.repository }}
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+        run: |
+          set -euo pipefail
+          node .github/wake/decide.mjs > "$RUNNER_TEMP/wake-plan.json"
+          jq -r '.skips[] | "skip \(.code) \(.route // "-") \(.deliveryId // "-") \(.detail // "-")"' \
+            "$RUNNER_TEMP/wake-plan.json"
+          if [ -f .wake-state/buckets.json ]; then
+            cp .wake-state/buckets.json "$RUNNER_TEMP/next-buckets.json"
+          else
+            echo '{}' > "$RUNNER_TEMP/next-buckets.json"
+          fi
+          count="$(jq '.posts | length' "$RUNNER_TEMP/wake-plan.json")"
+          posted=0
+          i=0
+          while [ "$i" -lt "$count" ]; do
+            sink="$(jq -r ".posts[$i].sink" "$RUNNER_TEMP/wake-plan.json")"
+            route="$(jq -r ".posts[$i].route" "$RUNNER_TEMP/wake-plan.json")"
+            bucket="$(jq -r ".posts[$i].bucket" "$RUNNER_TEMP/wake-plan.json")"
+            jq ".posts[$i].body" "$RUNNER_TEMP/wake-plan.json" > "$RUNNER_TEMP/wake-body.json"
+            if [ "$sink" = "grok" ]; then
+              if [ -z "${WAKE_GROK_FORGE_WEBHOOK_URL}" ] || [ -z "${WAKE_GROK_FORGE_WEBHOOK_KEY}" ]; then
+                echo "::notice::missing secret for sink grok route ${route}"
+                if [ "${WAKE_FORK}" = "true" ]; then
+                  echo "::notice::fork pull request withholds secrets"
+                fi
+                i=$((i + 1))
+                continue
+              fi
+              curl --fail-with-body --silent --show-error --max-time 20 \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${WAKE_GROK_FORGE_WEBHOOK_KEY}" \
+                --data-binary @"$RUNNER_TEMP/wake-body.json" \
+                "${WAKE_GROK_FORGE_WEBHOOK_URL}"
+            elif [ "$sink" = "feishu" ]; then
+              if [ -z "${WAKE_FEISHU_VELA_WEBHOOK_URL}" ]; then
+                echo "::notice::missing secret WAKE_FEISHU_VELA_WEBHOOK_URL for sink feishu route ${route}"
+                if [ "${WAKE_FORK}" = "true" ]; then
+                  echo "::notice::fork pull request withholds secrets"
+                fi
+                i=$((i + 1))
+                continue
+              fi
+              curl --fail-with-body --silent --show-error --max-time 20 \
+                -H "Content-Type: application/json" \
+                --data-binary @"$RUNNER_TEMP/wake-body.json" \
+                "${WAKE_FEISHU_VELA_WEBHOOK_URL}"
+            else
+              echo "unknown sink ${sink}" >&2
+              exit 1
+            fi
+            jq --arg route "$route" --argjson bucket "$bucket" \
+              '. + {($route): $bucket}' "$RUNNER_TEMP/next-buckets.json" \
+              > "$RUNNER_TEMP/next-buckets-next.json"
+            mv "$RUNNER_TEMP/next-buckets-next.json" "$RUNNER_TEMP/next-buckets.json"
+            posted=1
+            i=$((i + 1))
+          done
+          if [ "$posted" -eq 1 ]; then
+            mkdir -p .wake-state
+            mv "$RUNNER_TEMP/next-buckets.json" .wake-state/buckets.json
+            echo "save=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.post.outputs.save == 'true'
+        with:
+          path: .wake-state
+          key: wake-v1-${{ github.repository_id }}-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event_name }}-${{ github.run_id }}-${{ github.run_attempt }}
