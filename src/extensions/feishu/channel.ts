@@ -21,7 +21,7 @@ import {
   topicRunCard,
 } from './cards.ts'
 import { type FeishuChat, parseChats } from './chats.ts'
-import { readGroupContext, readTopicContext } from './history.ts'
+import { messageTime, readGroupContext, readTopicContext } from './history.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { FeishuProgress } from './progress.ts'
 import { FeishuTopics, topicToolNames } from './topics.ts'
@@ -443,7 +443,11 @@ export class FeishuChannel implements ChannelDefinition {
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (!msg.passive && msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
-    const question = { name, text: msg.text }
+    const question = {
+      name,
+      text: msg.text,
+      time: messageTime(event.message.create_time),
+    }
     let text = `${name}: ${msg.text}`
     if (msg.passive || (msg.topic && !msg.isNewTopic))
       return { ...msg, senderName: name, text }

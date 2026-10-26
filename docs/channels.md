@@ -151,16 +151,16 @@ For a top-level group @, after any earlier queued reply finishes, Vela fetches a
 
 ```text
 [Chat since last reply]
-Alice: Let's use blue.
-Bob: Agreed.
+[10:31] Alice: Let's use blue.
+[10:32] Bob: Agreed.
 
 [Question]
-Alice: What should we do next?
+[10:33] Alice: What should we do next?
 ```
 
-The history window also supplies at most the four most recent images (including post images). In a group, send an image first, then @ the bot in a text message. Historical files appear only as `[file: <name>]` and are not downloaded.
+Each line starts with the message's send time in the local time of the machine running Vela (`HH:MM`). The history window also supplies at most the four most recent images (including post images). In a group, send an image first, then @ the bot in a text message. Historical files appear only as `[file: <name>]` and are not downloaded.
 
-With no earlier text, the input is just `Alice: What should we do next?`. If history cannot be fetched, Vela logs the failure and answers the named question alone. It does not claim the missing context was read. The API query is bounded to one page; older messages beyond that page are omitted. Feishu's chat-history endpoint returns thread roots, not all replies inside separate threads.
+With no earlier text, the input is just `[10:33] Alice: What should we do next?`. If history cannot be fetched, Vela logs the failure and answers the named question alone. It does not claim the missing context was read. The API query is bounded to one page; older messages beyond that page are omitted. Feishu's chat-history endpoint returns thread roots, not all replies inside separate threads.
 
 With `appId` configured, history stops at any message sent by this application's app_id, including interactive cards and other message types. That boundary works after process restart without in-memory reply state. Opening a topic for a top-level message, or forwarding that message into a topic, also stops the scan at the trigger. Vela remembers the trigger's create time for this process only, because the in-topic reply never appears in the group list. Messages from other people after that trigger still appear. Restart drops the remembered trigger and falls back to an own-app message in the list. Messages from a different bot are not this app's boundary. This also applies to control cards, so the bounded scan may omit earlier discussion; use history search when needed.
 
