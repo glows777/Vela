@@ -123,7 +123,7 @@ export function table(
       return `${perTurn.map(display).join('/')}; max ${display(Math.max(...metrics.map((metric) => metric.maxPercent)))}`
     })
     lines.push(
-      `| ${id} | ${old.passes}/${old.valid.length} | ${current.passes}/${current.valid.length} | ${repeats.join(' / ')} | ${pair(old.tools, current.tools)} | ${old.cost.toFixed(4)}/${current.cost.toFixed(4)} | ${notes.join('; ')} |`,
+      `| ${id} | ${old.passes}/${old.valid.length} | ${current.passes}/${current.valid.length} | ${pair(old.chars, current.chars)} | ${repeats.join(' / ')} | ${pair(old.tools, current.tools)} | ${old.cost.toFixed(4)}/${current.cost.toFixed(4)} | ${notes.join('; ')} |`,
     )
   }
   for (const arm of ['old', 'new']) {

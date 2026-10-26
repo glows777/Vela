@@ -349,6 +349,23 @@ test('sentence counting ignores code and counts numbered items once', () => {
 })
 
 const sharedThirty = '0123456789ABCDEFGHIJKLMNOPQRST'
+test('table data rows retain the character-median cell and align with all eight headings', () => {
+  const rows = table([], ['C4', 'C5'], 3)
+    .split('\n')
+    .filter((line) => line.startsWith('|'))
+  const cells = rows.map((row) =>
+    row
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.trim()),
+  )
+  expect(cells[0]).toHaveLength(8)
+  for (const row of cells.slice(2)) {
+    expect(row).toHaveLength(8)
+    expect(row[3]).toBe('—/— (—)')
+    expect(row[4]).toBe('— / —')
+  }
+})
 test('C4: metrics count shared Unicode positions once and report every turn and maximum', () => {
   const answers = [
     `${sharedThirty}X`,
