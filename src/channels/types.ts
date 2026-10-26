@@ -153,7 +153,9 @@ export interface ChannelDefinition {
     chatKind: 'group' | 'direct',
   ) => boolean
 
-  start(): Promise<void> | void
+  /** `false` means the channel is not configured to connect; the gateway skips its startup line, routines and recovery. */
+  // biome-ignore lint/suspicious/noConfusingVoidType: public shape: `undefined` would reject channel implementations whose start returns nothing
+  start(): Promise<boolean | void> | boolean | void
   stop(): Promise<void> | void
   send(message: OutgoingMessage): Promise<void>
 
