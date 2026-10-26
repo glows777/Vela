@@ -1,0 +1,23 @@
+name: Bug or UX
+description: Report a product bug or a UX miss.
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw.
+    validations:
+      required: true
+  - type: dropdown
+    id: should-have-been-caught-at
+    attributes:
+      label: Should have been caught at
+      description: The layer that should have caught this miss.
+      options:
+        - pre-PR
+        - AI/bot review
+        - CI
+        - human
+        - post-merge
+    validations:
+      required: true
