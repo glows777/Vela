@@ -49,7 +49,6 @@ test('Registry persists begin before execute and stores native small results wit
       return { ok: true, value: 42 }
     },
   })
-  const guide = store.history.readingGuide()
   const value = await registry.toAISDKFormat().inspect!.execute!(
     input,
     options('sdk-small'),
@@ -62,7 +61,6 @@ test('Registry persists begin before execute and stores native small results wit
     status: 'completed',
     output: { ok: true, value: 42 },
   })
-  expect(store.history.readingGuide()).toBe(guide)
 })
 
 test('native MCP errors and thrown errors are recorded without parsing preview strings', async () => {
@@ -191,43 +189,6 @@ test('new sessions get separate histories; session resume reuses exact history a
   expect(resumed.results.indexPath).toBe(session.results.indexPath)
   expect(resumed.results.history.throughSequence).toBe(2)
   expect((await resumed.results.history.completed('one'))?.output).toBe('saved')
-})
-
-test('the reading recipe executes with existing Bun and uses a frozen historical boundary', async () => {
-  const results = new ToolResultStore(
-    join(root, "recipe's $literal", 'outputs'),
-  )
-  const registry = new ToolRegistry(results)
-  registry.register({
-    name: 'inspect',
-    description: '',
-    inputSchema: z.object({}),
-    execute: async () => 'evidence',
-  })
-  await registry.toAISDKFormat().inspect!.execute!(
-    { region: 'west' },
-    options('west'),
-  )
-  const guide = results.history.readingGuide(2)
-  await registry.toAISDKFormat().inspect!.execute!(
-    { region: 'west' },
-    options('new'),
-  )
-  const script = guide
-    .slice(guide.indexOf("bun -e '"))
-    .replaceAll('TARGET_TOOL', 'inspect')
-    .replaceAll('TARGET_ARG', 'west')
-  const process = Bun.spawn(['bash', '-lc', script], {
-    cwd: root,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const text = await process.stdout.text()
-  expect(await process.exited).toBe(0)
-  const record = JSON.parse(text.trim())
-  expect(record.toolCallId).toBe('west')
-  expect(record.input).toEqual({ region: 'west' })
-  expect(record.output).toBe('evidence')
 })
 
 test('Bash cancellation persists status and original stdout', async () => {

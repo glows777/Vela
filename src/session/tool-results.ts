@@ -93,19 +93,6 @@ export class ToolResultStore {
     this.historyViewSequence = viewSequence
   }
 
-  readingGuide(): string {
-    if (this.historyViewSequence === undefined)
-      return this.history.readingGuide()
-    const guide = this.history.readingGuide(
-      this.historyViewSequence,
-      this.history.snapshotPath(this.historyViewSequence),
-    )
-    return (
-      guide +
-      `\nUse the live log only to query new calls made after the summary: ${this.history.path} (seq > ${this.historyViewSequence}). For anything before the summary, always use the fixed snapshot above.`
-    )
-  }
-
   private outputPath(callId: string = crypto.randomUUID()): string {
     if (
       !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(callId)
