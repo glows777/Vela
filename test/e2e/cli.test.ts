@@ -1,5 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { projectDataDir } from '../../src/config/index.ts'
@@ -861,6 +861,31 @@ test.concurrent('-e loads an extension file; --no-extensions drops built-in and 
   expect(code).toBe(0)
   expect(stderr).toContain('[extra] loaded {}')
   expect(stderr).toBe('  [extra] loaded {}\n')
+})
+
+test.concurrent('permission-gate is off by default and -e builtin:permission-gate blocks a dangerous command', async () => {
+  const files = {
+    'replies.json': JSON.stringify({
+      responses: [
+        { toolCalls: [{ name: 'bash', input: { command: 'rm -rf junk' } }] },
+        { text: 'done' },
+      ],
+    }),
+    'junk/keep.txt': 'x',
+  }
+  const off = await cli(['-p', 'Delete junk'], {
+    model: 'faux:replies.json',
+    files,
+  })
+  expect(off.code).toBe(0)
+  expect(existsSync(join(off.cwd, 'junk'))).toBe(false)
+
+  const on = await cli(['-p', '-e', 'builtin:permission-gate', 'Delete junk'], {
+    model: 'faux:replies.json',
+    files,
+  })
+  expect(on.code).toBe(0)
+  expect(existsSync(join(on.cwd, 'junk'))).toBe(true)
 })
 
 test.concurrent('loaded context files are named at startup', async () => {

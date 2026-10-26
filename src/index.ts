@@ -68,6 +68,7 @@ export {
   mcp,
 } from './extensions/mcp/index.ts'
 export { memory } from './extensions/memory/index.ts'
+export { permissionGate } from './extensions/permission-gate/index.ts'
 export { createEmbedder, type EmbeddingFn } from './extensions/rag/embedder.ts'
 export { type RagOptions, rag } from './extensions/rag/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'

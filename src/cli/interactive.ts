@@ -628,9 +628,6 @@ export class InteractiveMode {
       case 'audit':
         this.addNotice(`[audit] ${event.toolName} → ${event.path}`, 'dim')
         break
-      case 'security_warning':
-        this.addNotice(`⚠ ${event.reason}: ${event.command}`, 'warning')
-        break
       case 'notify':
         this.addNotice(event.message, event.level)
         break
