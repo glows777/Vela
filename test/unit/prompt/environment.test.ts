@@ -53,6 +53,10 @@ test('the env block reads the branch from .git/HEAD, follows a worktree pointer,
     )
     expect(env(repo)).toContain('timezone: ')
     expect(env(repo)).toContain('git branch: vela/175-prompt-rules-env')
+    // A session opened in a subdirectory still belongs to the checkout above it
+    const sub = join(repo, 'src', 'nested')
+    mkdirSync(sub, { recursive: true })
+    expect(env(sub)).toContain('git branch: vela/175-prompt-rules-env')
     expect(env(worktree)).toContain('git branch: wt')
     expect(env(plain)).not.toContain('git branch:')
     // A detached HEAD is identified by its short hash
