@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { SessionUI, VelaExtension } from '@glows777/vela'
+import { jsonSchema } from 'ai'
 import { z } from 'zod'
+import { z as z3 } from 'zod/v3'
+import { z as mini } from 'zod/v4/mini'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import { echoChannel } from '../../examples/extensions/echo-channel.ts'
 import hello from '../../examples/extensions/hello-tool.ts'
@@ -30,6 +33,59 @@ function scriptedUI(answer: boolean) {
   }
   return { ui, asked, notes }
 }
+
+test.each([
+  { type: 'object', properties: {} },
+  jsonSchema({ type: 'object', properties: {} }),
+])(
+  'SDK extension tools reject non-Zod schemas during registration',
+  (inputSchema) => {
+    expect(() =>
+      createTestVela({
+        extensions: [
+          function invalidSchema(vela) {
+            vela.registerTool({
+              name: 'x',
+              description: 'x',
+              inputSchema: inputSchema as never,
+              execute: async () => 'bad',
+            })
+          },
+        ],
+      }),
+    ).toThrow(
+      'Extension "invalidSchema": tool "x" inputSchema must be a Zod schema',
+    )
+  },
+)
+
+test.each([
+  z3.object({ name: z3.string() }),
+  mini.object({ name: mini.string() }),
+])(
+  'supported Zod variants still register and execute extension tools',
+  async (inputSchema) => {
+    const t = createTestVela({
+      extensions: [
+        function compatible(vela) {
+          vela.registerTool({
+            name: 'greet',
+            description: 'Greet',
+            inputSchema,
+            execute: async ({ name }) => `Hello, ${name}!`,
+          })
+        },
+      ],
+      responses: [
+        fauxToolCall('compatible_greet', { name: 'Ada' }),
+        (req) => fauxText(req.toolResults[0]!.output),
+      ],
+    })
+    await t.run('Greet Ada')
+    expect(t.lastAssistantText()).toBe('Hello, Ada!')
+    expect(t.eventsOf('tool_execution_end')[0]!.isError).toBe(false)
+  },
+)
 
 // ---------- Each example extension ----------
 

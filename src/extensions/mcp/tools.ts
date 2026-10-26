@@ -192,6 +192,13 @@ export interface McpToolCaller {
   ): Promise<CallToolResult>
 }
 
+// Only tools built by this adapter may use its internal AI SDK JSON schemas.
+const mcpTools = new WeakSet<ToolDefinition>()
+
+export function isMcpTool(tool: ToolDefinition): boolean {
+  return mcpTools.has(tool)
+}
+
 export function createMcpTool(options: {
   server: string
   tool: McpTool
@@ -203,7 +210,7 @@ export function createMcpTool(options: {
   const { server, tool } = options
   const title = tool.title ?? tool.annotations?.title
   const annotations = toAnnotations(tool)
-  return {
+  const definition: ToolDefinition = {
     name: options.name,
     description:
       tool.description?.trim() ||
@@ -227,4 +234,6 @@ export function createMcpTool(options: {
       return convertMcpResult(server, tool.name, result)
     },
   }
+  mcpTools.add(definition)
+  return definition
 }

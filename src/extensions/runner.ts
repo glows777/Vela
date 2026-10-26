@@ -28,6 +28,7 @@ import type {
   ToolResultEventResult,
   TreePreparation,
 } from './events.ts'
+import { isMcpTool } from './mcp/tools.ts'
 import type {
   ExtensionAPI,
   ExtensionCommand,
@@ -172,6 +173,17 @@ export class ExtensionRunner {
         loaded.providers.push(providerName)
       },
       registerTool: (tool) => {
+        const schema = tool.inputSchema
+        // Match the AI SDK's Zod detection across supported versions and package copies.
+        const isZod =
+          typeof schema === 'object' &&
+          schema !== null &&
+          '~standard' in schema &&
+          schema['~standard'].vendor === 'zod'
+        if (!isZod && !isMcpTool(tool))
+          throw new Error(
+            `Extension "${name}": tool "${tool.name}" inputSchema must be a Zod schema`,
+          )
         // Prefix tool names with the extension name so they cannot clash with built-in or other
         // extensions' tools; skip the prefix when the tool name equals it (memory's tool is not
         // memory_memory) or already carries it (mcp's mcp__docs__search)
