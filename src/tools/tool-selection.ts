@@ -62,16 +62,3 @@ export function mergeDefaultTools(
     return override
   return [...base, ...override]
 }
-
-/**
- * Resolves `defaultTools`: a list with plain names is the whole selection (like `--tools a,b`),
- * while a list of only modifiers adjusts the built-in default set and leaves the tools that
- * extensions register alone.
- */
-export function resolveDefaultTools(entries: readonly string[]): ToolLoadout {
-  const modifiers = entries.filter(isToolModifier)
-  const plain = entries.filter((entry) => !isToolModifier(entry))
-  return plain.length > 0 || entries.length === 0
-    ? { selection: applyToolModifiers(plain, modifiers) }
-    : { modifiers }
-}

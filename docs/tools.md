@@ -203,10 +203,10 @@ Every session starts with the default tools; there are no roles (like pi). Chang
 
 `--tools` on the command line and `tools` in the SDK take either an allowlist or a list of `+name` / `-name` entries (like pi):
 
-- A list with plain names or `*` patterns enables exactly those tools; every other tool, built-in or from an extension, is off. `--exclude-tools` then removes names (or patterns) from the result.
+- A list with plain names enables exactly those tools; every other tool, built-in or from an extension, is off. On the command line the names may be `*` patterns (`read_*`), and `--exclude-tools` then removes names or patterns from the result; the SDK option takes exact names.
 - A list of only `+name` / `-name` entries takes exact names, cannot be mixed with plain names, and changes the default set instead, so tools from extensions stay on. `--tools +grep` enables `grep`; `--tools -bash` turns `bash` off.
 
-The `defaultTools` setting uses the same syntax and is described in [Settings](settings.md#defaulttools). With the SDK, pass `tools` and `permissions` (per-tool rules) when opening a session:
+The `defaultTools` setting takes plain names (`*` patterns work there) and `+name` / `-name` entries, and is described in [Settings](settings.md#defaulttools). With the SDK, pass `tools` and `permissions` (per-tool rules) when opening a session:
 
 ```ts
 const session = vela.session('review', {

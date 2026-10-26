@@ -29,7 +29,6 @@ import {
   applyToolModifiers,
   getToolListError,
   isToolModifier,
-  resolveDefaultTools,
   type ToolLoadout,
 } from '../tools/tool-selection.ts'
 
@@ -303,20 +302,13 @@ export function selectTools(
   if (listError) throw new Error(`Invalid --tools list: ${listError}`)
   const plain = entries.filter((entry) => !isToolModifier(entry))
   const modifiers = entries.filter(isToolModifier)
-  const settings = defaultTools ? resolveDefaultTools(defaultTools) : undefined
-  const fromSetting =
-    settings?.selection ??
-    settings?.modifiers?.map((entry) => entry.slice(1)) ??
-    []
-  // A plain --tools list replaces the setting; otherwise both lists name tools here
+  // A plain --tools list replaces the setting, so the setting's entries are not in play then
   const requested =
     plain.length > 0
       ? [...plain, ...args.excludeTools]
-      : [
-          ...fromSetting,
-          ...modifiers.map((entry) => entry.slice(1)),
-          ...args.excludeTools,
-        ]
+      : [...[...(defaultTools ?? []), ...entries], ...args.excludeTools].map(
+          (entry) => (isToolModifier(entry) ? entry.slice(1) : entry),
+        )
   const unknown = requested.filter(
     (entry) => !available.some(toolMatcher(entry)),
   )
@@ -324,27 +316,34 @@ export function selectTools(
     throw new Error(
       `Unknown tool${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. Available: ${available.join(', ')}`,
     )
-  const matches = (entries: readonly string[]) => (name: string) =>
-    entries.some((entry) => toolMatcher(entry)(name))
-  // The setting may use `*` patterns too; the registry only knows exact names
-  const settingsSelection = settings?.selection
-    ? available.filter(matches(settings.selection))
-    : undefined
+  const matches = (names: readonly string[]) => (name: string) =>
+    names.some((entry) => toolMatcher(entry)(name))
+  // The setting's plain names and * patterns select exactly those tools; only modifiers adjust the
+  // default set. Its modifiers apply after the patterns are expanded, so a project's `-name` removes
+  // a tool the user selected with a pattern. An empty list selects nothing (pi keeps the user's list).
+  const settingsPlain = defaultTools?.filter((entry) => !isToolModifier(entry))
+  const settingsSelection =
+    settingsPlain && (settingsPlain.length > 0 || defaultTools?.length === 0)
+      ? applyToolModifiers(
+          available.filter(matches(settingsPlain)),
+          (defaultTools ?? []).filter(isToolModifier),
+        )
+      : undefined
   let selection: string[] | undefined
   let adjusted = modifiers
   if (modifiers.length > 0) {
     if (args.noTools) selection = applyToolModifiers([], modifiers)
     else if (settingsSelection)
       selection = applyToolModifiers(settingsSelection, modifiers)
-    else adjusted = [...(settings?.modifiers ?? []), ...modifiers]
+    else adjusted = [...(defaultTools ?? []), ...modifiers]
   } else if (plain.length > 0) {
     selection = available.filter(matches(plain))
   } else if (args.noTools) {
     selection = []
   } else if (settingsSelection) {
     selection = settingsSelection
-  } else if (settings?.modifiers) {
-    adjusted = [...settings.modifiers]
+  } else if (defaultTools?.length) {
+    adjusted = defaultTools.filter(isToolModifier)
   }
   const excluded = available.filter(matches(args.excludeTools))
   if (selection)

@@ -94,7 +94,7 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 |---|---|---|
 | `cwd` | Vela's cwd | Base for file/search/bash tools (also `executeBash`), the cwd prompt and automatic AGENTS/CLAUDE discovery; relative values resolve against Vela's cwd. `session.cwd` exposes the resolved path. A different cwd reloads its own instruction chain instead of a supplied `contextFiles` array; `contextFiles: false` still disables loading. Skills, templates, extensions/config, `dataDir`, storage and relative export destinations stay Vela-wide. Fork/clone preserves cwd; callers must pass it again when reopening/resuming. This is a default path, not a security sandbox. |
 | `permissions` | none | Per-tool rules: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`; a tool without a rule is allowed. `ask` calls `ui.confirm`; without a UI it refuses. See [Security](security.md#per-session-permissions). |
-| `tools` | default set | Names (or `*` patterns) enable only those tools; a list of only `+name` / `-name` entries adjusts the default set instead, like pi |
+| `tools` | default set | Exact tool names enable only those tools; a list of only `+name` / `-name` entries adjusts the default set instead, like pi. `*` patterns are a CLI option (`--tools`, `--exclude-tools`), not part of this option |
 | `ui` | none | A `SessionUI` extensions use to talk to the user (`notify`, `confirm`, `select`, `input`, optional `setStatus`, `setWidget`). Without it `confirm` answers no, `select`/`input` answer nothing, and `notify` becomes a `notify` event. |
 | `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
 | `thinkingLevel` | Vela's level | Thinking level for this session |

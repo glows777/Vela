@@ -424,6 +424,19 @@ test('+name / -name adjust the default set and defaultTools applies like pi', ()
       'edit_*',
     ]),
   ).toEqual({ selection: ['edit_file', 'bash'] })
+  // A project-level -name removes a tool the user selected with a pattern (the layers are
+  // merged into one list before this, so the modifier comes after the pattern it must remove)
+  expect(
+    selectTools(all, { noTools: false, excludeTools: [] }, [
+      'read_*',
+      '-read_file',
+    ]),
+  ).toEqual({ selection: [] })
+  expect(
+    selectTools(all, { noTools: false, excludeTools: [] }, ['*', '-bash']),
+  ).toEqual({
+    selection: ['read_file', 'write_file', 'edit_file', 'grep'],
+  })
   expect(() =>
     selectTools(all, { noTools: false, excludeTools: [] }, ['nope']),
   ).toThrow('Unknown tool: nope')
