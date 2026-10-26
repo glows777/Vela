@@ -246,7 +246,7 @@ vela.registerChannel({
 })
 ```
 
-Every sender in the chat shares one session, its history and its tools. A channel must reject untrusted chats before delivering messages; see [Channels](channels.md). The interactive CLI starts channels after startup. The SDK starts them with `vela.startChannels()`.
+Every sender in the chat shares one session, its history and its tools. A channel must reject untrusted chats before delivering messages; see [Channels](channels.md). The CLI runs channels with `vela serve` only; the SDK starts them with `vela.startChannels()`.
 
 ### on
 

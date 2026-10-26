@@ -32,7 +32,7 @@ The built-in `feishu` extension uses Feishu's long connection (WebSocket), so no
 
    `owners` and legacy `chats` accept string arrays or comma-separated strings. `chats` also accepts objects with `id` and an optional `tools` list (see below). `FEISHU_APP_ID`, `FEISHU_APP_SECRET` and `FEISHU_OWNERS` remain environment defaults; settings take precedence. To supply chat ids from an environment variable, set `"chats": "$FEISHU_CHATS"` in settings.
 
-5. Start `vela` in interactive mode and keep it running. The SDK equivalent is `feishu({ appId, appSecret, owners, chats })`, followed by `await vela.ready()` and `await vela.startChannels()`.
+5. Run `vela serve` and keep it running. The SDK equivalent is `feishu({ appId, appSecret, owners, chats })`, followed by `await vela.ready()` and `await vela.startChannels()`.
 
 ### Enablement and replies
 
@@ -213,7 +213,7 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 
 **SDK:** `await vela.startChannels()` starts registered channels. `vela.channels()` lists them. `vela.dispose()` aborts running sessions, waits for pending work and stops channels. Tool-policy validation errors reject startup before transport/recovery; a failed channel `start()` is logged without stopping other channels.
 
-**CLI:** channels start with interactive mode, and stop on exit. Incoming messages, replies and errors appear in the terminal; channel tool calls are not displayed there. Print, JSON and RPC modes do not start channels. `/channel` lists them.
+**CLI:** channels run only under `vela serve` (see [CLI](cli.md#serve)), which stops them on SIGINT/SIGTERM. It has no UI: one line per incoming message, reply and error goes to stderr, with a local timestamp; channel tool calls are not shown. It takes no prompt and cannot be combined with print, JSON, RPC, `--export`, `--list-models`, session selection or tool flags. Interactive, print, JSON and RPC modes do not start channels, so two processes never share the single-process channel directory. `/channel` lists the registered channels.
 
 ## Writing a channel
 
@@ -265,7 +265,7 @@ Status says "Recorded since …" using the first ledger row. Earlier usage is no
 
 ### Restart recovery
 
-The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `feishu_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues.
+The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, shared by startup recovery, `runtime.topics(chatId)` and `feishu_list_topics`. Updates are serialized and published by a synced temporary file and atomic rename. A malformed directory rejects `startChannels()` with its path; it never becomes an empty topic list. This is a single-process directory, like the gateway's session queues; `vela serve` is that process, and the TUI does not open a second one.
 
 Records contain the channel/chat kind, topic root/thread IDs, requester/reply target, task label, active and previous session IDs, run state, pending service-message IDs and timestamps. Input content remains in the session JSONL. The directory does not backfill pre-M2 topics or reconstruct hashed routing IDs; an older topic joins on its next admitted message. `runtime.topicCoverage()` reports that boundary.
 

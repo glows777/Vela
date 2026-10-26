@@ -48,6 +48,8 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
 export const DEFAULT_OFF_BUILTINS: readonly string[] = ['permission-gate']
 
 export interface CliArgs {
+  /** `serve`: run the configured channels without the TUI, until a signal stops the process */
+  serve: boolean
   /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
   print: boolean
   /** `--mode text | json | rpc` (like pi): json writes one line per event, rpc reads commands from stdin */
@@ -95,16 +97,19 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
 
 Usage:
   vela [options] [prompt...]
+  vela serve [options]
 
 Modes:
   (default)                     Interactive TUI when stdin and stdout are a terminal
+  serve                         Run the configured channels without the TUI: one line per channel
+                                event on stderr, stops on Ctrl-C / SIGTERM
   -p, --print                   Run the prompts and exit; stdout gets only the last answer
                                 (also used when stdin or stdout is redirected)
   --mode <text|json|rpc>        text: like -p; json: one JSON line per event; rpc: JSON commands on stdin
@@ -144,6 +149,9 @@ as a temporary file path for read_file. Images in history show a short placehold
 Examples:
   # Interactive mode
   vela
+
+  # Run the configured channels in the background
+  vela serve
 
   # Interactive mode with an initial prompt
   vela "List all .ts files in src/"
@@ -195,6 +203,7 @@ export function packageVersion(): string {
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
+    serve: false,
     print: false,
     messages: [],
     continue: false,
@@ -214,7 +223,8 @@ export function parseArgs(argv: string[]): CliArgs {
       if (next === undefined) throw new Error(`${arg} requires a value`)
       return next
     }
-    if (arg === '-h' || arg === '--help') args.help = true
+    if (i === 0 && arg === 'serve') args.serve = true
+    else if (arg === '-h' || arg === '--help') args.help = true
     else if (arg === '-v' || arg === '--version') args.version = true
     else if (arg === '-p' || arg === '--print') args.print = true
     else if (arg === '--mode') {
@@ -275,6 +285,27 @@ export function parseArgs(argv: string[]): CliArgs {
     ].filter(Boolean).length > 1
   )
     throw new Error('Use only one of -c, -r, --session and --fork')
+  // `serve` has no single session and no prompt: a flag that only configures one would be ignored
+  if (args.serve) {
+    const unsupported = [
+      args.messages.length > 0 && 'a prompt',
+      args.print && '-p/--print',
+      args.mode && '--mode',
+      args.export && '--export',
+      args.listModels && '--list-models',
+      args.continue && '-c/--continue',
+      args.resume && '-r/--resume',
+      args.session && '--session',
+      args.fork && '--fork',
+      args.tools?.length && '-t/--tools',
+      args.noTools && '-nt/--no-tools',
+      args.excludeTools.length > 0 && '-xt/--exclude-tools',
+    ].filter((entry): entry is string => typeof entry === 'string')
+    if (unsupported.length > 0)
+      throw new Error(
+        `vela serve runs channels only; it does not take ${unsupported.join(', ')}`,
+      )
+  }
   return args
 }
 

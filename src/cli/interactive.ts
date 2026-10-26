@@ -253,14 +253,6 @@ export class InteractiveMode {
           'warning',
         ),
       )
-    await vela
-      .startChannels()
-      .catch((error) =>
-        this.addNotice(
-          `Failed to start channels: ${errorMessage(error)}`,
-          'error',
-        ),
-      )
     this.tui.requestRender()
   }
 
@@ -474,29 +466,6 @@ export class InteractiveMode {
   // ---------------------------------------------------------------- Events
 
   private onEvent(event: VelaEvent, sessionId: string): void {
-    // Channel activity (Feishu etc.) gets one line each; channel session content is not streamed
-    switch (event.type) {
-      case 'channel_message':
-        this.addNotice(
-          `[${event.channel}] ${event.senderName}: ${event.text}`,
-          'dim',
-        )
-        return
-      case 'channel_reply':
-        this.addNotice(
-          `[${event.channel}] → ${event.text.slice(0, 80)}${event.text.length > 80 ? '…' : ''}`,
-          'dim',
-        )
-        return
-      case 'channel_error':
-        this.addNotice(
-          event.aborted
-            ? `[${event.channel}] Turn aborted`
-            : `[${event.channel}] Turn stopped: ${errorMessage(event.error)}`,
-          event.aborted ? 'dim' : 'error',
-        )
-        return
-    }
     if (sessionId !== this.session.id) return
     switch (event.type) {
       case 'agent_start':

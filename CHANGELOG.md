@@ -6,11 +6,15 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **`vela serve` runs the configured channels without the TUI.** The first argument `serve` selects a new run mode: no terminal UI and nothing on stdout, one line per channel event on stderr with a local timestamp (`channel_message`, `channel_reply`, `channel_error`, terminal escape sequences stripped and text cut to 80 characters), and SIGINT/SIGTERM stop the channels through the existing `dispose()` and exit 0. A second signal exits right away. `serve` takes no prompt; `-p`, `--mode`, `--export`, `--list-models`, session selection (`-c`, `-r`, `--session`, `--fork`), tool flags (`-t`, `-nt`, `-xt`) are rejected with exit code 2 instead of being ignored. When no channel started (none configured, or every `start()` failed), it exits 1 instead of idling. See [CLI](docs/cli.md#serve) and [Channels](docs/channels.md).
+
 - **Built-in `permission-gate` extension, off by default.** It confirms a few dangerous `bash` patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) through the session UI and blocks them when there is no UI, like pi's `permission-gate` example. Enable it with `+builtin:permission-gate` in settings or `-e builtin:permission-gate`; the SDK adds `permissionGate()`. `loadConfig` gains `defaultOffBuiltins` for callers that pass `builtins` themselves. See [Built-in extensions](docs/built-in-extensions.md#permission-gate).
 
 - **Passive Feishu group messages show a reaction once Vela starts answering.** An untagged evaluation adds `OnIt` to the triggering message at the first non-empty assistant text delta, then `DONE` after delivery or `CrossMark` on failure or Stop. Silence, an empty answer or a topic handoff removes the marker with nothing left behind; passive input still gets no progress/control card. Custom channels receive the new `silent` value on `finish(outcome)`.
 
 ### Changed
+
+- **The TUI no longer starts channels.** Channels run only under `vela serve`, so an interactive `vela` session no longer opens a second connection to the chat service or a second writer to the single-process channel directory, and channel messages no longer appear in the chat log. The SDK is unchanged: `vela.startChannels()` still starts them in your own process. See [Channels](docs/channels.md) and [CLI](docs/cli.md#interactive-mode).
 
 - **The core prompt has output rules, an `<env>` block, and Feishu group history carries send times.** The new rules ask for the answer first, a length that matches the question, no restating and no unrequested next steps, and say something was saved, sent or done only after the tool call for it succeeded. `<env>` adds the date (not the time of day, so the cached prompt prefix only changes once a day), time zone, OS, shell and git branch; the branch comes from the session working directory's `.git/HEAD`, with no subprocess. Each `[Chat since last reply]` and `[Question]` line now starts with the message's local `HH:MM`.
 

@@ -7,6 +7,7 @@ vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>]
      [-e <extension>]... [--no-extensions] [--no-session]
      [--approve | --no-approve] [--model provider/id] [--thinking <level>]
      [-h | --help] [-v | --version]
+vela serve [options]
 ```
 
 An unknown option or a bad value prints the usage line and exits with code 2. There is no `--` separator: every argument that starts with `-` (except a lone `-`) is read as an option. To send a prompt that starts with `-`, pipe it through stdin.
@@ -15,6 +16,7 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 
 | Option | Description |
 |---|---|
+| `serve` | As the first argument: run the configured channels without the TUI until SIGINT/SIGTERM. See [serve](#serve). |
 | `prompt...` | Every argument that is not an option is a prompt. Several prompts are sent one after another. |
 | `@file` | Attach a file to the first prompt: images are detected by header; text is inlined as `<file name="…">…</file>`. A missing or unreadable file exits 1. |
 | `-p`, `--print` | Run the prompts, write the last assistant answer to stdout, then exit. |
@@ -54,9 +56,10 @@ An extension that fails to load is reported on stderr (or in the chat log) and s
 
 Vela picks the mode at startup:
 
-1. `--mode rpc` selects RPC mode and `--mode json` selects JSON mode.
-2. `-p`, `--mode text`, or a stdin or stdout that is not a terminal selects print mode.
-3. Otherwise Vela opens the interactive terminal UI.
+1. `serve` as the first argument selects serve mode.
+2. `--mode rpc` selects RPC mode and `--mode json` selects JSON mode.
+3. `-p`, `--mode text`, or a stdin or stdout that is not a terminal selects print mode.
+4. Otherwise Vela opens the interactive terminal UI.
 
 ```sh
 vela                                         # interactive
@@ -64,7 +67,18 @@ vela -p "Summarize this repository"          # print the answer and exit
 git diff | vela -p "Review this change"      # piped stdin
 vela --mode json "List the TODOs" > events.jsonl
 vela --mode rpc                              # driven by another program
+vela serve                                   # run the channels, no TUI
 ```
+
+### serve
+
+`vela serve` runs the registered channels (Feishu and any that an extension registers) without a terminal UI, so it can run for days under a service manager. It starts nothing else: there is no prompt, no interactive session and no `/command`. See [Channels](channels.md) for configuration.
+
+- stdout stays empty. One line per channel event goes to **stderr**, with a local `YYYY-MM-DD HH:MM:SS` timestamp: `channel_message` (channel, sender name, text), `channel_reply` (channel, text) and `channel_error` (channel, sender, reason or `Turn aborted`). Text is cut to one line of 80 characters, so an operator log gets one event per line, and terminal escape sequences are stripped from chat text and sender names, as in the TUI. The gateway logs each channel's startup and start failures on the same stream.
+- SIGINT/SIGTERM stop the channels (sessions are saved and closed, the connection is closed, extension shutdown hooks run) and exit 0. A second signal exits right away with the signal's code. SIGHUP stops it the same way on POSIX.
+- If no channel started, `serve` says so on stderr and exits 1 instead of idling; that is also what happens when every channel's `start()` failed or returned `false` (not configured).
+- The flags that apply to a single session do not: `-p`, `--mode`, `--export`, `--list-models`, `-c`, `-r`, `--session`, `--fork`, `-t`/`--tools`, `-nt`, `-xt` and a prompt are rejected with exit code 2. `-e`, `--no-extensions`, `--model`, `--thinking`, `--no-session` and `--approve` / `--no-approve` still apply. A chat's own `tools` list in the channel config still picks the tools of that chat.
+- The log is not rotated by Vela; use the service manager's (systemd/journald, logrotate).
 
 ### Print mode
 
@@ -100,6 +114,8 @@ vela -c
 A resumed session restores its history, name, thinking level and model (if the model was chosen by name and is still available). `--model`, `--thinking` and `VELA_MODEL` still win over the saved values. See [Sessions](sessions.md).
 
 ## Interactive mode
+
+The TUI does not start channels; run [`vela serve`](#serve) for those, in a separate process. It has no channel traffic in the chat log.
 
 The screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
 
