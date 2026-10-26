@@ -26,7 +26,11 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 
 ## Rounds
 
-After three review-and-fix rounds without converging, stop and reconsider the approach in the issue instead of another round. From the third round on, review only the new commits.
+Human and bot reviewers follow this section.
+
+After three review-and-fix rounds without converging, stop and return to the issue. Ask Claude to change the approach. Do not open another nit loop. From the third round on, review only the new commits.
+
+If Evidence is missing, or it only says "tests passed" or "looks good", bounce the PR immediately. That bounce does not count toward the three rounds. It is not a bug-fix review round.
 
 ## Skip
 
