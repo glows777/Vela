@@ -6,6 +6,7 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '../../src/channels/types.ts'
+import { messageTime } from '../../src/extensions/feishu/history.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import { silentLogger } from '../../src/logger.ts'
 import type { ProviderContext } from '../../src/models/index.ts'
@@ -27,6 +28,9 @@ async function waitFor(condition: () => boolean) {
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
 }
+
+/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+const at = (ms: string) => `[${messageTime(ms)}] `
 
 /** Register a fake channel; returns a function that delivers messages and the replies sent */
 function fakeChannel(t: TestVela, name = 'fake') {
@@ -439,7 +443,8 @@ test('Feishu mention fetches earlier group messages since this bot last replied 
     { chatId: 'oc_group', before: '4000', limit: 50 },
   ])
   expect(f.t.model.calls[0]?.lastUserText).toBe(
-    '[Chat since last reply]\nBob: use blue\n\n[Question]\nAlice: question',
+    `[Chat since last reply]\n${at('3000')}Bob: use blue` +
+      `\n\n[Question]\n${at('4000')}Alice: question`,
   )
 })
 
@@ -478,12 +483,16 @@ test('Feishu owner DM works with empty chats, prefixes the name, and announces t
 test('Feishu cached sender names fall back to open_id and missing history does not lose the question', async () => {
   const f = await feishuGateway()
   f.failHistory()
-  f.deliver(feishuEvent({ message_id: 'one' }, 'ou_unknown'))
+  const first = feishuEvent({ message_id: 'one' }, 'ou_unknown')
+  f.deliver(first)
   await waitFor(() => f.sent.length === 1)
   f.deliver(feishuEvent({ message_id: 'two' }, 'ou_unknown'))
   await waitFor(() => f.sent.length === 2)
   expect(f.nameCalls).toEqual(['ou_unknown'])
-  expect(f.t.model.calls[0]?.lastUserText).toBe('ou_unknown: hello')
+  // Without history the question keeps its own send time
+  expect(f.t.model.calls[0]?.lastUserText).toBe(
+    `${at(first.message.create_time!)}ou_unknown: hello`,
+  )
   expect(
     f.logs.some((line) => line.includes('history permission denied')),
   ).toBe(true)

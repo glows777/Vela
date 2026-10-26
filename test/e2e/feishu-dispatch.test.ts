@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { z } from 'zod'
+import { messageTime } from '../../src/extensions/feishu/history.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import type { VelaExtension } from '../../src/extensions/types.ts'
 import { memorySessionStorage } from '../../src/session/storage.ts'
@@ -19,6 +20,10 @@ const dispatchTools = [
   'feishu_forward_to_topic',
   'feishu_list_topics',
 ]
+
+/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+const at = (ms: string) => `[${messageTime(ms)}] `
+
 async function until(condition: () => boolean) {
   const deadline = Date.now() + 1500
   while (!condition()) {
@@ -272,7 +277,8 @@ test('a topic handoff keeps the handled mention out of the next group input and 
         call.tools.includes('feishu_start_topic'),
     )
     expect(second?.lastUserText).toBe(
-      '[Chat since last reply]\nBob: check the tests\n\n[Question]\nAlice: new question',
+      `[Chat since last reply]\n${at('4000')}Bob: check the tests` +
+        `\n\n[Question]\n${at('5000')}Alice: new question`,
     )
   } finally {
     await t.internals.gateway.stopAll()

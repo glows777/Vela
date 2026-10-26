@@ -28,6 +28,7 @@ import {
   addendum,
   coreRules,
   deferredTools,
+  environment,
   extensionSections,
   projectContext,
   workingDirectory,
@@ -317,6 +318,12 @@ export function createVela(options: VelaOptions = {}): Vela {
     )
     .pipe('cwd', (ctx) =>
       workingDirectory(sessions.get(ctx.sessionId)?.cwd ?? cwd)(ctx),
+    )
+    .pipe('env', (ctx) =>
+      environment({
+        cwd: sessions.get(ctx.sessionId)?.cwd ?? cwd,
+        shell: options.shellPath,
+      })(ctx),
     )
     .pipe('extensions', extensionSections())
 

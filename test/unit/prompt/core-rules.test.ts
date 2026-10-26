@@ -22,3 +22,16 @@ test('the core prompt has a preamble and rules; the working directory is its own
     '<cwd>\nC:/work/repo\n</cwd>',
   )
 })
+
+test('the core prompt states the output rules', () => {
+  const prompt = coreRules()(context)!
+  for (const rule of [
+    'Lead with the answer or result',
+    'Match the response length to the question',
+    "Don't restate the request",
+    "Don't add unrequested suggestions",
+    "Don't state unchecked things as fact",
+    'only after the tool call for it succeeded',
+  ])
+    expect(prompt).toContain(rule)
+})

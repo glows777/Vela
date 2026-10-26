@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
+import { messageTime } from '../../src/extensions/feishu/history.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
 import type { FeishuHistoryMessage } from '../../src/extensions/feishu/transport.ts'
 import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
@@ -24,6 +25,9 @@ async function until(check: () => boolean) {
     await Bun.sleep(1)
   }
 }
+
+/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+const at = (ms: string) => `[${messageTime(ms)}] `
 
 async function runningChat(dm = false, history: FeishuHistoryMessage[] = []) {
   const fake = fakeFeishu()
@@ -143,7 +147,7 @@ test('Steer joins the active run with both named questions and sends one combine
     await until(() =>
       f.t
         .eventsOf('queue_update')
-        .some((event) => event.steering.includes('Bob: use blue')),
+        .some((event) => event.steering.includes(`${at('5000')}Bob: use blue`)),
     )
     expect(f.sent).toEqual([])
   } finally {
@@ -158,11 +162,11 @@ test('Steer joins the active run with both named questions and sends one combine
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain(
     'Alice: original question',
   )
-  expect(f.t.model.calls[1]?.lastUserText).toBe('Bob: use blue')
+  expect(f.t.model.calls[1]?.lastUserText).toBe(`${at('5000')}Bob: use blue`)
   expect(f.t.eventsOf('agent_start')).toHaveLength(1)
   expect(f.t.eventsOf('channel_message').map((event) => event.text)).toEqual([
-    'Alice: original question',
-    'Bob: use blue',
+    `${at('3000')}Alice: original question`,
+    `${at('5000')}Bob: use blue`,
   ])
   expect(await f.t.readData('sessions/feishu-oc_group.jsonl')).toContain(
     'Bob: use blue',
@@ -361,9 +365,11 @@ test('Stop consumes only its own trigger and preserves the other queued message'
   const f = await runningChat()
   try {
     await until(() => f.cards.length === 1)
-    f.deliver(
-      feishuEvent({ message_id: 'third', content: '{"text":"after stop"}' }),
-    )
+    const afterStop = feishuEvent({
+      message_id: 'third',
+      content: '{"text":"after stop"}',
+    })
+    f.deliver(afterStop)
     await until(() => f.cards.length === 2)
     f.click(0, 'stop')
     await until(() => f.sent.length === 2)
@@ -373,7 +379,9 @@ test('Stop consumes only its own trigger and preserves the other queued message'
     })
     expect(f.sent[1]?.messageId).toBe('third')
     expect(f.t.model.calls).toHaveLength(2)
-    expect(f.t.model.calls[1]?.lastUserText).toBe('Alice: after stop')
+    expect(f.t.model.calls[1]?.lastUserText).toBe(
+      `${at(afterStop.message.create_time!)}Alice: after stop`,
+    )
     expect(
       f.t
         .eventsOf('channel_message')
@@ -430,15 +438,16 @@ test('Stop discards an accepted steer from the cancelled run without leaking it 
       steering: [],
       followUp: [],
     })
-    f.deliver(
-      feishuEvent({
-        message_id: 'independent',
-        content: '{"text":"new independent task"}',
-      }),
-    )
+    const independent = feishuEvent({
+      message_id: 'independent',
+      content: '{"text":"new independent task"}',
+    })
+    f.deliver(independent)
     await until(() => f.sent.length === 2)
     expect(f.t.model.calls).toHaveLength(2)
-    expect(f.t.model.calls[1]?.lastUserText).toBe('Alice: new independent task')
+    expect(f.t.model.calls[1]?.lastUserText).toBe(
+      `${at(independent.message.create_time!)}Alice: new independent task`,
+    )
     expect(f.sent.map((reply) => reply.messageId)).toEqual([
       'stop',
       'independent',
@@ -476,7 +485,7 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
         })
         api.on('input', async (event) => {
           if (
-            event.text === 'Bob: use blue' &&
+            event.text.endsWith('Bob: use blue') &&
             event.streamingBehavior === 'steer'
           ) {
             hookEntered.release()
@@ -524,15 +533,16 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
     expect(f.sent).toEqual([
       { messageId: 'stop', text: 'Stopped the current run.' },
     ])
-    f.deliver(
-      feishuEvent({
-        message_id: 'independent',
-        content: '{"text":"new task"}',
-      }),
-    )
+    const independent = feishuEvent({
+      message_id: 'independent',
+      content: '{"text":"new task"}',
+    })
+    f.deliver(independent)
     await until(() => f.sent.length === 2)
     expect(t.model.calls).toHaveLength(2)
-    expect(t.model.calls[1]?.lastUserText).toBe('Alice: new task')
+    expect(t.model.calls[1]?.lastUserText).toBe(
+      `${at(independent.message.create_time!)}Alice: new task`,
+    )
   } finally {
     hookHeld.release()
     held.release()
@@ -551,7 +561,8 @@ for (const peerTime of ['4500', '3000']) {
     try {
       await until(() => f.cards.length === 1)
       expect(f.t.model.calls[0]?.lastUserText).toBe(
-        '[Chat since last reply]\nBob: context already read\n\n[Question]\nAlice: original question',
+        `[Chat since last reply]\n${at('2500')}Bob: context already read` +
+          `\n\n[Question]\n${at('3000')}Alice: original question`,
       )
       f.history.unshift(
         historyMessage('second', 'ou_bob', 'use blue', '5000'),
@@ -572,7 +583,8 @@ for (const peerTime of ['4500', '3000']) {
     }
     await until(() => f.sent.length === 1)
     expect(f.t.model.calls[1]?.lastUserText).toBe(
-      '[Chat since last reply]\nAlice: keep the new detail\n\n[Question]\nBob: use blue',
+      `[Chat since last reply]\n${at(peerTime)}Alice: keep the new detail` +
+        `\n\n[Question]\n${at('5000')}Bob: use blue`,
     )
     const users = f.t.model.calls[1]?.prompt.filter(
       (message) => message.role === 'user',
@@ -614,7 +626,9 @@ test('a delayed Steer whose service time precedes the active trigger still suppl
     f.release()
   }
   await until(() => f.sent.length === 2)
-  expect(f.t.model.calls[1]?.lastUserText).toBe('Bob: delayed correction')
+  expect(f.t.model.calls[1]?.lastUserText).toBe(
+    `${at('2000')}Bob: delayed correction`,
+  )
   expect(f.sent.map((reply) => reply.messageId)).toEqual(['first', 'second'])
 })
 
@@ -636,7 +650,7 @@ test('Queue immediately followed by Stop on another card keeps the explicitly qu
     )
     expect(f.sent.map((reply) => reply.messageId)).toEqual(['stop', 'second'])
     expect(f.t.model.calls).toHaveLength(2)
-    expect(f.t.model.calls[1]?.lastUserText).toBe('Bob: use blue')
+    expect(f.t.model.calls[1]?.lastUserText).toBe(`${at('5000')}Bob: use blue`)
   } finally {
     f.release()
   }

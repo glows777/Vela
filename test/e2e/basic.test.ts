@@ -76,6 +76,11 @@ test('the model receives the system prompt, the tool list and the user message',
   expect(req!.tools).toEqual(
     expect.arrayContaining(['read_file', 'bash', 'memory']),
   )
+  expect(req!.system).toContain('Lead with the answer or result')
+  expect(req!.system).toContain('<env>')
+  expect(req!.system).toContain(
+    `date: ${new Date().toLocaleDateString('en-CA')}`,
+  )
 })
 
 test('multi-turn: the second request carries the first exchange', async () => {
