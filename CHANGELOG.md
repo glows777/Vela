@@ -12,6 +12,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **A Feishu topic opens with a short title, and the brief stays private.** `feishu_start_topic` takes `title` and `brief` instead of one `task`: the title is posted as the topic's first visible message and becomes its label in `feishu_list_topics`, while the brief goes only to the topic session with the sender's name. The channel prompt asks for a one-line title and keeps the plan out of both texts. Custom `FeishuTransport` implementations receive the title in `startTopic`; `ChannelRuntime.dispatch` takes an optional label for the directory entry.
+
 - Compaction now produces a structured free-text checkpoint with progress, next steps and code-derived read/modified file lists. Summaries use the model output limit instead of a fixed 8,192-token cap; incomplete or failed summaries leave history unchanged.
 
 - **Tool results sent to the model are plain text.** Bash no longer adds a timestamp or a `StoredToolResult` JSON wrapper; only truncated output includes a full-output path. Default and web result limits are now 50K characters, with head previews for generic/web results and the existing bash tail. The system history guide is removed; compaction keeps the earlier-output location. Result files and crash-recovery history are retained, and old `StoredToolResult` sessions still load. SDK consumers reading tool messages should handle text results instead of expecting `StoredToolResult`.
