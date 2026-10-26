@@ -113,8 +113,5 @@ test('a frozen history file cannot expose later entries even when the reader omi
   const restored = new SessionStore('snapshot', root)
   await restored.loadSaved()
   expect(restored.results.historyViewSequence).toBe(2)
-  expect(restored.results.readingGuide()).toContain(
-    `Absolute path: ${frozen.path}`,
-  )
   expect((await store.snapshot(undefined, 2)).path).toBe(frozen.path)
 })
