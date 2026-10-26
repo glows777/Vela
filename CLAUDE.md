@@ -11,6 +11,7 @@ alwaysApply: false
 - Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost to the user and get their buy-in. Do not silently expand scope for theoretical robustness.
 - Pick verification by risk: run the affected Bun tests for targeted regressions; widen to the full `bun test`, typecheck or build for cross-module, runtime or protocol changes. Don't run unrelated full suites for low-risk changes.
 - `.skills/<name>/SKILL.md` is an on-demand workflow entry point. Keep a skill's trigger description short and precise; put multi-flow content behind references or scripts (progressive disclosure), don't preload unrelated text, and don't write one task's temporary steps into shared rules.
+- **Prompt the What, not the How.** When exploration is needed, the agent builds its own iterative tools, such as several variants and checks that can be compared. It does not go back and forth with a human on trial and error.
 
 Default to using Bun instead of Node.js.
 
@@ -51,6 +52,10 @@ When reviewing a pull request, follow [REVIEW.md](REVIEW.md). When opening one, 
 ## Product verification (verify-vela)
 
 After implementing or changing user-facing CLI/TUI/SDK behavior, **follow** [`.skills/verify-vela/SKILL.md`](.skills/verify-vela/SKILL.md) before claiming done: use the change as a user would, through the real CLI or an SDK script, with the mock or a faux scenario model. Tests don't replace this. What to drive per feature: [`journeys.md`](.skills/verify-vela/journeys.md); SDK onboarding and core checks: [`core.md`](.skills/verify-vela/core.md).
+
+"tests passed" and "looks good" are not evidence. Claiming done requires command results someone else can rerun. User-visible CLI/TUI/SDK changes still go through the verify-vela skill above.
+
+Before opening a pull request, the implementer verifies the change and does one fresh-context self-review in a new thread that sees only the diff. Vela is the default implementer. Friday follows the same rules.
 
 ## Frontend
 
