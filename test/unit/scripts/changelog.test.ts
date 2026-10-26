@@ -132,7 +132,9 @@ Previous.
     const checkout = job
       .slice(job.indexOf('actions/checkout'), job.indexOf('oven-sh/setup-bun'))
       .replace(/#[^\n]*/g, '')
-    const readsTag = /ref:\s*refs\/tags\/\$\{\{\s*env\.TAG\s*\}\}/.test(checkout)
+    const readsTag = /ref:\s*refs\/tags\/\$\{\{\s*env\.TAG\s*\}\}/.test(
+      checkout,
+    )
     const changelog = readsTag ? tagSnapshot : mainAfterFinal
     expect(releaseNotes(changelog, '0.4.0-rc.1')).toBe(
       '### Added\n\n- Original candidate entry.',
