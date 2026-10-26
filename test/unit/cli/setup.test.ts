@@ -415,6 +415,15 @@ test('+name / -name adjust the default set and defaultTools applies like pi', ()
       'bash',
     ]),
   ).toEqual({ selection: ['read_file', 'bash', 'grep'] })
+  // defaultTools may use * patterns; the session gets the tools they match
+  expect(
+    selectTools(all, { noTools: false, excludeTools: [] }, ['read_*']),
+  ).toEqual({ selection: ['read_file'] })
+  expect(
+    selectTools(all, { tools: ['+bash'], noTools: false, excludeTools: [] }, [
+      'edit_*',
+    ]),
+  ).toEqual({ selection: ['edit_file', 'bash'] })
   expect(() =>
     selectTools(all, { noTools: false, excludeTools: [] }, ['nope']),
   ).toThrow('Unknown tool: nope')

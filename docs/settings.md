@@ -28,7 +28,7 @@ Project settings are applied on top of user settings:
 
 - Objects (`limits`, `extensionConfig`) are merged key by key, recursively.
 - `extensions`, `skills` and `prompts` lists are concatenated: user entries first, then project entries.
-- `defaultTools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended (see [defaultTools](#defaulttools)).
+- `defaultTools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [defaultTools](#defaulttools)).
 - Every other value is replaced by the project's value.
 
 Relative paths in `extensions`, `skills` and `prompts` resolve from the directory of the settings file that lists them. `~` expands to the home directory.
@@ -77,7 +77,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 
 The default set is `read_file`, `write_file`, `edit_file` and `bash`; `grep`, `find` and `list_directory` are registered but off. A list with plain names (or `*` patterns) replaces the default set and is an allowlist: tools from extensions are off unless the list names them.
 
-User and project settings combine like pi: a project list with plain names replaces the user list, while a list of only `+name` / `-name` entries is appended to it. A user-level `["+grep"]` can therefore be narrowed by a project-level `["-grep"]`. `--tools` on the command line replaces the setting; its `+name` / `-name` entries apply on top of the setting's list.
+User and project settings combine like pi: a project list with plain names replaces the user list, while a list of only `+name` / `-name` entries is appended to it. A user-level `["+grep"]` can therefore be narrowed by a project-level `["-grep"]`. An empty project list replaces the user list with no tools, so a project can turn the default tools off (pi appends an empty list and keeps the user's tools). `--tools` on the command line replaces the setting; its `+name` / `-name` entries apply on top of the setting's list.
 
 ### Enabled models
 

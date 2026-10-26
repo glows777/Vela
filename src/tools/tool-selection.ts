@@ -50,14 +50,16 @@ export function applyToolModifiers(
 
 /**
  * Project `defaultTools` on top of the user list: a list with plain names replaces it, while
- * `+name` / `-name` entries append and adjust it.
+ * `+name` / `-name` entries append and adjust it. An empty list replaces it too, so a project can
+ * turn every default tool off (pi appends an empty list, which leaves the user's tools on).
  */
 export function mergeDefaultTools(
   base: string[] | undefined,
   override: string[] | undefined,
 ): string[] | undefined {
   if (override === undefined) return base
-  if (!base || !override.every(isToolModifier)) return override
+  if (!base || override.length === 0 || !override.every(isToolModifier))
+    return override
   return [...base, ...override]
 }
 

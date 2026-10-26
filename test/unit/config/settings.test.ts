@@ -86,6 +86,14 @@ test('defaultTools: project plain names replace the user list, +name / -name ent
   expect(
     loadConfig({ ...replaced, trusted: true }).settings.defaultTools,
   ).toEqual(['read_file'])
+  // An empty project list turns the user's tools off; it does not append nothing
+  const emptied = setup({
+    'home/settings.json': json({ defaultTools: ['read_file'] }),
+    'project/.vela/settings.json': json({ defaultTools: [] }),
+  })
+  expect(
+    loadConfig({ ...emptied, trusted: true }).settings.defaultTools,
+  ).toEqual([])
   const bad = setup({ 'home/settings.json': json({ defaultTools: '+grep' }) })
   expect(() => loadConfig(bad)).toThrow(
     'defaultTools must be an array of strings',

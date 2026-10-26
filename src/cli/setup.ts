@@ -326,19 +326,23 @@ export function selectTools(
     )
   const matches = (entries: readonly string[]) => (name: string) =>
     entries.some((entry) => toolMatcher(entry)(name))
+  // The setting may use `*` patterns too; the registry only knows exact names
+  const settingsSelection = settings?.selection
+    ? available.filter(matches(settings.selection))
+    : undefined
   let selection: string[] | undefined
   let adjusted = modifiers
   if (modifiers.length > 0) {
     if (args.noTools) selection = applyToolModifiers([], modifiers)
-    else if (settings?.selection)
-      selection = applyToolModifiers(settings.selection, modifiers)
+    else if (settingsSelection)
+      selection = applyToolModifiers(settingsSelection, modifiers)
     else adjusted = [...(settings?.modifiers ?? []), ...modifiers]
   } else if (plain.length > 0) {
     selection = available.filter(matches(plain))
   } else if (args.noTools) {
     selection = []
-  } else if (settings?.selection) {
-    selection = [...settings.selection]
+  } else if (settingsSelection) {
+    selection = settingsSelection
   } else if (settings?.modifiers) {
     adjusted = [...settings.modifiers]
   }
