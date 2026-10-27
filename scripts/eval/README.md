@@ -135,9 +135,18 @@ remember. After its run ends, the worker snapshots actual group memory entries
 (not the index, acknowledgement or tool arguments) to
 `memory-after-topic-1.json`. A fresh topic (`g7_recall`) then asks for the server
 name without importing topic 1's conversation. `store` checks entry content in
-that snapshot; `recall` checks only topic 2's last delivered answer. A memory
-written during recall cannot earn store credit. The two checks are reported
-separately, including their own repetition totals.
+that snapshot; `recall` requires topic 2's last delivered answer to contain the
+fact and an observed source in that topic: a memory read/search/list/lint result,
+an injected memory index, `read_file`/`grep` of its legitimate memory files, or
+matching `feishu_search_history` message text. A tool name, save acknowledgement,
+empty search, Bash output alone or guessed answer is not a source. Recall-topic
+disk-tool references to raw sessions, the eval artifact tree or another attempt
+fail recall, even if a valid memory/history result was also retrieved. The grader resolves ordinary
+relative and absolute paths against the actual group workspace, including Bash
+parent traversal; it does not sandbox tools or interpret arbitrary shell code.
+The workspace/data layout is unchanged, and these are behavioral failures, not
+runtime errors. A memory written during recall cannot earn store credit. The two
+checks are reported separately, including their own repetition totals.
 
 G8 uses the same snapshot, store/recall predicates and isolated same-group topics
 (`g8_store`, `g8_recall`). Topic 1 asks for a two-line on-call note about a deploy
