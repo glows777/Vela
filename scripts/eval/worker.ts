@@ -292,9 +292,13 @@ export async function runAttempt(
     }
   }
   const files = fixtures(config.scenario)
-  const exitScenario = config.scenario === 'G6' || config.scenario === 'G7'
+  const exitScenario = ['G6', 'G7', 'G8'].includes(config.scenario)
   const topicRoots =
-    config.scenario === 'G6' ? ['g6_b', 'g6_a'] : ['g7_store', 'g7_recall']
+    config.scenario === 'G6'
+      ? ['g6_b', 'g6_a']
+      : config.scenario === 'G8'
+        ? ['g8_store', 'g8_recall']
+        : ['g7_store', 'g7_recall']
   const { channelSessionId } = await load<
     typeof import('../../src/channels/session-id.ts')
   >(config.runtime, 'src/channels/session-id.ts')
@@ -424,7 +428,7 @@ export async function runAttempt(
           while (gateway.queues.size && !channelError)
             await Promise.all([...gateway.queues.values()])
           if (channelError) throw channelError
-          if (config.scenario === 'G7' && index === 0) {
+          if (['G7', 'G8'].includes(config.scenario) && index === 0) {
             const { MemoryStore } = await load<
               typeof import('../../src/extensions/memory/store.ts')
             >(config.runtime, 'src/extensions/memory/store.ts')

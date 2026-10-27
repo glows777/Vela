@@ -24,7 +24,7 @@ Options:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--only C1,G2` | all thirteen | Comma-separated scenario IDs |
+| `--only C1,G2` | all fourteen | Comma-separated scenario IDs |
 | `--runs 3` | 3 | Repetitions per arm |
 | `--thinking max` | max | Vela thinking level; `high` is used for the additional CLI round |
 | `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
@@ -33,12 +33,12 @@ Options:
 Install the selected checkout's dependencies first. Git, Bun, ripgrep and fd must
 be on PATH. The runner installs each selected baseline's frozen dependencies in
 an owned temporary worktree. C1–C6 and G1–G5 retain `OLD_COMMIT`;
-G6/G7 use the exact peeled `v0.4.0` commit
+G6/G7/G8 use the exact peeled `v0.4.0` commit
 `5b976e26706686a2213f514895d05110f50af2a5`. `results.json` records the per-scenario
 `baselineCommits` map as well as the legacy `oldCommit`. Both arms get fresh task worktrees at
 `7fac1dfd6b06e003a990d17867c10090b6f8efc2`; production modules and helpers come
 from each arm's revision. Baseline G2 is skipped because its `task` API cannot
-represent the current `title`/`brief` checks. A default round has 75 executable
+represent the current `title`/`brief` checks. A default round has 81 executable
 slots and three skips. Worktrees provide context isolation, not a security sandbox.
 
 ## Results and cost
@@ -122,7 +122,7 @@ diagnostic-helper source. This investigation does not change any grade threshold
 G1–G5 fake only Feishu transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
 
-G6/G7 also use `fakeFeishu()` with the real extension, gateway, tools and separate
+G6/G7/G8 also use `fakeFeishu()` with the real extension, gateway, tools and separate
 topic sessions in one group. G6 starts B (`g6_b`) needing a code, then asks A
 (`g6_a`) to read `task/handoff.txt` in the actual group workspace and hand the
 fact to B. Neither task prompt contains the code. Only B's last delivered answer
@@ -139,11 +139,19 @@ that snapshot; `recall` checks only topic 2's last delivered answer. A memory
 written during recall cannot earn store credit. The two checks are reported
 separately, including their own repetition totals.
 
-The G6 exit bar and each G7 component require two passes in three valid runs per
+G8 uses the same snapshot, store/recall predicates and isolated same-group topics
+(`g8_store`, `g8_recall`). Topic 1 asks for a two-line on-call note about a deploy
+delayed to 22:00 and mentions the staging server's rename to kestrel in passing.
+It never asks to remember or save the fact. After that run ends and
+`memory-after-topic-1.json` is written, topic 2 asks for the current staging server
+name. G7's explicit remember request is unchanged. Claude owns the paid G8
+`v0.4.0` baseline and posts it on [#218](https://github.com/glows777/Vela/issues/218).
+
+The G6 exit bar and each G7/G8 component require two passes in three valid runs per
 arm. Notes say `incomplete` when three valid runs are unavailable (including
 one-run pilots or errors); errors are never behavioral failures. The main G7
-pass/valid columns still count attempts satisfying both predicates; the separate
-store/recall notes are the exit assessments. Claude owns the real DeepSeek
+and G8 pass/valid columns still count attempts satisfying both predicates; the
+separate store/recall notes are the exit assessments. Claude owns the real DeepSeek
 baseline runs for [#219](https://github.com/glows777/Vela/issues/219).
 
 Overlap means a whitespace-normalized shared contiguous span of at least 30 Unicode

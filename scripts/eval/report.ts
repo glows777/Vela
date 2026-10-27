@@ -104,7 +104,7 @@ export function table(
     if (arms.some((a) => a.all.some((item) => item.usage.unknown)))
       notes.push('usage unknown')
     if (id === 'C6') notes.push('recorded only')
-    if (id === 'G6' || id === 'G7')
+    if (id === 'G6' || id === 'G7' || id === 'G8')
       for (const [index, arm] of arms.entries()) {
         const outcome = (passes: number) => {
           const status =
