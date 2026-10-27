@@ -218,7 +218,11 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
     case 'C4':
       check(
         'no repetition',
-        e.answers.length === 4 && repetition(e.answers).maxPercent <= 15,
+        // Turn 4 asks for a summary of turns 1-3, so repeating them there is the task.
+        e.answers.length === 4 &&
+          repetition(e.answers)
+            .turns.filter((turn) => turn.turn < 4)
+            .every((turn) => turn.percent <= 15),
       )
       check('three sentences', chars(answer) > 0 && sentences(answer) <= 3)
       break

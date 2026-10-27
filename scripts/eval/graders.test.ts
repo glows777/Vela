@@ -438,6 +438,15 @@ test.each([
     ).toBe(pass)
   },
 )
+test('C4: the requested turn-4 summary may repeat earlier turns', () => {
+  const input = evidence({
+    answers: [sharedThirty, 'Different.', 'Also different.', sharedThirty],
+  })
+  expect(graders.repetition(input.answers).maxPercent).toBe(100)
+  expect(grade('C4', input).find((c) => c.name === 'no repetition')?.pass).toBe(
+    true,
+  )
+})
 test('C4: distinct spans shared with different earlier answers both count', () => {
   const other = 'abcdefghijklmnopqrstuvwxyzABCD'
   const input = evidence({
