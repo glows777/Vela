@@ -1,0 +1,5 @@
+{
+  "responses": [
+    { "text": "Half a filtered answer", "finishReason": "content-filter" }
+  ]
+}

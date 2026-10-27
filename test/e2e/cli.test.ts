@@ -807,6 +807,17 @@ test.concurrent('a model error makes -p exit 1 with the real cause on stderr', a
   )
 })
 
+test.concurrent('a content-filtered response makes -p exit 1 with the provider reason on stderr', async () => {
+  const { stdout, code, stderr } = await cli(['-p', 'hi'], {
+    model: `faux:${scenario('content-filter')}`,
+  })
+  expect(code).toBe(1)
+  expect(stdout).toBe('')
+  expect(stderr).toContain(
+    '[Agent] Turn stopped: Provider stopped the response: content_filter',
+  )
+})
+
 test.concurrent('-p without a prompt prints usage and exits 2', async () => {
   const { code, stderr } = await cli(['-p'], {
     model: `faux:${scenario('hello')}`,
