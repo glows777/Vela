@@ -10,6 +10,8 @@ export const scenarioIds = [
   'G3',
   'G4',
   'G5',
+  'G6',
+  'G7',
 ] as const
 export type ScenarioId = (typeof scenarioIds)[number]
 export interface Call {
@@ -22,7 +24,10 @@ export interface Call {
 export interface Evidence {
   answers: string[]
   calls: Call[]
-  deliveries: { scope: 'group' | 'topic'; text: string }[]
+  deliveries: { scope: 'group' | 'topic'; text: string; topicRootId?: string }[]
+  inputs?: { topicRootId: string; text: string }[]
+  /** Actual entries snapshotted after topic 1, before topic 2 can write. */
+  memoryEntries?: { name: string; content: string }[]
   topics: string[]
   compactions: number[]
   files: Record<string, string>
@@ -333,6 +338,35 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
         !overlaps(e.previousReport ?? '', delivered),
       )
       break
+    case 'G6': {
+      const final =
+        e.deliveries
+          .filter(
+            (item) => item.scope === 'topic' && item.topicRootId === 'g6_b',
+          )
+          .at(-1)?.text ?? ''
+      check('B final fact', /(?<![\w-])ORBIT-73(?![\w-])/i.test(final))
+      check(
+        'no human relay',
+        e.inputs?.length === 2 &&
+          e.inputs[0]?.topicRootId === 'g6_b' &&
+          e.inputs[1]?.topicRootId === 'g6_a',
+      )
+      break
+    }
+    case 'G7': {
+      const fact = (text: string) => /(?<![\w-])kestrel(?![\w-])/i.test(text)
+      check('store', !!e.memoryEntries?.some((entry) => fact(entry.content)))
+      const final =
+        e.deliveries
+          .filter(
+            (item) =>
+              item.scope === 'topic' && item.topicRootId === 'g7_recall',
+          )
+          .at(-1)?.text ?? ''
+      check('recall', fact(final))
+      break
+    }
   }
   return checks
 }
