@@ -104,6 +104,29 @@ export function table(
     if (arms.some((a) => a.all.some((item) => item.usage.unknown)))
       notes.push('usage unknown')
     if (id === 'C6') notes.push('recorded only')
+    if (id === 'G6' || id === 'G7')
+      for (const [index, arm] of arms.entries()) {
+        const outcome = (passes: number) => {
+          const status =
+            arm.valid.length !== 3 || runs !== 3
+              ? 'incomplete'
+              : passes >= 2
+                ? 'pass'
+                : 'fail'
+          return `${status} (${passes}/${arm.valid.length})`
+        }
+        const label = index ? 'new' : 'old'
+        if (id === 'G6') notes.push(`${label} exit: ${outcome(arm.passes)}`)
+        else {
+          const count = (name: string) =>
+            arm.valid.filter((a) =>
+              a.checks.some((check) => check.name === name && check.pass),
+            ).length
+          notes.push(
+            `${label} store: ${outcome(count('store'))}; recall: ${outcome(count('recall'))}`,
+          )
+        }
+      }
     const pair = (a: number | undefined, b: number | undefined) =>
       `${display(a)}/${display(b)} (${display(a === undefined || b === undefined ? undefined : b - a)})`
     const repeats = arms.map(({ valid }) => {
