@@ -28,6 +28,10 @@ export const truncatedToolCallResult = (toolName: string) =>
 export const failedToolCallResult = (errorMessage: string) =>
   `Tool call was not executed: the response failed (${errorMessage}).`
 
+/** Why the provider blocked a response (AI SDK's `content-filter` finish reason). */
+export const CONTENT_FILTER_ERROR =
+  'Provider stopped the response: content_filter'
+
 /** AI SDK only runs tools when the model stopped normally (`stop` / `tool-calls`). */
 const executesTools = (finishReason: FinishReason) =>
   finishReason === 'stop' || finishReason === 'tool-calls'
@@ -268,10 +272,17 @@ export class StepMessage {
         ? 'length'
         : runs
           ? 'toolUse'
-          : finishReason === 'error'
+          : finishReason === 'error' || finishReason === 'content-filter'
             ? 'error'
             : 'stop'
-    this.emit({ type: 'message_end', message: this.snapshot(), stopReason })
+    this.emit({
+      type: 'message_end',
+      message: this.snapshot(),
+      stopReason,
+      ...(finishReason === 'content-filter'
+        ? { errorMessage: CONTENT_FILTER_ERROR }
+        : {}),
+    })
     if (runs) for (const call of this.toolCalls) this.executionStart(call)
   }
 

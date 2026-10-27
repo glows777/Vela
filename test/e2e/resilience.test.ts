@@ -161,6 +161,51 @@ test('a non-retryable error midway keeps the streamed text in the session but no
   expect(t.lastAssistantText()).toBe('not resent')
 })
 
+test('a content-filtered response fails the run with the provider reason and keeps the streamed text', async () => {
+  const t = createTestVela({
+    responses: [
+      { text: 'Half a filtered ans', finishReason: 'content-filter' },
+      (req) =>
+        fauxText(
+          JSON.stringify(req.prompt).includes('Half a filtered ans')
+            ? 'kept in context'
+            : 'missing from context',
+        ),
+    ],
+  })
+
+  await expect(t.run('hi')).rejects.toThrow(
+    'Provider stopped the response: content_filter',
+  )
+
+  const assistantEnd = t
+    .eventsOf('message_end')
+    .find((event) => event.message.role === 'assistant')!
+  expect(assistantEnd).toMatchObject({
+    stopReason: 'error',
+    errorMessage: 'Provider stopped the response: content_filter',
+  })
+  expect(JSON.stringify(assistantEnd.message)).toContain('Half a filtered ans')
+  expect(t.eventsOf('agent_end').at(-1)).toMatchObject({
+    type: 'agent_end',
+    reason: 'error',
+    error: expect.objectContaining({
+      message: 'Provider stopped the response: content_filter',
+    }),
+  })
+  // A blocked response is final: no retry, and its turn still ends
+  expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
+  expect(t.eventsOf('turn_end')).toHaveLength(t.eventsOf('turn_start').length)
+  expect(t.session.busy.locked).toBe(false)
+  expect(await t.readData('sessions/default.jsonl')).toContain(
+    'Half a filtered ans',
+  )
+
+  // The text the provider streamed before filtering stays in the context
+  await t.run('again')
+  expect(t.lastAssistantText()).toBe('kept in context')
+})
+
 test('a response cut off by the output limit answers its tool calls with an error and continues (like pi)', async () => {
   const t = createTestVela({
     files: { 'a.txt': 'A' },
