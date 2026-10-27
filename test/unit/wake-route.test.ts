@@ -477,3 +477,22 @@ test('the workflow listens only to the route events and cannot comment', () => {
     expect(source).not.toContain('review_requested')
   })
 })
+
+test('an ordinary comment after a queued Forge mention preserves the wake', async () => {
+  const doc = parse(await Bun.file('.github/workflows/wake-route.yml').text())
+  // Model GitHub's documented pending queue while the first comment run is held.
+  // single replaces the pending run; max retains up to 100 pending runs.
+  const pending: string[] = []
+  for (const body of ['@forge', 'thanks']) {
+    if (doc.concurrency.queue !== 'max') pending.pop()
+    pending.push(body)
+  }
+  const routes = pending.flatMap((body, index) =>
+    run('issue_comment', {
+      ...issue({ labels: [] }),
+      action: 'created',
+      comment: { id: 555 + index, body, created_at: '2026-10-26T15:04:05Z' },
+    }).plan.posts.map((post) => post.route),
+  )
+  expect(routes).toEqual(['forge'])
+})

@@ -214,6 +214,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | unit/scripts | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version; a candidate retry reads the tag snapshot rather than main after that snapshot's entries are stamped |
 | unit/security | session permission rules (default allow, exact names before `*`, deny and ask), ask goes through confirm, the hook chain, bash classification, `/hooks` lists registered hooks |
 | unit/… | other module-level rules; see each file |
+| unit/wake-route, unit/wake-post | wake plans and documented Actions pending-queue model; actual workflow POST step with local fake HTTP endpoints, Feishu business/HTTP errors and acknowledgements, bucket saves, missing secrets, and Grok route bodies |
 
 ## Verifying a change
 
