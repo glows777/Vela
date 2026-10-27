@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-27
+
 ### Added
 
 - **`vela serve` runs the configured channels without the TUI.** The first argument `serve` selects a new run mode: no terminal UI and nothing on stdout, one line per channel event on stderr with a local timestamp (`channel_message`, `channel_reply`, `channel_error`, terminal escape sequences stripped and text cut to 80 characters), and SIGINT/SIGTERM stop the channels through the existing `dispose()` and exit 0. A second signal exits right away. `serve` takes no prompt; `-p`, `--mode`, `--export`, `--list-models`, session selection (`-c`, `-r`, `--session`, `--fork`), tool flags (`-t`, `-nt`, `-xt`) are rejected with exit code 2 instead of being ignored. When no channel started (none configured, or every `start()` failed), it exits 1 instead of idling. See [CLI](docs/cli.md#serve) and [Channels](docs/channels.md).
