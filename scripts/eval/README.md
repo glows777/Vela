@@ -127,7 +127,8 @@ positions. Per-turn counts/percentages and the scenario maximum are stored in
 `results.json`; the column beside character medians shows each arm's worst observed
 T2/T3/T4 percentages across valid runs, then its overall maximum. JSON and grading
 use unrounded percentages; the table rounds to two decimals. Passing requires
-every turn to be at most 15%. **15% is Claude's provisional judgment, not an
+turns 2 and 3 to be at most 15%; turn 4 is reported but not gated, because it asks
+for a summary of the earlier turns. **15% is Claude's provisional judgment, not an
 empirically calibrated threshold.** Report the actual measurements so it can be
 revisited. Turn 4's three-sentence check is unchanged. G2/G5 still use the original
 any-shared-span predicate. Sentence boundaries are `。！？.!?` followed by whitespace or end of
