@@ -302,6 +302,12 @@ export async function runAttempt(
   const { channelSessionId } = await load<
     typeof import('../../src/channels/session-id.ts')
   >(config.runtime, 'src/channels/session-id.ts')
+  const scope = exitScenario
+    ? await load<typeof import('../../src/channels/scope.ts')>(
+        config.runtime,
+        'src/channels/scope.ts',
+      )
+    : undefined
   const bun = (...args: string[]) =>
     command(config.cwd, [process.execPath, '--no-env-file', ...args])
   const readTask = (path: string) =>
@@ -324,10 +330,30 @@ export async function runAttempt(
         : undefined,
   })
   let phase = 0
+  const recallScenario = config.scenario === 'G7' || config.scenario === 'G8'
+  const workspace = scope
+    ? scope.groupWorkspace(t.dataDir, 'feishu', 'oc_group')
+    : config.cwd
+  const recallSessionId = channelSessionId('feishu', 'oc_group', topicRoots[1])
+  if (recallScenario) {
+    evidence.recallPaths = {
+      workspace,
+      artifactDir: resolve(config.artifactDir),
+    }
+    evidence.recallMemory = []
+  }
   let channelStarted = false
   let channelError: unknown
   const calls = new Map<string, Call>()
   t.vela.subscribe((event: VelaEvent, sessionId) => {
+    if (
+      recallScenario &&
+      sessionId === recallSessionId &&
+      event.type === 'message_end' &&
+      event.custom?.customType === 'memory' &&
+      typeof event.message.content === 'string'
+    )
+      evidence.recallMemory!.push(event.message.content)
     if (event.type === 'agent_start' && sessionId.startsWith('feishu-'))
       channelStarted = true
     if (event.type === 'channel_error') channelError = event.error
@@ -346,8 +372,17 @@ export async function runAttempt(
     if (event.type === 'tool_execution_start') {
       const args = { ...(event.args as Record<string, unknown>) }
       if (typeof args.path === 'string')
-        args.path = relative(config.cwd, resolve(config.cwd, args.path))
-      const call = { name: event.toolName, args, phase, success: false }
+        args.path = relative(
+          recallScenario ? workspace : config.cwd,
+          resolve(recallScenario ? workspace : config.cwd, args.path),
+        )
+      const call = {
+        name: event.toolName,
+        args,
+        phase,
+        sessionId,
+        success: false,
+      }
       calls.set(event.toolCallId, call)
       evidence.calls.push(call)
     }
@@ -356,9 +391,10 @@ export async function runAttempt(
       if (call) {
         call.success = !event.isError
         if (
-          call.name === 'bash' &&
-          call.success &&
-          ['C2', 'C6'].includes(config.scenario)
+          (recallScenario && sessionId === recallSessionId) ||
+          (call.name === 'bash' &&
+            call.success &&
+            ['C2', 'C6'].includes(config.scenario))
         )
           call.output = event.result
       }
@@ -398,10 +434,6 @@ export async function runAttempt(
     if (fake && eventFactory) {
       await t.vela.startChannels()
       if (exitScenario) {
-        const { groupWorkspace, chatDirectory } = await load<
-          typeof import('../../src/channels/scope.ts')
-        >(config.runtime, 'src/channels/scope.ts')
-        const workspace = groupWorkspace(t.dataDir, 'feishu', 'oc_group')
         for (const [path, content] of Object.entries(files)) {
           await mkdir(dirname(join(workspace, path)), { recursive: true })
           await Bun.write(join(workspace, path), content)
@@ -435,7 +467,10 @@ export async function runAttempt(
             // Inspect persisted entries, not tool arguments or MEMORY.md. Snapshot
             // before the fresh topic starts so its writes cannot earn store credit.
             const store = new MemoryStore(
-              join(chatDirectory(t.dataDir, 'feishu', 'oc_group'), 'memory'),
+              join(
+                scope!.chatDirectory(t.dataDir, 'feishu', 'oc_group'),
+                'memory',
+              ),
             )
             evidence.memoryEntries = store
               .list()

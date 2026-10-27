@@ -1,3 +1,5 @@
+import { dirname, relative, resolve } from 'node:path'
+
 export const scenarioIds = [
   'C1',
   'C2',
@@ -19,6 +21,7 @@ export interface Call {
   name: string
   args: Record<string, unknown>
   phase: number
+  sessionId?: string
   success: boolean
   output?: unknown
 }
@@ -29,6 +32,9 @@ export interface Evidence {
   inputs?: { topicRootId: string; text: string }[]
   /** Actual entries snapshotted after topic 1, before topic 2 can write. */
   memoryEntries?: { name: string; content: string }[]
+  /** Memory custom messages actually injected into the recall topic. */
+  recallMemory?: string[]
+  recallPaths?: { workspace: string; artifactDir: string }
   topics: string[]
   compactions: number[]
   files: Record<string, string>
@@ -102,17 +108,7 @@ export function repetition(answers: string[]): Repetition {
 
 /** Observe Bun's completed runner output, independent of shell spelling or a preceding cd. */
 export function observedBunTest(result: unknown, target: string): boolean {
-  const output =
-    typeof result === 'string'
-      ? result
-      : result &&
-          typeof result === 'object' &&
-          'kind' in result &&
-          result.kind === 'vela-tool-result' &&
-          'preview' in result &&
-          typeof result.preview === 'string'
-        ? result.preview
-        : ''
+  const output = resultText(result)
   const basename = target.split('/').at(-1)!
   return (
     /^bun test v/m.test(output) &&
@@ -125,6 +121,101 @@ export function observedBunTest(result: unknown, target: string): boolean {
         name.endsWith(`/${target}:`)
       )
     })
+  )
+}
+
+/** Current model-facing text, or the unchanged baseline's stored preview. */
+function resultText(result: unknown): string {
+  return typeof result === 'string'
+    ? result
+    : result &&
+        typeof result === 'object' &&
+        'kind' in result &&
+        result.kind === 'vela-tool-result' &&
+        'preview' in result &&
+        typeof result.preview === 'string'
+      ? result.preview
+      : ''
+}
+
+const within = (root: string, path: string) => {
+  const tail = relative(root, path)
+  return (
+    tail === '' ||
+    (tail !== '..' && !tail.startsWith('../') && !tail.startsWith('/'))
+  )
+}
+const memoryPaths = (e: Evidence) =>
+  e.recallPaths
+    ? [
+        resolve(e.recallPaths.workspace, '../memory'),
+        resolve(e.recallPaths.artifactDir, 'data/memory'),
+      ]
+    : []
+
+/** Inspect demonstrated path references, not a shell sandbox or general shell interpreter. */
+function diskPaths(call: Call): string[] {
+  if (call.name === 'bash')
+    return String(call.args.command ?? '')
+      .split(/[\s"'`|;&()<>]+/u)
+      .filter(
+        (part) =>
+          ['.', '..', '.vela-eval', 'sessions'].includes(part) ||
+          part.includes('/'),
+      )
+  return ['read_file', 'grep', 'find', 'list_directory'].includes(call.name) &&
+    typeof call.args.path === 'string'
+    ? [call.args.path]
+    : []
+}
+function contaminated(call: Call, e: Evidence): boolean {
+  return diskPaths(call).some((path) => {
+    const absolute = resolve(e.recallPaths?.workspace ?? '.', path)
+    if (memoryPaths(e).some((root) => within(root, absolute))) return false
+    if (
+      /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|feishu-[^/]*\.jsonl/u.test(path)
+    )
+      return true
+    if (!e.recallPaths || within(e.recallPaths.workspace, absolute))
+      return false
+    return within(dirname(e.recallPaths.artifactDir), absolute)
+  })
+}
+function recallSource(
+  call: Call,
+  e: Evidence,
+  fact: (text: string) => boolean,
+): boolean {
+  if (!call.success) return false
+  const text = resultText(call.output)
+  if (call.name === 'memory')
+    return (
+      ['read', 'search', 'list', 'lint'].includes(String(call.args.action)) &&
+      !/^(?:No memories|File not found:|Read failed:)/u.test(text) &&
+      fact(text)
+    )
+  if (call.name === 'feishu_search_history') {
+    try {
+      const history = text ? JSON.parse(text) : call.output
+      return (
+        Array.isArray(history?.matches) &&
+        history.matches.some(
+          (match: { text?: unknown }) =>
+            typeof match.text === 'string' && fact(match.text),
+        )
+      )
+    } catch {
+      return false
+    }
+  }
+  return (
+    ['read_file', 'grep'].includes(call.name) &&
+    fact(text) &&
+    diskPaths(call).some((path) =>
+      memoryPaths(e).some((root) =>
+        within(root, resolve(e.recallPaths!.workspace, path)),
+      ),
+    )
   )
 }
 
@@ -367,7 +458,18 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
               item.topicRootId === `${id.toLowerCase()}_recall`,
           )
           .at(-1)?.text ?? ''
-      check('recall', fact(final))
+      const recallCalls = e.calls.filter(
+        (call) =>
+          call.phase === 1 &&
+          call.sessionId === `feishu-oc_group-${id.toLowerCase()}_recall`,
+      )
+      check(
+        'recall',
+        fact(final) &&
+          !recallCalls.some((call) => contaminated(call, e)) &&
+          (!!e.recallMemory?.some(fact) ||
+            recallCalls.some((call) => recallSource(call, e, fact))),
+      )
       break
     }
   }
