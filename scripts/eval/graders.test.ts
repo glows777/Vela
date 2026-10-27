@@ -26,7 +26,7 @@ const requirements = [
   'cap spending at 700 credits',
   'assign the owner to Morgan',
 ]
-const good: Record<ScenarioId, Evidence> = {
+const good = {
   C1: evidence({
     answers: [
       'Other tools default to 3000 characters. **bash**: **2,000** lines or **51,200** bytes.',
@@ -123,7 +123,7 @@ const good: Record<ScenarioId, Evidence> = {
       { scope: 'topic', topicRootId: 'g7_recall', text: 'Kestrel.' },
     ],
   }),
-}
+} satisfies Partial<Record<ScenarioId, Evidence>>
 
 for (const [id, input] of Object.entries(good)) {
   test(`${id}: canned passing transcript satisfies every check`, () => {
@@ -134,7 +134,7 @@ for (const [id, input] of Object.entries(good)) {
 }
 
 function fails(
-  id: ScenarioId,
+  id: keyof typeof good,
   check: string,
   mutate: (input: Evidence) => void,
 ) {
@@ -658,7 +658,10 @@ import * as scenarios from './scenarios.ts'
 import { command, runAttempt } from './worker.ts'
 
 const exitRuntime = resolve(import.meta.dir, '../..')
-async function exitAttempt(scenario: 'G6' | 'G7', responses: FauxStep[]) {
+async function exitAttempt(
+  scenario: 'G6' | 'G7' | 'G8',
+  responses: FauxStep[],
+) {
   const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
   const model = createFauxModel({ responses })
   try {
@@ -691,7 +694,12 @@ async function exitAttempt(scenario: 'G6' | 'G7', responses: FauxStep[]) {
       undefined,
       model,
     )
-    return { result, calls: model.calls, pending: model.pending() }
+    const snapshot = await Bun.file(
+      join(root, 'artifacts', 'memory-after-topic-1.json'),
+    )
+      .json()
+      .catch(() => undefined)
+    return { result, calls: model.calls, pending: model.pending(), snapshot }
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -711,7 +719,7 @@ test('exit scenarios use the peeled v0.4.0 baseline while legacy scenarios retai
     '5b976e26706686a2213f514895d05110f50af2a5',
   )
   for (const id of graders.scenarioIds.filter(
-    (id) => id !== 'G6' && id !== 'G7',
+    (id) => id !== 'G6' && id !== 'G7' && id !== 'G8',
   ))
     expect(scenarios.baselineCommit(id)).toBe(scenarios.OLD_COMMIT)
   expect(options([]).runs).toBe(3)
@@ -821,4 +829,204 @@ test('G6 report uses the two-of-three exit bar and keeps errors incomplete', () 
   expect(table(attempts, ['G6'], 3)).toContain('old exit: fail (1/3)')
   attempts[2]!.status = 'error'
   expect(table(attempts, ['G6'], 3)).toContain('old exit: incomplete (1/2)')
+})
+
+test('G8 is selectable, uses v0.4.0, and mentions the durable fact only during the ordinary task', () => {
+  expect(graders.scenarioIds).toContain('G8')
+  expect(options([]).only).toContain('G8')
+  expect(options(['--only', 'G8']).only).toEqual(['G8'])
+  expect(scenarios.baselineCommit('G8')).toBe(
+    '5b976e26706686a2213f514895d05110f50af2a5',
+  )
+  expect(prompts('G8')).toEqual([
+    "Draft a two-line note for the on-call channel saying tonight's deploy is delayed to 22:00. FYI the staging server got renamed to kestrel last week, so use that name in the note.",
+    "What's our staging server called these days?",
+  ])
+  expect(prompts('G8')[0]).not.toMatch(/remember|memory|save|store/i)
+  expect(prompts('G8')[1]).not.toContain('kestrel')
+  expect(fixtures('G8')).toEqual({})
+})
+
+test.each([
+  [true, true],
+  [true, false],
+  [false, true],
+  [false, false],
+])('G8 grades store=%s and recall=%s independently', (store, recall) => {
+  expect(
+    grade(
+      'G8',
+      evidence({
+        memoryEntries: store
+          ? [{ name: 'staging', content: stagingMemory.content }]
+          : [],
+        deliveries: [
+          {
+            scope: 'topic',
+            topicRootId: 'g8_recall',
+            text: recall ? 'Kestrel.' : 'I do not know.',
+          },
+        ],
+      }),
+    ),
+  ).toEqual([
+    { name: 'store', pass: store },
+    { name: 'recall', pass: recall },
+  ])
+})
+
+test('G8 rejects acknowledgements, filenames, tool arguments, and nonfinal or wrong-topic recall', () => {
+  expect(
+    grade(
+      'G8',
+      evidence({
+        memoryEntries: [
+          { name: 'kestrel', content: 'The server name is unknown.' },
+        ],
+        calls: [
+          { name: 'memory', args: stagingMemory, phase: 0, success: true },
+        ],
+        answers: ['Kestrel.'],
+        deliveries: [
+          {
+            scope: 'topic',
+            topicRootId: 'g8_store',
+            text: 'Kestrel deploy at 22:00.',
+          },
+          { scope: 'group', text: 'Kestrel.' },
+          { scope: 'topic', topicRootId: 'g7_recall', text: 'Kestrel.' },
+          { scope: 'topic', topicRootId: 'g8_recall', text: 'Kestrel.' },
+          { scope: 'topic', topicRootId: 'g8_recall', text: 'I do not know.' },
+        ],
+      }),
+    ),
+  ).toEqual([
+    { name: 'store', pass: false },
+    { name: 'recall', pass: false },
+  ])
+  expect(grade('G8', evidence())).toEqual([
+    { name: 'store', pass: false },
+    { name: 'recall', pass: false },
+  ])
+})
+
+test.each(['kestrel-test', 'kestrels'])(
+  'G8 rejects fact substring %s in stored content and recall',
+  (text) => {
+    expect(
+      grade(
+        'G8',
+        evidence({
+          memoryEntries: [{ name: 'staging', content: text }],
+          deliveries: [{ scope: 'topic', topicRootId: 'g8_recall', text }],
+        }),
+      ),
+    ).toEqual([
+      { name: 'store', pass: false },
+      { name: 'recall', pass: false },
+    ])
+  },
+)
+
+test('G8 report counts store and recall separately and excludes errors from valid runs', () => {
+  const attempts: Attempt[] = [1, 2, 3].map((run) => ({
+    scenario: 'G8',
+    arm: 'old',
+    run,
+    attempt: 1,
+    status: run === 2 ? 'pass' : 'fail',
+    checks: [
+      { name: 'store', pass: run < 3 },
+      { name: 'recall', pass: run === 2 },
+    ],
+    usage: emptyUsage(),
+    durationMs: 0,
+    sessionFiles: [],
+    finalChars: 0,
+    toolCalls: 0,
+    artifactDir: '',
+  }))
+  attempts.push(...attempts.map((a) => ({ ...a, arm: 'new' as const })))
+  for (const arm of ['old', 'new'])
+    expect(table(attempts, ['G8'], 3)).toContain(
+      `${arm} store: pass (2/3); recall: fail (1/3)`,
+    )
+  attempts[2]!.status = 'error'
+  expect(table(attempts, ['G8'], 3)).toContain(
+    'old store: incomplete (2/2); recall: incomplete (1/2)',
+  )
+  expect(table(attempts.slice(0, 1), ['G8'], 1)).toContain(
+    'old store: incomplete (1/1); recall: incomplete (0/1)',
+  )
+})
+
+test('G8 worker snapshots actual task memory then recalls in a fresh same-group topic', async () => {
+  const { result, calls, pending, snapshot } = await exitAttempt('G8', [
+    fauxToolCall('memory', stagingMemory),
+    fauxText(
+      'Tonight’s kestrel deploy is delayed to 22:00.\nOn-call, please use the new time.',
+    ),
+    fauxToolCall('memory', {
+      action: 'read',
+      filename: 'project_staging-server.md',
+    }),
+    fauxText('The staging server is called kestrel.'),
+  ])
+  expect(result.status).toBe('pass')
+  expect(result.checks).toEqual([
+    { name: 'store', pass: true },
+    { name: 'recall', pass: true },
+  ])
+  expect(snapshot).toEqual([
+    expect.objectContaining({ content: stagingMemory.content }),
+  ])
+  expect(result.evidence!.memoryEntries).toEqual(snapshot)
+  expect(calls[0]!.lastUserText).toContain(prompts('G8')[0]!)
+  expect(calls[3]!.toolResults[0]!.output).toContain('kestrel')
+  const recall = JSON.stringify(calls[2]!.prompt)
+  expect(recall).toContain(prompts('G8')[1]!)
+  expect(recall).not.toContain('22:00')
+  expect(recall).not.toContain('got renamed')
+  expect(recall).not.toContain('On-call, please use the new time.')
+  expect(result.evidence!.inputs!.map((input) => input.topicRootId)).toEqual([
+    'g8_store',
+    'g8_recall',
+  ])
+  for (const topic of ['g8_store', 'g8_recall'])
+    expect(result.sessionFiles.some((file) => file.includes(topic))).toBe(true)
+  expect(result.evidence!.calls.every((call) => call.success)).toBe(true)
+  expect(pending).toBe(0)
+})
+
+test('G8 worker excludes recall-time memory writes from the topic-1 snapshot', async () => {
+  const { result, snapshot, pending } = await exitAttempt('G8', [
+    fauxText(
+      'Tonight’s kestrel deploy is delayed to 22:00.\nOn-call, please use the new time.',
+    ),
+    fauxToolCall('memory', stagingMemory),
+    fauxText('Kestrel.'),
+  ])
+  expect(result.status).toBe('fail')
+  expect(result.checks).toEqual([
+    { name: 'store', pass: false },
+    { name: 'recall', pass: true },
+  ])
+  expect(snapshot).toEqual([])
+  expect(result.evidence!.memoryEntries).toEqual([])
+  expect(result.evidence!.calls[0]).toMatchObject({
+    name: 'memory',
+    phase: 1,
+    success: true,
+  })
+  expect(pending).toBe(0)
+})
+
+test('G8 worker excludes runtime/model errors from behavioral grades', async () => {
+  const { result } = await exitAttempt('G8', [
+    fauxError('400 offline provider failure'),
+  ])
+  expect(result.status).toBe('error')
+  expect(result.checks).toEqual([])
+  expect(result.usage.main).toBeGreaterThan(0)
+  expect(result.reason).toBeDefined()
 })
