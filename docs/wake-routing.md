@@ -112,9 +112,9 @@ A Feishu POST is a custom-bot text message.
 
 The window is 90 seconds, per issue or pull request number, event name, and route. The first event in a bucket POSTs. A later event in that same bucket for the same route does not. `2026-10-26T15:04:29Z` and `2026-10-26T15:04:30Z` fall in different buckets, so both POST. A cache restore that misses a save just written can POST two different events from one bucket. A repeated `delivery_id` is still a no-op for the receiver.
 
-One job writes the bucket file for that number and event name, with `cancel-in-progress` set to false. Cancelling a job that already started `curl` would send a second id.
+One job writes the bucket file for that number and event name, with `cancel-in-progress` set to false. `queue: max` keeps up to 100 pending runs instead of replacing a queued route mention when a later ordinary comment arrives. GitHub cancels additional arrivals when that queue is full. Cancelling a job that already started `curl` would send a second id.
 
-A missing secret skips that route with a notice. The job fails only when a POST fails after its secret was present. A corrupt bucket file fails the job and sends nothing.
+A missing secret skips that route with a notice. The job fails when a POST fails after its secret was present. Feishu must also acknowledge the message with JSON `code: 0`; HTTP success alone does not record delivery. A rejected or invalid response fails the step without saving the bucket. A corrupt bucket file fails the job and sends nothing.
 
 ## Try the filter locally
 
@@ -124,4 +124,4 @@ The CLI prints a plan. It does not POST.
 WAKE_EVENT_NAME=issues WAKE_EVENT_PATH=./event.json node .github/wake/decide.mjs
 ```
 
-`test/unit/wake-route.test.ts` locks the plan.
+`test/unit/wake-route.test.ts` locks the plan and models the pending-comment queue using GitHub's documented semantics. `bun test test/unit/wake-route.test.ts test/unit/wake-post.test.ts` also runs the actual workflow POST step against local fake HTTP endpoints, checking Feishu responses, saved buckets, missing secrets, and Grok route bodies. It sends no real provider messages.

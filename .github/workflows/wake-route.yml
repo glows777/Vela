@@ -20,6 +20,7 @@ permissions:
 concurrency:
   group: wake-${{ github.repository_id }}-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event_name }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   wake:
@@ -90,7 +91,12 @@ jobs:
               curl --fail-with-body --silent --show-error --max-time 20 \
                 -H "Content-Type: application/json" \
                 --data-binary @"$RUNNER_TEMP/wake-body.json" \
+                --output "$RUNNER_TEMP/feishu-response.json" \
                 "${WAKE_FEISHU_VELA_WEBHOOK_URL}"
+              if ! jq -e '.code == 0' "$RUNNER_TEMP/feishu-response.json" > /dev/null; then
+                echo "::error::Feishu wake failed: expected response code 0" >&2
+                exit 1
+              fi
             else
               echo "unknown sink ${sink}" >&2
               exit 1
