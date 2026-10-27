@@ -109,6 +109,55 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   )
 })
 
+test('a group work request becomes one topic with a title inside the prompt budget', async () => {
+  const title = 'Prepare the launch brief'
+  const brief =
+    'Alice wants a launch brief. Requirements: launch on 12 November; cap spending at 700 credits; assign the owner to Morgan.'
+  const request =
+    'Prepare a launch brief with these requirements: launch on 12 November; cap spending at 700 credits; assign the owner to Morgan.'
+  const restated =
+    'Launch brief: launch on 12 November, cap spending at 700 credits, owner Morgan.'
+  const respond = (req: FauxRequest) => {
+    if (!req.tools.includes('feishu_start_topic'))
+      return fauxText('brief ready')
+    // Without a title budget the eval's model answered the work request in the group.
+    if (!req.system.includes('at most 40 characters')) return fauxText(restated)
+    return req.toolResults.length
+      ? fauxText('handed off')
+      : fauxToolCall('feishu_start_topic', { title, brief })
+  }
+  const { fake, t, start } = setup(Array(4).fill(respond))
+  await start()
+  try {
+    fake.deliver(
+      feishuEvent({
+        message_id: 'work',
+        content: JSON.stringify({ text: request }),
+      }),
+    )
+    await until(() => fake.topics.length === 1 || fake.sent.length > 0)
+    expect(fake.sent).toEqual([])
+    expect(fake.topics).toEqual([{ messageId: 'work', title }])
+    const posted = fake.topics[0]!.title
+    expect(Array.from(posted).length).toBeLessThanOrEqual(40)
+    expect(posted).not.toMatch(/[\r\n]/)
+    expect(t.model.calls[0]?.system).toContain(
+      'must not be answered in the group',
+    )
+    const description =
+      t.internals.registry.get('feishu_start_topic')?.description ?? ''
+    for (const phrase of [
+      'at most 40 characters',
+      'no requirements, method or status',
+    ]) {
+      expect(t.model.calls[0]?.system).toContain(phrase)
+      expect(description).toContain(phrase)
+    }
+  } finally {
+    await t.internals.gateway.stopAll()
+  }
+})
+
 test('starting a topic returns its receipt and frees the channel while its task is still running', async () => {
   const respond = (req: FauxRequest) => {
     if (!req.tools.includes('feishu_start_topic'))
