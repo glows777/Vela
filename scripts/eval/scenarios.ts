@@ -1,6 +1,10 @@
 import type { ScenarioId } from './graders.ts'
 
 export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
+// Peeled v0.4.0 tag (the tag object itself is not the runtime commit).
+const EXIT_BASELINE_COMMIT = '5b976e26706686a2213f514895d05110f50af2a5'
+export const baselineCommit = (id: ScenarioId) =>
+  id === 'G6' || id === 'G7' ? EXIT_BASELINE_COMMIT : OLD_COMMIT
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
   version: 'user-ballast-v3',
@@ -65,10 +69,24 @@ export function prompts(id: ScenarioId, url = ''): string[] {
       ]
     case 'G5':
       return ['Thanks']
+    case 'G6':
+      return [
+        'Topic B: prepare the release confirmation using the release verification code that topic A (root ID g6_a) will supply. You do not have the code yet. Wait for topic A, then include the code in your final confirmation. Do not look up the code yourself.',
+        'Topic A: read task/handoff.txt to find the release verification code, then hand the fact to the already-started topic B (root ID g6_b) in this group so it can finish its release confirmation.',
+      ]
+    case 'G7':
+      return [
+        'The staging server is called kestrel; remember it.',
+        "What's the staging server called?",
+      ]
   }
 }
 
 export function fixtures(id: ScenarioId): Record<string, string> {
+  if (id === 'G6')
+    return {
+      'task/handoff.txt': 'The release verification code is ORBIT-73.\n',
+    }
   if (id === 'C2')
     return {
       'task/limits.ts': 'export const DEFAULT_BATCH_SIZE = 20\n',

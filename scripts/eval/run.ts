@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type ScenarioId, scenarioIds } from './graders.ts'
 import { type Attempt, emptyUsage, pricing, table } from './report.ts'
-import { compactionFixture, OLD_COMMIT } from './scenarios.ts'
+import { baselineCommit, compactionFixture, OLD_COMMIT } from './scenarios.ts'
 
 const help =
   'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>]'
@@ -126,7 +126,11 @@ async function main() {
   const git = (...args: string[]) => checked(config.repo, ['git', ...args])
   const sha = await git('rev-parse', 'HEAD')
   const dirty = !!(await git('status', '--porcelain'))
-  await git('cat-file', '-e', `${OLD_COMMIT}^{commit}`)
+  const baselineCommits = Object.fromEntries(
+    config.only.map((id) => [id, baselineCommit(id)]),
+  )
+  for (const commit of new Set([OLD_COMMIT, ...Object.values(baselineCommits)]))
+    await git('cat-file', '-e', `${commit}^{commit}`)
   if (!existsSync(join(config.repo, 'node_modules')))
     throw new Error(
       'Run bun install --frozen-lockfile in the selected checkout first',
@@ -143,7 +147,7 @@ async function main() {
     `${new Date().toISOString().replace(/[:.]/g, '-')}-${sha.slice(0, 8)}`,
   )
   const scratch = await mkdtemp(join(tmpdir(), 'vela-eval-'))
-  const oldRuntime = join(scratch, 'old-runtime')
+  const oldRuntimes = new Map<string, string>()
   const attempts: Attempt[] = []
   let remaining = config.only.length * config.runs * 2
   let capped = false
@@ -156,6 +160,7 @@ async function main() {
         {
           version: 1,
           oldCommit: OLD_COMMIT,
+          baselineCommits,
           newCommit: sha,
           dirty,
           options: config,
@@ -174,14 +179,18 @@ async function main() {
   await mkdir(root, { recursive: true })
   await save()
   try {
-    await git('worktree', 'add', '--detach', oldRuntime, OLD_COMMIT)
-    // Install only in the owned baseline worktree, using that revision's frozen lock.
-    await checked(oldRuntime, [
-      process.execPath,
-      '--no-env-file',
-      'install',
-      '--frozen-lockfile',
-    ])
+    for (const commit of new Set(Object.values(baselineCommits))) {
+      const runtime = join(scratch, `old-runtime-${commit.slice(0, 8)}`)
+      await git('worktree', 'add', '--detach', runtime, commit)
+      oldRuntimes.set(commit, runtime)
+      // Install only in owned baseline worktrees, using each revision's frozen lock.
+      await checked(runtime, [
+        process.execPath,
+        '--no-env-file',
+        'install',
+        '--frozen-lockfile',
+      ])
+    }
     schedule: for (const scenario of config.only)
       for (let run = 1; run <= config.runs; run++)
         for (const arm of ['old', 'new'] as const) {
@@ -215,7 +224,10 @@ async function main() {
               `${scenario}-${arm}-${run}-${attempt}`,
             )
             const cwd = join(scratch, `${scenario}-${arm}-${run}-${attempt}`)
-            const runtime = arm === 'old' ? oldRuntime : config.repo
+            const runtime =
+              arm === 'old'
+                ? oldRuntimes.get(baselineCommit(scenario))!
+                : config.repo
             const env = await workerEnvironment(artifactDir, scratch)
             await git('worktree', 'add', '--detach', cwd, OLD_COMMIT)
             try {
@@ -292,8 +304,9 @@ async function main() {
         }
   } finally {
     // Only owned temporary worktrees are removed. Artifacts survive all outcomes.
-    if (existsSync(oldRuntime))
-      await git('worktree', 'remove', '--force', oldRuntime)
+    for (const runtime of oldRuntimes.values())
+      if (existsSync(runtime))
+        await git('worktree', 'remove', '--force', runtime)
     await rm(scratch, { recursive: true, force: true })
     await save()
     console.log(table(attempts, config.only, config.runs))

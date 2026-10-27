@@ -24,18 +24,21 @@ Options:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--only C1,G2` | all eleven | Comma-separated scenario IDs |
+| `--only C1,G2` | all thirteen | Comma-separated scenario IDs |
 | `--runs 3` | 3 | Repetitions per arm |
 | `--thinking max` | max | Vela thinking level; `high` is used for the additional CLI round |
 | `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
 | `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm |
 
 Install the selected checkout's dependencies first. Git, Bun, ripgrep and fd must
-be on PATH. The runner installs the baseline's frozen dependencies in an owned
-temporary worktree. Both arms get fresh task worktrees at
+be on PATH. The runner installs each selected baseline's frozen dependencies in
+an owned temporary worktree. C1–C6 and G1–G5 retain `OLD_COMMIT`;
+G6/G7 use the exact peeled `v0.4.0` commit
+`5b976e26706686a2213f514895d05110f50af2a5`. `results.json` records the per-scenario
+`baselineCommits` map as well as the legacy `oldCommit`. Both arms get fresh task worktrees at
 `7fac1dfd6b06e003a990d17867c10090b6f8efc2`; production modules and helpers come
 from each arm's revision. Baseline G2 is skipped because its `task` API cannot
-represent the current `title`/`brief` checks. A default round has 63 executable
+represent the current `title`/`brief` checks. A default round has 75 executable
 slots and three skips. Worktrees provide context isolation, not a security sandbox.
 
 ## Results and cost
@@ -119,6 +122,30 @@ diagnostic-helper source. This investigation does not change any grade threshold
 G1–G5 fake only Feishu transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
 
+G6/G7 also use `fakeFeishu()` with the real extension, gateway, tools and separate
+topic sessions in one group. G6 starts B (`g6_b`) needing a code, then asks A
+(`g6_a`) to read `task/handoff.txt` in the actual group workspace and hand the
+fact to B. Neither task prompt contains the code. Only B's last delivered answer
+can satisfy the fact check; A/group replies do not count. The transport input
+trace must contain just those two initial tasks, in order. No human relay or
+synthetic wake-up is injected. Unsupported hand-off behavior can validly fail.
+
+G7 tells topic 1 (`g7_store`) the staging server is called kestrel and asks it to
+remember. After its run ends, the worker snapshots actual group memory entries
+(not the index, acknowledgement or tool arguments) to
+`memory-after-topic-1.json`. A fresh topic (`g7_recall`) then asks for the server
+name without importing topic 1's conversation. `store` checks entry content in
+that snapshot; `recall` checks only topic 2's last delivered answer. A memory
+written during recall cannot earn store credit. The two checks are reported
+separately, including their own repetition totals.
+
+The G6 exit bar and each G7 component require two passes in three valid runs per
+arm. Notes say `incomplete` when three valid runs are unavailable (including
+one-run pilots or errors); errors are never behavioral failures. The main G7
+pass/valid columns still count attempts satisfying both predicates; the separate
+store/recall notes are the exit assessments. Claude owns the real DeepSeek
+baseline runs for [#219](https://github.com/glows777/Vela/issues/219).
+
 Overlap means a whitespace-normalized shared contiguous span of at least 30 Unicode
 code points. C4 counts the union of positions covered by these spans against all
 earlier answers, once per position, and divides by that answer's trimmed Unicode
@@ -144,10 +171,13 @@ flushed on cleanup. A worker has an additional fifteen-second shutdown allowance
 Incomplete workers retain usage checkpoints and are reported as errors, not fails.
 
 ```sh
-bun test scripts/eval/graders.test.ts
+bun test scripts/eval
 bun run typecheck
 bun run lint
 ```
 
 Offline faux verification covers routing/tools/artifacts and C5 calibration, not
 real-model behavior, provider compatibility or billing.
+The exit tests exercise the real worker with injected scripted models: readable
+group fixtures, isolated persisted topic sessions, memory snapshots, successful
+and unsuccessful independent grades, and model errors excluded from grading.

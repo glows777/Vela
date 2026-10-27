@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
@@ -292,6 +292,12 @@ export async function runAttempt(
     }
   }
   const files = fixtures(config.scenario)
+  const exitScenario = config.scenario === 'G6' || config.scenario === 'G7'
+  const topicRoots =
+    config.scenario === 'G6' ? ['g6_b', 'g6_a'] : ['g7_store', 'g7_recall']
+  const { channelSessionId } = await load<
+    typeof import('../../src/channels/session-id.ts')
+  >(config.runtime, 'src/channels/session-id.ts')
   const bun = (...args: string[]) =>
     command(config.cwd, [process.execPath, '--no-env-file', ...args])
   const readTask = (path: string) =>
@@ -305,7 +311,7 @@ export async function runAttempt(
     providers,
     thinkingLevel: config.thinking as 'max',
     extensions,
-    files,
+    files: config.scenario === 'G6' ? {} : files,
     // Restore normal backoff: the helper otherwise defaults retryBaseMs to zero. Keep product retries.
     limits: { retryBaseMs: 500 },
     session:
@@ -321,6 +327,16 @@ export async function runAttempt(
     if (event.type === 'agent_start' && sessionId.startsWith('feishu-'))
       channelStarted = true
     if (event.type === 'channel_error') channelError = event.error
+    if (exitScenario && event.type === 'channel_reply') {
+      const topicRootId = topicRoots.find(
+        (root) => channelSessionId('feishu', 'oc_group', root) === sessionId,
+      )
+      evidence.deliveries.push({
+        scope: topicRootId ? 'topic' : 'group',
+        topicRootId,
+        text: event.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
+      })
+    }
     if (event.type === 'compaction_end' && event.result && !event.aborted)
       evidence.compactions.push(phase)
     if (event.type === 'tool_execution_start') {
@@ -356,7 +372,7 @@ export async function runAttempt(
   )
   try {
     // The committed fixtures form the diff baseline, not part of the model's change.
-    if (Object.keys(files).length) {
+    if (config.scenario !== 'G6' && Object.keys(files).length) {
       await command(config.cwd, ['git', 'add', '--', ...Object.keys(files)])
       const committed = await command(config.cwd, [
         'git',
@@ -377,40 +393,92 @@ export async function runAttempt(
     await t.vela.ready()
     if (fake && eventFactory) {
       await t.vela.startChannels()
-      fake.deliver(
-        eventFactory({
-          message_id: 'trigger',
-          create_time: '3000',
-          mentions:
-            config.scenario === 'G3'
-              ? []
-              : [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
-          content: JSON.stringify({
-            text: `${config.scenario === 'G3' ? '' : '@_user_1 '}${prompts(config.scenario)[0]}`,
+      if (exitScenario) {
+        const { groupWorkspace, chatDirectory } = await load<
+          typeof import('../../src/channels/scope.ts')
+        >(config.runtime, 'src/channels/scope.ts')
+        const workspace = groupWorkspace(t.dataDir, 'feishu', 'oc_group')
+        for (const [path, content] of Object.entries(files)) {
+          await mkdir(dirname(join(workspace, path)), { recursive: true })
+          await Bun.write(join(workspace, path), content)
+        }
+        evidence.inputs = []
+        for (const [index, text] of prompts(config.scenario).entries()) {
+          phase = index
+          channelStarted = false
+          const topicRootId = topicRoots[index]!
+          evidence.inputs.push({ topicRootId, text })
+          fake.deliver(
+            eventFactory({
+              message_id: `trigger_${topicRootId}`,
+              root_id: topicRootId,
+              thread_id: `thread_${topicRootId}`,
+              create_time: String(3000 + index * 1000),
+              content: JSON.stringify({ text: `@_user_1 ${text}` }),
+            }),
+          )
+          while (!channelStarted && !channelError) await Bun.sleep(1)
+          const gateway = velaInternals(t.vela).gateway as unknown as {
+            queues: Map<string, Promise<void>>
+          }
+          while (gateway.queues.size && !channelError)
+            await Promise.all([...gateway.queues.values()])
+          if (channelError) throw channelError
+          if (config.scenario === 'G7' && index === 0) {
+            const { MemoryStore } = await load<
+              typeof import('../../src/extensions/memory/store.ts')
+            >(config.runtime, 'src/extensions/memory/store.ts')
+            // Inspect persisted entries, not tool arguments or MEMORY.md. Snapshot
+            // before the fresh topic starts so its writes cannot earn store credit.
+            const store = new MemoryStore(
+              join(chatDirectory(t.dataDir, 'feishu', 'oc_group'), 'memory'),
+            )
+            evidence.memoryEntries = store
+              .list()
+              .map(({ name, content }) => ({ name, content }))
+            await Bun.write(
+              join(config.artifactDir, 'memory-after-topic-1.json'),
+              JSON.stringify(evidence.memoryEntries, null, 2),
+            )
+          }
+        }
+        evidence.answers = evidence.deliveries.map((item) => item.text)
+      } else {
+        fake.deliver(
+          eventFactory({
+            message_id: 'trigger',
+            create_time: '3000',
+            mentions:
+              config.scenario === 'G3'
+                ? []
+                : [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+            content: JSON.stringify({
+              text: `${config.scenario === 'G3' ? '' : '@_user_1 '}${prompts(config.scenario)[0]}`,
+            }),
+            ...(['G4', 'G5'].includes(config.scenario)
+              ? { root_id: 'root', thread_id: 'thread' }
+              : {}),
           }),
-          ...(['G4', 'G5'].includes(config.scenario)
-            ? { root_id: 'root', thread_id: 'thread' }
-            : {}),
-        }),
-      )
-      while (!channelStarted && !channelError) await Bun.sleep(1)
-      // Both revisions expose the same gateway queue. Drain handoff-created queues too.
-      const gateway = velaInternals(t.vela).gateway as unknown as {
-        queues: Map<string, Promise<void>>
+        )
+        while (!channelStarted && !channelError) await Bun.sleep(1)
+        // Both revisions expose the same gateway queue. Drain handoff-created queues too.
+        const gateway = velaInternals(t.vela).gateway as unknown as {
+          queues: Map<string, Promise<void>>
+        }
+        while (gateway.queues.size && !channelError)
+          await Promise.all([...gateway.queues.values()])
+        if (channelError) throw channelError
+        evidence.topics = fake.topics.map((topic) => topic.title)
+        evidence.deliveries = fake.sent.map((item) => ({
+          scope:
+            item.messageId === 'trigger' &&
+            !['G4', 'G5'].includes(config.scenario)
+              ? 'group'
+              : 'topic',
+          text: item.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
+        }))
+        evidence.answers = evidence.deliveries.map((item) => item.text)
       }
-      while (gateway.queues.size && !channelError)
-        await Promise.all([...gateway.queues.values()])
-      if (channelError) throw channelError
-      evidence.topics = fake.topics.map((topic) => topic.title)
-      evidence.deliveries = fake.sent.map((item) => ({
-        scope:
-          item.messageId === 'trigger' &&
-          !['G4', 'G5'].includes(config.scenario)
-            ? 'group'
-            : 'topic',
-        text: item.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
-      }))
-      evidence.answers = evidence.deliveries.map((item) => item.text)
     } else {
       for (const [index, prompt] of prompts(
         config.scenario,

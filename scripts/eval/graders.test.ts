@@ -108,6 +108,21 @@ const good: Record<ScenarioId, Evidence> = {
     previousReport: report,
     deliveries: [{ scope: 'topic', text: 'You’re welcome.' }],
   }),
+  G6: evidence({
+    inputs: [
+      { topicRootId: 'g6_b', text: 'Wait for A.' },
+      { topicRootId: 'g6_a', text: 'Read the fixture.' },
+    ],
+    deliveries: [{ scope: 'topic', topicRootId: 'g6_b', text: 'ORBIT-73' }],
+  }),
+  G7: evidence({
+    memoryEntries: [
+      { name: 'staging', content: 'The staging server is called kestrel.' },
+    ],
+    deliveries: [
+      { scope: 'topic', topicRootId: 'g7_recall', text: 'Kestrel.' },
+    ],
+  }),
 }
 
 for (const [id, input] of Object.entries(good)) {
@@ -477,4 +492,333 @@ test('C5: ballast is admitted in staged user messages, not paginated notes', () 
   expect(staged[4]).toBe(
     'Continue and finish the remaining steps in order. Do not recreate completed files.',
   )
+})
+
+// Issue #219: these cases were added and run before the exit graders/harness.
+const exitEvidence = () =>
+  evidence({
+    inputs: [
+      {
+        topicRootId: 'g6_b',
+        text: 'Wait for topic A to supply the release code.',
+      },
+      {
+        topicRootId: 'g6_a',
+        text: 'Read the fixture and hand its code to topic B.',
+      },
+    ],
+    deliveries: [
+      { scope: 'topic', topicRootId: 'g6_b', text: 'The code is ORBIT-73.' },
+    ],
+  })
+test('G6: a B answer with the fixture fact and only the two initial tasks passes', () => {
+  expect(grade('G6', exitEvidence())).toEqual([
+    { name: 'B final fact', pass: true },
+    { name: 'no human relay', pass: true },
+  ])
+})
+test.each(['g6_a', undefined])(
+  'G6: fact delivered outside B (%s) does not pass',
+  (topicRootId) => {
+    const e = exitEvidence()
+    e.deliveries[0]!.topicRootId = topicRootId
+    expect(grade('G6', e).find((c) => c.name === 'B final fact')?.pass).toBe(
+      false,
+    )
+  },
+)
+test.each(['I still need the code.', 'ORBIT-730'])(
+  'G6: only the final B answer with the exact fact counts: %s',
+  (text) => {
+    const e = exitEvidence()
+    e.deliveries.push({ scope: 'topic', topicRootId: 'g6_b', text })
+    expect(grade('G6', e).find((c) => c.name === 'B final fact')?.pass).toBe(
+      false,
+    )
+  },
+)
+test('G6: a human relay invalidates an otherwise correct B answer', () => {
+  const e = exitEvidence()
+  e.inputs!.push({ topicRootId: 'g6_b', text: 'ORBIT-73' })
+  expect(grade('G6', e).find((c) => c.name === 'no human relay')?.pass).toBe(
+    false,
+  )
+})
+test('G6: reversed topic startup is rejected', () => {
+  const e = exitEvidence()
+  e.inputs!.reverse()
+  expect(grade('G6', e).find((c) => c.name === 'no human relay')?.pass).toBe(
+    false,
+  )
+})
+test.each([true, false])(
+  'G7: store and recall are graded independently (stored=%s)',
+  (stored) => {
+    const e = evidence({
+      memoryEntries: stored
+        ? [
+            {
+              name: 'staging',
+              content: 'The staging server is called kestrel.',
+            },
+          ]
+        : [],
+      deliveries: [
+        {
+          scope: 'topic',
+          topicRootId: 'g7_recall',
+          text: stored ? 'I do not know.' : 'Kestrel.',
+        },
+      ],
+    })
+    expect(grade('G7', e)).toEqual([
+      { name: 'store', pass: stored },
+      { name: 'recall', pass: !stored },
+    ])
+  },
+)
+test('G7: a real entry and a fresh-topic answer satisfy both predicates', () => {
+  const e = evidence({
+    memoryEntries: [
+      { name: 'staging', content: 'The staging server is called kestrel.' },
+    ],
+    deliveries: [
+      { scope: 'topic', topicRootId: 'g7_recall', text: 'Kestrel.' },
+    ],
+  })
+  expect(grade('G7', e)).toEqual([
+    { name: 'store', pass: true },
+    { name: 'recall', pass: true },
+  ])
+})
+test('G7: topic 1, the index/name, and fact substrings cannot satisfy the predicates', () => {
+  const e = evidence({
+    memoryEntries: [
+      { name: 'kestrel', content: 'The server name is unknown.' },
+    ],
+    deliveries: [
+      { scope: 'topic', topicRootId: 'g7_store', text: 'Remembered kestrel.' },
+      { scope: 'topic', topicRootId: 'g7_recall', text: 'kestrel-test' },
+    ],
+  })
+  expect(grade('G7', e)).toEqual([
+    { name: 'store', pass: false },
+    { name: 'recall', pass: false },
+  ])
+})
+test('exit report requires three valid runs and reports G7 components separately', () => {
+  const make = (
+    run: number,
+    store: boolean,
+    recall: boolean,
+    status: Attempt['status'] = 'fail',
+  ): Attempt => ({
+    scenario: 'G7',
+    arm: 'old',
+    run,
+    attempt: 1,
+    status,
+    checks: [
+      { name: 'store', pass: store },
+      { name: 'recall', pass: recall },
+    ],
+    usage: emptyUsage(),
+    durationMs: 0,
+    sessionFiles: [],
+    finalChars: 0,
+    toolCalls: 0,
+    artifactDir: '',
+  })
+  const attempts = [
+    make(1, true, false),
+    make(2, true, true, 'pass'),
+    make(3, false, false),
+  ]
+  expect(table(attempts, ['G7'], 3)).toContain(
+    'old store: pass (2/3); recall: fail (1/3)',
+  )
+  attempts[2]!.status = 'error'
+  expect(table(attempts, ['G7'], 3)).toContain(
+    'old store: incomplete (2/2); recall: incomplete (1/2)',
+  )
+})
+
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import {
+  createFauxModel,
+  type FauxStep,
+  fauxError,
+  fauxText,
+  fauxToolCall,
+} from '../../src/testing/faux.ts'
+import { options } from './run.ts'
+import * as scenarios from './scenarios.ts'
+import { command, runAttempt } from './worker.ts'
+
+const exitRuntime = resolve(import.meta.dir, '../..')
+async function exitAttempt(scenario: 'G6' | 'G7', responses: FauxStep[]) {
+  const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
+  const model = createFauxModel({ responses })
+  try {
+    const cwd = join(root, 'work')
+    await command(root, ['git', 'init', '-q', cwd])
+    await command(cwd, [
+      'git',
+      '-c',
+      'user.name=Eval test',
+      '-c',
+      'user.email=eval@localhost',
+      '-c',
+      'commit.gpgSign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'fixture',
+    ])
+    const result = await runAttempt(
+      {
+        runtime: exitRuntime,
+        cwd,
+        artifactDir: join(root, 'artifacts'),
+        scenario,
+        arm: 'new',
+        run: 1,
+        attempt: 1,
+        thinking: 'off',
+      },
+      undefined,
+      model,
+    )
+    return { result, calls: model.calls, pending: model.pending() }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+const stagingMemory = {
+  action: 'save',
+  name: 'staging-server',
+  description: 'The staging server name',
+  type: 'project',
+  content: 'The staging server is called kestrel.',
+}
+test('exit scenarios use the peeled v0.4.0 baseline while legacy scenarios retain OLD_COMMIT', () => {
+  expect(scenarios.baselineCommit('G6')).toBe(
+    '5b976e26706686a2213f514895d05110f50af2a5',
+  )
+  expect(scenarios.baselineCommit('G7')).toBe(
+    '5b976e26706686a2213f514895d05110f50af2a5',
+  )
+  for (const id of graders.scenarioIds.filter(
+    (id) => id !== 'G6' && id !== 'G7',
+  ))
+    expect(scenarios.baselineCommit(id)).toBe(scenarios.OLD_COMMIT)
+  expect(options([]).runs).toBe(3)
+  expect(options(['--only', 'G6,G7']).only).toEqual(['G6', 'G7'])
+})
+test('G6 worker starts B first, then A reads the real group fixture; no unsupported handoff is fabricated', async () => {
+  const { result, calls, pending } = await exitAttempt('G6', [
+    fauxText('Waiting for topic A.'),
+    fauxToolCall('read_file', { path: 'task/handoff.txt' }),
+    fauxText('The code is ORBIT-73, but I cannot hand it to B.'),
+  ])
+  expect(result.status).toBe('fail')
+  expect(result.checks).toEqual([
+    { name: 'B final fact', pass: false },
+    { name: 'no human relay', pass: true },
+  ])
+  expect(calls).toHaveLength(3)
+  expect(calls[0]!.lastUserText).toContain('topic A')
+  expect(calls[0]!.lastUserText).not.toContain('ORBIT-73')
+  expect(calls[1]!.lastUserText).toContain('g6_b')
+  expect(calls[1]!.lastUserText).not.toContain('ORBIT-73')
+  expect(calls[2]!.toolResults[0]!.output).toContain('ORBIT-73')
+  expect(result.evidence!.calls[0]!.success).toBe(true)
+  expect(result.evidence!.inputs!.map((input) => input.topicRootId)).toEqual([
+    'g6_b',
+    'g6_a',
+  ])
+  expect(result.sessionFiles.some((file) => file.includes('g6_b'))).toBe(true)
+  expect(result.sessionFiles.some((file) => file.includes('g6_a'))).toBe(true)
+  expect(pending).toBe(0)
+})
+test('G7 worker snapshots real group memory after topic 1 and recalls in an isolated fresh topic', async () => {
+  const { result, calls, pending } = await exitAttempt('G7', [
+    fauxToolCall('memory', stagingMemory),
+    fauxText('Remembered.'),
+    fauxToolCall('memory', {
+      action: 'read',
+      filename: 'project_staging-server.md',
+    }),
+    fauxText('The staging server is called kestrel.'),
+  ])
+  expect(result.status).toBe('pass')
+  expect(result.checks).toEqual([
+    { name: 'store', pass: true },
+    { name: 'recall', pass: true },
+  ])
+  expect(result.evidence!.memoryEntries).toEqual([
+    expect.objectContaining({ content: stagingMemory.content }),
+  ])
+  expect(calls[2]!.lastUserText).toContain('staging-server')
+  expect(JSON.stringify(calls[2]!.prompt)).not.toContain('remember it')
+  expect(calls[3]!.toolResults[0]!.output).toContain('kestrel')
+  expect(result.evidence!.inputs!.map((input) => input.topicRootId)).toEqual([
+    'g7_store',
+    'g7_recall',
+  ])
+  expect(result.sessionFiles.some((file) => file.includes('g7_store'))).toBe(
+    true,
+  )
+  expect(result.sessionFiles.some((file) => file.includes('g7_recall'))).toBe(
+    true,
+  )
+  expect(pending).toBe(0)
+})
+test('G7 worker does not credit a memory written only during recall to topic 1', async () => {
+  const { result } = await exitAttempt('G7', [
+    fauxText('Remembered kestrel.'),
+    fauxToolCall('memory', stagingMemory),
+    fauxText('Kestrel.'),
+  ])
+  expect(result.status).toBe('fail')
+  expect(result.checks).toEqual([
+    { name: 'store', pass: false },
+    { name: 'recall', pass: true },
+  ])
+})
+test.each(['G6', 'G7'] as const)(
+  '%s worker reports runtime/model breakage as error, without behavioral grades',
+  async (scenario) => {
+    const { result } = await exitAttempt(scenario, [
+      fauxError('400 offline provider failure'),
+    ])
+    expect(result.status).toBe('error')
+    expect(result.checks).toEqual([])
+    expect(result.usage.main).toBeGreaterThan(0)
+    expect(result.reason).toBeDefined()
+  },
+)
+
+test('G6 report uses the two-of-three exit bar and keeps errors incomplete', () => {
+  const attempts: Attempt[] = [1, 2, 3].map((run) => ({
+    scenario: 'G6',
+    arm: 'old',
+    run,
+    attempt: 1,
+    status: run < 3 ? 'pass' : 'fail',
+    checks: [],
+    usage: emptyUsage(),
+    durationMs: 0,
+    sessionFiles: [],
+    finalChars: 0,
+    toolCalls: 0,
+    artifactDir: '',
+  }))
+  expect(table(attempts, ['G6'], 3)).toContain('old exit: pass (2/3)')
+  attempts[1]!.status = 'fail'
+  expect(table(attempts, ['G6'], 3)).toContain('old exit: fail (1/3)')
+  attempts[2]!.status = 'error'
+  expect(table(attempts, ['G6'], 3)).toContain('old exit: incomplete (1/2)')
 })
