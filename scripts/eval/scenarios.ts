@@ -4,7 +4,7 @@ export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
 // Peeled v0.4.0 tag (the tag object itself is not the runtime commit).
 const EXIT_BASELINE_COMMIT = '5b976e26706686a2213f514895d05110f50af2a5'
 export const baselineCommit = (id: ScenarioId) =>
-  id === 'G6' || id === 'G7' ? EXIT_BASELINE_COMMIT : OLD_COMMIT
+  id === 'G6' || id === 'G7' || id === 'G8' ? EXIT_BASELINE_COMMIT : OLD_COMMIT
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
   version: 'user-ballast-v3',
@@ -78,6 +78,11 @@ export function prompts(id: ScenarioId, url = ''): string[] {
       return [
         'The staging server is called kestrel; remember it.',
         "What's the staging server called?",
+      ]
+    case 'G8':
+      return [
+        "Draft a two-line note for the on-call channel saying tonight's deploy is delayed to 22:00. FYI the staging server got renamed to kestrel last week, so use that name in the note.",
+        "What's our staging server called these days?",
       ]
   }
 }

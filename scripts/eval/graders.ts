@@ -12,6 +12,7 @@ export const scenarioIds = [
   'G5',
   'G6',
   'G7',
+  'G8',
 ] as const
 export type ScenarioId = (typeof scenarioIds)[number]
 export interface Call {
@@ -354,14 +355,16 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       break
     }
-    case 'G7': {
+    case 'G7':
+    case 'G8': {
       const fact = (text: string) => /(?<![\w-])kestrel(?![\w-])/i.test(text)
       check('store', !!e.memoryEntries?.some((entry) => fact(entry.content)))
       const final =
         e.deliveries
           .filter(
             (item) =>
-              item.scope === 'topic' && item.topicRootId === 'g7_recall',
+              item.scope === 'topic' &&
+              item.topicRootId === `${id.toLowerCase()}_recall`,
           )
           .at(-1)?.text ?? ''
       check('recall', fact(final))
