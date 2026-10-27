@@ -1,6 +1,6 @@
 {
   "name": "@glows777/vela",
-  "version": "0.3.0",
+  "version": "0.4.0-rc.1",
   "description": "An embeddable TypeScript agent SDK and terminal agent, with pi-style extensions",
   "license": "MIT",
   "repository": {
