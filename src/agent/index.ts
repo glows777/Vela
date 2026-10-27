@@ -17,6 +17,7 @@ import { isContextOverflow } from './overflow.ts'
 import { calculateDelay, isRetryable, sleep } from './retry.ts'
 import {
   ABORTED_RESULT,
+  CONTENT_FILTER_ERROR,
   errorMessageOf,
   failedToolCallResult,
   StepMessage,
@@ -446,6 +447,18 @@ export const agentLoop = async ({
         const toolMessage = step.toolMessage()
         if (toolMessage) responseMessages.push(toolMessage)
       }
+      if (
+        finalStep.finishReason === 'content-filter' &&
+        step.toolCalls.length
+      ) {
+        // A blocked response never runs tools: answer each call with an error so the history stays valid
+        for (const call of step.toolCalls)
+          step.result(call, {
+            error: new Error(failedToolCallResult(CONTENT_FILTER_ERROR)),
+          })
+        const toolMessage = step.toolMessage()
+        if (toolMessage) responseMessages.push(toolMessage)
+      }
       // The assistant message was announced while it streamed
       for (const message of responseMessages)
         add(message, message.role !== 'assistant')
@@ -455,6 +468,12 @@ export const agentLoop = async ({
       ) ?? { role: 'assistant', content: [] }
       const toolResults = toolResultsOf(responseMessages)
       const needToolCall = step.toolCalls.length > 0
+
+      if (finalStep.finishReason === 'content-filter') {
+        // Like pi: a blocked response is final. Keep what streamed in history, end its turn, then fail the run.
+        emit({ type: 'turn_end', turn, message: assistant, toolResults })
+        throw new Error(CONTENT_FILTER_ERROR)
+      }
 
       if (shouldBreak) {
         emit({ type: 'turn_end', turn, message: assistant, toolResults })
