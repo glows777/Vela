@@ -9,8 +9,10 @@ import {
   loadConfig,
   type VelaConfig,
 } from '../config/index.ts'
+import type { ImageContent, VelaSession } from '../core.ts'
+import { setDefaultToolModifiers } from '../core.ts'
+import { inspectVela } from '../diagnostics.ts'
 import { errorMessage } from '../logger.ts'
-import type { ImageContent } from '../messages.ts'
 import { ModelRegistry } from '../models/index.ts'
 import {
   buildSessionPath,
@@ -25,8 +27,7 @@ import { memorySessionStorage } from '../session/storage.ts'
 import { createMockModel } from '../testing/demo-model.ts'
 import { loadFauxScenario } from '../testing/faux.ts'
 import { recordModel } from '../testing/record.ts'
-import { createVela, velaInternals } from '../vela.ts'
-import type { VelaSession } from '../vela-session.ts'
+import { createVela } from '../vela.ts'
 import { readAttachments } from './files.ts'
 import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
@@ -307,9 +308,7 @@ try {
   ) {
     await vela.ready().catch(() => {})
     toolLoadout = selectTools(
-      velaInternals(vela)
-        .registry.getAllTools()
-        .map((tool) => tool.name),
+      inspectVela(vela).tools.map((tool) => tool.name),
       args,
       config.settings.defaultTools,
     )
@@ -384,7 +383,7 @@ function applyModelArgs(target: VelaSession): boolean {
   recordedSession = target.id
   if (toolLoadout?.selection) target.setActiveTools(toolLoadout.selection)
   else if (toolLoadout?.modifiers)
-    target.registry.setDefaultToolModifiers(toolLoadout.modifiers)
+    setDefaultToolModifiers(target, toolLoadout.modifiers)
   if (args.thinking) target.setThinkingLevel(args.thinking)
   // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
   const override =
@@ -404,7 +403,7 @@ function applyModelArgs(target: VelaSession): boolean {
 }
 
 function reportContextFiles(): void {
-  const line = formatContextFileList(velaInternals(vela).loadedContextFiles, {
+  const line = formatContextFileList(inspectVela(vela).contextFiles, {
     cwd,
     homeDir: homedir(),
     agentDir,

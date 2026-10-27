@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { channelSessionId } from '../../channels/gateway.ts'
-import { groupWorkspace } from '../../channels/scope.ts'
 import type {
   ChannelDefinition,
   ChannelFeedbackUpdate,
@@ -10,10 +8,10 @@ import type {
   ChannelRunFeedback,
   IncomingMessage,
   OutgoingMessage,
-} from '../../channels/types.ts'
-import { imageMimeType } from '../../images/metadata.ts'
-import { errorMessage, type VelaLogger } from '../../logger.ts'
-import type { ImageContent } from '../../messages.ts'
+} from '../../channels/index.ts'
+import { channelSessionId, groupWorkspace } from '../../channels/index.ts'
+import type { ImageContent, VelaLogger } from '../../extension-api.ts'
+import { imageMimeType } from '../../images/index.ts'
 import {
   type FeishuCardAction,
   type FeishuCardResponse,
@@ -27,6 +25,7 @@ import {
   readGroupContext,
   readTopicContext,
 } from './history.ts'
+import { errorMessage } from './log.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { FeishuProgress } from './progress.ts'
 import { FeishuTopics, topicToolNames } from './topics.ts'

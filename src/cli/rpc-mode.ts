@@ -1,10 +1,13 @@
-import type { SessionUI } from '../extensions/ui.ts'
-import type { ImageContent } from '../messages.ts'
-import type { ThinkingLevel } from '../models/index.ts'
-import { messageText } from '../session/entries.ts'
-import type { QueueMode } from '../session/options.ts'
-import { type Vela, velaInternals } from '../vela.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type {
+  ImageContent,
+  QueueMode,
+  SessionUI,
+  ThinkingLevel,
+  VelaSession,
+} from '../core.ts'
+import { messageText } from '../core.ts'
+import { inspectVela } from '../diagnostics.ts'
+import type { Vela } from '../vela.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'
 
@@ -220,7 +223,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         .getEntries()
         .flatMap((entry) =>
           entry.type === 'message' && entry.message.role === 'user'
-            ? [{ entryId: entry.id, text: messageText(entry.message.content) }]
+            ? [{ entryId: entry.id, text: messageText(entry.message) }]
             : [],
         ),
     }),
@@ -349,18 +352,16 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
         ...vela
           .commands()
           .map((command) => ({ ...command, source: 'extension' as const })),
-        ...velaInternals(vela).promptTemplates.map((t) => ({
+        ...inspectVela(vela).promptTemplates.map((t) => ({
           name: t.name,
           description: t.description,
           source: 'prompt' as const,
         })),
-        ...velaInternals(vela)
-          .skillLoader.list()
-          .map((s) => ({
-            name: `skill:${s.name}`,
-            description: s.description,
-            source: 'skill' as const,
-          })),
+        ...inspectVela(vela).skills.map((s) => ({
+          name: `skill:${s.name}`,
+          description: s.description,
+          source: 'skill' as const,
+        })),
       ],
     }),
   }

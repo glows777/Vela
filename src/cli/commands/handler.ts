@@ -1,5 +1,5 @@
-import type { Vela, VelaInternals } from '../../vela.ts'
-import type { VelaSession } from '../../vela-session.ts'
+import type { VelaSession } from '../../core.ts'
+import type { Vela } from '../../vela.ts'
 
 /**
  * Slash commands belong to the CLI: they read data the SDK exposes (vela / session) and
@@ -7,8 +7,6 @@ import type { VelaSession } from '../../vela-session.ts'
  */
 export interface CommandContext {
   vela: Vela
-  /** The CLI ships in the same package as core, so commands may read internals (memory, knowledge base, hooks, ...) */
-  internals: VelaInternals
   session: VelaSession
   /** Print text (may be multi-line) */
   print: (text: string) => void

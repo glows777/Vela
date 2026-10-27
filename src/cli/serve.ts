@@ -1,6 +1,6 @@
-import type { VelaEvent } from '../agent/events.ts'
+import type { VelaEvent } from '../core.ts'
 import { errorMessage } from '../logger.ts'
-import { type Vela, velaInternals } from '../vela.ts'
+import type { Vela } from '../vela.ts'
 import { sanitize } from './tui/components.ts'
 
 /** Channel text is cut to one line of this many characters, like the TUI cut replies */
@@ -76,7 +76,7 @@ export async function runServe(options: {
     return 1
   }
   if (shutdown.requested()) return stop()
-  if (velaInternals(vela).gateway.running().length === 0) {
+  if (vela.runningChannels().length === 0) {
     unsubscribe()
     write(
       '[serve] no channel started: configure one (see docs/channels.md) or check the errors above',

@@ -1,11 +1,17 @@
-import { errorMessage, silentLogger, type VelaLogger } from '../logger.ts'
-import type { SessionOptions, VelaSession } from '../vela-session.ts'
+import type {
+  SessionOptions,
+  VelaLogger,
+  VelaSession,
+} from '../extension-api.ts'
+import { publishChannelEvent, silentLogger } from '../extension-api.ts'
 import { TopicAdmission } from './admission.ts'
 import { TopicCommands } from './commands.ts'
 import { ChannelDirectory } from './directory.ts'
 import { RunFeedback } from './feedback.ts'
+import { errorMessage } from './log.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { ChannelRoutines } from './routines.ts'
+import { resolveChannelScope } from './scope.ts'
 import { channelSessionId } from './session-id.ts'
 import { ChannelSessions } from './sessions.ts'
 import type {
@@ -81,6 +87,7 @@ export class ChannelGateway {
       this.directory,
       (name) => this.channels.get(name),
       options.session,
+      options.dataDir ?? process.cwd(),
     )
     this.admission = new TopicAdmission(this.directory, (id, name, msg) =>
       this.sessions.open(id, name, msg),
@@ -121,6 +128,17 @@ export class ChannelGateway {
     this.channels.set(channel.name, channel)
 
     channel.connect?.({
+      scope: (id) => {
+        const record = this.directory.get(this.directory.keyForSession(id))
+        return record
+          ? resolveChannelScope(
+              this.options.dataDir ?? process.cwd(),
+              record.channel,
+              record.chatId,
+              record.chatKind,
+            )
+          : undefined
+      },
       routines: this.routines.scoped(
         channel.name,
         (id) =>
@@ -416,9 +434,8 @@ export class ChannelGateway {
   ): Promise<void> {
     try {
       // A failed close discards pending history. Keep the live session until a real save succeeds.
-      await session.save()
-    } catch (error) {
-      session.emit({ type: 'session_save_failed', error })
+      await session.save({ reportFailure: true })
+    } catch {
       return
     }
     // New work may have arrived while saving; its queue will rearm idle cleanup.
@@ -556,7 +573,7 @@ export class ChannelGateway {
       !(await this.routines.shouldRun(msg, session))
     )
       return 'done'
-    session.emit({
+    publishChannelEvent(session, {
       type: 'channel_message',
       channel: channelName,
       senderId: msg.senderId,
@@ -610,7 +627,7 @@ export class ChannelGateway {
     try {
       await channel.send(reply)
     } catch (error) {
-      session.emit({
+      publishChannelEvent(session, {
         type: 'channel_error',
         channel: channelName,
         senderId: msg.senderId,
@@ -620,7 +637,7 @@ export class ChannelGateway {
       this.logger.error(`[${channelName}] Reply failed: ${errorMessage(error)}`)
       return false
     }
-    session.emit({
+    publishChannelEvent(session, {
       type: 'channel_reply',
       channel: channelName,
       recipientId: msg.senderId,

@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { VelaLogger } from '../../logger.ts'
+import type { VelaLogger } from '../../extension-api.ts'
 import { bm25Search, type SearchHit } from './search.ts'
 import { lintAll, type ValidationReport } from './validator.ts'
 

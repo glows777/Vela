@@ -7,8 +7,8 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '../../src/channels/types.ts'
+import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
 import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
-import type { VelaExtension } from '../../src/extensions/types.ts'
 import type { ProviderDefinition } from '../../src/models/index.ts'
 import {
   fileSessionStorage,

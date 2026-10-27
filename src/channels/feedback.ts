@@ -1,7 +1,7 @@
-import { errorMessage, type VelaLogger } from '../logger.ts'
-import type { ModelMessage } from '../messages.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type { ModelMessage, VelaLogger, VelaSession } from '../extension-api.ts'
+import { publishChannelEvent } from '../extension-api.ts'
 import type { ChannelDirectory } from './directory.ts'
+import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
@@ -193,7 +193,7 @@ export class RunFeedback {
             this.options.stopped() || run.stopped || isAbort(error)
           if (!aborted) await this.feedbackError(channelName, msg, error)
           else
-            run.session.emit({
+            publishChannelEvent(run.session, {
               type: 'channel_error',
               channel: channelName,
               senderId: msg.senderId,
@@ -329,7 +329,7 @@ export class RunFeedback {
       return true
     }
     run.inputs.push(...inputs)
-    run.session.emit({
+    publishChannelEvent(run.session, {
       type: 'channel_message',
       channel: channel.name,
       senderId: prepared.senderId,
@@ -375,13 +375,14 @@ export class RunFeedback {
     const session = this.options.find(
       channelSessionId(channelName, msg.channelId, msg.topic?.rootId),
     )
-    session?.emit({
-      type: 'channel_error',
-      channel: channelName,
-      senderId: msg.senderId,
-      error,
-      aborted: false,
-    })
+    session &&
+      publishChannelEvent(session, {
+        type: 'channel_error',
+        channel: channelName,
+        senderId: msg.senderId,
+        error,
+        aborted: false,
+      })
     this.options.logger.error(
       `[${channelName}] Feedback failed: ${errorMessage(error)}`,
     )
@@ -462,7 +463,7 @@ export class RunFeedback {
               if (action !== 'stop' || !this.runIsLive(run)) return false
               void this.applyRunChoice(channel, msg, run, 'stop').catch(
                 (error) =>
-                  session.emit({
+                  publishChannelEvent(session, {
                     type: 'channel_error',
                     channel: channelName,
                     senderId: msg.senderId,
@@ -511,7 +512,7 @@ export class RunFeedback {
           )
         else answer = `Task failed: ${errorMessage(error)}`
       }
-      session.emit({
+      publishChannelEvent(session, {
         type: 'channel_error',
         channel: channelName,
         senderId: msg.senderId,

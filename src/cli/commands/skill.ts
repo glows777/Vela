@@ -1,13 +1,13 @@
-import type { SkillLoader } from '../../skills/loader.ts'
+import type { VelaInspection } from '../../diagnostics.ts'
 import type { CommandHandler } from './index.ts'
 
 /**
  * `/skill` lists skills. The model loads a skill itself by reading its file; `/skill:<name> args` sends one
  * explicitly and is expanded by session.prompt() (like pi), so it is not a CLI command.
  */
-export function createSkillCommands(
-  skillLoader: SkillLoader,
-): CommandHandler[] {
+export function createSkillCommands(skillLoader: {
+  list(): VelaInspection['skills']
+}): CommandHandler[] {
   return [
     (cmd, { print }) => {
       if (cmd !== '/skill' && cmd !== '/skills' && cmd !== '/skill list')

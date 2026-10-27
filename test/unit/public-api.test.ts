@@ -12,3 +12,16 @@ test('the public API matches api/public-api.txt', async () => {
   ).text()
   expect(apiReport()).toBe(expected)
 }, 30_000)
+
+test('experimental diagnostic contracts are visible in the API report', () => {
+  const report = apiReport()
+  for (const name of [
+    'inspectVela',
+    'inspectSession',
+    'VelaInspection',
+    'SessionInspection',
+  ])
+    expect(report).toMatch(
+      new RegExp(`@experimental\\n  (?:function|interface) ${name}\\b`),
+    )
+}, 30_000)

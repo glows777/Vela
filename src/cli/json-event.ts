@@ -1,4 +1,4 @@
-import type { VelaEvent } from '../agent/events.ts'
+import type { VelaEvent } from '../core.ts'
 
 /** JSON.stringify that writes Errors (including DOMException) as `{ name, message }` and bigints as strings. */
 export function toJsonLine(value: unknown): string {

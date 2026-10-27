@@ -1,6 +1,6 @@
 import type { SelectItem } from '@earendil-works/pi-tui'
+import type { VelaSession } from '../../core.ts'
 import { messageText, type SessionEntry } from '../../session/entries.ts'
-import type { VelaSession } from '../../vela-session.ts'
 import { errorMessage, oneLine, sanitize } from './components.ts'
 import { nearestShown, treeItems } from './tree-selector.ts'
 

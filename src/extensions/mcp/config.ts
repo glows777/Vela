@@ -6,7 +6,10 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isPlainObject } from '../../config/interpolate.ts'
+import type { ExtensionConfigDefinition } from '../../extension-api.ts'
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /**
  * How the model reaches a server's tools. Vela has no codemode yet, so `codemode` (pi's default) is
@@ -320,4 +323,19 @@ export function loadMcpServers(options: {
     }
   }
   return result
+}
+
+export const mcpConfig: ExtensionConfigDefinition = {
+  name: 'mcp',
+  projectResources: ['mcp.json'],
+  resolve(section, context) {
+    const files = loadMcpServers(context)
+    const settings = isPlainObject(section.mcpServers) ? section.mcpServers : {}
+    return {
+      ...section,
+      mcpServers: { ...settings, ...files.servers },
+      sources: files.sources,
+      errors: files.errors,
+    }
+  },
 }

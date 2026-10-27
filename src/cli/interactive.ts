@@ -18,20 +18,25 @@ import {
   TruncatedText,
   TuiMainScreen,
 } from '@earendil-works/pi-tui'
-import type { VelaEvent } from '../agent/events.ts'
-import type { LoginOptions } from '../auth/types.ts'
-import type { SessionUI } from '../extensions/ui.ts'
-import { imageMimeType } from '../images/metadata.ts'
-import type { ImageContent, ModelMessage } from '../messages.ts'
-import type { ThinkingLevel } from '../models/index.ts'
+import type {
+  ImageContent,
+  LoginOptions,
+  ModelMessage,
+  SessionUI,
+  ThinkingLevel,
+  VelaEvent,
+  VelaSession,
+} from '../core.ts'
+import { resolveBinary } from '../core.ts'
+import { inspectSession, inspectVela } from '../diagnostics.ts'
+import { imageMimeType } from '../images/index.ts'
 import {
   branchSummaryMessageText,
   contextEntries,
   type SessionEntry,
   summaryMessageText,
 } from '../session/entries.ts'
-import { type Vela, velaInternals } from '../vela.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type { Vela } from '../vela.ts'
 import {
   copyToClipboard,
   readClipboardImage,
@@ -233,19 +238,15 @@ export class InteractiveMode {
       this.addNotice(errorMessage(error), 'error')
     }
     await this.openSession(sessionId, resume)
-    const contextFiles = formatContextFileList(
-      velaInternals(vela).loadedContextFiles,
-      {
-        cwd: vela.cwd,
-        homeDir: homedir(),
-        agentDir: options.agentDir,
-      },
-    )
+    const contextFiles = formatContextFileList(inspectVela(vela).contextFiles, {
+      cwd: vela.cwd,
+      homeDir: homedir(),
+      agentDir: options.agentDir,
+    })
     if (contextFiles) this.addNotice(`[context] ${contextFiles}`)
     this.setAutocomplete()
     // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
-    velaInternals(vela)
-      .resolveBinary('fd')
+    resolveBinary(vela, 'fd')
       .then((fdPath) => this.setAutocomplete(fdPath))
       .catch((error) =>
         this.addNotice(
@@ -263,18 +264,16 @@ export class InteractiveMode {
         [
           ...TUI_COMMANDS,
           ...CLI_COMMANDS,
-          ...velaInternals(vela).promptTemplates.map((t) => ({
+          ...inspectVela(vela).promptTemplates.map((t) => ({
             name: t.name,
             description: t.argumentHint
               ? `${t.argumentHint} — ${t.description}`
               : t.description,
           })),
-          ...velaInternals(vela)
-            .skillLoader.list()
-            .map((s) => ({
-              name: `skill:${s.name}`,
-              description: s.description,
-            })),
+          ...inspectVela(vela).skills.map((s) => ({
+            name: `skill:${s.name}`,
+            description: s.description,
+          })),
           ...vela.commands().map((c) => ({
             name: c.name,
             description: c.description ?? `Extension ${c.extension}`,
@@ -320,16 +319,10 @@ export class InteractiveMode {
       )
     }
     if (process.env.VELA_DEBUG === '1') {
-      const internals = velaInternals(this.vela)
-      const lines = internals.builder
-        .status({
-          ...session.promptContext(),
-          toolCount: internals.registry.getAllTools().length,
-        })
-        .map(
-          ({ name, chars }) =>
-            `  ${name}: ${chars === null ? '[OFF]' : `[ON] ${chars} chars`}`,
-        )
+      const lines = (await inspectSession(this.vela, session)).stages.map(
+        ({ name, chars }) =>
+          `  ${name}: ${chars === null ? '[OFF]' : `[ON] ${chars} chars`}`,
+      )
       this.addNotice(['Prompt PipeLine Debug', ...lines].join('\n'), 'dim')
     }
     this.updatePending()
@@ -1075,7 +1068,6 @@ export class InteractiveMode {
     if (!running || text.startsWith('/')) {
       const handled = this.dispatch(text, {
         vela: this.vela,
-        internals: velaInternals(this.vela),
         session: this.session,
         print: this.commandOutput(),
         agentDir: this.options.agentDir,

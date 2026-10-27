@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -177,10 +178,20 @@ export async function runAttempt(
   const { loadModels } = await load<
     typeof import('../../src/config/models.ts')
   >(config.runtime, 'src/config/models.ts')
-  const { velaInternals } = await load<typeof import('../../src/vela.ts')>(
-    config.runtime,
-    'src/vela.ts',
+  const channelTesting = existsSync(
+    join(config.runtime, 'src/channels/testing.ts'),
   )
+    ? await load<typeof import('../../src/channels/testing.ts')>(
+        config.runtime,
+        'src/channels/testing.ts',
+      )
+    : undefined
+  const historicalVela = channelTesting
+    ? undefined
+    : await load<typeof import('../../src/vela.ts')>(
+        config.runtime,
+        'src/vela.ts',
+      )
   const providerDir = join(config.artifactDir, 'provider')
   await mkdir(providerDir, { recursive: true })
   await Bun.write(
@@ -344,6 +355,15 @@ export async function runAttempt(
   }
   let channelStarted = false
   let channelError: unknown
+  const drain = async () => {
+    if (channelError) return
+    if (channelTesting) return channelTesting.drainChannels(t.vela)
+    // Historical snapshots are immutable and predate the testing entry.
+    const gateway = historicalVela!.velaInternals(t.vela)
+      .gateway as unknown as { queues: Map<string, Promise<void>> }
+    while (gateway.queues.size && !channelError)
+      await Promise.all([...gateway.queues.values()])
+  }
   const calls = new Map<string, Call>()
   t.vela.subscribe((event: VelaEvent, sessionId) => {
     if (
@@ -454,11 +474,7 @@ export async function runAttempt(
             }),
           )
           while (!channelStarted && !channelError) await Bun.sleep(1)
-          const gateway = velaInternals(t.vela).gateway as unknown as {
-            queues: Map<string, Promise<void>>
-          }
-          while (gateway.queues.size && !channelError)
-            await Promise.all([...gateway.queues.values()])
+          await drain()
           if (channelError) throw channelError
           if (['G7', 'G8'].includes(config.scenario) && index === 0) {
             const { MemoryStore } = await load<
@@ -500,12 +516,7 @@ export async function runAttempt(
           }),
         )
         while (!channelStarted && !channelError) await Bun.sleep(1)
-        // Both revisions expose the same gateway queue. Drain handoff-created queues too.
-        const gateway = velaInternals(t.vela).gateway as unknown as {
-          queues: Map<string, Promise<void>>
-        }
-        while (gateway.queues.size && !channelError)
-          await Promise.all([...gateway.queues.values()])
+        await drain()
         if (channelError) throw channelError
         evidence.topics = fake.topics.map((topic) => topic.title)
         evidence.deliveries = fake.sent.map((item) => ({

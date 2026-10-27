@@ -24,7 +24,7 @@ import type {
   TreePreparation,
 } from './extensions/events.ts'
 import { withProviderHooks } from './extensions/provider-hooks.ts'
-import type { ExtensionUI, SessionUI } from './extensions/ui.ts'
+import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
 import type { VelaLimits } from './limits.ts'
 import type { VelaLogger } from './logger.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
@@ -41,7 +41,6 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
-import type { PermissionRules } from './security/permissions.ts'
 import {
   type BranchSummaryEntry,
   messageText as contentText,
@@ -55,13 +54,19 @@ import { renderSessionHtml } from './session/export-html.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
-import type { SendMessageOptions } from './session/options.ts'
+import type {
+  SendMessageOptions,
+  SessionOptions,
+  SessionUsage,
+} from './session/options.ts'
 import {
   assertSessionId,
   type ForkOptions,
   type NavigateTreeOptions,
   type QueueMode,
 } from './session/options.ts'
+import { applySessionRouting, sessionScope } from './session/routing.ts'
+import type { SessionScope } from './session/scope.ts'
 import { newSessionId } from './session/session-id.ts'
 import {
   type SessionPersistence,
@@ -72,12 +77,9 @@ import { UserBash } from './session/user-bash.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { BashResult } from './tools/shell.ts'
 import { getToolListError, isToolModifier } from './tools/tool-selection.ts'
-import {
-  CONTEXT_WINDOW,
-  type TokenStatus,
-  TokenTracker,
-  type UsageTotals,
-} from './usage/tracker.ts'
+import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
+
+export type { SessionUsage } from './session/options.ts'
 
 export interface PromptOptions {
   /** Inline images attached to this input; normalized after input hooks. */
@@ -94,25 +96,7 @@ export interface PromptOptions {
 }
 
 /** Options for `vela.session(id, options)`; only apply when the session is first opened. */
-export interface SessionOptions {
-  /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
-  cwd?: string
-  /** Tool permissions, e.g. `{ bash: 'ask' }`; tools without a rule are allowed */
-  permissions?: PermissionRules
-  /**
-   * Tools for this session: plain names (or `*` patterns) enable only those; a list of only
-   * `+name` / `-name` entries adjusts the default set instead (like pi).
-   */
-  tools?: string[]
-  /** UI extensions use to interact with the user; without it there is no UI (confirm always returns false) */
-  ui?: SessionUI
-  /** Model for this session (`provider/id` or LanguageModel), default Vela's model */
-  model?: string | LanguageModel
-  /** Thinking level, default Vela's (Vela defaults to medium, like pi) */
-  thinkingLevel?: ThinkingLevel
-  /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
-  autoCompaction?: boolean
-}
+export type { SessionOptions } from './session/options.ts'
 
 /** What `fork()` / `clone()` returns. */
 export interface ForkResult {
@@ -242,7 +226,7 @@ export class VelaSession {
   }
   /** @internal UI for extensions */
   readonly ui: ExtensionUI
-  /** @internal Whether there is a real UI */
+  /** Whether this session has a real UI (idle channel cleanup must preserve it). */
   readonly hasUI: boolean
 
   private readonly listeners = new Set<VelaEventListener>()
@@ -293,12 +277,14 @@ export class VelaSession {
     this.registry = deps.registry.fork(this.store.results, {
       onEvent: this.emit,
       sessionId: id,
+      scope: () => this.scope,
       confirm: (toolName, input) =>
         this.ui.confirm(
           `Allow ${toolName} to run?`,
           JSON.stringify(input, null, 2) ?? '',
         ),
     })
+    applySessionRouting(this, options)
     this.registry.setPermissions(options.permissions)
     const toolListError = options.tools
       ? getToolListError(options.tools)
@@ -467,10 +453,20 @@ export class VelaSession {
   }
 
   /**
-   * The channel this session answers on (e.g. `feishu`), set by the channel gateway on every message; undefined
+   * The channel this session answers on (e.g. `feishu`), supplied by host routing on session open; undefined
    * for local sessions. Providers see it as `ProviderContext.channel()`.
    */
   channel?: string
+
+  /** Transient host-supplied sharing identity; it never grants permissions. */
+  get scope(): Readonly<SessionScope> | undefined {
+    return sessionScope(this)
+  }
+
+  /** Effective tool selection, channel eligibility and permission decision. */
+  toolDecision(name: string) {
+    return this.registry.decide(name)
+  }
 
   /** Tool names the model can currently see (after tool selection and deferred loading). */
   getActiveTools(): string[] {
@@ -558,9 +554,15 @@ export class VelaSession {
     return this.contextManager.prepare(request, options)
   }
 
-  /** @internal Waits until the session's entries are written to storage; rejects if some could not be. */
-  save(): Promise<void> {
-    return this.contextManager.save()
+  /** Flushes pending entries. Default rejection is unchanged; reportFailure also emits session_save_failed once. */
+  async save(options: { reportFailure?: boolean } = {}): Promise<void> {
+    try {
+      await this.contextManager.save()
+    } catch (error) {
+      if (options.reportFailure)
+        this.emit({ type: 'session_save_failed', error })
+      throw error
+    }
   }
 
   /**
@@ -831,10 +833,15 @@ export class VelaSession {
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
       const branch = leafId === null ? [] : this.store.getBranch(leafId)
+      const {
+        scope: _scope,
+        channel: _channel,
+        ...unroutedOptions
+      } = this.options
       const session = this.deps.openSession(
         options.sessionId ?? newSessionId(),
         {
-          ...this.options,
+          ...unroutedOptions,
           model: this.modelChoice,
           thinkingLevel: this.thinking,
           autoCompaction: this.autoCompaction,
@@ -1483,8 +1490,14 @@ export class VelaSession {
   }
 
   /** Token estimate, context usage and this session's total usage. */
-  get usage(): TokenStatus & { totals: UsageTotals } {
-    return { ...this.tracker.status, totals: this.tracker.totals() }
+  get usage(): SessionUsage {
+    const last = this.tracker.recent(1)[0]
+    return {
+      ...this.tracker.status,
+      totals: this.tracker.totals(),
+      contextWindow: this.tracker.contextWindow,
+      ...(last ? { lastRecord: { ...last } } : {}),
+    }
   }
 
   /** Aborts the running task, waits for it to finish and save, then removes the session from Vela. */
@@ -1525,31 +1538,6 @@ export class VelaSession {
     }
     if (errors.length)
       throw new AggregateError(errors, 'Session shutdown failed')
-  }
-}
-
-/** ExtensionUI without a real UI: notify becomes an event, and anything needing an answer is treated as "no / no answer" (like pi). */
-function headlessUI(emit: (event: VelaEvent) => void): ExtensionUI {
-  return {
-    notify: (message, level = 'info') =>
-      emit({ type: 'notify', message, level }),
-    confirm: async () => false,
-    select: async () => undefined,
-    input: async () => undefined,
-    setStatus: () => {},
-    setWidget: () => {},
-  }
-}
-
-/** Fills in setStatus / setWidget the UI doesn't implement (no-ops). */
-function withDefaults(ui: SessionUI): ExtensionUI {
-  return {
-    notify: (message, level) => ui.notify(message, level),
-    confirm: (title, message) => ui.confirm(title, message),
-    select: (title, options) => ui.select(title, options),
-    input: (title, placeholder) => ui.input(title, placeholder),
-    setStatus: (key, text) => ui.setStatus?.(key, text),
-    setWidget: (key, lines) => ui.setWidget?.(key, lines),
   }
 }
 

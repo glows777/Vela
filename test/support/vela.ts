@@ -24,7 +24,6 @@ export function createTestVela(options: TestVelaOptions = {}) {
 
   const ctx: CommandContext = {
     vela: t.vela,
-    internals,
     session: t.session,
     // Command output still goes to console.log; capture it with captureConsole()
     print: (text) => console.log(text),

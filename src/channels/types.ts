@@ -1,6 +1,8 @@
-import type { VelaEvent } from '../agent/events.ts'
-import type { ImageContent } from '../messages.ts'
-import type { PermissionRules } from '../security/permissions.ts'
+import type {
+  ImageContent,
+  PermissionRules,
+  VelaEvent,
+} from '../extension-api.ts'
 
 export interface IncomingMessage {
   /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
@@ -74,6 +76,7 @@ export interface ChannelTopic {
 }
 
 export interface ChannelRuntime {
+  scope(sessionId: string): import('./scope.ts').ChannelScope | undefined
   routines: {
     /** One-off at is deployment-local YYYY-MM-DDTHH:mm; recurring times are local too. */
     create(
