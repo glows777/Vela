@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { savedGraderAnswers } from './fixtures/saved-grader-answers.ts'
 import { savedTestRuns } from './fixtures/saved-test-runs.ts'
 import * as graders from './graders.ts'
@@ -19,6 +19,15 @@ function evidence(overrides: Partial<Evidence> = {}): Evidence {
     ...overrides,
   }
 }
+const memoryRead = () => ({
+  name: 'memory',
+  args: { action: 'read', filename: 'project_staging-server.md' },
+  phase: 1,
+  sessionId: 'feishu-oc_group-g7_recall',
+  success: true,
+  output:
+    '---\nname: staging-server\n---\nThe staging server is called kestrel.',
+})
 const report =
   'Completed the release checklist and archived the deployment evidence for the team.'
 const requirements = [
@@ -116,6 +125,7 @@ const good = {
     deliveries: [{ scope: 'topic', topicRootId: 'g6_b', text: 'ORBIT-73' }],
   }),
   G7: evidence({
+    calls: [memoryRead()],
     memoryEntries: [
       { name: 'staging', content: 'The staging server is called kestrel.' },
     ],
@@ -555,6 +565,16 @@ test.each([true, false])(
   'G7: store and recall are graded independently (stored=%s)',
   (stored) => {
     const e = evidence({
+      calls: [
+        {
+          ...memoryRead(),
+          name: 'feishu_search_history',
+          args: {},
+          output: JSON.stringify({
+            matches: [{ text: 'The staging server is called kestrel.' }],
+          }),
+        },
+      ],
       memoryEntries: stored
         ? [
             {
@@ -579,6 +599,7 @@ test.each([true, false])(
 )
 test('G7: a real entry and a fresh-topic answer satisfy both predicates', () => {
   const e = evidence({
+    calls: [memoryRead()],
     memoryEntries: [
       { name: 'staging', content: 'The staging server is called kestrel.' },
     ],
@@ -653,6 +674,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '../../src/testing/faux.ts'
+import * as feishuHelpers from '../../test/support/feishu.ts'
 import { options } from './run.ts'
 import * as scenarios from './scenarios.ts'
 import { command, runAttempt } from './worker.ts'
@@ -661,9 +683,27 @@ const exitRuntime = resolve(import.meta.dir, '../..')
 async function exitAttempt(
   scenario: 'G6' | 'G7' | 'G8',
   responses: FauxStep[],
+  history = false,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
   const model = createFauxModel({ responses })
+  const originalFake = feishuHelpers.fakeFeishu
+  const fakeSpy = history
+    ? spyOn(feishuHelpers, 'fakeFeishu').mockImplementation(() => {
+        const fake = originalFake()
+        fake.transport.searchMessages = async () => ({
+          items: [
+            feishuHelpers.historyMessage(
+              'stored',
+              'ou_alice',
+              prompts(scenario)[0]!,
+              '3000',
+            ),
+          ],
+        })
+        return fake
+      })
+    : undefined
   try {
     const cwd = join(root, 'work')
     await command(root, ['git', 'init', '-q', cwd])
@@ -701,6 +741,7 @@ async function exitAttempt(
       .catch(() => undefined)
     return { result, calls: model.calls, pending: model.pending(), snapshot }
   } finally {
+    fakeSpy?.mockRestore()
     await rm(root, { recursive: true, force: true })
   }
 }
@@ -793,7 +834,7 @@ test('G7 worker does not credit a memory written only during recall to topic 1',
   expect(result.status).toBe('fail')
   expect(result.checks).toEqual([
     { name: 'store', pass: false },
-    { name: 'recall', pass: true },
+    { name: 'recall', pass: false },
   ])
 })
 test.each(['G6', 'G7'] as const)(
@@ -857,6 +898,7 @@ test.each([
     grade(
       'G8',
       evidence({
+        calls: [{ ...memoryRead(), sessionId: 'feishu-oc_group-g8_recall' }],
         memoryEntries: store
           ? [{ name: 'staging', content: stagingMemory.content }]
           : [],
@@ -1009,7 +1051,7 @@ test('G8 worker excludes recall-time memory writes from the topic-1 snapshot', a
   expect(result.status).toBe('fail')
   expect(result.checks).toEqual([
     { name: 'store', pass: false },
-    { name: 'recall', pass: true },
+    { name: 'recall', pass: false },
   ])
   expect(snapshot).toEqual([])
   expect(result.evidence!.memoryEntries).toEqual([])
@@ -1030,3 +1072,338 @@ test('G8 worker excludes runtime/model errors from behavioral grades', async () 
   expect(result.usage.main).toBeGreaterThan(0)
   expect(result.reason).toBeDefined()
 })
+
+for (const id of ['G7', 'G8'] as const) {
+  const sessionId = `feishu-oc_group-${id.toLowerCase()}_recall`
+  const recallPaths = {
+    workspace: '/tmp/run/attempt/data/channels/feishu-oc_group/workspace',
+    artifactDir: '/tmp/run/attempt',
+  }
+  const recalled = (
+    calls: Evidence['calls'] = [],
+    extra: Partial<Evidence> = {},
+  ) =>
+    evidence({
+      calls,
+      recallPaths,
+      deliveries: [
+        {
+          scope: 'topic',
+          topicRootId: `${id.toLowerCase()}_recall`,
+          text: 'Kestrel.',
+        },
+      ],
+      ...extra,
+    })
+  const source = { ...memoryRead(), sessionId }
+  const recall = (e: Evidence) =>
+    grade(id, e).find((c) => c.name === 'recall')!.pass
+  test(`${id}: accepts observed memory reads, memory index, and matched history text`, () => {
+    expect(recall(recalled([source]))).toBe(true)
+    expect(
+      recall(
+        recalled([
+          {
+            ...source,
+            name: 'read_file',
+            args: { path: '../memory/project_staging-server.md' },
+          },
+        ]),
+      ),
+    ).toBe(true)
+    expect(
+      recall(
+        recalled([], {
+          recallMemory: [
+            'Group memory:\n- [staging](project_staging.md) — The server is called kestrel.',
+          ],
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      recall(
+        recalled([
+          {
+            ...source,
+            name: 'feishu_search_history',
+            args: { keyword: 'staging' },
+            output: JSON.stringify({
+              matches: [{ text: 'Our staging server is called kestrel.' }],
+            }),
+          },
+        ]),
+      ),
+    ).toBe(true)
+    expect(
+      recall(
+        recalled([
+          {
+            ...source,
+            output: { kind: 'vela-tool-result', preview: source.output },
+          },
+        ]),
+      ),
+    ).toBe(true)
+  })
+  const absent = [
+    [],
+    [
+      {
+        ...source,
+        phase: 0,
+        sessionId: `feishu-oc_group-${id.toLowerCase()}_store`,
+      },
+    ],
+    [{ ...source, sessionId: 'another-session' }],
+    [{ ...source, success: false }],
+    [{ ...source, output: undefined }],
+    [
+      {
+        ...source,
+        name: 'bash',
+        args: { command: 'echo kestrel ../memory' },
+        output: 'kestrel ../memory',
+      },
+    ],
+    [
+      {
+        ...source,
+        args: { action: 'save', content: 'kestrel' },
+        output: 'Saved to memory: project_kestrel.md',
+      },
+    ],
+    [{ ...source, output: 'File not found: kestrel.md' }],
+    [
+      {
+        ...source,
+        args: { action: 'search', query: 'kestrel' },
+        output: 'No memories found for "kestrel".',
+      },
+    ],
+    [
+      {
+        ...source,
+        name: 'feishu_search_history',
+        args: { keyword: 'kestrel' },
+        output: JSON.stringify({
+          matches: [],
+          coverage: 'kestrel is not a match',
+        }),
+      },
+    ],
+    [
+      {
+        ...source,
+        name: 'feishu_search_history',
+        output: JSON.stringify({ matches: [{ text: 'unknown' }] }),
+      },
+    ],
+  ]
+  test.each(absent.map((calls, i) => [i, calls] as const))(
+    `${id}: no observed source (%s) fails`,
+    (_i, calls) => {
+      expect(
+        recall(
+          recalled([...calls], {
+            memoryEntries: [{ name: 'staging', content: 'kestrel' }],
+          }),
+        ),
+      ).toBe(false)
+    },
+  )
+  const contaminated = [
+    ['bash', { command: 'grep -R kestrel .vela-eval' }],
+    ['bash', { command: 'find sessions -name "*.jsonl"' }],
+    ['read_file', { path: '../../../sessions/feishu-oc_group-g8_store.jsonl' }],
+    ['bash', { command: 'grep -R kestrel ../../../sessions' }],
+    [
+      'bash',
+      { command: 'cat /tmp/run/other-attempt/memory-after-topic-1.json' },
+    ],
+    [
+      'read_file',
+      {
+        path: '/tmp/run/other-attempt/data/channels/feishu-oc_group/memory/project_staging.md',
+      },
+    ],
+    [
+      'grep',
+      {
+        pattern: 'kestrel',
+        path: '/tmp/run/attempt/memory-after-topic-1.json',
+      },
+    ],
+    ['find', { pattern: '*.jsonl', path: '../../../sessions' }],
+    ['bash', { command: 'rg kestrel /tmp/.vela-eval/run' }],
+    ['bash', { command: 'cd .. && rg kestrel .' }],
+    ['bash', { command: 'grep kestrel /tmp/run/other-attempt/result.json' }],
+  ] as const
+  test.each(contaminated)(
+    `${id}: %s artifact reference rejects even with a valid source (%j)`,
+    (name, args) => {
+      expect(
+        recall(
+          recalled([
+            source,
+            {
+              name,
+              args,
+              phase: 1,
+              sessionId,
+              success: true,
+              output: 'kestrel',
+            },
+          ]),
+        ),
+      ).toBe(false)
+    },
+  )
+  test(`${id}: failed artifact references still fail; store-topic reads and workspace inspection do not contaminate recall`, () => {
+    const call = {
+      name: 'read_file',
+      args: { path: '/tmp/run/other-attempt/result.json' },
+      phase: 1,
+      sessionId,
+      success: false,
+    }
+    expect(recall(recalled([source, call]))).toBe(false)
+    expect(
+      recall(
+        recalled([
+          source,
+          {
+            ...call,
+            phase: 0,
+            sessionId: `feishu-oc_group-${id.toLowerCase()}_store`,
+          },
+        ]),
+      ),
+    ).toBe(true)
+    expect(
+      recall(
+        recalled([source, { ...call, name: 'bash', args: { command: 'pwd' } }]),
+      ),
+    ).toBe(true)
+    expect(
+      recall(
+        recalled([
+          source,
+          { ...call, args: { path: '../memory/project_staging-server.md' } },
+        ]),
+      ),
+    ).toBe(true)
+  })
+
+  test(`${id} worker rejects successful raw-session reads and later memory saves as fail`, async () => {
+    const topic = id.toLowerCase()
+    const { result, calls, pending } = await exitAttempt(id, [
+      fauxText('Kestrel.'),
+      fauxToolCall('bash', { command: 'pwd' }),
+      fauxToolCall('read_file', {
+        path: `../../../sessions/feishu-oc_group-${topic}_store.jsonl`,
+      }),
+      fauxToolCall('memory', stagingMemory),
+      fauxText('Kestrel.'),
+    ])
+    expect(calls[3]!.toolResults[0]!.output).toContain('kestrel')
+    expect(result.evidence!.calls[1]).toMatchObject({
+      success: true,
+      phase: 1,
+      sessionId,
+    })
+    expect(result.evidence!.calls[1]!.output).toContain('kestrel')
+    expect(result.status).toBe('fail')
+    expect(result.checks).toEqual([
+      { name: 'store', pass: false },
+      { name: 'recall', pass: false },
+    ])
+    expect(result.reason).toBeUndefined()
+    expect(pending).toBe(0)
+  })
+  test(`${id} worker rejects bash grep of the store transcript even after valid memory retrieval`, async () => {
+    const { result, calls, pending } = await exitAttempt(id, [
+      fauxToolCall('memory', stagingMemory),
+      fauxText('Saved.'),
+      fauxToolCall('memory', {
+        action: 'read',
+        filename: 'project_staging-server.md',
+      }),
+      fauxToolCall('bash', {
+        command: `grep -i kestrel ../../../sessions/feishu-oc_group-${id.toLowerCase()}_store.jsonl`,
+      }),
+      fauxText('Kestrel.'),
+    ])
+    expect(calls[4]!.toolResults[0]!.output).toContain('kestrel')
+    expect(result.evidence!.calls[2]).toMatchObject({
+      success: true,
+      sessionId,
+    })
+    expect(result.status).toBe('fail')
+    expect(result.checks).toEqual([
+      { name: 'store', pass: true },
+      { name: 'recall', pass: false },
+    ])
+    expect(pending).toBe(0)
+  })
+  test(`${id} worker accepts actual history results and rejects empty history`, async () => {
+    for (const history of [true, false]) {
+      const { result, calls, pending } = await exitAttempt(
+        id,
+        [
+          fauxText('Done.'),
+          fauxToolCall('feishu_search_history', { keyword: 'staging' }),
+          fauxText('Kestrel.'),
+        ],
+        history,
+      )
+      const output = JSON.parse(calls[2]!.toolResults[0]!.output as string)
+      expect(output.matches).toHaveLength(history ? 1 : 0)
+      expect(result.evidence!.calls[0]).toMatchObject({
+        success: true,
+        sessionId,
+      })
+      expect(result.checks).toEqual([
+        { name: 'store', pass: false },
+        { name: 'recall', pass: history },
+      ])
+      expect(result.status).toBe('fail')
+      expect(pending).toBe(0)
+    }
+  })
+  test(`${id} worker credits a fact in the actual injected memory index`, async () => {
+    const { result, calls } = await exitAttempt(id, [
+      fauxToolCall('memory', {
+        ...stagingMemory,
+        description: 'The staging server is called kestrel.',
+      }),
+      fauxText('Saved.'),
+      fauxText('Kestrel.'),
+    ])
+    expect(calls[2]!.lastUserText).toContain('kestrel')
+    expect(result.evidence!.recallMemory!.join('\n')).toContain('kestrel')
+    expect(result.status).toBe('pass')
+  })
+  test(`${id} worker accepts reading the legitimate group memory file`, async () => {
+    const { result, calls } = await exitAttempt(id, [
+      fauxToolCall('memory', stagingMemory),
+      fauxText('Saved.'),
+      fauxToolCall('read_file', {
+        path: '../memory/project_staging-server.md',
+      }),
+      fauxText('Kestrel.'),
+    ])
+    expect(calls[3]!.toolResults[0]!.output).toContain('kestrel')
+    expect(result.status).toBe('pass')
+  })
+  test(`${id} worker rejects a scripted correct answer without a source`, async () => {
+    const { result } = await exitAttempt(id, [
+      fauxText('Done.'),
+      fauxText('Kestrel.'),
+    ])
+    expect(result.checks).toEqual([
+      { name: 'store', pass: false },
+      { name: 'recall', pass: false },
+    ])
+    expect(result.status).toBe('fail')
+  })
+}
