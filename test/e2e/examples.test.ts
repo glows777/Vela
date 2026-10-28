@@ -57,6 +57,8 @@ test.concurrent('examples/rpc-client.ts drives vela --mode rpc to agent_settled'
   ])
   expect(stderr).not.toContain('failed]')
   expect(code).toBe(0)
-  // The demo model lists the folder: the client printed the tool call and the result
-  expect(stdout).toContain('[tool] list_directory')
+  // The demo model lists the folder with a default tool, and the listing comes back (#233)
+  expect(stdout).toContain('[tool] bash {"command":"ls"}')
+  expect(stdout).not.toContain('[tool error]')
+  expect(stdout).toContain('package.json')
 })
