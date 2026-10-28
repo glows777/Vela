@@ -2,7 +2,7 @@
 
 Vela is an AI coworker for your team's group chats, built on a terminal agent and TypeScript SDK.
 
-Add Vela to a Lark (Feishu) group and it works like a teammate: it answers short questions in the group, opens a topic for each larger task, keeps the topic's progress card up to date, remembers what the group told it and can wake itself on a schedule. Run `vela serve` on a machine you trust and enable the chats you want it in. See [channels](docs/channels.md) for the setup.
+Add Vela to a group chat and it works like a teammate: it answers short questions in the group, opens a topic for each larger task, keeps the topic's progress card up to date, remembers what the group told it and can wake itself on a schedule. Chat platforms plug in through a standard [channel](docs/channels.md) interface; Lark (Feishu) ships built in. Run `vela serve` on a machine you trust and enable the chats you want it in.
 
 Underneath is a general agent you can also use on its own. Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. Use it in your terminal, script it with JSON or RPC mode, or embed it as an SDK that runs many sessions in one process. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels, or connect [MCP servers](docs/mcp.md).
 
