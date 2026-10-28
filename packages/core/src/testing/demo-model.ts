@@ -186,7 +186,7 @@ function wasToolSearchCalled(prompt: Prompt): boolean {
 function detectParallelIntent(text: string): ToolCallIntent[] | null {
   if (text.includes('测试并发') || text.includes('test parallel')) {
     return [
-      { toolName: 'list_directory', args: { path: '.' } },
+      { toolName: 'bash', args: { command: 'ls' } },
       { toolName: 'bash', args: { command: 'echo parallel-1' } },
       { toolName: 'bash', args: { command: 'echo parallel-2' } },
     ]
@@ -200,7 +200,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
 
   // Calls a tool on every step and never answers: something to interrupt with Esc
   if (text.includes('测试死循环') || text.includes('test loop')) {
-    return { toolName: 'list_directory', args: { path: '.' } }
+    return { toolName: 'bash', args: { command: 'ls' } }
   }
 
   // tool_search just returned: call the tool it found
@@ -328,7 +328,7 @@ function detectToolIntent(prompt: Prompt): ToolCallIntent | null {
     text.includes('list files') ||
     /\bls\b/.test(text)
   ) {
-    return { toolName: 'list_directory', args: { path: '.' } }
+    return { toolName: 'bash', args: { command: 'ls' } }
   }
 
   const fileMatch = text.match(/(\S+\.[\w]+)/)

@@ -37,12 +37,12 @@ REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date
 
 | Prompt | Model does |
 |---|---|
-| `list files`, `ls` | `list_directory .` |
+| `list files`, `ls` | `bash ls` |
 | `read a.txt` | `read_file` |
 | `test edit` | `edit_file` on `sample-data.txt` (once per fixture) |
-| `test bash` / `test grep` / `test find` | `bash` echo / `grep` / `find` |
+| `test bash` / `test grep` / `test find` | `bash` echo / `grep` / `find` (`grep` and `find` are off by default: pass `--tools +grep,+find`) |
 | `test parallel` | three tools in one step |
-| `test loop` | `list_directory` every step while the last user message contains `test loop`. After 10 identical calls the agent inserts a warning and the next step is the canned reply, so press Esc while `Esc to interrupt` is showing |
+| `test loop` | `bash ls` every step while the last user message contains `test loop`. After 10 identical calls the agent inserts a warning and the next step is the canned reply, so press Esc while `Esc to interrupt` is showing |
 | `test retry` | two 429 errors, then an answer |
 | anything else | a canned greeting, streamed slowly |
 

@@ -59,7 +59,7 @@ test('demo model: test parallel only calls built-in tools', async () => {
 
 test('demo model: "ls" only lists files as a whole word', async () => {
   const model = createMockModel()
-  expect(await toolsOf(model, 'ls')).toEqual(['list_directory'])
+  expect(await toolsOf(model, 'ls')).toEqual(['bash'])
   expect(await toolsOf(model, 'what tools do you have')).toEqual([])
 })
 

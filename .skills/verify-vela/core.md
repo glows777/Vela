@@ -21,7 +21,7 @@ The smallest real program, offline (swap the faux model for `'openai/<id>'` plus
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
 
-const model = createFauxModel({ responses: [fauxToolCall('list_directory', { path: '.' }), fauxText('done')] })
+const model = createFauxModel({ responses: [fauxToolCall('bash', { command: 'ls' }), fauxText('done')] })
 const vela = createVela({ model })               // no dataDir: sessions stay in memory
 try {
   const session = vela.session('demo')           // one Vela, many sessions
