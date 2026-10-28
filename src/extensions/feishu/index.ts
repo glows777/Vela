@@ -1,5 +1,6 @@
-import { configString, configStrings } from '../config.ts'
-import type { VelaExtension } from '../types.ts'
+import type { ChannelExtension as VelaExtension } from '../../channels/index.ts'
+import type { ExtensionConfigDefinition } from '../../extension-api.ts'
+import { configString, configStrings } from '../../extension-api.ts'
 import { FeishuChannel } from './channel.ts'
 import type { FeishuChat } from './chats.ts'
 import type { FeishuTransport } from './transport.ts'
@@ -34,4 +35,16 @@ export function feishu(options: FeishuOptions = {}): VelaExtension {
     vela.registerChannel(channel)
     channel.topics.register(vela)
   }
+}
+
+export const larkConfig: ExtensionConfigDefinition = {
+  name: 'feishu',
+  resolve(section, context) {
+    return {
+      appId: context.env.FEISHU_APP_ID,
+      appSecret: context.env.FEISHU_APP_SECRET,
+      owners: context.env.FEISHU_OWNERS,
+      ...section,
+    }
+  },
 }

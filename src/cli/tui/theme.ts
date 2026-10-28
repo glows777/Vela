@@ -8,7 +8,7 @@ import {
   styleText,
   type TextStyle,
 } from '@earendil-works/pi-tui'
-import type { ThinkingLevel } from '../../models/index.ts'
+import type { ThinkingLevel } from '../../core.ts'
 
 /** Colors from pi's default dark theme (okhsl), only the ones Vela uses. */
 const c = (h: number, s: number, l: number) => okhslColor(h, s / 100, l / 100)

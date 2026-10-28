@@ -1,9 +1,10 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
-import { formatUsd } from '../usage/format.ts'
-import type { StepUsage, UsageTotals } from '../usage/tracker.ts'
-import type { VelaSession } from '../vela-session.ts'
+
+const formatUsd = (amount: number): string => `$${amount.toFixed(4)}`
+
+import type { StepUsage, UsageTotals, VelaSession } from '../extension-api.ts'
 import type { ChannelDirectory } from './directory.ts'
 
 const count = z.number().finite().nonnegative()
@@ -83,7 +84,7 @@ export class ChannelUsage {
         before = undefined
         if (after.steps === start.steps) return
         // A priced subtotal alone cannot distinguish an unpriced summary from a free one.
-        const summary = session.tracker.recent(1)[0]!
+        const summary = session.usage.lastRecord!
         const tokens: StepUsage = {
           inputTokens: after.inputTokens - start.inputTokens,
           outputTokens: after.outputTokens - start.outputTokens,
@@ -132,7 +133,7 @@ export class ChannelUsage {
     const first = this.rows[0]
     return [
       `Model: ${info.ref}`,
-      `Context: ${usage.tokens} estimated tokens (${usage.percent}% of ${info.contextWindow ?? session.tracker.contextWindow})`,
+      `Context: ${usage.tokens} estimated tokens (${usage.percent}% of ${info.contextWindow ?? session.usage.contextWindow})`,
       this.total('Topic', topic),
       this.total('Group', group),
       first

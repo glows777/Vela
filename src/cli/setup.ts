@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fuzzyFilter } from '@earendil-works/pi-tui'
+import type { ChannelExtension as VelaExtension } from '../channels/vela.ts'
 import {
   type ExtensionEntry,
   extensionName,
@@ -11,19 +12,14 @@ import {
   saveTrust,
   type VelaConfig,
 } from '../config/index.ts'
-import { deepMerge } from '../config/interpolate.ts'
-import { feishu } from '../extensions/feishu/index.ts'
+import type { ModelInfo, ThinkingLevel } from '../core.ts'
+import { feishu, larkConfig } from '../extensions/feishu/index.ts'
 import { mcp } from '../extensions/mcp/index.ts'
 import { memory } from '../extensions/memory/index.ts'
 import { permissionGate } from '../extensions/permission-gate/index.ts'
-import { rag } from '../extensions/rag/index.ts'
-import type { VelaExtension } from '../extensions/types.ts'
-import { web } from '../extensions/web/index.ts'
-import {
-  type ModelInfo,
-  THINKING_LEVELS,
-  type ThinkingLevel,
-} from '../models/index.ts'
+import { rag, ragConfig } from '../extensions/rag/index.ts'
+import { web, webConfig } from '../extensions/web/index.ts'
+import { THINKING_LEVELS } from '../models/index.ts'
 import { assertSessionId } from '../session/options.ts'
 import {
   applyToolModifiers,
@@ -515,25 +511,14 @@ export function extensionConfigFromEnv(
   env: Env,
   fromSettings: Record<string, Record<string, unknown>>,
 ): Record<string, Record<string, unknown>> {
-  const defaults: Record<string, Record<string, unknown>> = {
-    web: { tavilyKey: env.TAVILY_API_KEY, serperKey: env.SERPER_API_KEY },
-    feishu: {
-      appId: env.FEISHU_APP_ID,
-      appSecret: env.FEISHU_APP_SECRET,
-      owners: env.FEISHU_OWNERS,
-    },
-    rag: {
-      embedding: {
-        baseUrl: env.EMBEDDING_MODEL_BASE_URL,
-        model: env.EMBEDDING_MODEL,
-        apiKey: env.EMBEDDING_MODEL_KEY,
-      },
-    },
-  }
-  return deepMerge(defaults, fromSettings) as Record<
-    string,
-    Record<string, unknown>
-  >
+  const result = { ...fromSettings }
+  const context = { cwd: '', agentDir: '', projectDir: '', trusted: false, env }
+  for (const definition of [webConfig, larkConfig, ragConfig])
+    result[definition.name] = definition.resolve(
+      result[definition.name] ?? {},
+      context,
+    )
+  return result
 }
 
 /**

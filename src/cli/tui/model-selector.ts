@@ -1,6 +1,6 @@
 import type { Component } from '@earendil-works/pi-tui'
+import type { VelaSession } from '../../core.ts'
 import type { Vela } from '../../vela.ts'
-import type { VelaSession } from '../../vela-session.ts'
 import { nextModel, scopedModels } from '../model-cycle.ts'
 import { dialogBox, errorMessage } from './components.ts'
 import { SearchSelect } from './search-select.ts'

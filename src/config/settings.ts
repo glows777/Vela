@@ -3,10 +3,6 @@ import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileCredentialStore } from '../auth/store.ts'
 import type { CredentialStore } from '../auth/types.ts'
-import {
-  loadMcpServers,
-  type McpServersFile,
-} from '../extensions/mcp/config.ts'
 import { assertLimitKeys, type VelaLimits } from '../limits.ts'
 import {
   type ProviderDefinition,
@@ -15,6 +11,7 @@ import {
 } from '../models/index.ts'
 import { type ContextFile, loadContextFiles } from '../prompt/context-files.ts'
 import { isToolModifier, mergeDefaultTools } from '../tools/tool-selection.ts'
+import type { ExtensionConfigDefinition } from './extension-config.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
@@ -59,6 +56,8 @@ export type ExtensionEntry =
   | { name: string; path: string }
 
 export interface LoadConfigOptions {
+  /** Installed extensions own any additional settings sources and trust resources. */
+  extensionConfigs?: readonly ExtensionConfigDefinition[]
   /** Project directory, default process.cwd() */
   cwd?: string
   /** User-level directory, default `env.VELA_DIR` or `~/.vela` */
@@ -100,8 +99,6 @@ export interface VelaConfig {
   credentials: CredentialStore
   /** Per-extension config sections (`$VAR` already interpolated) */
   extensionConfig: Record<string, Record<string, unknown>>
-  /** MCP servers from `<agentDir>/mcp.json` and the trusted project's `.vela/mcp.json`, for the mcp extension */
-  mcp: McpServersFile
 }
 
 const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
@@ -181,6 +178,13 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     join(agentDir, 'APPEND_SYSTEM.md'),
   ].find((file) => existsSync(file))
 
+  const extensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
+  for (const definition of options.extensionConfigs ?? [])
+    extensionConfig[definition.name] = definition.resolve(
+      extensionConfig[definition.name] ?? {},
+      { cwd, agentDir, projectDir, trusted, env },
+    )
+
   return {
     cwd,
     agentDir,
@@ -198,15 +202,13 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       : {}),
     providers: loadModels({ agentDir, env }),
     credentials: fileCredentialStore(join(agentDir, 'auth.json')),
-    extensionConfig: interpolateDeep(settings.extensionConfig ?? {}, env),
-    mcp: loadMcpServers({ agentDir, projectDir, trusted, env }),
+    extensionConfig,
   }
 }
 
 /** Project resources in `.vela/` that need trust (same list as pi's, minus what Vela doesn't have) */
 const TRUSTED_PROJECT_RESOURCES = [
   'settings.json',
-  'mcp.json',
   'extensions',
   'skills',
   'prompts',
@@ -223,14 +225,18 @@ export function projectTrustRequired(
   cwd: string,
   agentDir?: string,
   homeDir: string = homedir(),
+  extensionConfigs: readonly ExtensionConfigDefinition[] = [],
 ): boolean {
   const projectDir = join(resolve(cwd), '.vela')
   if (agentDir && resolve(agentDir) === projectDir) return false
   const userAgentsSkills = join(resolve(homeDir), '.agents', 'skills')
   return (
-    TRUSTED_PROJECT_RESOURCES.some((name) =>
-      existsSync(join(projectDir, name)),
-    ) ||
+    [
+      ...TRUSTED_PROJECT_RESOURCES,
+      ...extensionConfigs.flatMap(
+        (definition) => definition.projectResources ?? [],
+      ),
+    ].some((name) => existsSync(join(projectDir, name))) ||
     existsSync(join(resolve(cwd), '.skills')) ||
     ancestorAgentsSkillDirs(cwd).some(
       (dir) => dir !== userAgentsSkills && existsSync(dir),

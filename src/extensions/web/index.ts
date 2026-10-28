@@ -1,5 +1,8 @@
-import { configString } from '../config.ts'
-import type { VelaExtension } from '../types.ts'
+import type {
+  ExtensionConfigDefinition,
+  VelaExtension,
+} from '../../extension-api.ts'
+import { configString } from '../../extension-api.ts'
 import { serperSearchTool, tavilySearchTool, webFetchTool } from './tools.ts'
 
 export interface WebOptions {
@@ -23,4 +26,15 @@ export function web(options: WebOptions = {}): VelaExtension {
     if (tavilyKey) vela.registerTool(tavilySearchTool(tavilyKey))
     else if (serperKey) vela.registerTool(serperSearchTool(serperKey))
   }
+}
+
+export const webConfig: ExtensionConfigDefinition = {
+  name: 'web',
+  resolve(section, context) {
+    return {
+      tavilyKey: context.env.TAVILY_API_KEY,
+      serperKey: context.env.SERPER_API_KEY,
+      ...section,
+    }
+  },
 }

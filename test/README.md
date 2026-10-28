@@ -245,3 +245,9 @@ Conventions:
 
 - The TUI in a real terminal has only the two smoke tests in `e2e/cli` (util-linux `script` gives the subprocess a pseudo-terminal; platforms without `script`, such as macOS, skip them). Keys and rendering are tested in detail in `e2e/tui` with the fake terminal.
 - When you find a problem, first write a faux scenario that reproduces it; anything that can't be fixed yet goes here, with tests asserting the current behavior.
+
+## Core/channel decoupling regressions
+
+`e2e/core-decoupling.test.ts` characterizes first routing binding (including identity and unchanged cwd/tools/permissions), matching/conflicting routes, no conflict retry, fork/clone authority, save observers, explicit failure reporting and shutdown ordering. `e2e/core-entries.test.ts` exercises the source-level core assembly/testing entry, public memory/schema contracts, descriptor-owned config/trust, the narrow channel publisher and side-effect-free diagnostic inspection with faux models. Existing channel, group-memory, Feishu, serve, CLI/RPC and image suites remain the behavioral regression coverage.
+
+The public `@glows777/vela/testing` fixture stays channel-aware with optional RAG. Its shared implementation in `src/testing/core-vela.ts` assembles core plus memory by default; the compatibility wrapper injects channel/RAG assembly. Keep getter-backed fixture properties lazy (in particular `model` when a custom model was supplied). Historical eval workers use the channel testing drain helper when present and the historical internal path only for older source snapshots.

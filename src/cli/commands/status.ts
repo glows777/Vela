@@ -1,9 +1,8 @@
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { formatUsd } from '../../usage/format.ts'
-import type { UsageTotals } from '../../usage/tracker.ts'
-import { velaInternals } from '../../vela.ts'
-import type { VelaSession } from '../../vela-session.ts'
+import type { UsageTotals, VelaSession } from '../../core.ts'
+import { inspectVela } from '../../diagnostics.ts'
+import { formatUsd } from '../format.ts'
 import { formatContextFileList, formatStatusPath } from '../status-display.ts'
 import { sanitize } from '../tui/components.ts'
 import type { CommandHandler } from './index.ts'
@@ -14,7 +13,7 @@ export const statusCommands: CommandHandler[] = [
     if (cmd !== '/status') return false
 
     let model: string
-    let windowTokens = session.tracker.contextWindow
+    let windowTokens = session.usage.contextWindow
     try {
       const info = session.modelInfo
       model = info.ref
@@ -32,7 +31,7 @@ export const statusCommands: CommandHandler[] = [
       `  Cwd: ${plain(vela.cwd)}`,
     ]
     const contextFiles = plain(
-      formatContextFileList(velaInternals(vela).loadedContextFiles, {
+      formatContextFileList(inspectVela(vela).contextFiles, {
         cwd: vela.cwd,
         homeDir: homedir(),
         agentDir,

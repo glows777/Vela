@@ -1,6 +1,9 @@
-import type { VelaLogger } from '../logger.ts'
-import type { ImageContent, ModelMessage } from '../messages.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type {
+  ImageContent,
+  ModelMessage,
+  VelaLogger,
+  VelaSession,
+} from '../extension-api.ts'
 import {
   type ChannelDirectory,
   type ChannelRecord,

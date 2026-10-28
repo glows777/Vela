@@ -1,10 +1,11 @@
 import { z } from 'zod'
-import { routineToolSchema } from '../../channels/routines.ts'
-import { channelScopes } from '../../channels/scope.ts'
-import type { ChannelRuntime, IncomingMessage } from '../../channels/types.ts'
-import type { ImageContent } from '../../messages.ts'
-import type { ToolContext, ToolRegistry } from '../../tools/registry.ts'
-import type { ExtensionAPI } from '../types.ts'
+import type { ChannelRuntime, IncomingMessage } from '../../channels/index.ts'
+import { routineToolSchema } from '../../channels/index.ts'
+import type {
+  ExtensionAPI,
+  ImageContent,
+  ToolContext,
+} from '../../extension-api.ts'
 import { historySearchSchema, searchHistory } from './search-history.ts'
 import type { FeishuMessageEvent, FeishuTransport } from './transport.ts'
 
@@ -27,7 +28,6 @@ function isChannel(msg: IncomingMessage): boolean {
 export class FeishuTopics {
   runtime?: ChannelRuntime
   readonly triggerImages = new WeakMap<FeishuMessageEvent, ImageContent[]>()
-  private sessions = new WeakMap<ToolRegistry, string>()
   constructor(
     private transport: () => FeishuTransport,
     private onHandled?: (
@@ -59,7 +59,7 @@ export class FeishuTopics {
   }
 
   private source(ctx?: ToolContext) {
-    const id = ctx?.registry && this.sessions.get(ctx.registry)
+    const id = ctx?.sessionId
     const runtime = this.runtime
     const msg = id && runtime?.context(id)
     if (!runtime || !id || !msg || !isChannel(msg) || !msg.replyToId)
@@ -71,7 +71,6 @@ export class FeishuTopics {
 
   register(vela: ExtensionAPI): void {
     vela.on('before_agent_start', (event, { session }) => {
-      this.sessions.set(session.registry, session.id)
       const msg = this.runtime?.context(session.id)
       if (msg?.topic) event.sections.feishuTopic = topicPrompt
       else if (msg && isChannel(msg))
@@ -89,7 +88,7 @@ export class FeishuTopics {
       inputSchema: routineToolSchema,
       executionMode: 'sequential',
       execute: async (input, ctx) => {
-        const id = ctx?.registry && this.sessions.get(ctx.registry)
+        const id = ctx?.sessionId
         const runtime = this.runtime
         if (!id || !runtime)
           throw new Error('Routines require an active Feishu channel run')
@@ -123,7 +122,7 @@ export class FeishuTopics {
       inputSchema: z.object({ reason: z.string().trim().min(1).max(2000) }),
       executionMode: 'sequential',
       execute: async ({ reason }: { reason: string }, ctx) => {
-        const id = ctx?.registry && this.sessions.get(ctx.registry)
+        const id = ctx?.sessionId
         if (!id || !this.runtime?.context(id)?.topic)
           throw new Error('Waiting requires an active Feishu topic session')
         await this.runtime.waitForInput(id, reason)
@@ -139,7 +138,9 @@ export class FeishuTopics {
       inputSchema: historySearchSchema,
       annotations: { readOnlyHint: true },
       execute: async (input, ctx) => {
-        const scope = ctx?.registry && channelScopes.get(ctx.registry)
+        const scope = ctx?.sessionId
+          ? this.runtime?.scope(ctx.sessionId)
+          : undefined
         if (scope?.channel !== 'feishu' || scope.chatKind !== 'group')
           throw new Error('History search requires a Feishu group session')
         return searchHistory(this.transport(), scope.chatId, input)

@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { imageMimeType, isBinaryFile } from '../images/metadata.ts'
-import type { ImageContent } from '../messages.ts'
+import type { ImageContent } from '../core.ts'
+import { imageMimeType, isBinaryFile } from '../images/index.ts'
 
 /** Command-line attachments are added to the first prompt, like pi. Core normalizes images once. */
 export async function readAttachments(paths: string[]): Promise<{

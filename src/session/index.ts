@@ -331,10 +331,17 @@ export class SessionStore {
       if (batch[0]?.type === 'session') await this.checkNew()
       await this.storage.append(this.sessionId, batch)
       this.lastError = undefined
-      this.onSaved?.()
     } catch (error) {
       this.pending.unshift(...batch)
       this.lastError = error
+      return
+    }
+    try {
+      this.onSaved?.()
+    } catch (error) {
+      this.logger.error(
+        `[session:${this.sessionId}] save observer failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
 

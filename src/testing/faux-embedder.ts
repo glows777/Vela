@@ -1,4 +1,7 @@
-import type { EmbeddingFn } from '../extensions/rag/embedder.ts'
+type EmbeddingFn = ((
+  texts: string[],
+  signal?: AbortSignal,
+) => Promise<number[][]>) & { readonly id?: string }
 
 /**
  * Deterministic offline embedder: splits text into words (CJK as adjacent character pairs),

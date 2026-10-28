@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { renderUsageView } from '../../../src/context/view.ts'
+import { renderUsageView } from '../../../src/cli/context-view.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
 
 const usage = {
@@ -13,7 +13,7 @@ const usage = {
 test('/usage shows tokens but no dollar amount for a model without a price', () => {
   const tracker = new TokenTracker()
   tracker.record('some-unpriced-model', usage)
-  const view = stripTerminalSequences(renderUsageView(tracker))
+  const view = stripTerminalSequences(renderUsageView(tracker.totals()))
 
   expect(view).toContain('Input')
   expect(view).not.toContain('$')
@@ -23,7 +23,7 @@ test('/usage shows tokens but no dollar amount for a model without a price', () 
 test('/usage shows the cost for a priced model', () => {
   const tracker = new TokenTracker()
   tracker.record('mock-model', usage)
-  const view = stripTerminalSequences(renderUsageView(tracker))
+  const view = stripTerminalSequences(renderUsageView(tracker.totals()))
 
   expect(view).toMatch(/Cost\s+\$\d/)
   expect(view).toContain('Without cache')
