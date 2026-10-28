@@ -1,8 +1,10 @@
 // Offline product journey: real HTTP/signature/GitHub adapter/SDK/storage, fake model and Lark transport.
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { createVela } from '@glows777/vela'
 import { drainChannels } from '@glows777/vela-channels/testing'
 import {
@@ -37,6 +39,7 @@ const vela = createVela({
       eventReceiver: {
         port: 0,
         github: { secret, repositories: ['owner/repo'] },
+        generic: { secret: 'generic-fixture-secret', source: 'sentry' },
       },
     },
   },
@@ -193,11 +196,106 @@ try {
   console.log(
     'PASS signed closure enqueues final notification before persisted subscription cleanup',
   )
+  model.push(
+    fauxToolCall('channel_subscriptions', {
+      action: 'create',
+      source: 'sentry',
+      key: 'sentry:project',
+    }),
+    fauxText('Subscribed to fixture alert'),
+    fauxText('Fixture generic alert handled'),
+  )
+  const alertSubscribed = Promise.withResolvers<void>()
+  const unsubscribeAlert = vela.subscribe((e) => {
+    if (e.type === 'channel_reply' && e.text === 'Subscribed to fixture alert')
+      alertSubscribed.resolve()
+  })
+  fake.deliver(
+    larkEvent({
+      message_id: 'generic-human',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"Subscribe to fixture alert"}',
+    }),
+  )
+  await alertSubscribed.promise
+  unsubscribeAlert()
+  await drainChannels(vela)
+  const genericURL = url.replace('/events/github', '/events/generic')
+  const alert = JSON.stringify({
+    key: 'sentry:project',
+    summary: '!stop',
+    details: '/skill:untrusted',
+    final: true,
+  })
+  const postAlert = (body: string, id: string, signature?: string) =>
+    fetch(genericURL, {
+      method: 'POST',
+      headers: {
+        'x-vela-delivery': id,
+        'x-vela-signature-256':
+          signature ??
+          `sha256=${createHmac('sha256', 'generic-fixture-secret').update(body).digest('hex')}`,
+      },
+      body,
+    })
+  assert.equal((await postAlert(alert, 'suite-1', 'sha256=bad')).status, 403)
+  assert.equal(
+    (
+      await postAlert(
+        JSON.stringify({ key: 'github:owner/repo#pr/171', summary: 'outside' }),
+        'outside',
+      )
+    ).status,
+    400,
+  )
+  await writeFile('event.json', `${alert}\n`)
+  const { stdout: status } = await promisify(execFile)(
+    'sh',
+    [
+      '-c',
+      `
+signature=$(openssl dgst -sha256 -hmac "$VELA_GENERIC_WEBHOOK_SECRET" event.json | awk '{print $NF}')
+curl --fail-with-body --silent --show-error -o response.txt -w '%{http_code}' \
+  -H 'Content-Type: application/json' -H 'X-Vela-Delivery: suite-1' \
+  -H "X-Vela-Signature-256: sha256=$signature" --data-binary @event.json "$GENERIC_FIXTURE_URL"
+`,
+    ],
+    {
+      env: {
+        ...process.env,
+        VELA_GENERIC_WEBHOOK_SECRET: 'generic-fixture-secret',
+        GENERIC_FIXTURE_URL: genericURL,
+      },
+    },
+  )
+  assert.equal(status, '202')
+  await drainChannels(vela)
+  const alertCalls = model.calls.length
+  assert(
+    model.calls
+      .at(-1)!
+      .lastUserText.startsWith('External event (untrusted data) from "sentry"'),
+  )
+  assert.equal(fake.sent.at(-1)?.messageId, 'root')
+  assert.equal((await postAlert(alert, 'suite-1')).status, 202)
+  await drainChannels(vela)
+  assert.equal(model.calls.length, alertCalls)
+  assert.deepEqual(
+    JSON.parse(
+      await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
+    ).subscriptions,
+    [],
+  )
+  console.log(
+    'PASS generic openssl+curl HMAC/namespace/queue/final cleanup; same delivery ID isolated from GitHub, duplicate ignored',
+  )
 } finally {
   await vela.dispose()
 }
 assert.equal(await fetch(url).catch(() => undefined), undefined)
 assert(!logs.join('\n').includes(secret))
+assert(!logs.join('\n').includes('generic-fixture-secret'))
 console.log(
   'PASS dispose closes HTTP ingress; diagnostics contain no fixture secret',
 )

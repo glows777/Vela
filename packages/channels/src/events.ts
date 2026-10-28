@@ -15,7 +15,7 @@ import type {
 } from './types.ts'
 
 const identity = z.string().trim().min(1).max(512)
-const eventSchema = z
+export const eventSchema = z
   .object({
     source: identity,
     key: identity,

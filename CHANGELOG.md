@@ -15,6 +15,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - Opt-in channel webhook ingress binds only to `127.0.0.1`, verifies GitHub HMAC signatures over at most 1 MiB of raw bytes, and remembers the last 1,000 delivery IDs in memory. Allowlisted check suites, submitted reviews, PR conversation comments and closure events wake subscribed conversations through the existing untrusted-event queue. Self-origin comments/reviews are skipped; tunnel setup remains external. See [Channels](docs/channels.md#github-webhooks).
 
+- Generic shared-secret events reuse the same receiver, untrusted queue and final cleanup. The host fixes one source and its `source:` key namespace; raw-body HMAC, strict payload validation and adapter-scoped delivery IDs prevent source/target injection and cross-adapter dedup collisions. GitHub and generic may run separately or together with independent secrets. See [signed local-script example](docs/channels.md#generic-shared-secret-events).
+
 - Experimental frontend helpers in `@glows777/vela-core/diagnostics` share core session rendering, validation and trust rules with the CLI. Recording resolves models without constructing an extra Vela; exact public development mappings make focused tests and the watched CLI observe source edits immediately, while builds and packed consumers retain real artifact resolution.
 
 - Session routing options (`scope`, `channel`), read-only scope and tool-call session identity, `toolDecision`, explicit `save({ reportFailure })`, lifecycle callbacks, channel-only event publication and experimental diagnostic snapshots support core/channel separation. Existing package root and testing imports remain compatible.

@@ -219,7 +219,7 @@ Event input has a fixed untrusted-data prefix, so command-looking payloads do no
 
 `final: true` enqueues the last notification to matching available targets and then removes the snapshotted subscriptions. `publishEvent()` resolves after enqueue and final-state persistence, without waiting for the model. Disabled, missing or disconnected matching targets are skipped with diagnostics and never forwarded elsewhere. Only an event with no matching subscriptions can use `eventDefaultTarget: { channel, chatId }`, supplied as an SDK option or CLI setting; that top-level target must already exist and be enabled. Otherwise the event is dropped. Publication requires started channels and rejects once stopping begins.
 
-Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. Embedded producers call the SDK directly; independent GitHub producers use the optional receiver below. The generic shared-secret adapter and a CLI event client are not provided yet. The existing notification workflow is separate.
+Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. Embedded producers call the SDK directly; independent producers use the optional authenticated receivers below. There is no CLI event client. The existing notification workflow is separate.
 
 External top-level inputs never borrow a previous human reply ID. Lark establishes a new announcement receipt before prompting; admission or preparation errors are recorded in operator diagnostics without a synthetic feedback reply. Human input retains its own error feedback. CLI and direct SDK default-target addresses both trim surrounding whitespace.
 
@@ -257,9 +257,45 @@ Configure a GitHub repository webhook with JSON content type, a high-entropy sec
 
 Vela-authored PR conversation comments and reviews must end with an independent final line `<!-- vela:event-origin -->`. The adapter checks the complete body before truncation and ignores those events; unmarked content by the same author still wakes the conversation. This marker is a collaboration convention, not authentication. Summaries/previews are bounded (500/8192 characters with a truncation marker), queued as untrusted data, and never download logs, diffs or payload URLs.
 
-Only `POST /events/github` is registered. The receiver limits the raw request to **1 MiB**, including streamed bodies without Content-Length. It verifies [`X-Hub-Signature-256` HMAC-SHA256](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) against the original bytes with a constant-time comparison before JSON parsing. Wrong/missing signatures return 403 without consuming a delivery ID; malformed authenticated payloads return 400, oversize bodies 413, and publication failures 503. Other routes/methods return 404/405.
+The GitHub adapter registers only `POST /events/github`. The receiver limits the raw request to **1 MiB**, including streamed bodies without Content-Length. It verifies [`X-Hub-Signature-256` HMAC-SHA256](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) against the original bytes with a constant-time comparison before JSON parsing. Wrong/missing signatures return 403 without consuming a delivery ID; malformed authenticated payloads return 400, oversize bodies 413, and publication failures 503. Unconfigured routes/other methods return 404/405.
 
-After authentication, the original `X-GitHub-Delivery` ID is synchronously recorded before mapping/fanout. The last **1,000** IDs live only in memory; concurrent duplicates return 202 without another fanout. IDs remain consumed after malformed payloads or publication failure: this stage has no reservation, rollback or retry. Eviction or restart permits redelivery. **202 means accepted/ignored, not executed or durably delivered**; queue/storage/crash boundaries remain best effort. Signatures authenticate bytes, not the actor's authority to run tools. Raw bodies and secrets are not logged.
+After authentication, the original `X-GitHub-Delivery` ID is synchronously recorded before mapping/fanout. The last **1,000** `(adapter, delivery ID)` pairs share one memory cache; concurrent duplicates return 202 without another fanout. Equal IDs from GitHub and generic producers are independent. IDs remain consumed after malformed payloads or publication failure: this stage has no reservation, rollback or retry. Eviction or restart permits redelivery. **202 means accepted/ignored, not executed or durably delivered**; queue/storage/crash boundaries remain best effort. Signatures authenticate bytes, not the actor's authority to run tools. Raw bodies and secrets are not logged.
+
+### Generic shared-secret events
+
+Independent scripts and alerts can use `POST /events/generic`. Add this section beside `github` under `extensionConfig.channel.eventReceiver`, or use it alone:
+
+```json
+{
+  "generic": {
+    "secret": "$VELA_GENERIC_WEBHOOK_SECRET",
+    "source": "sentry"
+  }
+}
+```
+
+Exactly one generic source is configured per receiver. `source` is fixed by the host; `github` is reserved case-insensitively. If both adapters are configured, their secrets must differ. At least one adapter is required. Existing settings interpolation/trust, SDK literal inputs, port, loopback binding, body limit and start/stop lifecycle apply unchanged. A route is absent (404) when its adapter is unconfigured.
+
+The strict JSON body requires `key` and `summary`, with optional string `details` and boolean `final`. A key must already be trimmed, start with the exact configured `source:` and have a nonempty suffix; it is kept unchanged. Other namespaces return 400. Payload `source`, `deliveryId`, target/chat/session/permission fields and all other properties are rejected. Subscribe with that exact source and full key, for example `source: "sentry", key: "sentry:project-x"`. Existing enabled-target/default rules, untrusted queue, 500/8192-character summary/details bounds and final enqueue-before-unsubscribe behavior are shared with SDK events.
+
+Set `X-Vela-Delivery` to the producer's stable ID for this delivery (nonempty, at most 512 characters). Sign the **original bytes** with HMAC-SHA256 in `X-Vela-Signature-256: sha256=<hex>`. Verification precedes JSON parsing; invalid signatures cannot consume an ID. Dedup uses `(generic, delivery ID)` in the same bounded cache and has the same best-effort/consumed-on-error rules described above. There is no timestamp or replay window.
+
+With the matching secret already in your environment and a subscription created, a local script can send:
+
+```sh
+: "${VELA_GENERIC_WEBHOOK_SECRET:?set the same secret as Vela}"
+cat > event.json <<'JSON'
+{"key":"sentry:project-x","summary":"Local alert resolved","details":"External data, not new authorization"}
+JSON
+signature=$(openssl dgst -sha256 -hmac "$VELA_GENERIC_WEBHOOK_SECRET" event.json | awk '{print $NF}')
+curl --fail-with-body --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -H 'X-Vela-Delivery: local-alert-001' \
+  -H "X-Vela-Signature-256: sha256=$signature" \
+  --data-binary @event.json http://127.0.0.1:8787/events/generic
+```
+
+Use a new delivery ID for a new event; resending the same ID is intentionally ignored while cached. `--data-binary` preserves the signed file bytes. Set `"final": true` only when the final notification should remove matching subscriptions. A tunneled producer uses the HTTPS tunnel URL with the same path and signature. Signing does not authorize tool execution beyond the receiving chat's existing permissions.
 
 ### Tunnel deployment examples
 
