@@ -8,7 +8,7 @@ Pick the surface first:
 
 | You are | Use | Docs |
 |---|---|---|
-| TypeScript in the same process | `createVela()` from `@glows777/vela` | [sdk](../../docs/sdk.md) |
+| TypeScript in the same process | `createVela()` from `@glows777/vela` (or `@glows777/vela-core` for a core-only app, see [packages](../../docs/sdk.md#packages)) | [sdk](../../docs/sdk.md) |
 | Another language or process | `vela --mode rpc` (long-lived) or `vela --mode json "<prompt>"` (one run) | [rpc](../../docs/rpc.md), [json](../../docs/json.md) |
 | Adding tools, commands, providers, hooks or a chat app | An extension: `(vela) => { vela.registerTool(…); vela.on(…) }` | [extensions](../../docs/extensions.md), [channels](../../docs/channels.md) |
 | Testing any of the above offline | `@glows777/vela/testing` | [testing](../../docs/testing.md) |
@@ -46,7 +46,7 @@ A faux response can be a function of the request (`req.lastUserText`, `req.toolR
 
 ## Verifying core
 
-Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.ts` and `$REPO/packages/vela/src/testing/index.ts`, and run it with `$H exec $RUN core env REPO=$REPO bun core-check.ts` (see [SKILL.md](SKILL.md)). Drive the behavior your change touches plus its neighbors, then read the matching e2e test to see what is already pinned down. `t` is a `createTestVela(…)`; `call(…)` is `fauxToolCall(…)`.
+Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.ts` and `$REPO/packages/vela/src/testing/index.ts` (a change inside `packages/core` that should work without channels: import `$REPO/packages/core/src/index.ts` and `$REPO/packages/core/src/testing/index.ts` instead, and check the assembled Vela has no channel methods such as `startChannels`), and run it with `$H exec $RUN core env REPO=$REPO bun core-check.ts` (see [SKILL.md](SKILL.md)). Drive the behavior your change touches plus its neighbors, then read the matching e2e test to see what is already pinned down. `t` is a `createTestVela(…)`; `call(…)` is `fauxToolCall(…)`.
 
 | Behavior | Recipe | Check | Covered in |
 |---|---|---|---|

@@ -27,6 +27,23 @@ Unlike the CLI, the SDK reads no config files and no environment variables by it
 
 All [SDK examples](../examples/sdk/) run offline with the faux model from `@glows777/vela/testing` and are typechecked with the repository.
 
+## Packages
+
+The examples on this page import from `@glows777/vela`, which bundles everything. The six packages share one version. Choose the smallest consumer dependency:
+
+| Package | Public entries and ownership |
+|---|---|
+| `@glows777/vela-core` | Root SDK (including images, memory, web and permission gate), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
+| `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
+| `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config; see [migration](lark-migration.md) for older Feishu deployments |
+| `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
+| `@glows777/vela-rag` | Root RAG factory; depends on core |
+| `@glows777/vela` | Compatibility SDK, built-in composition and CLI/TUI; depends on all five |
+
+For a core-only app, import `createVela` from `@glows777/vela-core` and its faux helpers from `@glows777/vela-core/testing`. For custom channel composition, use `createChannelVela` from `@glows777/vela-channels` and install only the adapters you need. Each extension owns its config descriptor; supply descriptors through core `loadConfig({ extensionConfigs })` when composing configuration yourself. The umbrella continues to supply built-in defaults and descriptors.
+
+Only listed export-map entries are supported. Private `src/` or `dist/` paths are not package APIs. Core normalizes images with Photon lazily when an image is used; core and channels exclude the Lark SDK, MCP SDK, sqlite-vec and pi-tui. For production artifacts use `bun run build`; development maps exactly the 12 public entries to source; package builds clear the mapping and packed consumers resolve the real artifacts.
+
 ## createVela options
 
 `createVela(options?: VelaOptions): Vela`. Every option is optional.
@@ -448,7 +465,7 @@ During 0.x, a breaking change bumps the minor version (0.1 to 0.2); patch releas
 
 Anthropic and OpenAI Responses accept native tool images. OpenAI Chat-compatible adapters serialize tool content as JSON, so Vela lifts images into one request-only user message after the complete consecutive tool-result group. Adapter detection uses the provider's `.chat` suffix, including configured aliases. Custom provider implementations must report that protocol suffix if they share this limitation.
 
-See [the offline tool-image example](../examples/sdk/06-tool-images.ts), [tool hooks](extensions.md#tool-image-results), and [verification notes](verification/image-tool-results.md).
+See [the offline tool-image example](../examples/sdk/06-tool-images.ts) and [tool hooks](extensions.md#tool-image-results).
 
 ## Routing and host lifecycle
 
@@ -463,21 +480,5 @@ An existing unbound session accepts its first scope/channel binding while preser
 `publishChannelEvent(session, event)` accepts only `channel_message`, `channel_reply` and `channel_error`. `resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
 
 The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
-
-The six packages share one version. Choose the smallest consumer dependency:
-
-| Package | Public entries and ownership |
-|---|---|
-| `@glows777/vela-core` | Root SDK (including images, memory, web and permission gate), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
-| `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
-| `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config; see [migration](lark-migration.md) for older Feishu deployments |
-| `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
-| `@glows777/vela-rag` | Root RAG factory; depends on core |
-| `@glows777/vela` | Compatibility SDK, built-in composition and CLI/TUI; depends on all five |
-
-For a core-only app, import `createVela` from `@glows777/vela-core` and its faux helpers from `@glows777/vela-core/testing`. For custom channel composition, use `createChannelVela` from `@glows777/vela-channels` and install only the adapters you need. Each extension owns its config descriptor; supply descriptors through core `loadConfig({ extensionConfigs })` when composing configuration yourself. The umbrella continues to supply built-in defaults and descriptors.
-
-Only listed export-map entries are supported. Private `src/` or `dist/` paths are not package APIs. Core normalizes images with Photon lazily when an image is used; core and channels exclude the Lark SDK, MCP SDK, sqlite-vec and pi-tui. For production artifacts use `bun run build`; development maps exactly the 12 public entries to source; package builds clear the mapping and packed consumers resolve the real artifacts.
-
 
 The experimental `@glows777/vela-core/diagnostics` entry also provides the canonical frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions. `resolveModel(ref, { providers, credentials })` resolves a supplied object, provider reference or configured default without assembling a Vela or reading project resources. With no configured default it throws the CLI’s existing no-model guidance. These helpers are experimental; the exact surface is recorded in the core API snapshot.

@@ -1,6 +1,6 @@
 # Built-in extensions
 
-Vela ships six extensions: `memory`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
+Vela ships six extensions: `memory`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `web` and `permission-gate` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all six (see [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|

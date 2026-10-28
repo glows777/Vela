@@ -134,7 +134,7 @@ An invalid file (bad JSON, unknown `api`, a model without `id`) stops the CLI wi
 
 ## The model catalog
 
-`src/models/catalog.generated.ts` is generated from a pinned version of pi's `@earendil-works/pi-ai` package (MIT), keeping the providers and fields Vela uses. It is part of the package, so Vela has no runtime dependency on pi. To refresh it, run `bun scripts/update-models.ts [version]` and commit the result.
+`packages/core/src/models/catalog.generated.ts` is generated from a pinned version of pi's `@earendil-works/pi-ai` package (MIT), keeping the providers and fields Vela uses. It is part of the package, so Vela has no runtime dependency on pi. To refresh it, run `bun scripts/update-models.ts [version]` and commit the result.
 
 ## Context window and limits
 

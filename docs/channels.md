@@ -221,7 +221,7 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 
 **Channel hooks remain experimental.** Lark is the only channel implementation so far; the hooks will be stabilized once a second channel is implemented. Their signatures may change in the meantime; consult the migration notes when upgrading. This does not change the stability policy for the rest of the SDK.
 
-Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
+Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The channel types and `createChannelVela` come from `@glows777/vela-channels` (also re-exported by `@glows777/vela`); an adapter for another platform depends on it and `@glows777/vela-core`, like `@glows777/vela-lark` does. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
 
 | Member | Required | Contract |
 | --- | --- | --- |

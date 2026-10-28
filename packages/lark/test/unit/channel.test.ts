@@ -7,9 +7,9 @@ import { lark } from '@glows777/vela-lark'
 import {
   cleanupTestVelas,
   createTestVela,
-} from '../../../../../../test/support/vela.ts'
-import { LarkChannel, UNSUPPORTED_MESSAGE } from '../../../../src/channel.ts'
-import { messageText } from '../../../../src/messages.ts'
+} from '../../../../test/support/vela.ts'
+import { LarkChannel, UNSUPPORTED_MESSAGE } from '../../src/channel.ts'
+import { messageText } from '../../src/messages.ts'
 
 afterEach(cleanupTestVelas)
 

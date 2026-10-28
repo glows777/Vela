@@ -6,7 +6,7 @@ import {
   releaseNotes,
   stampRelease,
   unreleasedEntries,
-} from '../../../../../scripts/changelog.ts'
+} from '../../scripts/changelog.ts'
 
 const CHANGELOG = `# Changelog
 
@@ -60,7 +60,7 @@ describe('changelog', () => {
   })
 
   test('the repo changelog has release notes for the published version', async () => {
-    const root = join(import.meta.dir, '../../../../..')
+    const root = join(import.meta.dir, '../..')
     const changelog = await Bun.file(join(root, 'CHANGELOG.md')).text()
     const { version } = await Bun.file(join(root, 'package.json')).json()
     expect(releaseNotes(changelog, version)).toContain('###')
@@ -123,7 +123,7 @@ describe('changelog', () => {
 Previous.
 `
     const mainAfterFinal = stampRelease(tagSnapshot, '0.4.0', '2026-10-26')
-    const root = join(import.meta.dir, '../../../../..')
+    const root = join(import.meta.dir, '../..')
     const workflow = await Bun.file(
       join(root, '.github/workflows/release.yml'),
     ).text()

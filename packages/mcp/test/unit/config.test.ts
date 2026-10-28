@@ -6,7 +6,7 @@ import {
   loadMcpServers,
   parseServers,
   toolExposureOf,
-} from '../../../../src/config.ts'
+} from '../../src/config.ts'
 
 const dirs: string[] = []
 afterEach(() => {

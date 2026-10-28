@@ -91,7 +91,7 @@ if (toolFiles.length !== 1 || JSON.stringify(imageTool.session.messages).include
   throw new Error('packaged read_file image was not resized and sent')
 console.log('tool image sdk ok')
 
-// rag extension: sqlite-vec loads via bun:sqlite on Bun / node:sqlite on Node (src/extensions/rag/sqlite.ts)
+// rag extension: sqlite-vec loads via bun:sqlite on Bun / node:sqlite on Node (packages/rag/src/sqlite.ts)
 const r = createTestVela({
   embedder: true,
   files: { 'guide.md': 'Vela runs on Node and Bun.' },
@@ -105,7 +105,7 @@ await r.run('ingest and search')
 if (!JSON.stringify(r.model.calls[2]?.prompt).includes('Vela runs on Node and Bun.'))
   throw new Error('rag_search did not return the ingested text')
 
-// grep / find run ripgrep / fd as child processes (src/tools/search.ts)
+// grep / find run ripgrep / fd as child processes (packages/core/src/tools/search.ts)
 const s = createTestVela({
   session: { tools: ['+find', '+grep'] },
   files: { 'src/a.ts': 'export const answer = 42' },

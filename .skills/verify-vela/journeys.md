@@ -31,6 +31,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | RPC | `exec $RUN rpc env VELA_RPC_COMMAND="bun $PWD/packages/vela/src/cli/main.ts" bun $PWD/examples/rpc-client.ts "list files"` | The tool call and answer, exit 0. Closing stdin aborts a running prompt (`agent_end` reason `aborted`) |
 | RPC usage error | `run $RUN r --mode rpc hi` | exit 2 with a usage line |
 | `--version`, `--help` | `run $RUN v --version` | stdout, exit 0 |
+| `vela serve` | `work/serve-channel.ts`: an extension whose channel `start()` hands one message to its `onMessage` handler and whose `send()` appends to a file (the pattern in `test/e2e/serve.test.ts`). Start `serve -e work/serve-channel.ts` in the background with `exec`, wait for the file, then send SIGTERM; also `run $RUN s serve --no-extensions` | stderr shows `✓ <name> started`, then `channel_message` and `channel_reply` lines; stdout stays empty; SIGTERM exits 0. With no channel: `[serve] no channel started …`, exit 1 |
 
 ## Sessions ([sessions](../../docs/sessions.md))
 
