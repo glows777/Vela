@@ -6,6 +6,7 @@
 
 export type {
   ChannelDefinition,
+  ChannelEvent,
   ChannelExtension as VelaExtension,
   ChannelExtensionAPI as ExtensionAPI,
   IncomingMessage,

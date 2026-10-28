@@ -257,6 +257,7 @@ const vela = createVela({
   limits: config.settings.limits,
   autoCompaction: config.settings.autoCompaction,
   shellPath: config.settings.shellPath,
+  eventDefaultTarget: config.settings.eventDefaultTarget,
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
   binDir: join(agentDir, 'bin'),

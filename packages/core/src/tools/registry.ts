@@ -90,8 +90,8 @@ export interface ToolDefinition {
   /** Group the tool belongs to, for example its MCP server (like pi) */
   namespace?: ToolNamespace
   searchHint?: string // Hint shown next to the name in the deferred tool list
-  /** Only sessions of this channel see or can call the tool; undefined means every session */
-  channel?: string
+  /** An exact channel name, or true for any channel-bound session; undefined means every session. */
+  channel?: string | true
   /** Whether the tool is on without being named (like pi's `defaultActive`); default true. `false` keeps it registered but off until a session names it */
   activeByDefault?: false
 }
@@ -273,7 +273,11 @@ export class ToolRegistry {
   decide(toolName: string): PermissionDecision {
     if (!this.isEnabled(toolName)) return 'deny'
     const tool = this.tools.get(toolName)
-    if (tool?.channel !== undefined && tool.channel !== this.channel)
+    if (
+      tool?.channel === true
+        ? !this.channel
+        : tool?.channel !== undefined && tool.channel !== this.channel
+    )
       return 'deny'
     return decidePermission(toolName, this.permissions)
   }

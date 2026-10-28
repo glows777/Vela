@@ -18,7 +18,7 @@ Vela reads its configuration from JSON files in the user directory (`~/.vela`, o
 | `~/.vela/AGENTS.md`, `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Instructions put into the system prompt. Not gated by trust. See [Context files](#context-files). |
 | `~/.vela/APPEND_SYSTEM.md`, `<project>/.vela/APPEND_SYSTEM.md` | Text appended to the system prompt. The project file needs trust. See [Appending to the system prompt](#appending-to-the-system-prompt). |
 
-All files are optional. A file that is not valid JSON, or a key with the wrong type, stops the CLI with a `[config]` error and exit code 2. Unknown top-level keys are ignored; unknown keys under `limits` are an error.
+All files are optional. A file that is not valid JSON, or a recognized key below with the wrong type, stops the CLI with a `[config]` error and exit code 2. Other top-level keys are ignored; unknown keys under `limits` are an error.
 
 When you start Vela from your home directory, `<project>/.vela` is `~/.vela` itself; it is read once, as user configuration, and no trust question is asked.
 
@@ -26,7 +26,7 @@ When you start Vela from your home directory, `<project>/.vela` is `~/.vela` its
 
 Project settings are applied on top of user settings:
 
-- Objects (`limits`, `extensionConfig`) are merged key by key, recursively.
+- Objects (`limits`, `extensionConfig`, `eventDefaultTarget`) are merged key by key, recursively.
 - `extensions`, `skills` and `prompts` lists are concatenated: user entries first, then project entries.
 - `defaultTools` with plain names replaces the user list; a list of only `+name` / `-name` entries is appended, and an empty list replaces it with no tools (see [defaultTools](#defaulttools)).
 - Every other value is replaced by the project's value.
@@ -59,6 +59,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
 | `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. |
 | `defaultTools` | string[] | `read_file`, `write_file`, `edit_file`, `bash` | Tools a new CLI session starts with. Plain names (or `*` patterns) select exactly those; `+name` / `-name` entries turn default tools on or off. See [defaultTools](#defaulttools). |
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
+| `eventDefaultTarget` | `{ channel: string, chatId: string }` | none (drop) | Optional fallback for external events with no matching subscription. The top-level conversation must already exist and be enabled; it is never created implicitly. Both fields must be nonempty and surrounding whitespace is trimmed (also for the direct channel-aware SDK option). Matching disabled/unavailable subscriptions never fall through here. See [external events](channels.md#external-event-subscriptions). |
 | `shellPath` | string | `bash` on `PATH` | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. A path that does not exist makes every `bash` call fail with an error. |
 | `limits` | object | see below | Overrides runtime limits. |
 | `autoCompaction` | boolean | `true` | Compact the context automatically (pi's `compaction.enabled`). `false` turns off microcompaction, threshold summaries and compact-and-retry on overflow; `/compact` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |

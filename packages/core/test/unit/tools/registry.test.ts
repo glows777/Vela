@@ -29,6 +29,27 @@ function tool(
   }
 }
 
+test('generic channel tools require a channel binding and keep exact strings, selections and denies', () => {
+  const registry = makeRegistry()
+  registry.register(
+    tool('generic', { channel: true }),
+    tool('larkOnly', { channel: 'lark' }),
+  )
+  expect(registry.decide('generic')).toBe('deny')
+  for (const channel of ['lark', 'another']) {
+    registry.setChannel(channel)
+    expect(registry.decide('generic')).toBe('allow')
+    expect(registry.decide('larkOnly')).toBe(
+      channel === 'lark' ? 'allow' : 'deny',
+    )
+  }
+  registry.setPermissions({ generic: 'deny' })
+  expect(registry.decide('generic')).toBe('deny')
+  registry.setPermissions(undefined)
+  registry.setSelection([])
+  expect(registry.decide('generic')).toBe('deny')
+})
+
 test('registering a tool name twice throws', () => {
   const registry = makeRegistry()
   registry.register(tool('dup'))

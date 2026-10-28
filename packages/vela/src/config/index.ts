@@ -1,7 +1,9 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import type { ChannelVelaOptions } from '@glows777/vela-channels'
 import {
   type VelaConfig as CoreConfig,
+  type VelaSettings as CoreSettings,
   type LoadConfigOptions,
   loadConfig as loadCoreConfig,
 } from '@glows777/vela-core'
@@ -13,13 +15,18 @@ export type {
   LoadConfigOptions,
   ProviderApi,
   ProviderConfig,
-  VelaSettings,
 } from '@glows777/vela-core'
 export { importExtension, loadModels } from '@glows777/vela-core'
 export { defaultAgentDir, extensionName } from '@glows777/vela-core/diagnostics'
 export { savedTrust, saveTrust } from '../cli/config-trust.ts'
 
+export interface VelaSettings extends CoreSettings {
+  /** Unmatched events may reach this existing enabled top-level chat; unset drops them. */
+  eventDefaultTarget?: ChannelVelaOptions['eventDefaultTarget']
+}
+
 export interface VelaConfig extends CoreConfig {
+  settings: VelaSettings
   mcp: McpServersFile
 }
 export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
@@ -43,6 +50,28 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     throw new Error(
       'Legacy extensionConfig.feishu / feishu_* tool selectors require migration to lark / lark_*. Stop Vela and run scripts/migrate-lark.ts with each settings file (dry run first).',
     )
+  const settings: VelaSettings = core.settings
+  const target = settings.eventDefaultTarget
+  if (
+    target !== undefined &&
+    (!target ||
+      typeof target !== 'object' ||
+      Object.keys(target).some(
+        (key) => key !== 'channel' && key !== 'chatId',
+      ) ||
+      typeof target.channel !== 'string' ||
+      !target.channel.trim() ||
+      typeof target.chatId !== 'string' ||
+      !target.chatId.trim())
+  )
+    throw new Error(
+      `${core.files.join(', ')}: eventDefaultTarget must be { channel, chatId } with nonempty strings`,
+    )
+  if (target)
+    settings.eventDefaultTarget = {
+      channel: target.channel.trim(),
+      chatId: target.chatId.trim(),
+    }
   const projectDir = join(core.cwd, '.vela')
   const section = mcpConfig.resolve(
     {},
@@ -56,6 +85,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   )
   return {
     ...core,
+    settings,
     mcp: {
       servers: section.mcpServers as Record<string, unknown>,
       sources: section.sources as Record<string, string>,

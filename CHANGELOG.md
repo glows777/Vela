@@ -10,6 +10,9 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- Channel conversations can manage durable `channel_subscriptions`; the channel-aware SDK publishes untrusted external events through the existing queue, with logical-topic routing, optional existing-chat fallback and final-event cleanup. Generic channel tools use `ToolDefinition.channel: true` without exposing them to ordinary SDK sessions. This stage has no HTTP receiver or source adapters.
+  External event admission/announcement failures are diagnosed without replying to the preceding human message; CLI and SDK default event targets normalize surrounding whitespace.
+
 - Experimental frontend helpers in `@glows777/vela-core/diagnostics` share core session rendering, validation and trust rules with the CLI. Recording resolves models without constructing an extra Vela; exact public development mappings make focused tests and the watched CLI observe source edits immediately, while builds and packed consumers retain real artifact resolution.
 
 - Session routing options (`scope`, `channel`), read-only scope and tool-call session identity, `toolDecision`, explicit `save({ reportFailure })`, lifecycle callbacks, channel-only event publication and experimental diagnostic snapshots support core/channel separation. Existing package root and testing imports remain compatible.

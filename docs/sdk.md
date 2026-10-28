@@ -90,6 +90,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `commands()` | Slash commands registered by extensions |
 | `channels()` | Channels registered by extensions |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
+| `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels.md#external-event-subscriptions). |
 | `dispose()` | Stops channels, closes all sessions (aborting running work and saving) and deletes the temp data dir if there is one |
 
 ## Sessions

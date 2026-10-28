@@ -549,7 +549,7 @@
   interface ToolDefinition
     activeByDefault?: false | undefined
     annotations?: ToolAnnotations | undefined
-    channel?: string | undefined
+    channel?: string | true | undefined
     description: string
     execute: (input: any, context?: ToolContext) => Promise<unknown>
     executionMode?: ToolExecutionMode | undefined
@@ -1212,7 +1212,7 @@
   interface ToolDefinition
     activeByDefault?: false | undefined
     annotations?: ToolAnnotations | undefined
-    channel?: string | undefined
+    channel?: string | true | undefined
     description: string
     execute: (input: any, context?: ToolContext) => Promise<unknown>
     executionMode?: ToolExecutionMode | undefined

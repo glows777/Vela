@@ -10,6 +10,7 @@ import {
 import { TopicAdmission } from './admission.ts'
 import { TopicCommands } from './commands.ts'
 import { ChannelDirectory } from './directory.ts'
+import { ChannelEvents } from './events.ts'
 import { RunFeedback } from './feedback.ts'
 import { errorMessage } from './log.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
@@ -34,6 +35,7 @@ interface GatewayOptions {
   /** A channel session with no message for this long is closed; the next message resumes it. Default 10 minutes */
   idleMs?: number
   logger?: VelaLogger
+  eventDefaultTarget?: { channel: string; chatId: string }
 }
 
 const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
@@ -43,6 +45,7 @@ const MAX_SAVE_FAILURES = 3
 
 export class ChannelGateway {
   readonly routines: ChannelRoutines
+  readonly events: ChannelEvents
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
   private readonly sessions: ChannelSessions
@@ -114,6 +117,25 @@ export class ChannelGateway {
       closing: (key) => this.closing.get(key),
       routines: (name, chatId) => this.routines.formatList(name, chatId),
     })
+    this.events = new ChannelEvents(
+      options.dataDir,
+      this.directory,
+      (name) => this.channels.get(name),
+      (name) =>
+        !this.stopped &&
+        (name ? this.started.has(name) : this.started.size > 0),
+      (id) => {
+        const run = this.feedback.runs.get(this.directory.keyForSession(id))
+        return run?.session.id === id && this.feedback.runIsLive(run)
+          ? run.trigger
+          : undefined
+      },
+      (name, msg) => {
+        void this.handleIncoming(name, msg)
+      },
+      this.logger,
+      options.eventDefaultTarget,
+    )
   }
 
   /** Internal storage-success notification, including saves outside a channel prompt. */
@@ -205,6 +227,7 @@ export class ChannelGateway {
     for (const channel of this.channels.values())
       channel.validateTools?.(toolNames)
     await this.directory.load()
+    await this.events.load()
     await this.routines.load(this.channels.values())
     this.usage.load()
     this.stopped = false
@@ -281,6 +304,7 @@ export class ChannelGateway {
       ...this.commands.active,
       ...this.closing.values(),
       ...this.routines.active,
+      ...this.events.active,
     ])
     this.saveFailures.clear()
     for (const result of drained)
@@ -497,6 +521,11 @@ export class ChannelGateway {
     )
     await this.closing.get(id)
     const channel = this.channels.get(channelName)
+    if (msg.externalEvent) {
+      const record = this.directory.get(id)
+      if (!record || channel?.canRecover?.(msg, record.chatKind) === false)
+        return 'done'
+    }
     const topicSession =
       msg.topic || msg.passive
         ? await this.admission.admit(id, channel, msg)

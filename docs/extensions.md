@@ -142,7 +142,7 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
 | `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
-| `channel` | The channel this tool belongs to: only sessions opened by that channel see or can call it. Omit it to make the tool available to every session |
+| `channel` | An exact channel name, or `true` for every channel-bound session and no plain SDK session. Selection and permission rules still apply. Omit it to make the tool available to every session |
 
 <a id="tool-image-results"></a>
 

@@ -11,7 +11,7 @@ import type {
 } from '@glows777/vela-core/extension-api'
 import { silentLogger } from '@glows777/vela-core/extension-api'
 import { ChannelGateway } from './gateway.ts'
-import type { ChannelDefinition } from './types.ts'
+import type { ChannelDefinition, ChannelEvent } from './types.ts'
 
 export interface ChannelExtensionAPI extends CoreExtensionAPI {
   registerChannel(channel: ChannelDefinition): void
@@ -26,12 +26,16 @@ export interface ChannelVelaOptions extends Omit<CoreOptions, 'extensions'> {
   extensions?: ChannelExtension[]
   /** Default 10 minutes; 0 closes idle conversations after each reply. */
   channelIdleMs?: number
+  /** Unmatched events may reach this existing enabled top-level chat; unset drops them. */
+  eventDefaultTarget?: { channel: string; chatId: string }
 }
 export interface ChannelVela extends Omit<CoreVela, 'extensions'> {
   extensions(): LoadedChannelExtension[]
   channels(): { name: string; description: string }[]
   startChannels(): Promise<void>
   runningChannels(): string[]
+  /** Enqueues to matching subscriptions, without waiting for model execution. Channels must be started. */
+  publishEvent(event: ChannelEvent): Promise<void>
 }
 
 const gateways = new WeakMap<CoreVela, ChannelGateway>()
@@ -67,6 +71,7 @@ export function createChannelVela(
       session: (id, sessionOptions) => core.session(id, sessionOptions),
       find: (id) => core.sessions().find((session) => session.id === id),
       idleMs: channelIdleMs,
+      eventDefaultTarget: options.eventDefaultTarget,
       logger,
     }))
   const registered: string[][] = []
@@ -86,6 +91,9 @@ export function createChannelVela(
       }[name]!
     },
   )
+  extensions.push(function channel(api) {
+    runtime(api).events.register(api)
+  })
   core = createCoreVela({
     ...options,
     extensions,
@@ -117,10 +125,11 @@ export function createChannelVela(
     extensions: () =>
       loaded().map((entry, index) => ({
         ...entry,
-        channels: [...registered[index]!],
+        channels: [...(registered[index] ?? [])],
       })),
     channels: () => runtime().list(),
     runningChannels: () => runtime().running(),
+    publishEvent: (event: ChannelEvent) => runtime().events.publish(event),
     async startChannels() {
       await core.ready()
       await runtime().startAll(inspectVela(core).tools.map((tool) => tool.name))
