@@ -4,7 +4,7 @@ A Vela session file is an append-only JSONL log in pi's format: a header line, t
 
 The format is part of Vela's public API. See [Sessions](sessions.md) for behavior and [SDK](sdk.md#session-storage) for custom storage.
 
-Source: `src/session/entries.ts` (entry types, rebuilding the context, migration), `src/session/storage.ts` (file and memory storage) and `src/session/index.ts` (appending and loading).
+Source, in `packages/core/src/session/`: `entries.ts` (entry types, rebuilding the context, migration), `storage.ts` (file and memory storage) and `index.ts` (appending and loading).
 
 ## File location
 

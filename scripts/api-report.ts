@@ -1,8 +1,8 @@
 /**
- * Generates the public API report: every name exported from `@glows777/vela` and
- * `@glows777/vela/testing`, with its type. test/unit/public-api.test.ts compares it
- * with api/public-api.txt; after changing the public surface, run `bun run api:update`
- * to refresh the snapshot so the API change shows up in the PR.
+ * Generates the public API report of each package: every name exported from its
+ * export-map entries, with its type. packages/<name>/test/public-api.test.ts compares it
+ * with packages/<name>/api/public-api.txt; after changing the public surface, run
+ * `bun run api:update` to refresh the snapshots so the API change shows up in the PR.
  * `@internal`, private and protected members are not part of the public surface.
  */
 import { readFileSync } from 'node:fs'

@@ -26,7 +26,7 @@ Then start it with Bun from the folder you want to work in:
 
 ```bash
 cd /path/to/project
-bun /path/to/Vela/src/cli/main.ts
+bun /path/to/Vela/packages/vela/src/cli/main.ts
 ```
 
 To get a `vela` command from the clone instead, build the package and link it (this runs the compiled `dist/cli/main.js` with Node):
@@ -96,7 +96,7 @@ git diff | vela -p "Review this change"
 
 ```bash
 VELA_MODEL=mock vela
-VELA_MODEL=mock bun src/cli/main.ts     # from a clone
+VELA_MODEL=mock bun packages/vela/src/cli/main.ts     # from a clone
 ```
 
 Try `hello`, `list files`, `read package.json`, `test bash`, then `/status`, `/usage` and `/context`. `/cache off` turns the cache simulation off so you can compare costs.

@@ -470,7 +470,7 @@ The dialog comes from the extension's `tool_call` handler, which runs after `too
 
 ## Client example
 
-[examples/rpc-client.ts](../examples/rpc-client.ts) is a small TypeScript client using only `node:` modules. It starts `bun src/cli/main.ts --mode rpc` (set `VELA_RPC_COMMAND=vela` to use an installed CLI), sends one prompt, prints streamed text and tool calls, cancels any extension dialog, waits for `agent_settled` and closes stdin. From the repository root:
+[examples/rpc-client.ts](../examples/rpc-client.ts) is a small TypeScript client using only `node:` modules. It starts `bun packages/vela/src/cli/main.ts --mode rpc` (set `VELA_RPC_COMMAND=vela` to use an installed CLI), sends one prompt, prints streamed text and tool calls, cancels any extension dialog, waits for `agent_settled` and closes stdin. From the repository root:
 
 ```bash
 VELA_MODEL=mock VELA_DIR=$(mktemp -d) bun examples/rpc-client.ts "list files"

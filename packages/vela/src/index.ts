@@ -1,7 +1,7 @@
 /**
  * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).
- * Export only from here; the CLI lives in src/cli/main.ts and test helpers in 'vela/testing'.
- * test/unit/public-api.test.ts snapshots the public surface: update the snapshot when changing this file.
+ * Export only from here; the CLI lives in cli/main.ts and test helpers in '@glows777/vela/testing'.
+ * test/public-api.test.ts checks the export map against api/public-api.txt: run `bun run api:update` after changing it.
  */
 
 export type {

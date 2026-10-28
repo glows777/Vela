@@ -5,12 +5,12 @@ import type {
 } from '@glows777/vela-channels'
 import { silentLogger } from '@glows777/vela-core'
 import { lark } from '@glows777/vela-lark'
-import { fakeLark, larkEvent } from '../../../../../../test/support/lark.ts'
+import { fakeLark, larkEvent } from '../../../../test/support/lark.ts'
 import {
   cleanupTestVelas,
   createTestVela,
-} from '../../../../../../test/support/vela.ts'
-import { formatGroupContext, messageTime } from '../../../../src/history.ts'
+} from '../../../../test/support/vela.ts'
+import { formatGroupContext, messageTime } from '../../src/history.ts'
 
 afterEach(cleanupTestVelas)
 
