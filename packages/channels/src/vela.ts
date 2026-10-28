@@ -10,6 +10,7 @@ import type {
   ExtensionAPI as CoreExtensionAPI,
 } from '@glows777/vela-core/extension-api'
 import { silentLogger } from '@glows777/vela-core/extension-api'
+import { EventReceiver } from './event-receiver.ts'
 import { ChannelGateway } from './gateway.ts'
 import type { ChannelDefinition, ChannelEvent } from './types.ts'
 
@@ -63,6 +64,16 @@ export function createChannelVela(
       `channelIdleMs must be a whole number of milliseconds from 0 to ${2 ** 31 - 1}; got ${channelIdleMs}`,
     )
   const logger = options.logger ?? silentLogger
+  const receiverConfig = options.extensionConfig?.channel?.eventReceiver
+  const receiver =
+    receiverConfig === undefined
+      ? undefined
+      : new EventReceiver(
+          receiverConfig,
+          (event) => runtime().events.publish(event),
+          logger,
+        )
+  let stopping = false
   let core: CoreVela
   let gateway: ChannelGateway | undefined
   const runtime = (api?: CoreExtensionAPI): ChannelGateway =>
@@ -75,6 +86,27 @@ export function createChannelVela(
       logger,
     }))
   const registered: string[][] = []
+  const stop = async () => {
+    stopping = true
+    const errors: unknown[] = []
+    try {
+      await receiver?.stop()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await runtime().stopAll()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await options.beforeDispose?.()
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length)
+      throw new AggregateError(errors, 'Channel ingress shutdown failed')
+  }
   const extensions: CoreExtension[] = (options.extensions ?? []).map(
     (extension, index) => {
       const name = extension.name || `extension-${index + 1}`
@@ -101,23 +133,13 @@ export function createChannelVela(
       gateway?.sessionSaved(id)
       options.onSessionSaved?.(id)
     },
-    beforeDispose: options.beforeDispose
-      ? async () => {
-          const errors: unknown[] = []
-          try {
-            await runtime().stopAll()
-          } catch (error) {
-            errors.push(error)
-          }
-          try {
-            await options.beforeDispose?.()
-          } catch (error) {
-            errors.push(error)
-          }
-          if (errors.length)
-            throw new AggregateError(errors, 'Channel ingress shutdown failed')
-        }
-      : () => runtime().stopAll(),
+    beforeDispose:
+      receiver || options.beforeDispose
+        ? stop
+        : () => {
+            stopping = true
+            return runtime().stopAll()
+          },
   })
   gateways.set(core, runtime())
   const loaded = core.extensions.bind(core)
@@ -133,6 +155,7 @@ export function createChannelVela(
     async startChannels() {
       await core.ready()
       await runtime().startAll(inspectVela(core).tools.map((tool) => tool.name))
+      if (!stopping && runtime().running().length) await receiver?.start()
     },
   })
 }

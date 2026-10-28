@@ -219,9 +219,66 @@ Event input has a fixed untrusted-data prefix, so command-looking payloads do no
 
 `final: true` enqueues the last notification to matching available targets and then removes the snapshotted subscriptions. `publishEvent()` resolves after enqueue and final-state persistence, without waiting for the model. Disabled, missing or disconnected matching targets are skipped with diagnostics and never forwarded elsewhere. Only an event with no matching subscriptions can use `eventDefaultTarget: { channel, chatId }`, supplied as an SDK option or CLI setting; that top-level target must already exist and be enabled. Otherwise the event is dropped. Publication requires started channels and rejects once stopping begins.
 
-Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. This first stage provides no HTTP receiver, GitHub adapter, tunnel or independent-process client; those belong to the later stages of #171. The existing notification workflow is separate.
+Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. Embedded producers call the SDK directly; independent GitHub producers use the optional receiver below. The generic shared-secret adapter and a CLI event client are not provided yet. The existing notification workflow is separate.
 
 External top-level inputs never borrow a previous human reply ID. Lark establishes a new announcement receipt before prompting; admission or preparation errors are recorded in operator diagnostics without a synthetic feedback reply. Human input retains its own error feedback. CLI and direct SDK default-target addresses both trim surrounding whitespace.
+
+### GitHub webhooks
+
+The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent by default. Add this section to user settings, supply the secret through the existing `$VAR` interpolation, and run `vela serve` with at least one enabled, connected channel:
+
+```json
+{
+  "extensionConfig": {
+    "channel": {
+      "eventReceiver": {
+        "port": 8787,
+        "github": {
+          "secret": "$VELA_GITHUB_WEBHOOK_SECRET",
+          "repositories": ["glows777/Vela"],
+          "apps": ["github-actions"]
+        }
+      }
+    }
+  }
+}
+```
+
+The SDK passes the same section in `createChannelVela({ extensionConfig: ... })` / `createVela(...)`, with a literal secret supplied by the host; the SDK never reads environment variables. Project sections require trust and merge through the existing settings rules. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
+
+The listener starts after channels connect, prints its local URL, and closes during dispose/SIGTERM before channel work drains. An occupied port rejects startup. A successful HTTP response does not wait for a model turn. Subscribe from the target conversation with `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#pr/171" })`; this is an exact key, including repository spelling. Enablement and tool permissions still apply; a signed webhook cannot choose a chat or grant authority.
+
+Configure a GitHub repository webhook with JSON content type, a high-entropy secret matching the setting, and payload URL `https://<your-tunnel-host>/events/github`. Select only:
+
+- **Check suites**, action `completed`, from an allowlisted app. Each supplied PR mapping receives that suite's conclusion, exact SHA, time and link. This is not an aggregate verdict for all PR CI. Empty PR mappings are logged and dropped; there is no token/API lookup or branch-name guessing.
+- **Pull request reviews**, action `submitted`: reviewer, state, commit SHA, link and body preview. No fabricated inline-comment count or individual inline-comment events.
+- **Issue comments**, action `created`, on PRs only: author, link and body preview.
+- **Pull requests**, action `closed`: both merged and closed-unmerged are final. Enqueue the final notice, then remove matching subscriptions; reopening requires a new subscription.
+
+Vela-authored PR conversation comments and reviews must end with an independent final line `<!-- vela:event-origin -->`. The adapter checks the complete body before truncation and ignores those events; unmarked content by the same author still wakes the conversation. This marker is a collaboration convention, not authentication. Summaries/previews are bounded (500/8192 characters with a truncation marker), queued as untrusted data, and never download logs, diffs or payload URLs.
+
+Only `POST /events/github` is registered. The receiver limits the raw request to **1 MiB**, including streamed bodies without Content-Length. It verifies [`X-Hub-Signature-256` HMAC-SHA256](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) against the original bytes with a constant-time comparison before JSON parsing. Wrong/missing signatures return 403 without consuming a delivery ID; malformed authenticated payloads return 400, oversize bodies 413, and publication failures 503. Other routes/methods return 404/405.
+
+After authentication, the original `X-GitHub-Delivery` ID is synchronously recorded before mapping/fanout. The last **1,000** IDs live only in memory; concurrent duplicates return 202 without another fanout. IDs remain consumed after malformed payloads or publication failure: this stage has no reservation, rollback or retry. Eviction or restart permits redelivery. **202 means accepted/ignored, not executed or durably delivered**; queue/storage/crash boundaries remain best effort. Signatures authenticate bytes, not the actor's authority to run tools. Raw bodies and secrets are not logged.
+
+### Tunnel deployment examples
+
+Vela does not install or manage tunnels. Choose one separately and keep the machine, `vela serve` and connector awake. A stopped connector, sleeping machine or broken outbound connection makes webhooks unavailable; there is no polling or automatic failover.
+
+For a **named Cloudflare Tunnel**, use a Cloudflare-managed domain and follow the [locally managed tunnel setup](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/create-local-tunnel/). After creating `vela-events`, use its UUID/credential file in `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <tunnel-uuid>
+credentials-file: /absolute/path/<tunnel-uuid>.json
+ingress:
+  - hostname: vela-events.example.com
+    service: http://127.0.0.1:8787
+  - service: http_status:404
+```
+
+Run `cloudflared tunnel route dns vela-events vela-events.example.com`, then `cloudflared tunnel run vela-events`. The webhook URL is `https://vela-events.example.com/events/github`. Account/domain setup and service supervision remain deployment tasks; Quick Tunnel addresses are not a stable deployment.
+
+For **Tailscale Funnel**, no separate domain is needed. On an eligible tailnet with HTTPS and Funnel permission enabled, run `tailscale funnel --bg http://127.0.0.1:8787` and use the printed HTTPS hostname plus `/events/github`. Follow the [Funnel prerequisites](https://tailscale.com/docs/features/tailscale-funnel) and [CLI reference](https://tailscale.com/docs/reference/tailscale-cli/funnel); Funnel is public ingress, while Serve alone limits access to the tailnet. Keep webhook signature validation enabled with either tunnel.
 
 ## Gateway lifecycle
 

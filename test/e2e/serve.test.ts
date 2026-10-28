@@ -1,4 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { createHmac } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { projectDataDir } from '../../packages/core/src/config/paths.ts'
@@ -68,6 +69,119 @@ function spawnServe(
     stdin: 'ignore',
   })
 }
+
+test('serve loads extension-owned webhook settings, handles signed input and closes ingress on SIGTERM', async () => {
+  const dir = tempDir('vela-serve-hooks-')
+  const home = tempDir('vela-serve-hooks-home-')
+  dirs.push(dir, home)
+  const replies = join(dir.path, 'replies.txt')
+  const extension = join(dir.path, 'channel.ts')
+  await Bun.write(extension, serveChannel('fake', replies, 'Subscribe'))
+  await Bun.write(
+    join(home.path, 'settings.json'),
+    JSON.stringify({
+      extensionConfig: {
+        channel: {
+          eventReceiver: {
+            port: 0,
+            github: {
+              secret: '$WEBHOOK_FIXTURE_SECRET',
+              repositories: ['owner/repo'],
+            },
+          },
+        },
+      },
+    }),
+  )
+  await Bun.write(
+    join(dir.path, 'reply.json'),
+    JSON.stringify({
+      responses: [
+        {
+          toolCalls: [
+            {
+              name: 'channel_subscriptions',
+              input: {
+                action: 'create',
+                source: 'github',
+                key: 'github:owner/repo#pr/1',
+              },
+            },
+          ],
+        },
+        { text: 'Subscribed' },
+        { text: 'Webhook delivered' },
+      ],
+    }),
+  )
+  const proc = spawnServe(
+    ['serve', '--no-extensions', '-e', extension],
+    dir.path,
+    home.path,
+    { VELA_MODEL: 'faux:reply.json', WEBHOOK_FIXTURE_SECRET: 'fixture-only' },
+  )
+  let stderr = ''
+  const reading = (async () => {
+    for await (const chunk of proc.stderr)
+      stderr += new TextDecoder().decode(chunk)
+  })()
+  const timer = setTimeout(() => proc.kill('SIGKILL'), 20_000)
+  let url: string | undefined
+  try {
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      url = stderr.match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)?.[0]
+      if (
+        url &&
+        existsSync(replies) &&
+        (await Bun.file(replies).text()).includes('Subscribed')
+      )
+        break
+      await Bun.sleep(1)
+    }
+    expect(url).toBeDefined()
+    const raw = JSON.stringify({
+      action: 'closed',
+      repository: { full_name: 'owner/repo' },
+      pull_request: {
+        number: 1,
+        merged: true,
+        title: 'Fixture',
+        user: { login: 'author' },
+        head: { sha: 'a'.repeat(40) },
+        html_url: 'https://github.com/owner/repo/pull/1',
+      },
+    })
+    expect(
+      (
+        await fetch(url!, {
+          method: 'POST',
+          headers: {
+            'x-github-event': 'pull_request',
+            'x-github-delivery': 'serve-fixture',
+            'x-hub-signature-256': `sha256=${createHmac('sha256', 'fixture-only').update(raw).digest('hex')}`,
+          },
+          body: raw,
+        })
+      ).status,
+    ).toBe(202)
+    while (
+      !(await Bun.file(replies).text()).includes('Webhook delivered') &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(1)
+    expect(await Bun.file(replies).text()).toContain('Webhook delivered')
+    expect(stderr).not.toContain('fixture-only')
+  } finally {
+    proc.kill('SIGTERM')
+    await proc.exited
+    clearTimeout(timer)
+    await reading
+  }
+  expect(proc.exitCode).toBe(0)
+  expect(await new Response(proc.stdout).text()).toBe('')
+  expect(await fetch(url!).catch(() => undefined)).toBeUndefined()
+})
 
 /** Starts the CLI and waits for it to exit; the caller asserts on the result */
 async function runServe(
