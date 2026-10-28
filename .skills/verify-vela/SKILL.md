@@ -33,7 +33,7 @@ REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date
 
 ## Choose the model
 
-`VERIFY_MODEL=mock` (default) is the keyword demo model in `src/testing/demo-model.ts`:
+`VERIFY_MODEL=mock` (default) is the keyword demo model in `packages/core/src/testing/demo-model.ts`:
 
 | Prompt | Model does |
 |---|---|
@@ -72,7 +72,7 @@ $H cleanup $RUN
 
 - `wait` regexes should match only the result, not the typed text or a `/command` name.
 - A project with `.vela/` or `.skills/` stops at the trust question: `send y`, or launch with `--approve`.
-- For the SDK, write a short script in `work/` that imports `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, and run it with `$H exec $RUN sdk bun consumer.ts`.
+- For the SDK, write a short script in `work/` that imports `$REPO/packages/vela/dist/index.js` and `$REPO/packages/vela/dist/testing/index.js`, and run it with `$H exec $RUN sdk bun consumer.ts`.
 - For the Feishu channel, start from [scripts/feishu-journeys.ts](scripts/feishu-journeys.ts): the real extension and gateway with a fake transport and a router faux model (see [journeys.md](journeys.md#sdk)).
 
 What to drive for each feature: [journeys.md](journeys.md). Using the SDK and checking core behavior (agent loop, sessions, context, extensions API): [core.md](core.md).

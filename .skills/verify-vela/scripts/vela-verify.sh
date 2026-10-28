@@ -20,7 +20,7 @@ MODEL="${VERIFY_MODEL:-mock}"
 # Everything runs under env -i with this allowlist only: no API keys, FEISHU_* or the user's ~/.vela.
 ENV=(env -i "PATH=$PATH" "TERM=${TERM:-xterm-256color}" "LANG=${LANG:-C.UTF-8}"
   "HOME=$STATE/userhome" "VELA_DIR=$STATE/home" "VELA_OFFLINE=1" "VELA_MODEL=$MODEL")
-VELA=(bun "$REPO/src/cli/main.ts")
+VELA=(bun "$REPO/packages/vela/src/cli/main.ts")
 
 # Fixture, created once per run (later run/launch calls keep edits and sessions)
 seed() {

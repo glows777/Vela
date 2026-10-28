@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type ScenarioId, scenarioIds } from './graders.ts'
+import { runtimePaths } from './layout.ts'
 import { type Attempt, emptyUsage, pricing, table } from './report.ts'
 import { baselineCommit, compactionFixture, OLD_COMMIT } from './scenarios.ts'
 
@@ -190,7 +191,21 @@ async function main() {
         'install',
         '--frozen-lockfile',
       ])
+      if (runtimePaths(runtime).workspace)
+        await checked(runtime, [
+          process.execPath,
+          '--no-env-file',
+          'run',
+          'build',
+        ])
     }
+    if (runtimePaths(config.repo).workspace)
+      await checked(config.repo, [
+        process.execPath,
+        '--no-env-file',
+        'run',
+        'build',
+      ])
     schedule: for (const scenario of config.only)
       for (let run = 1; run <= config.runs; run++)
         for (const arm of ['old', 'new'] as const) {

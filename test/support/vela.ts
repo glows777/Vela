@@ -1,16 +1,16 @@
 import { spyOn } from 'bun:test'
-import type { CommandContext } from '../../src/cli/commands/index.ts'
-import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
 import {
   type TestVelaOptions as CoreTestVelaOptions,
   createTestVela as createCoreTestVela,
-} from '../../src/testing/test-vela.ts'
-import { velaInternals } from '../../src/vela.ts'
+} from '@glows777/vela/testing'
+import type { CommandContext } from '../../packages/vela/dist/cli/commands/index.js'
+import { createCliDispatcher } from '../../packages/vela/dist/cli/dispatcher.js'
+import { velaInternals } from './compat-vela.ts'
 
 export {
   cleanupTestVelas,
   tempDir,
-} from '../../src/testing/test-vela.ts'
+} from '@glows777/vela/testing'
 
 export type TestVelaOptions = CoreTestVelaOptions
 

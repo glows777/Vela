@@ -3,19 +3,15 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { messageTime } from '../../src/extensions/feishu/history.ts'
-import {
-  type FeishuOptions,
-  feishu,
-} from '../../src/extensions/feishu/index.ts'
-import type { FeishuMessageEvent } from '../../src/index.ts'
-import { silentLogger } from '../../src/logger.ts'
-import { fileSessionStorage } from '../../src/session/storage.ts'
+import type { FeishuMessageEvent } from '@glows777/vela'
+import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
 import {
   fauxStreamError,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { type FeishuOptions, feishu } from '@glows777/vela-lark'
+import { messageTime } from '../../packages/lark/dist/history.js'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

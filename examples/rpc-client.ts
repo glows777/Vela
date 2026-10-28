@@ -6,7 +6,7 @@
  *
  *   VELA_MODEL=mock VELA_DIR=$(mktemp -d) bun examples/rpc-client.ts "list files"
  *
- * By default it starts `bun src/cli/main.ts`; set VELA_RPC_COMMAND to start something else,
+ * By default it starts `bun packages/vela/src/cli/main.ts`; set VELA_RPC_COMMAND to start something else,
  * for example `VELA_RPC_COMMAND=vela` when the package is installed.
  * The child inherits this process's environment (VELA_MODEL, VELA_DIR, API keys, ...).
  * Uses only `node:` modules, so it also runs with `node examples/rpc-client.ts`.
@@ -17,7 +17,7 @@ type RpcRecord = { type: string; [key: string]: unknown }
 
 const prompt = process.argv.slice(2).join(' ') || 'list files'
 const [command = 'bun', ...commandArgs] = (
-  process.env.VELA_RPC_COMMAND ?? 'bun src/cli/main.ts'
+  process.env.VELA_RPC_COMMAND ?? 'bun packages/vela/src/cli/main.ts'
 )
   .split(' ')
   .filter(Boolean)

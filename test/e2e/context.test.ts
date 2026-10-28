@@ -1,16 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
 import {
-  createRequestSnapshot,
-  estimateRequestTokens,
-} from '../../src/context/request.ts'
-import {
   createFauxModel,
   fauxError,
   fauxHang,
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import {
+  createRequestSnapshot,
+  estimateRequestTokens,
+} from '../../packages/core/dist/context/request.js'
 import {
   cleanupTestVelas,
   createTestVela,

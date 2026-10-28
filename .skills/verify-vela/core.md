@@ -46,7 +46,7 @@ A faux response can be a function of the request (`req.lastUserText`, `req.toolR
 
 ## Verifying core
 
-Write a script in the run's `work/` that imports `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, and run it with `$H exec $RUN core env REPO=$REPO bun core-check.ts` (see [SKILL.md](SKILL.md)). Drive the behavior your change touches plus its neighbors, then read the matching e2e test to see what is already pinned down. `t` is a `createTestVela(…)`; `call(…)` is `fauxToolCall(…)`.
+Write a script in the run's `work/` that imports `$REPO/packages/vela/dist/index.js` and `$REPO/packages/vela/dist/testing/index.js`, and run it with `$H exec $RUN core env REPO=$REPO bun core-check.ts` (see [SKILL.md](SKILL.md)). Drive the behavior your change touches plus its neighbors, then read the matching e2e test to see what is already pinned down. `t` is a `createTestVela(…)`; `call(…)` is `fauxToolCall(…)`.
 
 | Behavior | Recipe | Check | Covered in |
 |---|---|---|---|

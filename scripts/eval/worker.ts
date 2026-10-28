@@ -3,8 +3,8 @@ import { mkdir, readdir, readFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
+import type { VelaEvent } from '@glows777/vela-core'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
-import type { VelaEvent } from '../../src/agent/events.ts'
 import {
   type Call,
   chars,
@@ -14,6 +14,7 @@ import {
   repetition,
   type ScenarioId,
 } from './graders.ts'
+import { runtimePaths } from './layout.ts'
 import { type Attempt, emptyUsage, pricing } from './report.ts'
 import {
   compactionFixture,
@@ -172,26 +173,26 @@ export async function runAttempt(
         },
       },
     })
+  const paths = runtimePaths(config.runtime)
   const { createTestVela } = await load<
-    typeof import('../../src/testing/test-vela.ts')
-  >(config.runtime, 'src/testing/test-vela.ts')
+    typeof import('@glows777/vela/testing')
+  >(config.runtime, paths.testing)
   const { loadModels } = await load<
-    typeof import('../../src/config/models.ts')
-  >(config.runtime, 'src/config/models.ts')
-  const channelTesting = existsSync(
-    join(config.runtime, 'src/channels/testing.ts'),
-  )
-    ? await load<typeof import('../../src/channels/testing.ts')>(
+    typeof import('../../packages/core/dist/config/models.js')
+  >(config.runtime, paths.models)
+  const channelTesting = existsSync(join(config.runtime, paths.channelTesting))
+    ? await load<typeof import('@glows777/vela-channels/testing')>(
         config.runtime,
-        'src/channels/testing.ts',
+        paths.channelTesting,
       )
     : undefined
   const historicalVela = channelTesting
     ? undefined
-    : await load<typeof import('../../src/vela.ts')>(
-        config.runtime,
-        'src/vela.ts',
-      )
+    : await load<{
+        velaInternals(vela: unknown): {
+          gateway: { queues: Map<string, Promise<void>> }
+        }
+      }>(config.runtime, paths.legacyVela)
   const providerDir = join(config.artifactDir, 'provider')
   await mkdir(providerDir, { recursive: true })
   await Bun.write(
@@ -245,8 +246,8 @@ export async function runAttempt(
     | undefined
   if (config.scenario === 'C3') {
     const { web } = await load<
-      typeof import('../../src/extensions/web/index.ts')
-    >(config.runtime, 'src/extensions/web/index.ts')
+      typeof import('../../packages/core/dist/extensions/web/index.js')
+    >(config.runtime, paths.web)
     extensions.push(web())
     server = Bun.serve({
       hostname: '127.0.0.1',
@@ -261,8 +262,8 @@ export async function runAttempt(
       'test/support/feishu.ts',
     )
     const { feishu } = await load<
-      typeof import('../../src/extensions/feishu/index.ts')
-    >(config.runtime, 'src/extensions/feishu/index.ts')
+      typeof import('../../packages/lark/dist/index.js')
+    >(config.runtime, paths.feishu)
     fake = helpers.fakeFeishu()
     eventFactory = helpers.feishuEvent
     extensions.push(
@@ -311,12 +312,12 @@ export async function runAttempt(
         ? ['g8_store', 'g8_recall']
         : ['g7_store', 'g7_recall']
   const { channelSessionId } = await load<
-    typeof import('../../src/channels/session-id.ts')
-  >(config.runtime, 'src/channels/session-id.ts')
+    typeof import('../../packages/channels/dist/session-id.js')
+  >(config.runtime, paths.channelId)
   const scope = exitScenario
-    ? await load<typeof import('../../src/channels/scope.ts')>(
+    ? await load<typeof import('../../packages/channels/dist/scope.js')>(
         config.runtime,
-        'src/channels/scope.ts',
+        paths.scope,
       )
     : undefined
   const bun = (...args: string[]) =>
@@ -478,8 +479,8 @@ export async function runAttempt(
           if (channelError) throw channelError
           if (['G7', 'G8'].includes(config.scenario) && index === 0) {
             const { MemoryStore } = await load<
-              typeof import('../../src/extensions/memory/store.ts')
-            >(config.runtime, 'src/extensions/memory/store.ts')
+              typeof import('../../packages/core/dist/extensions/memory/store.js')
+            >(config.runtime, paths.memoryStore)
             // Inspect persisted entries, not tool arguments or MEMORY.md. Snapshot
             // before the fresh topic starts so its writes cannot earn store credit.
             const store = new MemoryStore(

@@ -5,20 +5,33 @@
  * to refresh the snapshot so the API change shows up in the PR.
  * `@internal`, private and protected members are not part of the public surface.
  */
+import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import ts from 'typescript'
 
 const ROOT = resolve(import.meta.dir, '..')
-const ENTRIES: [string, string][] = [
-  ['@glows777/vela', 'src/index.ts'],
-  ['@glows777/vela/testing', 'src/testing/index.ts'],
-]
+const PACKAGES = ['core', 'channels', 'mcp', 'rag', 'lark', 'vela']
+const entriesFor = (key: string): [string, string][] => {
+  const pkg = JSON.parse(
+    readFileSync(join(ROOT, 'packages', key, 'package.json'), 'utf8'),
+  )
+  return Object.entries(pkg.exports).map(([subpath, conditions]) => [
+    pkg.name + (subpath === '.' ? '' : subpath.slice(1)),
+    'packages/' +
+      key +
+      '/' +
+      (conditions as { import: string }).import
+        .replace('./dist/', 'src/')
+        .replace(/\.js$/, '.ts'),
+  ])
+}
 const FLAGS =
   ts.TypeFormatFlags.NoTruncation |
   ts.TypeFormatFlags.UseFullyQualifiedType |
   ts.TypeFormatFlags.WriteArrowStyleSignature
 
-export function apiReport(): string {
+export function apiReport(key = 'vela'): string {
+  const ENTRIES = entriesFor(key)
   const config = ts.readConfigFile(join(ROOT, 'tsconfig.json'), ts.sys.readFile)
   const { options } = ts.parseJsonConfigFileContent(config.config, ts.sys, ROOT)
   const files = ENTRIES.map(([, file]) => join(ROOT, file))
@@ -131,7 +144,9 @@ export function apiReport(): string {
 }
 
 if (import.meta.main) {
-  const path = join(ROOT, 'api/public-api.txt')
-  await Bun.write(path, apiReport())
-  console.log(`Wrote ${path}`)
+  for (const key of PACKAGES) {
+    const path = join(ROOT, 'packages', key, 'api/public-api.txt')
+    await Bun.write(path, apiReport(key))
+    console.log(`Wrote ${path}`)
+  }
 }

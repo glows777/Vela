@@ -1,0 +1,52 @@
+# @glows777/vela-lark
+
+  function feishu: (options?: FeishuOptions) => VelaExtension
+  interface FeishuCard
+    body: { elements: { tag: "markdown" | "column_set"; content?: string; columns?: { tag: "column"; width: "weighted"; weight: number; elements: { tag: "button"; text: { tag: "plain_text"; content: string; }; type: "primary" | "default" | "danger"; behaviors: { type: "callback"; value: { action: string; token: string; }; }[]; }[]; }[]; }[]; }
+    config?: { update_multi: true; } | undefined
+    header: { title: { tag: "plain_text"; content: string; }; }
+    schema: "2.0"
+  interface FeishuCardAction
+    action?: { value?: unknown; } | undefined
+    context?: { open_chat_id?: string; } | undefined
+    operator?: { open_id?: string; } | undefined
+  interface FeishuCardResponse
+    toast: { type: "success" | "info"; content: string; }
+  interface FeishuHistoryMessage
+    body?: { content?: string; } | undefined
+    create_time?: string | undefined
+    deleted?: boolean | undefined
+    mentions?: { key: string; }[] | undefined
+    message_id?: string | undefined
+    msg_type?: string | undefined
+    sender?: { id?: string; sender_type?: string; } | undefined
+  interface FeishuMessageEvent
+    message: { message_id?: string; root_id?: string; thread_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
+    sender: { sender_id?: { open_id?: string; }; sender_type: string; }
+  interface FeishuOptions
+    appId?: string | undefined
+    appSecret?: string | undefined
+    chats?: (string | { id: string; tools?: string[] | undefined; readUntagged?: boolean | undefined; })[] | undefined
+    owners?: string[] | undefined
+    transport?: FeishuTransport | undefined
+  interface FeishuSentMessage
+    createTime: string
+    messageId: string
+  interface FeishuTransport
+    addReaction: (messageId: string, emoji: "OnIt" | "DONE" | "CrossMark") => Promise<string>
+    forward: (messageId: string, threadId: string) => Promise<FeishuSentMessage>
+    getBotId: () => Promise<string>
+    getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
+    getSenderName: (openId: string) => Promise<string | undefined>
+    listMessages: (chatId: string, options: { before?: string; limit: number; }) => Promise<FeishuHistoryMessage[]>
+    listTopicMessages: (threadId: string, pageToken?: string) => Promise<{ items: FeishuHistoryMessage[]; pageToken?: string; }>
+    patchCard: (messageId: string, card: FeishuCard) => Promise<void>
+    removeReaction: (messageId: string, reactionId: string) => Promise<void>
+    reply: (messageId: string, text: string) => Promise<FeishuSentMessage>
+    searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: FeishuHistoryMessage[]; pageToken?: string; }>
+    send: (chatId: string, text: string) => Promise<void | FeishuSentMessage>
+    sendCard: (chatId: string, card: FeishuCard, replyToId?: string) => Promise<string>
+    start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>
+    startTopic: (messageId: string, title: string) => Promise<FeishuSentMessage & { rootId: string; threadId: string; }>
+    stop: () => void
+  const larkConfig: ExtensionConfigDefinition

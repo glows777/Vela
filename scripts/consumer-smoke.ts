@@ -1,6 +1,8 @@
 /**
  * Consumer smoke test: use Vela the way an external project would.
- * Runs `bun run build`, packs this repo into a tarball, and installs it into two fresh,
+ * Builds and packs all six packages, serving their unchanged tarballs from a disposable scoped registry.
+ * Each package is installed alone into fresh Node and Bun projects outside the workspace.
+ * The external dependency registry stays unchanged. It installs into fresh,
  * empty projects (not workspace links):
  * - Node project (npm install): strict NodeNext tsconfig (exactOptionalPropertyTypes etc.,
  *   no @types/bun) type-checks `@glows777/vela` / `@glows777/vela/testing`, then runs an
@@ -9,13 +11,15 @@
  * Installing dependencies needs the network, so this is not part of `bun run test`;
  * CI runs it separately: `bun run smoke:consumer`.
  */
+
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
+import { packWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
-const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
+const tooling = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
 const work = await mkdtemp(join(tmpdir(), 'vela-consumer-'))
 
 const IMAGE = (
@@ -165,101 +169,238 @@ const BUN_TSCONFIG = {
   },
 }
 
-async function project(
-  name: string,
-  tarball: string,
-  devDependencies: Record<string, string>,
-  tsconfig: unknown,
-): Promise<string> {
-  const app = join(work, name)
-  await mkdir(app, { recursive: true })
-  await writeFile(
-    join(app, 'package.json'),
-    JSON.stringify({
-      name: `vela-consumer-${name}`,
-      private: true,
-      type: 'module',
-      dependencies: { [pkg.name]: tarball, zod: pkg.dependencies.zod },
-      devDependencies: {
-        typescript: pkg.devDependencies.typescript,
-        ...devDependencies,
-      },
-    }),
-  )
-  await writeFile(join(app, 'tsconfig.json'), JSON.stringify(tsconfig))
-  await writeFile(join(app, 'smoke.ts'), SMOKE)
-  return app
-}
-
-async function cli(app: string, runtime: string): Promise<void> {
-  const home = join(work, `home-${runtime}`)
-  const out = await $`${runtime} ./node_modules/.bin/vela -p hello < /dev/null`
-    .cwd(app)
-    .env({
-      ...process.env,
-      HOME: home,
-      VELA_DIR: join(home, '.vela'),
-      VELA_MODEL: 'mock',
-    })
-    .text()
-  if (!out.trim()) throw new Error(`vela -p (${runtime}) printed nothing`)
-  console.log(out.trim())
-  // --version reads package.json relative to dist/cli/: check that path holds in the installed package
-  const version = (
-    await $`${runtime} ./node_modules/.bin/vela --version`.cwd(app).text()
-  ).trim()
-  if (version !== pkg.version)
-    throw new Error(
-      `vela --version (${runtime}) printed ${JSON.stringify(version)}, expected ${pkg.version}`,
+const coreSmoke = SMOKE.replaceAll(
+  "'@glows777/vela/testing'",
+  "'@glows777/vela-core/testing'",
+).replaceAll("'@glows777/vela'", "'@glows777/vela-core'")
+const ragStart = coreSmoke.indexOf('// rag extension:')
+const ragEnd = coreSmoke.indexOf('// grep / find', ragStart)
+const CORE = insertCoreSubpaths(
+  coreSmoke.slice(0, ragStart) + coreSmoke.slice(ragEnd),
+)
+function insertCoreSubpaths(source: string) {
+  return (
+    `
+import {defineJsonSchemaTool} from '@glows777/vela-core/extension-api'
+import {imageMimeType,imageMetadata,isBinaryFile} from '@glows777/vela-core/images'
+import {inspectVela,inspectSession} from '@glows777/vela-core/diagnostics'
+if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||typeof imageMetadata!=='function'||typeof isBinaryFile!=='function')throw new Error('missing public core subpath')
+` +
+    source.replace(
+      'await vela.dispose()',
+      "if(!inspectVela(vela).tools.length||(await inspectSession(vela,session)).windowTokens<=0)throw new Error('diagnostic consumer failed');await vela.dispose()",
     )
+  )
 }
-
-try {
+const CHANNELS = `
+import assert from 'node:assert/strict'
+import {createChannelVela,type ChannelExtension,type IncomingMessage} from '@glows777/vela-channels'
+import {drainChannels} from '@glows777/vela-channels/testing'
+import {createFauxModel,fauxText} from '@glows777/vela-core/testing'
+let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
+const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:'standard adapter',start(){},stop(){stopped++},onMessage(next){receive=next},async send(m){replies.push(m.text)}})
+const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('channel received')]}),extensions:[probe]})
+try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private')}finally{await vela.dispose()}
+assert.equal(stopped,1);console.log('standard channel sdk ok')
+`
+const LARK = `
+import assert from 'node:assert/strict'
+import {Readable} from 'node:stream'
+import {feishu,type FeishuOptions,type FeishuTransport,type FeishuMessageEvent} from '@glows777/vela-lark'
+import {createChannelVela} from '@glows777/vela-channels'
+import {drainChannels} from '@glows777/vela-channels/testing'
+import {createFauxModel,fauxText} from '@glows777/vela-core/testing'
+let receive:(event:FeishuMessageEvent)=>void=()=>{throw new Error('transport not started')};const sent:string[]=[]
+const receipt=()=>({messageId:'reply',createTime:String(Date.now())})
+const transport:FeishuTransport={
+ async start(next){receive=next},stop(){},async getBotId(){return 'ou_bot'},async getSenderName(){return 'Alice'},
+ async send(_chat,text){sent.push(text);return receipt()},async reply(_message,text){sent.push(text);return receipt()},
+ async startTopic(){return {...receipt(),rootId:'root',threadId:'thread'}},async forward(){return receipt()},
+ async sendCard(){return 'card'},async patchCard(){},async addReaction(){return 'reaction'},async removeReaction(){},
+ async getResource(){return Readable.from([])},async listTopicMessages(){return {items:[]}},async searchMessages(){return {items:[]}},async listMessages(){return []},
+}
+const options:FeishuOptions={appId:'offline',owners:['ou_alice'],transport}
+const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('lark received')]}),extensions:[feishu(options)]})
+try{await vela.startChannels();receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'incoming',message_type:'text',content:JSON.stringify({text:'hello'}),create_time:String(Date.now())}});await drainChannels(vela);assert(sent.some(text=>text.includes('lark received')))}finally{await vela.dispose()}
+console.log('lark fake transport sdk ok')
+`
+const MCP = `
+import assert from 'node:assert/strict'
+import {mcp,type McpOptions} from '@glows777/vela-mcp'
+import {createTestVela,createFauxEmbedder,fauxToolCall,fauxText} from '@glows777/vela-core/testing'
+const options:McpOptions={servers:{local:{command:process.execPath,args:['server.ts'],exposure:'direct'}}}
+const t=createTestVela({cwd:process.cwd(),dataDir:'.mcp-data',extensions:[mcp(options)],responses:[fauxToolCall('mcp__local__echo',{text:'stdio works'}),fauxText('done')]})
+try{await t.run('echo');assert(JSON.stringify(t.model.calls[1]?.prompt).includes('stdio works'));console.log('mcp stdio sdk ok')}finally{await t.cleanup()}
+`
+const RAG = `
+import assert from 'node:assert/strict'
+import {rag,type EmbeddingFn} from '@glows777/vela-rag'
+import {createTestVela,createFauxEmbedder,fauxToolCall,fauxText} from '@glows777/vela-core/testing'
+const embedder:EmbeddingFn=createFauxEmbedder()
+const t=createTestVela({extensions:[rag({embedder})],files:{'guide.md':'Vela runs on Node and Bun.'},responses:[fauxToolCall('rag_ingest',{path:'guide.md'}),fauxToolCall('rag_search',{query:'runs on Node'}),fauxText('ok')]})
+try{await t.run('ingest and search');assert(JSON.stringify(t.model.calls[2]?.prompt).includes('Vela runs on Node and Bun.'));console.log('rag sqlite vector sdk ok')}finally{await t.cleanup()}
+`
+const checks: Record<string, string> = {
+  core: CORE,
+  channels: CHANNELS,
+  lark: LARK,
+  mcp: MCP,
+  rag: RAG,
+  vela: SMOKE,
+}
+const forbidden = [
+  '@larksuiteoapi/node-sdk',
+  '@modelcontextprotocol/sdk',
+  'sqlite-vec',
+  '@earendil-works/pi-tui',
+]
+const packed = await (async () => {
   await $`bun run build`.cwd(ROOT)
-  const packDir = join(work, 'pack')
-  await $`bun pm pack --destination ${packDir} --quiet`.cwd(ROOT)
-  const tarball = join(
-    packDir,
-    `${pkg.name.replace('@', '').replace('/', '-')}-${pkg.version}.tgz`,
+  return packWorkspaces(ROOT, work)
+})()
+const byName = new Map(packed.map((p) => [p.name, p]))
+const byTar = new Map(packed.map((p) => ['/tar/' + p.key + '.tgz', p]))
+let registryURL = ''
+const registry = Bun.serve({
+  hostname: '127.0.0.1',
+  port: 0,
+  async fetch(request) {
+    const url = new URL(request.url)
+    const archive = byTar.get(url.pathname)
+    if (archive) return new Response(Bun.file(archive.tarball))
+    const name = decodeURIComponent(url.pathname.slice(1))
+    const pkg = byName.get(name)
+    if (!pkg) return new Response('not found', { status: 404 })
+    return Response.json({
+      name: pkg.name,
+      'dist-tags': { latest: pkg.version },
+      versions: {
+        [pkg.version]: {
+          ...pkg.manifest,
+          dist: {
+            tarball: registryURL + '/tar/' + pkg.key + '.tgz',
+            integrity: pkg.integrity,
+          },
+        },
+      },
+    })
+  },
+})
+registryURL = `http://127.0.0.1:${registry.port}`
+async function assertLightInstall(app: string) {
+  const report = await $`npm ls --all --json`.cwd(app).quiet().nothrow()
+  if (report.exitCode !== 0)
+    throw new Error(
+      'installed dependency tree is invalid: ' + report.stderr.toString(),
+    )
+  const tree = JSON.parse(report.stdout.toString())
+  const visit = (node: { dependencies?: Record<string, unknown> }) => {
+    for (const [name, child] of Object.entries(node.dependencies ?? {})) {
+      if (forbidden.includes(name))
+        throw new Error(`light install contains ${name}`)
+      visit(child as typeof node)
+    }
+  }
+  visit(tree)
+}
+async function cli(app: string, runtime: string, version: string) {
+  const home = join(app, 'home')
+  await mkdir(home, { recursive: true })
+  const env = {
+    PATH: process.env.PATH ?? '',
+    HOME: home,
+    VELA_DIR: join(home, '.vela'),
+    VELA_MODEL: 'mock',
+    VELA_OFFLINE: '1',
+  }
+  const output =
+    await $`${runtime} ./node_modules/.bin/vela -p hello < /dev/null`
+      .cwd(app)
+      .env(env)
+      .text()
+  if (!output.trim()) throw new Error('CLI printed no answer')
+  const actual = (
+    await $`${runtime} ./node_modules/.bin/vela --version`
+      .cwd(app)
+      .env(env)
+      .text()
+  ).trim()
+  if (actual !== version)
+    throw new Error(`CLI version ${actual}, expected ${version}`)
+  const file = join(app, 'node_modules/@glows777/vela/dist/cli/main.js')
+  if (!((await Bun.file(file).stat()).mode & 0o111))
+    throw new Error('CLI bin lost executable mode')
+}
+try {
+  const only = process.argv.includes('--only')
+    ? new Set(process.argv[process.argv.indexOf('--only') + 1]!.split(','))
+    : undefined
+  for (const pkg of packed.filter((p) => !only || only.has(p.key)))
+    for (const runtime of ['node', 'bun']) {
+      const app = join(work, pkg.key + '-' + runtime)
+      await mkdir(app, { recursive: true })
+      await writeFile(
+        join(app, '.npmrc'),
+        `@glows777:registry=${registryURL}/\n`,
+      )
+      const devDependencies = {
+        typescript: tooling.devDependencies.typescript,
+        zod: tooling.devDependencies.zod,
+        [runtime === 'node' ? '@types/node' : '@types/bun']:
+          tooling.devDependencies[
+            runtime === 'node' ? '@types/node' : '@types/bun'
+          ],
+        ...(pkg.key === 'mcp'
+          ? {
+              '@modelcontextprotocol/sdk':
+                tooling.devDependencies['@modelcontextprotocol/sdk'],
+            }
+          : {}),
+      }
+      await writeFile(
+        join(app, 'package.json'),
+        JSON.stringify({
+          name: 'consumer-' + pkg.key + '-' + runtime,
+          private: true,
+          type: 'module',
+          dependencies: { [pkg.name]: pkg.version },
+          devDependencies,
+        }),
+      )
+      await writeFile(
+        join(app, 'tsconfig.json'),
+        JSON.stringify(runtime === 'node' ? NODE_TSCONFIG : BUN_TSCONFIG),
+      )
+      await writeFile(join(app, 'smoke.ts'), checks[pkg.key]!)
+      if (pkg.key === 'mcp')
+        await cpFixture(
+          'test/fixtures/mcp-echo-server.ts',
+          join(app, 'server.ts'),
+        )
+      console.log(`--- ${pkg.key}: ${runtime} fresh install`)
+      if (runtime === 'node')
+        await $`npm install --no-audit --no-fund --loglevel=error`.cwd(app)
+      else
+        await $`bun install`.cwd(app).env({
+          ...process.env,
+          BUN_INSTALL_CACHE_DIR: join(work, 'bun-cache'),
+        })
+      if (pkg.key === 'core' || pkg.key === 'channels')
+        await assertLightInstall(app)
+      await $`./node_modules/.bin/tsc -p .`.cwd(app)
+      await $`${runtime} smoke.ts`.cwd(app)
+      if (pkg.key === 'vela') await cli(app, runtime, pkg.version)
+      console.log(`PASS ${pkg.name} on ${runtime}`)
+    }
+  console.log(
+    only
+      ? 'selected packed workspace consumer checks passed'
+      : 'all six packed workspace consumer checks passed',
   )
-  const files = await $`tar -tzf ${tarball}`.text()
-  if (files.includes('package/src/') || files.includes('package/test/'))
-    throw new Error('the package must ship dist/, not src/ or test/')
-  if (!files.includes('package/LICENSE'))
-    throw new Error('the package must ship the LICENSE file')
-  for (const doc of ['package/docs/index.md', 'package/CHANGELOG.md'])
-    if (!files.includes(doc))
-      throw new Error(`the package must ship ${doc.slice('package/'.length)}`)
-
-  // Skip this repo's lockfile: resolve dependencies from package.json ranges like a real consumer
-  const node = await project(
-    'node',
-    tarball,
-    { '@types/node': pkg.devDependencies['@types/node'] },
-    NODE_TSCONFIG,
-  )
-  await $`npm install --no-audit --no-fund --loglevel=error`.cwd(node)
-  console.log('--- node: tsc (NodeNext, strict)')
-  await $`./node_modules/.bin/tsc -p .`.cwd(node)
-  console.log('--- node: sdk')
-  await $`node smoke.ts`.cwd(node)
-  console.log('--- node: cli')
-  await cli(node, 'node')
-
-  const bun = await project(
-    'bun',
-    tarball,
-    { '@types/bun': pkg.devDependencies['@types/bun'] },
-    BUN_TSCONFIG,
-  )
-  await $`bun install`.cwd(bun)
-  console.log('--- bun: tsc')
-  await $`bun x tsc -p .`.cwd(bun)
-  console.log('--- bun: sdk')
-  await $`bun smoke.ts`.cwd(bun)
-  console.log('--- bun: cli')
-  await cli(bun, 'bun')
-  console.log('consumer smoke ok')
 } finally {
+  registry.stop(true)
   await rm(work, { recursive: true, force: true })
+}
+async function cpFixture(source: string, destination: string) {
+  await writeFile(destination, await readFile(join(ROOT, source)))
 }

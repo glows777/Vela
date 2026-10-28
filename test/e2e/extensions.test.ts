@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { SessionUI, VelaExtension } from '@glows777/vela'
+import { web } from '@glows777/vela-core'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { jsonSchema } from 'ai'
 import { z } from 'zod'
 import { z as z3 } from 'zod/v3'
@@ -12,8 +14,6 @@ import today from '../../examples/extensions/prompt-section.ts'
 import readOnlyReview from '../../examples/extensions/read-only-session.ts'
 import redact from '../../examples/extensions/redact-secrets.ts'
 import todo from '../../examples/extensions/todo-command.ts'
-import { web } from '../../src/extensions/web/index.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

@@ -1,9 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import z from 'zod'
-import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
-import todo from '../../examples/extensions/todo-command.ts'
-import type { ProviderDefinition } from '../../src/models/index.ts'
+import type { ProviderDefinition } from '@glows777/vela-core'
 import {
   createFauxModel,
   fauxHang,
@@ -11,7 +8,10 @@ import {
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import z from 'zod'
+import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
+import todo from '../../examples/extensions/todo-command.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -173,7 +173,7 @@ for (const phase of ['live', 'resumed'] as const) {
       },
     ]
     function catalog(
-      vela: import('../../src/extensions/types.ts').ExtensionAPI,
+      vela: import('../../packages/core/dist/extensions/types.js').ExtensionAPI,
     ) {
       vela.registerTool({
         name: 'inspect',
@@ -819,7 +819,9 @@ test('/tree moves to an earlier message and puts it back in the editor; /fork an
 })
 
 test('custom messages show as a labeled block only with display: true (like pi)', async () => {
-  function notes(vela: import('../../src/extensions/types.ts').ExtensionAPI) {
+  function notes(
+    vela: import('../../packages/core/dist/extensions/types.js').ExtensionAPI,
+  ) {
     vela.registerCommand('note', {
       handler: async (_args, ctx) => {
         await ctx.session.sendMessage({

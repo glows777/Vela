@@ -5,12 +5,12 @@ import type {
   LanguageModelV4Prompt,
   SharedV4FileData,
 } from '@ai-sdk/provider'
-import { PhotonImage } from '@silvia-odwyer/photon-node'
 import {
   createFauxModel,
   fauxSummary,
   fauxText,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { PhotonImage } from '@silvia-odwyer/photon-node'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

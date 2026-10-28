@@ -6,9 +6,11 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
-- Session routing options (`scope`, `channel`), read-only scope and tool-call session identity, `toolDecision`, explicit `save({ reportFailure })`, lifecycle callbacks, channel-only event publication and experimental diagnostic snapshots support core/channel separation. Existing package root and testing imports remain compatible; package relocation is a later change.
+- Session routing options (`scope`, `channel`), read-only scope and tool-call session identity, `toolDecision`, explicit `save({ reportFailure })`, lifecycle callbacks, channel-only event publication and experimental diagnostic snapshots support core/channel separation. Existing package root and testing imports remain compatible.
 
 ### Changed
+
+- Six jointly versioned Bun workspace packages separate core SDK, channel runtime/interfaces, Lark transport, MCP, RAG and the umbrella CLI. Existing `@glows777/vela` and `/testing` imports, `vela` executable, Feishu identifiers and behavior remain compatible. Lightweight consumers can install `@glows777/vela-core` or `@glows777/vela-channels`; each package has an explicit export map, declared runtime dependencies and API snapshot.
 
 - Opening an existing session may establish its first routing binding; matching bindings are accepted and conflicting routes throw `SessionRoutingConflictError` with the session ID and both routes. Existing cwd, tools, permissions and model options remain first-open-only. Forks and clones do not inherit routing authority.
 - Save-success observer failures are logged without replaying already committed history. Ordinary `save()` still flushes and rejects on storage failure without emitting a failure event; only `reportFailure: true` emits the existing event.

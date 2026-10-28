@@ -19,7 +19,7 @@ From the repository root:
 bun examples/sdk/01-minimal.ts
 ```
 
-Inside the repository, `@glows777/vela` resolves to `src/` through `tsconfig.json` paths, so no build is needed. `bunx tsc --noEmit` typechecks the examples with the rest of the repository.
+Inside the repository, `@glows777/vela` resolves through the umbrella package’s real export map to built `dist/`; run `bun run build` first. `bunx tsc --noEmit` typechecks the examples with the rest of the repository.
 
 ## Using a real model
 

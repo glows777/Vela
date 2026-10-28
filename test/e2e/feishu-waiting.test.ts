@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import { fauxError, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

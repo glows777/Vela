@@ -1,12 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
+import type { ProviderDefinition, VelaLogger } from '@glows777/vela-core'
+import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
 import { wrapLanguageModel } from 'ai'
 import { z } from 'zod'
-import { DEFAULT_LIMITS } from '../../src/limits.ts'
-import type { VelaLogger } from '../../src/logger.ts'
-import type { ProviderDefinition } from '../../src/models/index.ts'
-import { describeModel } from '../../src/models/index.ts'
-import { createFauxModel, fauxText } from '../../src/testing/faux.ts'
-import { createVela } from '../../src/vela.ts'
+import { DEFAULT_LIMITS } from '../../packages/core/dist/limits.js'
+import { describeModel } from '../../packages/core/dist/models/index.js'
+import { createVela } from '../support/compat-vela.ts'
 import {
   captureConsole,
   cleanupTestVelas,

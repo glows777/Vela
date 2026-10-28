@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
+import type { VelaEvent } from '@glows777/vela-core'
+import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { z } from 'zod'
-import type { VelaEvent } from '../../src/agent/events.ts'
-import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

@@ -1,5 +1,4 @@
 {
-  // Publishing build: src → dist (JS + .d.ts). Node types only, so dist never relies on Bun globals.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["node"],
@@ -16,5 +15,5 @@
     "allowJs": false,
     "jsx": "preserve"
   },
-  "include": ["src"]
+  "include": ["packages/*/src"]
 }

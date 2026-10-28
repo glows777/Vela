@@ -1,17 +1,20 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import { channelSessionId } from '../../src/channels/gateway.ts'
 import type {
   ChannelDefinition,
   IncomingMessage,
   OutgoingMessage,
-} from '../../src/channels/types.ts'
-import { messageTime } from '../../src/extensions/feishu/history.ts'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import { silentLogger } from '../../src/logger.ts'
-import type { ProviderContext } from '../../src/models/index.ts'
-import { memorySessionStorage } from '../../src/session/storage.ts'
-import { createFauxModel, fauxHang, fauxText } from '../../src/testing/faux.ts'
+} from '@glows777/vela-channels'
+import { channelSessionId } from '@glows777/vela-channels'
+import type { ProviderContext } from '@glows777/vela-core'
+import { memorySessionStorage, silentLogger } from '@glows777/vela-core'
+import {
+  createFauxModel,
+  fauxHang,
+  fauxText,
+} from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
+import { messageTime } from '../../packages/lark/dist/history.js'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import {
   cleanupTestVelas,

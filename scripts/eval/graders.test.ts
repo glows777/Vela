@@ -673,13 +673,17 @@ import {
   fauxError,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
 import * as feishuHelpers from '../../test/support/feishu.ts'
 import { options } from './run.ts'
 import * as scenarios from './scenarios.ts'
 import { command, runAttempt } from './worker.ts'
 
-const exitRuntime = resolve(import.meta.dir, '../..')
+const exitRuntime =
+  process.env.VELA_EVAL_TEST_RUNTIME ?? resolve(import.meta.dir, '../..')
+const exitHelpers: typeof feishuHelpers = await import(
+  join(exitRuntime, 'test/support/feishu.ts')
+)
 async function exitAttempt(
   scenario: 'G6' | 'G7' | 'G8',
   responses: FauxStep[],
@@ -687,9 +691,9 @@ async function exitAttempt(
 ) {
   const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
   const model = createFauxModel({ responses })
-  const originalFake = feishuHelpers.fakeFeishu
+  const originalFake = exitHelpers.fakeFeishu
   const fakeSpy = history
-    ? spyOn(feishuHelpers, 'fakeFeishu').mockImplementation(() => {
+    ? spyOn(exitHelpers, 'fakeFeishu').mockImplementation(() => {
         const fake = originalFake()
         fake.transport.searchMessages = async () => ({
           items: [

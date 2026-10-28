@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { createFauxModel, fauxText } from '../../src/testing/faux.ts'
-import { tempDir } from '../../src/testing/test-vela.ts'
-import { createVela } from '../../src/vela.ts'
+import { tempDir } from '@glows777/vela/testing'
+import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
+import { createVela } from '../support/compat-vela.ts'
 
 function deferred() {
   let resolve!: () => void

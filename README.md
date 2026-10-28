@@ -70,6 +70,7 @@ The SDK reads no environment variables and persists nothing unless you pass `dat
 git clone https://github.com/glows777/Vela
 cd Vela
 bun install
+bun run build
 VELA_MODEL=mock bun run start
 bun run test
 ```

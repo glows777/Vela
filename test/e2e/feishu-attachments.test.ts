@@ -5,10 +5,10 @@ import type {
   LanguageModelV4FilePart,
   LanguageModelV4Prompt,
 } from '@ai-sdk/provider'
+import type { VelaExtension } from '@glows777/vela'
+import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import type { VelaExtension } from '../../src/index.ts'
-import { fauxError, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -237,10 +237,8 @@ test('Feishu file prepared by expired Steer is reused when the gateway processes
   const f = await setup()
   f.resources.set('file', [Buffer.from('once')])
   const event = dm('file', { file_key: 'file', file_name: 'once.txt' })
-  const { FeishuChannel } = await import(
-    '../../src/extensions/feishu/channel.ts'
-  )
-  const { silentLogger } = await import('../../src/logger.ts')
+  const { FeishuChannel } = await import('../../packages/lark/dist/channel.js')
+  const { silentLogger } = await import('../../packages/core/dist/logger.js')
   const channel = new FeishuChannel({
     appId: '',
     appSecret: '',

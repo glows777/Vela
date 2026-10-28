@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { feishu } from '../../src/extensions/feishu/index.ts'
 import {
   createFauxModel,
   type FauxStep,
   fauxHang,
   fauxSummary,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
