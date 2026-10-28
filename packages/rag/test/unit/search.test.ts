@@ -4,8 +4,8 @@ import {
   normalizeFtsQuery,
   normalizeMinMax,
   type SearchResult,
-} from '../../../../src/search.ts'
-import type { StoredChunk } from '../../../../src/sqlite-store.ts'
+} from '../../src/search.ts'
+import type { StoredChunk } from '../../src/sqlite-store.ts'
 
 function makeResult(
   id: string,

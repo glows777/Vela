@@ -263,4 +263,4 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 
 The extension variables are defaults for the `extensionConfig` keys shown in parentheses: a value set in `settings.json` overrides them, and an empty string counts as unset. `models.json` and `extensionConfig` can read any other variable with `$NAME` or `${NAME}`. Because the providers are built on the AI SDK, an `openai-*` or `anthropic-messages` provider with no base URL also honors the SDK's own `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`.
 
-The installed `vela` command does not load `.env` files. Bun does, from the current folder, when you run the source with `bun src/cli/main.ts`.
+The installed `vela` command does not load `.env` files. Bun does, from the current folder, when you run the source with `bun packages/vela/src/cli/main.ts`.

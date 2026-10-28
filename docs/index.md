@@ -16,7 +16,7 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 
 - [JSON mode](json.md) streams the events of one run as JSON lines.
 - [RPC mode](rpc.md) controls a long-running Vela process over stdin and stdout.
-- The [SDK](sdk.md) runs Vela inside your application, with as many concurrent sessions as you need.
+- The [SDK](sdk.md) runs Vela inside your application, with as many concurrent sessions as you need. Vela is published as six packages; `@glows777/vela` bundles them, and [Packages](sdk.md#packages) says which smaller one to depend on.
 
 ## Extend Vela
 

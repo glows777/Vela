@@ -2,8 +2,8 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openSqlite } from '../../../../src/sqlite.ts'
-import { SqliteVectorStore } from '../../../../src/sqlite-store.ts'
+import { openSqlite } from '../../src/sqlite.ts'
+import { SqliteVectorStore } from '../../src/sqlite-store.ts'
 
 const embedding = Array.from({ length: 128 }, (_, index) => index / 128)
 

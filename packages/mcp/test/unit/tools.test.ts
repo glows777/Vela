@@ -3,7 +3,7 @@ import {
   convertMcpResult,
   createMcpToolName,
   mcpResultText,
-} from '../../../../src/tools.ts'
+} from '../../src/tools.ts'
 
 test('tool names are mcp__<server>__<tool>, sanitized, with a hash when too long or taken (like pi)', () => {
   expect(createMcpToolName('my-server', 'get.file')).toBe(

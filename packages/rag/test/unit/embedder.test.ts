@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { createFauxEmbedder } from '@glows777/vela-core/testing'
-import { EMBED_CACHE_SIZE, embed } from '../../../../src/embedder.ts'
+import { EMBED_CACHE_SIZE, embed } from '../../src/embedder.ts'
 
 test('embed() caches vectors per text for the same embedder', async () => {
   const calls: string[][] = []
