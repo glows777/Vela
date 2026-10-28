@@ -200,13 +200,13 @@ if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||
 }
 const CHANNELS = `
 import assert from 'node:assert/strict'
-import {createChannelVela,type ChannelExtension,type IncomingMessage} from '@glows777/vela-channels'
+import {createChannelVela,type ChannelExtension,type IncomingMessage,type ChannelEvent} from '@glows777/vela-channels'
 import {drainChannels} from '@glows777/vela-channels/testing'
-import {createFauxModel,fauxText} from '@glows777/vela-core/testing'
+import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
 let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
 const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:'standard adapter',start(){},stop(){stopped++},onMessage(next){receive=next},async send(m){replies.push(m.text)}})
-const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('channel received')]}),extensions:[probe]})
-try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private')}finally{await vela.dispose()}
+const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('channel received'),fauxText('event received')]}),extensions:[probe]})
+try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private');const event:ChannelEvent={source:'consumer',key:'build',deliveryId:'packed',summary:'!stop',final:true};await vela.publishEvent(event);await drainChannels(vela);assert(replies.includes('event received'))}finally{await vela.dispose()}
 assert.equal(stopped,1);console.log('standard channel sdk ok')
 `
 const LARK = `
@@ -261,7 +261,9 @@ const checks: Record<string, string> = {
   lark: LARK,
   mcp: MCP,
   rag: RAG,
-  vela: SMOKE,
+  vela:
+    SMOKE +
+    "\nif (typeof vela.publishEvent !== 'function') throw new Error('umbrella publishEvent missing')\n",
 }
 const forbidden = [
   '@larksuiteoapi/node-sdk',

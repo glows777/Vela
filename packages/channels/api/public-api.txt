@@ -15,6 +15,13 @@
     stop: () => Promise<void> | void
     timezone?: unknown
     validateTools?: ((names: readonly string[]) => void) | undefined
+  interface ChannelEvent
+    deliveryId: string
+    details?: string | undefined
+    final?: boolean | undefined
+    key: string
+    source: string
+    summary: string
   type ChannelExtension = (
       api: ChannelExtensionAPI,
       ) => void | Promise<void>
@@ -101,6 +108,7 @@
     loginProviders: () => LoginProvider[]
     logout: (provider: string) => Promise<boolean>
     models: (options?: { all?: boolean; }) => ModelInfo[]
+    publishEvent: (event: ChannelEvent) => Promise<void>
     readonly cwd: string
     readonly dataDir: string
     readonly limits: VelaLimits
@@ -121,6 +129,7 @@
     credentials?: CredentialStore | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
+    eventDefaultTarget?: { channel: string; chatId: string; } | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: ChannelExtension[] | undefined
     limits?: Partial<VelaLimits> | undefined
@@ -139,6 +148,7 @@
   function groupWorkspace: (dataDir: string, channel: string, chatId: string, create?: boolean) => string
   interface IncomingMessage
     channelId: string
+    externalEvent?: ChannelEvent | undefined
     images?: ImageContent[] | undefined
     isNewTopic?: boolean | undefined
     passive?: boolean | undefined

@@ -162,6 +162,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 
 | File | Scenarios |
 |---|---|
+| e2e/channel-events | Generic subscription CRUD and chat scope; atomic persistence and write failures; logical restart; untrusted command-looking payloads; queue/final fanout; disabled-target/default isolation; generic tool visibility and permission denies; ordinary-message interruption recovery; Lark reply anchors and lifecycle |
 | e2e/channel-routines | Fake-clock one-off topic/group/DM delivery and creator mentions; human group announcements distinct from model input; recurrence across process and logical restart with marker alignment; cancellation; latest-only late catch-up; disabled-chat skip; queued routine isolation; original requester retained in topic overview and routine/human recovery; malformed-file rejection and input save failure |
 | channels: unit/routine-time | Local weekday recurrence and latest occurrence; DST gap shift and first repeated instant |
 | e2e/images | image request payloads, resize and invalid-image hints; model-capability switching; image history resume/fork/clone; input-hook replacement; queued images; summary safety |

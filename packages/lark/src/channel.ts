@@ -399,6 +399,16 @@ export class LarkChannel implements ChannelDefinition {
     activeMessage?: IncomingMessage,
   ): Promise<IncomingMessage | undefined> {
     if (this.stopped) return
+    if (msg.externalEvent && !msg.topic && this.chats.has(msg.channelId)) {
+      const receipt = await this.transport?.send(msg.channelId, msg.text)
+      if (!receipt) {
+        this.config.logger.warn(
+          '[lark] External event skipped: top-level delivery requires a transport send receipt',
+        )
+        return
+      }
+      return { ...msg, replyToId: receipt.messageId }
+    }
     if (!msg.raw) return msg
     const event = msg.raw as LarkMessageEvent
     const activeTrigger = (activeMessage?.raw as LarkMessageEvent | undefined)
