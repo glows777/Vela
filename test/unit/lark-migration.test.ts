@@ -406,3 +406,129 @@ test('an actual interrupted atomic apply resumes its own already-installed files
     ).status,
   ).toBe('complete')
 })
+
+test.each([
+  'feishu-oc_group-ou_alice',
+  'feishu-ou_alice',
+  'feishu-oc_group-unknown',
+])(
+  'retained pre-shared sender archive %s never becomes shared routing',
+  async (id) => {
+    const f = await fixture()
+    const header =
+      id === 'feishu-ou_alice'
+        ? {
+            type: 'checkpoint',
+            messages: [{ role: 'user', content: 'private legacy fact' }],
+          }
+        : {
+            type: 'session',
+            version: 2,
+            id,
+            timestamp: '2026-01-01T00:00:00.000Z',
+          }
+    const transcript = `${JSON.stringify(header)}\n${JSON.stringify({ type: 'custom', id: 'entry', parentId: null, timestamp: '2026-01-01T00:00:00.000Z', customType: 'private-note', data: 'Private pre-shared transcript' })}\n`
+    const path = join(f.dataDir, 'sessions', `${id}.jsonl`)
+    await writeFile(path, transcript)
+    await mkdir(join(f.dataDir, 'sessions', id), { recursive: true })
+    await writeFile(
+      join(f.dataDir, 'sessions', id, 'kept.txt'),
+      'old tool artifact',
+    )
+    await (await migration()).migrateLark({
+      dataDir: f.dataDir,
+      settingsFiles: [f.settings],
+      apply: true,
+    })
+    expect(await readFile(path, 'utf8')).toBe(transcript)
+    expect(
+      await readFile(join(f.dataDir, 'sessions', id, 'kept.txt'), 'utf8'),
+    ).toBe('old tool artifact')
+    const index = JSON.parse(await readFile(f.index, 'utf8'))
+    expect(index.records).toHaveLength(1)
+    expect(
+      index.records.some(
+        (record: { activeSessionId: string }) => record.activeSessionId === id,
+      ),
+    ).toBe(false)
+    const { assertLarkState } = await import(
+      '../../packages/lark/src/legacy.ts'
+    )
+    expect(() => assertLarkState(f.dataDir)).not.toThrow()
+  },
+)
+
+test.each(['root', 'channels', 'settings'] as const)(
+  'migration backup snapshots linked %s contents independently of live state',
+  async (location) => {
+    const { symlink, rename, lstat, cp } = await import('node:fs/promises')
+    const f = await fixture()
+    const beforeIndex = await readFile(f.index, 'utf8')
+    const beforeRoutines = await readFile(
+      join(f.dataDir, 'channels/routines.json'),
+      'utf8',
+    )
+    const beforeSettings = await readFile(f.settings, 'utf8')
+    const source =
+      location === 'root'
+        ? f.dataDir
+        : location === 'channels'
+          ? join(f.dataDir, 'channels')
+          : f.settings
+    const actual = `${source}.actual`
+    await rename(source, actual)
+    await symlink(actual, source, location === 'settings' ? 'file' : 'dir')
+    const result = await (await migration()).migrateLark({
+      dataDir: f.dataDir,
+      settingsFiles: [f.settings],
+      apply: true,
+    })
+    const backup = result.backup!
+    expect(
+      await readFile(join(backup, 'data/channels/index.json'), 'utf8'),
+    ).toBe(beforeIndex)
+    expect(
+      await readFile(join(backup, 'data/channels/routines.json'), 'utf8'),
+    ).toBe(beforeRoutines)
+    await writeFile(
+      location === 'settings' ? actual : f.settings,
+      'later external edit',
+    )
+    expect(await readFile(join(backup, 'settings/0.json'), 'utf8')).toBe(
+      beforeSettings,
+    )
+    expect((await lstat(join(backup, 'data'))).isSymbolicLink()).toBe(false)
+    expect((await lstat(join(backup, 'data/channels'))).isSymbolicLink()).toBe(
+      false,
+    )
+    expect(
+      (await lstat(join(backup, 'settings/0.json'))).isSymbolicLink(),
+    ).toBe(false)
+    // Restore the snapshot bytes through the original paths, preserving administrator-owned links.
+    await cp(join(backup, 'data/channels/index.json'), f.index)
+    await cp(
+      join(backup, 'data/channels/routines.json'),
+      join(f.dataDir, 'channels/routines.json'),
+    )
+    expect(await readFile(f.index, 'utf8')).toBe(beforeIndex)
+    expect(
+      await readFile(join(f.dataDir, 'channels/routines.json'), 'utf8'),
+    ).toBe(beforeRoutines)
+  },
+)
+
+test('late omitted settings get an actionable stop without deleting or changing the completed journal', async () => {
+  const f = await fixture()
+  await (await migration()).migrateLark({ dataDir: f.dataDir, apply: true })
+  const marker = join(f.dataDir, 'channels/migration.json')
+  const before = await readFile(marker, 'utf8')
+  await expect(
+    (await migration()).migrateLark({
+      dataDir: f.dataDir,
+      settingsFiles: [f.settings],
+      apply: true,
+    }),
+  ).rejects.toThrow(/settings.*omitted|additional settings/i)
+  expect(await readFile(marker, 'utf8')).toBe(before)
+  expect(await readFile(f.settings, 'utf8')).toContain('builtin:feishu')
+})

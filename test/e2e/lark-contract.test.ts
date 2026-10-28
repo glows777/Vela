@@ -366,3 +366,53 @@ test('migrated pending recovery and overdue one-off run once across two restarts
   expect(again.model.calls).toEqual([])
   expect(againFake.sent).toEqual([])
 })
+
+test('a retained private sender transcript cannot leak into the new shared Lark chat', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { migrateLark } = await import('../../scripts/lark-migration.ts')
+  const { drainChannels } = await import('@glows777/vela-channels/testing')
+  const old = 'feishu-oc_group-ou_alice'
+  const before = createTestVela({
+    sessionId: old,
+    responses: [fauxText('private archived answer')],
+  })
+  await before.run(
+    'Private sender-only detail ORCHID-PRIVATE must not reach the shared chat',
+  )
+  await before.session.save()
+  const path = join(before.dataDir, 'sessions', `${old}.jsonl`)
+  const original = await readFile(path, 'utf8')
+  kept.push(before.cwd)
+  await before.cleanup({ keepDir: true })
+  await migrateLark({ dataDir: before.dataDir, apply: true })
+  const fake = fakeLark()
+  const after = createTestVela({
+    cwd: before.cwd,
+    responses: [
+      (request) => {
+        expect(JSON.stringify(request.prompt)).not.toContain('ORCHID-PRIVATE')
+        return fauxText('fresh shared answer')
+      },
+    ],
+    extensions: [
+      adapter.lark({ chats: ['oc_group'], transport: fake.transport }),
+    ],
+  })
+  await after.vela.startChannels()
+  const { larkEvent } = await import('../support/lark.ts')
+  fake.deliver(
+    larkEvent({
+      message_id: 'fresh-shared',
+      content: JSON.stringify({ text: 'hello group' }),
+    }),
+  )
+  await drainChannels(after.vela)
+  expect(after.vela.sessions().some((session) => session.id === old)).toBe(
+    false,
+  )
+  expect(
+    after.vela.sessions().some((session) => session.id === 'lark-oc_group'),
+  ).toBe(true)
+  expect(after.model.calls).toHaveLength(1)
+  expect(await readFile(path, 'utf8')).toBe(original)
+})

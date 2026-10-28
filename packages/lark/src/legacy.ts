@@ -5,6 +5,37 @@ import { channelSessionId } from '@glows777/vela-channels'
 const instruction =
   'Stop Vela and run bun scripts/migrate-lark.ts --data-dir <dataDir> --settings <settings.json> (dry run first, then --apply).'
 
+/** Historical sender IDs are archives, never a chat/topic route or permission source. */
+export function isLegacySenderArchive(
+  sessionDir: string,
+  file: string,
+): boolean {
+  const id = file.endsWith('.jsonl') ? file.slice(0, -6) : file
+  // The built-in used open_id, then (chat_id, open_id), before shared chat sessions.
+  // Provider IDs are short/plain; unknown or hashed tuples still require reconciliation.
+  if (!/^feishu-(?:oc_[A-Za-z0-9_]+-)?(?:ou_[A-Za-z0-9_]+|unknown)$/.test(id))
+    return false
+  const path = join(sessionDir, `${id}.jsonl`)
+  if (!existsSync(path)) return false
+  const line = readFileSync(path, 'utf8')
+    .split('\n')
+    .find((part) => part.trim())
+  let first: ReturnType<typeof JSON.parse>
+  try {
+    first = line ? JSON.parse(line) : undefined
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return false // A malformed would-be archive remains unknown/orphaned state.
+  }
+  return (
+    (first?.type === 'session' && first.id === id) ||
+    (first?.type === 'checkpoint' && Array.isArray(first.messages)) ||
+    (first?.type === 'message' &&
+      first.id === undefined &&
+      first.message?.role === 'user')
+  )
+}
+
 /** Old state must be explicitly migrated; never silently open a second conversation/store. */
 export function assertLarkState(dataDir: string): void {
   const directory = join(dataDir, 'channels')
@@ -51,7 +82,8 @@ export function assertLarkState(dataDir: string): void {
   for (const file of existsSync(sessionDir) ? readdirSync(sessionDir) : [])
     if (
       file.startsWith('feishu-') &&
-      !sessions.has(file.endsWith('.jsonl') ? file.slice(0, -6) : file)
+      !sessions.has(file.endsWith('.jsonl') ? file.slice(0, -6) : file) &&
+      !isLegacySenderArchive(sessionDir, file)
     )
       throw new Error(`Orphaned legacy Feishu session ${file}. ${instruction}`)
 }

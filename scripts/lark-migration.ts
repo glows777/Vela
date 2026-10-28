@@ -6,6 +6,7 @@ import { writeAtomicJson } from '../packages/channels/src/atomic-json.ts'
 import { channelIndexSchema } from '../packages/channels/src/directory.ts'
 import { channelRoutinesSchema } from '../packages/channels/src/routines.ts'
 import { channelUsageRowSchema } from '../packages/channels/src/usage.ts'
+import { isLegacySenderArchive } from '../packages/lark/src/legacy.ts'
 
 type ObjectValue = Record<string, unknown>
 type Change = { path: string; before: string; after: string }
@@ -224,7 +225,8 @@ export async function migrateLark(options: {
   for (const file of await entries(join(dataDir, 'sessions')))
     if (
       file.startsWith('feishu-') &&
-      !knownSessions.has(file.endsWith('.jsonl') ? file.slice(0, -6) : file)
+      !knownSessions.has(file.endsWith('.jsonl') ? file.slice(0, -6) : file) &&
+      !isLegacySenderArchive(join(dataDir, 'sessions'), file)
     )
       throw new Error(`Orphan legacy session ${file}`)
   for (const directory of await entries(join(dataDir, 'channels')))
@@ -296,10 +298,15 @@ export async function migrateLark(options: {
   for (const { path, before, value } of settings)
     add(path, before, renameSettings(value, path))
   // A complete marker is evidence of a prior apply; new legacy state requires explicit investigation.
-  if (prior && changes.length)
+  if (prior && changes.length) {
+    if (changes.every((change) => settingsFiles.includes(change.path)))
+      throw new Error(
+        `Additional settings were omitted from the completed migration: ${changes.map((change) => change.path).join(', ')}. Keep the journal and backups. Stop all writers and migrate these settings explicitly using docs/lark-migration.md, or restore the complete pre-migration data/settings before a fresh apply if no later writes exist.`,
+      )
     throw new Error(
-      'Migration collision: legacy state appeared after completed migration',
+      'Migration collision: legacy state appeared after completed migration; keep the journal/backups and reconcile new state before restarting',
     )
+  }
   if (!options.apply || !changes.length)
     return {
       applied: !!options.apply,
@@ -319,11 +326,12 @@ export async function migrateLark(options: {
       recursive: true,
       errorOnExist: true,
       force: false,
+      dereference: true,
     })
   await mkdir(join(backup, 'settings'), { mode: 0o700 })
   for (const [index, path] of settingsFiles.entries()) {
     const target = join(backup, 'settings', `${index}.json`)
-    await cp(path, target)
+    await cp(path, target, { dereference: true })
     await chmod(target, 0o600)
   }
   // Stop on source drift after backup and before installing the write barrier.

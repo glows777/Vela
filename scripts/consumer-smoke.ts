@@ -212,7 +212,7 @@ assert.equal(stopped,1);console.log('standard channel sdk ok')
 const LARK = `
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
-import {mkdir,symlink,readFile,realpath} from 'node:fs/promises'
+import {mkdir,symlink,readFile,realpath,writeFile} from 'node:fs/promises'
 import {resolve,join} from 'node:path'
 import {lark,type LarkOptions,type LarkTransport,type LarkMessageEvent} from '@glows777/vela-lark'
 // @ts-expect-error breaking rename removes old public factory
@@ -232,11 +232,12 @@ const transport:LarkTransport={
  async getResource(){return Readable.from([Buffer.from('canonical packed attachment')])},async listTopicMessages(){return {items:[]}},async searchMessages(){return {items:[]}},async listMessages(){return []},
 }
 const options:LarkOptions={appId:'offline',owners:['ou_alice'],transport}
-const actual=resolve('lark-data');await mkdir(actual);const linked=resolve('linked-lark-data');await symlink(actual,linked,'dir')
+const actual=resolve('lark-data');await mkdir(actual);const archiveId='feishu-oc_archived-ou_alice';const archive=JSON.stringify({type:'session',version:2,id:archiveId,timestamp:'2026-01-01T00:00:00.000Z'})+'\\n'+JSON.stringify({type:'message',id:'old',parentId:null,timestamp:'2026-01-01T00:00:00.000Z',message:{role:'user',content:'ORCHID-PRIVATE'}})+'\\n';await mkdir(join(actual,'sessions',archiveId),{recursive:true});await writeFile(join(actual,'sessions',archiveId+'.jsonl'),archive);await writeFile(join(actual,'sessions',archiveId,'output.txt'),'retained old output');const linked=resolve('linked-lark-data');await symlink(actual,linked,'dir')
 const model=createFauxModel({responses:[fauxText('lark received'),fauxText('file received')]})
 const vela=createChannelVela({dataDir:linked,contextFiles:false,model,extensions:[lark(options)]})
 try{await vela.startChannels();receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'incoming',message_type:'text',content:JSON.stringify({text:'hello'}),create_time:String(Date.now())}});await drainChannels(vela);assert(sent.some(text=>text.includes('lark received')));receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'file',message_type:'file',content:JSON.stringify({file_key:'resource',file_name:'notes.txt'}),create_time:String(Date.now())}});await drainChannels(vela);const path=join(await realpath(actual),'channels/lark-direct/files/file-notes.txt');assert.equal(await readFile(path,'utf8'),'canonical packed attachment');assert(model.calls[1]!.lastUserText.includes('saved at '+path+']'))}finally{await vela.dispose()}
-console.log('lark fake transport sdk and symlink-root attachment ok')
+assert.equal(await readFile(join(actual,'sessions',archiveId+'.jsonl'),'utf8'),archive);assert.equal(await readFile(join(actual,'sessions',archiveId,'output.txt'),'utf8'),'retained old output');assert(!vela.sessions().some(session=>session.id===archiveId));assert(!JSON.stringify(model.calls.map(call=>call.prompt)).includes('ORCHID-PRIVATE'))
+console.log('lark fake transport sdk, retained archive privacy and symlink-root attachment ok')
 `
 const MCP = `
 import assert from 'node:assert/strict'
