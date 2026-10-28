@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import type {
   ChannelDefinition,
   ChannelFeedbackUpdate,
@@ -592,7 +592,14 @@ export class LarkChannel implements ChannelDefinition {
     )
     await mkdir(this.config.dataDir, { recursive: true })
     const root = await realpath(this.config.dataDir)
-    const directory = resolve(root, this.storage(message.chat_id), 'files')
+    const directory = resolve(
+      root,
+      relative(
+        resolve(this.config.dataDir),
+        resolve(this.storage(message.chat_id)),
+      ),
+      'files',
+    )
     await mkdir(directory, { recursive: true })
     if ((await realpath(directory)) !== directory)
       throw new Error('File directory must not contain symlinks')

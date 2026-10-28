@@ -1,5 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs'
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
   LanguageModelV4FilePart,
@@ -10,9 +16,13 @@ import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
-afterEach(cleanupTestVelas)
+const linkedRoots: ReturnType<typeof tempDir>[] = []
+afterEach(async () => {
+  await cleanupTestVelas()
+  for (const root of linkedRoots.splice(0)) root.cleanup()
+})
 const png = readFileSync(
   new URL('../fixtures/images/blue.png', import.meta.url),
 )
@@ -532,4 +542,110 @@ test('Lark expired group Steer reuses history images after the active run fails 
     finish()
     release()
   }
+})
+
+test.each([
+  ['root', false],
+  ['ancestor', false],
+  ['root', true],
+  ['ancestor', true],
+] as const)(
+  'Lark file downloads retain canonical paths with linked %s data directory (migrated=%s)',
+  async (location, migrated) => {
+    const root = tempDir('vela-linked-data-')
+    linkedRoots.push(root)
+    const real = join(root.path, 'actual')
+    const link = join(root.path, 'linked')
+    mkdirSync(real)
+    symlinkSync(real, link, 'dir')
+    const dataDir = location === 'root' ? link : join(link, 'nested')
+    const canonicalData = location === 'root' ? real : join(real, 'nested')
+    const storageKey = migrated ? 'feishu-oc_group' : 'lark-oc_dm'
+    if (migrated) {
+      const createdAt = new Date().toISOString()
+      mkdirSync(join(dataDir, 'channels', storageKey), { recursive: true })
+      await Bun.write(
+        join(dataDir, 'channels/index.json'),
+        JSON.stringify({
+          version: 1,
+          createdAt,
+          records: [
+            {
+              key: 'lark-oc_group-root',
+              legacyKey: 'feishu-oc_group-root',
+              storageKey,
+              channel: 'lark',
+              chatId: 'oc_group',
+              chatKind: 'group',
+              rootId: 'root',
+              threadId: 'thread',
+              requester: { id: 'ou_alice', name: 'Alice' },
+              task: 'retained topic',
+              activeSessionId: 'feishu-oc_group-root',
+              previousSessionIds: [],
+              state: 'done',
+              pendingMessageIds: [],
+              createdAt,
+              updatedAt: createdAt,
+            },
+          ],
+        }),
+      )
+    }
+    const fake = fakeLark()
+    fake.resources.set('file', [Buffer.from('canonical attachment bytes')])
+    const t = createTestVela({
+      cwd: root.path,
+      dataDir,
+      responses: [fauxText('file received')],
+      allowPendingResponses: true,
+      extensions: [
+        lark({
+          owners: ['ou_alice'],
+          chats: ['oc_group'],
+          transport: fake.transport,
+        }),
+      ],
+    })
+    await t.vela.startChannels()
+    fake.deliver(
+      migrated
+        ? larkEvent({
+            message_id: 'attachment',
+            root_id: 'root',
+            thread_id: 'thread',
+            message_type: 'file',
+            content: JSON.stringify({
+              file_key: 'file',
+              file_name: 'notes.txt',
+            }),
+          })
+        : dm('file', { file_key: 'file', file_name: 'notes.txt' }),
+    )
+    await until(() => fake.sent.length > 0)
+    const path = join(
+      realpathSync(canonicalData),
+      'channels',
+      storageKey,
+      'files/attachment-notes.txt',
+    )
+    expect(t.model.calls).toHaveLength(1)
+    expect(readFileSync(path, 'utf8')).toBe('canonical attachment bytes')
+    expect(t.model.calls[0]!.lastUserText).toContain(`saved at ${path}]`)
+  },
+)
+
+test('Lark still rejects a symlink inside the attachment storage directory', async () => {
+  const f = await setup()
+  const parent = f.t.dataPath('channels/lark-oc_dm')
+  const outside = join(f.t.cwd, 'outside-files')
+  mkdirSync(parent, { recursive: true })
+  mkdirSync(outside)
+  symlinkSync(outside, join(parent, 'files'), 'dir')
+  f.resources.set('file', [Buffer.from('must not be written outside')])
+  f.deliver(dm('file', { file_key: 'file', file_name: 'notes.txt' }))
+  await until(() => f.sent.length > 0)
+  expect(readdirSync(outside)).toEqual([])
+  expect(f.t.model.calls).toHaveLength(0)
+  expect(f.resourceCalls).toEqual([])
 })

@@ -212,6 +212,8 @@ assert.equal(stopped,1);console.log('standard channel sdk ok')
 const LARK = `
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
+import {mkdir,symlink,readFile,realpath} from 'node:fs/promises'
+import {resolve,join} from 'node:path'
 import {lark,type LarkOptions,type LarkTransport,type LarkMessageEvent} from '@glows777/vela-lark'
 // @ts-expect-error breaking rename removes old public factory
 type LegacyFactory = typeof import('@glows777/vela-lark')['feishu']
@@ -227,12 +229,14 @@ const transport:LarkTransport={
  async send(_chat,text){sent.push(text);return receipt()},async reply(_message,text){sent.push(text);return receipt()},
  async startTopic(){return {...receipt(),rootId:'root',threadId:'thread'}},async forward(){return receipt()},
  async sendCard(){return 'card'},async patchCard(){},async addReaction(){return 'reaction'},async removeReaction(){},
- async getResource(){return Readable.from([])},async listTopicMessages(){return {items:[]}},async searchMessages(){return {items:[]}},async listMessages(){return []},
+ async getResource(){return Readable.from([Buffer.from('canonical packed attachment')])},async listTopicMessages(){return {items:[]}},async searchMessages(){return {items:[]}},async listMessages(){return []},
 }
 const options:LarkOptions={appId:'offline',owners:['ou_alice'],transport}
-const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('lark received')]}),extensions:[lark(options)]})
-try{await vela.startChannels();receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'incoming',message_type:'text',content:JSON.stringify({text:'hello'}),create_time:String(Date.now())}});await drainChannels(vela);assert(sent.some(text=>text.includes('lark received')))}finally{await vela.dispose()}
-console.log('lark fake transport sdk ok')
+const actual=resolve('lark-data');await mkdir(actual);const linked=resolve('linked-lark-data');await symlink(actual,linked,'dir')
+const model=createFauxModel({responses:[fauxText('lark received'),fauxText('file received')]})
+const vela=createChannelVela({dataDir:linked,contextFiles:false,model,extensions:[lark(options)]})
+try{await vela.startChannels();receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'incoming',message_type:'text',content:JSON.stringify({text:'hello'}),create_time:String(Date.now())}});await drainChannels(vela);assert(sent.some(text=>text.includes('lark received')));receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'file',message_type:'file',content:JSON.stringify({file_key:'resource',file_name:'notes.txt'}),create_time:String(Date.now())}});await drainChannels(vela);const path=join(await realpath(actual),'channels/lark-direct/files/file-notes.txt');assert.equal(await readFile(path,'utf8'),'canonical packed attachment');assert(model.calls[1]!.lastUserText.includes('saved at '+path+']'))}finally{await vela.dispose()}
+console.log('lark fake transport sdk and symlink-root attachment ok')
 `
 const MCP = `
 import assert from 'node:assert/strict'
