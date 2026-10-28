@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import type { FeishuHistoryMessage } from '@glows777/vela-lark'
-import { feishu } from '@glows777/vela-lark'
+import type { LarkHistoryMessage } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
 import { messageTime } from '../../packages/lark/src/history.ts'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -26,11 +26,11 @@ async function until(check: () => boolean) {
   }
 }
 
-/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+/** `[HH:MM] ` for a Lark create_time in the machine's local time */
 const at = (ms: string) => `[${messageTime(ms)}] `
 
-async function runningChat(dm = false, history: FeishuHistoryMessage[] = []) {
-  const fake = fakeFeishu()
+async function runningChat(dm = false, history: LarkHistoryMessage[] = []) {
+  const fake = fakeLark()
   fake.history.push(...history)
   const held = latch()
   const entered = latch()
@@ -48,7 +48,7 @@ async function runningChat(dm = false, history: FeishuHistoryMessage[] = []) {
       fauxText('later answer'),
     ],
     extensions: [
-      feishu({
+      lark({
         appId: 'cli_bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -79,7 +79,7 @@ async function runningChat(dm = false, history: FeishuHistoryMessage[] = []) {
   await t.vela.startChannels()
   const chat = dm ? { chat_id: 'oc_dm', chat_type: 'p2p', mentions: [] } : {}
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       ...chat,
       message_id: 'first',
       create_time: '3000',
@@ -88,7 +88,7 @@ async function runningChat(dm = false, history: FeishuHistoryMessage[] = []) {
   )
   await entered.promise
   fake.deliver(
-    feishuEvent(
+    larkEvent(
       {
         ...chat,
         message_id: 'second',
@@ -168,7 +168,7 @@ test('Steer joins the active run with both named questions and sends one combine
     `${at('3000')}Alice: original question`,
     `${at('5000')}Bob: use blue`,
   ])
-  expect(await f.t.readData('sessions/feishu-oc_group.jsonl')).toContain(
+  expect(await f.t.readData('sessions/lark-oc_group.jsonl')).toContain(
     'Bob: use blue',
   )
 })
@@ -183,10 +183,10 @@ test('Stop aborts the active run, visibly confirms on the second message, and do
       { messageId: 'second', text: 'Stopped the current run.' },
     ])
     expect(f.t.eventsOf('agent_end').at(-1)?.reason).toBe('aborted')
-    expect(f.t.vela.session('feishu-oc_group').isRunning).toBe(false)
+    expect(f.t.vela.session('lark-oc_group').isRunning).toBe(false)
     expect(f.t.model.calls).toHaveLength(1)
     f.deliver(
-      feishuEvent({ message_id: 'later', content: '{"text":"continue"}' }),
+      larkEvent({ message_id: 'later', content: '{"text":"continue"}' }),
     )
     await until(() => f.sent.length === 2)
     expect(f.sent[1]?.messageId).toBe('later')
@@ -239,7 +239,7 @@ test('malformed values, wrong chats and missing operators cannot steer or stop a
     expect(f.click(0, 'stop', { operator: {} })).toMatchObject({
       toast: { type: 'info' },
     })
-    expect(f.t.vela.session('feishu-oc_group').isRunning).toBe(true)
+    expect(f.t.vela.session('lark-oc_group').isRunning).toBe(true)
     expect(f.click(0, 'steer')).toMatchObject({ toast: { type: 'success' } })
     await until(() =>
       f.t.eventsOf('queue_update').some((event) => event.steering.length === 1),
@@ -258,7 +258,7 @@ test('a card from a completed run cannot abort or steer the next run in the same
     f.release()
   }
   await until(() => f.sent.length === 2)
-  const idle = f.t.vela.session('feishu-oc_group')
+  const idle = f.t.vela.session('lark-oc_group')
   f.t.model.push({ text: 'busy again', hang: true })
   // Consume the remaining scripted answers before starting the controlled next run.
   await idle.prompt('next')
@@ -300,7 +300,7 @@ test('a run finishing during Steer history lookup keeps the input queued and nev
 })
 
 test('card send failure leaves the second message queued and does not discard either reply', async () => {
-  const f = fakeFeishu()
+  const f = fakeLark()
   let cardAttempts = 0
   f.transport.sendCard = async () => {
     cardAttempts++
@@ -315,7 +315,7 @@ test('card send failure leaves the second message queued and does not discard ei
       fauxText('two'),
     ],
     extensions: [
-      feishu({ chats: ['oc_group'], transport: f.transport }),
+      lark({ chats: ['oc_group'], transport: f.transport }),
       function hold(api) {
         api.registerTool({
           name: 'pause',
@@ -332,9 +332,9 @@ test('card send failure leaves the second message queued and does not discard ei
   })
   await t.vela.ready()
   await t.vela.startChannels()
-  f.deliver(feishuEvent({ message_id: 'one' }))
+  f.deliver(larkEvent({ message_id: 'one' }))
   await entered.promise
-  f.deliver(feishuEvent({ message_id: 'two' }))
+  f.deliver(larkEvent({ message_id: 'two' }))
   gate.release()
   await until(() => f.sent.length === 2)
   expect(cardAttempts).toBe(1)
@@ -347,7 +347,7 @@ test('owner DM cards use normal sends and a non-owner callback cannot control th
     await until(() => f.cards.length === 1)
     expect(f.cards[0]).toMatchObject({ chatId: 'oc_dm', replyToId: undefined })
     expect(f.click(0, 'stop')).toMatchObject({ toast: { type: 'info' } })
-    expect(f.t.vela.session('feishu-oc_dm').isRunning).toBe(true)
+    expect(f.t.vela.session('lark-oc_dm').isRunning).toBe(true)
     expect(
       f.click(0, 'stop', { operator: { open_id: 'ou_alice' } }),
     ).toMatchObject({ toast: { type: 'success' } })
@@ -365,7 +365,7 @@ test('Stop consumes only its own trigger and preserves the other queued message'
   const f = await runningChat()
   try {
     await until(() => f.cards.length === 1)
-    const afterStop = feishuEvent({
+    const afterStop = larkEvent({
       message_id: 'third',
       content: '{"text":"after stop"}',
     })
@@ -393,7 +393,7 @@ test('Stop consumes only its own trigger and preserves the other queued message'
   }
 })
 
-test('any own-app message, including a control card, bounds Feishu history during Steer', async () => {
+test('any own-app message, including a control card, bounds Lark history during Steer', async () => {
   const f = await runningChat()
   try {
     await until(() => f.cards.length === 1)
@@ -428,17 +428,17 @@ test('Stop discards an accepted steer from the cancelled run without leaking it 
     await until(() => f.cards.length === 1)
     f.click(0, 'steer')
     await until(
-      () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+      () => f.t.vela.session('lark-oc_group').queue.steering.length === 1,
     )
-    f.deliver(feishuEvent({ message_id: 'stop', content: '{"text":"cancel"}' }))
+    f.deliver(larkEvent({ message_id: 'stop', content: '{"text":"cancel"}' }))
     await until(() => f.cards.length === 2)
     f.click(1, 'stop')
     await until(() => f.sent.length === 1)
-    expect(f.t.vela.session('feishu-oc_group').queue).toEqual({
+    expect(f.t.vela.session('lark-oc_group').queue).toEqual({
       steering: [],
       followUp: [],
     })
-    const independent = feishuEvent({
+    const independent = larkEvent({
       message_id: 'independent',
       content: '{"text":"new independent task"}',
     })
@@ -458,7 +458,7 @@ test('Stop discards an accepted steer from the cancelled run without leaking it 
 })
 
 test('Stop also cancels a Steer whose input hook finishes while the aborted tool is still cleaning up', async () => {
-  const f = fakeFeishu()
+  const f = fakeLark()
   const entered = latch()
   const held = latch()
   const hookEntered = latch()
@@ -471,7 +471,7 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
       fauxText('stale answer'),
     ],
     extensions: [
-      feishu({ chats: ['oc_group'], transport: f.transport }),
+      lark({ chats: ['oc_group'], transport: f.transport }),
       function hold(api) {
         api.registerTool({
           name: 'pause',
@@ -498,10 +498,10 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
   await t.vela.ready()
   await t.vela.startChannels()
   try {
-    f.deliver(feishuEvent({ message_id: 'first' }))
+    f.deliver(larkEvent({ message_id: 'first' }))
     await entered.promise
     f.deliver(
-      feishuEvent(
+      larkEvent(
         { message_id: 'second', content: '{"text":"use blue"}' },
         'ou_bob',
       ),
@@ -509,7 +509,7 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
     await until(() => f.cards.length === 1)
     f.click(0, 'steer')
     await hookEntered.promise
-    f.deliver(feishuEvent({ message_id: 'stop' }))
+    f.deliver(larkEvent({ message_id: 'stop' }))
     await until(() => f.cards.length === 2)
     f.click(1, 'stop')
     hookHeld.release()
@@ -523,9 +523,9 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
       () =>
         f.sent.length >= 1 &&
         // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
-        !t.internals.gateway['queues'].has('feishu-oc_group'),
+        !t.internals.gateway['queues'].has('lark-oc_group'),
     )
-    expect(t.vela.session('feishu-oc_group').queue).toEqual({
+    expect(t.vela.session('lark-oc_group').queue).toEqual({
       steering: [],
       followUp: [],
     })
@@ -533,7 +533,7 @@ test('Stop also cancels a Steer whose input hook finishes while the aborted tool
     expect(f.sent).toEqual([
       { messageId: 'stop', text: 'Stopped the current run.' },
     ])
-    const independent = feishuEvent({
+    const independent = larkEvent({
       message_id: 'independent',
       content: '{"text":"new task"}',
     })
@@ -576,7 +576,7 @@ for (const peerTime of ['4500', '3000']) {
       )
       f.click(0, 'steer')
       await until(
-        () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+        () => f.t.vela.session('lark-oc_group').queue.steering.length === 1,
       )
     } finally {
       f.release()
@@ -603,7 +603,7 @@ test('a delayed Steer whose service time precedes the active trigger still suppl
     await until(() => f.cards.length === 1)
     f.click(0, 'queue')
     f.deliver(
-      feishuEvent(
+      larkEvent(
         {
           message_id: 'delayed',
           create_time: '2000',
@@ -620,7 +620,7 @@ test('a delayed Steer whose service time precedes the active trigger still suppl
     )
     f.click(1, 'steer')
     await until(
-      () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+      () => f.t.vela.session('lark-oc_group').queue.steering.length === 1,
     )
   } finally {
     f.release()
@@ -637,7 +637,7 @@ test('Queue immediately followed by Stop on another card keeps the explicitly qu
   try {
     await until(() => f.cards.length === 1)
     f.deliver(
-      feishuEvent({ message_id: 'stop', content: '{"text":"stop this run"}' }),
+      larkEvent({ message_id: 'stop', content: '{"text":"stop this run"}' }),
     )
     await until(() => f.cards.length === 2)
     f.click(0, 'queue')
@@ -646,7 +646,7 @@ test('Queue immediately followed by Stop on another card keeps the explicitly qu
       () =>
         f.sent.length >= 1 &&
         // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
-        !f.t.internals.gateway['queues'].has('feishu-oc_group'),
+        !f.t.internals.gateway['queues'].has('lark-oc_group'),
     )
     expect(f.sent.map((reply) => reply.messageId)).toEqual(['stop', 'second'])
     expect(f.t.model.calls).toHaveLength(2)
@@ -681,7 +681,7 @@ test('run cards use the Card 2.0 callback schema for the subscribed card.action.
     ).toBe(1)
     expect(f.click(0, 'steer')).toMatchObject({ toast: { type: 'success' } })
     await until(
-      () => f.t.vela.session('feishu-oc_group').queue.steering.length === 1,
+      () => f.t.vela.session('lark-oc_group').queue.steering.length === 1,
     )
   } finally {
     f.release()

@@ -12,7 +12,7 @@ import type {
 import type { ChannelDirectory } from './directory.ts'
 
 const count = z.number().finite().nonnegative()
-const rowSchema = z.object({
+export const channelUsageRowSchema = z.object({
   key: z.string(),
   chatId: z.string(),
   model: z.string(),
@@ -25,7 +25,7 @@ const rowSchema = z.object({
   }),
   cost: count.optional(),
 })
-type UsageRow = z.infer<typeof rowSchema>
+type UsageRow = z.infer<typeof channelUsageRowSchema>
 
 /** Channel-owned requests only; append rows, never rewrite totals or session history. */
 export class ChannelUsage {
@@ -54,7 +54,7 @@ export class ChannelUsage {
       this.rows = text.split('\n').flatMap((line, index) => {
         if (!line.trim()) return []
         try {
-          return [rowSchema.parse(JSON.parse(line))]
+          return [channelUsageRowSchema.parse(JSON.parse(line))]
         } catch (error) {
           throw new Error(
             `Invalid channel usage ledger ${this.path}, line ${index + 1}`,
@@ -128,7 +128,9 @@ export class ChannelUsage {
     this.load()
     const info = session.modelInfo
     const usage = session.usage
-    const topic = this.rows.filter((row) => row.key === key)
+    const topic = this.rows.filter(
+      (row) => (this.directory.get(row.key)?.key ?? row.key) === key,
+    )
     const group = this.rows.filter(
       (row) =>
         row.chatId === chatId &&

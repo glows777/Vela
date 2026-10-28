@@ -15,7 +15,10 @@ export function runtimePaths(runtime: string) {
       : source
         ? current.replace('/dist/', '/src/').replace(/\.js$/, '.ts')
         : current
+  const lark = existsSync(join(runtime, 'test/support/lark.ts'))
   return {
+    channelName: lark ? ('lark' as const) : ('feishu' as const),
+    helpers: `test/support/${lark ? 'lark' : 'feishu'}.ts`,
     workspace,
     source,
     testing: path(
@@ -32,10 +35,7 @@ export function runtimePaths(runtime: string) {
       'src/extensions/web/index.ts',
       'packages/core/dist/extensions/web/index.js',
     ),
-    feishu: path(
-      'src/extensions/feishu/index.ts',
-      'packages/lark/dist/index.js',
-    ),
+    lark: path('src/extensions/feishu/index.ts', 'packages/lark/dist/index.js'),
     channelId: path(
       'src/channels/session-id.ts',
       'packages/channels/dist/session-id.js',

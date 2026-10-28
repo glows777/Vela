@@ -1,25 +1,25 @@
 import { afterEach, expect, test } from 'bun:test'
 import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
 test('overview explains a reused topic label while preserving its current waiting reason', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [
       fauxText('File checked.'),
-      fauxToolCall('feishu_wait_for_input', {
+      fauxToolCall('lark_wait_for_input', {
         reason: 'Choose the title color',
       }),
       fauxText('Which color should the title use?'),
-      fauxToolCall('feishu_list_topics', {}),
+      fauxToolCall('lark_list_topics', {}),
       (req) => fauxText(req.toolResults.at(-1)!.output),
     ],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -30,9 +30,9 @@ test('overview explains a reused topic label while preserving its current waitin
   await t.vela.ready()
   await t.vela.startChannels()
   const topic = { root_id: 'root', thread_id: 'thread' }
-  async function deliver(overrides: Parameters<typeof feishuEvent>[0]) {
+  async function deliver(overrides: Parameters<typeof larkEvent>[0]) {
     const count = fake.reactions.filter((r) => r.emoji === 'DONE').length
-    fake.deliver(feishuEvent(overrides))
+    fake.deliver(larkEvent(overrides))
     const deadline = Date.now() + 2000
     while (fake.reactions.filter((r) => r.emoji === 'DONE').length === count) {
       if (Date.now() > deadline) throw new Error('Topic did not settle')
@@ -60,16 +60,16 @@ test('overview explains a reused topic label while preserving its current waitin
 test.each(['empty', 'failed'] as const)(
   'waiting requires a delivered question, not an %s answer',
   async (answer) => {
-    const fake = fakeFeishu()
+    const fake = fakeLark()
     const t = createTestVela({
       responses: [
-        fauxToolCall('feishu_wait_for_input', {
+        fauxToolCall('lark_wait_for_input', {
           reason: 'Choose blue or green',
         }),
         answer === 'empty' ? fauxText('') : fauxError('400 model failed'),
       ],
       extensions: [
-        feishu({
+        lark({
           appId: 'bot',
           owners: ['ou_alice'],
           chats: [{ id: 'oc_group', tools: [] }],
@@ -79,7 +79,7 @@ test.each(['empty', 'failed'] as const)(
     })
     await t.vela.ready()
     await t.vela.startChannels()
-    fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+    fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
     const deadline = Date.now() + 2000
     while (!fake.reactions.some((reaction) => reaction.emoji !== 'OnIt')) {
       if (Date.now() > deadline) throw new Error('Topic did not finish')
@@ -88,7 +88,7 @@ test.each(['empty', 'failed'] as const)(
     await t.vela.dispose()
     const record = JSON.parse(await t.readData('channels/index.json'))
       .records[0]
-    expect(t.model.calls[0]?.tools).toContain('feishu_wait_for_input')
+    expect(t.model.calls[0]?.tools).toContain('lark_wait_for_input')
     expect(record.state).toBe('done')
     expect(record.waitingReason).toBeUndefined()
   },

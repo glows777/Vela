@@ -2,9 +2,9 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { channelSessionId } from '@glows777/vela-channels'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { RoutineClock } from '../support/routine-clock.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -14,17 +14,17 @@ async function until(condition: () => boolean) {
   const deadline = Date.now() + 3000
   while (!condition()) {
     if (Date.now() > deadline)
-      throw new Error('Timed out waiting for Feishu result')
+      throw new Error('Timed out waiting for Lark result')
     await new Promise((resolve) => setTimeout(resolve, 1))
   }
 }
 function setup() {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     allowPendingResponses: true,
-    extensionConfig: { feishu: { timezone: 'America/New_York' } },
+    extensionConfig: { lark: { timezone: 'America/New_York' } },
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: [{ id: 'oc_group', tools: [], readUntagged: false }, 'oc_other'],
         transport: fake.transport,
@@ -36,13 +36,13 @@ function setup() {
   let sequence = 0
   async function ask(
     input: unknown,
-    overrides: Parameters<typeof feishuEvent>[0] = {},
+    overrides: Parameters<typeof larkEvent>[0] = {},
     sender = 'ou_alice',
   ) {
     const answer = `Result ${++sequence}`
-    t.model.push(fauxToolCall('feishu_routines', input), fauxText(answer))
+    t.model.push(fauxToolCall('lark_routines', input), fauxText(answer))
     fake.deliver(
-      feishuEvent(
+      larkEvent(
         { ...overrides, content: JSON.stringify({ text: 'Manage reminders' }) },
         sender,
       ),
@@ -75,9 +75,9 @@ test('a member creates a local-time topic routine with mandatory tools, lists af
   expect(created.target).toBe('Topic: Manage reminders')
   const [record] = await r.stored()
   expect(record.schedule).toEqual({ at: '2026-01-05T14:00:00.000Z' })
-  expect(record.targetKey).toBe(channelSessionId('feishu', 'oc_group', 'root'))
+  expect(record.targetKey).toBe(channelSessionId('lark', 'oc_group', 'root'))
   expect(record.creator).toEqual({ id: 'ou_alice', name: 'Alice' })
-  r.fake.deliver(feishuEvent({ ...r.topic, content: '{"text":"!restart"}' }))
+  r.fake.deliver(larkEvent({ ...r.topic, content: '{"text":"!restart"}' }))
   await until(() => r.fake.sent.some((m) => m.text.includes('Restarted')))
   const listed = JSON.parse(await r.ask({ action: 'list' }, r.topic))
   expect(listed.routines[0].id).toBe(record.id)
@@ -120,7 +120,7 @@ test.each(['group', 'topic', 'direct'] as const)(
     )
     const session = r.t.vela.session(
       channelSessionId(
-        'feishu',
+        'lark',
         'oc_group',
         target === 'topic' ? 'root' : undefined,
       ),
@@ -134,7 +134,7 @@ test.each(['group', 'topic', 'direct'] as const)(
       // A fallback answer lets an incorrect model path finish and fail the assertions.
       r.t.model.push(fauxText('Unexpected model request'))
       r.fake.deliver(
-        feishuEvent({
+        larkEvent({
           ...address,
           mentions: mentioned
             ? [{ key: '@_user_1', id: { open_id: 'ou_bot' } }]
@@ -170,10 +170,10 @@ test('unmentioned !routines in an unowned topic and other discussion with passiv
   const r = setup()
   await r.t.vela.startChannels()
   r.fake.deliver(
-    feishuEvent({ ...r.topic, mentions: [], content: '{"text":"!routines"}' }),
+    larkEvent({ ...r.topic, mentions: [], content: '{"text":"!routines"}' }),
   )
   r.fake.deliver(
-    feishuEvent({ mentions: [], content: '{"text":"!routines please"}' }),
+    larkEvent({ mentions: [], content: '{"text":"!routines please"}' }),
   )
   await r.t.internals.gateway.stopAll()
   expect(r.t.model.calls).toHaveLength(0)
@@ -206,14 +206,12 @@ test('listing while a topic runs neither stops nor steers the active run', async
     replyToId: 'work',
     topic: { rootId: 'busy', threadId: 'thread_busy' },
   }
-  const running = r.t.internals.gateway.handleIncoming('feishu', input)
+  const running = r.t.internals.gateway.handleIncoming('lark', input)
   await entered.promise
-  const session = r.t.vela.session(
-    channelSessionId('feishu', 'oc_other', 'busy'),
-  )
+  const session = r.t.vela.session(channelSessionId('lark', 'oc_other', 'busy'))
   const before = session.getEntries().length
   const cardsBefore = r.fake.cards.length
-  const command = r.t.internals.gateway.handleIncoming('feishu', {
+  const command = r.t.internals.gateway.handleIncoming('lark', {
     ...input,
     text: '!routines',
     replyToId: 'listing',
@@ -299,7 +297,7 @@ test('routine tools enforce validation, a per-chat cap and same-chat cancellatio
   r.t.model.push(fauxText('SDK done'))
   await r.t.run('List channel routines')
   // A plain SDK session is not a channel session, so it never sees the routine tool.
-  expect(r.t.model.calls.at(-1)!.tools).not.toContain('feishu_routines')
+  expect(r.t.model.calls.at(-1)!.tools).not.toContain('lark_routines')
 })
 
 test.each([
@@ -351,5 +349,5 @@ test('routine management keeps operation-specific fields required and rejects fi
       /Invalid|invalid|Unrecognized|unrecognized|small/,
     )
   }
-  expect(r.t.internals.gateway.routines.list('feishu', 'oc_group')).toEqual([])
+  expect(r.t.internals.gateway.routines.list('lark', 'oc_group')).toEqual([])
 })

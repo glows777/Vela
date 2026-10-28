@@ -43,7 +43,7 @@ Relative paths in `extensions`, `skills` and `prompts` resolve from the director
   "dataDir": ".vela-data",
   "shellPath": "/bin/zsh",
   "limits": { "maxRetries": 5 },
-  "extensions": ["-builtin:feishu", "./extensions/todo.ts"],
+  "extensions": ["-builtin:lark", "./extensions/todo.ts"],
   "skills": ["~/shared-skills"],
   "prompts": ["~/shared-prompts"],
   "extensionConfig": {
@@ -132,14 +132,14 @@ Each extension reads its own section, `extensionConfig.<name>`, as `vela.config`
         "apiKey": "${EMBEDDING_KEY}"
       }
     },
-    "feishu": { "owners": "ou_xxx,ou_yyy", "timezone": "Asia/Shanghai" }
+    "lark": { "owners": "ou_xxx,ou_yyy", "timezone": "Asia/Shanghai" }
   }
 }
 ```
 
-The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `FEISHU_APP_ID`, `EMBEDDING_MODEL_KEY` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
+The CLI fills the built-in extensions' sections from environment variables first (`TAVILY_API_KEY`, `LARK_APP_ID`, `EMBEDDING_MODEL_KEY` and the others listed in [CLI](cli.md#environment-variables)); values in `extensionConfig` override them. The keys each built-in extension reads are listed in [Built-in extensions](built-in-extensions.md).
 
-`extensionConfig.feishu.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!routines` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
+`extensionConfig.lark.timezone` is the single IANA timezone for scheduled wake-ups (for example `Asia/Shanghai`); omitted, it uses the process timezone. Startup rejects invalid names. Reminder creation accepts local dates/times in this zone, and both tool confirmations and `!routines` show it explicitly. Recurring schedules follow the configured wall time; changing the zone shifts their UTC occurrences. Saved one-off instants do not change. See [scheduled wake-ups](channels.md#scheduled-wake-ups-m4) for weekday, DST and cancellation behavior.
 
 ## Data directory
 

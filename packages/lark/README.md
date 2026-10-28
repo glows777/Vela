@@ -1,5 +1,5 @@
 # @glows777/vela-lark
 
-The Feishu/Lark channel adapter. The package is named lark; existing feishu factory, config, environment and tool names remain until the separate migration.
+The Lark channel adapter: `lark()`, `LarkOptions`, `LarkTransport` and `larkConfig`.
 
-See the [repository documentation](https://github.com/glows777/Vela/tree/main/docs).
+The Feishu-to-Lark identifier change is breaking; existing deployments must follow the [migration guide](https://github.com/glows777/Vela/blob/main/docs/lark-migration.md). Upstream domains and the SDK are unchanged.

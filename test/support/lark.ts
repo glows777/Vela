@@ -1,18 +1,18 @@
 import { Readable } from 'node:stream'
 import type {
-  FeishuCard,
-  FeishuHistoryMessage,
-  FeishuMessageEvent,
-  FeishuTransport,
+  LarkCard,
+  LarkHistoryMessage,
+  LarkMessageEvent,
+  LarkTransport,
 } from '@glows777/vela-lark'
 
-/** Offline Feishu boundary; the actual extension and gateway still process every event. */
-export function fakeFeishu() {
-  let receive: ((event: FeishuMessageEvent) => void) | undefined
+/** Offline Lark boundary; the actual extension and gateway still process every event. */
+export function fakeLark() {
+  let receive: ((event: LarkMessageEvent) => void) | undefined
   let action: ((event: CardAction) => unknown) | undefined
   const sent: { chatId?: string; messageId?: string; text: string }[] = []
   const cards: { chatId: string; replyToId?: string; card: Card }[] = []
-  const patches: { messageId: string; card: FeishuCard }[] = []
+  const patches: { messageId: string; card: LarkCard }[] = []
   const reactions: {
     messageId: string
     emoji: string
@@ -27,8 +27,8 @@ export function fakeFeishu() {
   ])
   const nameCalls: string[] = []
   const historyCalls: { chatId: string; before?: string; limit: number }[] = []
-  const history: FeishuHistoryMessage[] = []
-  const topicHistory: FeishuHistoryMessage[][] = []
+  const history: LarkHistoryMessage[] = []
+  const topicHistory: LarkHistoryMessage[][] = []
   const topicHistoryCalls: { threadId: string; pageToken?: string }[] = []
   let failHistory = false
   let failReply = false
@@ -38,7 +38,7 @@ export function fakeFeishu() {
     key: string
     type: 'image' | 'file'
   }[] = []
-  const transport: FeishuTransport = {
+  const transport: LarkTransport = {
     startTopic: async (messageId, title) => {
       if (failReply) throw new Error('topic permission denied')
       topics.push({ messageId, title })
@@ -167,7 +167,7 @@ export function fakeFeishu() {
     failReply: () => {
       failReply = true
     },
-    deliver: (event: FeishuMessageEvent) => receive?.(event),
+    deliver: (event: LarkMessageEvent) => receive?.(event),
   }
 }
 
@@ -194,10 +194,10 @@ interface CardAction {
   action?: { value?: unknown }
 }
 
-export function feishuEvent(
-  overrides: Partial<FeishuMessageEvent['message']> = {},
+export function larkEvent(
+  overrides: Partial<LarkMessageEvent['message']> = {},
   sender = 'ou_alice',
-): FeishuMessageEvent {
+): LarkMessageEvent {
   return {
     sender: { sender_type: 'user', sender_id: { open_id: sender } },
     message: {
@@ -218,7 +218,7 @@ export function historyMessage(
   sender: string,
   text: string,
   time = '1000',
-): FeishuHistoryMessage {
+): LarkHistoryMessage {
   return {
     message_id: id,
     create_time: time,

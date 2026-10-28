@@ -8,20 +8,20 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
 import { messageTime } from '../../packages/lark/src/history.ts'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 const dispatchTools = [
-  'feishu_start_topic',
-  'feishu_forward_to_topic',
-  'feishu_list_topics',
+  'lark_start_topic',
+  'lark_forward_to_topic',
+  'lark_list_topics',
 ]
 
-/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+/** `[HH:MM] ` for a Lark create_time in the machine's local time */
 const at = (ms: string) => `[${messageTime(ms)}] `
 
 async function until(condition: () => boolean) {
@@ -39,14 +39,14 @@ function setup(
     Parameters<typeof createTestVela>[0]
   >['sessionStorage'],
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses,
     cwd,
     sessionStorage,
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group', 'oc_other'],
@@ -72,7 +72,7 @@ test('short channel answers and topic/DM requests have the right prompts and vis
     fauxText('DM answer'),
   ])
   await start()
-  fake.deliver(feishuEvent({ message_id: 'short' }))
+  fake.deliver(larkEvent({ message_id: 'short' }))
   await until(() => fake.sent.length === 1)
   expect(t.model.calls[0]?.tools).toEqual(expect.arrayContaining(dispatchTools))
   expect(t.model.calls[0]?.system).toContain('in one reply, without tools')
@@ -81,9 +81,9 @@ test('short channel answers and topic/DM requests have the right prompts and vis
     messageId: 'short',
     text: 'short answer',
   })
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 2)
-  fake.deliver(feishuEvent({ chat_id: 'dm', chat_type: 'p2p', mentions: [] }))
+  fake.deliver(larkEvent({ chat_id: 'dm', chat_type: 'p2p', mentions: [] }))
   await until(() => fake.sent.length === 3)
   for (const call of t.model.calls.slice(1)) {
     expect(call.tools.some((name) => dispatchTools.includes(name))).toBe(false)
@@ -118,19 +118,18 @@ test('a group work request becomes one topic with a title inside the prompt budg
   const restated =
     'Launch brief: launch on 12 November, cap spending at 700 credits, owner Morgan.'
   const respond = (req: FauxRequest) => {
-    if (!req.tools.includes('feishu_start_topic'))
-      return fauxText('brief ready')
+    if (!req.tools.includes('lark_start_topic')) return fauxText('brief ready')
     // Without a title budget the eval's model answered the work request in the group.
     if (!req.system.includes('at most 40 characters')) return fauxText(restated)
     return req.toolResults.length
       ? fauxText('handed off')
-      : fauxToolCall('feishu_start_topic', { title, brief })
+      : fauxToolCall('lark_start_topic', { title, brief })
   }
   const { fake, t, start } = setup(Array(4).fill(respond))
   await start()
   try {
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'work',
         content: JSON.stringify({ text: request }),
       }),
@@ -145,7 +144,7 @@ test('a group work request becomes one topic with a title inside the prompt budg
       'must not be answered in the group',
     )
     const description =
-      t.internals.registry.get('feishu_start_topic')?.description ?? ''
+      t.internals.registry.get('lark_start_topic')?.description ?? ''
     for (const phrase of [
       'at most 40 characters',
       'no requirements, method or status',
@@ -160,12 +159,12 @@ test('a group work request becomes one topic with a title inside the prompt budg
 
 test('starting a topic returns its receipt and frees the channel while its task is still running', async () => {
   const respond = (req: FauxRequest) => {
-    if (!req.tools.includes('feishu_start_topic'))
+    if (!req.tools.includes('lark_start_topic'))
       return fauxToolCall('hold_pause', {})
     if (req.lastUserText.includes('second question'))
       return fauxText('second answer')
     if (req.toolResults.length) return fauxText('handed off')
-    return fauxToolCall('feishu_start_topic', {
+    return fauxToolCall('lark_start_topic', {
       title: 'Investigate cobalt',
       brief: 'Investigate cobalt',
     })
@@ -192,7 +191,7 @@ test('starting a topic returns its receipt and frees the channel while its task 
   await start()
   try {
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'task',
         content: '{"text":"investigate cobalt; unrelated chatter"}',
       }),
@@ -201,12 +200,12 @@ test('starting a topic returns its receipt and frees the channel while its task 
     expect(fake.topics).toEqual([
       { messageId: 'task', title: 'Investigate cobalt' },
     ])
-    await until(() => !t.vela.session('feishu-oc_group').isRunning)
+    await until(() => !t.vela.session('lark-oc_group').isRunning)
     await until(() => entered)
-    const topic = t.vela.session('feishu-oc_group-task')
+    const topic = t.vela.session('lark-oc_group-task')
     expect(topic.isRunning).toBe(true)
     const taskCall = t.model.calls.find(
-      (call) => !call.tools.includes('feishu_start_topic'),
+      (call) => !call.tools.includes('lark_start_topic'),
     )!
     expect(taskCall.lastUserText).toContain('Alice: Investigate cobalt')
     expect(taskCall.lastUserText).not.toContain('unrelated chatter')
@@ -216,7 +215,7 @@ test('starting a topic returns its receipt and frees the channel while its task 
     expect(JSON.stringify(receipt)).toContain('thread_task')
     expect(fake.sent).toEqual([])
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'second',
         content: '{"text":"second question"}',
       }),
@@ -237,18 +236,17 @@ test('a topic start posts only the short title and sends the long brief to the t
     if (req.lastUserText.includes('list the topics'))
       return req.toolResults.length
         ? fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
-        : fauxToolCall('feishu_list_topics', {})
-    if (!req.tools.includes('feishu_start_topic'))
-      return fauxText('topic result')
+        : fauxToolCall('lark_list_topics', {})
+    if (!req.tools.includes('lark_start_topic')) return fauxText('topic result')
     return req.toolResults.length
       ? fauxText('handed off')
-      : fauxToolCall('feishu_start_topic', { title, brief })
+      : fauxToolCall('lark_start_topic', { title, brief })
   }
   const { fake, t, start } = setup(Array(6).fill(respond))
   await start()
   try {
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'long_brief',
         content: '{"text":"fix the cobalt import"}',
       }),
@@ -256,14 +254,14 @@ test('a topic start posts only the short title and sends the long brief to the t
     await until(() => fake.topics.length === 1)
     expect(fake.topics).toEqual([{ messageId: 'long_brief', title }])
     await until(() =>
-      t.model.calls.some((call) => !call.tools.includes('feishu_start_topic')),
+      t.model.calls.some((call) => !call.tools.includes('lark_start_topic')),
     )
     const topicCall = t.model.calls.find(
-      (call) => !call.tools.includes('feishu_start_topic'),
+      (call) => !call.tools.includes('lark_start_topic'),
     )!
     expect(topicCall.lastUserText).toContain(`Alice: ${brief}`)
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'list',
         content: '{"text":"list the topics"}',
       }),
@@ -288,8 +286,8 @@ test('a topic handoff keeps the handled mention out of the next group input and 
     if (req.lastUserText.includes('new question'))
       return fauxText('second answer')
     if (req.toolResults.length) return fauxText('handed off')
-    if (req.tools.includes('feishu_start_topic'))
-      return fauxToolCall('feishu_start_topic', {
+    if (req.tools.includes('lark_start_topic'))
+      return fauxToolCall('lark_start_topic', {
         title: 'Handle the request',
         brief: 'Handle the request',
       })
@@ -299,21 +297,21 @@ test('a topic handoff keeps the handled mention out of the next group input and 
   await start()
   try {
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'first',
         create_time: '3000',
         content: JSON.stringify({ text: handled }),
       }),
     )
     await until(() => fake.topics.length === 1)
-    await until(() => !t.vela.session('feishu-oc_group').isRunning)
+    await until(() => !t.vela.session('lark-oc_group').isRunning)
     fake.history.push(
       historyMessage('peer', 'ou_bob', 'check the tests', '4000'),
       historyMessage('first', 'ou_alice', handled, '3000'),
       historyMessage('stale', 'ou_bob', 'ancient note', '1000'),
     )
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'second',
         create_time: '5000',
         content: '{"text":"new question"}',
@@ -323,7 +321,7 @@ test('a topic handoff keeps the handled mention out of the next group input and 
     const second = t.model.calls.find(
       (call) =>
         call.lastUserText.includes('new question') &&
-        call.tools.includes('feishu_start_topic'),
+        call.tools.includes('lark_start_topic'),
     )
     expect(second?.lastUserText).toBe(
       `[Chat since last reply]\n${at('4000')}Bob: check the tests` +
@@ -337,21 +335,21 @@ test('a topic handoff keeps the handled mention out of the next group input and 
 test('forwarding a channel message feeds the same-group topic once with original sender attribution', async () => {
   const { fake, t, start } = setup([
     fauxText('topic established'),
-    fauxToolCall('feishu_forward_to_topic', { root_id: 'root' }),
+    fauxToolCall('lark_forward_to_topic', { root_id: 'root' }),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('forwarded')
         : fauxText('received'),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('forwarded')
         : fauxText('received'),
   ])
   await start()
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 1)
   fake.deliver(
-    feishuEvent(
+    larkEvent(
       { message_id: 'original', content: '{"text":"also inspect cobalt"}' },
       'ou_bob',
     ),
@@ -365,7 +363,7 @@ test('forwarding a channel message feeds the same-group topic once with original
   const call = t.model.calls.find(
     (req) =>
       req.lastUserText.includes('Bob: also inspect cobalt') &&
-      !req.tools.includes('feishu_start_topic'),
+      !req.tools.includes('lark_start_topic'),
   )!
   expect(call).toBeDefined()
   expect(call.lastUserText.match(/also inspect cobalt/g)).toHaveLength(1)
@@ -374,7 +372,7 @@ test('forwarding a channel message feeds the same-group topic once with original
 
 test('a failed topic creation reports the API cause without starting a task', async () => {
   const { fake, t, start } = setup([
-    fauxToolCall('feishu_start_topic', {
+    fauxToolCall('lark_start_topic', {
       title: 'Investigate',
       brief: 'Investigate',
     }),
@@ -387,31 +385,31 @@ test('a failed topic creation reports the API cause without starting a task', as
     return { messageId: 'error', createTime: '1' }
   }
   await start()
-  fake.deliver(feishuEvent())
+  fake.deliver(larkEvent())
   await until(() => fake.sent.length === 1)
   expect(fake.sent[0]?.text).toContain('topic permission denied')
   expect(fake.topics).toEqual([])
   expect(
-    t.vela.sessions().filter((session) => session.channel === 'feishu'),
+    t.vela.sessions().filter((session) => session.channel === 'lark'),
   ).toHaveLength(1)
 })
 
 test('forwarding rejects a topic from another enabled group before the platform call', async () => {
   const { fake, t, start } = setup([
     fauxText('other group task'),
-    fauxToolCall('feishu_forward_to_topic', { root_id: 'other_root' }),
+    fauxToolCall('lark_forward_to_topic', { root_id: 'other_root' }),
     (req) => fauxText(JSON.stringify(req.toolResults)),
   ])
   await start()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       chat_id: 'oc_other',
       root_id: 'other_root',
       thread_id: 'other_thread',
     }),
   )
   await until(() => fake.sent.length === 1)
-  fake.deliver(feishuEvent({ message_id: 'wrong_group' }))
+  fake.deliver(larkEvent({ message_id: 'wrong_group' }))
   await until(() => fake.sent.length === 2)
   expect(fake.forwards).toEqual([])
   expect(fake.sent[1]?.text).toContain(
@@ -423,22 +421,22 @@ test('forwarding rejects a topic from another enabled group before the platform 
 test('forwarded attachments are prepared from the original service message, not the forward receipt', async () => {
   const { fake, t, start } = setup([
     fauxText('topic established'),
-    fauxToolCall('feishu_forward_to_topic', { root_id: 'root' }),
+    fauxToolCall('lark_forward_to_topic', { root_id: 'root' }),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('forwarded')
         : fauxText('file received'),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('forwarded')
         : fauxText('file received'),
   ])
   fake.resources.set('file-key', [Buffer.from('cobalt notes')])
   await start()
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 1)
   fake.deliver(
-    feishuEvent(
+    larkEvent(
       {
         message_id: 'file_original',
         message_type: 'file',
@@ -457,22 +455,20 @@ test('forwarded attachments are prepared from the original service message, not 
   ])
   const input = t.model.calls.find(
     (req) =>
-      !req.tools.includes('feishu_start_topic') &&
+      !req.tools.includes('lark_start_topic') &&
       req.lastUserText.includes('notes.txt'),
   )?.lastUserText
   expect(input).toContain('Bob: [file: notes.txt')
 })
 
-const listCall = () => fauxToolCall('feishu_list_topics', {})
+const listCall = () => fauxToolCall('lark_list_topics', {})
 const listAnswer = (req: FauxRequest) =>
   fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
 
 test('topic listing after restart retains recorded same-group topics and stable coverage', async () => {
   const first = setup([fauxText('remember cobalt')])
   await first.start()
-  first.fake.deliver(
-    feishuEvent({ root_id: 'saved', thread_id: 'saved_thread' }),
-  )
+  first.fake.deliver(larkEvent({ root_id: 'saved', thread_id: 'saved_thread' }))
   await until(() => first.fake.sent.length === 1)
   await first.t.cleanup({ keepDir: true })
   const second = setup(
@@ -489,7 +485,7 @@ test('topic listing after restart retains recorded same-group topics and stable 
   try {
     await second.start()
     second.fake.deliver(
-      feishuEvent({ content: '{"text":"what tasks do you see?"}' }),
+      larkEvent({ content: '{"text":"what tasks do you see?"}' }),
     )
     await until(() => second.fake.sent.length === 1)
     const empty = JSON.parse(second.fake.sent[0]!.text)
@@ -504,7 +500,7 @@ test('topic listing after restart retains recorded same-group topics and stable 
     expect(empty.coverage).toContain('earlier topics may exist')
     expect(empty.coverage).toContain('does not mean there are no tasks')
     second.fake.deliver(
-      feishuEvent({
+      larkEvent({
         root_id: 'saved',
         thread_id: 'saved_thread',
         mentions: [],
@@ -515,7 +511,7 @@ test('topic listing after restart retains recorded same-group topics and stable 
     expect(JSON.stringify(second.t.model.calls[2]?.prompt)).toContain(
       'remember cobalt',
     )
-    second.fake.deliver(feishuEvent({ content: '{"text":"list tasks again"}' }))
+    second.fake.deliver(larkEvent({ content: '{"text":"list tasks again"}' }))
     await until(() => second.fake.sent.length === 3)
     const observed = JSON.parse(second.fake.sent[2]!.text)
     expect(observed.topics).toEqual([
@@ -551,10 +547,10 @@ test('topic listing reports only this group with queued, running and stopped sta
   ])
   await start()
   try {
-    fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+    fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
     await until(() => fake.sent.length === 1)
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         chat_id: 'oc_other',
         root_id: 'other',
         thread_id: 'other_thread',
@@ -569,7 +565,7 @@ test('topic listing reports only this group with queued, running and stopped sta
       return download(...args)
     }
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         root_id: 'root',
         thread_id: 'thread',
         mentions: [],
@@ -580,7 +576,7 @@ test('topic listing reports only this group with queued, running and stopped sta
     await until(() => entered)
     async function list(state: string) {
       const count = fake.sent.length
-      fake.deliver(feishuEvent({ content: '{"text":"list current topics"}' }))
+      fake.deliver(larkEvent({ content: '{"text":"list current topics"}' }))
       await until(() => fake.sent.length > count)
       const result = JSON.parse(fake.sent.at(-1)!.text)
       expect(result.topics).toEqual([
@@ -605,19 +601,19 @@ test('an earlier-work follow-up has a disclosure instruction and puts its notice
     'The earlier topic could not be found. Continue investigating cobalt.'
   const { fake, t, start } = setup([
     listCall(),
-    fauxToolCall('feishu_start_topic', { title: notice, brief: notice }),
+    fauxToolCall('lark_start_topic', { title: notice, brief: notice }),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('handed off')
         : fauxText('continued'),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('handed off')
         : fauxText('continued'),
   ])
   await start()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'followup',
       content: '{"text":"continue the earlier cobalt investigation"}',
     }),
@@ -641,7 +637,7 @@ test('an earlier-work follow-up has a disclosure instruction and puts its notice
 })
 
 test.each(['start', 'forward'] as const)(
-  'Stop while %s is awaiting Feishu prevents task dispatch after the request returns',
+  'Stop while %s is awaiting Lark prevents task dispatch after the request returns',
   async (operation) => {
     let entered = false
     let release!: () => void
@@ -651,11 +647,11 @@ test.each(['start', 'forward'] as const)(
     const { fake, t, start } = setup([
       ...(operation === 'forward' ? [fauxText('target established')] : []),
       operation === 'start'
-        ? fauxToolCall('feishu_start_topic', {
+        ? fauxToolCall('lark_start_topic', {
             title: 'cancelled task',
             brief: 'cancelled task',
           })
-        : fauxToolCall('feishu_forward_to_topic', { root_id: 'target' }),
+        : fauxToolCall('lark_forward_to_topic', { root_id: 'target' }),
       fauxText('must not run'),
     ])
     const create = fake.transport.startTopic
@@ -674,19 +670,19 @@ test.each(['start', 'forward'] as const)(
     try {
       if (operation === 'forward') {
         fake.deliver(
-          feishuEvent({ root_id: 'target', thread_id: 'target_thread' }),
+          larkEvent({ root_id: 'target', thread_id: 'target_thread' }),
         )
         await until(() => fake.sent.length === 1)
       }
       fake.deliver(
-        feishuEvent({
+        larkEvent({
           message_id: 'source',
           content: '{"text":"do this task"}',
         }),
       )
       await until(() => entered)
       fake.deliver(
-        feishuEvent({ message_id: 'cancel', content: '{"text":"stop"}' }),
+        larkEvent({ message_id: 'cancel', content: '{"text":"stop"}' }),
       )
       await until(() => fake.cards.some((card) => card.replyToId === 'cancel'))
       const index = fake.cards.findIndex((card) => card.replyToId === 'cancel')
@@ -710,16 +706,16 @@ test.each(['start', 'forward'] as const)(
 
 test('a screenshot post handoff carries trigger images without copying group history images', async () => {
   const { fake, t, start } = setup([
-    fauxToolCall('feishu_start_topic', {
+    fauxToolCall('lark_start_topic', {
       title: 'Fix the broken page in this screenshot',
       brief: 'Fix the broken page in this screenshot',
     }),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('handed off')
         : fauxText('fixed'),
     (req) =>
-      req.tools.includes('feishu_start_topic')
+      req.tools.includes('lark_start_topic')
         ? fauxText('handed off')
         : fauxText('fixed'),
   ])
@@ -739,7 +735,7 @@ test('a screenshot post handoff carries trigger images without copying group his
   })
   await start()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'screenshot_post',
       message_type: 'post',
       content: JSON.stringify({
@@ -788,13 +784,13 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
   const storage = memorySessionStorage()
   const { fake, t, start } = setup(
     [
-      fauxToolCall('feishu_start_topic', {
+      fauxToolCall('lark_start_topic', {
         title: 'Investigate cobalt',
         brief: 'Investigate cobalt',
       }),
       listCall(),
       fauxText('listed'),
-      fauxToolCall('feishu_forward_to_topic', { root_id: 'source' }),
+      fauxToolCall('lark_forward_to_topic', { root_id: 'source' }),
       fauxText('forwarded'),
       fauxText('first topic answer'),
       fauxText('forwarded input answer'),
@@ -804,7 +800,7 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
     {
       ...storage,
       load: async (id) => {
-        if (id === 'feishu-oc_group-source') {
+        if (id === 'lark-oc_group-source') {
           entered = true
           await held
         }
@@ -814,12 +810,12 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
   )
   await start()
   try {
-    fake.deliver(feishuEvent({ message_id: 'source' }))
+    fake.deliver(larkEvent({ message_id: 'source' }))
     await until(
       () =>
         entered &&
         t.model.calls.length === 3 &&
-        !t.vela.session('feishu-oc_group').isRunning,
+        !t.vela.session('lark-oc_group').isRunning,
     )
     const listed = JSON.parse(t.model.calls[2]!.toolResults.at(-1)!.output)
     expect(listed.topics).toEqual([
@@ -830,7 +826,7 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
       }),
     ])
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'followup',
         content: '{"text":"also inspect cobalt"}',
       }),
@@ -866,7 +862,7 @@ test('topic overview reports running, durable waiting, then done with requester 
       fauxToolCall('hold_pause', {}),
       listCall(),
       listAnswer,
-      fauxToolCall('feishu_wait_for_input', {
+      fauxToolCall('lark_wait_for_input', {
         reason: 'Which release should I use?',
       }),
       fauxText('Which release should I use?'),
@@ -890,9 +886,9 @@ test('topic overview reports running, durable waiting, then done with requester 
   )
   await first.start()
   try {
-    first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+    first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
     await until(() => entered)
-    first.fake.deliver(feishuEvent({ message_id: 'running-list' }))
+    first.fake.deliver(larkEvent({ message_id: 'running-list' }))
     await until(() => first.fake.sent.length === 1)
     const running = JSON.parse(first.fake.sent[0]!.text).topics[0]
     expect(running).toMatchObject({
@@ -902,7 +898,7 @@ test('topic overview reports running, durable waiting, then done with requester 
     expect(Number.isNaN(Date.parse(running.updatedAt))).toBe(false)
     release()
     await until(() => first.fake.sent.length === 2)
-    first.fake.deliver(feishuEvent({ message_id: 'waiting-list' }))
+    first.fake.deliver(larkEvent({ message_id: 'waiting-list' }))
     await until(() => first.fake.sent.length === 3)
     const waiting = JSON.parse(first.fake.sent[2]!.text).topics[0]
     expect(waiting).toMatchObject({
@@ -927,14 +923,14 @@ test('topic overview reports running, durable waiting, then done with requester 
     )
     try {
       await second.start()
-      second.fake.deliver(feishuEvent({ message_id: 'after-restart-list' }))
+      second.fake.deliver(larkEvent({ message_id: 'after-restart-list' }))
       await until(() => second.fake.sent.length === 1)
       expect(JSON.parse(second.fake.sent[0]!.text).topics[0]).toMatchObject({
         state: 'waiting',
         waitingReason: waiting.waitingReason,
       })
       second.fake.deliver(
-        feishuEvent(
+        larkEvent(
           {
             message_id: 'decision',
             root_id: 'root',
@@ -946,7 +942,7 @@ test('topic overview reports running, durable waiting, then done with requester 
         ),
       )
       await until(() => second.fake.sent.length === 2)
-      second.fake.deliver(feishuEvent({ message_id: 'done-list' }))
+      second.fake.deliver(larkEvent({ message_id: 'done-list' }))
       await until(() => second.fake.sent.length === 3)
       const done = JSON.parse(second.fake.sent[2]!.text).topics[0]
       expect(done).toMatchObject({

@@ -340,7 +340,7 @@ export const openaiChatGPTLogin: OAuthLogin = {
 
 /**
  * How the openai provider sends requests while a ChatGPT sign-in is used. OpenAI documents the sign-in for local
- * agents the signed-in person runs, so channel sessions (a Feishu bot) cannot use it.
+ * agents the signed-in person runs, so channel sessions (a Lark bot) cannot use it.
  */
 export const chatGPTRequests = {
   localOnly: true,

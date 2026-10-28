@@ -4,7 +4,7 @@ Extensions are TypeScript or JavaScript modules that add behavior to Vela: tools
 
 An extension runs inside the Vela process with the same permissions as the user who started it. It can read files, call the network, see every prompt and tool call, and change tool input and output. Vela does not sandbox extensions. Load only extensions you trust; see [Security](security.md).
 
-The built-in memory, knowledge base, web and Feishu features are extensions too; see [Built-in extensions](built-in-extensions.md).
+The built-in memory, knowledge base, web and Lark features are extensions too; see [Built-in extensions](built-in-extensions.md).
 
 ## Create and load an extension
 
@@ -39,7 +39,7 @@ The factory can be synchronous or `async`. It runs once per Vela instance, not o
 
 The CLI loads extensions in this order:
 
-1. Built-in extensions (`memory`, `rag`, `web`, `feishu`, `mcp`). All are on by default except `permission-gate`, which stays off until you enable it.
+1. Built-in extensions (`memory`, `rag`, `web`, `lark`, `mcp`). All are on by default except `permission-gate`, which stays off until you enable it.
 2. `~/.vela/extensions/` (or `$VELA_DIR/extensions/`).
 3. `<cwd>/.vela/extensions/`, only when the project is trusted (see [Project trust](settings.md#project-trust)).
 4. Paths listed in the `extensions` array of `settings.json`, user settings before project settings.
@@ -51,7 +51,7 @@ In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension 
 
 ```json
 {
-  "extensions": ["./extensions/deploy.ts", "-builtin:web", "-builtin:feishu"]
+  "extensions": ["./extensions/deploy.ts", "-builtin:web", "-builtin:lark"]
 }
 ```
 
@@ -225,7 +225,7 @@ vela.registerProvider('corp', {
 
 Credentials are stored like the built-in ones, in `~/.vela/auth.json` for the CLI.
 
-`ctx.channel()` names the channel the requesting session answers on (for example `feishu`), or returns undefined for local sessions. Read it per request too; a sign-in meant only for the person at the terminal can refuse channel sessions with it, as Sign in with ChatGPT does.
+`ctx.channel()` names the channel the requesting session answers on (for example `lark`), or returns undefined for local sessions. Read it per request too; a sign-in meant only for the person at the terminal can refuse channel sessions with it, as Sign in with ChatGPT does.
 
 If you only need a different base URL or key for an OpenAI- or Anthropic-compatible service, edit `~/.vela/models.json` instead. See [Models](models.md).
 
@@ -233,7 +233,7 @@ If you only need a different base URL or key for an OpenAI- or Anthropic-compati
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
-A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`. Channel hooks remain experimental: Feishu is the only channel implementation so far, and the hooks will be stabilized once a second channel is implemented. See [Writing a channel](channels.md#writing-a-channel) for every hook, the `startRun` feedback lifecycle and migration guidance.
+A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`. Channel hooks remain experimental: Lark is the only channel implementation so far, and the hooks will be stabilized once a second channel is implemented. See [Writing a channel](channels.md#writing-a-channel) for every hook, the `startRun` feedback lifecycle and migration guidance.
 
 ```ts
 vela.registerChannel({

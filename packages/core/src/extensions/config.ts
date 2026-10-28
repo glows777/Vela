@@ -8,7 +8,7 @@ export function configString(
   return typeof value === 'string' && value ? value : undefined
 }
 
-/** A string array; a comma-separated string (e.g. `"$FEISHU_OWNERS"`) is also accepted. */
+/** A string array; a comma-separated string (e.g. `"$LARK_OWNERS"`) is also accepted. */
 export function configStrings(
   config: Readonly<Record<string, unknown>>,
   key: string,

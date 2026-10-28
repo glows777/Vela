@@ -2,13 +2,13 @@
 
 GitHub is the source of truth. `.github/workflows/wake-route.yml` is a thin filter. It POSTs to a webhook when a route label is present, or when a comment contains a route token. A closed local Vela process is not a wake target. A closed local Claude session is not a wake target. The local REPL remains an accelerator for a person who is already looking. This cut does not call it.
 
-The product Feishu channel is a WebSocket bot, described in [Channels](channels.md#feishu). This workflow does not use that connection. Liam supplies a custom-bot incoming webhook.
+The product Lark channel is a WebSocket bot, described in [Channels](channels.md#lark). This workflow does not use that connection. Liam supplies a custom-bot incoming webhook.
 
 ## Routing table
 
 | Signal | Wake |
 |---|---|
-| `to:vela` label on an issue or pull request | Feishu incoming webhook, for a human who should look |
+| `to:vela` label on an issue or pull request | Lark incoming webhook, for a human who should look |
 | `to:forge` label, or `Forge` label | Grok Bot webhook routine, then Forge |
 | `Taste` label | Same Grok webhook, JSON field `route` set to `taste` |
 | Needs Claude to implement or review | Official `anthropics/claude-code-action`, or an `@claude` mention in the cloud |
@@ -58,15 +58,15 @@ The workflow sends `Authorization: Bearer` and that key. It does not add a secon
 
 The Grok routine must not post a GitHub comment that contains `to:forge`, `to:vela`, `Taste`, `@forge`, or `@vela`. A comment with one of those tokens starts this workflow again.
 
-### Feishu
+### Lark
 
-1. In the Feishu group where a person should look, add a custom bot and copy its incoming webhook URL.
+1. In the Lark group where a person should look, add a custom bot and copy its incoming webhook URL.
 2. Leave signature verification off. This workflow sends an unsigned text body.
-3. Create the GitHub secret `WAKE_FEISHU_VELA_WEBHOOK_URL` with that URL.
+3. Create the GitHub secret `WAKE_LARK_VELA_WEBHOOK_URL` with that URL.
 
 This secret is optional. Until it exists, a `to:vela` wake prints a notice and the job stays green.
 
-The Feishu body is a short summary. It has the issue or pull request number, the title, the `html_url`, and the `delivery_id`. It is not a copy of the GitHub event.
+The Lark body is a short summary. It has the issue or pull request number, the title, the `html_url`, and the `delivery_id`. It is not a copy of the GitHub event.
 
 ### Claude
 
@@ -97,7 +97,7 @@ A Grok POST is JSON.
 
 GitHub Actions does not pass the `X-GitHub-Delivery` header into the job. `delivery_id` is built from the repository, the route, the event, the action, the number, and a stamp taken from the payload. A re-run of the same event keeps the same id. A new comment, label action, review, or head SHA changes it. The receiver must do nothing when that id arrives again.
 
-A Feishu POST is a custom-bot text message.
+A Lark POST is a custom-bot text message.
 
 ```json
 {
@@ -114,7 +114,7 @@ The window is 90 seconds, per issue or pull request number, event name, and rout
 
 One job writes the bucket file for that number and event name, with `cancel-in-progress` set to false. `queue: max` keeps up to 100 pending runs instead of replacing a queued route mention when a later ordinary comment arrives. GitHub cancels additional arrivals when that queue is full. Cancelling a job that already started `curl` would send a second id.
 
-A missing secret skips that route with a notice. The job fails when a POST fails after its secret was present. Feishu must also acknowledge the message with JSON `code: 0`; HTTP success alone does not record delivery. A rejected or invalid response fails the step without saving the bucket. A corrupt bucket file fails the job and sends nothing.
+A missing secret skips that route with a notice. The job fails when a POST fails after its secret was present. Lark must also acknowledge the message with JSON `code: 0`; HTTP success alone does not record delivery. A rejected or invalid response fails the step without saving the bucket. A corrupt bucket file fails the job and sends nothing.
 
 ## Try the filter locally
 
@@ -124,4 +124,4 @@ The CLI prints a plan. It does not POST.
 WAKE_EVENT_NAME=issues WAKE_EVENT_PATH=./event.json node .github/wake/decide.mjs
 ```
 
-`test/unit/wake-route.test.ts` locks the plan and models the pending-comment queue using GitHub's documented semantics. `bun test test/unit/wake-route.test.ts test/unit/wake-post.test.ts` also runs the actual workflow POST step against local fake HTTP endpoints, checking Feishu responses, saved buckets, missing secrets, and Grok route bodies. It sends no real provider messages.
+`test/unit/wake-route.test.ts` locks the plan and models the pending-comment queue using GitHub's documented semantics. `bun test test/unit/wake-route.test.ts test/unit/wake-post.test.ts` also runs the actual workflow POST step against local fake HTTP endpoints, checking Lark responses, saved buckets, missing secrets, and Grok route bodies. It sends no real provider messages.

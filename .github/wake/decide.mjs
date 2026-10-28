@@ -19,7 +19,7 @@ const ROUTES = [
   },
   {
     id: 'vela',
-    sink: 'feishu',
+    sink: 'lark',
     labels: ['to:vela'],
     tokens: ['to:vela', '@vela'],
   },
@@ -283,7 +283,7 @@ function grokBody(event, route, id, reason) {
   }
 }
 
-function feishuBody(event, id) {
+function larkBody(event, id) {
   const text = [
     `Look at #${event.item.number}`,
     oneLine(event.item.title),
@@ -355,8 +355,8 @@ function decide(input) {
       continue
     }
     const body =
-      route.sink === 'feishu'
-        ? feishuBody(event, id)
+      route.sink === 'lark'
+        ? larkBody(event, id)
         : grokBody(event, route.id, id, reason)
     posts.push({
       sink: route.sink,

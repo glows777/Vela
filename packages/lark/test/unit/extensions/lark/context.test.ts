@@ -4,11 +4,8 @@ import type {
   IncomingMessage,
 } from '@glows777/vela-channels'
 import { silentLogger } from '@glows777/vela-core'
-import { feishu } from '@glows777/vela-lark'
-import {
-  fakeFeishu,
-  feishuEvent,
-} from '../../../../../../test/support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../../../../../../test/support/lark.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -40,7 +37,7 @@ test('group context puts named history before the named question and keeps only 
   )
 })
 
-test('a Feishu create_time becomes a local HH:MM label', () => {
+test('a Lark create_time becomes a local HH:MM label', () => {
   const local = new Date(2026, 0, 2, 10, 32, 15)
   expect(messageTime(String(local.getTime()))).toBe('10:32')
   expect(messageTime(undefined)).toBeUndefined()
@@ -48,21 +45,21 @@ test('a Feishu create_time becomes a local HH:MM label', () => {
 })
 
 test.each([{ chats: ['oc_group'] }, { chats: ' oc_group , oc_other ' }])(
-  'Feishu chats config accepts arrays and comma-separated ids: %j',
+  'Lark chats config accepts arrays and comma-separated ids: %j',
   async ({ chats }) => {
-    const fake = fakeFeishu()
+    const fake = fakeLark()
     const t = createTestVela({
       responses: [],
       logger: silentLogger,
-      extensionConfig: { feishu: { chats, owners: ' ou_alice , ou_owner ' } },
-      extensions: [feishu({ transport: fake.transport })],
+      extensionConfig: { lark: { chats, owners: ' ou_alice , ou_owner ' } },
+      extensions: [lark({ transport: fake.transport })],
     })
     await t.vela.ready()
     const channel = (
       t.internals.gateway as unknown as {
         channels: Map<string, ChannelDefinition>
       }
-    ).channels.get('feishu')!
+    ).channels.get('lark')!
     const received: IncomingMessage[] = []
     channel.onMessage?.(async (message) => {
       const prepared = channel.prepareMessage
@@ -72,13 +69,13 @@ test.each([{ chats: ['oc_group'] }, { chats: ' oc_group , oc_other ' }])(
     })
     await t.vela.startChannels()
     fake.deliver(
-      feishuEvent({ chat_id: 'disabled', chat_type: 'group' }, 'ou_alice'),
+      larkEvent({ chat_id: 'disabled', chat_type: 'group' }, 'ou_alice'),
     )
     // The boundary rejects synchronously, even when an owner speaks in an unlisted group.
     expect(fake.historyCalls).toEqual([])
-    fake.deliver(feishuEvent({}, 'ou_bob'))
+    fake.deliver(larkEvent({}, 'ou_bob'))
     fake.deliver(
-      feishuEvent({ chat_id: 'owner_dm', chat_type: 'p2p' }, 'ou_owner'),
+      larkEvent({ chat_id: 'owner_dm', chat_type: 'p2p' }, 'ou_owner'),
     )
     const deadline = Date.now() + 2000
     while (received.length < 2) {

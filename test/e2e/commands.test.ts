@@ -61,7 +61,7 @@ test('/status reports the session, model and context usage', async () => {
 
 test('/status on a fresh session shows identity and omits usage totals', async () => {
   const t = createTestVela({ thinkingLevel: 'low' })
-  t.session.channel = 'feishu'
+  t.session.channel = 'lark'
   const { output } = await captureConsole(() => {
     expect(t.dispatch('/status')).toBe(true)
   })
@@ -73,7 +73,7 @@ test('/status on a fresh session shows identity and omits usage totals', async (
   expect(output).not.toContain(`Path: ${destination}`)
   expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
   expect(output).toContain('Thinking: low')
-  expect(output).toContain('Channel: feishu')
+  expect(output).toContain('Channel: lark')
   expect(output).toContain('Messages: 0')
   expect(output).toContain('Context:')
   expect(output).not.toContain('Usage:')

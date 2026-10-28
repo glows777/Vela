@@ -2,7 +2,7 @@
  * Several sessions in one Vela, running at the same time.
  *
  * Sessions share tools, extensions and the model, but each has its own history, queue,
- * usage and run lock. This is how a channel (for example Feishu) serves many users:
+ * usage and run lock. This is how a channel (for example Lark) serves many users:
  * one shared session per conversation.
  *
  * Run: bun examples/sdk/03-multi-session.ts

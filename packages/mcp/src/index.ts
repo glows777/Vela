@@ -3,7 +3,7 @@
  * streamable HTTP and registers their tools as `mcp__<server>__<tool>`, deferred by default so
  * tool_search loads them on demand.
  *
- * Unlike pi, one set of connections serves all sessions of a Vela (a Feishu bot has many concurrent
+ * Unlike pi, one set of connections serves all sessions of a Vela (a Lark bot has many concurrent
  * sessions); they start with the first session and close when the Vela is disposed.
  */
 

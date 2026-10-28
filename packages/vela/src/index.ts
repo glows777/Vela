@@ -166,17 +166,17 @@ export {
   type VelaInspection,
 } from '@glows777/vela-core/diagnostics'
 export type {
-  FeishuCard,
-  FeishuCardAction,
-  FeishuCardResponse,
-  FeishuHistoryMessage,
-  FeishuMessageEvent,
-  FeishuSentMessage,
-  FeishuTransport,
+  LarkCard,
+  LarkCardAction,
+  LarkCardResponse,
+  LarkHistoryMessage,
+  LarkMessageEvent,
+  LarkSentMessage,
+  LarkTransport,
 } from '@glows777/vela-lark'
 export {
-  type FeishuOptions,
-  feishu,
+  type LarkOptions,
+  lark,
   larkConfig,
 } from '@glows777/vela-lark'
 export {

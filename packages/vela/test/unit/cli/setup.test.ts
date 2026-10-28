@@ -320,7 +320,7 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
     'memory',
     'rag',
     'web',
-    'feishu',
+    'lark',
     'mcp',
     'permission-gate',
   ])

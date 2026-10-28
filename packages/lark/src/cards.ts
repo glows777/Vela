@@ -1,15 +1,15 @@
 /** The fields used from a `card.action.trigger` callback (v2). */
-export interface FeishuCardAction {
+export interface LarkCardAction {
   operator?: { open_id?: string }
   context?: { open_chat_id?: string }
   action?: { value?: unknown }
 }
 
-export interface FeishuCardResponse {
+export interface LarkCardResponse {
   toast: { type: 'success' | 'info'; content: string }
 }
 
-export interface FeishuCard {
+export interface LarkCard {
   schema: '2.0'
   config?: { update_multi: true }
   header: { title: { tag: 'plain_text'; content: string } }
@@ -35,7 +35,7 @@ export interface FeishuCard {
   }
 }
 
-export function runControlsCard(token: string): FeishuCard {
+export function runControlsCard(token: string): LarkCard {
   return {
     schema: '2.0',
     header: { title: { tag: 'plain_text', content: 'A run is in progress' } },
@@ -79,7 +79,7 @@ export function runControlsCard(token: string): FeishuCard {
   }
 }
 
-export function topicRunCard(token: string): FeishuCard {
+export function topicRunCard(token: string): LarkCard {
   const card = runControlsCard(token)
   card.config = { update_multi: true }
   card.body.elements[0] = {

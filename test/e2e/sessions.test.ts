@@ -48,7 +48,7 @@ test('vela.session(id) returns the open session and rejects ids that are not saf
   expect(t.vela.session()).toBe(t.session)
   expect(t.vela.session('x')).toBe(t.vela.session('x'))
   expect(t.vela.sessions().map((s) => s.id)).toEqual(['default', 'x'])
-  for (const bad of ['../evil', 'a/b', '.hidden', '', 'feishu:ou_1'])
+  for (const bad of ['../evil', 'a/b', '.hidden', '', 'lark:ou_1'])
     expect(() => t.vela.session(bad)).toThrow('Invalid session id')
 })
 

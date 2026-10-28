@@ -453,7 +453,7 @@ export class VelaSession {
   }
 
   /**
-   * The channel this session answers on (e.g. `feishu`), supplied by host routing on session open; undefined
+   * The channel this session answers on (e.g. `lark`), supplied by host routing on session open; undefined
    * for local sessions. Providers see it as `ProviderContext.channel()`.
    */
   channel?: string

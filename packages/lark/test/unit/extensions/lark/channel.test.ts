@@ -2,22 +2,22 @@ import { afterEach, expect, test } from 'bun:test'
 import type { IncomingMessage } from '@glows777/vela-channels'
 import { silentLogger } from '@glows777/vela-core'
 import { fauxText } from '@glows777/vela-core/testing'
-import type { FeishuMessageEvent, FeishuTransport } from '@glows777/vela-lark'
-import { feishu } from '@glows777/vela-lark'
+import type { LarkMessageEvent, LarkTransport } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import {
   cleanupTestVelas,
   createTestVela,
 } from '../../../../../../test/support/vela.ts'
-import { FeishuChannel, UNSUPPORTED_MESSAGE } from '../../../../src/channel.ts'
+import { LarkChannel, UNSUPPORTED_MESSAGE } from '../../../../src/channel.ts'
 import { messageText } from '../../../../src/messages.ts'
 
 afterEach(cleanupTestVelas)
 
-/** A fake Feishu connection: `deliver` pushes an event, `sent` collects the texts sent to chats */
+/** A fake Lark connection: `deliver` pushes an event, `sent` collects the texts sent to chats */
 function fakeTransport(options: { failSend?: boolean } = {}) {
-  let push: ((event: FeishuMessageEvent) => void) | undefined
+  let push: ((event: LarkMessageEvent) => void) | undefined
   const sent: { chatId?: string; messageId?: string; text: string }[] = []
-  const transport: FeishuTransport = {
+  const transport: LarkTransport = {
     start: async (onMessage) => {
       push = onMessage
     },
@@ -53,14 +53,14 @@ function fakeTransport(options: { failSend?: boolean } = {}) {
   return {
     transport,
     sent,
-    deliver: (event: FeishuMessageEvent) => push?.(event),
+    deliver: (event: LarkMessageEvent) => push?.(event),
   }
 }
 
 const event = (
-  message: Partial<FeishuMessageEvent['message']>,
+  message: Partial<LarkMessageEvent['message']>,
   openId: string | undefined = 'ou_1',
-): FeishuMessageEvent => ({
+): LarkMessageEvent => ({
   message: {
     message_id: crypto.randomUUID(),
     chat_id: 'oc_1',
@@ -76,7 +76,7 @@ const event = (
 })
 
 async function startedChannel(fake = fakeTransport()) {
-  const channel = new FeishuChannel({
+  const channel = new LarkChannel({
     appId: '',
     appSecret: '',
     dataDir: '/tmp',
@@ -200,7 +200,7 @@ test('replies go to the chat; a failed send throws so the gateway reports it', a
 
 test('without app id, secret or a transport the channel does not connect', async () => {
   const warnings: string[] = []
-  const channel = new FeishuChannel({
+  const channel = new LarkChannel({
     appId: '',
     appSecret: '',
     dataDir: '/tmp',
@@ -220,9 +220,9 @@ test('owners and enabled chats from comma-separated config give permitted sender
       (req) => fauxText(`tools: ${req.tools.join(',') || 'none'}`),
     ],
     extensionConfig: {
-      feishu: { owners: ' ou_owner , ou_other ', chats: ' oc_b , oc_c ' },
+      lark: { owners: ' ou_owner , ou_other ', chats: ' oc_b , oc_c ' },
     },
-    extensions: [feishu({ transport: fake.transport })],
+    extensions: [lark({ transport: fake.transport })],
   })
   await t.vela.ready()
   await t.vela.startChannels()

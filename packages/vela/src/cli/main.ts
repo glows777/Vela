@@ -175,16 +175,22 @@ if (legacyHint) console.error(legacyHint)
  * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → settings
  * defaultModel → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
  */
-const NO_MODEL =
-  'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.'
-
 /** Error text for the user: the core's "No model selected" names SDK calls (createVela / setModel); the CLI says how to pick a model. */
 function cliErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message.startsWith('No model selected') ? NO_MODEL : message
+  if (message.startsWith('No model selected')) {
+    try {
+      resolveModel(undefined, { providers: {} })
+    } catch (resolutionError) {
+      return resolutionError instanceof Error
+        ? resolutionError.message
+        : String(resolutionError)
+    }
+  }
+  return message
 }
 
-/** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports NO_MODEL) */
+/** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports model-selection guidance) */
 async function chooseModel(): Promise<LanguageModel | string | undefined> {
   // --model wins over VELA_MODEL (so VELA_RECORD wraps the model --model names)
   if (args.model) return args.model
@@ -261,7 +267,7 @@ const vela = createVela({
     extensionConfigFromEnv(env, config.extensionConfig),
     config,
   ),
-  // Built-in extensions (memory / rag / web / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
+  // Built-in extensions (memory / rag / web / lark) + ~/.vela/extensions + .vela/extensions + settings + -e
   extensions: await loadCliExtensions(config, args, (message) => {
     extensionErrors.push(message)
     console.error(message)
@@ -402,7 +408,7 @@ function applyModelArgs(target: VelaSession): boolean {
     return true
   } catch (error) {
     console.error(
-      `[model] ${chosenModel === undefined && !args.model ? NO_MODEL : cliErrorMessage(error)}`,
+      `[model] ${cliErrorMessage(chosenModel === undefined && !args.model ? new Error('No model selected') : error)}`,
     )
     return false
   }

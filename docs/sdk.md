@@ -322,13 +322,13 @@ Long tool output and the tool call history are always written to files under `<d
 
 ```typescript
 import {
-  createVela, feishu, importExtension, loadConfig, mcp, memory, rag, web,
+  createVela, lark, importExtension, loadConfig, mcp, memory, rag, web,
   type VelaExtension,
 } from '@glows777/vela'
 
 const builtins: Record<string, () => VelaExtension> = {
   memory: () => memory(), rag: () => rag(), web: () => web(),
-  feishu: () => feishu(), mcp: () => mcp({ servers: config.mcp.servers }),
+  lark: () => lark(), mcp: () => mcp({ servers: config.mcp.servers }),
 }
 const config = loadConfig({ cwd: process.cwd(), env: process.env, builtins: Object.keys(builtins) })
 
@@ -391,7 +391,7 @@ Extensions get the same logger as `vela.logger`.
 The SDK loads no extensions by default. The CLI's built-in extensions are exported as factories:
 
 ```typescript
-import { createVela, memory, rag, createEmbedder, web, feishu, mcp } from '@glows777/vela'
+import { createVela, memory, rag, createEmbedder, web, lark, mcp } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
@@ -404,7 +404,7 @@ const vela = createVela({
 })
 ```
 
-Options not passed to a factory are read from its `extensionConfig` section. See [Built-in extensions](built-in-extensions.md) and [Channels](channels.md) for `feishu()`.
+Options not passed to a factory are read from its `extensionConfig` section. See [Built-in extensions](built-in-extensions.md) and [Channels](channels.md) for `lark()`.
 
 ## Disposal
 
@@ -470,7 +470,7 @@ The six packages share one version. Choose the smallest consumer dependency:
 |---|---|
 | `@glows777/vela-core` | Root SDK (including images, memory, web and permission gate), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
 | `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
-| `@glows777/vela-lark` | Root Feishu transport/factory/config exports; depends on core and channels. Existing `feishu` identifiers remain unchanged in this move |
+| `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config; see [migration](lark-migration.md) for older Feishu deployments |
 | `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
 | `@glows777/vela-rag` | Root RAG factory; depends on core |
 | `@glows777/vela` | Compatibility SDK, built-in composition and CLI/TUI; depends on all five |

@@ -226,7 +226,7 @@ test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal doll
     'home/settings.json': json({
       extensionConfig: {
         // biome-ignore lint/suspicious/noTemplateCurlyInString: ${OWNER} is interpolation syntax in this fixture
-        feishu: { appSecret: '$SECRET', owners: ['${OWNER}', 'x'] },
+        lark: { appSecret: '$SECRET', owners: ['${OWNER}', 'x'] },
         price: { text: 'costs $$5, $MISSING!' },
       },
     }),
@@ -236,7 +236,7 @@ test('extension config strings interpolate $VAR and ${VAR}; $$ is a literal doll
     agentDir,
     env: { SECRET: 's3', OWNER: 'ou_1' },
   })
-  expect(config.extensionConfig.feishu).toEqual({
+  expect(config.extensionConfig.lark).toEqual({
     appSecret: 's3',
     owners: ['ou_1', 'x'],
   })

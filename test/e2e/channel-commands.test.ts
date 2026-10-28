@@ -4,9 +4,9 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fauxHang, fauxText } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { ChannelDirectory } from '../../packages/channels/src/directory.ts'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 const roots: string[] = []
@@ -26,7 +26,7 @@ async function until(check: () => boolean) {
 }
 
 function message(text: string, mentioned = true) {
-  return feishuEvent({
+  return larkEvent({
     root_id: 'root',
     thread_id: 'thread',
     content: JSON.stringify({ text: mentioned ? `@_user_1 ${text}` : text }),
@@ -45,7 +45,7 @@ test.each([
     const { fake, t } = await setup()
     fake.deliver(message('original task'))
     await until(() => fake.sent.length === 1)
-    const oldId = 'feishu-oc_group-root'
+    const oldId = 'lark-oc_group-root'
     const path = t.dataPath('channels/index.json')
     let releaseWrite!: () => void
     const heldWrite = new Promise<void>((resolve) => {
@@ -127,13 +127,13 @@ test.each([
       ).toMatchObject({
         activeSessionId: failWrite
           ? oldId
-          : expect.not.stringMatching(/^feishu-/),
+          : expect.not.stringMatching(/^lark-/),
         previousSessionIds: failWrite ? [] : [oldId],
       })
       expect(
         records.find(
           (r: { key: string }) =>
-            r.key === (otherTopic ? 'feishu-oc_group-other' : oldId),
+            r.key === (otherTopic ? 'lark-oc_group-other' : oldId),
         ).pendingMessageIds,
       ).toContain('later-input')
       expect(t.model.calls).toHaveLength(1)
@@ -166,7 +166,7 @@ test.each([false, true])(
     await until(() => t.model.calls.length === 2)
     const index = JSON.parse(await t.readData('channels/index.json'))
     const fresh = t.vela.session(index.records[0].activeSessionId)
-    expect(fresh.id).not.toBe('feishu-oc_group-root')
+    expect(fresh.id).not.toBe('lark-oc_group-root')
     expect(fake.sent.map((m) => m.text)).toEqual([
       expect.stringContaining('Stopped the current run'),
       expect.stringContaining('Restarted with a fresh session'),
@@ -185,7 +185,7 @@ test.each([false, true])(
 test.each(['!stop', '!restart'])(
   'an unmentioned %s in an unowned topic has no writes or feedback',
   async (command) => {
-    const fake = fakeFeishu()
+    const fake = fakeLark()
     let loads = 0
     let writes = 0
     const t = createTestVela({
@@ -200,7 +200,7 @@ test.each(['!stop', '!restart'])(
         },
       },
       extensions: [
-        feishu({
+        lark({
           owners: ['ou_alice'],
           chats: ['oc_group'],
           transport: fake.transport,
@@ -252,14 +252,14 @@ test('an interrupted successor recovers under the same logical topic after proce
     activeSessionId: freshId,
     state: 'done',
     pendingMessageIds: [],
-    previousSessionIds: ['feishu-oc_group-root'],
+    previousSessionIds: ['lark-oc_group-root'],
   })
 })
 
 test.each(['history', 'controls'])(
   '!restart received during %s preparation prevents the old input from starting',
   async (phase) => {
-    const fake = fakeFeishu()
+    const fake = fakeLark()
     let release!: () => void
     const held = new Promise<void>((resolve) => {
       release = resolve
@@ -282,7 +282,7 @@ test.each(['history', 'controls'])(
     const t = createTestVela({
       responses: [],
       extensions: [
-        feishu({
+        lark({
           owners: ['ou_alice'],
           chats: ['oc_group'],
           transport: fake.transport,
@@ -303,12 +303,12 @@ test.each(['history', 'controls'])(
 )
 
 async function setup(response = fauxText('original answer'), cwd?: string) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     cwd,
     responses: [response],
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: ['oc_group'],
         transport: fake.transport,
@@ -360,7 +360,7 @@ test.each([false, true])(
     await until(() =>
       fake.sent.some((m) => m.text.includes('Stopped the current run')),
     )
-    const session = t.vela.session('feishu-oc_group-root')
+    const session = t.vela.session('lark-oc_group-root')
     expect(session.isRunning).toBe(false)
     expect(t.model.calls).toHaveLength(1)
     t.model.push(fauxText('continued cobalt'))
@@ -386,7 +386,7 @@ test.each([false, true])(
     const { fake, t } = await setup()
     fake.deliver(message('original task'))
     await until(() => fake.sent.length === 1)
-    const oldId = 'feishu-oc_group-root'
+    const oldId = 'lark-oc_group-root'
     fake.deliver(message('!restart', mentioned))
     await until(() =>
       fake.sent.some((m) => m.text.includes('Restarted with a fresh session')),

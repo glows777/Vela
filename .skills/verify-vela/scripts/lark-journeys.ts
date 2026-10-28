@@ -1,9 +1,9 @@
-// Offline drive of the Feishu channel journeys: topic handoff, untagged topic replies, the group
+// Offline drive of the Lark channel journeys: topic handoff, untagged topic replies, the group
 // workspace, passive top-level chatter (skip and a text answer), the topic overview and routines
 // across a restart.
-// The extension, gateway, files and timers are real; only the model (a router) and the Feishu
+// The extension, gateway, files and timers are real; only the model (a router) and the Lark
 // transport are fake. Run it from a verify-vela run (up to about 2 minutes: the last step waits
-// past a real due time):  $H exec $RUN feishu bun $REPO/.skills/verify-vela/scripts/feishu-journeys.ts
+// past a real due time):  $H exec $RUN lark bun $REPO/.skills/verify-vela/scripts/lark-journeys.ts
 // It prints one line per check, marks failed checks FAIL and exits 1 if any failed; adapt the
 // router and steps to the change being verified.
 import { existsSync, readFileSync } from 'node:fs'
@@ -14,10 +14,10 @@ import {
   type FauxRequest,
   type FauxResponse,
 } from '@glows777/vela/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../../../test/support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 
-type Fake = ReturnType<typeof fakeFeishu>
+type Fake = ReturnType<typeof fakeLark>
 const zone = 'Asia/Shanghai'
 const failed: string[] = []
 /** Print one check; a false `ok` marks it FAIL and makes the script exit 1. */
@@ -34,7 +34,7 @@ async function until(what: string, ok: () => boolean, ms = 5000) {
     await sleep(10)
   }
 }
-/** Deployment-local YYYY-MM-DDTHH:mm, the format feishu_routines expects for a one-off. */
+/** Deployment-local YYYY-MM-DDTHH:mm, the format lark_routines expects for a one-off. */
 function local(ms: number): string {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
@@ -65,24 +65,24 @@ function router(req: FauxRequest): FauxResponse {
   const call = (name: string, input: unknown): FauxResponse => ({
     toolCalls: [{ name, input }],
   })
-  if (/investigate/i.test(text) && req.tools.includes('feishu_start_topic'))
-    return call('feishu_start_topic', {
+  if (/investigate/i.test(text) && req.tools.includes('lark_start_topic'))
+    return call('lark_start_topic', {
       title: 'Investigate the flaky test',
       brief: 'Investigate the flaky test and write down the likely cause.',
     })
   if (text.includes('Investigate the flaky test'))
     return call('write_file', { path: 'notes.md', content: 'cause: timing' })
   if (/remind/i.test(text))
-    return call('feishu_routines', {
+    return call('lark_routines', {
       action: 'create',
       message: 'Check the PR',
       schedule: { at: local(dueMs) },
     })
   if (text.includes('Scheduled wake-up'))
     return { text: 'Reminder: check the PR' }
-  if (/list topics/i.test(text)) return call('feishu_list_topics', {})
-  if (/lunch/i.test(text) && req.tools.includes('feishu_skip_reply'))
-    return call('feishu_skip_reply', {})
+  if (/list topics/i.test(text)) return call('lark_list_topics', {})
+  if (/lunch/i.test(text) && req.tools.includes('lark_skip_reply'))
+    return call('lark_skip_reply', {})
   return { text: `ok: ${text.slice(-40)}` }
 }
 
@@ -93,9 +93,9 @@ const start = async (fake: Fake) => {
   const vela = createVela({
     dataDir: '.vela-data',
     model,
-    extensionConfig: { feishu: { timezone: zone } },
+    extensionConfig: { lark: { timezone: zone } },
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: ['oc_group'],
         transport: fake.transport,
@@ -108,11 +108,11 @@ const start = async (fake: Fake) => {
 const sent = (fake: Fake, part: string) =>
   fake.sent.find((message) => message.text.includes(part))?.text
 
-let fake = fakeFeishu()
+let fake = fakeLark()
 let vela = await start(fake)
 
 // 1. Top-level @ hands the task to a topic
-const root = feishuEvent({
+const root = larkEvent({
   content: JSON.stringify({ text: '@_user_1 investigate the flaky test' }),
 })
 const rootId = root.message.message_id
@@ -142,7 +142,7 @@ check('reactions', reactions, reactions.at(-1) === 'DONE')
 check('cards, patches', [fake.cards.length, fake.patches.length])
 check('topic reply', sent(fake, 'after write_file'))
 const workspaceFile = join(
-  '.vela-data/channels/feishu-oc_group/workspace/notes.md',
+  '.vela-data/channels/lark-oc_group/workspace/notes.md',
 )
 check(
   'file in group workspace',
@@ -153,7 +153,7 @@ check(
 // 2. Another member replies in the topic without @
 let before = fake.sent.length
 fake.deliver(
-  feishuEvent(
+  larkEvent(
     {
       ...topic,
       mentions: [],
@@ -169,7 +169,7 @@ check('untagged topic reply', fake.sent.at(-1)?.text)
 before = fake.sent.length
 const reactionsBefore = fake.reactions.length
 fake.deliver(
-  feishuEvent(
+  larkEvent(
     { mentions: [], content: JSON.stringify({ text: 'lunch at 12?' }) },
     'ou_bob',
   ),
@@ -189,7 +189,7 @@ check(
 before = fake.sent.length
 const answerMark = fake.reactions.length
 fake.deliver(
-  feishuEvent(
+  larkEvent(
     { mentions: [], content: JSON.stringify({ text: 'how is the build?' }) },
     'ou_bob',
   ),
@@ -208,25 +208,25 @@ check(
 
 // 4. Topic overview at top level
 fake.deliver(
-  feishuEvent({ content: JSON.stringify({ text: '@_user_1 list topics' }) }),
+  larkEvent({ content: JSON.stringify({ text: '@_user_1 list topics' }) }),
 )
-await until('topic list', () => !!sent(fake, 'after feishu_list_topics'))
-check('topic list', sent(fake, 'after feishu_list_topics'))
+await until('topic list', () => !!sent(fake, 'after lark_list_topics'))
+check('topic list', sent(fake, 'after lark_list_topics'))
 
 // 5. A routine in the topic, then !routines without @ (no model call)
 dueMs = Math.ceil((Date.now() + 30_000) / 60_000) * 60_000
 fake.deliver(
-  feishuEvent({
+  larkEvent({
     ...topic,
     content: JSON.stringify({ text: '@_user_1 remind me in a minute' }),
   }),
 )
-await until('routine created', () => !!sent(fake, 'after feishu_routines'))
-const created = sent(fake, 'after feishu_routines') ?? ''
+await until('routine created', () => !!sent(fake, 'after lark_routines'))
+const created = sent(fake, 'after lark_routines') ?? ''
 check('routine created', created, !/error/i.test(created))
 const calls = model.calls.length
 fake.deliver(
-  feishuEvent({
+  larkEvent({
     ...topic,
     mentions: [],
     content: JSON.stringify({ text: '!routines' }),
@@ -241,7 +241,7 @@ check('model calls for !routines', routineCalls, routineCalls === 0)
 await vela.dispose()
 console.log('stopped; waiting past the due time')
 await sleep(dueMs - Date.now() + 5_000)
-fake = fakeFeishu()
+fake = fakeLark()
 vela = await start(fake)
 await until(
   'late routine',

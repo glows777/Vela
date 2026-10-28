@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { savedGraderAnswers } from './fixtures/saved-grader-answers.ts'
 import { savedTestRuns } from './fixtures/saved-test-runs.ts'
 import * as graders from './graders.ts'
@@ -674,15 +675,23 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import * as feishuHelpers from '../../test/support/feishu.ts'
+import * as larkHelpers from '../../test/support/lark.ts'
 import { options } from './run.ts'
 import * as scenarios from './scenarios.ts'
 import { command, runAttempt } from './worker.ts'
 
 const exitRuntime =
   process.env.VELA_EVAL_TEST_RUNTIME ?? resolve(import.meta.dir, '../..')
-const exitHelpers: typeof feishuHelpers = await import(
-  join(exitRuntime, 'test/support/feishu.ts')
+const exitHelperName = existsSync(join(exitRuntime, 'test/support/lark.ts'))
+  ? 'fakeLark'
+  : 'fakeFeishu'
+const exitHelpers: typeof larkHelpers & {
+  fakeFeishu: typeof larkHelpers.fakeLark
+} = await import(
+  join(
+    exitRuntime,
+    `test/support/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}.ts`,
+  )
 )
 async function exitAttempt(
   scenario: 'G6' | 'G7' | 'G8',
@@ -691,13 +700,13 @@ async function exitAttempt(
 ) {
   const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
   const model = createFauxModel({ responses })
-  const originalFake = exitHelpers.fakeFeishu
+  const originalFake = exitHelpers[exitHelperName]
   const fakeSpy = history
-    ? spyOn(exitHelpers, 'fakeFeishu').mockImplementation(() => {
+    ? spyOn(exitHelpers, exitHelperName).mockImplementation(() => {
         const fake = originalFake()
         fake.transport.searchMessages = async () => ({
           items: [
-            feishuHelpers.historyMessage(
+            larkHelpers.historyMessage(
               'stored',
               'ou_alice',
               prompts(scenario)[0]!,
@@ -1078,7 +1087,7 @@ test('G8 worker excludes runtime/model errors from behavioral grades', async () 
 })
 
 for (const id of ['G7', 'G8'] as const) {
-  const sessionId = `feishu-oc_group-${id.toLowerCase()}_recall`
+  const sessionId = `${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_recall`
   const recallPaths = {
     workspace: '/tmp/run/attempt/data/channels/feishu-oc_group/workspace',
     artifactDir: '/tmp/run/attempt',
@@ -1155,7 +1164,7 @@ for (const id of ['G7', 'G8'] as const) {
       {
         ...source,
         phase: 0,
-        sessionId: `feishu-oc_group-${id.toLowerCase()}_store`,
+        sessionId: `${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store`,
       },
     ],
     [{ ...source, sessionId: 'another-session' }],
@@ -1218,7 +1227,12 @@ for (const id of ['G7', 'G8'] as const) {
   const contaminated = [
     ['bash', { command: 'grep -R kestrel .vela-eval' }],
     ['bash', { command: 'find sessions -name "*.jsonl"' }],
-    ['read_file', { path: '../../../sessions/feishu-oc_group-g8_store.jsonl' }],
+    [
+      'read_file',
+      {
+        path: `../../../sessions/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-g8_store.jsonl`,
+      },
+    ],
     ['bash', { command: 'grep -R kestrel ../../../sessions' }],
     [
       'bash',
@@ -1278,7 +1292,7 @@ for (const id of ['G7', 'G8'] as const) {
           {
             ...call,
             phase: 0,
-            sessionId: `feishu-oc_group-${id.toLowerCase()}_store`,
+            sessionId: `${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store`,
           },
         ]),
       ),
@@ -1304,7 +1318,7 @@ for (const id of ['G7', 'G8'] as const) {
       fauxText('Kestrel.'),
       fauxToolCall('bash', { command: 'pwd' }),
       fauxToolCall('read_file', {
-        path: `../../../sessions/feishu-oc_group-${topic}_store.jsonl`,
+        path: `../../../sessions/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${topic}_store.jsonl`,
       }),
       fauxToolCall('memory', stagingMemory),
       fauxText('Kestrel.'),
@@ -1333,7 +1347,7 @@ for (const id of ['G7', 'G8'] as const) {
         filename: 'project_staging-server.md',
       }),
       fauxToolCall('bash', {
-        command: `grep -i kestrel ../../../sessions/feishu-oc_group-${id.toLowerCase()}_store.jsonl`,
+        command: `grep -i kestrel ../../../sessions/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store.jsonl`,
       }),
       fauxText('Kestrel.'),
     ])
@@ -1355,7 +1369,10 @@ for (const id of ['G7', 'G8'] as const) {
         id,
         [
           fauxText('Done.'),
-          fauxToolCall('feishu_search_history', { keyword: 'staging' }),
+          fauxToolCall(
+            `${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}_search_history`,
+            { keyword: 'staging' },
+          ),
           fauxText('Kestrel.'),
         ],
         history,
@@ -1411,3 +1428,42 @@ for (const id of ['G7', 'G8'] as const) {
     expect(result.status).toBe('fail')
   })
 }
+
+test.each(['G7', 'G8'] as const)(
+  '%s accepts canonical Lark identity and still rejects Lark-history contamination',
+  (id) => {
+    const base = evidence({
+      memoryEntries: [
+        {
+          name: 'project_staging.md',
+          content: 'The staging project is kestrel.',
+        },
+      ],
+      deliveries: [
+        {
+          scope: 'topic',
+          topicRootId: `${id.toLowerCase()}_recall`,
+          text: 'The staging project is kestrel.',
+        },
+      ],
+      calls: [
+        {
+          ...memoryRead(),
+          sessionId: `lark-oc_group-${id.toLowerCase()}_recall`,
+        },
+      ],
+    })
+    expect(grade(id, base).every((check) => check.pass)).toBe(true)
+    base.calls.push({
+      name: 'read_file',
+      args: { path: `lark-oc_group-${id.toLowerCase()}_store.jsonl` },
+      phase: 1,
+      sessionId: `lark-oc_group-${id.toLowerCase()}_recall`,
+      success: true,
+      output: 'kestrel',
+    })
+    expect(grade(id, base).find((check) => check.name === 'recall')?.pass).toBe(
+      false,
+    )
+  },
+)

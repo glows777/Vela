@@ -1,9 +1,9 @@
 import type { ImageContent } from '@glows777/vela-core/extension-api'
 import { messageText } from './messages.ts'
 import type {
-  FeishuHistoryMessage,
-  FeishuMessageEvent,
-  FeishuSentMessage,
+  LarkHistoryMessage,
+  LarkMessageEvent,
+  LarkSentMessage,
 } from './transport.ts'
 
 /** One named line of chat history; `time` is the local send time when the message has one */
@@ -15,20 +15,20 @@ export interface ContextLine {
 
 interface GroupContextOptions {
   chatId: string
-  message: FeishuMessageEvent['message']
-  activeTrigger?: FeishuMessageEvent['message']
-  previous?: FeishuSentMessage
+  message: LarkMessageEvent['message']
+  activeTrigger?: LarkMessageEvent['message']
+  previous?: LarkSentMessage
   appId: string
   question: ContextLine
   senderName: (id: string) => Promise<string>
   downloadImages: (
-    message: FeishuMessageEvent['message'],
+    message: LarkMessageEvent['message'],
     limit: number,
   ) => Promise<ImageContent[]>
 }
 
 export async function readGroupContext(
-  history: FeishuHistoryMessage[],
+  history: LarkHistoryMessage[],
   {
     chatId,
     message,
@@ -91,7 +91,7 @@ export async function readGroupContext(
   }
 }
 
-/** The local `HH:MM` for a Feishu `create_time` in milliseconds. */
+/** The local `HH:MM` for a Lark `create_time` in milliseconds. */
 export function messageTime(
   createTime: string | undefined,
 ): string | undefined {
@@ -116,7 +116,7 @@ export function formatGroupContext(
 
 /** Full topic history, already fetched in ascending creation order. */
 export async function readTopicContext(
-  history: FeishuHistoryMessage[],
+  history: LarkHistoryMessage[],
   options: GroupContextOptions,
 ): Promise<{ text: string; images: ImageContent[] }> {
   const lines: string[] = []

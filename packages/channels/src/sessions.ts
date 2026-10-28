@@ -37,6 +37,7 @@ export class ChannelSessions {
       channel.name,
       msg.channelId,
       chatKind,
+      this.directory.storageKey(channel.name, msg.channelId),
     )
     return this.session(this.directory.sessionId(key), {
       ...channel.sessionOptions?.(msg),

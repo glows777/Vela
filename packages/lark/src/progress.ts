@@ -1,7 +1,7 @@
 import type { ChannelOutcome } from '@glows777/vela-channels'
 import type { VelaEvent } from '@glows777/vela-core/extension-api'
-import type { FeishuCard } from './cards.ts'
-import type { FeishuTransport } from './transport.ts'
+import type { LarkCard } from './cards.ts'
+import type { LarkTransport } from './transport.ts'
 
 function plain(value: string, limit: number): string {
   return value
@@ -29,7 +29,7 @@ function inputSummary(args: unknown): string {
 }
 
 /** One ordered writer for one shared card. Event listeners never await network I/O. */
-export class FeishuProgress {
+export class LarkProgress {
   private rows = new Map<string, { state: string; label: string }>()
   private readonly startedAt = Date.now()
   private stage = 'Working'
@@ -41,9 +41,9 @@ export class FeishuProgress {
   private lastWrite = Date.now()
   private heartbeat: ReturnType<typeof setInterval>
   constructor(
-    private transport: FeishuTransport,
+    private transport: LarkTransport,
     private messageId: string,
-    private card: FeishuCard,
+    private card: LarkCard,
     private report: (error: unknown) => Promise<void>,
   ) {
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
@@ -84,7 +84,7 @@ export class FeishuProgress {
     }
   }
 
-  private snapshot(terminal = false): FeishuCard {
+  private snapshot(terminal = false): LarkCard {
     const seconds = Math.max(
       0,
       Math.floor((Date.now() - this.startedAt) / 1000),

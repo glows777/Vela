@@ -163,13 +163,13 @@ test('to:forge and Taste post two bodies with different ids', () => {
   expect(plan.posts[0]?.deliveryId).not.toBe(plan.posts[1]?.deliveryId)
 })
 
-test('to:vela posts a Feishu text summary and not the Grok object', () => {
+test('to:vela posts a Lark text summary and not the Grok object', () => {
   const { plan } = run(
     'issues',
     issue({ labels: ['to:vela'], added: 'to:vela' }),
   )
   const body = plan.posts[0]?.body
-  expect(plan.posts[0]).toMatchObject({ sink: 'feishu', route: 'vela' })
+  expect(plan.posts[0]).toMatchObject({ sink: 'lark', route: 'vela' })
   expect(Object.keys(body ?? {}).sort()).toEqual(['content', 'msg_type'])
   expect(body).toEqual({
     msg_type: 'text',
@@ -363,7 +363,7 @@ test('assigned wakes only when a route label is already present', () => {
     'issues',
     issue({ action: 'assigned', labels: ['to:vela'], assignee: 'liam' }),
   )
-  expect(vela.plan.posts[0]).toMatchObject({ route: 'vela', sink: 'feishu' })
+  expect(vela.plan.posts[0]).toMatchObject({ route: 'vela', sink: 'lark' })
   const forge = run(
     'issues',
     issue({ action: 'assigned', labels: ['to:forge'], assignee: 'liam' }),

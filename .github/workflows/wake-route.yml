@@ -43,7 +43,7 @@ jobs:
           WAKE_STATE_PATH: .wake-state/buckets.json
           WAKE_GROK_FORGE_WEBHOOK_URL: ${{ secrets.WAKE_GROK_FORGE_WEBHOOK_URL }}
           WAKE_GROK_FORGE_WEBHOOK_KEY: ${{ secrets.WAKE_GROK_FORGE_WEBHOOK_KEY }}
-          WAKE_FEISHU_VELA_WEBHOOK_URL: ${{ secrets.WAKE_FEISHU_VELA_WEBHOOK_URL }}
+          WAKE_LARK_VELA_WEBHOOK_URL: ${{ secrets.WAKE_LARK_VELA_WEBHOOK_URL }}
           WAKE_FORK: ${{ github.event.pull_request.head.repo.full_name && github.event.pull_request.head.repo.full_name != github.repository }}
           GITHUB_TOKEN: ''
           GH_TOKEN: ''
@@ -79,9 +79,9 @@ jobs:
                 -H "Authorization: Bearer ${WAKE_GROK_FORGE_WEBHOOK_KEY}" \
                 --data-binary @"$RUNNER_TEMP/wake-body.json" \
                 "${WAKE_GROK_FORGE_WEBHOOK_URL}"
-            elif [ "$sink" = "feishu" ]; then
-              if [ -z "${WAKE_FEISHU_VELA_WEBHOOK_URL}" ]; then
-                echo "::notice::missing secret WAKE_FEISHU_VELA_WEBHOOK_URL for sink feishu route ${route}"
+            elif [ "$sink" = "lark" ]; then
+              if [ -z "${WAKE_LARK_VELA_WEBHOOK_URL}" ]; then
+                echo "::notice::missing secret WAKE_LARK_VELA_WEBHOOK_URL for sink lark route ${route}"
                 if [ "${WAKE_FORK}" = "true" ]; then
                   echo "::notice::fork pull request withholds secrets"
                 fi
@@ -91,10 +91,10 @@ jobs:
               curl --fail-with-body --silent --show-error --max-time 20 \
                 -H "Content-Type: application/json" \
                 --data-binary @"$RUNNER_TEMP/wake-body.json" \
-                --output "$RUNNER_TEMP/feishu-response.json" \
-                "${WAKE_FEISHU_VELA_WEBHOOK_URL}"
-              if ! jq -e '.code == 0' "$RUNNER_TEMP/feishu-response.json" > /dev/null; then
-                echo "::error::Feishu wake failed: expected response code 0" >&2
+                --output "$RUNNER_TEMP/lark-response.json" \
+                "${WAKE_LARK_VELA_WEBHOOK_URL}"
+              if ! jq -e '.code == 0' "$RUNNER_TEMP/lark-response.json" > /dev/null; then
+                echo "::error::Lark wake failed: expected response code 0" >&2
                 exit 1
               fi
             else

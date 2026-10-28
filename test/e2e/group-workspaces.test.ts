@@ -9,9 +9,9 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -30,13 +30,13 @@ function setup(
   cwd?: string,
   extensions: VelaExtension[] = [],
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     cwd,
     allowPendingResponses: true,
-    extensionConfig: { feishu: { chats } },
+    extensionConfig: { lark: { chats } },
     extensions: [
-      feishu({ transport: fake.transport, owners: ['ou_alice'] }),
+      lark({ transport: fake.transport, owners: ['ou_alice'] }),
       ...extensions,
     ],
   })
@@ -53,7 +53,7 @@ async function turn(
   run.t.model.push(...steps)
   const count = run.fake.sent.length
   run.fake.deliver(
-    feishuEvent({
+    larkEvent({
       chat_id: chat,
       ...(root ? { root_id: root, thread_id: `thread_${root}` } : {}),
       content: JSON.stringify({ text }),
@@ -134,7 +134,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
   )
   await t.run('Save global guidance')
   const files = t.dataPath(
-    `channels/${channelSessionId('feishu', 'oc_alpha')}/files`,
+    `channels/${channelSessionId('lark', 'oc_alpha')}/files`,
   )
   mkdirSync(files, { recursive: true })
   writeFileSync(join(files, 'existing.txt'), 'retained attachment')
@@ -148,7 +148,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
       fauxToolCall('write_file', { path: 'same.txt', content: value }),
       fauxText('saved'),
     ])
-    const folder = `channels/${channelSessionId('feishu', chat!)}`
+    const folder = `channels/${channelSessionId('lark', chat!)}`
     expect(await t.readData(`${folder}/workspace/same.txt`)).toBe(value)
     expect(
       await t.readData(`${folder}/memory/project_shared-name.md`),
@@ -172,7 +172,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
         expect(memory).toContain('Shared global guidance')
         expect(req.system).toContain(
           current.t.dataPath(
-            `channels/${channelSessionId('feishu', chat)}/workspace`,
+            `channels/${channelSessionId('lark', chat)}/workspace`,
           ),
         )
         return fauxToolCall('memory', {
@@ -218,7 +218,7 @@ test('two groups keep same-name files and memory separate across topics, idle re
     expect(current.fake.sent.at(-1)?.text).toContain('verified')
   }
   await verify(run, 'oc_alpha', 'ALPHA', 'second-root')
-  await t.vela.session(channelSessionId('feishu', 'oc_beta', 'root')).close()
+  await t.vela.session(channelSessionId('lark', 'oc_beta', 'root')).close()
   await verify(run, 'oc_beta', 'BETA')
   await turn(run, 'oc_alpha', 'root', '!restart', [])
   expect(run.fake.sent.at(-1)?.text).toContain('Restarted with a fresh session')
@@ -281,9 +281,9 @@ test('an empty tool list retains channel controls, hides memory and cannot invok
     (req) => {
       expect(req.tools).toEqual(
         expect.arrayContaining([
-          'feishu_start_topic',
-          'feishu_forward_to_topic',
-          'feishu_list_topics',
+          'lark_start_topic',
+          'lark_forward_to_topic',
+          'lark_list_topics',
         ]),
       )
       expect(req.tools).not.toContain('memory')
@@ -303,7 +303,7 @@ test('an empty tool list retains channel controls, hides memory and cannot invok
     )
     expect(
       existsSync(
-        run.t.dataPath('channels/feishu-oc_alpha/workspace/forbidden.txt'),
+        run.t.dataPath('channels/lark-oc_alpha/workspace/forbidden.txt'),
       ),
     ).toBe(false)
     expect(existsSync(join(run.t.cwd, 'forbidden.txt'))).toBe(false)

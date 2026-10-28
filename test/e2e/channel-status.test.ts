@@ -6,8 +6,8 @@ import {
   fauxHang,
   fauxSummary,
 } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -26,7 +26,7 @@ function message(
   root = 'root',
   chat = 'oc_group',
 ) {
-  return feishuEvent({
+  return larkEvent({
     chat_id: chat,
     root_id: root,
     thread_id: `thread-${root}`,
@@ -40,7 +40,7 @@ async function setup(
   cwd?: string,
   generate: FauxStep[] = [],
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const model = createFauxModel({ responses, generate })
   const t = createTestVela({
     cwd,
@@ -59,7 +59,7 @@ async function setup(
       },
     },
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: ['oc_group', 'oc_other'],
         transport: fake.transport,
@@ -76,7 +76,7 @@ test.each([false, true])(
     const { fake, model, t } = await setup([fauxHang('working')])
     fake.deliver(message('original task'))
     await until(() => model.calls.length === 1)
-    const session = t.vela.session('feishu-oc_group-root')
+    const session = t.vela.session('lark-oc_group-root')
     const before = JSON.stringify(session.messages)
     fake.deliver(message('!status', mentioned))
     await until(() =>
@@ -121,7 +121,7 @@ test('topic/group ledger counts summaries once and survives process and generati
     first.fake.deliver(message(`question ${i}`))
     await until(() => first.fake.sent.length === i + 1)
   }
-  await first.t.vela.session('feishu-oc_group-root').compact()
+  await first.t.vela.session('lark-oc_group-root').compact()
   first.fake.deliver(message('second topic', true, 'second'))
   await until(() => first.fake.sent.length === 5)
   first.fake.deliver(message('other group', true, 'elsewhere', 'oc_other'))
@@ -140,7 +140,7 @@ test('topic/group ledger counts summaries once and survives process and generati
     .split('\n')
     .map((line) => JSON.parse(line))
   expect(rows).toHaveLength(7)
-  expect(rows.filter((r) => r.key === 'feishu-oc_group-root')).toHaveLength(5)
+  expect(rows.filter((r) => r.key === 'lark-oc_group-root')).toHaveLength(5)
   expect(rows[4].tokens).toEqual({
     inputTokens: 35,
     outputTokens: 5,
@@ -189,7 +189,7 @@ test('mixed known and unknown prices remain visible without pretending to be a c
   ])
   f.fake.deliver(message('priced request'))
   await until(() => f.fake.sent.length === 1)
-  f.t.vela.session('feishu-oc_group-root').setModel('test/unpriced')
+  f.t.vela.session('lark-oc_group-root').setModel('test/unpriced')
   f.fake.deliver(message('unpriced request', false))
   await until(() => f.fake.sent.length === 2)
   f.fake.deliver(message('!status', false))
@@ -204,7 +204,7 @@ test('mixed known and unknown prices remain visible without pretending to be a c
 })
 
 test('an unmentioned status in an unowned topic writes no session, directory or ledger', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   let loads = 0
   let writes = 0
   const t = createTestVela({
@@ -218,7 +218,7 @@ test('an unmentioned status in an unowned topic writes no session, directory or 
       },
     },
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: ['oc_group'],
         transport: fake.transport,
@@ -246,7 +246,7 @@ test('an unpriced summary does not turn a prior priced subtotal into a free summ
     f.fake.deliver(message(`question ${i}`))
     await until(() => f.fake.sent.length === i + 1)
   }
-  const session = f.t.vela.session('feishu-oc_group-root')
+  const session = f.t.vela.session('lark-oc_group-root')
   session.setModel('test/unpriced')
   await session.compact()
   f.fake.deliver(message('!status', false))

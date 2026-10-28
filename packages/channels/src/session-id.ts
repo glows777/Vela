@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 const PLAIN = /^[A-Za-z0-9_]+$/
 
 /**
- * Shared session id for a chat or topic, e.g. `feishu-oc_456`. Non-plain or long ids get a
+ * Shared session id for a chat or topic, e.g. `lark-oc_456`. Non-plain or long ids get a
  * hash suffix so different (channel, conversation, topic root) tuples cannot share history.
  */
 export const channelSessionId = (

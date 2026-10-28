@@ -8,10 +8,10 @@ const chatSchema = z
   })
   .strict()
 
-export type FeishuChat = z.infer<typeof chatSchema>
+export type LarkChat = z.infer<typeof chatSchema>
 
 /** Keep legacy strings/comma-separated environment config; reject malformed and duplicate entries. */
-export function parseChats(value: unknown): FeishuChat[] {
+export function parseChats(value: unknown): LarkChat[] {
   const input =
     value === undefined
       ? []
@@ -26,6 +26,6 @@ export function parseChats(value: unknown): FeishuChat[] {
     .parse(input)
     .map((chat) => (typeof chat === 'string' ? { id: chat } : chat))
   if (new Set(chats.map((chat) => chat.id)).size !== chats.length)
-    throw new Error('Duplicate Feishu chat id')
+    throw new Error('Duplicate Lark chat id')
   return chats
 }
