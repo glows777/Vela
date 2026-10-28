@@ -3,8 +3,8 @@ import type { ProviderDefinition, VelaLogger } from '@glows777/vela-core'
 import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
 import { wrapLanguageModel } from 'ai'
 import { z } from 'zod'
-import { DEFAULT_LIMITS } from '../../packages/core/dist/limits.js'
-import { describeModel } from '../../packages/core/dist/models/index.js'
+import { DEFAULT_LIMITS } from '../../packages/core/src/limits.ts'
+import { describeModel } from '../../packages/core/src/models/index.ts'
 import { createVela } from '../support/compat-vela.ts'
 import {
   captureConsole,

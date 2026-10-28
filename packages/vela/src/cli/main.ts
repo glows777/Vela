@@ -1,15 +1,25 @@
 #!/usr/bin/env node
+
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { ImageContent, VelaSession } from '@glows777/vela-core'
 import {
-  createVela as createCoreVela,
   memorySessionStorage,
+  migrateSessionV1,
+  type SessionEntry,
+  type SessionHeader,
   setDefaultToolModifiers,
 } from '@glows777/vela-core'
-import { inspectVela } from '@glows777/vela-core/diagnostics'
+import {
+  buildSessionPath,
+  inspectVela,
+  isSessionV1,
+  newSessionId,
+  renderSessionHtml,
+  resolveModel,
+} from '@glows777/vela-core/diagnostics'
 import {
   createMockModel,
   loadFauxScenario,
@@ -31,15 +41,6 @@ import { installationId } from './login.ts'
 import { runPrintMode } from './print-mode.ts'
 import { runRpcMode } from './rpc-mode.ts'
 import { runServe } from './serve.ts'
-import { renderSessionHtml } from './session-html.ts'
-import { newSessionId } from './session-options.ts'
-import {
-  buildSessionPath,
-  isSessionV1,
-  migrateSessionV1,
-  type SessionEntry,
-  type SessionHeader,
-} from './session-view.ts'
 import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
@@ -207,19 +208,13 @@ const chosenModel = args.listModels ? undefined : await chooseModel()
 let recorder: ReturnType<typeof recordModel> | undefined
 if (env.VELA_RECORD && !args.listModels) {
   try {
-    const resolver = createCoreVela({
-      model: chosenModel,
-      providers: config.providers,
-      credentials: config.credentials,
-      contextFiles: false,
-      skillDirs: [],
-      promptTemplateDirs: [],
-    })
-    try {
-      recorder = recordModel(resolver.model, { path: env.VELA_RECORD })
-    } finally {
-      await resolver.dispose()
-    }
+    recorder = recordModel(
+      resolveModel(chosenModel, {
+        providers: config.providers,
+        credentials: config.credentials,
+      }),
+      { path: env.VELA_RECORD },
+    )
   } catch (error) {
     console.error(`[record] ${cliErrorMessage(error)}`)
     process.exit(1)

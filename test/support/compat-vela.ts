@@ -1,5 +1,5 @@
-import { channelInternals } from '../../packages/channels/dist/vela.js'
-import { velaInternals as coreInternals } from '../../packages/core/dist/vela.js'
+import { channelInternals } from '../../packages/channels/src/vela.ts'
+import { velaInternals as coreInternals } from '../../packages/core/src/vela.ts'
 
 export { createVela, type Vela, type VelaOptions } from '@glows777/vela'
 

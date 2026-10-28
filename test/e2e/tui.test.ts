@@ -173,7 +173,7 @@ for (const phase of ['live', 'resumed'] as const) {
       },
     ]
     function catalog(
-      vela: import('../../packages/core/dist/extensions/types.js').ExtensionAPI,
+      vela: import('../../packages/core/src/extensions/types.ts').ExtensionAPI,
     ) {
       vela.registerTool({
         name: 'inspect',
@@ -820,7 +820,7 @@ test('/tree moves to an earlier message and puts it back in the editor; /fork an
 
 test('custom messages show as a labeled block only with display: true (like pi)', async () => {
   function notes(
-    vela: import('../../packages/core/dist/extensions/types.js').ExtensionAPI,
+    vela: import('../../packages/core/src/extensions/types.ts').ExtensionAPI,
   ) {
     vela.registerCommand('note', {
       handler: async (_args, ctx) => {

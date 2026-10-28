@@ -13,7 +13,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "allowJs": false,
-    "jsx": "preserve"
+    "jsx": "preserve",
+    "paths": {}
   },
   "include": ["packages/*/src"]
 }

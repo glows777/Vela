@@ -12,6 +12,18 @@ async function fixture(files: Record<string, string>) {
   const root = await mkdtemp(join(tmpdir(), 'vela-boundaries-'))
   dirs.push(root)
   const base: Record<string, string> = {
+    'tsconfig.json': JSON.stringify({
+      compilerOptions: {
+        paths: {
+          '@glows777/vela-core': ['./packages/core/src/index.ts'],
+          '@glows777/vela-core/extension-api': [
+            './packages/core/src/extension-api.ts',
+          ],
+          '@glows777/vela-channels': ['./packages/channels/src/index.ts'],
+          '@glows777/vela': ['./packages/vela/src/index.ts'],
+        },
+      },
+    }),
     'package.json': JSON.stringify({
       private: true,
       workspaces: ['packages/*'],
@@ -189,3 +201,74 @@ test('absolute private source imports are not package contracts', async () => {
     ).join('\n'),
   ).toMatch(/source escape/)
 })
+
+test('declared public development mappings resolve only each package export entry', async () => {
+  expect(
+    await errors({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          paths: {
+            '@glows777/vela-core': ['./packages/core/src/index.ts'],
+            '@glows777/vela-core/extension-api': [
+              './packages/core/src/extension-api.ts',
+            ],
+            '@glows777/vela-channels': ['./packages/channels/src/index.ts'],
+            '@glows777/vela': ['./packages/vela/src/index.ts'],
+          },
+        },
+      }),
+    }),
+  ).toEqual([])
+})
+
+test('a downward workspace import still requires a declared runtime dependency', async () => {
+  expect(
+    (
+      await errors({
+        'packages/vela/package.json': JSON.stringify({
+          name: '@glows777/vela',
+          version: '0.4.0',
+          exports: { '.': { import: './dist/index.js' } },
+          dependencies: {},
+        }),
+        'packages/vela/src/index.ts':
+          "export {core} from '@glows777/vela-core'",
+      })
+    ).join('\n'),
+  ).toMatch(/undeclared.*dependency|dependency.*undeclared/)
+})
+
+for (const [label, files] of [
+  [
+    'wrong public source target',
+    {
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          paths: { '@glows777/vela-core': ['./packages/core/src/vela.ts'] },
+        },
+      }),
+    },
+  ],
+  [
+    'build inheriting development mappings',
+    {
+      'tsconfig.build.json': JSON.stringify({
+        extends: './tsconfig.json',
+        compilerOptions: { module: 'NodeNext' },
+      }),
+    },
+  ],
+  [
+    'build private source mapping',
+    {
+      'packages/core/tsconfig.build.json': JSON.stringify({
+        compilerOptions: { paths: { '@private/*': ['src/*'] } },
+      }),
+    },
+  ],
+] as const)
+  test(`development mapping guard rejects ${label}`, async () => {
+    expect((await errors(files)).join('\n')).toMatch(
+      /source aliases|explicitly clear/,
+    )
+  })

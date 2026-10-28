@@ -1,11 +1,23 @@
 /** Revision-local paths: immutable flat snapshots and the workspace layout share one worker. */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import ts from 'typescript'
 export function runtimePaths(runtime: string) {
   const workspace = existsSync(join(runtime, 'packages/core/package.json'))
-  const path = (flat: string, current: string) => (workspace ? current : flat)
+  const source =
+    workspace &&
+    ts.readConfigFile(join(runtime, 'tsconfig.json'), ts.sys.readFile).config
+      ?.compilerOptions?.paths?.['@glows777/vela-core']?.[0] ===
+      './packages/core/src/index.ts'
+  const path = (flat: string, current: string) =>
+    !workspace
+      ? flat
+      : source
+        ? current.replace('/dist/', '/src/').replace(/\.js$/, '.ts')
+        : current
   return {
     workspace,
+    source,
     testing: path(
       'src/testing/test-vela.ts',
       'packages/vela/dist/testing/index.js',

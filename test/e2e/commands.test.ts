@@ -19,7 +19,7 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import { z } from 'zod'
-import { createCliDispatcher } from '../../packages/vela/dist/cli/dispatcher.js'
+import { createCliDispatcher } from '../../packages/vela/src/cli/dispatcher.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 import {
   captureConsole,

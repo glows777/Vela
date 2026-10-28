@@ -171,7 +171,7 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   let release!: () => void
   let entered = false
   const respond = (
-    request: import('../../packages/core/dist/testing/faux.js').FauxRequest,
+    request: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => {
     if (request.tools.includes('feishu_start_topic'))
       return request.toolResults.length

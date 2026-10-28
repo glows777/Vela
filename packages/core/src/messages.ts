@@ -48,6 +48,7 @@ export type ModelMessage =
   | (Omit<UserModelMessage, 'content'> & { content: UserContent })
   | ToolModelMessage
 
+/** @experimental Shared frontend contract. */
 export function isToolContent(value: unknown): value is ToolContent {
   return (
     Array.isArray(value) &&

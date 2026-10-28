@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { TokenTracker } from '../../../../core/dist/usage/tracker.js'
+import { TokenTracker } from '../../../../core/src/usage/tracker.ts'
 import { renderUsageView } from '../../../src/cli/context-view.ts'
 
 const usage = {

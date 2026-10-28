@@ -2,8 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { interpolate } from '../../../../core/dist/config/interpolate.js'
-import { projectDataDir } from '../../../../core/dist/config/paths.js'
+import { interpolate } from '../../../../core/src/config/interpolate.ts'
+import { projectDataDir } from '../../../../core/src/config/paths.ts'
 import {
   loadConfig,
   projectTrustRequired,

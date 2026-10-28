@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from '@glows777/vela-core'
-import { THINKING_LEVELS } from '../session-options.ts'
+import { THINKING_LEVELS } from '@glows777/vela-core/diagnostics'
 import type { CommandHandler } from './index.ts'
 
 /** `/model [provider/id]`, `/thinking [level]`: show or switch the session's model and thinking level (the picker UI lives in the TUI). */

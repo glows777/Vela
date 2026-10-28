@@ -5,7 +5,7 @@ import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { Credential } from '@glows777/vela-core'
 import { memoryCredentialStore } from '@glows777/vela-core'
 import { tempDir } from '../../../../../test/support/vela.ts'
-import { ModelRegistry } from '../../../../core/dist/models/index.js'
+import { ModelRegistry } from '../../../../core/src/models/index.ts'
 import { loadModels } from '../../../src/config/index.ts'
 
 const dirs: { cleanup(): void }[] = []

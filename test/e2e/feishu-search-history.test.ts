@@ -66,7 +66,7 @@ test('history search bounds pages, matches and characters and uses the logical g
   }
   const search = () => fauxToolCall('feishu_search_history', query)
   const answer = (
-    req: import('../../packages/core/dist/testing/faux.js').FauxRequest,
+    req: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
   const t = createTestVela({
     responses: [

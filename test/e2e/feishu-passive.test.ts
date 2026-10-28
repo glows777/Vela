@@ -11,7 +11,7 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import { type FeishuOptions, feishu } from '@glows777/vela-lark'
-import { messageTime } from '../../packages/lark/dist/history.js'
+import { messageTime } from '../../packages/lark/src/history.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

@@ -1,7 +1,7 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { projectDataDir } from '../../packages/core/dist/config/paths.js'
+import { projectDataDir } from '../../packages/core/src/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')

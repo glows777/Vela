@@ -122,7 +122,7 @@ test('conflicting routing names the session and both routes without changing its
 test('a real channel logs a conflicting route once without retrying or calling the model', async () => {
   const errors: string[] = []
   let deliver!: (
-    message: import('../../packages/channels/dist/types.js').IncomingMessage,
+    message: import('../../packages/channels/src/types.ts').IncomingMessage,
   ) => void | Promise<void>
   const model = createFauxModel({ responses: [] })
   const { vela, cwd } = setup({

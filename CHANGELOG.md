@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- Experimental frontend helpers in `@glows777/vela-core/diagnostics` share core session rendering, validation and trust rules with the CLI. Recording resolves models without constructing an extra Vela; exact public development mappings make focused tests and the watched CLI observe source edits immediately, while builds and packed consumers retain real artifact resolution.
+
 - Session routing options (`scope`, `channel`), read-only scope and tool-call session identity, `toolDecision`, explicit `save({ reportFailure })`, lifecycle callbacks, channel-only event publication and experimental diagnostic snapshots support core/channel separation. Existing package root and testing imports remain compatible.
 
 ### Changed

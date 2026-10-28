@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
 /** User-level directory: `VELA_DIR`, default `~/.vela` (like pi's `~/.pi/agent` / `PI_CODING_AGENT_DIR`). */
+/** @experimental Shared frontend contract. */
 export function defaultAgentDir(
   env: Record<string, string | undefined> = {},
 ): string {

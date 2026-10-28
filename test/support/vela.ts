@@ -3,8 +3,8 @@ import {
   type TestVelaOptions as CoreTestVelaOptions,
   createTestVela as createCoreTestVela,
 } from '@glows777/vela/testing'
-import type { CommandContext } from '../../packages/vela/dist/cli/commands/index.js'
-import { createCliDispatcher } from '../../packages/vela/dist/cli/dispatcher.js'
+import type { CommandContext } from '../../packages/vela/src/cli/commands/index.ts'
+import { createCliDispatcher } from '../../packages/vela/src/cli/dispatcher.ts'
 import { velaInternals } from './compat-vela.ts'
 
 export {

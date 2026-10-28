@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { projectTrustRequired } from '@glows777/vela-core/diagnostics'
 import { tempDir } from '@glows777/vela-core/testing'
-import { projectTrustRequired } from '../src/cli/config-helpers.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {

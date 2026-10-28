@@ -5,6 +5,7 @@
  */
 
 /** Whether an entry adjusts the default tool set (`+name` adds, `-name` removes) instead of naming a tool. */
+/** @experimental Shared frontend contract. */
 export function isToolModifier(entry: string): boolean {
   return entry.startsWith('+') || entry.startsWith('-')
 }
@@ -13,6 +14,7 @@ export function isToolModifier(entry: string): boolean {
  * Why a `--tools` / `tools` list is invalid, or undefined when it is. Like pi, a list of
  * `+name` / `-name` entries takes exact names and cannot be mixed with plain names.
  */
+/** @experimental Shared frontend contract. */
 export function getToolListError(
   entries: readonly string[],
 ): string | undefined {

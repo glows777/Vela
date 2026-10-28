@@ -237,8 +237,8 @@ test('Feishu file prepared by expired Steer is reused when the gateway processes
   const f = await setup()
   f.resources.set('file', [Buffer.from('once')])
   const event = dm('file', { file_key: 'file', file_name: 'once.txt' })
-  const { FeishuChannel } = await import('../../packages/lark/dist/channel.js')
-  const { silentLogger } = await import('../../packages/core/dist/logger.js')
+  const { FeishuChannel } = await import('../../packages/lark/src/channel.ts')
+  const { silentLogger } = await import('../../packages/core/src/logger.ts')
   const channel = new FeishuChannel({
     appId: '',
     appSecret: '',

@@ -21,6 +21,22 @@ test('eval retains flat historical paths and selects the new workspace layout', 
       'packages/channels/dist/testing.js',
     )
     expect(runtimePaths(root).feishu).toBe('packages/lark/dist/index.js')
+    await Bun.write(
+      join(root, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          paths: { '@glows777/vela-core': ['./packages/core/src/index.ts'] },
+        },
+      }),
+    )
+    expect(runtimePaths(root).source).toBe(true)
+    expect(runtimePaths(root).testing).toBe(
+      'packages/vela/src/testing/index.ts',
+    )
+    expect(runtimePaths(root).models).toBe('packages/core/src/config/models.ts')
+    expect(runtimePaths(root).channelTesting).toBe(
+      'packages/channels/src/testing.ts',
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }

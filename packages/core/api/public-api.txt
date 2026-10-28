@@ -1462,9 +1462,39 @@
 # @glows777/vela-core/diagnostics
 
   @experimental
+  function assertSessionId: (id: string) => void
+  @experimental
+  function branchSummaryMessageText: (summary: string) => string
+  @experimental
+  function buildSessionPath: (entries: SessionEntry[], leafId?: string | null, byId?: Map<string, SessionEntry>) => SessionEntry[]
+  @experimental
+  function contextEntries: (path: SessionEntry[]) => { compaction?: CompactionEntry; entries: SessionEntry[]; }
+  @experimental
+  function defaultAgentDir: (env?: Record<string, string | undefined>) => string
+  @experimental
+  function extensionName: (path: string) => string
+  @experimental
+  function getToolListError: (entries: readonly string[]) => string | undefined
+  @experimental
   function inspectSession: (vela: Vela, session: VelaSession, options?: { previewExtensions?: boolean; }) => Promise<SessionInspection>
   @experimental
   function inspectVela: (vela: Vela) => VelaInspection
+  @experimental
+  function isSessionV1: (lines: unknown[]) => boolean
+  @experimental
+  function isToolContent: (value: unknown) => value is ToolContent
+  @experimental
+  function isToolModifier: (entry: string) => boolean
+  @experimental
+  function newSessionId: (now?: Date) => string
+  @experimental
+  function projectTrustRequired: (cwd: string, agentDir?: string, homeDir?: string, extensionConfigs?: readonly ExtensionConfigDefinition[]) => boolean
+  @experimental
+  function renderSessionHtml: (input: SessionHtmlInput) => string
+  @experimental
+  function resolveModel: (ref: string | LanguageModel | undefined, options?: { providers?: Record<string, ProviderDefinition>; credentials?: CredentialStore; }) => LanguageModel
+  @experimental
+  function sessionContentText: (content: ModelMessage["content"]) => string
   @experimental
   interface SessionInspection
     extensionSections: Readonly<Record<string, string>>
@@ -1473,6 +1503,10 @@
     systemPromptChars: number
     toolDescriptionChars: number
     windowTokens: number
+  @experimental
+  function summaryMessageText: (summary: string) => string
+  @experimental
+  const THINKING_LEVELS: readonly ThinkingLevel[]
   @experimental
   interface VelaInspection
     contextFiles: readonly Readonly<ContextFile>[]

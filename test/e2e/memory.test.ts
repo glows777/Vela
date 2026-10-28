@@ -6,7 +6,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import { MemoryStore } from '../../packages/core/dist/extensions/memory/store.js'
+import { MemoryStore } from '../../packages/core/src/extensions/memory/store.ts'
 import {
   captureConsole,
   cleanupTestVelas,

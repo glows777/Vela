@@ -101,6 +101,44 @@ export interface VelaConfig {
   extensionConfig: Record<string, Record<string, unknown>>
 }
 
+const TRUSTED_PROJECT_RESOURCES = [
+  'settings.json',
+  'extensions',
+  'skills',
+  'prompts',
+  'APPEND_SYSTEM.md',
+]
+
+/**
+ * The project has executable or behavior-changing config (`.vela/settings.json`, `.vela/extensions/`,
+ * skills in `.vela/skills/`, `.skills/` or `.agents/skills/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md`) that
+ * needs the user's trust before loading (like pi's trust-requiring project resources). Not counted when the
+ * project dir is the user-level dir (running from the home directory). AGENTS.md / CLAUDE.md don't count (like pi).
+ */
+/** @experimental Shared frontend contract. */
+export function projectTrustRequired(
+  cwd: string,
+  agentDir?: string,
+  homeDir: string = homedir(),
+  extensionConfigs: readonly ExtensionConfigDefinition[] = [],
+): boolean {
+  const projectDir = join(resolve(cwd), '.vela')
+  if (agentDir && resolve(agentDir) === projectDir) return false
+  const userAgentsSkills = join(resolve(homeDir), '.agents', 'skills')
+  return (
+    [
+      ...TRUSTED_PROJECT_RESOURCES,
+      ...extensionConfigs.flatMap(
+        (definition) => definition.projectResources ?? [],
+      ),
+    ].some((name) => existsSync(join(projectDir, name))) ||
+    existsSync(join(resolve(cwd), '.skills')) ||
+    ancestorAgentsSkillDirs(cwd).some(
+      (dir) => dir !== userAgentsSkills && existsSync(dir),
+    )
+  )
+}
+
 const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
 
 /**
@@ -360,7 +398,8 @@ function indexFile(dir: string): string | undefined {
 }
 
 /** Extension name: the file name without extension, or the directory name for index files. Sets the tool prefix and config section. */
-function extensionName(path: string): string {
+/** @experimental Shared frontend contract. */
+export function extensionName(path: string): string {
   const file = basename(path, extname(path))
   return file === 'index' ? basename(dirname(path)) : file
 }

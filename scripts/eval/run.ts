@@ -191,7 +191,7 @@ async function main() {
         'install',
         '--frozen-lockfile',
       ])
-      if (runtimePaths(runtime).workspace)
+      if (runtimePaths(runtime).workspace && !runtimePaths(runtime).source)
         await checked(runtime, [
           process.execPath,
           '--no-env-file',
@@ -199,7 +199,10 @@ async function main() {
           'build',
         ])
     }
-    if (runtimePaths(config.repo).workspace)
+    if (
+      runtimePaths(config.repo).workspace &&
+      !runtimePaths(config.repo).source
+    )
       await checked(config.repo, [
         process.execPath,
         '--no-env-file',

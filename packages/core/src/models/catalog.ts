@@ -10,6 +10,7 @@ export type ThinkingLevel =
   | 'xhigh'
   | 'max'
 
+/** @experimental Shared thinking-level choices for frontends. */
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [
   'off',
   'minimal',

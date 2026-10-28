@@ -28,6 +28,7 @@ export interface ForkOptions {
 /** Session ids become file names: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/
 
+/** @experimental Shared frontend contract. */
 export function assertSessionId(id: string): void {
   if (!SESSION_ID.test(id))
     throw new Error(

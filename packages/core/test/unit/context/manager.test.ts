@@ -209,7 +209,7 @@ test('summary chosen directly when a profitable micro still leaves >=150k', asyn
 
 test('summary cannot execute tools and rejected summary leaves original history', async () => {
   let executions = 0
-  const { ToolRegistry } = await import('../../../dist/tools/registry.js')
+  const { ToolRegistry } = await import('../../../src/tools/registry.ts')
   const z = (await import('zod')).default
   const registry = new ToolRegistry()
   registry.register({

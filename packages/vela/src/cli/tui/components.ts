@@ -11,8 +11,8 @@ import {
   visibleWidth,
 } from '@earendil-works/pi-tui'
 import type { ModelMessage, VelaEvent } from '@glows777/vela-core'
+import { isToolContent } from '@glows777/vela-core/diagnostics'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
-import { isToolContent } from '../tool-content.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
 

@@ -199,11 +199,13 @@ export type NewEntry<T> = T extends SessionEntry
 export type SessionFileEntry = SessionHeader | SessionEntry
 
 /** Text of the user message that stands for a summary in the model context. */
+/** @experimental Shared frontend contract. */
 export function summaryMessageText(summary: string): string {
   return `[Summary of the earlier conversation]\n${summary}`
 }
 
 /** Text of the user message that stands for a branch summary in the model context. */
+/** @experimental Shared frontend contract. */
 export function branchSummaryMessageText(summary: string): string {
   return `[Summary of the conversation branch you left]\n${summary}`
 }
@@ -271,6 +273,7 @@ function parseTime(value: string): number {
  * The entries from the root to `leafId` (like pi's `buildSessionPath`). An undefined leaf means the last
  * entry; null means before the first entry (an empty path).
  */
+/** @experimental Shared frontend contract. */
 export function buildSessionPath(
   entries: SessionEntry[],
   leafId?: string | null,
@@ -297,7 +300,8 @@ export function buildSessionPath(
  * walks): with a compaction, the branch's latest one and the entries it keeps plus everything after it;
  * otherwise the whole branch. The TUI renders a resumed session from these.
  */
-function contextEntries(path: SessionEntry[]): {
+/** @experimental Shared frontend contract. */
+export function contextEntries(path: SessionEntry[]): {
   compaction?: CompactionEntry
   entries: SessionEntry[]
 } {
@@ -497,6 +501,7 @@ export function copyBranch(path: SessionEntry[]): SessionEntry[] {
 }
 
 /** Text of a message's content (text parts only). */
+/** @experimental Shared frontend contract. */
 export function messageText(content: ModelMessage['content']): string {
   return typeof content === 'string'
     ? content
@@ -573,6 +578,7 @@ interface CheckpointV1 {
  * (message lines without entry ids). Anything else without a header (say a version-2 file whose header
  * line is damaged) is not converted, so it is never rewritten with less than it holds.
  */
+/** @experimental Shared frontend contract. */
 export function isSessionV1(lines: unknown[]): boolean {
   const first = lines[0] as { type?: unknown; id?: unknown } | undefined
   return (

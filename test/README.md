@@ -22,7 +22,7 @@ packages/core/src/testing/  core faux, recording, replay and demo support (`@glo
   demo-model.ts          keyword-driven demo model (VELA_MODEL=mock, for trying the CLI by hand; tests don't use it)
 ```
 
-The umbrella `packages/vela/src/testing/` composes the channel-aware compatibility fixture with optional RAG. `packages/channels/src/testing.ts` provides the channel drain helper. Package unit tests may import their own implementation; cross-package integration tests use public built exports. `test/support/compat-vela.ts` is privileged test-only inspection of built internals and is never published. Run `bun run build` before direct `bun test` commands. No compiler source aliases bypass export maps.
+The umbrella `packages/vela/src/testing/` composes the channel-aware compatibility fixture with optional RAG. `packages/channels/src/testing.ts` provides the channel drain helper. Package unit tests may import their own implementation; cross-package integration tests use public source-mapped exports. `test/support/compat-vela.ts` is privileged test-only inspection of source internals and is never published. Development maps exactly the declared public entries to source, so bare focused tests see edits immediately. Package builds explicitly clear these mappings and consumer checks verify real built exports. Private inspection is test-only source code, never a package export.
 
 `bun run smoke:consumer` builds and packs all six packages with the release packer, then installs each as the only direct Vela dependency in fresh Node and Bun projects outside the workspace. Each typechecks and runs through public exports; core/channels dependency trees reject the four optional heavy integrations. Local registry GETs serve tarballs only: this never publishes packages.
 
@@ -256,6 +256,6 @@ The public `@glows777/vela/testing` fixture stays channel-aware with optional RA
 
 ## Workspace and historical eval contracts
 
-`bun run quality` reuses Knip (including strict production workspace dependency declarations) and Madge, then checks sizes and `scripts/check-boundaries.ts`. The boundary checker includes type-only edges, public export maps, forbidden heavy core/channel entry graphs and light built-in use of the public extension API. Architecture fixtures reject hoisted-dependency assumptions, private imports, source aliases and computed internal access.
+`bun run quality` reuses Knip (including strict production workspace dependency declarations) and Madge, then checks sizes and `scripts/check-boundaries.ts`. The boundary checker includes type-only edges, public export maps, forbidden heavy core/channel entry graphs and light built-in use of the public extension API. Architecture fixtures reject hoisted-dependency assumptions, private imports, unapproved source aliases, missing internal dependency declarations and computed internal access.
 
 `bun test scripts/eval` exercises 177 offline grader/worker regressions with injected faux models. To check the unchanged flat layout too, install the selected historical checkout with its frozen lockfile and run `VELA_EVAL_TEST_RUNTIME=/absolute/historical/checkout bun test scripts/eval`. `scripts/eval/layout.ts` selects revision-local paths; baseline commits, prompts, grader rules and contamination checks stay unchanged. No provider request is needed for these tests.

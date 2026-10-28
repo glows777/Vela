@@ -6,66 +6,33 @@
   interface ApiKeyCredential
     key: string
     type: "api_key"
-  type AssistantMessageEvent = {
-      type: 'text_start';
-      contentIndex: number;
-      } | {
-      type: 'text_delta';
-      contentIndex: number;
-      delta: string;
-      } | {
-      type: 'text_end';
-      contentIndex: number;
-      content: string;
-      } | {
-      type: 'thinking_start';
-      contentIndex: number;
-      } | {
-      type: 'thinking_delta';
-      contentIndex: number;
-      delta: string;
-      } | {
-      type: 'thinking_end';
-      contentIndex: number;
-      content: string;
-      } | {
-      type: 'toolcall_start';
-      contentIndex: number;
-      } | {
-      type: 'toolcall_delta';
-      contentIndex: number;
-      delta: string;
-      } | {
-      type: 'toolcall_end';
-      contentIndex: number;
-      toolCall: ToolCallPart;
-      }
-  type AuthEvent = {
-      type: 'info' | 'progress';
-      message: string;
-      } | {
-      type: 'auth_url';
-      url: string;
-      instructions?: string;
-      }
+  type AssistantMessageEvent = | { type: 'text_start'; contentIndex: number }
+      | { type: 'text_delta'; contentIndex: number; delta: string }
+      | { type: 'text_end'; contentIndex: number; content: string }
+      | { type: 'thinking_start'; contentIndex: number }
+      | { type: 'thinking_delta'; contentIndex: number; delta: string }
+      | { type: 'thinking_end'; contentIndex: number; content: string }
+      | { type: 'toolcall_start'; contentIndex: number }
+      | { type: 'toolcall_delta'; contentIndex: number; delta: string }
+      | { type: 'toolcall_end'; contentIndex: number; toolCall: ToolCallPart }
+  type AuthEvent = | { type: 'info' | 'progress'; message: string }
+      | { type: 'auth_url'; url: string; instructions?: string }
   interface AuthInteraction
     notify: (event: AuthEvent) => void
     prompt: (prompt: AuthPrompt) => Promise<string>
     signal: AbortSignal
-  type AuthPrompt = {
-      signal?: AbortSignal;
-      } & ({
-      type: 'text' | 'secret' | 'manual_code';
-      message: string;
-      placeholder?: string;
-      } | {
-      type: 'select';
-      message: string;
-      options: readonly {
-      id: string;
-      label: string;
-      }[];
-      })
+  type AuthPrompt = { signal?: AbortSignal } & (
+      | {
+      type: 'text' | 'secret' | 'manual_code'
+      message: string
+      placeholder?: string
+      }
+      | {
+      type: 'select'
+      message: string
+      options: readonly { id: string; label: string }[]
+      }
+      )
   interface BashExecutionEntry
     cancelled: boolean
     command: string
@@ -184,9 +151,10 @@
     display: boolean
   function customMessageMissing: (messages: readonly ModelMessage[], markers: readonly string[]) => boolean
   function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: Schema<unknown>; }) => ToolDefinition
-  type EmbeddingFn = ((texts: string[], signal?: AbortSignal) => Promise<number[][]>) & {
-      readonly id?: string;
-      }
+  type EmbeddingFn = ((
+      texts: string[],
+      signal?: AbortSignal,
+      ) => Promise<number[][]>) & { readonly id?: string }
   interface ExecuteToolOptions
     onUpdate?: ((partialResult: unknown) => void) | undefined
     signal?: AbortSignal | undefined
@@ -227,16 +195,17 @@
     session: VelaSession
     signal: AbortSignal | undefined
     ui: ExtensionUI
-  type ExtensionEntry = {
-      name: string;
-      builtin: true;
-      } | {
-      name: string;
-      path: string;
-      }
+  type ExtensionEntry = | { name: string; builtin: true }
+      | { name: string; path: string }
   type ExtensionEventName = keyof ExtensionEvents
   type ExtensionEvents = InterceptEvents & NotifyEvents
-  type ExtensionHandler<K extends ExtensionEventName> = (event: ExtensionEvents[K][0], ctx: ExtensionContext) => ExtensionEvents[K][1] | undefined | Promise<ExtensionEvents[K][1] | undefined>
+  type ExtensionHandler<K extends ExtensionEventName> = (
+      event: ExtensionEvents[K][0],
+      ctx: ExtensionContext,
+      ) =>
+      | ExtensionEvents[K][1]
+      | undefined
+      | Promise<ExtensionEvents[K][1] | undefined>
   interface ExtensionUI
     confirm: (title: string, message: string) => Promise<boolean>
     input: (title: string, placeholder?: string) => Promise<string | undefined>
@@ -293,7 +262,10 @@
     start: (onMessage: (event: FeishuMessageEvent) => void, onAction: (event: FeishuCardAction) => FeishuCardResponse) => Promise<void>
     startTopic: (messageId: string, title: string) => Promise<FeishuSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
-  type FetchFunction = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  type FetchFunction = (
+      input: string | URL | Request,
+      init?: RequestInit,
+      ) => Promise<Response>
   function fileCredentialStore: (path: string) => CredentialStore
   function fileSessionStorage: (dir: string, logger?: VelaLogger) => SessionStorage
   interface ForkOptions
@@ -327,16 +299,14 @@
     streamingBehavior?: "steer" | "followUp" | undefined
     text: string
     type: "input"
-  type InputEventResult = {
-      action: 'continue';
-      } | {
-      action: 'transform';
-      text: string;
-      images?: ImageContent[];
-      } | {
-      action: 'handled';
-      }
-  type InputSource = 'interactive' | 'rpc' | 'extension' | 'channel' | 'sdk'
+  type InputEventResult = | { action: 'continue' }
+      | { action: 'transform'; text: string; images?: ImageContent[] }
+      | { action: 'handled' }
+  type InputSource = | 'interactive'
+      | 'rpc'
+      | 'extension'
+      | 'channel'
+      | 'sdk'
   @experimental
   function inspectSession: (vela: Vela, session: VelaSession, options?: { previewExtensions?: boolean; }) => Promise<SessionInspection>
   @experimental
@@ -429,9 +399,9 @@
     reasoning?: boolean | undefined
     ref: string
     thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>> | undefined
-  type ModelMessage = Exclude<AIModelMessage, UserModelMessage | AIToolModelMessage> | (Omit<UserModelMessage, 'content'> & {
-      content: UserContent;
-      }) | ToolModelMessage
+  type ModelMessage = | Exclude<AIModelMessage, UserModelMessage | AIToolModelMessage>
+      | (Omit<UserModelMessage, 'content'> & { content: UserContent })
+      | ToolModelMessage
   interface ModelPricing
     cacheRead: number
     cacheWrite: number
@@ -486,7 +456,9 @@
     signal?: AbortSignal | undefined
     source?: InputSource | undefined
     streamingBehavior?: "steer" | "followUp" | undefined
-  type ProviderApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+  type ProviderApi = | 'openai-completions'
+      | 'openai-responses'
+      | 'anthropic-messages'
   interface ProviderConfig
     api?: ProviderApi | undefined
     apiKey?: string | undefined
@@ -535,7 +507,17 @@
     focus?: string | undefined
     label?: string | undefined
     summary?: { summary: string; } | undefined
-  type SessionEntry = SessionMessageEntry | ModelChangeEntry | ThinkingLevelChangeEntry | SessionInfoEntry | CompactionEntry | ContextEditEntry | BranchSummaryEntry | LabelEntry | CustomEntry | CustomMessageEntry | BashExecutionEntry
+  type SessionEntry = | SessionMessageEntry
+      | ModelChangeEntry
+      | ThinkingLevelChangeEntry
+      | SessionInfoEntry
+      | CompactionEntry
+      | ContextEditEntry
+      | BranchSummaryEntry
+      | LabelEntry
+      | CustomEntry
+      | CustomMessageEntry
+      | BashExecutionEntry
   interface SessionEntryBase
     id: string
     parentId: string | null
@@ -583,14 +565,9 @@
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
     ui?: SessionUI | undefined
-  type SessionPersistence = {
-      readonly type: 'file';
-      readonly path: string;
-      } | {
-      readonly type: 'memory';
-      } | {
-      readonly type: 'unknown';
-      }
+  type SessionPersistence = | { readonly type: 'file'; readonly path: string }
+      | { readonly type: 'memory' }
+      | { readonly type: 'unknown' }
   interface SessionScope
     readonly dataDir: string
     readonly id: string
@@ -620,7 +597,8 @@
     children: SessionTreeNode[]
     entry: SessionEntry
     label?: string | undefined
-  type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> & Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
+  type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
+      Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
   interface SessionUsage
     contextWindow: number
     lastRecord?: StepRecord | undefined
@@ -649,7 +627,13 @@
   type StopReason = 'stop' | 'length' | 'toolUse' | 'aborted' | 'error'
   function summarizeSession: (id: string, entries: SessionFileEntry[]) => SessionSummary
   type TextContent = TextPart
-  type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  type ThinkingLevel = | 'off'
+      | 'minimal'
+      | 'low'
+      | 'medium'
+      | 'high'
+      | 'xhigh'
+      | 'max'
   interface ThinkingLevelChangeEntry
     id: string
     parentId: string | null
@@ -707,9 +691,16 @@
     readonly execution: ExecutionMetadata
     readonly text: string
     readonly value: unknown
-  type ToolExposure = 'direct' | 'model-only' | 'codemode' | 'deferred' | 'hidden'
+  type ToolExposure = | 'direct'
+      | 'model-only'
+      | 'codemode'
+      | 'deferred'
+      | 'hidden'
   type ToolModelMessage = Omit<AIToolModelMessage, 'content'> & {
-      content: (Exclude<AIToolModelMessage['content'][number], AIToolResultPart> | ToolResultPart)[];
+      content: (
+      | Exclude<AIToolModelMessage['content'][number], AIToolResultPart>
+      | ToolResultPart
+      )[]
       }
   interface ToolNamespace
     description?: string | undefined
@@ -727,7 +718,7 @@
     content?: ToolContent | undefined
     output?: string | undefined
   type ToolResultPart = Omit<AIToolResultPart, 'output'> & {
-      output: ToolResultOutput;
+      output: ToolResultOutput
       }
   interface TreePreparation
     commonAncestorId: string | null
@@ -747,7 +738,8 @@
     outputTokens: number
     savedCost?: number | undefined
     steps: number
-  type UserContent = string | (Exclude<AIUserContent, string>[number] | ImageContent)[]
+  type UserContent = | string
+      | (Exclude<AIUserContent, string>[number] | ImageContent)[]
   interface Vela
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
@@ -783,159 +775,134 @@
     providers: Record<string, ProviderDefinition>
     settings: VelaSettings
     skillDirs: string[]
-  type VelaEvent = {
-      type: 'agent_start';
-      input: string;
-      } | {
-      type: 'turn_start';
-      turn: number;
+  type VelaEvent = | { type: 'agent_start'; input: string }
+      | { type: 'turn_start'; turn: number }
+      | {
+      type: 'message_start'
+      message: ModelMessage
+      custom?: CustomMessageInfo
       }
       | {
-      type: 'message_start';
-      message: ModelMessage;
-      custom?: CustomMessageInfo;
+      type: 'message_update'
+      message: AssistantModelMessage
+      assistantMessageEvent: AssistantMessageEvent
       }
       | {
-      type: 'message_update';
-      message: AssistantModelMessage;
-      assistantMessageEvent: AssistantMessageEvent;
+      type: 'message_end'
+      message: ModelMessage
+      stopReason?: StopReason
+      errorMessage?: string
+      custom?: CustomMessageInfo
       }
       | {
-      type: 'message_end';
-      message: ModelMessage;
-      stopReason?: StopReason;
-      errorMessage?: string;
-      custom?: CustomMessageInfo;
+      type: 'tool_execution_start'
+      toolCallId: string
+      toolName: string
+      args: unknown
+      parentToolCallId?: string
       }
       | {
-      type: 'tool_execution_start';
-      toolCallId: string;
-      toolName: string;
-      args: unknown;
-      parentToolCallId?: string;
+      type: 'tool_execution_update'
+      toolCallId: string
+      toolName: string
+      args: unknown
+      partialResult: unknown
+      parentToolCallId?: string
       }
       | {
-      type: 'tool_execution_update';
-      toolCallId: string;
-      toolName: string;
-      args: unknown;
-      partialResult: unknown;
-      parentToolCallId?: string;
+      type: 'tool_execution_end'
+      toolCallId: string
+      toolName: string
+      result: unknown
+      isError: boolean
+      details?: unknown
+      durationMs?: number
+      parentToolCallId?: string
       }
       | {
-      type: 'tool_execution_end';
-      toolCallId: string;
-      toolName: string;
-      result: unknown;
-      isError: boolean;
-      details?: unknown;
-      durationMs?: number;
-      parentToolCallId?: string;
-      } | {
-      type: 'loop_detected';
-      level: 'warning' | 'critical';
-      detector: string;
-      message: string;
+      type: 'loop_detected'
+      level: 'warning' | 'critical'
+      detector: string
+      message: string
       }
       | {
-      type: 'auto_retry_start';
-      attempt: number;
-      maxAttempts: number;
-      delayMs: number;
-      errorMessage: string;
+      type: 'auto_retry_start'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      errorMessage: string
       }
       | {
-      type: 'auto_retry_end';
-      success: boolean;
-      attempt: number;
-      finalError?: string;
-      } | {
-      type: 'usage';
-      modelId: string;
-      usage: StepUsage;
-      record?: StepRecord;
+      type: 'auto_retry_end'
+      success: boolean
+      attempt: number
+      finalError?: string
       }
       | {
-      type: 'turn_end';
-      turn: number;
-      message: AssistantModelMessage;
-      toolResults: ToolResultPart[];
+      type: 'usage'
+      modelId: string
+      usage: StepUsage
+      record?: StepRecord
       }
       | {
-      type: 'agent_end';
-      messages: ModelMessage[];
-      reason: 'done' | 'loop' | 'aborted' | 'error';
-      error?: unknown;
+      type: 'turn_end'
+      turn: number
+      message: AssistantModelMessage
+      toolResults: ToolResultPart[]
       }
       | {
-      type: 'queue_update';
-      steering: string[];
-      followUp: string[];
+      type: 'agent_end'
+      messages: ModelMessage[]
+      reason: 'done' | 'loop' | 'aborted' | 'error'
+      error?: unknown
+      }
+      | { type: 'queue_update'; steering: string[]; followUp: string[] }
+      | { type: 'agent_settled' }
+      | { type: 'bash_execution_update'; id?: string; delta: string }
+      | {
+      type: 'context_prepare'
+      action: 'micro' | 'summary-required'
+      before: number
+      after?: number
+      saved?: number
+      calls?: number
+      }
+      | { type: 'compaction_start'; reason: CompactionReason }
+      | {
+      type: 'compaction_end'
+      reason: CompactionReason
+      result?: CompactionResult
+      aborted: boolean
+      willRetry: boolean
+      errorMessage?: string
+      }
+      | { type: 'session_save_failed'; error: unknown }
+      | { type: 'audit'; toolName: string; path: string }
+      | { type: 'notify'; message: string; level: 'info' | 'warning' | 'error' }
+      | {
+      type: 'channel_message'
+      channel: string
+      senderId: string
+      senderName: string
+      text: string
       }
       | {
-      type: 'agent_settled';
+      type: 'channel_reply'
+      channel: string
+      recipientId: string
+      text: string
       }
       | {
-      type: 'bash_execution_update';
-      id?: string;
-      delta: string;
-      }
-      | {
-      type: 'context_prepare';
-      action: 'micro' | 'summary-required';
-      before: number;
-      after?: number;
-      saved?: number;
-      calls?: number;
-      }
-      | {
-      type: 'compaction_start';
-      reason: CompactionReason;
-      }
-      | {
-      type: 'compaction_end';
-      reason: CompactionReason;
-      result?: CompactionResult;
-      aborted: boolean;
-      willRetry: boolean;
-      errorMessage?: string;
-      }
-      | {
-      type: 'session_save_failed';
-      error: unknown;
-      }
-      | {
-      type: 'audit';
-      toolName: string;
-      path: string;
-      }
-      | {
-      type: 'notify';
-      message: string;
-      level: 'info' | 'warning' | 'error';
-      }
-      | {
-      type: 'channel_message';
-      channel: string;
-      senderId: string;
-      senderName: string;
-      text: string;
-      }
-      | {
-      type: 'channel_reply';
-      channel: string;
-      recipientId: string;
-      text: string;
-      }
-      | {
-      type: 'channel_error';
-      channel: string;
-      senderId: string;
-      error: unknown;
-      aborted: boolean;
+      type: 'channel_error'
+      channel: string
+      senderId: string
+      error: unknown
+      aborted: boolean
       }
   type VelaEventListener = (event: VelaEvent) => void
-  type VelaExtension = (api: ChannelExtensionAPI) => void | Promise<void>
+  type VelaExtension = (
+      api: ChannelExtensionAPI,
+      ) => void | Promise<void>
   @experimental
   interface VelaInspection
     contextFiles: readonly Readonly<ContextFile>[]
@@ -1035,7 +1002,10 @@
     subscribe: (listener: VelaEventListener) => () => void
     toolDecision: (name: string) => PermissionDecision
     waitForIdle: () => Promise<void>
-  type VelaSessionEventListener = (event: VelaEvent, sessionId: string) => void
+  type VelaSessionEventListener = (
+      event: VelaEvent,
+      sessionId: string,
+      ) => void
   interface VelaSettings
     autoCompaction?: boolean | undefined
     dataDir?: string | undefined
@@ -1113,7 +1083,9 @@
     generate?: FauxResponse[] | undefined
     inputs?: string[] | undefined
     responses: FauxResponse[]
-  type FauxStep = FauxResponse | FauxResponse[] | ((req: FauxRequest) => FauxResponse | FauxResponse[])
+  type FauxStep = | FauxResponse
+      | FauxResponse[]
+      | ((req: FauxRequest) => FauxResponse | FauxResponse[])
   const fauxStreamError: (message: string, partialText?: string) => FauxResponse
   const fauxSummary: (pick?: { goal?: number; }) => (req: FauxRequest) => FauxResponse
   const fauxText: (text: string, options?: Omit<FauxResponse, "text">) => FauxResponse

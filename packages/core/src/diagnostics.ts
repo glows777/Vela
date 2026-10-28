@@ -89,3 +89,21 @@ export async function inspectSession(
     }),
   }
 }
+
+export { defaultAgentDir } from './config/paths.ts'
+export { extensionName, projectTrustRequired } from './config/settings.ts'
+export { isToolContent } from './messages.ts'
+export { THINKING_LEVELS } from './models/catalog.ts'
+export { resolveModel } from './models/index.ts'
+export {
+  branchSummaryMessageText,
+  buildSessionPath,
+  contextEntries,
+  isSessionV1,
+  messageText as sessionContentText,
+  summaryMessageText,
+} from './session/entries.ts'
+export { renderSessionHtml } from './session/export-html.ts'
+export { assertSessionId } from './session/options.ts'
+export { newSessionId } from './session/session-id.ts'
+export { getToolListError, isToolModifier } from './tools/tool-selection.ts'

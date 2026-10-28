@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { projectDataDir } from '../../packages/core/dist/config/paths.js'
+import { projectDataDir } from '../../packages/core/src/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
@@ -1235,7 +1235,7 @@ test.concurrent('--model picks a provider registered by an extension; the choice
   dirs.push(home)
   await Bun.write(
     join(home.path, 'extensions/local.ts'),
-    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'packages/core/dist/testing/faux.js'))}
+    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'packages/core/src/testing/faux.ts'))}
 export default (vela) => vela.registerProvider('local', {
   models: [{ id: 'm', contextWindow: 32768 }],
   createModel: (id) => createFauxModel({ modelId: id, responses: [(req) => fauxText('from ' + id + ' ' + (req.reasoning ?? '-'))] }),
@@ -1473,4 +1473,32 @@ test.concurrent('recording resolves a model without reading untrusted project pr
   } finally {
     chmodSync(prompts, 0o700)
   }
+})
+
+test.concurrent('recording a faux model does not require a temporary Vela directory', async () => {
+  const dir = tempDir('vela-record-no-temp-')
+  dirs.push(dir)
+  const blocked = join(dir.path, 'not-a-temp-directory')
+  await Bun.write(blocked, 'This deployment has no usable temporary directory.')
+  const common = {
+    cwd: dir.path,
+    model: 'faux:scenario.json',
+    files: {
+      'scenario.json': JSON.stringify({
+        responses: [{ text: 'recorded offline' }],
+      }),
+    },
+    env: { TMPDIR: blocked },
+  }
+  const ordinary = await cli(['-p', 'hello'], common)
+  expect(ordinary.code).toBe(0)
+  expect(ordinary.stdout.trim()).toBe('recorded offline')
+  const recorded = await cli(['-p', 'hello'], {
+    ...common,
+    env: { ...common.env, VELA_RECORD: join(dir.path, 'recorded.json') },
+  })
+  expect(recorded.stderr).not.toContain('[record]')
+  expect(recorded.code).toBe(0)
+  expect(recorded.stdout.trim()).toBe('recorded offline')
+  expect(await Bun.file(join(dir.path, 'recorded.json')).exists()).toBe(true)
 })

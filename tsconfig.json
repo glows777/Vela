@@ -18,7 +18,23 @@
     "noImplicitOverride": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    "noPropertyAccessFromIndexSignature": false,
+    "paths": {
+      "@glows777/vela-core": ["./packages/core/src/index.ts"],
+      "@glows777/vela-core/testing": ["./packages/core/src/testing/index.ts"],
+      "@glows777/vela-core/extension-api": [
+        "./packages/core/src/extension-api.ts"
+      ],
+      "@glows777/vela-core/images": ["./packages/core/src/images/index.ts"],
+      "@glows777/vela-core/diagnostics": ["./packages/core/src/diagnostics.ts"],
+      "@glows777/vela-channels": ["./packages/channels/src/index.ts"],
+      "@glows777/vela-channels/testing": ["./packages/channels/src/testing.ts"],
+      "@glows777/vela-mcp": ["./packages/mcp/src/index.ts"],
+      "@glows777/vela-rag": ["./packages/rag/src/index.ts"],
+      "@glows777/vela-lark": ["./packages/lark/src/index.ts"],
+      "@glows777/vela": ["./packages/vela/src/index.ts"],
+      "@glows777/vela/testing": ["./packages/vela/src/testing/index.ts"]
+    }
   },
   "exclude": [
     "**/dist",

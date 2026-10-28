@@ -10,7 +10,7 @@ import {
 import {
   createRequestSnapshot,
   estimateRequestTokens,
-} from '../../packages/core/dist/context/request.js'
+} from '../../packages/core/src/context/request.ts'
 import {
   cleanupTestVelas,
   createTestVela,

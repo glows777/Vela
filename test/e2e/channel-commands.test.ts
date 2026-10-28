@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fauxHang, fauxText } from '@glows777/vela-core/testing'
 import { feishu } from '@glows777/vela-lark'
-import { ChannelDirectory } from '../../packages/channels/dist/directory.js'
+import { ChannelDirectory } from '../../packages/channels/src/directory.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

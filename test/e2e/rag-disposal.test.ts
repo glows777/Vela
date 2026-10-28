@@ -3,7 +3,7 @@ import { readdirSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { createFauxEmbedder, fauxToolCall } from '@glows777/vela-core/testing'
 import type { EmbeddingFn } from '@glows777/vela-rag'
-import { SqliteVectorStore } from '../../packages/rag/dist/sqlite-store.js'
+import { SqliteVectorStore } from '../../packages/rag/src/sqlite-store.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

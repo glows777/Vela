@@ -119,21 +119,56 @@ export async function checkBoundaries(root: string): Promise<string[]> {
       manifest,
     })
   }
+  const publicPaths: Record<string, string[]> = {}
+  for (const pkg of packages)
+    for (const [subpath, entry] of Object.entries(pkg.exports)) {
+      const target = entry.import ?? entry.types
+      if (target)
+        publicPaths[pkg.name + (subpath === '.' ? '' : subpath.slice(1))] = [
+          './' +
+            relative(
+              root,
+              resolve(
+                pkg.dir,
+                target
+                  .replace('./dist/', 'src/')
+                  .replace(/\.d\.ts$/, '.ts')
+                  .replace(/\.js$/, '.ts'),
+              ),
+            ).replaceAll('\\', '/'),
+        ]
+    }
+  const canonical = (paths: Record<string, unknown> = {}) =>
+    JSON.stringify(Object.entries(paths).sort(([a], [b]) => a.localeCompare(b)))
+  const development =
+    ts.readConfigFile(join(root, 'tsconfig.json'), ts.sys.readFile).config
+      ?.compilerOptions ?? {}
+  if (
+    development.baseUrl ||
+    canonical(development.paths) !== canonical(publicPaths)
+  )
+    errors.push(
+      'tsconfig.json: source aliases must equal the declared public export entries',
+    )
   for (const file of [
-    join(root, 'tsconfig.json'),
+    join(root, 'tsconfig.build.json'),
     ...packages.flatMap((p) => [
       join(p.dir, 'tsconfig.json'),
       join(p.dir, 'tsconfig.build.json'),
     ]),
   ]) {
-    const config = ts.readConfigFile(file, ts.sys.readFile)
-    if (
-      config.config?.compilerOptions?.paths ||
-      config.config?.compilerOptions?.baseUrl
-    )
+    const config = ts.readConfigFile(file, ts.sys.readFile).config
+      ?.compilerOptions
+    if (config?.baseUrl || Object.keys(config?.paths ?? {}).length)
       errors.push(
         `${relative(root, file)}: source aliases may not bypass package exports`,
       )
+    if (file === join(root, 'tsconfig.build.json') && config) {
+      if (!config.paths || Object.keys(config.paths).length)
+        errors.push(
+          'tsconfig.build.json: builds must explicitly clear development paths',
+        )
+    }
   }
   const byName = new Map(packages.map((p) => [p.name, p]))
   const sourceMap = new Map<
@@ -258,6 +293,13 @@ export async function checkBoundaries(root: string): Promise<string[]> {
           destination = sourceTarget(target, subpath)
           if (!destination)
             report(file, edge.at, `private or missing export ${spec}`)
+          if (
+            target !== pkg &&
+            !['dependencies', 'peerDependencies', 'optionalDependencies'].some(
+              (field) => name in ((pkg.manifest[field] ?? {}) as object),
+            )
+          )
+            report(file, edge.at, `undeclared runtime dependency ${name}`)
           if (target !== pkg && !(allowed[pkg.key] ?? []).includes(target.key))
             report(
               file,
@@ -323,6 +365,8 @@ export async function checkBoundaries(root: string): Promise<string[]> {
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     allowImportingTsExtensions: true,
     skipLibCheck: true,
+    baseUrl: root,
+    paths: publicPaths,
   })
   const checker = program.getTypeChecker()
   for (const [file, record] of sourceMap) {

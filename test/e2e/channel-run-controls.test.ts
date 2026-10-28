@@ -3,7 +3,7 @@ import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import type { FeishuHistoryMessage } from '@glows777/vela-lark'
 import { feishu } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { messageTime } from '../../packages/lark/dist/history.js'
+import { messageTime } from '../../packages/lark/src/history.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

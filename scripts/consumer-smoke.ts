@@ -184,6 +184,12 @@ function insertCoreSubpaths(source: string) {
 import {defineJsonSchemaTool} from '@glows777/vela-core/extension-api'
 import {imageMimeType,imageMetadata,isBinaryFile} from '@glows777/vela-core/images'
 import {inspectVela,inspectSession} from '@glows777/vela-core/diagnostics'
+import * as frontend from '@glows777/vela-core/diagnostics'
+const functions=[frontend.renderSessionHtml,frontend.buildSessionPath,frontend.contextEntries,frontend.summaryMessageText,frontend.branchSummaryMessageText,frontend.sessionContentText,frontend.isSessionV1,frontend.newSessionId,frontend.assertSessionId,frontend.isToolModifier,frontend.getToolListError,frontend.isToolContent,frontend.defaultAgentDir,frontend.extensionName,frontend.projectTrustRequired,frontend.resolveModel]
+if(functions.some(value=>typeof value!=='function')||frontend.THINKING_LEVELS.length!==7)throw new Error('missing experimental frontend API')
+frontend.assertSessionId(frontend.newSessionId())
+if(frontend.sessionContentText('frontend')!=='frontend'||!frontend.isToolContent([{type:'text',text:'x'}]))throw new Error('frontend contract failed')
+try{frontend.resolveModel(undefined);throw new Error('missing no-model error')}catch(error){if(!(error instanceof Error)||!error.message.startsWith('No model available. Sign in with /login'))throw error}
 if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||typeof imageMetadata!=='function'||typeof isBinaryFile!=='function')throw new Error('missing public core subpath')
 ` +
     source.replace(
@@ -330,6 +336,67 @@ async function cli(app: string, runtime: string, version: string) {
   const file = join(app, 'node_modules/@glows777/vela/dist/cli/main.js')
   if (!((await Bun.file(file).stat()).mode & 0o111))
     throw new Error('CLI bin lost executable mode')
+  const reply = join(app, 'serve-reply.txt')
+  const stopped = join(app, 'serve-stopped.txt')
+  const extension = join(app, 'serve-channel.mjs')
+  const scenario = join(app, 'serve-faux.json')
+  await writeFile(
+    scenario,
+    JSON.stringify({ responses: [{ text: 'serve received' }] }),
+  )
+  await writeFile(
+    extension,
+    `import {appendFileSync} from 'node:fs';export default api=>{let receive,connection;api.registerChannel({name:'probe',description:'packed serve',start(){connection=setInterval(()=>{},1000);setTimeout(()=>receive({channelId:'room',senderId:'u',senderName:'Visitor',text:'ping'}),0)},stop(){clearInterval(connection);appendFileSync(${JSON.stringify(stopped)},'stop\\n')},onMessage(next){receive=next},async send(m){appendFileSync(${JSON.stringify(reply)},m.text+'\\n')}})}`,
+  )
+  const proc = Bun.spawn(
+    [
+      runtime,
+      './node_modules/.bin/vela',
+      'serve',
+      '--no-extensions',
+      '-e',
+      extension,
+    ],
+    {
+      cwd: app,
+      env: { ...env, VELA_MODEL: 'faux:' + scenario },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  let stderr = ''
+  const reading = (async () => {
+    for await (const chunk of proc.stderr)
+      stderr += new TextDecoder().decode(chunk)
+  })()
+  const stdout = new Response(proc.stdout).text()
+  try {
+    const deadline = Date.now() + 20000
+    while (
+      !(stderr.includes('channel_reply') && (await Bun.file(reply).exists()))
+    ) {
+      if (Date.now() > deadline || proc.exitCode !== null)
+        throw new Error('packed serve failed: ' + stderr)
+      await new Promise((done) => setTimeout(done, 20))
+    }
+    proc.kill('SIGTERM')
+    const code = await proc.exited
+    await reading
+    if (
+      code !== 0 ||
+      (await stdout) !== '' ||
+      (await readFile(stopped, 'utf8')) !== 'stop\n' ||
+      (await readFile(reply, 'utf8')).trim() !== 'serve received'
+    )
+      throw new Error('packed serve lifecycle failed: ' + stderr)
+    console.log('packaged serve signal/disposal ok')
+  } finally {
+    if (proc.exitCode === null) proc.kill('SIGKILL')
+    await proc.exited
+    await reading
+    await stdout
+  }
 }
 try {
   const only = process.argv.includes('--only')

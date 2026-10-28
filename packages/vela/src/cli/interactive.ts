@@ -27,8 +27,14 @@ import type {
   VelaEvent,
   VelaSession,
 } from '@glows777/vela-core'
-import { resolveBinary } from '@glows777/vela-core'
-import { inspectSession, inspectVela } from '@glows777/vela-core/diagnostics'
+import { resolveBinary, type SessionEntry } from '@glows777/vela-core'
+import {
+  branchSummaryMessageText,
+  contextEntries,
+  inspectSession,
+  inspectVela,
+  summaryMessageText,
+} from '@glows777/vela-core/diagnostics'
 import { imageMimeType } from '@glows777/vela-core/images'
 import type { Vela } from '../vela.ts'
 import {
@@ -37,12 +43,6 @@ import {
   readClipboardText,
 } from './clipboard.ts'
 import { createCliDispatcher } from './dispatcher.ts'
-import {
-  branchSummaryMessageText,
-  contextEntries,
-  type SessionEntry,
-  summaryMessageText,
-} from './session-view.ts'
 import { formatContextFileList } from './status-display.ts'
 import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
 import { CLI_COMMANDS, HOTKEYS, TUI_COMMANDS } from './tui/commands.ts'

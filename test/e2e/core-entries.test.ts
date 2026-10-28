@@ -115,7 +115,7 @@ test('the public publisher cannot forge agent events; ordinary inspection does n
 
 test('JSON Schema construction requires the SDK wrapper and leaves ordinary schema registration strict', async () => {
   const { defineJsonSchemaTool } = await import(
-    '../../packages/core/dist/tools/json-schema.js'
+    '../../packages/core/src/tools/json-schema.ts'
   )
   expect(() =>
     defineJsonSchemaTool({

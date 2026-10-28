@@ -133,6 +133,7 @@ summary{cursor:pointer;color:var(--muted)}
  * A self-contained HTML page for one branch of a session: no scripts and no external resources, every piece
  * of session content escaped (it may hold anything a tool returned).
  */
+/** @experimental Shared frontend contract. */
 export function renderSessionHtml(input: SessionHtmlInput): string {
   const title = input.name ?? input.id
   const model = typeof input.model === 'string' ? ` · ${input.model}` : ''

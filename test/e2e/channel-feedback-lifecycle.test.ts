@@ -9,7 +9,7 @@ import type {
 } from '@glows777/vela-channels'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { z } from 'zod'
-import { FeishuChannel } from '../../packages/lark/dist/channel.js'
+import { FeishuChannel } from '../../packages/lark/src/channel.ts'
 import { fakeFeishu } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -86,7 +86,7 @@ test('handoff transfers input feedback and starts destination presentation witho
   let release!: () => void
   let entered = false
   const respond = (
-    req: import('../../packages/core/dist/testing/faux.js').FauxRequest,
+    req: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => {
     const source = req.lastUserText === 'source'
     return req.toolResults.length

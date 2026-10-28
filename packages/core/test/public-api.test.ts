@@ -13,8 +13,25 @@ test('core public entries match the API snapshot', async () => {
     'inspectSession',
     'VelaInspection',
     'SessionInspection',
+    'renderSessionHtml',
+    'buildSessionPath',
+    'contextEntries',
+    'summaryMessageText',
+    'branchSummaryMessageText',
+    'sessionContentText',
+    'isSessionV1',
+    'newSessionId',
+    'assertSessionId',
+    'THINKING_LEVELS',
+    'isToolModifier',
+    'getToolListError',
+    'isToolContent',
+    'defaultAgentDir',
+    'extensionName',
+    'projectTrustRequired',
+    'resolveModel',
   ])
     expect(report).toMatch(
-      new RegExp(`@experimental\\n  (?:function|interface) ${name}\\b`),
+      new RegExp(`@experimental\\n  (?:function|interface|const) ${name}\\b`),
     )
 }, 60000)

@@ -5,8 +5,8 @@ import {
   type LoadConfigOptions,
   loadConfig as loadCoreConfig,
 } from '@glows777/vela-core'
+import { projectTrustRequired as coreTrust } from '@glows777/vela-core/diagnostics'
 import { type McpServersFile, mcpConfig } from '@glows777/vela-mcp'
-import { projectTrustRequired as coreTrust } from '../cli/config-helpers.ts'
 
 export type {
   ExtensionEntry,
@@ -16,7 +16,7 @@ export type {
   VelaSettings,
 } from '@glows777/vela-core'
 export { importExtension, loadModels } from '@glows777/vela-core'
-export { defaultAgentDir, extensionName } from '../cli/config-helpers.ts'
+export { defaultAgentDir, extensionName } from '@glows777/vela-core/diagnostics'
 export { savedTrust, saveTrust } from '../cli/config-trust.ts'
 
 export interface VelaConfig extends CoreConfig {

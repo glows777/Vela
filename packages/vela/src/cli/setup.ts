@@ -5,6 +5,12 @@ import { fuzzyFilter } from '@earendil-works/pi-tui'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import type { ModelInfo, ThinkingLevel } from '@glows777/vela-core'
 import { memory, permissionGate, web, webConfig } from '@glows777/vela-core'
+import {
+  assertSessionId,
+  getToolListError,
+  isToolModifier,
+  THINKING_LEVELS,
+} from '@glows777/vela-core/diagnostics'
 import { feishu, larkConfig } from '@glows777/vela-lark'
 import { mcp } from '@glows777/vela-mcp'
 import { rag, ragConfig } from '@glows777/vela-rag'
@@ -17,13 +23,7 @@ import {
   saveTrust,
   type VelaConfig,
 } from '../config/index.ts'
-import { assertSessionId, THINKING_LEVELS } from './session-options.ts'
-import {
-  applyToolModifiers,
-  getToolListError,
-  isToolModifier,
-  type ToolLoadout,
-} from './tool-selection.ts'
+import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
 type Env = Record<string, string | undefined>
 
