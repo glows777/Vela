@@ -9,8 +9,8 @@ import type {
 } from '@glows777/vela-channels'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { z } from 'zod'
-import { FeishuChannel } from '../../packages/lark/src/channel.ts'
-import { fakeFeishu } from '../support/feishu.ts'
+import { LarkChannel } from '../../packages/lark/src/channel.ts'
+import { fakeLark } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -184,14 +184,14 @@ test('a channel without startRun still processes and replies to its input', asyn
   ])
 })
 
-test('Feishu starts feedback from normalized topic and reply data without a raw receive event', async () => {
-  const fake = fakeFeishu()
+test('Lark starts feedback from normalized topic and reply data without a raw receive event', async () => {
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxText('recovered answer')],
     extensions: [
       function normalized(api) {
         api.registerChannel(
-          new FeishuChannel({
+          new LarkChannel({
             appId: 'bot',
             appSecret: '',
             owners: ['alice'],
@@ -208,7 +208,7 @@ test('Feishu starts feedback from normalized topic and reply data without a raw 
   await t.vela.startChannels()
   const reconstructed: IncomingMessage = JSON.parse(JSON.stringify(message))
   expect(reconstructed.raw).toBeUndefined()
-  await t.internals.gateway.handleIncoming('feishu', reconstructed)
+  await t.internals.gateway.handleIncoming('lark', reconstructed)
   expect(
     fake.reactions.map(({ messageId, emoji }) => ({ messageId, emoji })),
   ).toEqual([

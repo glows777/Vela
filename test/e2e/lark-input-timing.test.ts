@@ -1,14 +1,14 @@
 import { afterEach, expect, test } from 'bun:test'
 import { silentLogger } from '@glows777/vela-core'
 import { fauxText } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
 test('input diagnostics separate transport, acknowledgement, preparation and model input without message text', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const logs: string[] = []
   const reaction = Promise.withResolvers<void>()
   const history = Promise.withResolvers<void>()
@@ -38,7 +38,7 @@ test('input diagnostics separate transport, acknowledgement, preparation and mod
     allowPendingResponses: true,
     logger: { ...silentLogger, debug: (line) => logs.push(line) },
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -59,7 +59,7 @@ test('input diagnostics separate transport, acknowledgement, preparation and mod
     await t.vela.ready()
     await t.vela.startChannels()
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'timing-message',
         root_id: 'root',
         thread_id: 'thread',

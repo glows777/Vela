@@ -1,21 +1,21 @@
 # Built-in extensions
 
-Vela ships six extensions: `memory`, `rag`, `web`, `feishu`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
+Vela ships six extensions: `memory`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)); they are just bundled with the package.
 
 | Extension | Adds |
 |---|---|
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
 | `web` | `web_fetch`, and `web_search` when a search API key is set |
-| `feishu` | The Feishu bot channel (see [Channels](channels.md)) |
+| `lark` | The Lark bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
 | `permission-gate` | Confirms a few dangerous `bash` commands; off by default |
 
 ## Loading
 
-**CLI.** Five load by default, before any discovered or `-e` extensions; `permission-gate` stays off until you enable it. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `feishu` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** Five load by default, before any discovered or `-e` extensions; `permission-gate` stays off until you enable it. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
-To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:feishu"]`. To enable `permission-gate`, add `+builtin:permission-gate` the same way, or load it for one run with `-e builtin:permission-gate`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
+To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. To enable `permission-gate`, add `+builtin:permission-gate` the same way, or load it for one run with `-e builtin:permission-gate`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
@@ -163,21 +163,21 @@ Enabled channel chats can call both tools. Deny either one with session `permiss
 
 **SDK.** `web({ tavilyKey, serperKey })`; both are optional.
 
-## feishu
+## lark
 
-Connects a Feishu (Lark) bot to Vela over Feishu's long connection. Each enabled chat has one shared session. All members are trusted with bash, files, memory and extension tools.
+Connects a Lark (Lark) bot to Vela over Lark's long connection. Each enabled chat has one shared session. All members are trusted with bash, files, memory and extension tools.
 
 | Option | Config key | Description |
 |---|---|---|
-| `appId` | `extensionConfig.feishu.appId` | Feishu app id |
-| `appSecret` | `extensionConfig.feishu.appSecret` | Feishu app secret |
-| `owners` | `extensionConfig.feishu.owners` | `open_id`s whose direct chats are always enabled; array or comma-separated string |
-| `chats` | `extensionConfig.feishu.chats` | Enabled chat_ids; array or comma-separated string. All members get full access |
-| `transport` | | SDK only: the connection to Feishu (`FeishuTransport`); default Feishu's long connection. Tests pass a fake |
+| `appId` | `extensionConfig.lark.appId` | Lark app id |
+| `appSecret` | `extensionConfig.lark.appSecret` | Lark app secret |
+| `owners` | `extensionConfig.lark.owners` | `open_id`s whose direct chats are always enabled; array or comma-separated string |
+| `chats` | `extensionConfig.lark.chats` | Enabled chat_ids; array or comma-separated string. All members get full access |
+| `transport` | | SDK only: the connection to Lark (`LarkTransport`); default Lark's long connection. Tests pass a fake |
 
-It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#feishu).
+It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#lark).
 
-**SDK.** `feishu({ appId, appSecret, owners, chats })`.
+**SDK.** `lark({ appId, appSecret, owners, chats })`.
 
 ## permission-gate
 

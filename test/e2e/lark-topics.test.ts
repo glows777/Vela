@@ -3,8 +3,8 @@ import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
 import { fauxHang, fauxText } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -17,13 +17,13 @@ async function until(condition: () => boolean) {
   }
 }
 
-test('Feishu mentions in two topics run concurrently with separate transcripts', async () => {
-  const fake = fakeFeishu()
+test('Lark mentions in two topics run concurrently with separate transcripts', async () => {
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxHang('working A'), fauxHang('working B')],
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -33,12 +33,12 @@ test('Feishu mentions in two topics run concurrently with separate transcripts',
   })
   await t.vela.ready()
   await t.vela.startChannels()
-  const first = feishuEvent({
+  const first = larkEvent({
     message_id: 'trigger_a',
     content: '{"text":"task alpha"}',
   })
   Object.assign(first.message, { root_id: 'root_a', thread_id: 'thread_a' })
-  const second = feishuEvent({
+  const second = larkEvent({
     message_id: 'trigger_b',
     content: '{"text":"task beta"}',
   })
@@ -52,7 +52,7 @@ test('Feishu mentions in two topics run concurrently with separate transcripts',
     expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain('task alpha')
     const sessions = t.vela
       .sessions()
-      .filter((session) => session.channel === 'feishu')
+      .filter((session) => session.channel === 'lark')
     expect(sessions).toHaveLength(2)
     expect(sessions.every((session) => session.isRunning)).toBe(true)
   } finally {
@@ -60,8 +60,8 @@ test('Feishu mentions in two topics run concurrently with separate transcripts',
   }
 })
 
-test('with readUntagged off, top-level Feishu attachments are dropped before preparation or content logging', async () => {
-  const fake = fakeFeishu()
+test('with readUntagged off, top-level Lark attachments are dropped before preparation or content logging', async () => {
+  const fake = fakeLark()
   const logs: string[] = []
   const t = createTestVela({
     responses: [],
@@ -71,7 +71,7 @@ test('with readUntagged off, top-level Feishu attachments are dropped before pre
       warn: (line) => logs.push(line),
     },
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: [{ id: 'oc_group', readUntagged: false }],
@@ -82,7 +82,7 @@ test('with readUntagged off, top-level Feishu attachments are dropped before pre
   await t.vela.ready()
   await t.vela.startChannels()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       mentions: [],
       message_type: 'file',
       content: '{"file_key":"private-key","file_name":"private-name"}',
@@ -94,7 +94,7 @@ test('with readUntagged off, top-level Feishu attachments are dropped before pre
   expect(fake.resourceCalls).toEqual([])
   expect(t.model.calls).toEqual([])
   expect(
-    t.vela.sessions().filter((session) => session.channel === 'feishu'),
+    t.vela.sessions().filter((session) => session.channel === 'lark'),
   ).toEqual([])
   expect(logs.join('\n')).not.toContain('private-')
 })
@@ -102,11 +102,11 @@ test('with readUntagged off, top-level Feishu attachments are dropped before pre
 test.each([false, true])(
   'a running topic reply steers without rereading history or Queue/Steer cards (mentioned=%s)',
   async (mentioned) => {
-    const fake = fakeFeishu()
+    const fake = fakeLark()
     const t = createTestVela({
       responses: [fauxHang('working')],
       extensions: [
-        feishu({
+        lark({
           appId: 'bot',
           owners: ['ou_alice'],
           chats: ['oc_group'],
@@ -118,7 +118,7 @@ test.each([false, true])(
     await t.vela.startChannels()
     try {
       fake.deliver(
-        feishuEvent({
+        larkEvent({
           root_id: 'root',
           thread_id: 'thread',
           content: '{"text":"original task"}',
@@ -127,7 +127,7 @@ test.each([false, true])(
       await until(() => t.model.calls.length === 1)
       fake.topicHistoryCalls.length = 0
       fake.deliver(
-        feishuEvent(
+        larkEvent(
           {
             root_id: 'root',
             thread_id: 'thread',
@@ -158,7 +158,7 @@ test.each([false, true])(
 )
 
 test('a topic mention reads every history page by thread ID including earlier bot answers', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   fake.topicHistory.push(
     Array.from({ length: 50 }, (_, index) =>
       historyMessage(`old_${index}`, 'ou_alice', `fact ${index}`),
@@ -174,7 +174,7 @@ test('a topic mention reads every history page by thread ID including earlier bo
   const t = createTestVela({
     responses: [fauxText('done')],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -185,7 +185,7 @@ test('a topic mention reads every history page by thread ID including earlier bo
   await t.vela.ready()
   await t.vela.startChannels()
   fake.deliver(
-    feishuEvent(
+    larkEvent(
       {
         message_id: 'trigger',
         root_id: 'root',
@@ -209,12 +209,12 @@ test('a topic mention reads every history page by thread ID including earlier bo
 })
 
 test('topic history permission failure is visible and does not run with partial context', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   fake.failHistory()
   const t = createTestVela({
     responses: [],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -224,7 +224,7 @@ test('topic history permission failure is visible and does not run with partial 
   })
   await t.vela.ready()
   await t.vela.startChannels()
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 1)
   expect(fake.sent[0]!.text).toContain('history permission denied')
   expect(fake.sent[0]!.text).toContain('im:message.group_msg')
@@ -232,11 +232,11 @@ test('topic history permission failure is visible and does not run with partial 
 })
 
 test('a topic answer does not advance the top-level group history boundary', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxText('topic done'), fauxText('group done')],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -246,18 +246,18 @@ test('a topic answer does not advance the top-level group history boundary', asy
   })
   await t.vela.ready()
   await t.vela.startChannels()
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 1)
   fake.history.push(
     historyMessage('discussion', 'ou_bob', 'top-level context', '1000'),
   )
-  fake.deliver(feishuEvent({ content: '{"text":"summarize the discussion"}' }))
+  fake.deliver(larkEvent({ content: '{"text":"summarize the discussion"}' }))
   await until(() => fake.sent.length === 2)
   expect(t.model.calls[1]?.lastUserText).toContain('top-level context')
 })
 
 test('unowned untagged topics serialize admission without preparation, saves or empty files', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const logs: string[] = []
   let storage: ReturnType<typeof fileSessionStorage>
   let release!: () => void
@@ -293,7 +293,7 @@ test('unowned untagged topics serialize admission without preparation, saves or 
       },
     },
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -313,8 +313,8 @@ test('unowned untagged topics serialize admission without preparation, saves or 
     content: '{"file_key":"private-key","file_name":"private-name"}',
   }
   try {
-    fake.deliver(feishuEvent(input))
-    fake.deliver(feishuEvent(input, 'ou_bob'))
+    fake.deliver(larkEvent(input))
+    fake.deliver(larkEvent(input, 'ou_bob'))
     await until(() => loads === 1)
     expect(fake.nameCalls).toEqual([])
     expect(fake.topicHistoryCalls).toEqual([])
@@ -327,7 +327,7 @@ test('unowned untagged topics serialize admission without preparation, saves or 
   expect(maximumLoads).toBe(1)
   expect(saves).toBe(0)
   expect(existsSync(directory)).toBe(false)
-  expect(existsSync(join(t.vela.dataDir, 'channels', 'feishu-oc_group'))).toBe(
+  expect(existsSync(join(t.vela.dataDir, 'channels', 'lark-oc_group'))).toBe(
     false,
   )
   expect(fake.nameCalls).toEqual([])
@@ -338,11 +338,11 @@ test('unowned untagged topics serialize admission without preparation, saves or 
 })
 
 test('untagged replies resume a persisted topic after restart and idle replies start the next run', async () => {
-  const firstFake = fakeFeishu()
+  const firstFake = fakeLark()
   const first = createTestVela({
     responses: [fauxText('remembered')],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -353,7 +353,7 @@ test('untagged replies resume a persisted topic after restart and idle replies s
   await first.vela.ready()
   await first.vela.startChannels()
   firstFake.deliver(
-    feishuEvent({
+    larkEvent({
       root_id: 'root',
       thread_id: 'thread',
       content: '{"text":"remember cobalt"}',
@@ -361,12 +361,12 @@ test('untagged replies resume a persisted topic after restart and idle replies s
   )
   await until(() => firstFake.sent.length === 1)
   await first.cleanup({ keepDir: true })
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const second = createTestVela({
     cwd: first.cwd,
     responses: [fauxText('cobalt'), fauxText('next answer')],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -378,7 +378,7 @@ test('untagged replies resume a persisted topic after restart and idle replies s
     await second.vela.ready()
     await second.vela.startChannels()
     fake.deliver(
-      feishuEvent(
+      larkEvent(
         {
           mentions: [],
           root_id: 'root',
@@ -393,7 +393,7 @@ test('untagged replies resume a persisted topic after restart and idle replies s
       'remember cobalt',
     )
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         mentions: [],
         root_id: 'root',
         thread_id: 'thread',
@@ -410,12 +410,12 @@ test('untagged replies resume a persisted topic after restart and idle replies s
 })
 
 test('topic Stop affects only its run, expires, and preserves context for the next message', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxHang('A'), fauxHang('B'), fauxText('continued')],
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -427,7 +427,7 @@ test('topic Stop affects only its run, expires, and preserves context for the ne
   await t.vela.startChannels()
   try {
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         root_id: 'root_a',
         thread_id: 'thread_a',
         content: '{"text":"task alpha"}',
@@ -435,7 +435,7 @@ test('topic Stop affects only its run, expires, and preserves context for the ne
     )
     await until(() => t.model.calls.length === 1)
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         root_id: 'root_b',
         thread_id: 'thread_b',
         content: '{"text":"task beta"}',
@@ -452,7 +452,7 @@ test('topic Stop affects only its run, expires, and preserves context for the ne
     ).toHaveLength(1)
     expect(fake.click(0, 'stop')).toMatchObject({ toast: { type: 'info' } })
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         mentions: [],
         root_id: 'root_a',
         thread_id: 'thread_a',
@@ -472,14 +472,14 @@ test('topic Stop affects only its run, expires, and preserves context for the ne
 })
 
 test('a failed topic Stop-card send reports its cause without starting uncontrolled work', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   fake.transport.sendCard = async () => {
     throw new Error('card permission denied')
   }
   const t = createTestVela({
     responses: [],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -489,18 +489,18 @@ test('a failed topic Stop-card send reports its cause without starting uncontrol
   })
   await t.vela.ready()
   await t.vela.startChannels()
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => t.eventsOf('channel_error').length === 1)
   expect(fake.sent[0]?.text).toContain('card permission denied')
   expect(t.model.calls).toEqual([])
 })
 
 test('an explicit mention in an owned topic uses stored context without reinjecting platform history', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxText('earlier answer'), fauxText('next answer')],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -511,7 +511,7 @@ test('an explicit mention in an owned topic uses stored context without reinject
   await t.vela.ready()
   await t.vela.startChannels()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       root_id: 'root',
       thread_id: 'thread',
       content: '{"text":"first question"}',
@@ -520,7 +520,7 @@ test('an explicit mention in an owned topic uses stored context without reinject
   await until(() => fake.sent.length === 1)
   fake.topicHistoryCalls.length = 0
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       root_id: 'root',
       thread_id: 'thread',
       content: '{"text":"follow-up mention"}',
@@ -533,7 +533,7 @@ test('an explicit mention in an owned topic uses stored context without reinject
 })
 
 test('first topic entry excludes later history replies which arrive through their own events', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   fake.topicHistory.push([
     historyMessage('earlier', 'ou_alice', 'earlier context', '1000'),
     historyMessage('peer', 'ou_bob', 'same millisecond context', '2000'),
@@ -542,7 +542,7 @@ test('first topic entry excludes later history replies which arrive through thei
   const t = createTestVela({
     responses: [fauxText('first answer'), fauxText('later answer')],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -553,7 +553,7 @@ test('first topic entry excludes later history replies which arrive through thei
   await t.vela.ready()
   await t.vela.startChannels()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'trigger',
       root_id: 'root',
       thread_id: 'thread',
@@ -565,7 +565,7 @@ test('first topic entry excludes later history replies which arrive through thei
   expect(t.model.calls[0]?.lastUserText).not.toContain('later instruction')
   expect(t.model.calls[0]?.lastUserText).toContain('same millisecond context')
   fake.deliver(
-    feishuEvent(
+    larkEvent(
       {
         mentions: [],
         message_id: 'later',

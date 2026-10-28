@@ -1,12 +1,12 @@
 import { extname } from 'node:path'
-import type { FeishuMessageEvent } from './transport.ts'
+import type { LarkMessageEvent } from './transport.ts'
 
 /**
  * Text and attachment placeholders, with `@` mentions removed; undefined for unsupported
  * types. Malformed content counts as empty.
  */
 export function messageText(
-  message: FeishuMessageEvent['message'],
+  message: LarkMessageEvent['message'],
 ): string | undefined {
   if (!['text', 'post', 'image', 'file'].includes(message.message_type))
     return undefined
@@ -89,7 +89,7 @@ function utf8Prefix(text: string, maxBytes: number): string {
   return result
 }
 
-export function imageKeys(message: FeishuMessageEvent['message']): string[] {
+export function imageKeys(message: LarkMessageEvent['message']): string[] {
   if (message.message_type !== 'image' && message.message_type !== 'post')
     return []
   let content: unknown

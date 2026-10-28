@@ -1,20 +1,20 @@
 import { afterEach, expect, test } from 'bun:test'
 import { silentLogger } from '@glows777/vela-core'
 import { fauxText } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
-const feishuTools = [
-  'feishu_routines',
-  'feishu_skip_reply',
-  'feishu_wait_for_input',
-  'feishu_search_history',
-  'feishu_start_topic',
-  'feishu_forward_to_topic',
-  'feishu_list_topics',
+const larkTools = [
+  'lark_routines',
+  'lark_skip_reply',
+  'lark_wait_for_input',
+  'lark_search_history',
+  'lark_start_topic',
+  'lark_forward_to_topic',
+  'lark_list_topics',
 ]
 
 async function until(condition: () => boolean) {
@@ -26,8 +26,8 @@ async function until(condition: () => boolean) {
   }
 }
 
-test('Feishu tools reach channel sessions only', async () => {
-  const fake = fakeFeishu()
+test('Lark tools reach channel sessions only', async () => {
+  const fake = fakeLark()
   const t = createTestVela({
     responses: [
       fauxText('plain answer'),
@@ -36,7 +36,7 @@ test('Feishu tools reach channel sessions only', async () => {
     ],
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -46,38 +46,38 @@ test('Feishu tools reach channel sessions only', async () => {
   })
   await t.run('hello')
   const plain = t.model.calls[0]!.tools
-  expect(plain.filter((name) => name.startsWith('feishu_'))).toEqual([])
+  expect(plain.filter((name) => name.startsWith('lark_'))).toEqual([])
   expect(plain).toContain('read_file')
 
   await t.vela.ready()
   await t.vela.startChannels()
-  fake.deliver(feishuEvent({ message_id: 'group-message' }))
+  fake.deliver(larkEvent({ message_id: 'group-message' }))
   await until(() => t.model.calls.length === 2)
   const group = t.model.calls[1]!.tools
   expect(group).toEqual(
     expect.arrayContaining(
-      feishuTools.filter((name) => name !== 'feishu_wait_for_input'),
+      larkTools.filter((name) => name !== 'lark_wait_for_input'),
     ),
   )
   // The group channel's own deny list still hides the topic-only tool.
-  expect(group).not.toContain('feishu_wait_for_input')
+  expect(group).not.toContain('lark_wait_for_input')
   expect(group).toContain('read_file')
 
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => t.model.calls.length === 3)
   const topic = t.model.calls[2]!.tools
   expect(topic).toEqual(
     expect.arrayContaining([
-      'feishu_routines',
-      'feishu_search_history',
-      'feishu_wait_for_input',
+      'lark_routines',
+      'lark_search_history',
+      'lark_wait_for_input',
     ]),
   )
-  expect(topic).not.toContain('feishu_start_topic')
+  expect(topic).not.toContain('lark_start_topic')
   expect(topic).toContain('read_file')
 })
 
-test('Feishu does not start or log started without app credentials', async () => {
+test('Lark does not start or log started without app credentials', async () => {
   const logs: string[] = []
   const t = createTestVela({
     logger: {
@@ -85,11 +85,11 @@ test('Feishu does not start or log started without app credentials', async () =>
       info: (line) => logs.push(line),
       warn: (line) => logs.push(line),
     },
-    extensions: [feishu({ owners: ['ou_alice'], chats: ['oc_group'] })],
+    extensions: [lark({ owners: ['ou_alice'], chats: ['oc_group'] })],
   })
   await t.vela.startChannels()
   expect(logs).toContain(
-    '[feishu] appId / appSecret not configured; channel will not connect to Feishu',
+    '[lark] appId / appSecret not configured; channel will not connect to Lark',
   )
-  expect(logs.some((line) => line.includes('✓ feishu started'))).toBe(false)
+  expect(logs.some((line) => line.includes('✓ lark started'))).toBe(false)
 })

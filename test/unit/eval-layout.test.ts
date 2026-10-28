@@ -20,7 +20,7 @@ test('eval retains flat historical paths and selects the new workspace layout', 
     expect(runtimePaths(root).channelTesting).toBe(
       'packages/channels/dist/testing.js',
     )
-    expect(runtimePaths(root).feishu).toBe('packages/lark/dist/index.js')
+    expect(runtimePaths(root).lark).toBe('packages/lark/dist/index.js')
     await Bun.write(
       join(root, 'tsconfig.json'),
       JSON.stringify({

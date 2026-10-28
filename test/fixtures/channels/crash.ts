@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { createTestVela } from '@glows777/vela/testing'
 import { fauxHang, fauxText } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../../support/lark.ts'
 
 const [cwd, mode] = process.argv.slice(2)
-const fake = fakeFeishu()
+const fake = fakeLark()
 const ready = () => console.log('CRASH_READY')
 if (mode === 'image')
   fake.resources.set('screenshot', [
@@ -28,7 +28,7 @@ const t = createTestVela({
     mode === 'answer' ? fauxText('saved answer') : fauxHang(),
   ],
   extensions: [
-    feishu({
+    lark({
       owners: ['ou_alice'],
       chats: ['oc_group'],
       transport: fake.transport,
@@ -39,7 +39,7 @@ await t.vela.ready()
 await t.vela.startChannels()
 if (mode === 'forward') {
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'establish',
       root_id: 'root',
       thread_id: 'thread',
@@ -49,7 +49,7 @@ if (mode === 'forward') {
   while (!fake.sent.length) await Bun.sleep(1)
 }
 fake.deliver(
-  feishuEvent({
+  larkEvent({
     message_id: 'trigger',
     ...(mode === 'passive' ? { mentions: [] } : {}),
     ...(['group', 'forward', 'passive'].includes(mode!)
@@ -66,13 +66,13 @@ if (
   while (t.model.calls.length < (mode === 'forward' ? 2 : 1)) await Bun.sleep(1)
   const session = t.vela.session(
     ['group', 'forward', 'passive'].includes(mode!)
-      ? 'feishu-oc_group'
-      : 'feishu-oc_group-root',
+      ? 'lark-oc_group'
+      : 'lark-oc_group-root',
   )
   await session.save()
   if (mode === 'steer') {
     fake.deliver(
-      feishuEvent(
+      larkEvent(
         {
           message_id: 'steer',
           root_id: 'root',
@@ -87,7 +87,7 @@ if (
   }
   if (mode === 'passive') {
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'queued-passive',
         mentions: [],
         content: '{"text":"another discussion"}',

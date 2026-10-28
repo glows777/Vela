@@ -149,7 +149,7 @@ test('a stop signal during channel startup still disposes instead of dying', asy
   const connecting = join(dir.path, 'connecting')
   const stopped = join(dir.path, 'stopped')
   const extension = join(dir.path, 'slow-channel.ts')
-  // A transport connect that takes a moment, like the Feishu socket: the signal arrives while start() runs
+  // A transport connect that takes a moment, like the Lark socket: the signal arrives while start() runs
   await Bun.write(
     extension,
     `import { appendFileSync } from 'node:fs'

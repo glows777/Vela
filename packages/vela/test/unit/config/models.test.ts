@@ -400,8 +400,8 @@ test('a ChatGPT sign-in is used by local sessions but refused in channel session
   )
 
   const error = await doGenerate(
-    registry.resolve('openai/gpt-5.5', { channel: () => 'feishu' }).model,
+    registry.resolve('openai/gpt-5.5', { channel: () => 'lark' }).model,
   )
-  expect(String(error)).toContain('only for the local terminal, not for feishu')
+  expect(String(error)).toContain('only for the local terminal, not for lark')
   expect(requests).toHaveLength(1)
 })

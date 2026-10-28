@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type {
@@ -9,19 +10,19 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '@glows777/vela-channels'
-import { channelSessionId, groupWorkspace } from '@glows777/vela-channels'
+import { channelSessionId, chatDirectory } from '@glows777/vela-channels'
 import type {
   ImageContent,
   VelaLogger,
 } from '@glows777/vela-core/extension-api'
 import { imageMimeType } from '@glows777/vela-core/images'
 import {
-  type FeishuCardAction,
-  type FeishuCardResponse,
+  type LarkCardAction,
+  type LarkCardResponse,
   runControlsCard,
   topicRunCard,
 } from './cards.ts'
-import { type FeishuChat, parseChats } from './chats.ts'
+import { type LarkChat, parseChats } from './chats.ts'
 import {
   formatGroupContext,
   messageTime,
@@ -30,16 +31,16 @@ import {
 } from './history.ts'
 import { errorMessage } from './log.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
-import { FeishuProgress } from './progress.ts'
-import { FeishuTopics, topicToolNames } from './topics.ts'
+import { LarkProgress } from './progress.ts'
+import { LarkTopics, topicToolNames } from './topics.ts'
 import {
-  type FeishuMessageEvent,
-  type FeishuSentMessage,
-  type FeishuTransport,
+  type LarkMessageEvent,
+  type LarkSentMessage,
+  type LarkTransport,
   larkTransport,
 } from './transport.ts'
 
-export interface FeishuChannelConfig {
+export interface LarkChannelConfig {
   appId: string
   appSecret: string
   /** These senders (open_id) always have their direct chats enabled. */
@@ -49,19 +50,19 @@ export interface FeishuChannelConfig {
   dataDir: string
   logger: VelaLogger
   /** Default: lark's long connection with appId / appSecret */
-  transport?: FeishuTransport
+  transport?: LarkTransport
   timezone?: unknown
 }
 
-/** Feishu may deliver an event more than once; this many recent message ids are remembered to drop repeats */
+/** Lark may deliver an event more than once; this many recent message ids are remembered to drop repeats */
 const SEEN_MESSAGES = 1000
 
 export const UNSUPPORTED_MESSAGE =
   'Only text, images and files are supported; please send one of these message types.'
 
-export class FeishuChannel implements ChannelDefinition {
-  name = 'feishu'
-  description = 'Feishu bot message channel (long-connection mode)'
+export class LarkChannel implements ChannelDefinition {
+  name = 'lark'
+  description = 'Lark bot message channel (long-connection mode)'
   get timezone(): unknown {
     return this.config.timezone
   }
@@ -80,16 +81,16 @@ export class FeishuChannel implements ChannelDefinition {
     const receipt = await this.transport?.send(msg.channelId, text)
     if (!receipt) {
       this.config.logger.warn(
-        '[feishu] Routine skipped: top-level delivery requires a transport send receipt',
+        '[lark] Routine skipped: top-level delivery requires a transport send receipt',
       )
       return
     }
     return { ...msg, replyToId: receipt.messageId }
   }
 
-  readonly topics = new FeishuTopics(
+  readonly topics = new LarkTopics(
     () => {
-      if (!this.transport) throw new Error('Feishu is not connected')
+      if (!this.transport) throw new Error('Lark is not connected')
       return this.transport
     },
     (chatId, messageId, createTime) =>
@@ -102,13 +103,8 @@ export class FeishuChannel implements ChannelDefinition {
     const options = this.topics.sessionOptions(msg)
     if (!msg.topic && !msg.replyToId) return options
     const chat = this.chats.get(msg.channelId)
-    if (!chat) throw new Error('Feishu group is not enabled')
-    const cwd = groupWorkspace(
-      this.config.dataDir,
-      this.name,
-      chat.id,
-      !msg.requireExistingSession,
-    )
+    if (!chat) throw new Error('Lark group is not enabled')
+    const cwd = this.workspace(chat.id, !msg.requireExistingSession)
     return {
       ...options,
       cwd,
@@ -119,7 +115,7 @@ export class FeishuChannel implements ChannelDefinition {
               ...new Set([
                 ...chat.tools,
                 ...topicToolNames,
-                ...(msg.topic ? ['feishu_wait_for_input'] : []),
+                ...(msg.topic ? ['lark_wait_for_input'] : []),
               ]),
             ],
     }
@@ -130,13 +126,26 @@ export class FeishuChannel implements ChannelDefinition {
     for (const chat of this.chats.values())
       for (const name of chat.tools ?? [])
         if (!known.has(name))
-          throw new Error(`Unknown Feishu tool "${name}" for chat ${chat.id}`)
+          throw new Error(`Unknown Lark tool "${name}" for chat ${chat.id}`)
   }
 
-  private config: FeishuChannelConfig
-  private readonly chats: Map<string, FeishuChat>
+  private storage(chatId: string): string {
+    return (
+      this.topics.runtime?.scope(channelSessionId(this.name, chatId))
+        ?.dataDir ?? chatDirectory(this.config.dataDir, this.name, chatId)
+    )
+  }
+
+  private workspace(chatId: string, create = true): string {
+    const cwd = join(this.storage(chatId), 'workspace')
+    if (create) mkdirSync(cwd, { recursive: true })
+    return cwd
+  }
+
+  private config: LarkChannelConfig
+  private readonly chats: Map<string, LarkChat>
   private messageHandler?: (msg: IncomingMessage) => void | Promise<void>
-  private transport?: FeishuTransport
+  private transport?: LarkTransport
   private readonly seen = new Set<string>()
   private stopped = false
   private readonly pending = new Set<Promise<void>>()
@@ -156,10 +165,10 @@ export class FeishuChannel implements ChannelDefinition {
   >()
   private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
   // Custom transports without appId cannot identify own-app history items.
-  private readonly lastReplies = new Map<string, FeishuSentMessage>()
-  private readonly handledTriggers = new Map<string, FeishuSentMessage>()
+  private readonly lastReplies = new Map<string, LarkSentMessage>()
+  private readonly handledTriggers = new Map<string, LarkSentMessage>()
 
-  constructor(config: FeishuChannelConfig) {
+  constructor(config: LarkChannelConfig) {
     this.config = config
     this.chats = new Map(
       parseChats(config.chats).map((chat) => [chat.id, chat]),
@@ -188,27 +197,27 @@ export class FeishuChannel implements ChannelDefinition {
         : undefined)
     if (!transport) {
       this.config.logger.warn(
-        '[feishu] appId / appSecret not configured; channel will not connect to Feishu',
+        '[lark] appId / appSecret not configured; channel will not connect to Lark',
       )
       return false
     }
     if (!this.chats.size)
       this.config.logger.info(
-        '[feishu] chats is empty; only owners’ direct chats are enabled',
+        '[lark] chats is empty; only owners’ direct chats are enabled',
       )
     this.transport = transport
     try {
       this.botId = await transport.getBotId()
     } catch (error) {
       this.config.logger.warn(
-        `[feishu] Cannot identify bot; group messages will be ignored: ${String(error)}`,
+        `[lark] Cannot identify bot; group messages will be ignored: ${String(error)}`,
       )
     }
     await transport.start(
       (event) => this.receive(event),
       (event) => this.receiveAction(event),
     )
-    this.config.logger.info('[feishu] Long connection established')
+    this.config.logger.info('[lark] Long connection established')
   }
 
   async stop(): Promise<void> {
@@ -223,13 +232,13 @@ export class FeishuChannel implements ChannelDefinition {
     controls: Extract<ChannelFeedbackUpdate, { type: 'controls' }>,
     report?: (error: unknown) => Promise<void>,
     // biome-ignore lint/suspicious/noConfusingVoidType: mirrors ChannelDefinition.startRun, which returns `| void`
-  ): Promise<FeishuProgress | void> {
+  ): Promise<LarkProgress | void> {
     if (
       this.stopped ||
       controls.signal.aborted ||
       !this.transport ||
       (msg.raw !== undefined &&
-        messageText((msg.raw as FeishuMessageEvent).message) === undefined)
+        messageText((msg.raw as LarkMessageEvent).message) === undefined)
     )
       return
     const token = randomUUID()
@@ -248,7 +257,7 @@ export class FeishuChannel implements ChannelDefinition {
         msg.replyToId,
       )
       if (report)
-        return new FeishuProgress(this.transport, messageId, card, report)
+        return new LarkProgress(this.transport, messageId, card, report)
     } catch (error) {
       clear()
       throw error
@@ -266,7 +275,7 @@ export class FeishuChannel implements ChannelDefinition {
       transport && messageId
         ? await transport.addReaction(messageId, 'OnIt')
         : undefined
-    let progress: FeishuProgress | undefined
+    let progress: LarkProgress | undefined
     let report: ((error: unknown) => Promise<void>) | undefined
     return {
       event: (update) => {
@@ -300,8 +309,8 @@ export class FeishuChannel implements ChannelDefinition {
     }
   }
 
-  private receiveAction(event: FeishuCardAction): FeishuCardResponse {
-    const ignored: FeishuCardResponse = {
+  private receiveAction(event: LarkCardAction): LarkCardResponse {
+    const ignored: LarkCardResponse = {
       toast: {
         type: 'info',
         content: 'This control is unavailable or has expired.',
@@ -353,7 +362,7 @@ export class FeishuChannel implements ChannelDefinition {
     this.handledTriggers.set(chatId, { messageId, createTime })
   }
 
-  private groupBoundary(chatId: string): FeishuSentMessage | undefined {
+  private groupBoundary(chatId: string): LarkSentMessage | undefined {
     const reply = this.lastReplies.get(chatId)
     const handled = this.handledTriggers.get(chatId)
     if (!reply) return handled
@@ -366,7 +375,7 @@ export class FeishuChannel implements ChannelDefinition {
   async send(message: OutgoingMessage): Promise<void> {
     if (!this.transport) {
       this.config.logger.warn(
-        `[feishu] Feishu not configured, skipping send: ${message.text.slice(0, 50)}`,
+        `[lark] Lark not configured, skipping send: ${message.text.slice(0, 50)}`,
       )
       return
     }
@@ -391,8 +400,8 @@ export class FeishuChannel implements ChannelDefinition {
   ): Promise<IncomingMessage | undefined> {
     if (this.stopped) return
     if (!msg.raw) return msg
-    const event = msg.raw as FeishuMessageEvent
-    const activeTrigger = (activeMessage?.raw as FeishuMessageEvent | undefined)
+    const event = msg.raw as LarkMessageEvent
+    const activeTrigger = (activeMessage?.raw as LarkMessageEvent | undefined)
       ?.message
     if (messageText(event.message) === undefined) {
       await this.send({
@@ -412,8 +421,7 @@ export class FeishuChannel implements ChannelDefinition {
     }
     let input = messageText(event.message) ?? msg.text
     if (!input) return
-    if (msg.topic || msg.replyToId)
-      groupWorkspace(this.config.dataDir, this.name, msg.channelId)
+    if (msg.topic || msg.replyToId) this.workspace(msg.channelId)
     const attachmentType =
       event.message.message_type === 'file' ? 'file' : 'image'
     try {
@@ -429,7 +437,7 @@ export class FeishuChannel implements ChannelDefinition {
     } catch (error) {
       if (msg.passive) {
         this.config.logger.warn(
-          `[feishu] Passive attachment preparation failed: ${errorMessage(error)}`,
+          `[lark] Passive attachment preparation failed: ${errorMessage(error)}`,
         )
         return
       }
@@ -522,7 +530,7 @@ export class FeishuChannel implements ChannelDefinition {
         text = context.text
       } catch (error) {
         this.config.logger.warn(
-          `[feishu] Failed to fetch context for chat ${msg.channelId}: ${String(error)}. History images require im:resource permission.`,
+          `[lark] Failed to fetch context for chat ${msg.channelId}: ${String(error)}. History images require im:resource permission.`,
         )
       }
     }
@@ -530,7 +538,7 @@ export class FeishuChannel implements ChannelDefinition {
   }
 
   private async downloadImages(
-    message: FeishuMessageEvent['message'],
+    message: LarkMessageEvent['message'],
     cache: Map<string, Promise<ImageContent>>,
     limit = Infinity,
   ): Promise<ImageContent[]> {
@@ -569,7 +577,7 @@ export class FeishuChannel implements ChannelDefinition {
   }
 
   private async downloadFile(
-    message: FeishuMessageEvent['message'],
+    message: LarkMessageEvent['message'],
   ): Promise<string> {
     const content = JSON.parse(message.content) as {
       file_key: string
@@ -584,12 +592,7 @@ export class FeishuChannel implements ChannelDefinition {
     )
     await mkdir(this.config.dataDir, { recursive: true })
     const root = await realpath(this.config.dataDir)
-    const directory = resolve(
-      root,
-      'channels',
-      channelSessionId(this.name, message.chat_id),
-      'files',
-    )
+    const directory = resolve(root, this.storage(message.chat_id), 'files')
     await mkdir(directory, { recursive: true })
     if ((await realpath(directory)) !== directory)
       throw new Error('File directory must not contain symlinks')
@@ -643,7 +646,7 @@ export class FeishuChannel implements ChannelDefinition {
     return name
   }
 
-  private receive(event: FeishuMessageEvent): void {
+  private receive(event: LarkMessageEvent): void {
     if (this.stopped) return
     const { message } = event
     if (message.message_id) {
@@ -683,7 +686,7 @@ export class FeishuChannel implements ChannelDefinition {
     if (text === '' || (passive && text === undefined) || !this.messageHandler)
       return
     this.config.logger.debug(
-      `[feishu] input ${message.message_id ?? '-'} received at=${new Date().toISOString()} created=${message.create_time ?? '-'}`,
+      `[lark] input ${message.message_id ?? '-'} received at=${new Date().toISOString()} created=${message.create_time ?? '-'}`,
     )
     // Deliver immediately so the gateway can show run controls, then serialize preparation and replies there.
     const next = Promise.resolve(
@@ -707,7 +710,7 @@ export class FeishuChannel implements ChannelDefinition {
       }),
     ).catch((error) =>
       this.config.logger.warn(
-        `[feishu] Failed to handle message: ${String(error)}`,
+        `[lark] Failed to handle message: ${String(error)}`,
       ),
     )
     this.pending.add(next)

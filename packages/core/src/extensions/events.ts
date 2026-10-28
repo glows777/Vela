@@ -5,7 +5,7 @@ import type { BranchSummaryEntry, SessionEntry } from '../session/entries.ts'
 
 /**
  * Where an input came from (pi's sources plus Vela's): the TUI and `-p` send `interactive`, RPC clients `rpc`,
- * `session.sendUserMessage()` `extension`, channels (Feishu) `channel`; SDK calls default to `sdk`.
+ * `session.sendUserMessage()` `extension`, channels (Lark) `channel`; SDK calls default to `sdk`.
  */
 export type InputSource =
   | 'interactive'

@@ -4,17 +4,17 @@ import { join } from 'node:path'
 import { channelSessionId } from '@glows777/vela-channels'
 import { VelaSession } from '@glows777/vela-core'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
 import { ChannelDirectory } from '../../packages/channels/src/directory.ts'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { RoutineClock } from '../support/routine-clock.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
 function setup(cwd?: string, chats = ['oc_group']) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const logs: string[] = []
   const t = createTestVela({
     cwd,
@@ -25,9 +25,9 @@ function setup(cwd?: string, chats = ['oc_group']) {
       warn: (s) => logs.push(s),
       error: (s) => logs.push(s),
     },
-    extensionConfig: { feishu: { timezone: 'UTC' } },
+    extensionConfig: { lark: { timezone: 'UTC' } },
     extensions: [
-      feishu({ owners: ['ou_alice'], chats, transport: fake.transport }),
+      lark({ owners: ['ou_alice'], chats, transport: fake.transport }),
     ],
   })
   const clock = new RoutineClock()
@@ -40,11 +40,11 @@ function setup(cwd?: string, chats = ['oc_group']) {
     const directory = new ChannelDirectory(t.vela.dataDir)
     await directory.load()
     const key = channelSessionId(
-      'feishu',
+      'lark',
       'oc_group',
       target === 'topic' ? 'root' : undefined,
     )
-    await directory.admit(key, 'feishu', {
+    await directory.admit(key, 'lark', {
       channelId: 'oc_group',
       senderId: 'ou_alice',
       senderName: 'Alice',
@@ -63,7 +63,7 @@ function setup(cwd?: string, chats = ['oc_group']) {
         routines: [
           {
             id: 'reminder',
-            channel: 'feishu',
+            channel: 'lark',
             chatId: 'oc_group',
             targetKey: key,
             creator: { id: 'ou_bob', name: 'Bob' },
@@ -89,7 +89,7 @@ test.each(['routine', 'human'] as const)(
   'a routine preserves the original topic requester and recovers the %s run recipient',
   async (recovering) => {
     const first = setup()
-    const key = channelSessionId('feishu', 'oc_group', 'root')
+    const key = channelSessionId('lark', 'oc_group', 'root')
     const topic = { root_id: 'root', thread_id: 'thread' }
     async function deliver(text: string, answer: string) {
       const done = Promise.withResolvers<void>()
@@ -98,7 +98,7 @@ test.each(['routine', 'human'] as const)(
           done.resolve()
       })
       first.fake.deliver(
-        feishuEvent({ ...topic, content: JSON.stringify({ text }) }),
+        larkEvent({ ...topic, content: JSON.stringify({ text }) }),
       )
       try {
         await done.promise
@@ -110,7 +110,7 @@ test.each(['routine', 'human'] as const)(
     await first.t.vela.startChannels()
     await deliver('Investigate the original task', 'Original result')
     await first.t.internals.gateway.routines.create({
-      channel: 'feishu',
+      channel: 'lark',
       chatId: 'oc_group',
       targetKey: key,
       creator: { id: 'ou_bob', name: 'Bob' },
@@ -123,7 +123,7 @@ test.each(['routine', 'human'] as const)(
     let overviewRequester: unknown
     if (recovering === 'human') {
       first.t.model.push(
-        fauxToolCall('feishu_list_topics', {}),
+        fauxToolCall('lark_list_topics', {}),
         fauxText('Overview'),
       )
       const overviewDone = Promise.withResolvers<void>()
@@ -132,7 +132,7 @@ test.each(['routine', 'human'] as const)(
           overviewDone.resolve()
       })
       first.fake.deliver(
-        feishuEvent({ content: '{"text":"List this group\u0027s topics"}' }),
+        larkEvent({ content: '{"text":"List this group\u0027s topics"}' }),
       )
       await overviewDone.promise
       unsubscribe()
@@ -147,7 +147,7 @@ test.each(['routine', 'human'] as const)(
           failed.resolve()
       })
       first.fake.deliver(
-        feishuEvent({
+        larkEvent({
           ...topic,
           content: '{"text":"Continue my original task"}',
         }),
@@ -249,7 +249,7 @@ test('recurrence survives process and logical topic restart and realigns saved m
   expect((await second.stored())[0].lastFiredAt).toBe(
     '2026-01-05T09:00:00.000Z',
   )
-  await second.t.internals.gateway.handleIncoming('feishu', {
+  await second.t.internals.gateway.handleIncoming('lark', {
     channelId: 'oc_group',
     senderId: 'ou_alice',
     senderName: 'Alice',
@@ -264,7 +264,7 @@ test('recurrence survives process and logical topic restart and realigns saved m
   const physical = directory.sessionId(key)
   expect(physical).not.toBe(key)
   expect(second.t.vela.session(physical).cwd).toContain(
-    `${channelSessionId('feishu', 'oc_group')}/workspace`,
+    `${channelSessionId('lark', 'oc_group')}/workspace`,
   )
   expect(second.fake.sent.at(-1)?.text).toContain('ou_bob')
   expect(second.t.model.calls).toHaveLength(1)
@@ -274,7 +274,7 @@ test('a cancelled routine does not fire', async () => {
   const r = setup()
   await r.seed({ time: '09:00' })
   await r.t.vela.startChannels()
-  await r.t.internals.gateway.routines.cancel('feishu', 'oc_group', 'reminder')
+  await r.t.internals.gateway.routines.cancel('lark', 'oc_group', 'reminder')
   await r.advance('2026-01-05T09:00:00Z')
   expect(r.t.model.calls).toHaveLength(0)
   expect(r.fake.sent).toHaveLength(0)
@@ -346,7 +346,7 @@ test('a routine queues behind a running topic without steering and mentions its 
     fauxText('Routine answer'),
   )
   await r.t.vela.startChannels()
-  const running = r.t.internals.gateway.handleIncoming('feishu', {
+  const running = r.t.internals.gateway.handleIncoming('lark', {
     channelId: 'oc_group',
     senderId: 'ou_alice',
     senderName: 'Alice',

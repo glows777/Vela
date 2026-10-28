@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -8,6 +9,12 @@ const recordSchema = z
   .object({
     key: z.string(),
     channel: z.string(),
+    legacyKey: z.string().optional(),
+    storageKey: z
+      .string()
+      .regex(/^[A-Za-z0-9_.-]+$/)
+      .refine((key) => key !== '.' && key !== '..')
+      .optional(),
     chatId: z.string(),
     chatKind: z.enum(['group', 'direct']),
     rootId: z.string().optional(),
@@ -40,7 +47,7 @@ const recordSchema = z
     (record) => !!record.rootId === !!record.threadId,
     'Incomplete topic address',
   )
-const indexSchema = z.object({
+export const channelIndexSchema = z.object({
   version: z.literal(1),
   createdAt: z.string(),
   records: z.array(recordSchema),
@@ -73,6 +80,14 @@ export class ChannelDirectory {
 
   private async read(): Promise<void> {
     if (!this.path) return
+    const marker = join(this.path, '..', 'migration.json')
+    if (existsSync(marker)) {
+      const migration = JSON.parse(await readFile(marker, 'utf8'))
+      if (migration.version !== 1 || migration.status !== 'complete')
+        throw new Error(
+          'Channel migration is incomplete; rerun the migration utility before starting transports',
+        )
+    }
     let text: string
     try {
       text = await readFile(this.path, 'utf8')
@@ -83,9 +98,25 @@ export class ChannelDirectory {
       })
     }
     try {
-      const data = indexSchema.parse(JSON.parse(text))
+      const data = channelIndexSchema.parse(JSON.parse(text))
       if (new Set(data.records.map((r) => r.key)).size !== data.records.length)
         throw new Error('Duplicate channel key')
+      const keys = new Set(data.records.map((record) => record.key))
+      const legacy = data.records.flatMap((record) =>
+        record.legacyKey ? [record.legacyKey] : [],
+      )
+      if (
+        new Set(legacy).size !== legacy.length ||
+        legacy.some((key) => keys.has(key))
+      )
+        throw new Error('Conflicting legacy channel key')
+      const stores = new Map<string, string | undefined>()
+      for (const record of data.records) {
+        const chat = JSON.stringify([record.channel, record.chatId])
+        if (stores.has(chat) && stores.get(chat) !== record.storageKey)
+          throw new Error('Conflicting channel storage keys')
+        stores.set(chat, record.storageKey)
+      }
       this.createdAt = data.createdAt
       this.records = new Map(data.records.map((record) => [record.key, record]))
     } catch (error) {
@@ -97,10 +128,17 @@ export class ChannelDirectory {
   }
 
   get(key: string): ChannelRecord | undefined {
-    return this.records.get(key)
+    return (
+      this.records.get(key) ??
+      [...this.records.values()].find((record) => record.legacyKey === key)
+    )
+  }
+  storageKey(channel: string, chatId: string): string | undefined {
+    return this.entries(channel).find((record) => record.chatId === chatId)
+      ?.storageKey
   }
   sessionId(key: string): string {
-    return this.records.get(key)?.activeSessionId ?? key
+    return this.get(key)?.activeSessionId ?? key
   }
   keyForSession(id: string): string {
     return (
@@ -153,6 +191,7 @@ export class ChannelDirectory {
         replyTarget: msg.replyToId,
         task: task.slice(0, 120),
         activeSessionId: key,
+        storageKey: this.storageKey(channel, msg.channelId),
         previousSessionIds: [],
         state: 'done',
         pendingMessageIds: [],

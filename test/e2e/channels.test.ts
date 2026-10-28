@@ -13,9 +13,9 @@ import {
   fauxHang,
   fauxText,
 } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { messageTime } from '../../packages/lark/src/history.ts'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -32,7 +32,7 @@ async function waitFor(condition: () => boolean) {
   }
 }
 
-/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+/** `[HH:MM] ` for a Lark create_time in the machine's local time */
 const at = (ms: string) => `[${messageTime(ms)}] `
 
 /** Register a fake channel; returns a function that delivers messages and the replies sent */
@@ -160,7 +160,7 @@ test('chat ids that sanitize to the same string still have separate sessions', a
   expect(channelSessionId('fake', `${long}1`)).not.toBe(
     channelSessionId('fake', `${long}2`),
   )
-  expect(channelSessionId('feishu', 'oc_9')).toBe('feishu-oc_9')
+  expect(channelSessionId('lark', 'oc_9')).toBe('lark-oc_9')
   const t = createTestVela({
     responses: [fauxText('OK'), fauxText("I don't know")],
   })
@@ -334,14 +334,14 @@ test('providers see which channel a session answers on (so a local-only sign-in 
   expect(contexts.map((ctx) => ctx.channel())).toEqual(['fake', undefined])
 })
 
-async function feishuGateway(
+async function larkGateway(
   options: {
-    chats?: NonNullable<Parameters<typeof feishu>[0]>['chats']
+    chats?: NonNullable<Parameters<typeof lark>[0]>['chats']
     owners?: string[]
     responses?: NonNullable<Parameters<typeof createTestVela>[0]>['responses']
   } = {},
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const logs: string[] = []
   const t = createTestVela({
     responses: options.responses ?? [
@@ -355,7 +355,7 @@ async function feishuGateway(
       warn: (line) => logs.push(line),
     },
     extensions: [
-      feishu({
+      lark({
         appId: 'cli_bot',
         chats: options.chats ?? ['oc_group'],
         owners: options.owners ?? ['ou_alice'],
@@ -368,13 +368,13 @@ async function feishuGateway(
   return { t, logs, ...fake }
 }
 
-test('Feishu ignores unlisted chats and stranger DMs without a model call, reply or per-message log', async () => {
-  const f = await feishuGateway()
-  f.deliver(feishuEvent({ chat_id: 'oc_unlisted' }))
-  f.deliver(feishuEvent({ chat_id: 'oc_stranger', chat_type: 'p2p' }, 'ou_bob'))
+test('Lark ignores unlisted chats and stranger DMs without a model call, reply or per-message log', async () => {
+  const f = await larkGateway()
+  f.deliver(larkEvent({ chat_id: 'oc_unlisted' }))
+  f.deliver(larkEvent({ chat_id: 'oc_stranger', chat_type: 'p2p' }, 'ou_bob'))
   // A later permitted turn is a barrier, so ignored events cannot hide behind async delivery.
   f.deliver(
-    feishuEvent({ chat_id: 'oc_owner', chat_type: 'p2p', message_id: 'owner' }),
+    larkEvent({ chat_id: 'oc_owner', chat_type: 'p2p', message_id: 'owner' }),
   )
   await waitFor(() => f.sent.length >= 1)
   expect(f.logs.join('\n')).not.toContain('oc_unlisted')
@@ -384,47 +384,47 @@ test('Feishu ignores unlisted chats and stranger DMs without a model call, reply
   expect(f.historyCalls).toEqual([])
 })
 
-test('Feishu enabled group members share a persisted session and both display names reach the model', async () => {
-  const f = await feishuGateway()
-  f.deliver(feishuEvent({ message_id: 'alice', content: '{"text":"first"}' }))
+test('Lark enabled group members share a persisted session and both display names reach the model', async () => {
+  const f = await larkGateway()
+  f.deliver(larkEvent({ message_id: 'alice', content: '{"text":"first"}' }))
   await waitFor(() => f.sent.length === 1)
   f.deliver(
-    feishuEvent({ message_id: 'bob', content: '{"text":"second"}' }, 'ou_bob'),
+    larkEvent({ message_id: 'bob', content: '{"text":"second"}' }, 'ou_bob'),
   )
   await waitFor(() => f.sent.length === 2)
   expect(
     f.t.vela
       .sessions()
-      .filter((s) => s.channel === 'feishu')
+      .filter((s) => s.channel === 'lark')
       .map((s) => s.id),
-  ).toEqual(['feishu-oc_group'])
+  ).toEqual(['lark-oc_group'])
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Alice: first')
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Bob: second')
   expect(f.t.model.calls[1]?.tools).toContain('bash')
-  expect(await f.t.readData('sessions/feishu-oc_group.jsonl')).toContain(
+  expect(await f.t.readData('sessions/lark-oc_group.jsonl')).toContain(
     'Alice: first',
   )
 })
 
-test('Feishu readUntagged off keeps mention-only top-level behavior', async () => {
-  const f = await feishuGateway({
+test('Lark readUntagged off keeps mention-only top-level behavior', async () => {
+  const f = await larkGateway({
     chats: [{ id: 'oc_group', readUntagged: false }],
   })
-  f.deliver(feishuEvent({ mentions: [], message_id: 'no_at' }))
+  f.deliver(larkEvent({ mentions: [], message_id: 'no_at' }))
   f.deliver(
-    feishuEvent({
+    larkEvent({
       mentions: [{ key: '@_user_1', id: { open_id: 'ou_bob' } }],
       message_id: 'other_at',
     }),
   )
-  f.deliver(feishuEvent({ message_id: 'bot_at' }))
+  f.deliver(larkEvent({ message_id: 'bot_at' }))
   await waitFor(() => f.sent.length >= 1)
   expect(f.t.model.calls).toHaveLength(1)
   expect(f.sent).toEqual([{ messageId: 'bot_at', text: 'answer' }])
 })
 
-test('Feishu mention fetches earlier group messages since this bot last replied and injects them before the question', async () => {
-  const f = await feishuGateway()
+test('Lark mention fetches earlier group messages since this bot last replied and injects them before the question', async () => {
+  const f = await larkGateway()
   f.history.push(
     historyMessage('question', 'ou_alice', 'question', '4000'),
     historyMessage('new', 'ou_bob', 'use blue', '3000'),
@@ -435,7 +435,7 @@ test('Feishu mention fetches earlier group messages since this bot last replied 
     historyMessage('old', 'ou_bob', 'stale detail', '1000'),
   )
   f.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'question',
       create_time: '4000',
       content: '{"text":"question"}',
@@ -451,17 +451,17 @@ test('Feishu mention fetches earlier group messages since this bot last replied 
   )
 })
 
-test('Feishu group answers reply to each triggering message in queue order, including a second sender during a run', async () => {
-  const f = await feishuGateway({
+test('Lark group answers reply to each triggering message in queue order, including a second sender during a run', async () => {
+  const f = await larkGateway({
     responses: [
       () => {
-        f.deliver(feishuEvent({ message_id: 'second' }, 'ou_bob'))
+        f.deliver(larkEvent({ message_id: 'second' }, 'ou_bob'))
         return fauxText('one')
       },
       fauxText('two'),
     ],
   })
-  f.deliver(feishuEvent({ message_id: 'first' }))
+  f.deliver(larkEvent({ message_id: 'first' }))
   await waitFor(() => f.sent.length === 2)
   expect(f.sent).toEqual([
     { messageId: 'first', text: 'one' },
@@ -471,25 +471,25 @@ test('Feishu group answers reply to each triggering message in queue order, incl
   expect(f.t.eventsOf('channel_error')).toEqual([])
 })
 
-test('Feishu owner DM works with empty chats, prefixes the name, and announces the empty chat configuration', async () => {
-  const f = await feishuGateway({ chats: [] })
-  f.deliver(feishuEvent({ chat_id: 'oc_dm', chat_type: 'p2p', mentions: [] }))
+test('Lark owner DM works with empty chats, prefixes the name, and announces the empty chat configuration', async () => {
+  const f = await larkGateway({ chats: [] })
+  f.deliver(larkEvent({ chat_id: 'oc_dm', chat_type: 'p2p', mentions: [] }))
   await waitFor(() => f.sent.length === 1)
   expect(f.sent).toEqual([{ chatId: 'oc_dm', text: 'answer' }])
   expect(f.t.model.calls[0]?.lastUserText).toBe('Alice: @_user_1 hello')
   expect(f.logs).toContain(
-    '[feishu] chats is empty; only owners’ direct chats are enabled',
+    '[lark] chats is empty; only owners’ direct chats are enabled',
   )
   expect(f.historyCalls).toEqual([])
 })
 
-test('Feishu cached sender names fall back to open_id and missing history does not lose the question', async () => {
-  const f = await feishuGateway()
+test('Lark cached sender names fall back to open_id and missing history does not lose the question', async () => {
+  const f = await larkGateway()
   f.failHistory()
-  const first = feishuEvent({ message_id: 'one' }, 'ou_unknown')
+  const first = larkEvent({ message_id: 'one' }, 'ou_unknown')
   f.deliver(first)
   await waitFor(() => f.sent.length === 1)
-  f.deliver(feishuEvent({ message_id: 'two' }, 'ou_unknown'))
+  f.deliver(larkEvent({ message_id: 'two' }, 'ou_unknown'))
   await waitFor(() => f.sent.length === 2)
   expect(f.nameCalls).toEqual(['ou_unknown'])
   // Without history the question keeps its own send time
@@ -501,13 +501,13 @@ test('Feishu cached sender names fall back to open_id and missing history does n
   ).toBe(true)
 })
 
-test('Feishu keeps slash command dispatch for both owner DMs and group mentions', async () => {
-  const fake = fakeFeishu()
+test('Lark keeps slash command dispatch for both owner DMs and group mentions', async () => {
+  const fake = fakeLark()
   const commands: string[] = []
   const t = createTestVela({
     responses: [],
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: ['oc_group'],
         transport: fake.transport,
@@ -524,21 +524,21 @@ test('Feishu keeps slash command dispatch for both owner DMs and group mentions'
   await t.vela.ready()
   await t.vela.startChannels()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       chat_id: 'oc_dm',
       chat_type: 'p2p',
       content: '{"text":"/ping dm"}',
     }),
   )
-  fake.deliver(feishuEvent({ content: '{"text":"@_user_1 /ping group"}' }))
+  fake.deliver(larkEvent({ content: '{"text":"@_user_1 /ping group"}' }))
   await waitFor(() => commands.length === 2)
   expect(commands.sort()).toEqual(['dm', 'group'])
   expect(t.model.calls).toEqual([])
   expect(fake.sent).toEqual([])
 })
 
-test('Feishu unsupported replies wait for earlier context preparation and cannot erase its history', async () => {
-  const f = await feishuGateway()
+test('Lark unsupported replies wait for earlier context preparation and cannot erase its history', async () => {
+  const f = await larkGateway()
   let release!: () => void
   let started!: () => void
   const gate = new Promise<void>((resolve) => {
@@ -552,10 +552,10 @@ test('Feishu unsupported replies wait for earlier context preparation and cannot
     await gate
     return [historyMessage('earlier', 'ou_bob', 'keep this detail', '1000')]
   }
-  f.deliver(feishuEvent({ message_id: 'text', create_time: '2000' }))
+  f.deliver(larkEvent({ message_id: 'text', create_time: '2000' }))
   await preparing
   f.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'audio',
       message_type: 'audio',
       create_time: '3000',

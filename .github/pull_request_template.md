@@ -20,7 +20,7 @@
 
 ## Risk
 
-<!-- What could break, and what you couldn't verify (e.g. not run against real Feishu or a real provider). -->
+<!-- What could break, and what you couldn't verify (e.g. not run against real Lark or a real provider). -->
 
 ## How to revert
 

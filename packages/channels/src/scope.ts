@@ -14,11 +14,14 @@ export function resolveChannelScope(
   channel: string,
   chatId: string,
   chatKind: 'group' | 'direct',
+  storageKey?: string,
 ): ChannelScope {
   return {
     id: channelSessionId(channel, chatId),
     kind: chatKind === 'group' ? 'shared' : 'private',
-    dataDir: chatDirectory(dataDir, channel, chatId),
+    dataDir: storageKey
+      ? join(dataDir, 'channels', storageKey)
+      : chatDirectory(dataDir, channel, chatId),
     channel,
     chatId,
     chatKind,

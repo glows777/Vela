@@ -17,7 +17,7 @@ pane() { T capture-pane -p -t vela -S -; }           # screen + all scrollback
 
 MODEL="${VERIFY_MODEL:-mock}"
 
-# Everything runs under env -i with this allowlist only: no API keys, FEISHU_* or the user's ~/.vela.
+# Everything runs under env -i with this allowlist only: no API keys, LARK_* or the user's ~/.vela.
 ENV=(env -i "PATH=$PATH" "TERM=${TERM:-xterm-256color}" "LANG=${LANG:-C.UTF-8}"
   "HOME=$STATE/userhome" "VELA_DIR=$STATE/home" "VELA_OFFLINE=1" "VELA_MODEL=$MODEL")
 VELA=(bun "$REPO/packages/vela/src/cli/main.ts")

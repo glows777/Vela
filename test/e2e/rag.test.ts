@@ -23,7 +23,7 @@ const GUIDE = [
   '',
   '# Monitoring',
   '',
-  'Alerts are sent by the Feishu bot; the on-call rota is in the oncall doc.',
+  'Alerts are sent by the Lark bot; the on-call rota is in the oncall doc.',
 ].join('\n')
 
 test('unconfigured RAG stays silent and /rag explains configuration without model or database work', async () => {

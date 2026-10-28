@@ -7,9 +7,9 @@ import type {
 } from '@ai-sdk/provider'
 import type { VelaExtension } from '@glows777/vela'
 import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -37,12 +37,12 @@ async function setup(
   extensions: VelaExtension[] = [],
   readUntagged = true,
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses,
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'cli_bot',
         owners: ['ou_alice'],
         chats: [{ id: 'oc_group', readUntagged }],
@@ -56,7 +56,7 @@ async function setup(
   return { ...fake, t }
 }
 const dm = (message_type: string, content: object, message_id = 'attachment') =>
-  feishuEvent({
+  larkEvent({
     chat_id: 'oc_dm',
     chat_type: 'p2p',
     mentions: [],
@@ -65,7 +65,7 @@ const dm = (message_type: string, content: object, message_id = 'attachment') =>
     content: JSON.stringify(content),
   })
 
-test('Feishu DM image-only input reaches the model with sniffed PNG bytes', async () => {
+test('Lark DM image-only input reaches the model with sniffed PNG bytes', async () => {
   const f = await setup()
   f.deliver(dm('image', { image_key: 'img' }))
   await until(() => f.sent.length === 1)
@@ -77,7 +77,7 @@ test('Feishu DM image-only input reaches the model with sniffed PNG bytes', asyn
   ])
 })
 
-test('Feishu rich post with only an img element triggers an image request', async () => {
+test('Lark rich post with only an img element triggers an image request', async () => {
   const f = await setup()
   f.deliver(
     dm('post', {
@@ -113,14 +113,14 @@ test('with passive intake off, group image then @text attaches four recent image
     sender: { id: 'cli_bot', sender_type: 'app' },
   })
   f.deliver(
-    feishuEvent({
+    larkEvent({
       message_type: 'image',
       content: '{"image_key":"img6"}',
       mentions: [],
       message_id: 'image6',
     }),
   )
-  f.deliver(feishuEvent({ create_time: '2000', message_id: 'question' }))
+  f.deliver(larkEvent({ create_time: '2000', message_id: 'question' }))
   await until(() => f.sent.length === 1)
   expect(imageParts(f.t.model.calls[0]!.prompt)).toHaveLength(4)
   expect(f.resourceCalls.map((c) => c.key).sort()).toEqual([
@@ -133,12 +133,12 @@ test('with passive intake off, group image then @text attaches four recent image
 })
 
 for (const name of ['notes.txt', '../../outside.txt', '..\\..\\outside.txt']) {
-  test(`Feishu saves ${name} inside the session files directory and sends its absolute path`, async () => {
+  test(`Lark saves ${name} inside the session files directory and sends its absolute path`, async () => {
     const f = await setup()
     f.resources.set('file', [Buffer.from('hello'), Buffer.from(' world')])
     f.deliver(dm('file', { file_key: 'file', file_name: name }))
     await until(() => f.sent.length === 1)
-    const directory = f.t.dataPath('channels/feishu-oc_dm/files')
+    const directory = f.t.dataPath('channels/lark-oc_dm/files')
     const files = readdirSync(directory)
     expect(files).toHaveLength(1)
     const path = join(directory, files[0]!)
@@ -149,7 +149,7 @@ for (const name of ['notes.txt', '../../outside.txt', '..\\..\\outside.txt']) {
   })
 }
 
-test('Feishu stops a streamed file above 20MB, removes its partial file and replies too large without calling the model', async () => {
+test('Lark stops a streamed file above 20MB, removes its partial file and replies too large without calling the model', async () => {
   const f = await setup()
   f.resources.set(
     'large',
@@ -159,12 +159,12 @@ test('Feishu stops a streamed file above 20MB, removes its partial file and repl
   await until(() => f.sent.length === 1)
   expect(f.sent[0]?.text).toMatch(/too large.*20\s*MB/i)
   expect(f.t.model.calls).toHaveLength(0)
-  expect(readdirSync(f.t.dataPath('channels/feishu-oc_dm/files'))).toEqual([])
+  expect(readdirSync(f.t.dataPath('channels/lark-oc_dm/files'))).toEqual([])
 })
 
-test('Feishu refuses an existing symlink file without writing outside the session directory', async () => {
+test('Lark refuses an existing symlink file without writing outside the session directory', async () => {
   const f = await setup()
-  const directory = f.t.dataPath('channels/feishu-oc_dm/files')
+  const directory = f.t.dataPath('channels/lark-oc_dm/files')
   mkdirSync(directory, { recursive: true })
   const target = join(f.t.cwd, 'outside.txt')
   await Bun.write(target, 'untouched')
@@ -176,7 +176,7 @@ test('Feishu refuses an existing symlink file without writing outside the sessio
   expect(readFileSync(target, 'utf8')).toBe('untouched')
 })
 
-test('Feishu audio stays unsupported and advertises text, images and files', async () => {
+test('Lark audio stays unsupported and advertises text, images and files', async () => {
   const f = await setup()
   f.deliver(dm('audio', { file_key: 'audio' }))
   await until(() => f.sent.length === 1)
@@ -185,7 +185,7 @@ test('Feishu audio stays unsupported and advertises text, images and files', asy
   expect(f.resourceCalls).toEqual([])
 })
 
-test('Feishu Steer carries an image into the active run', async () => {
+test('Lark Steer carries an image into the active run', async () => {
   let release!: () => void
   const held = new Promise<void>((resolve) => {
     release = resolve
@@ -211,14 +211,14 @@ test('Feishu Steer carries an image into the active run', async () => {
   f.deliver(dm('image', { image_key: 'img' }))
   await until(() => f.cards.length === 1)
   f.click(0, 'steer', { operator: { open_id: 'ou_alice' } })
-  const session = f.t.vela.session('feishu-oc_dm')
+  const session = f.t.vela.session('lark-oc_dm')
   await until(() => session.queue.steering.length === 1)
   release()
   await until(() => f.t.model.calls.length === 2)
   expect(imageParts(f.t.model.calls[1]!.prompt)).toHaveLength(1)
 })
 
-test('Feishu first file creates a fresh data directory before the first session save', async () => {
+test('Lark first file creates a fresh data directory before the first session save', async () => {
   const f = await setup()
   const { rmSync } = await import('node:fs')
   rmSync(f.t.vela.dataDir, { recursive: true, force: true })
@@ -227,19 +227,19 @@ test('Feishu first file creates a fresh data directory before the first session 
   await until(() => f.sent.length === 1)
   expect(
     readFileSync(
-      f.t.dataPath('channels/feishu-oc_dm/files/attachment-first.txt'),
+      f.t.dataPath('channels/lark-oc_dm/files/attachment-first.txt'),
       'utf8',
     ),
   ).toBe('first')
 })
 
-test('Feishu file prepared by expired Steer is reused when the gateway processes its default queue', async () => {
+test('Lark file prepared by expired Steer is reused when the gateway processes its default queue', async () => {
   const f = await setup()
   f.resources.set('file', [Buffer.from('once')])
   const event = dm('file', { file_key: 'file', file_name: 'once.txt' })
-  const { FeishuChannel } = await import('../../packages/lark/src/channel.ts')
+  const { LarkChannel } = await import('../../packages/lark/src/channel.ts')
   const { silentLogger } = await import('../../packages/core/src/logger.ts')
-  const channel = new FeishuChannel({
+  const channel = new LarkChannel({
     appId: '',
     appSecret: '',
     owners: ['ou_alice'],
@@ -266,7 +266,7 @@ test('Feishu file prepared by expired Steer is reused when the gateway processes
 })
 
 for (const type of ['image', 'file']) {
-  test(`Feishu ${type} download failure replies with the error and resource permission hint`, async () => {
+  test(`Lark ${type} download failure replies with the error and resource permission hint`, async () => {
     const f = await setup()
     f.transport.getResource = async () => {
       throw new Error('99991672: Access denied; im:resource required')
@@ -282,7 +282,7 @@ for (const type of ['image', 'file']) {
   })
 }
 
-test('Feishu interrupted file stream reports failure and leaves no reusable partial file', async () => {
+test('Lark interrupted file stream reports failure and leaves no reusable partial file', async () => {
   const f = await setup()
   const { Readable } = await import('node:stream')
   f.transport.getResource = async () =>
@@ -296,10 +296,10 @@ test('Feishu interrupted file stream reports failure and leaves no reusable part
   f.deliver(dm('text', { text: 'barrier' }, 'barrier'))
   await until(() => f.t.model.calls.length === 1 && f.sent.length > 0)
   expect(f.sent[0]?.text).toContain('connection reset')
-  expect(readdirSync(f.t.dataPath('channels/feishu-oc_dm/files'))).toEqual([])
+  expect(readdirSync(f.t.dataPath('channels/lark-oc_dm/files'))).toEqual([])
 })
 
-test('Feishu redelivery after process restart reuses the completed regular file', async () => {
+test('Lark redelivery after process restart reuses the completed regular file', async () => {
   const f = await setup()
   f.resources.set('file', [Buffer.from('complete')])
   const event = dm('file', { file_key: 'file', file_name: 'notes.txt' })
@@ -310,7 +310,7 @@ test('Feishu redelivery after process restart reuses the completed regular file'
     cwd: f.t.cwd,
     dataDir: f.t.vela.dataDir,
     responses: [fauxText('replayed')],
-    extensions: [feishu({ owners: ['ou_alice'], transport: f.transport })],
+    extensions: [lark({ owners: ['ou_alice'], transport: f.transport })],
   })
   await next.vela.startChannels()
   f.deliver(event)
@@ -319,7 +319,7 @@ test('Feishu redelivery after process restart reuses the completed regular file'
   expect(f.resourceCalls).toHaveLength(1)
   expect(
     readFileSync(
-      f.t.dataPath('channels/feishu-oc_dm/files/attachment-notes.txt'),
+      f.t.dataPath('channels/lark-oc_dm/files/attachment-notes.txt'),
       'utf8',
     ),
   ).toBe('complete')
@@ -331,7 +331,7 @@ for (const name of [
   `${'报'.repeat(80)}.pdf`,
   'report: Q3?*"<>|.pdf. ',
 ]) {
-  test(`Feishu saves a portable bounded filename for ${name.slice(0, 25)}`, async () => {
+  test(`Lark saves a portable bounded filename for ${name.slice(0, 25)}`, async () => {
     const f = await setup()
     f.resources.set('file', [Buffer.from('report')])
     f.deliver(
@@ -343,7 +343,7 @@ for (const name of [
     )
     await until(() => f.sent.length === 1)
     expect(f.t.model.calls).toHaveLength(1)
-    const directory = f.t.dataPath('channels/feishu-oc_dm/files')
+    const directory = f.t.dataPath('channels/lark-oc_dm/files')
     const saved = readdirSync(directory)[0]!
     expect(Buffer.byteLength(saved)).toBeLessThanOrEqual(255)
     expect(saved).not.toMatch(/[:?*"<>|]|[. ]$/)
@@ -353,7 +353,7 @@ for (const name of [
   })
 }
 
-test('Feishu exposes the reusable file only after the stream completes', async () => {
+test('Lark exposes the reusable file only after the stream completes', async () => {
   const f = await setup()
   const { Readable } = await import('node:stream')
   let release!: () => void
@@ -376,7 +376,7 @@ test('Feishu exposes the reusable file only after the stream completes', async (
   f.deliver(dm('file', { file_key: 'file', file_name: 'notes.txt' }))
   await streaming
   try {
-    expect(f.t.exists('channels/feishu-oc_dm/files/attachment-notes.txt')).toBe(
+    expect(f.t.exists('channels/lark-oc_dm/files/attachment-notes.txt')).toBe(
       false,
     )
   } finally {
@@ -385,13 +385,13 @@ test('Feishu exposes the reusable file only after the stream completes', async (
   await until(() => f.sent.length === 1)
   expect(
     readFileSync(
-      f.t.dataPath('channels/feishu-oc_dm/files/attachment-notes.txt'),
+      f.t.dataPath('channels/lark-oc_dm/files/attachment-notes.txt'),
       'utf8',
     ),
   ).toBe('firstlast')
 })
 
-test('Feishu expired Steer reuses downloaded images when the default queue runs', async () => {
+test('Lark expired Steer reuses downloaded images when the default queue runs', async () => {
   let finish!: () => void
   const held = new Promise<void>((r) => {
     finish = r
@@ -449,7 +449,7 @@ test('Feishu expired Steer reuses downloaded images when the default queue runs'
   }
 })
 
-test('Feishu filename truncation does not expose a trailing space', async () => {
+test('Lark filename truncation does not expose a trailing space', async () => {
   const f = await setup()
   f.resources.set('file', [Buffer.from('report')])
   f.deliver(
@@ -459,12 +459,12 @@ test('Feishu filename truncation does not expose a trailing space', async () => 
     }),
   )
   await until(() => f.sent.length === 1)
-  expect(
-    readdirSync(f.t.dataPath('channels/feishu-oc_dm/files'))[0],
-  ).not.toMatch(/[. ]$/)
+  expect(readdirSync(f.t.dataPath('channels/lark-oc_dm/files'))[0]).not.toMatch(
+    /[. ]$/,
+  )
 })
 
-test('Feishu expired group Steer reuses history images after the active run fails without a reply', async () => {
+test('Lark expired group Steer reuses history images after the active run fails without a reply', async () => {
   let finish!: () => void
   const held = new Promise<void>((r) => {
     finish = r
@@ -510,19 +510,19 @@ test('Feishu expired group Steer reuses history images after the active run fail
     return resource(...args)
   }
   try {
-    f.deliver(feishuEvent({ message_id: 'start', create_time: '3000' }))
+    f.deliver(larkEvent({ message_id: 'start', create_time: '3000' }))
     await until(() => f.t.model.calls.length === 1)
     f.history.push({
       ...historyMessage('image', 'ou_bob', '', '4000'),
       msg_type: 'image',
       body: { content: '{"image_key":"img"}' },
     })
-    f.deliver(feishuEvent({ message_id: 'question', create_time: '5000' }))
+    f.deliver(larkEvent({ message_id: 'question', create_time: '5000' }))
     await until(() => f.cards.length === 1)
     f.click(0, 'steer')
     await downloading
     finish()
-    await until(() => !f.t.vela.session('feishu-oc_group').isRunning)
+    await until(() => !f.t.vela.session('lark-oc_group').isRunning)
     expect(f.sent).toHaveLength(0)
     release()
     await until(() => f.sent.length === 1)

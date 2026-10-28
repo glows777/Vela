@@ -16,7 +16,7 @@ async function post(options: {
   status?: number
   body?: string
   grok?: boolean
-  feishu?: boolean
+  lark?: boolean
   state?: Record<string, number>
 }) {
   const dir = await mkdtemp(join(tmpdir(), 'wake-post-'))
@@ -36,7 +36,7 @@ async function post(options: {
         body: (await request.json()) as Record<string, unknown>,
       })
       return new Response(
-        path === '/feishu'
+        path === '/lark'
           ? (options.response ?? '{"code":0,"msg":"success"}')
           : '{}',
         { status: options.status ?? 200 },
@@ -89,8 +89,8 @@ async function post(options: {
         WAKE_STATE_PATH: statePath,
         WAKE_GROK_FORGE_WEBHOOK_URL: options.grok ? `${server.url}grok` : '',
         WAKE_GROK_FORGE_WEBHOOK_KEY: options.grok ? 'local-test-key' : '',
-        WAKE_FEISHU_VELA_WEBHOOK_URL:
-          options.feishu === false ? '' : `${server.url}feishu`,
+        WAKE_LARK_VELA_WEBHOOK_URL:
+          options.lark === false ? '' : `${server.url}lark`,
         WAKE_FORK: 'false',
       },
       stdout: 'pipe',
@@ -117,13 +117,13 @@ async function post(options: {
   }
 }
 
-test('Feishu HTTP 200 keyword rejection fails without recording delivery', async () => {
+test('Lark HTTP 200 keyword rejection fails without recording delivery', async () => {
   const result = await post({
     response: '{"code":19024,"msg":"Key Words Not Found"}',
     state: { forge: 1 },
   })
   expect(result.requests).toHaveLength(1)
-  expect(result.requests[0]?.path).toBe('/feishu')
+  expect(result.requests[0]?.path).toBe('/lark')
   expect({
     status: result.status,
     output: result.output,
@@ -135,7 +135,7 @@ test('Feishu HTTP 200 keyword rejection fails without recording delivery', async
   })
 })
 
-test('Feishu success records the bucket and saves only after posting the summary', async () => {
+test('Lark success records the bucket and saves only after posting the summary', async () => {
   const result = await post({
     response: '{"StatusCode":0,"code":0,"msg":"success","data":{}}',
   })
@@ -144,7 +144,7 @@ test('Feishu success records the bucket and saves only after posting the summary
   expect(Object.keys(result.state ?? {})).toEqual(['vela'])
   expect(result.requests).toHaveLength(1)
   expect(result.requests[0]).toMatchObject({
-    path: '/feishu',
+    path: '/lark',
     authorization: null,
     body: {
       msg_type: 'text',
@@ -157,7 +157,7 @@ test('Feishu success records the bucket and saves only after posting the summary
   })
 })
 
-test('Feishu malformed or missing success code fails without saving a bucket', async () => {
+test('Lark malformed or missing success code fails without saving a bucket', async () => {
   for (const response of ['not-json', '{}']) {
     const result = await post({ response })
     expect(result.status).not.toBe(0)
@@ -166,7 +166,7 @@ test('Feishu malformed or missing success code fails without saving a bucket', a
   }
 })
 
-test('Feishu HTTP failure remains a failure without saving a bucket', async () => {
+test('Lark HTTP failure remains a failure without saving a bucket', async () => {
   const result = await post({ status: 500 })
   expect(result.status).not.toBe(0)
   expect(result.requests).toHaveLength(1)
@@ -175,10 +175,10 @@ test('Feishu HTTP failure remains a failure without saving a bucket', async () =
 })
 
 test('missing secrets skip both sinks without requests or saved buckets', async () => {
-  const result = await post({ body: '@forge @vela', feishu: false })
+  const result = await post({ body: '@forge @vela', lark: false })
   expect(result.status).toBe(0)
   expect(result.stdout).toContain('missing secret for sink grok')
-  expect(result.stdout).toContain('missing secret WAKE_FEISHU_VELA_WEBHOOK_URL')
+  expect(result.stdout).toContain('missing secret WAKE_LARK_VELA_WEBHOOK_URL')
   expect(result.requests).toEqual([])
   expect(result.output).toBe('')
   expect(result.state).toBeUndefined()

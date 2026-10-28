@@ -123,7 +123,7 @@ vela -c
 - [Models](models.md): providers, `models.json`, thinking levels.
 - [Settings](settings.md): `settings.json`, project trust, skills.
 - [Tools](tools.md): the built-in file, search and shell tools.
-- [Built-in extensions](built-in-extensions.md): memory, knowledge base, web, Feishu.
+- [Built-in extensions](built-in-extensions.md): memory, knowledge base, web, Lark.
 - [Extensions](extensions.md): add your own tools, commands, providers and channels.
 - [SDK](sdk.md): embed Vela in your own program.
 - [Security](security.md): permissions and what Vela does not protect against.
