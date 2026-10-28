@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { SessionUI } from '@glows777/vela'
-import { permissionGate } from '../../src/extensions/permission-gate/index.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { permissionGate } from '@glows777/vela-core'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

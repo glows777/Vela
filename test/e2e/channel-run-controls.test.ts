@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import type { FeishuHistoryMessage } from '@glows777/vela-lark'
+import { feishu } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { messageTime } from '../../src/extensions/feishu/history.ts'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import type { FeishuHistoryMessage } from '../../src/extensions/feishu/transport.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { messageTime } from '../../packages/lark/src/history.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

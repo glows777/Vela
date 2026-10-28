@@ -1,0 +1,32 @@
+# @glows777/vela-mcp
+
+  function mcp: (options?: McpOptions) => VelaExtension
+  const mcpConfig: ExtensionConfigDefinition
+  type McpExposure = 'direct' | 'deferred' | 'hidden'
+  interface McpHttpServerConfig
+    description?: string | undefined
+    enabled?: boolean | undefined
+    exposure?: McpExposure | undefined
+    headers?: Record<string, string> | undefined
+    timeout?: number | undefined
+    toolExposure?: Record<string, McpExposure> | undefined
+    type?: "http" | "streamable-http" | undefined
+    url: string
+  interface McpOptions
+    servers?: Record<string, McpServerConfig> | undefined
+  type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig
+  interface McpServersFile
+    errors: string[]
+    servers: Record<string, unknown>
+    sources: Record<string, string>
+  interface McpStdioServerConfig
+    args?: string[] | undefined
+    command: string
+    cwd?: string | undefined
+    description?: string | undefined
+    enabled?: boolean | undefined
+    env?: Record<string, string> | undefined
+    exposure?: McpExposure | undefined
+    timeout?: number | undefined
+    toolExposure?: Record<string, McpExposure> | undefined
+    type?: "stdio" | undefined

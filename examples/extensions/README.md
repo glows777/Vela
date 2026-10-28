@@ -10,7 +10,7 @@ VELA_MODEL=mock vela -e examples/extensions/hello-tool.ts
 cp examples/extensions/hello-tool.ts ~/.vela/extensions/
 ```
 
-From a source checkout, use `bun src/cli/main.ts` in place of `vela`. Add `--no-extensions` to load only the example and skip the built-in extensions.
+From a source checkout, use `bun packages/vela/src/cli/main.ts` in place of `vela`. Add `--no-extensions` to load only the example and skip the built-in extensions.
 
 | File | Shows | Try it |
 |---|---|---|

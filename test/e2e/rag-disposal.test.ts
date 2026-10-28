@@ -1,10 +1,9 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { readdirSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import type { EmbeddingFn } from '../../src/extensions/rag/embedder.ts'
-import { SqliteVectorStore } from '../../src/extensions/rag/sqlite-store.ts'
-import { fauxToolCall } from '../../src/testing/faux.ts'
-import { createFauxEmbedder } from '../../src/testing/faux-embedder.ts'
+import { createFauxEmbedder, fauxToolCall } from '@glows777/vela-core/testing'
+import type { EmbeddingFn } from '@glows777/vela-rag'
+import { SqliteVectorStore } from '../../packages/rag/src/sqlite-store.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

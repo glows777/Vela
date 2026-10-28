@@ -1,13 +1,13 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import { z } from 'zod'
-import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
-import { feishu } from '../../src/extensions/feishu/index.ts'
+import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import {
   fauxError,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
+import { z } from 'zod'
 import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -171,7 +171,7 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   let release!: () => void
   let entered = false
   const respond = (
-    request: import('../../src/testing/faux.ts').FauxRequest,
+    request: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => {
     if (request.tools.includes('feishu_start_topic'))
       return request.toolResults.length

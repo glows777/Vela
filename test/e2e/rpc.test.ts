@@ -7,7 +7,7 @@ import { tempDir } from '../support/vela.ts'
 // `vela --mode rpc` child process: write JSONL commands to stdin, read responses / events / extension_ui_request from stdout
 
 const ROOT = resolve(import.meta.dir, '../..')
-const ENTRY = join(ROOT, 'src/cli/main.ts')
+const ENTRY = join(ROOT, 'packages/vela/src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
 

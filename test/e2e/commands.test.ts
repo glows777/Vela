@@ -2,24 +2,24 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { z } from 'zod'
 import type {
   IncomingMessage,
   OutgoingMessage,
-} from '../../src/channels/types.ts'
-import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
-import { createCliDispatcher } from '../../src/cli/dispatcher.ts'
-import type { ProviderDefinition } from '../../src/models/index.ts'
+  ChannelExtension as VelaExtension,
+} from '@glows777/vela-channels'
+import type { ProviderDefinition } from '@glows777/vela-core'
 import {
   fileSessionStorage,
   memorySessionStorage,
   type SessionStorage,
-} from '../../src/session/storage.ts'
+} from '@glows777/vela-core'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { z } from 'zod'
+import { createCliDispatcher } from '../../packages/vela/src/cli/dispatcher.ts'
 import { startTui, stopTuis } from '../support/terminal.ts'
 import {
   captureConsole,

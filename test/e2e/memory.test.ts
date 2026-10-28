@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { MemoryStore } from '../../src/extensions/memory/store.ts'
 import {
   fauxHang,
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { MemoryStore } from '../../packages/core/src/extensions/memory/store.ts'
 import {
   captureConsole,
   cleanupTestVelas,

@@ -1,12 +1,18 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+} from 'node:fs'
 import { join, resolve } from 'node:path'
 import { stripTerminalSequences } from '@earendil-works/pi-tui'
-import { projectDataDir } from '../../src/config/index.ts'
+import { projectDataDir } from '../../packages/core/src/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
-const ENTRY = join(ROOT, 'src/cli/main.ts')
+const ENTRY = join(ROOT, 'packages/vela/src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
 
@@ -1229,7 +1235,7 @@ test.concurrent('--model picks a provider registered by an extension; the choice
   dirs.push(home)
   await Bun.write(
     join(home.path, 'extensions/local.ts'),
-    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'src/testing/faux'))}
+    `import { createFauxModel, fauxText } from ${JSON.stringify(join(ROOT, 'packages/core/src/testing/faux.ts'))}
 export default (vela) => vela.registerProvider('local', {
   models: [{ id: 'm', contextWindow: 32768 }],
   createModel: (id) => createFauxModel({ modelId: id, responses: [(req) => fauxText('from ' + id + ' ' + (req.reasoning ?? '-'))] }),
@@ -1429,4 +1435,70 @@ test('-p: SIGTERM stops a running bash command with its process group, then exit
     // Don't leave the command running if the assertion failed
     if (pid && alive(pid)) process.kill(-pid, 'SIGKILL')
   }
+})
+
+test.concurrent('VELA_RECORD without a model preserves the CLI configuration guidance', async () => {
+  const home = tempDir('vela-record-unconfigured-')
+  dirs.push(home)
+  const result = await cli(['-p', 'hello'], {
+    model: '',
+    env: { VELA_RECORD: join(home.path, 'recorded.json') },
+  })
+  expect(result.code).toBe(1)
+  expect(result.stdout).toBe('')
+  expect(result.stderr).toContain(
+    '[record] No model available. Sign in with /login',
+  )
+})
+
+test.concurrent('recording resolves a model without reading untrusted project prompt resources', async () => {
+  const dir = tempDir('vela-record-trust-')
+  dirs.push(dir)
+  const prompts = join(dir.path, '.vela/prompts')
+  mkdirSync(prompts, { recursive: true })
+  chmodSync(prompts, 0)
+  try {
+    const result = await cli(['-p', 'hello'], {
+      cwd: dir.path,
+      model: `faux:${join(dir.path, 'faux.json')}`,
+      files: {
+        'faux.json': JSON.stringify({
+          responses: [{ text: 'recorded offline' }],
+        }),
+      },
+      env: { VELA_RECORD: join(dir.path, 'recorded.json') },
+    })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('recorded offline')
+  } finally {
+    chmodSync(prompts, 0o700)
+  }
+})
+
+test.concurrent('recording a faux model does not require a temporary Vela directory', async () => {
+  const dir = tempDir('vela-record-no-temp-')
+  dirs.push(dir)
+  const blocked = join(dir.path, 'not-a-temp-directory')
+  await Bun.write(blocked, 'This deployment has no usable temporary directory.')
+  const common = {
+    cwd: dir.path,
+    model: 'faux:scenario.json',
+    files: {
+      'scenario.json': JSON.stringify({
+        responses: [{ text: 'recorded offline' }],
+      }),
+    },
+    env: { TMPDIR: blocked },
+  }
+  const ordinary = await cli(['-p', 'hello'], common)
+  expect(ordinary.code).toBe(0)
+  expect(ordinary.stdout.trim()).toBe('recorded offline')
+  const recorded = await cli(['-p', 'hello'], {
+    ...common,
+    env: { ...common.env, VELA_RECORD: join(dir.path, 'recorded.json') },
+  })
+  expect(recorded.stderr).not.toContain('[record]')
+  expect(recorded.code).toBe(0)
+  expect(recorded.stdout.trim()).toBe('recorded offline')
+  expect(await Bun.file(join(dir.path, 'recorded.json')).exists()).toBe(true)
 })

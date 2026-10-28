@@ -1,12 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
-import { tempDir } from '../../src/testing/test-vela.ts'
+} from '@glows777/vela-core/testing'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -14,7 +13,7 @@ afterEach(async () => {
 })
 
 test('core assembly supports memory and schema tools without installing a channel runtime', async () => {
-  const core = await import('../../src/core.ts')
+  const core = await import('@glows777/vela-core')
   const { jsonSchema } = await import('ai')
   const model = createFauxModel({
     responses: [
@@ -55,7 +54,7 @@ test('core assembly supports memory and schema tools without installing a channe
 
 test('the SDK testing entry and replay use a core-only assembly', async () => {
   const { createTestVela, replayScenario } = await import(
-    '../../src/testing/core.ts'
+    '@glows777/vela-core/testing'
   )
   const fixture = createTestVela({ responses: [fauxText('core fixture')] })
   cleanups.push(() => fixture.cleanup())
@@ -74,45 +73,8 @@ test('the SDK testing entry and replay use a core-only assembly', async () => {
   expect(t.lastAssistantText()).toBe('replayed')
 })
 
-test('core config leaves MCP to its descriptor and trusts only declared project resources', async () => {
-  const core = await import('../../src/config/core.ts')
-  const { mcpConfig } = await import('../../src/extensions/mcp/config.ts')
-  const dir = tempDir('vela-config-contract-')
-  cleanups.push(dir.cleanup)
-  const cwd = join(dir.path, 'work')
-  const agentDir = join(dir.path, 'agent')
-  mkdirSync(join(cwd, '.vela'), { recursive: true })
-  writeFileSync(
-    join(cwd, '.vela', 'mcp.json'),
-    JSON.stringify({ mcpServers: { local: { command: 'example' } } }),
-  )
-  expect(core.projectTrustRequired(cwd, agentDir, dir.path)).toBe(false)
-  expect(core.projectTrustRequired(cwd, agentDir, dir.path, [mcpConfig])).toBe(
-    true,
-  )
-  const bare = core.loadConfig({ cwd, agentDir, homeDir: dir.path })
-  expect('mcp' in bare).toBe(false)
-  const resolved = core.loadConfig({
-    cwd,
-    agentDir,
-    homeDir: dir.path,
-    trusted: true,
-    extensionConfigs: [mcpConfig],
-  })
-  expect(resolved.extensionConfig.mcp?.mcpServers).toEqual({
-    local: { command: 'example' },
-  })
-  const untrusted = core.loadConfig({
-    cwd,
-    agentDir,
-    homeDir: dir.path,
-    extensionConfigs: [mcpConfig],
-  })
-  expect(untrusted.extensionConfig.mcp?.mcpServers).toEqual({})
-})
-
 test('the public publisher cannot forge agent events; ordinary inspection does not run extension hooks', async () => {
-  const core = await import('../../src/core.ts')
+  const core = await import('@glows777/vela-core')
   let previews = 0
   const vela = core.createVela({
     contextFiles: false,
@@ -153,7 +115,7 @@ test('the public publisher cannot forge agent events; ordinary inspection does n
 
 test('JSON Schema construction requires the SDK wrapper and leaves ordinary schema registration strict', async () => {
   const { defineJsonSchemaTool } = await import(
-    '../../src/tools/json-schema.ts'
+    '../../packages/core/src/tools/json-schema.ts'
   )
   expect(() =>
     defineJsonSchemaTool({

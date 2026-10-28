@@ -1,11 +1,11 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { projectDataDir } from '../../src/config/index.ts'
+import { projectDataDir } from '../../packages/core/src/config/paths.ts'
 import { tempDir } from '../support/vela.ts'
 
 const ROOT = resolve(import.meta.dir, '../..')
-const ENTRY = join(ROOT, 'src/cli/main.ts')
+const ENTRY = join(ROOT, 'packages/vela/src/cli/main.ts')
 
 // `serve` runs until a signal stops it, so the tests spawn one process each and wait for stderr
 setDefaultTimeout(30_000)

@@ -9,14 +9,14 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import { silentLogger } from '../../src/logger.ts'
+import { silentLogger } from '@glows777/vela-core'
 import {
   fauxError,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

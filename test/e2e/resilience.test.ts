@@ -1,13 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import { APICallError } from '@ai-sdk/provider'
-import z from 'zod'
 import {
   fauxError,
   fauxHang,
   fauxStreamError,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import z from 'zod'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

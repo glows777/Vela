@@ -1,0 +1,547 @@
+#!/usr/bin/env node
+
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import type { ImageContent, VelaSession } from '@glows777/vela-core'
+import {
+  memorySessionStorage,
+  migrateSessionV1,
+  type SessionEntry,
+  type SessionHeader,
+  setDefaultToolModifiers,
+} from '@glows777/vela-core'
+import {
+  buildSessionPath,
+  inspectVela,
+  isSessionV1,
+  newSessionId,
+  renderSessionHtml,
+  resolveModel,
+} from '@glows777/vela-core/diagnostics'
+import {
+  createMockModel,
+  loadFauxScenario,
+  recordModel,
+} from '@glows777/vela-core/testing'
+import type { LanguageModel } from 'ai'
+import {
+  defaultAgentDir,
+  loadConfig,
+  type VelaConfig,
+} from '../config/index.ts'
+import { createVela } from '../vela.ts'
+import { errorMessage } from './error.ts'
+import { readAttachments } from './files.ts'
+import { runInteractive } from './interactive.ts'
+import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
+import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
+import { installationId } from './login.ts'
+import { runPrintMode } from './print-mode.ts'
+import { runRpcMode } from './rpc-mode.ts'
+import { runServe } from './serve.ts'
+import {
+  BUILTIN_EXTENSIONS,
+  type CliArgs,
+  DEFAULT_OFF_BUILTINS,
+  extensionConfigFromEnv,
+  formatModelList,
+  HELP,
+  legacyDataHint,
+  loadCliExtensions,
+  packageVersion,
+  parseArgs,
+  resolveTrust,
+  selectTools,
+  USAGE,
+  withMcpServers,
+} from './setup.ts'
+import { formatContextFileList } from './status-display.ts'
+
+const usageError = (message: string): never => {
+  console.error(message)
+  console.error(USAGE)
+  process.exit(2)
+}
+
+let args: CliArgs
+try {
+  args = parseArgs(process.argv.slice(2))
+} catch (error) {
+  usageError(error instanceof Error ? error.message : String(error))
+  throw error
+}
+// Like pi: --help / --version print to stdout and exit before any config, trust or model is read
+if (args.help || args.version) {
+  process.stdout.write(args.help ? HELP : `${packageVersion()}\n`)
+  process.exit(0)
+}
+const env = process.env
+const cwd = process.cwd()
+
+/**
+ * Run mode (like pi): `serve` runs channels only; `--mode rpc` / `--mode json` pick explicitly; `-p`, `--mode text`
+ * or redirected stdin / stdout mean print mode; otherwise (in a terminal) interactive mode.
+ */
+const mode: 'serve' | 'interactive' | 'print' | 'json' | 'rpc' = args.serve
+  ? 'serve'
+  : args.mode === 'rpc'
+    ? 'rpc'
+    : args.mode === 'json'
+      ? 'json'
+      : args.print ||
+          args.mode === 'text' ||
+          !process.stdin.isTTY ||
+          !process.stdout.isTTY
+        ? 'print'
+        : 'interactive'
+// Non-interactive modes keep stdout for results / protocol: console output from extensions and the SDK goes to stderr
+if (mode !== 'interactive') redirectConsoleToStderr()
+if (mode === 'rpc' && args.messages.length)
+  usageError(
+    '--mode rpc reads commands from stdin and takes no prompt on the command line',
+  )
+if (args.export && (args.messages.length > 1 || args.mode || args.print))
+  usageError('--export takes a session and an optional output path only')
+if (mode !== 'interactive' && args.resume)
+  usageError(
+    '-r works only in interactive mode; in print / json / rpc mode use --session <id> or -c',
+  )
+
+// Print mode: piped stdin is prepended to the first prompt (like pi: `git diff | vela -p "review"`)
+const messages = args.export
+  ? [...args.messages]
+  : args.messages.filter((arg) => !arg.startsWith('@'))
+let attachments: { text: string; images: ImageContent[] } = {
+  text: '',
+  images: [],
+}
+if (mode !== 'rpc' && mode !== 'serve' && !args.listModels && !args.export) {
+  try {
+    attachments = await readAttachments(
+      args.messages
+        .filter((arg) => arg.startsWith('@'))
+        .map((arg) => arg.slice(1)),
+    )
+  } catch (error) {
+    console.error(errorMessage(error))
+    process.exit(1)
+  }
+}
+if (
+  messages[0]?.trimStart().startsWith('/') &&
+  (attachments.text || attachments.images.length)
+) {
+  console.error('[attachments] Attachments are ignored by slash commands')
+  attachments = { text: '', images: [] }
+}
+if ((mode === 'print' || mode === 'json') && !args.listModels && !args.export) {
+  const piped = process.stdin.isTTY ? '' : (await readStdin()).trim()
+  if (piped) messages[0] = messages[0] ? `${piped}\n\n${messages[0]}` : piped
+  if (!messages.length && !attachments.text && !attachments.images.length)
+    usageError('No prompt: pass one on the command line or via stdin')
+}
+if (attachments.text || attachments.images.length)
+  messages[0] = [attachments.text, messages[0]].filter(Boolean).join('\n\n')
+// Config: ~/.vela/settings.json + <cwd>/.vela/settings.json once trusted (step 4, see 04-plan.md)
+const agentDir = defaultAgentDir(env)
+let config: VelaConfig
+try {
+  const trust = await resolveTrust({
+    cwd,
+    agentDir,
+    approve: args.approve,
+    interactive: mode === 'interactive',
+  })
+  if (trust.warning) console.error(trust.warning)
+  config = loadConfig({
+    cwd,
+    agentDir,
+    env,
+    trusted: trust.trusted,
+    builtins: Object.keys(BUILTIN_EXTENSIONS),
+    defaultOffBuiltins: DEFAULT_OFF_BUILTINS,
+  })
+} catch (error) {
+  console.error(`[config] ${error instanceof Error ? error.message : error}`)
+  process.exit(2)
+}
+// Hint in -p mode too (if --continue can't find the old session, the user should know why); goes to stderr, stdout is for results
+const legacyHint = legacyDataHint(cwd, config.dataDir)
+if (legacyHint) console.error(legacyHint)
+
+/**
+ * Default model: VELA_MODEL=mock / faux:<scenario> wins (offline demo, replay), then `--model` → settings
+ * defaultModel → `openai/$OPENAI_API_MODEL_NAME` (the legacy env var form).
+ */
+const NO_MODEL =
+  'No model available. Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock.'
+
+/** Error text for the user: the core's "No model selected" names SDK calls (createVela / setModel); the CLI says how to pick a model. */
+function cliErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.startsWith('No model selected') ? NO_MODEL : message
+}
+
+/** The default model; undefined when nothing is configured (a session resumed with --continue may have a saved model; otherwise startup reports NO_MODEL) */
+async function chooseModel(): Promise<LanguageModel | string | undefined> {
+  // --model wins over VELA_MODEL (so VELA_RECORD wraps the model --model names)
+  if (args.model) return args.model
+  // VELA_MODEL=mock: offline demo with the built-in keyword demo model (simulates prompt cache behavior)
+  if (env.VELA_MODEL === 'mock') return createMockModel()
+  // VELA_MODEL=faux:<scenario.json>: replay model responses from a JSON scenario script (bug repros, CLI e2e)
+  if (env.VELA_MODEL?.startsWith('faux:'))
+    return loadFauxScenario(env.VELA_MODEL.slice('faux:'.length))
+  return (
+    config.settings.defaultModel ??
+    (env.OPENAI_API_MODEL_NAME
+      ? `openai/${env.OPENAI_API_MODEL_NAME}`
+      : undefined)
+  )
+}
+// --list-models needs neither a runnable model nor a recorder
+const chosenModel = args.listModels ? undefined : await chooseModel()
+
+// VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
+// (records the default model only; a model chosen by name is resolved here via models.json / built-in providers, so extension providers can't be recorded)
+let recorder: ReturnType<typeof recordModel> | undefined
+if (env.VELA_RECORD && !args.listModels) {
+  try {
+    recorder = recordModel(
+      resolveModel(chosenModel, {
+        providers: config.providers,
+        credentials: config.credentials,
+      }),
+      { path: env.VELA_RECORD },
+    )
+  } catch (error) {
+    console.error(`[record] ${cliErrorMessage(error)}`)
+    process.exit(1)
+  }
+}
+
+// Interactive mode logs to the TUI chat log and debug to ~/.vela/debug.log; other modes log to stderr
+const interactiveLogger =
+  mode === 'interactive' && !args.listModels
+    ? createInteractiveLogger({
+        debugLog:
+          env.VELA_DEBUG === '1' ? join(agentDir, 'debug.log') : undefined,
+      })
+    : undefined
+const logger =
+  interactiveLogger?.logger ??
+  createConsoleLogger({ debug: env.VELA_DEBUG === '1', stderr: true })
+// Extensions that failed to load (already reported on stderr); --list-models exits 1 when there are any
+const extensionErrors: string[] = []
+const vela = createVela({
+  model: recorder?.model ?? chosenModel,
+  providers: config.providers,
+  credentials: config.credentials,
+  thinkingLevel: args.thinking ?? config.settings.defaultThinkingLevel,
+  cwd,
+  dataDir: config.dataDir,
+  sessionStorage: args.noSession ? memorySessionStorage() : undefined,
+  skillDirs: config.skillDirs,
+  promptTemplateDirs: config.promptDirs,
+  contextFiles: args.noContextFiles ? false : config.contextFiles,
+  appendSystemPrompt: args.appendSystemPrompt.length
+    ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
+    : config.appendSystemPrompt,
+  limits: config.settings.limits,
+  autoCompaction: config.settings.autoCompaction,
+  shellPath: config.settings.shellPath,
+  logger,
+  // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off
+  binDir: join(agentDir, 'bin'),
+  offline: ['1', 'true', 'yes'].includes(
+    (env.VELA_OFFLINE ?? '').toLowerCase(),
+  ),
+  extensionConfig: withMcpServers(
+    extensionConfigFromEnv(env, config.extensionConfig),
+    config,
+  ),
+  // Built-in extensions (memory / rag / web / feishu) + ~/.vela/extensions + .vela/extensions + settings + -e
+  extensions: await loadCliExtensions(config, args, (message) => {
+    extensionErrors.push(message)
+    console.error(message)
+  }),
+})
+
+// Text mode diagnostics must survive runPrintMode, including the final save during dispose().
+// Vela clears this subscription after every session has closed.
+if (mode === 'print')
+  vela.subscribe((event, sessionId) => {
+    if (event.type === 'session_save_failed')
+      console.error(
+        `Could not save session ${sessionId}: ${errorMessage(event.error)}`,
+      )
+  })
+
+const exitWith = async (code: number, message: string): Promise<never> => {
+  ;(code ? process.stderr : process.stdout).write(message)
+  await vela.dispose()
+  process.exit(code)
+}
+
+// --list-models (like pi): extension providers are listed too, so wait for extensions to load.
+// pi exits 0 even when an extension failed to load; Vela still lists the models that did load,
+// but exits 1 so scripts notice (the errors are already on stderr)
+if (args.listModels) {
+  await vela.ready().catch(() => {})
+  const list = formatModelList(
+    vela.models(),
+    args.listModels === true ? undefined : args.listModels,
+  )
+  if (!extensionErrors.length) await exitWith(0, list)
+  process.stdout.write(list)
+  await exitWith(
+    1,
+    `${extensionErrors.length} extension(s) failed to load; the list above may be incomplete\n`,
+  )
+}
+
+// --tools / --no-tools / --exclude-tools and defaultTools: checked once extensions have registered their tools.
+// `serve` refuses those flags, and the setting does not reach channel sessions: it has no single session to apply them to.
+let toolLoadout: ReturnType<typeof selectTools>
+try {
+  if (
+    mode !== 'serve' &&
+    (args.tools ||
+      args.noTools ||
+      args.excludeTools.length ||
+      config.settings.defaultTools)
+  ) {
+    await vela.ready().catch(() => {})
+    toolLoadout = selectTools(
+      inspectVela(vela).tools.map((tool) => tool.name),
+      args,
+      config.settings.defaultTools,
+    )
+  }
+} catch (error) {
+  await exitWith(
+    2,
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  )
+}
+
+/** Set once a signal stops the CLI: its code wins over the one of the run it interrupted */
+let signalCode: number | undefined
+const exit = async (code: number): Promise<never> => {
+  await vela.dispose()
+  await recorder?.flush()
+  process.exit(signalCode ?? code)
+}
+
+// --export <id or .jsonl file> [output]: write the session as HTML and exit (like pi)
+if (args.export) {
+  try {
+    const written = await exportHtml(args.export, args.messages[0])
+    console.error(`Exported to ${written}`)
+  } catch (error) {
+    console.error(`[export] ${error instanceof Error ? error.message : error}`)
+    await exit(1)
+  }
+  await exit(0)
+}
+
+// --fork <id>: copy a saved session into a new one and start there (like pi)
+let forkedId: string | undefined
+if (args.fork) {
+  const source = vela.session(args.fork)
+  try {
+    if (!(await source.resume()))
+      throw new Error(`Session ${args.fork} has no saved history`)
+    forkedId = (await source.clone()).session?.id
+  } catch (error) {
+    console.error(`[fork] ${error instanceof Error ? error.message : error}`)
+    await exit(1)
+  }
+  await source.close()
+}
+
+/**
+ * Which session to use (like pi): `--session <id>`; `-c` continues the most recent saved one (or starts a new one);
+ * `-r` picks one in interactive mode; otherwise each launch starts a new session.
+ */
+const sessionId =
+  forkedId ??
+  args.session ??
+  (args.continue ? (await vela.listSessions())[0]?.id : undefined) ??
+  newSessionId()
+const resume = args.session !== undefined || args.continue
+// Record input of the main session only, not channel sessions (the id picked with -r is known only at configure time)
+let recordedSession = sessionId
+if (recorder)
+  vela.subscribe((event, id) => {
+    if (event.type === 'agent_start' && id === recordedSession)
+      recorder.addInput(event.input)
+  })
+
+/**
+ * Applies --tools / --no-tools / --exclude-tools to each session the CLI opens.
+ * A resumed session carries its saved model and thinking level. Explicit command-line values win, and so do
+ * VELA_MODEL=mock / faux and VELA_RECORD-wrapped models (otherwise --continue would bypass replay / recording
+ * and use the saved real model). Returns whether the model is usable.
+ */
+function applyModelArgs(target: VelaSession): boolean {
+  recordedSession = target.id
+  if (toolLoadout?.selection) target.setActiveTools(toolLoadout.selection)
+  else if (toolLoadout?.modifiers)
+    setDefaultToolModifiers(target, toolLoadout.modifiers)
+  if (args.thinking) target.setThinkingLevel(args.thinking)
+  // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
+  const override =
+    recorder?.model ??
+    args.model ??
+    (typeof chosenModel === 'string' ? undefined : chosenModel)
+  try {
+    if (override) target.setModel(override)
+    else void target.modelInfo
+    return true
+  } catch (error) {
+    console.error(
+      `[model] ${chosenModel === undefined && !args.model ? NO_MODEL : cliErrorMessage(error)}`,
+    )
+    return false
+  }
+}
+
+function reportContextFiles(): void {
+  const line = formatContextFileList(inspectVela(vela).contextFiles, {
+    cwd,
+    homeDir: homedir(),
+    agentDir,
+  })
+  if (line) logger.info(`[context] ${line}`)
+}
+
+/** `--append-system-prompt` takes text or a file path (like pi: an existing file is read). */
+function readPromptInput(input: string): string {
+  return existsSync(input) && statSync(input).isFile()
+    ? readFileSync(input, 'utf-8')
+    : input
+}
+
+// Print, JSON and RPC modes (interactive mode and `serve` handle their own): on a signal, abort the running
+// turn so the commands the model started are killed (bash runs them in their own process group, which would
+// outlive Vela), save the sessions and exit with the signal's code. A second signal exits right away.
+if (mode !== 'interactive' && mode !== 'serve') {
+  const signals: [NodeJS.Signals, number][] = [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+    ...(process.platform === 'win32'
+      ? []
+      : ([['SIGHUP', 129]] as [NodeJS.Signals, number][])),
+  ]
+  for (const [signal, code] of signals)
+    process.on(signal, () => {
+      if (signalCode !== undefined) process.exit(code)
+      signalCode = code
+      void exit(code)
+    })
+}
+
+if (mode === 'print' || mode === 'json') {
+  reportContextFiles()
+  // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
+  const session = vela.session(sessionId)
+  if (resume) await session.resume()
+  // Extension providers resolve only after extensions load (if loading fails, prompt reports it)
+  await vela.ready().catch(() => {})
+  if (!applyModelArgs(session)) await exit(1)
+  await exit(
+    await runPrintMode({
+      vela,
+      session,
+      messages,
+      images: attachments.images,
+      mode: mode === 'json' ? 'json' : 'text',
+    }),
+  )
+} else if (mode === 'rpc') {
+  reportContextFiles()
+  await vela
+    .ready()
+    .catch((error) =>
+      console.error(error instanceof Error ? error.message : error),
+    )
+  await runRpcMode({
+    vela,
+    sessionId,
+    resume,
+    newSessionId,
+    // Start even without a model; the client can set_model (the error goes to stderr)
+    configure: (session) => void applyModelArgs(session),
+    input: process.stdin,
+    write: writeStdout,
+    describeError: cliErrorMessage,
+    enabledModels: config.settings.enabledModels,
+  })
+  await exit(0)
+} else if (mode === 'serve') {
+  await exit(
+    await runServe({
+      vela,
+      write: (line) => process.stderr.write(`${line}\n`),
+    }),
+  )
+} else {
+  await runInteractive({
+    vela,
+    messages,
+    images: attachments.images,
+    sessionId,
+    resume,
+    pick: args.resume,
+    newSessionId,
+    configure: applyModelArgs,
+    describeError: cliErrorMessage,
+    enabledModels: config.settings.enabledModels,
+    loginOptions: { getDeviceId: () => installationId(agentDir) },
+    agentDir,
+    attachLogger: interactiveLogger?.attach,
+    onExit: async () => {
+      await vela.dispose()
+      await recorder?.flush()
+    },
+  })
+  process.exit(0)
+}
+
+/** Writes a saved session (by id, or a .jsonl session file) as HTML; returns the path written. */
+async function exportHtml(source: string, output?: string): Promise<string> {
+  let html: string
+  let id = source
+  if (existsSync(source) && statSync(source).isFile()) {
+    const lines = readFileSync(source, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as unknown)
+    const fileEntries = isSessionV1(lines)
+      ? migrateSessionV1('imported', lines)
+      : (lines as (SessionHeader | SessionEntry)[])
+    const header =
+      fileEntries[0]?.type === 'session' ? fileEntries[0] : undefined
+    id = header?.id ?? 'imported'
+    const entries = fileEntries.filter(
+      (entry): entry is SessionEntry => entry.type !== 'session',
+    )
+    html = renderSessionHtml({ id, entries: buildSessionPath(entries) })
+  } else {
+    const session = vela.session(source)
+    if (!(await session.resume()))
+      throw new Error(`Session ${source} has no saved history`)
+    return session.exportHtml(output)
+  }
+  const target = resolve(cwd, output ?? `vela-session-${id}.html`)
+  await writeFile(target, html, { mode: 0o600 })
+  return target
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString('utf8')
+}

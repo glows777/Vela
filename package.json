@@ -1,38 +1,26 @@
 {
-  "name": "@glows777/vela",
   "version": "0.4.0",
-  "description": "An embeddable TypeScript agent SDK and terminal agent, with pi-style extensions",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/glows777/Vela.git"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "type": "module",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./testing": {
-      "types": "./dist/testing/index.d.ts",
-      "import": "./dist/testing/index.js"
-    }
-  },
-  "bin": {
-    "vela": "dist/cli/main.js"
-  },
   "engines": {
     "node": ">=22.18.0",
     "bun": ">=1.4.0"
   },
+  "name": "vela-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "bun --watch run src/cli/main.ts",
-    "start": "bun run src/cli/main.ts",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli/main.js",
-    "test": "bun test test/unit test/e2e",
-    "test:unit": "bun test test/unit",
+    "dev": "bun --watch run packages/vela/src/cli/main.ts",
+    "start": "bun run packages/vela/src/cli/main.ts",
+    "build": "bun scripts/build.ts",
+    "test": "bun test packages/*/test test/unit test/e2e scripts/eval",
+    "test:unit": "bun test packages/*/test test/unit",
     "test:e2e": "bun test test/e2e",
     "test:live": "VELA_LIVE=1 bun test test/live",
     "typecheck": "tsc --noEmit",
@@ -42,8 +30,7 @@
     "quality": "bun scripts/quality-check.ts",
     "api:update": "bun scripts/api-report.ts",
     "smoke:consumer": "bun scripts/consumer-smoke.ts",
-    "release": "bun scripts/release.ts",
-    "prepublishOnly": "bun run build"
+    "release": "bun scripts/release.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.8",
@@ -52,29 +39,21 @@
     "@types/turndown": "^5.0.6",
     "knip": "6.42.1",
     "madge": "8.0.0",
-    "typescript": "^6.0.3"
-  },
-  "dependencies": {
+    "typescript": "^6.0.3",
+    "ai": "^7.0.130",
+    "zod": "^4.4.3",
+    "@ai-sdk/provider": "^4.0.24",
     "@ai-sdk/anthropic": "^4.0.74",
     "@ai-sdk/openai": "^4.0.86",
-    "@ai-sdk/provider": "^4.0.24",
-    "@cfworker/json-schema": "^4.1.1",
-    "@earendil-works/pi-tui": "^1.0.4",
-    "@larksuiteoapi/node-sdk": "^1.73.3",
+    "@glows777/vela-core": "workspace:*",
+    "@glows777/vela-channels": "workspace:*",
+    "@glows777/vela-mcp": "workspace:*",
+    "@glows777/vela-rag": "workspace:*",
+    "@glows777/vela-lark": "workspace:*",
+    "@glows777/vela": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@silvia-odwyer/photon-node": "^0.3.4",
-    "ai": "^7.0.130",
-    "diff": "8.0.4",
-    "sqlite-vec": "^0.1.9",
-    "turndown": "^7.2.4",
-    "yaml": "^2.9.1",
-    "zod": "^4.4.3"
-  },
-  "files": [
-    "dist",
-    "docs",
-    "examples",
-    "README.md",
-    "CHANGELOG.md"
-  ]
+    "@earendil-works/pi-tui": "^1.0.4",
+    "yaml": "^2.9.1"
+  }
 }

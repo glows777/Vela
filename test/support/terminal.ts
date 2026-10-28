@@ -1,6 +1,6 @@
 import { stripTerminalSequences, type Terminal } from '@earendil-works/pi-tui'
-import { InteractiveMode } from '../../src/cli/interactive.ts'
-import type { Vela } from '../../src/vela.ts'
+import { InteractiveMode } from '../../packages/vela/src/cli/interactive.ts'
+import type { Vela } from './compat-vela.ts'
 
 /** Fake implementation of pi-tui's Terminal interface: writes nothing and sends keys straight to the TUI. */
 class FakeTerminal implements Terminal {

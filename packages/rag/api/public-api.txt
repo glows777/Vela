@@ -1,0 +1,11 @@
+# @glows777/vela-rag
+
+  function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
+  type EmbeddingFn = ((
+      texts: string[],
+      signal?: AbortSignal,
+      ) => Promise<number[][]>) & { readonly id?: string }
+  function rag: (options?: RagOptions) => VelaExtension
+  const ragConfig: ExtensionConfigDefinition
+  interface RagOptions
+    embedder?: EmbeddingFn | undefined
