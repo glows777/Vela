@@ -16,6 +16,7 @@
         "@glows777/vela-lark": "workspace:*",
         "@glows777/vela-mcp": "workspace:*",
         "@glows777/vela-rag": "workspace:*",
+        "@larksuiteoapi/node-sdk": "^1.73.3",
         "@modelcontextprotocol/sdk": "^1.32.1",
         "@silvia-odwyer/photon-node": "^0.3.4",
         "@types/bun": "1.4.0",
