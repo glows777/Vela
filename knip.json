@@ -1,22 +1,58 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": [
-    "src/index.ts",
-    "src/core.ts",
-    "src/extension-api.ts",
-    "src/channels/index.ts",
-    "src/channels/testing.ts",
-    "src/images/index.ts",
-    "src/testing/core.ts",
-    "src/testing/index.ts",
-    "scripts/*.ts",
-    "scripts/eval/run.ts",
-    "scripts/eval/worker.ts",
-    "scripts/eval/graders.test.ts",
-    "examples/**/*.ts",
-    ".skills/**/scripts/*.ts",
-    "test/**/*.test.ts",
-    "test/fixtures/mcp-echo-server.ts"
-  ],
-  "ignoreBinaries": ["smoke.ts"]
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.ts",
+        "scripts/eval/run.ts",
+        "scripts/eval/worker.ts",
+        "examples/**/*.ts",
+        ".skills/**/scripts/*.ts",
+        "test/**/*.test.ts",
+        "test/fixtures/mcp-echo-server.ts"
+      ],
+      "project": [
+        "scripts/**/*.ts",
+        "test/**/*.ts",
+        "examples/**/*.ts",
+        ".skills/**/*.ts"
+      ]
+    },
+    "packages/core": {
+      "entry": [
+        "src/index.ts!",
+        "src/testing/index.ts!",
+        "src/extension-api.ts!",
+        "src/images/index.ts!",
+        "src/diagnostics.ts!",
+        "test/**/*.test.ts"
+      ],
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    },
+    "packages/channels": {
+      "entry": ["src/index.ts!", "src/testing.ts!", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    },
+    "packages/lark": {
+      "entry": ["src/index.ts!", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    },
+    "packages/mcp": {
+      "entry": ["src/index.ts!", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    },
+    "packages/rag": {
+      "entry": ["src/index.ts!", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    },
+    "packages/vela": {
+      "entry": [
+        "src/index.ts!",
+        "src/testing/index.ts!",
+        "src/cli/main.ts!",
+        "test/**/*.test.ts"
+      ],
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    }
+  }
 }

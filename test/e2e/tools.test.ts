@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ToolExecutionResult } from '@glows777/vela-core'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import z from 'zod'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
-import { ToolExecutionResult } from '../../src/tools/types.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

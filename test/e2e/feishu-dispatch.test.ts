@@ -1,16 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
-import { z } from 'zod'
-import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
-import { messageTime } from '../../src/extensions/feishu/history.ts'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import { memorySessionStorage } from '../../src/session/storage.ts'
+import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import { memorySessionStorage } from '@glows777/vela-core'
 import {
   type FauxRequest,
   fauxHang,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
+import { z } from 'zod'
+import { messageTime } from '../../packages/lark/src/history.ts'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

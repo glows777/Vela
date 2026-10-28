@@ -28,7 +28,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | `-p` | `run $RUN p -p "list files"` | exit 0; stdout is only the answer; empty stderr with no optional services configured |
 | Piped stdin | `echo ctx \| $H run $RUN --stdin pipe -p "list files"` | Same answer, exit 0 |
 | `--mode json` | `run $RUN j --mode json "list files"` | Line 1 `{"type":"session",…}`, then events including `tool_execution_end` |
-| RPC | `exec $RUN rpc env VELA_RPC_COMMAND="bun $PWD/src/cli/main.ts" bun $PWD/examples/rpc-client.ts "list files"` | The tool call and answer, exit 0. Closing stdin aborts a running prompt (`agent_end` reason `aborted`) |
+| RPC | `exec $RUN rpc env VELA_RPC_COMMAND="bun $PWD/packages/vela/src/cli/main.ts" bun $PWD/examples/rpc-client.ts "list files"` | The tool call and answer, exit 0. Closing stdin aborts a running prompt (`agent_end` reason `aborted`) |
 | RPC usage error | `run $RUN r --mode rpc hi` | exit 2 with a usage line |
 | `--version`, `--help` | `run $RUN v --version` | stdout, exit 0 |
 
@@ -84,7 +84,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 | Feature | Drive | Check |
 |---|---|---|
 | Examples | `exec $RUN ex bun $PWD/examples/sdk/01-minimal.ts` (01–04) | Each exits 0 |
-| Your own script | `work/consumer.ts` importing `$REPO/src/index.ts` and `$REPO/src/testing/index.ts`, run with `exec`; recipes in [core.md](core.md) | Whatever the change promises, with its edge cases |
+| Your own script | `work/consumer.ts` importing `$REPO/packages/vela/src/index.ts` and `$REPO/packages/vela/src/testing/index.ts`, run with `exec`; recipes in [core.md](core.md) | Whatever the change promises, with its edge cases |
 | Channels | `echoChannel()` from `examples/extensions/echo-channel.ts`: one shared session per chat. `receive('alice', …)` and `receive('bob', …)` | Both senders use the same session and can read a file |
 | Feishu channel journeys | `exec $RUN feishu bun $REPO/.skills/verify-vela/scripts/feishu-journeys.ts` (up to about 2 minutes, exits 1 if a check fails; see [the script](scripts/feishu-journeys.ts)). It drives the real extension and gateway with `fakeFeishu()` / `feishuEvent()` from `test/support/feishu.ts` and a router faux model; adapt it for the change you made | Below, one row per journey; the script prints one line per check |
 | Feishu topic handoff | Top-level @ "investigate …": the channel session calls `feishu_start_topic`; the topic session does the work | One topic opened; `OnIt` replaced by `DONE`; one progress card created and patched; the topic result @-mentions the requester |

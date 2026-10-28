@@ -1,0 +1,51 @@
+{
+  "name": "@glows777/vela",
+  "version": "0.4.0",
+  "description": "An embeddable TypeScript agent SDK and terminal agent, with pi-style extensions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glows777/Vela.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^1.0.4",
+    "@glows777/vela-channels": "workspace:*",
+    "@glows777/vela-core": "workspace:*",
+    "@glows777/vela-lark": "workspace:*",
+    "@glows777/vela-mcp": "workspace:*",
+    "@glows777/vela-rag": "workspace:*",
+    "ai": "^7.0.130",
+    "diff": "8.0.4"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "docs",
+    "examples",
+    "CHANGELOG.md"
+  ],
+  "bin": {
+    "vela": "dist/cli/main.js"
+  }
+}

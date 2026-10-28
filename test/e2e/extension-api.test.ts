@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { ExtensionAPI, VelaSession } from '@glows777/vela'
-import { z } from 'zod'
-import { ToolExecutionResult } from '../../src/index.ts'
+import { ToolExecutionResult } from '@glows777/vela'
 import {
   type FauxRequest,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
+import { z } from 'zod'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

@@ -1,0 +1,39 @@
+{
+  "name": "@glows777/vela-mcp",
+  "version": "0.4.0",
+  "description": "Vela mcp package",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glows777/Vela.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@glows777/vela-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "ai": "^7.0.130"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "docs",
+    "examples",
+    "CHANGELOG.md"
+  ]
+}

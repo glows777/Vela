@@ -1,6 +1,6 @@
 # Vela test reference
 
-How Vela is tested, how to verify a change and how to add tests. All tests and test helpers live under `test/`; anyone (or any agent) picking up the code starts here.
+How Vela is tested, how to verify a change and how to add tests. Package tests live under `packages/*/test/`, with shared integration tests and helpers under `test/`; anyone (or any agent) picking up the code starts here.
 
 ## Layout
 
@@ -9,26 +9,28 @@ test/
   README.md              this file
   support/vela.ts        createTestVela() from @glows777/vela/testing plus the CLI slash-command dispatcher and captureConsole (tests only)
   fixtures/scenarios/    faux scenario JSON files for CLI replay
-  unit/<mirrors src>/    unit tests, e.g. src/agent/retry.ts → test/unit/agent/retry.test.ts
+  unit/                 workspace architecture, release and eval-layout contracts
   e2e/                   end-to-end flows: real assembly + faux model
   live/                  real-model smoke tests, skipped by default
-src/testing/             published as `@glows777/vela/testing` (package.json exports)
-  index.ts               public exports
+packages/core/src/testing/  core faux, recording, replay and demo support (`@glows777/vela-core/testing`)
+  index.ts               public core testing exports
   faux.ts                scripted faux model (LanguageModelV4); the CLI's VELA_MODEL=faux: uses it too
   faux-embedder.ts       deterministic offline embedder
-  test-vela.ts           createTestVela(): a real Vela assembled in a temp dir with a faux model
+  test-vela.ts           core-only createTestVela(), no channel or RAG dependency
   record.ts              recordModel(): records a real model's responses as a faux scenario (the CLI's VELA_RECORD)
   replay.ts              replayScenario(): reruns a scenario from its recorded inputs
   demo-model.ts          keyword-driven demo model (VELA_MODEL=mock, for trying the CLI by hand; tests don't use it)
 ```
 
-The faux model, the demo model and createTestVela live in `src/testing/` rather than `test/` because the CLI loads faux at runtime, and extension authors need `import { createTestVela } from '@glows777/vela/testing'` to test their extensions offline. Tests import from `src/` by relative path; importing by package name is covered by `bun run smoke:consumer`.
+The umbrella `packages/vela/src/testing/` composes the channel-aware compatibility fixture with optional RAG. `packages/channels/src/testing.ts` provides the channel drain helper. Package unit tests may import their own implementation; cross-package integration tests use public source-mapped exports. `test/support/compat-vela.ts` is privileged test-only inspection of source internals and is never published. Development maps exactly the declared public entries to source, so bare focused tests see edits immediately. Package builds explicitly clear these mappings and consumer checks verify real built exports. Private inspection is test-only source code, never a package export.
+
+`bun run smoke:consumer` builds and packs all six packages with the release packer, then installs each as the only direct Vela dependency in fresh Node and Bun projects outside the workspace. Each typechecks and runs through public exports; core/channels dependency trees reject the four optional heavy integrations. Local registry GETs serve tarballs only: this never publishes packages.
 
 ## Running
 
 | Command | What it runs | Approximate time |
 |---|---|---|
-| `bun run test` | unit + e2e; run this before committing | 1–2 min |
+| `bun run test` | package, architecture, e2e and offline eval tests; run this before committing | 1–2 min |
 | `bun run test:unit` | unit tests only | ~5–15 s |
 | `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | ~1 min |
 | `bun run test:live` | real model; needs `OPENAI_API_KEY` and `OPENAI_API_MODEL_NAME` | depends on the model |
@@ -45,7 +47,7 @@ CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun r
 
 - **unit**: rules and edge cases of a single module (retry classification, loop detection, compaction cut points, summary validation, tool history, security rules, …). Construct the object under test directly; use faux for models.
 - **e2e**: `createTestVela()` assembles the same Vela the CLI does (`createVela()` + the CLI's slash-command dispatcher), with only the model swapped for faux and the directories for temp dirs. Assert on the event sequence, the requests the model received and the files written.
-- **e2e/cli.test.ts**: spawns a real `bun src/cli/main.ts` subprocess replaying `VELA_MODEL=faux:<scenario.json>`, and asserts on stdout, stderr and the exit code.
+- **e2e/cli.test.ts**: spawns a real `bun packages/vela/src/cli/main.ts` subprocess replaying `VELA_MODEL=faux:<scenario.json>`, and asserts on stdout, stderr and the exit code.
 - **e2e/tui.test.ts**: runs interactive mode (the TUI) in-process. `startTui(vela)` from `test/support/terminal.ts` starts `InteractiveMode` on a fake terminal that implements pi-tui's `Terminal` interface; `terminal.type()` / `press(KEYS.xxx)` send keys, `screen()` returns the whole screen as plain text, and `until('text')` waits for text to appear.
 - **live**: a real model; only checks that things connect, no detailed assertions.
 
@@ -54,7 +56,7 @@ Run the layer that matches what you changed; run the full `bun run test` when yo
 ## Faux model
 
 ```ts
-import { createFauxModel, fauxText, fauxToolCall, fauxError, fauxStreamError, fauxHang, fauxSummary } from '../../src/testing/faux.ts'
+import { createFauxModel, fauxText, fauxToolCall, fauxError, fauxStreamError, fauxHang, fauxSummary } from '@glows777/vela-core/testing'
 
 const model = createFauxModel({
   responses: [                                        // main queue, consumed in order by streamText
@@ -210,7 +212,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | unit/session/storage | memory storage saves by id and returns copies; file storage reads and writes, and still reads the old one-message-per-line format; list() for both (newest first, skips sessions without messages, names, first message) |
 | unit/testing/record | record then replay yields the same events; recording errors, broken streams, retries, aborts (hang) and the generate queue |
 | unit/boundary | core modules contain no console, process.stdout/stderr/exit/env or readline |
-| unit/public-api | the public API of `@glows777/vela` and `@glows777/vela/testing` matches `api/public-api.txt`; after changing the public surface run `bun run api:update` |
+| unit/public-api | each package’s public export map matches `packages/<name>/api/public-api.txt`; after changing the public surface run `bun run api:update` |
 | unit/scripts | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version; a candidate retry reads the tag snapshot rather than main after that snapshot's entries are stamped |
 | unit/security | session permission rules (default allow, exact names before `*`, deny and ask), ask goes through confirm, the hook chain, bash classification, `/hooks` lists registered hooks |
 | unit/… | other module-level rules; see each file |
@@ -223,13 +225,13 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 3. When the change crosses modules (agent loop, `createVela`, events, context, CLI), run `bun run test`.
 4. `bun run typecheck` and `bun run lint` must pass (CI runs them too).
 5. When real model behavior is involved (providers, usage fields, tool-call format), run `bun run test:live` once if you can.
-6. When you change events, the faux interface or test conventions, update this file; when you change the public API, run `bun run api:update` and commit `api/public-api.txt`.
+6. When you change events, the faux interface or test conventions, update this file; when you change the public API, run `bun run api:update` and commit each affected `packages/<name>/api/public-api.txt`.
 
 ## Adding tests
 
-- **A new module or rule** → `test/unit/<same path as in src>.test.ts`.
+- **A new module or rule** → `packages/<owner>/test/unit/<same path as in src>.test.ts`.
 - **End-to-end behavior of a new feature** → add a case to the matching file in `test/e2e/`; if no file covers the topic, create one and add it to the coverage table above.
-- **A problem seen in real use**: record the run with `VELA_RECORD=<file>`, rerun it with `replayScenario(file)` and assert; or reproduce it with a hand-written faux script. If only the CLI is involved, write `test/fixtures/scenarios/<name>.json`, run it by hand with `VELA_MODEL=faux:test/fixtures/scenarios/<name>.json bun run src/cli/main.ts -p "..."`, then add a case to `e2e/cli.test.ts`.
+- **A problem seen in real use**: record the run with `VELA_RECORD=<file>`, rerun it with `replayScenario(file)` and assert; or reproduce it with a hand-written faux script. If only the CLI is involved, write `test/fixtures/scenarios/<name>.json`, run it by hand with `VELA_MODEL=faux:test/fixtures/scenarios/<name>.json bun run packages/vela/src/cli/main.ts -p "..."`, then add a case to `e2e/cli.test.ts`.
 - **A new event type**: assert in e2e that it appears in the right place (`t.eventTypes()`).
 - **Waiting for an async command**: use `t.command()` rather than polling with `while (...) await Bun.sleep()`; when polling is unavoidable, poll every 1 ms with a clear exit condition.
 
@@ -250,4 +252,10 @@ Conventions:
 
 `e2e/core-decoupling.test.ts` characterizes first routing binding (including identity and unchanged cwd/tools/permissions), matching/conflicting routes, no conflict retry, fork/clone authority, save observers, explicit failure reporting and shutdown ordering. `e2e/core-entries.test.ts` exercises the source-level core assembly/testing entry, public memory/schema contracts, descriptor-owned config/trust, the narrow channel publisher and side-effect-free diagnostic inspection with faux models. Existing channel, group-memory, Feishu, serve, CLI/RPC and image suites remain the behavioral regression coverage.
 
-The public `@glows777/vela/testing` fixture stays channel-aware with optional RAG. Its shared implementation in `src/testing/core-vela.ts` assembles core plus memory by default; the compatibility wrapper injects channel/RAG assembly. Keep getter-backed fixture properties lazy (in particular `model` when a custom model was supplied). Historical eval workers use the channel testing drain helper when present and the historical internal path only for older source snapshots.
+The public `@glows777/vela/testing` fixture stays channel-aware with optional RAG. Its shared implementation in `packages/core/src/testing/test-vela.ts` assembles core plus memory by default; the compatibility wrapper injects channel/RAG assembly. Keep getter-backed fixture properties lazy (in particular `model` when a custom model was supplied). Historical eval workers use the channel testing drain helper when present and the historical internal path only for older source snapshots.
+
+## Workspace and historical eval contracts
+
+`bun run quality` reuses Knip (including strict production workspace dependency declarations) and Madge, then checks sizes and `scripts/check-boundaries.ts`. The boundary checker includes type-only edges, public export maps, forbidden heavy core/channel entry graphs and light built-in use of the public extension API. Architecture fixtures reject hoisted-dependency assumptions, private imports, unapproved source aliases, missing internal dependency declarations and computed internal access.
+
+`bun test scripts/eval` exercises 177 offline grader/worker regressions with injected faux models. To check the unchanged flat layout too, install the selected historical checkout with its frozen lockfile and run `VELA_EVAL_TEST_RUNTIME=/absolute/historical/checkout bun test scripts/eval`. `scripts/eval/layout.ts` selects revision-local paths; baseline commits, prompts, grader rules and contamination checks stay unchanged. No provider request is needed for these tests.

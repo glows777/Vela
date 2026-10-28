@@ -1,10 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import { silentLogger } from '../../src/logger.ts'
-import { fileSessionStorage } from '../../src/session/storage.ts'
-import { fauxHang, fauxText } from '../../src/testing/faux.ts'
+import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
+import { fauxHang, fauxText } from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 

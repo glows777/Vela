@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
-import { createVela } from '../../src/vela.ts'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { createVela } from '../support/compat-vela.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

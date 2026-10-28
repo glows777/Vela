@@ -2,18 +2,18 @@ import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { LanguageModelV4Prompt } from '@ai-sdk/provider'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { PhotonImage } from '@silvia-odwyer/photon-node'
-import z from 'zod'
-import { mcp } from '../../src/extensions/mcp/index.ts'
-import type { ImageContent } from '../../src/messages.ts'
+import type { ImageContent } from '@glows777/vela-core'
+import { ToolExecutionResult } from '@glows777/vela-core'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
-import { ToolExecutionResult } from '../../src/tools/types.ts'
+} from '@glows777/vela-core/testing'
+import { mcp } from '@glows777/vela-mcp'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { PhotonImage } from '@silvia-odwyer/photon-node'
+import z from 'zod'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

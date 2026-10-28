@@ -19,7 +19,7 @@ From the repository root:
 bun examples/sdk/01-minimal.ts
 ```
 
-Inside the repository, `@glows777/vela` resolves to `src/` through `tsconfig.json` paths, so no build is needed. `bunx tsc --noEmit` typechecks the examples with the rest of the repository.
+Inside the repository, development maps each public entry to its source, so focused tests and the watched CLI see source edits immediately. Builds clear these mappings; packed Node/Bun consumers verify real export maps. `bunx tsc --noEmit` typechecks the examples with the rest of the repository.
 
 ## Using a real model
 

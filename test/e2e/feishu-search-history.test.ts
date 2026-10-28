@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
-import { feishu } from '../../src/extensions/feishu/index.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -65,8 +65,9 @@ test('history search bounds pages, matches and characters and uses the logical g
     end_time: '2025-10-09T09:00:00Z',
   }
   const search = () => fauxToolCall('feishu_search_history', query)
-  const answer = (req: import('../../src/testing/faux.ts').FauxRequest) =>
-    fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
+  const answer = (
+    req: import('../../packages/core/src/testing/faux.ts').FauxRequest,
+  ) => fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
   const t = createTestVela({
     responses: [
       search(),

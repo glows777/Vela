@@ -1,19 +1,19 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
-import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
-import type { ModelMessage } from '../../src/messages.ts'
+import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import type {
+  ModelMessage,
   SessionEntry,
   SessionMessageEntry,
   SessionTreeNode,
-} from '../../src/session/entries.ts'
-import { memorySessionStorage } from '../../src/session/storage.ts'
+} from '@glows777/vela-core'
+import { memorySessionStorage } from '@glows777/vela-core'
 import {
   fauxError,
   fauxSummary,
   fauxText,
   fauxToolCall,
-} from '../../src/testing/faux.ts'
+} from '@glows777/vela-core/testing'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

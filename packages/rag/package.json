@@ -1,0 +1,41 @@
+{
+  "name": "@glows777/vela-rag",
+  "version": "0.4.0",
+  "description": "Vela rag package",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glows777/Vela.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.86",
+    "@glows777/vela-core": "workspace:*",
+    "ai": "^7.0.130",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^4.4.3"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "docs",
+    "examples",
+    "CHANGELOG.md"
+  ]
+}

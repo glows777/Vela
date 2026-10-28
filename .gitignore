@@ -47,3 +47,9 @@ knowledge.db
 
 # local real-model evaluation artifacts
 .vela-eval/
+
+# Staged package documentation copied by the build
+packages/*/LICENSE
+packages/*/CHANGELOG.md
+packages/vela/docs/
+packages/vela/examples/

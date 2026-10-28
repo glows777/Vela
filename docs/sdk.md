@@ -431,7 +431,7 @@ Disposal waits for extension factories to settle, then attempts channel shutdown
 
 The public surface is:
 
-- the exports of `@glows777/vela` and `@glows777/vela/testing` (snapshot in `api/public-api.txt`; regenerate it with `bun run api:update`, and a unit test fails when the exports change without it),
+- the exports of `@glows777/vela` and `@glows777/vela/testing` (snapshots in `packages/*/api/public-api.txt`; regenerate it with `bun run api:update`, and a unit test fails when the exports change without it),
 - CLI flags,
 - `settings.json` and `models.json` keys,
 - the `--mode json` event stream and the RPC protocol,
@@ -462,4 +462,22 @@ An existing unbound session accepts its first scope/channel binding while preser
 
 `publishChannelEvent(session, event)` accepts only `channel_message`, `channel_reply` and `channel_error`. `resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
 
-The current package still exports only its existing root and `./testing` entry. Core-only assembly, extension/image contracts and channel composition are separated within the source tree in preparation for the subsequent workspace move. No new package names or deep package imports are available yet. Channel-aware `createVela`, `channels()`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
+The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
+
+The six packages share one version. Choose the smallest consumer dependency:
+
+| Package | Public entries and ownership |
+|---|---|
+| `@glows777/vela-core` | Root SDK (including images, memory, web and permission gate), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
+| `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
+| `@glows777/vela-lark` | Root Feishu transport/factory/config exports; depends on core and channels. Existing `feishu` identifiers remain unchanged in this move |
+| `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
+| `@glows777/vela-rag` | Root RAG factory; depends on core |
+| `@glows777/vela` | Compatibility SDK, built-in composition and CLI/TUI; depends on all five |
+
+For a core-only app, import `createVela` from `@glows777/vela-core` and its faux helpers from `@glows777/vela-core/testing`. For custom channel composition, use `createChannelVela` from `@glows777/vela-channels` and install only the adapters you need. Each extension owns its config descriptor; supply descriptors through core `loadConfig({ extensionConfigs })` when composing configuration yourself. The umbrella continues to supply built-in defaults and descriptors.
+
+Only listed export-map entries are supported. Private `src/` or `dist/` paths are not package APIs. Core normalizes images with Photon lazily when an image is used; core and channels exclude the Lark SDK, MCP SDK, sqlite-vec and pi-tui. For production artifacts use `bun run build`; development maps exactly the 12 public entries to source; package builds clear the mapping and packed consumers resolve the real artifacts.
+
+
+The experimental `@glows777/vela-core/diagnostics` entry also provides the canonical frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions. `resolveModel(ref, { providers, credentials })` resolves a supplied object, provider reference or configured default without assembling a Vela or reading project resources. With no configured default it throws the CLI’s existing no-model guidance. These helpers are experimental; the exact surface is recorded in the core API snapshot.

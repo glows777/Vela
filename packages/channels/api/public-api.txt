@@ -1,0 +1,175 @@
+# @glows777/vela-channels
+
+  interface ChannelDefinition
+    canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
+    connect?: ((runtime: ChannelRuntime) => void) | undefined
+    description: string
+    name: string
+    onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
+    prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
+    prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
+    send: (message: OutgoingMessage) => Promise<void>
+    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; }) | undefined
+    start: () => Promise<boolean | void> | boolean | void
+    startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
+    stop: () => Promise<void> | void
+    timezone?: unknown
+    validateTools?: ((names: readonly string[]) => void) | undefined
+  type ChannelExtension = (
+      api: ChannelExtensionAPI,
+      ) => void | Promise<void>
+  interface ChannelExtensionAPI
+    on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    onShutdown: (handler: () => void | Promise<void>) => void
+    readonly config: Readonly<Record<string, unknown>>
+    readonly cwd: string
+    readonly dataDir: string
+    readonly logger: VelaLogger
+    registerChannel: (channel: ChannelDefinition) => void
+    registerCommand: (name: string, command: ExtensionCommand) => void
+    registerProvider: (name: string, provider: ProviderDefinition) => void
+    registerTool: (tool: ToolDefinition) => string
+    unregisterTool: (name: string) => boolean
+  type ChannelFeedbackUpdate = | {
+      type: 'controls'
+      message: IncomingMessage
+      signal: AbortSignal
+      choose: (action: 'queue' | 'steer' | 'stop') => boolean
+      error: (error: unknown) => Promise<void>
+      }
+      | { type: 'agent'; event: VelaEvent }
+  type ChannelOutcome = 'done' | 'failed' | 'stopped' | 'silent'
+  interface ChannelRoutine
+    channel: string
+    chatId: string
+    createdAt: string
+    creator: { id: string; name: string; }
+    id: string
+    lastFiredAt: string | null
+    message: string
+    schedule: RoutineSchedule
+    targetKey: string
+  interface ChannelRoutineInfo
+    channel: string
+    chatId: string
+    createdAt: string
+    creator: { id: string; name: string; }
+    id: string
+    lastFiredAt: string | null
+    message: string
+    nextRun: string | null
+    schedule: RoutineSchedule
+    scheduleText: string
+    target: string
+    targetKey: string
+    timezone: string
+  interface ChannelRunFeedback
+    event: (update: ChannelFeedbackUpdate) => void | Promise<void>
+    finish: (outcome: ChannelOutcome) => Promise<void>
+  interface ChannelRuntime
+    context: (sessionId: string) => IncomingMessage | undefined
+    dispatch: (sourceSessionId: string, message: IncomingMessage, label?: string) => void
+    routines: { create(sessionId: string, message: string, schedule: RoutineSchedule): Promise<ChannelRoutineInfo>; list(sessionId: string): { timezone: string; routines: ChannelRoutineInfo[]; }; cancel(sessionId: string, id: string): Promise<boolean>; }
+    scope: (sessionId: string) => ChannelScope | undefined
+    skipReply: (sessionId: string) => void
+    topicCoverage: () => string
+    topics: (chatId: string) => ChannelTopic[]
+    waitForInput: (sessionId: string, reason: string) => Promise<void>
+  interface ChannelScope
+    readonly channel: string
+    readonly chatId: string
+    readonly chatKind: "group" | "direct"
+    readonly dataDir: string
+    readonly id: string
+    readonly kind: "private" | "shared"
+  const channelSessionId: (channel: string, conversationId: string, topicRootId?: string) => string
+  interface ChannelTopic
+    requester: { id: string; name: string; }
+    rootId: string
+    state: "done" | "stopped" | "running" | "queued" | "waiting"
+    task: string
+    threadId: string
+    updatedAt: string
+    waitingReason?: string | undefined
+  interface ChannelVela
+    channels: () => { name: string; description: string; }[]
+    commands: () => { name: string; description?: string; extension: string; }[]
+    dispose: () => Promise<void>
+    extensions: () => LoadedChannelExtension[]
+    listSessions: () => Promise<SessionSummary[]>
+    login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
+    loginProviders: () => LoginProvider[]
+    logout: (provider: string) => Promise<boolean>
+    models: (options?: { all?: boolean; }) => ModelInfo[]
+    readonly cwd: string
+    readonly dataDir: string
+    readonly limits: VelaLimits
+    readonly model: LanguageModel
+    ready: () => Promise<void>
+    runningChannels: () => string[]
+    session: (id?: string, options?: SessionOptions) => VelaSession
+    sessions: () => VelaSession[]
+    startChannels: () => Promise<void>
+    subscribe: (listener: VelaSessionEventListener) => () => void
+  interface ChannelVelaOptions
+    appendSystemPrompt?: string | undefined
+    autoCompaction?: boolean | undefined
+    beforeDispose?: (() => void | Promise<void>) | undefined
+    binDir?: string | undefined
+    channelIdleMs?: number | undefined
+    contextFiles?: false | ContextFile[] | undefined
+    credentials?: CredentialStore | undefined
+    cwd?: string | undefined
+    dataDir?: string | undefined
+    extensionConfig?: Record<string, Record<string, unknown>> | undefined
+    extensions?: ChannelExtension[] | undefined
+    limits?: Partial<VelaLimits> | undefined
+    logger?: VelaLogger | undefined
+    model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
+    offline?: boolean | undefined
+    onSessionSaved?: ((sessionId: string) => void) | undefined
+    promptTemplateDirs?: string[] | undefined
+    providers?: Record<string, ProviderDefinition> | undefined
+    sessionStorage?: SessionStorage | undefined
+    shellPath?: string | undefined
+    skillDirs?: string[] | undefined
+    thinkingLevel?: ThinkingLevel | undefined
+  function chatDirectory: (dataDir: string, channel: string, chatId: string) => string
+  function createChannelVela: (options?: ChannelVelaOptions) => ChannelVela
+  function groupWorkspace: (dataDir: string, channel: string, chatId: string, create?: boolean) => string
+  interface IncomingMessage
+    channelId: string
+    images?: ImageContent[] | undefined
+    isNewTopic?: boolean | undefined
+    passive?: boolean | undefined
+    raw?: unknown
+    replyToId?: string | undefined
+    requireExistingSession?: boolean | undefined
+    routine?: { id: string; scheduledAt: string; } | undefined
+    senderId: string
+    senderName: string
+    text: string
+    topic?: { rootId: string; threadId: string; } | undefined
+  interface LoadedChannelExtension
+    channels: string[]
+    commands: string[]
+    name: string
+    providers: string[]
+    tools: string[]
+  interface OutgoingMessage
+    channelId: string
+    recipientId?: string | undefined
+    replyToId?: string | undefined
+    routine?: { id: string; scheduledAt: string; } | undefined
+    text: string
+    topic?: { rootId: string; threadId: string; } | undefined
+  type RoutineSchedule = | { at: string }
+      | {
+      time: string
+      days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
+      }
+  const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ create: "create"; list: "list"; cancel: "cancel"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>], "action">>
+
+# @glows777/vela-channels/testing
+
+  function drainChannels: (vela: ChannelVela) => Promise<void>

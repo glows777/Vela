@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import type { ModelMessage } from '../../src/messages.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import type { ModelMessage } from '@glows777/vela-core'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)

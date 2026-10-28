@@ -8,13 +8,13 @@
 // router and steps to the change being verified.
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { feishu } from '../../../src/extensions/feishu/index.ts'
-import { createVela } from '../../../src/index.ts'
+import { createVela } from '@glows777/vela'
 import {
   createFauxModel,
   type FauxRequest,
   type FauxResponse,
-} from '../../../src/testing/index.ts'
+} from '@glows777/vela/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent } from '../../../test/support/feishu.ts'
 
 type Fake = ReturnType<typeof fakeFeishu>

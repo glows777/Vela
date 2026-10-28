@@ -2,11 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import {
-  fileSessionStorage,
-  type SessionStorage,
-} from '../../src/session/storage.ts'
-import { fauxHang, fauxText, fauxToolCall } from '../../src/testing/faux.ts'
+import { fileSessionStorage, type SessionStorage } from '@glows777/vela-core'
+import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import {
   cleanupTestVelas,
   createTestVela,

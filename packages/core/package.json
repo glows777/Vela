@@ -1,0 +1,62 @@
+{
+  "name": "@glows777/vela-core",
+  "version": "0.4.0",
+  "description": "Vela core package",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glows777/Vela.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    },
+    "./extension-api": {
+      "types": "./dist/extension-api.d.ts",
+      "import": "./dist/extension-api.js"
+    },
+    "./images": {
+      "types": "./dist/images/index.d.ts",
+      "import": "./dist/images/index.js"
+    },
+    "./diagnostics": {
+      "types": "./dist/diagnostics.d.ts",
+      "import": "./dist/diagnostics.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.74",
+    "@ai-sdk/openai": "^4.0.86",
+    "@ai-sdk/provider": "^4.0.24",
+    "@cfworker/json-schema": "^4.1.1",
+    "@silvia-odwyer/photon-node": "^0.3.4",
+    "ai": "^7.0.130",
+    "diff": "8.0.4",
+    "turndown": "^7.2.4",
+    "yaml": "^2.9.1",
+    "zod": "^4.4.3"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "docs",
+    "examples",
+    "CHANGELOG.md"
+  ]
+}

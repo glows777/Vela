@@ -1,9 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type EmbeddingFn, rag } from '../../src/index.ts'
-import { fauxText, fauxToolCall } from '../../src/testing/faux.ts'
-import { createFauxEmbedder } from '../../src/testing/faux-embedder.ts'
+import { type EmbeddingFn, rag } from '@glows777/vela'
+import {
+  createFauxEmbedder,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import {
   captureConsole,
   cleanupTestVelas,

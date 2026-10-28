@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
-import { feishu } from '../../../src/extensions/feishu/index.ts'
-import { fauxHang, fauxText } from '../../../src/testing/faux.ts'
-import { createTestVela } from '../../../src/testing/test-vela.ts'
+import { createTestVela } from '@glows777/vela/testing'
+import { fauxHang, fauxText } from '@glows777/vela-core/testing'
+import { feishu } from '@glows777/vela-lark'
 import { fakeFeishu, feishuEvent } from '../../support/feishu.ts'
 
 const [cwd, mode] = process.argv.slice(2)

@@ -1,5 +1,5 @@
 /**
- * Regenerates src/models/catalog.generated.ts from pi's model catalog (the `@earendil-works/pi-ai` npm package,
+ * Regenerates packages/core/src/models/catalog.generated.ts from pi's model catalog (the `@earendil-works/pi-ai` npm package,
  * MIT, built from models.dev plus pi's corrections). Only the providers and fields Vela uses are kept.
  *
  *   bun scripts/update-models.ts [version]   (default: the version pinned below)
@@ -100,7 +100,15 @@ ${lines.join('\n')}
 }
 `
   await Bun.write(
-    join(import.meta.dir, '..', 'src', 'models', 'catalog.generated.ts'),
+    join(
+      import.meta.dir,
+      '..',
+      'packages',
+      'core',
+      'src',
+      'models',
+      'catalog.generated.ts',
+    ),
     source,
   )
   console.log(

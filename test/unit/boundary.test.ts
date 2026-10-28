@@ -5,10 +5,10 @@ import { join, relative, resolve } from 'node:path'
  * core (everything under src/ except the CLI and test tools) is an SDK other projects import:
  * it never writes to the terminal, exits the process, reads env vars, or touches readline. Output goes through events or an injected logger.
  */
-const SRC = resolve(import.meta.dir, '../../src')
+const SRC = resolve(import.meta.dir, '../../packages')
 
 /** Allowed places: the CLI and test tools */
-const ALLOWED = ['cli/', 'testing/']
+const ALLOWED = ['vela/src/cli/', 'core/src/testing/', 'vela/src/testing/']
 
 const FORBIDDEN: [RegExp, string][] = [
   [/\bconsole\.\w+/, 'console'],
@@ -27,7 +27,7 @@ function stripComments(source: string): string {
 
 test('core modules do not write to the terminal, exit, read env or use readline', async () => {
   const violations: string[] = []
-  for await (const file of new Bun.Glob('**/*.ts').scan(SRC)) {
+  for await (const file of new Bun.Glob('*/src/**/*.ts').scan(SRC)) {
     const path = file.replaceAll('\\', '/')
     if (ALLOWED.some((prefix) => path.startsWith(prefix))) continue
     const lines = stripComments(await Bun.file(join(SRC, file)).text()).split(
@@ -37,7 +37,7 @@ test('core modules do not write to the terminal, exit, read env or use readline'
       if (lines[i - 1]?.includes('vela-boundary: allow')) return
       for (const [pattern, name] of FORBIDDEN)
         if (pattern.test(line))
-          violations.push(`src/${path}:${i + 1} uses ${name}`)
+          violations.push(`packages/${path}:${i + 1} uses ${name}`)
     })
   }
   expect(violations).toEqual([])
@@ -53,7 +53,7 @@ test('the allow list only names paths that exist', async () => {
 
 test('image modules do not depend on the higher-level messages module', async () => {
   const violations: string[] = []
-  for await (const file of new Bun.Glob('images/**/*.ts').scan(SRC)) {
+  for await (const file of new Bun.Glob('core/src/images/**/*.ts').scan(SRC)) {
     const source = stripComments(await Bun.file(join(SRC, file)).text())
     if (/['"][^'"]*\bmessages\.ts['"]/.test(source)) {
       violations.push(file)

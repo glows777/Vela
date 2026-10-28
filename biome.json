@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!src/models/catalog.generated.ts"]
+    "includes": ["**", "!packages/core/src/models/catalog.generated.ts"]
   },
   "assist": {
     "actions": {

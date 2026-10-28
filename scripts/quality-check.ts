@@ -14,9 +14,13 @@ import { join, relative, resolve } from 'node:path'
 import { $, Glob } from 'bun'
 // @ts-expect-error madge ships no type definitions
 import madge from 'madge'
+import { checkBoundaries } from './check-boundaries.ts'
+import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
-const SRC = join(ROOT, 'src')
+const SOURCES = ['core', 'channels', 'mcp', 'rag', 'lark', 'vela'].map((name) =>
+  join(ROOT, 'packages', name, 'src'),
+)
 const LINE_LIMIT = 800
 
 /** Zero since #131 removed the last cycle. */
@@ -24,9 +28,9 @@ const MAX_CYCLES = 0
 
 /** Files that were already over the limit when the ratchet landed, pinned at their size that day. */
 const LINE_CEILINGS = new Map<string, number>([
-  ['src/vela-session.ts', 1562],
-  ['src/cli/interactive.ts', 1403],
-  ['src/tools/registry.ts', 808],
+  ['packages/core/src/vela-session.ts', 1562],
+  ['packages/vela/src/cli/interactive.ts', 1403],
+  ['packages/core/src/tools/registry.ts', 808],
 ])
 
 const failures: string[] = []
@@ -61,8 +65,42 @@ async function checkDeadCode() {
   ])
 }
 
+async function checkRuntimeDependencies() {
+  const result =
+    await $`bunx --no-install knip --production --strict --workspace 'packages/*'`
+      .cwd(ROOT)
+      .quiet()
+      .nothrow()
+  const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim()
+  report(
+    result.exitCode === 0,
+    'strict workspace runtime dependencies: ' +
+      (result.exitCode === 0 ? 'ok' : 'failed'),
+    result.exitCode === 0 ? [] : output.split('\n'),
+  )
+}
+
 async function checkCycles() {
-  const graph = await madge(SRC, { fileExtensions: ['ts'] })
+  const paths: Record<string, string[]> = {}
+  for (const pkg of await readWorkspaces(ROOT))
+    for (const [subpath, entry] of Object.entries(
+      pkg.manifest.exports as Record<string, { import: string }>,
+    ))
+      paths[pkg.name + (subpath === '.' ? '' : subpath.slice(1))] = [
+        relative(
+          ROOT,
+          resolve(
+            pkg.dir,
+            entry.import.replace('./dist/', 'src/').replace(/\.js$/, '.ts'),
+          ),
+        ),
+      ]
+  const graph = await madge(SOURCES, {
+    baseDir: ROOT,
+    fileExtensions: ['ts'],
+    tsConfig: { compilerOptions: { baseUrl: ROOT, paths } },
+    detectiveOptions: { ts: { skipTypeImports: true } },
+  })
   const cycles: string[][] = graph.circular()
   if (cycles.length <= MAX_CYCLES) {
     report(
@@ -76,7 +114,7 @@ async function checkCycles() {
     `circular dependencies: ${cycles.length}, ceiling ${MAX_CYCLES}`,
     [
       ...cycles.map((cycle) => {
-        const path = cycle.map((file) => relative(ROOT, resolve(SRC, file)))
+        const path = cycle.map((file) => relative(ROOT, resolve(ROOT, file)))
         return [...path, path[0]].join(' → ')
       }),
       '',
@@ -93,24 +131,25 @@ async function checkFileSizes() {
   let largest: { path: string; lines: number; ceiling: number } | undefined
   let files = 0
 
-  for await (const file of new Glob('**/*.ts').scan(SRC)) {
-    files++
-    const path = `src/${file}`
-    const lines = countLines(await Bun.file(join(SRC, file)).text())
-    const ceiling = LINE_CEILINGS.get(path)
-    if (ceiling === undefined) {
-      if (lines > LINE_LIMIT)
-        untracked.push(
-          `${path}: ${lines} lines, over the ${LINE_LIMIT}-line limit`,
+  for (const source of SOURCES)
+    for await (const file of new Glob('**/*.ts').scan(source)) {
+      files++
+      const path = relative(ROOT, join(source, file))
+      const lines = countLines(await Bun.file(join(source, file)).text())
+      const ceiling = LINE_CEILINGS.get(path)
+      if (ceiling === undefined) {
+        if (lines > LINE_LIMIT)
+          untracked.push(
+            `${path}: ${lines} lines, over the ${LINE_LIMIT}-line limit`,
+          )
+        continue
+      }
+      if (lines > ceiling)
+        grown.push(
+          `${path}: ${lines} lines, ${lines - ceiling} over its ceiling of ${ceiling}`,
         )
-      continue
+      if (!largest || lines > largest.lines) largest = { path, lines, ceiling }
     }
-    if (lines > ceiling)
-      grown.push(
-        `${path}: ${lines} lines, ${lines - ceiling} over its ceiling of ${ceiling}`,
-      )
-    if (!largest || lines > largest.lines) largest = { path, lines, ceiling }
-  }
 
   const oversized = [...grown, ...untracked].sort()
   if (oversized.length === 0) {
@@ -141,8 +180,15 @@ async function checkFileSizes() {
 
 const started = performance.now()
 await checkDeadCode()
+await checkRuntimeDependencies()
 await checkCycles()
 await checkFileSizes()
+const boundaries = await checkBoundaries(ROOT)
+report(
+  boundaries.length === 0,
+  `package boundaries: ${boundaries.length === 0 ? 'ok' : 'failed'}`,
+  boundaries,
+)
 const elapsed = ((performance.now() - started) / 1000).toFixed(1)
 
 if (failures.length > 0) {

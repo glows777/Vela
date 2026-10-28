@@ -1,10 +1,10 @@
 import { Readable } from 'node:stream'
-import type { FeishuCard } from '../../src/extensions/feishu/cards.ts'
 import type {
+  FeishuCard,
   FeishuHistoryMessage,
   FeishuMessageEvent,
   FeishuTransport,
-} from '../../src/extensions/feishu/transport.ts'
+} from '@glows777/vela-lark'
 
 /** Offline Feishu boundary; the actual extension and gateway still process every event. */
 export function fakeFeishu() {

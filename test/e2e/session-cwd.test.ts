@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createVela } from '../../src/index.ts'
+import { createVela } from '@glows777/vela'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
   tempDir,
-} from '../../src/testing/index.ts'
+} from '@glows777/vela/testing'
 
 test('SDK sessions use independent cwd for tools and context, preserving application resources and lifecycle', async () => {
   const dir = tempDir()
