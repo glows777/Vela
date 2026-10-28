@@ -200,6 +200,7 @@ if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||
 }
 const CHANNELS = `
 import assert from 'node:assert/strict'
+import {createHmac} from 'node:crypto'
 import {createChannelVela,type ChannelExtension,type IncomingMessage,type ChannelEvent} from '@glows777/vela-channels'
 import {drainChannels} from '@glows777/vela-channels/testing'
 import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
@@ -208,6 +209,22 @@ const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:
 const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('channel received'),fauxText('event received'),fauxText('default received')]}),eventDefaultTarget:{channel:' probe ',chatId:' room '},extensions:[probe]})
 try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private');const event:ChannelEvent={source:'consumer',key:'build',deliveryId:'packed',summary:'!stop',final:true};await vela.publishEvent(event);await drainChannels(vela);assert(replies.includes('event received'));await vela.publishEvent({...event,key:'unmatched',deliveryId:'packed-default',final:false});await drainChannels(vela);assert(replies.includes('default received'))}finally{await vela.dispose()}
 assert.equal(stopped,1);console.log('standard channel sdk ok')
+const hookLogs:string[]=[]
+const hookModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'github',key:'github:owner/repo#pr/1'}),fauxText('webhook subscribed'),fauxText('webhook handled')]})
+const hooks=createChannelVela({contextFiles:false,model:hookModel,extensions:[probe],extensionConfig:{channel:{eventReceiver:{port:0,github:{secret:'packed-fixture',repositories:['owner/repo']}}}},logger:{debug(){},info(s){hookLogs.push(s)},warn(){},error(s){hookLogs.push(s)}}})
+let hookURL=''
+try{
+  await hooks.startChannels();hookURL=hookLogs.join(' ').match(/http:\\/\\/127\\.0\\.0\\.1:\\d+\\/events\\/github/)![0]
+  receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'subscribe'});await drainChannels(hooks)
+  const raw=JSON.stringify({action:'closed',repository:{full_name:'owner/repo'},pull_request:{number:1,merged:true,title:'Packed fixture',user:{login:'author'},head:{sha:'a'.repeat(40)},html_url:'https://github.com/owner/repo/pull/1'}})
+  const signed='sha256='+createHmac('sha256','packed-fixture').update(raw).digest('hex')
+  const post=(signature:string,body=raw)=>fetch(hookURL,{method:'POST',headers:{'x-github-event':'pull_request','x-github-delivery':'packed-http','x-hub-signature-256':signature},body})
+  assert.equal((await post('sha256=bad')).status,403);assert.equal((await post(signed)).status,202);await drainChannels(hooks)
+  const calls=hookModel.calls.length;assert(replies.includes('webhook handled'));assert.equal((await post(signed)).status,202);await drainChannels(hooks);assert.equal(hookModel.calls.length,calls)
+  assert.equal((await post(signed,'x'.repeat(1048577))).status,413)
+  console.log('packed signed HTTP -> GitHub final event -> channel queue ok; wrong signature/duplicate/oversize blocked')
+}finally{await hooks.dispose()}
+assert.equal(await fetch(hookURL).catch(()=>undefined),undefined);console.log('packed HTTP ingress disposal ok')
 `
 const LARK = `
 import assert from 'node:assert/strict'
