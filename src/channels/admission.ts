@@ -1,4 +1,4 @@
-import type { VelaSession } from '../vela-session.ts'
+import type { VelaSession } from '../extension-api.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type {
   ChannelDefinition,

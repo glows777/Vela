@@ -1,4 +1,4 @@
-import type { ModelInfo } from '../models/index.ts'
+import type { ModelInfo } from '../core.ts'
 
 const toRegExp = (pattern: string) =>
   new RegExp(

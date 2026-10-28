@@ -1,11 +1,12 @@
+import { inspectVela } from '../../diagnostics.ts'
 import type { CommandHandler } from './index.ts'
 
 export const securityCommands: CommandHandler[] = [
   // /hooks
-  (cmd, { print, internals }) => {
+  (cmd, { print, vela }) => {
     if (cmd !== '/hooks') return false
 
-    const hooks = internals.hooks.list()
+    const hooks = inspectVela(vela).hooks
     print('\n[hooks]')
     if (hooks.pre.length > 0) {
       print('  Pre-Tool Hooks:')

@@ -1,12 +1,15 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { VelaSession } from '../../vela-session.ts'
+import type {
+  ExtensionConfigDefinition,
+  VelaExtension,
+  VelaSession,
+} from '../../extension-api.ts'
 import {
   customMessageIfChanged,
   customMessageMissing,
   lastCustomMessage,
-} from '../custom-message.ts'
-import type { VelaExtension } from '../types.ts'
+} from '../../extension-api.ts'
 import { createEmbedder, type EmbeddingFn } from './embedder.ts'
 import { SqliteVectorStore } from './sqlite-store.ts'
 import { createRagTools, ingestDocument } from './tools.ts'
@@ -147,4 +150,25 @@ function embeddingConfig(config: Readonly<Record<string, unknown>>) {
     apiKey
   )
     return { url: baseUrl, modelId: model, apiKey }
+}
+
+export const ragConfig: ExtensionConfigDefinition = {
+  name: 'rag',
+  resolve(section, context) {
+    const defaults = {
+      baseUrl: context.env.EMBEDDING_MODEL_BASE_URL,
+      model: context.env.EMBEDDING_MODEL,
+      apiKey: context.env.EMBEDDING_MODEL_KEY,
+    }
+    const embedding = section.embedding
+    return {
+      embedding: defaults,
+      ...section,
+      ...(embedding &&
+      typeof embedding === 'object' &&
+      !Array.isArray(embedding)
+        ? { embedding: { ...defaults, ...embedding } }
+        : {}),
+    }
+  },
 }

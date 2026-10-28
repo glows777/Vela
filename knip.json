@@ -2,6 +2,12 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "src/index.ts",
+    "src/core.ts",
+    "src/extension-api.ts",
+    "src/channels/index.ts",
+    "src/channels/testing.ts",
+    "src/images/index.ts",
+    "src/testing/core.ts",
     "src/testing/index.ts",
     "scripts/*.ts",
     "scripts/eval/run.ts",

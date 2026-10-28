@@ -1,4 +1,3 @@
-import { Validator } from '@cfworker/json-schema'
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
 import type { VelaEventListener } from '../agent/events.ts'
@@ -15,6 +14,7 @@ import {
   type PermissionDecision,
   type PermissionRules,
 } from '../security/permissions.ts'
+import type { SessionScope } from '../session/scope.ts'
 import type { ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import { prepareCallResult } from './call-result.ts'
@@ -30,9 +30,12 @@ import {
   type ToolRegistryForkOptions,
   ToolResultError,
 } from './types.ts'
+import { untilAborted, validateInput } from './validation.ts'
 
 /** Context passed to a tool's execute. */
 export interface ToolContext {
+  sessionId?: string
+  scope?: Readonly<SessionScope>
   toolCallId?: string
   /** Fires when the session is interrupted (abort, close); long-running tools should honor it */
   signal?: AbortSignal
@@ -164,6 +167,7 @@ export class ToolRegistry {
   private readonly shared: SharedToolState
   private onEvent?: VelaEventListener
   private sessionId?: string
+  private scope?: () => Readonly<SessionScope> | undefined
 
   constructor(
     readonly results = new ToolResultStore(),
@@ -180,6 +184,7 @@ export class ToolRegistry {
     const forked = new ToolRegistry(results, this.shared)
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
+    forked.scope = options.scope
     forked.confirm = options.confirm
     return forked
   }
@@ -436,7 +441,7 @@ export class ToolRegistry {
       if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
         input = pre.modifiedInput
         try {
-          input = await validateInput(tool, input)
+          input = await validateInput(tool.inputSchema, input)
         } catch (error) {
           return await reject(
             `[Rejected] Input modified by hook is invalid: ${error instanceof Error ? error.message : String(error)}`,
@@ -498,6 +503,8 @@ export class ToolRegistry {
       try {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
+          sessionId: this.sessionId,
+          scope: this.scope?.(),
           results: this.results,
           toolCallId: options.toolCallId,
           callId: call.callId,
@@ -618,7 +625,7 @@ export class ToolRegistry {
     }
     let input: unknown
     try {
-      input = await validateInput(tool, args)
+      input = await validateInput(tool.inputSchema, args)
     } catch (error) {
       const reason = `Invalid arguments for ${name}: ${error instanceof Error ? error.message : String(error)}`
       await this.recordRejection(name, toolCallId, args, reason)
@@ -772,37 +779,4 @@ export class ToolRegistry {
     this.discoveredTools.delete(name)
     return this.tools.delete(name)
   }
-}
-
-/** Validates (and parses) input against the tool's schema; throws when it does not match. */
-async function validateInput(
-  tool: ToolDefinition,
-  input: unknown,
-): Promise<unknown> {
-  const schema = asSchema(tool.inputSchema)
-  if (schema.validate) {
-    const validated = await schema.validate(input)
-    if (!validated.success) throw validated.error
-    return validated.value
-  }
-  const validated = new Validator(await schema.jsonSchema).validate(input)
-  if (!validated.valid) throw new Error(JSON.stringify(validated.errors))
-  return input
-}
-
-/** Awaits the promise; resolves false early if signal aborts (stop waiting for the user). */
-function untilAborted(
-  promise: Promise<boolean>,
-  signal: AbortSignal | undefined,
-): Promise<boolean> {
-  if (!signal) return promise
-  if (signal.aborted) return Promise.resolve(false)
-  return new Promise((resolve) => {
-    const onAbort = () => resolve(false)
-    signal.addEventListener('abort', onAbort, { once: true })
-    promise.then((value) => {
-      signal.removeEventListener('abort', onAbort)
-      resolve(value)
-    })
-  })
 }

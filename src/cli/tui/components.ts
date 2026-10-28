@@ -10,8 +10,8 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import type { VelaEvent } from '../../agent/events.ts'
-import { isToolContent, type ModelMessage } from '../../messages.ts'
+import type { ModelMessage, VelaEvent } from '../../core.ts'
+import { isToolContent } from '../../messages.ts'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'

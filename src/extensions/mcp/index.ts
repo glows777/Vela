@@ -8,7 +8,7 @@
  */
 
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { ExtensionContext, VelaExtension } from '../types.ts'
+import type { ExtensionContext, VelaExtension } from '../../extension-api.ts'
 import {
   type McpServerConfig,
   type McpServerEntry,

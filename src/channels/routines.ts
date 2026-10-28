@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { errorMessage, type VelaLogger } from '../logger.ts'
-import type { VelaSession } from '../vela-session.ts'
+import type { VelaLogger, VelaSession } from '../extension-api.ts'
 import { writeAtomicJson } from './atomic-json.ts'
 import type { ChannelDirectory } from './directory.ts'
+import { errorMessage } from './log.ts'
 import {
   latestOccurrence,
   localRoutineInstant,

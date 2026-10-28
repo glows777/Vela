@@ -1,3 +1,4 @@
+import { defineJsonSchemaTool } from '../../extension-api.ts'
 /**
  * MCP tools as Vela tools (like pi's `extensions/mcp/tools.ts`). Images stay as canonical image
  * content; audio and binary resources become one-line placeholders. Long text goes through Vela's
@@ -10,9 +11,12 @@ import type {
   Tool as McpTool,
 } from '@modelcontextprotocol/sdk/types.js'
 import { jsonSchema } from 'ai'
-import type { ToolDefinition } from '../../tools/registry.ts'
-import type { ToolAnnotations, ToolNamespace } from '../../tools/types.ts'
-import { ToolExecutionResult } from '../../tools/types.ts'
+import type {
+  ToolAnnotations,
+  ToolDefinition,
+  ToolNamespace,
+} from '../../extension-api.ts'
+import { ToolExecutionResult } from '../../extension-api.ts'
 import type { McpExposure } from './config.ts'
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`. */
@@ -193,12 +197,6 @@ export interface McpToolCaller {
 }
 
 // Only tools built by this adapter may use its internal AI SDK JSON schemas.
-const mcpTools = new WeakSet<ToolDefinition>()
-
-export function isMcpTool(tool: ToolDefinition): boolean {
-  return mcpTools.has(tool)
-}
-
 export function createMcpTool(options: {
   server: string
   tool: McpTool
@@ -210,7 +208,7 @@ export function createMcpTool(options: {
   const { server, tool } = options
   const title = tool.title ?? tool.annotations?.title
   const annotations = toAnnotations(tool)
-  const definition: ToolDefinition = {
+  const definition = {
     name: options.name,
     description:
       tool.description?.trim() ||
@@ -233,7 +231,6 @@ export function createMcpTool(options: {
       })
       return convertMcpResult(server, tool.name, result)
     },
-  }
-  mcpTools.add(definition)
-  return definition
+  } satisfies ToolDefinition
+  return defineJsonSchemaTool(definition)
 }

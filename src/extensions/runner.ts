@@ -1,6 +1,5 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { CustomMessage, VelaEvent } from '../agent/events.ts'
-import type { ChannelGateway } from '../channels/gateway.ts'
 import { errorMessage, type VelaLogger } from '../logger.ts'
 import type { ImageContent, ModelMessage } from '../messages.ts'
 import {
@@ -11,6 +10,7 @@ import {
 } from '../messages.ts'
 import type { ModelRegistry } from '../models/index.ts'
 import type { HookPipeline } from '../security/hooks.ts'
+import { isJsonSchemaTool } from '../tools/json-schema.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type {
@@ -28,7 +28,6 @@ import type {
   ToolResultEventResult,
   TreePreparation,
 } from './events.ts'
-import { isMcpTool } from './mcp/tools.ts'
 import type {
   ExtensionAPI,
   ExtensionCommand,
@@ -45,7 +44,6 @@ interface RunnerDeps {
   registry: ToolRegistry
   models: ModelRegistry
   hooks: HookPipeline
-  gateway: ChannelGateway
   /** Look up an open session by id (hooks only know the session id) */
   session: (id: string) => VelaSession | undefined
 }
@@ -56,7 +54,6 @@ export interface LoadedExtension {
   /** Registered model providers */
   providers: string[]
   commands: string[]
-  channels: string[]
 }
 
 type AnyHandler = (event: unknown, ctx: ExtensionContext) => unknown
@@ -158,7 +155,6 @@ export class ExtensionRunner {
       tools: [],
       providers: [],
       commands: [],
-      channels: [],
     }
     this.loadedList.push(loaded)
     const { deps } = this
@@ -180,7 +176,7 @@ export class ExtensionRunner {
           schema !== null &&
           '~standard' in schema &&
           schema['~standard'].vendor === 'zod'
-        if (!isZod && !isMcpTool(tool))
+        if (!isZod && !isJsonSchemaTool(tool))
           throw new Error(
             `Extension "${name}": tool "${tool.name}" inputSchema must be a Zod schema`,
           )
@@ -215,10 +211,6 @@ export class ExtensionRunner {
         this.commandMap.set(commandName, { extension: name, command })
         loaded.commands.push(commandName)
       },
-      registerChannel: (channel) => {
-        deps.gateway.register(channel)
-        loaded.channels.push(channel.name)
-      },
       on: <K extends ExtensionEventName>(
         event: K,
         handler: ExtensionHandler<K>,
@@ -241,7 +233,6 @@ export class ExtensionRunner {
       ...e,
       tools: [...e.tools],
       commands: [...e.commands],
-      channels: [...e.channels],
     }))
   }
 

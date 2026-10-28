@@ -1,4 +1,7 @@
-import type { VelaExtension } from '../types.ts'
+import type {
+  ExtensionConfigDefinition,
+  VelaExtension,
+} from '../../extension-api.ts'
 
 /** Commands worth confirming (pi's permission-gate example): a heuristic, not a security control */
 const DANGEROUS_PATTERNS = [
@@ -31,4 +34,11 @@ export function permissionGate(): VelaExtension {
       if (choice !== 'Yes') return { block: true, reason: 'Blocked by user' }
     })
   }
+}
+
+export const permissionGateConfig: ExtensionConfigDefinition = {
+  name: 'permission-gate',
+  resolve(section) {
+    return { ...section }
+  },
 }

@@ -423,3 +423,30 @@ test('running in the home directory reads ~/.vela once, as user settings, withou
     join(home, '.agents/skills'),
   ])
 })
+
+test('compatibility config only supplies explicitly passed environment to MCP', () => {
+  const options = setup({
+    'home/mcp.json': JSON.stringify({
+      mcpServers: { local: { command: '$VELA_MCP_CONFIG_FIXTURE' } },
+    }),
+  })
+  const previous = process.env.VELA_MCP_CONFIG_FIXTURE
+  process.env.VELA_MCP_CONFIG_FIXTURE = 'fixture-command'
+  try {
+    const config = loadConfig(options)
+    expect(config.mcp.errors).toHaveLength(1)
+    expect(config.mcp.errors[0]).toContain('VELA_MCP_CONFIG_FIXTURE')
+    expect(config.mcp.servers.local).toBeUndefined()
+    const explicit = loadConfig({
+      ...options,
+      env: { VELA_MCP_CONFIG_FIXTURE: 'fixture-command' },
+    })
+    expect(explicit.mcp.errors).toEqual([])
+    expect(explicit.mcp.servers.local).toMatchObject({
+      command: 'fixture-command',
+    })
+  } finally {
+    if (previous === undefined) delete process.env.VELA_MCP_CONFIG_FIXTURE
+    else process.env.VELA_MCP_CONFIG_FIXTURE = previous
+  }
+})

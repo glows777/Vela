@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { formatUsd } from '../../../src/cli/format.ts'
 import {
   fitStatusLines,
   formatStatusPath,
   noticeContentWidth,
 } from '../../../src/cli/status-display.ts'
 import { notice } from '../../../src/cli/tui/components.ts'
-import { formatUsd } from '../../../src/usage/format.ts'
 
 const HOME = '/home/ada'
 const AGENT = '/tmp/vela-verify/taste-status-43/home'

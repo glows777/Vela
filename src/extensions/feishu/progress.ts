@@ -1,5 +1,5 @@
-import type { VelaEvent } from '../../agent/events.ts'
-import type { ChannelOutcome } from '../../channels/types.ts'
+import type { ChannelOutcome } from '../../channels/index.ts'
+import type { VelaEvent } from '../../extension-api.ts'
 import type { FeishuCard } from './cards.ts'
 import type { FeishuTransport } from './transport.ts'
 

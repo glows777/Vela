@@ -449,3 +449,17 @@ During 0.x, a breaking change bumps the minor version (0.1 to 0.2); patch releas
 Anthropic and OpenAI Responses accept native tool images. OpenAI Chat-compatible adapters serialize tool content as JSON, so Vela lifts images into one request-only user message after the complete consecutive tool-result group. Adapter detection uses the provider's `.chat` suffix, including configured aliases. Custom provider implementations must report that protocol suffix if they share this limitation.
 
 See [the offline tool-image example](../examples/sdk/06-tool-images.ts), [tool hooks](extensions.md#tool-image-results), and [verification notes](verification/image-tool-results.md).
+
+## Routing and host lifecycle
+
+`vela.session(id, { scope, channel })` supplies a host's routing identity before session hooks and tool calls. A scope is `{ id, kind: 'private' | 'shared', dataDir }`; it selects shared storage and grants no permissions. `session.scope` and each tool call's `context.scope` are read-only snapshots; `context.sessionId` identifies the invoking session. Routing is transient: supply it again on resume. Fork and clone omit it.
+
+An existing unbound session accepts its first scope/channel binding while preserving object identity and its original cwd, tools, permissions and model. Repeating the same route is allowed. A conflicting route throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
+
+`session.toolDecision(name)` reports the existing tool eligibility and permission decision. `session.hasUI` distinguishes an attached frontend. `session.save()` retains its flush-and-reject behavior; `session.save({ reportFailure: true })` additionally emits one existing `session_save_failed` event if that explicit flush fails. It does not close the session.
+
+`createVela({ onSessionSaved(id), beforeDispose() })` supports host composition. A successful nonempty storage append calls `onSessionSaved`; no-op or failed saves do not. Observer errors are logged and cannot retry committed history. Disposal waits for extension factories, runs `beforeDispose` to stop ingress, attempts every session close, then shared extension shutdown and cleanup, aggregating errors.
+
+`publishChannelEvent(session, event)` accepts only `channel_message`, `channel_reply` and `channel_error`. `resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
+
+The current package still exports only its existing root and `./testing` entry. Core-only assembly, extension/image contracts and channel composition are separated within the source tree in preparation for the subsequent workspace move. No new package names or deep package imports are available yet. Channel-aware `createVela`, `channels()`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.

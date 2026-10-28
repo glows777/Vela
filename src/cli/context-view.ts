@@ -1,8 +1,14 @@
-import {
-  IMAGE_CHARS,
-  isImageContentPart,
-  type ModelMessage,
-} from '../messages.ts'
+import type { ModelMessage } from '../extension-api.ts'
+
+const IMAGE_CHARS = 4800
+const isImageContentPart = (part: {
+  type: string
+  mediaType?: string
+}): boolean =>
+  part.type === 'image' ||
+  part.type.startsWith('image-') ||
+  (part.type === 'file' && /^image(?:\/|$)/i.test(part.mediaType ?? ''))
+
 /**
  * Terminal view for /context, modeled on Claude Code's /context view.
  *
@@ -10,8 +16,8 @@ import {
  * Each category gets its own color (ANSI 256) so you can see at a glance what is eating the context.
  */
 
-import { formatUsd } from '../usage/format.ts'
-import type { TokenTracker } from '../usage/tracker.ts'
+import type { UsageTotals } from '../extension-api.ts'
+import { formatUsd } from './format.ts'
 
 interface ContextSlice {
   name: string
@@ -251,8 +257,7 @@ export function buildContextSnapshot(
 
 // ── /usage view: cumulative cost + cache hit rate ─────────────────────────
 
-export function renderUsageView(tracker: TokenTracker): string {
-  const t = tracker.totals()
+export function renderUsageView(t: UsageTotals): string {
   const lines: string[] = []
   const C = (n: number, s: string) => fg(n, s)
   const bold = (s: string) => `\x1b[1m${s}\x1b[0m`

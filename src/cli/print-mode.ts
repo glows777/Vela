@@ -1,7 +1,5 @@
-import type { ImageContent, ModelMessage } from '../messages.ts'
-
+import type { ImageContent, ModelMessage, VelaSession } from '../core.ts'
 import type { Vela } from '../vela.ts'
-import type { VelaSession } from '../vela-session.ts'
 import { jsonEvent, toJsonLine, writeStdout } from './json-event.ts'
 
 /** Text of the last assistant message (the output of -p). */

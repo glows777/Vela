@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
-import type { VelaExtension } from '../../src/extensions/types.ts'
+import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
 import type { ModelMessage } from '../../src/messages.ts'
 import type {
   SessionEntry,

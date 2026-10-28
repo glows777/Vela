@@ -1,9 +1,5 @@
 import type { SelectItem } from '@earendil-works/pi-tui'
-import type {
-  AuthInteraction,
-  AuthPrompt,
-  LoginOptions,
-} from '../../auth/types.ts'
+import type { AuthInteraction, AuthPrompt, LoginOptions } from '../../core.ts'
 import type { Vela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
 import { errorMessage } from './components.ts'

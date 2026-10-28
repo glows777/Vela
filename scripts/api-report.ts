@@ -110,8 +110,21 @@ export function apiReport(): string {
     out.push(`# ${entry}`, '')
     for (const symbol of checker
       .getExportsOfModule(module)
-      .sort((a, b) => a.name.localeCompare(b.name)))
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      const target =
+        symbol.flags & ts.SymbolFlags.Alias
+          ? checker.getAliasedSymbol(symbol)
+          : symbol
+      if (
+        target.declarations?.some((declaration) =>
+          ts
+            .getJSDocTags(declaration)
+            .some((tag) => tag.tagName.text === 'experimental'),
+        )
+      )
+        out.push('  @experimental')
       out.push(...describe(symbol.name, symbol))
+    }
     out.push('')
   }
   return out.join('\n')

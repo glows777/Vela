@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { z } from 'zod'
+import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
 import { messageTime } from '../../src/extensions/feishu/history.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
-import type { VelaExtension } from '../../src/extensions/types.ts'
 import { memorySessionStorage } from '../../src/session/storage.ts'
 import {
   type FauxRequest,

@@ -1,23 +1,22 @@
+import type { VelaSession } from '../../core.ts'
+import { inspectSession } from '../../diagnostics.ts'
 import {
   buildContextSnapshot,
   renderContextView,
   renderUsageView,
-} from '../../context/view.ts'
-import type { VelaSession } from '../../vela-session.ts'
+} from '../context-view.ts'
 import type { CommandHandler } from './handler.ts'
 
 export const contextCommands: CommandHandler[] = [
-  (cmd, { print, session, internals }) => {
+  (cmd, { print, session, vela }) => {
     if (cmd !== '/context') return false
     return (async () => {
       try {
         // Sections are built per prompt: preview the next prompt's sections so memory usage shows even before the first prompt
-        const sections = await session.previewSections()
-        const skills =
-          internals.skillLoader.buildPromptSection(
-            session.registry.getActiveTools().map((tool) => tool.name),
-          ) ?? ''
-        print(renderContextView(contextSnapshot(session, sections, skills)))
+        const snapshot = await inspectSession(vela, session, {
+          previewExtensions: true,
+        })
+        print(renderContextView(contextSnapshot(session, snapshot)))
       } catch (error) {
         print(
           `[context] Failed: ${error instanceof Error ? error.message : error}`,
@@ -28,7 +27,7 @@ export const contextCommands: CommandHandler[] = [
 
   (cmd, { print, session }) => {
     if (cmd !== '/usage') return false
-    print(renderUsageView(session.tracker))
+    print(renderUsageView(session.usage.totals))
     return true
   },
 ]
@@ -40,32 +39,22 @@ export const contextCommands: CommandHandler[] = [
  */
 function contextSnapshot(
   session: VelaSession,
-  sections: Record<string, string>,
-  skills: string,
+  snapshot: Awaited<ReturnType<typeof inspectSession>>,
 ) {
   const info = session.modelInfo
-  const windowTokens = info.contextWindow ?? session.tracker.contextWindow
-  const memoryChars = sections.memory?.length ?? 0
+  const windowTokens = info.contextWindow ?? snapshot.windowTokens
+  const memoryChars = snapshot.extensionSections.memory?.length ?? 0
   return buildContextSnapshot({
     modelName: info.provider ? `${info.provider} / ${info.id}` : info.id,
     modelId: info.id,
     windowTokens,
     systemPromptChars: Math.max(
       0,
-      session.buildSystem(sections).length - memoryChars - skills.length,
+      snapshot.systemPromptChars - memoryChars - snapshot.skillsChars,
     ),
-    toolDescriptionChars: session.registry
-      .getActiveTools()
-      .reduce(
-        (a, t) =>
-          a +
-          t.name.length +
-          (t.description?.length || 0) +
-          JSON.stringify(t.inputSchema || {}).length,
-        0,
-      ),
+    toolDescriptionChars: snapshot.toolDescriptionChars,
     memoryChars,
-    skillsChars: skills.length,
+    skillsChars: snapshot.skillsChars,
     messages: session.messages,
     autocompactBufferTokens: Math.max(
       0,

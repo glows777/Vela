@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod'
+import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
-import type { VelaExtension } from '../../src/extensions/types.ts'
 import {
   fauxError,
   fauxHang,

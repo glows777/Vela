@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { channelSessionId } from '../../src/channels/session-id.ts'
+import type { ChannelExtension as VelaExtension } from '../../src/channels/vela.ts'
 import { feishu } from '../../src/extensions/feishu/index.ts'
-import type { VelaExtension } from '../../src/extensions/types.ts'
 import {
   type FauxRequest,
   type FauxStep,

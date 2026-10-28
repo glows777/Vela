@@ -1,5 +1,5 @@
+import { inspectVela } from '../diagnostics.ts'
 import type { Vela } from '../vela.ts'
-import { velaInternals } from '../vela.ts'
 import { channelCommands } from './commands/channel.ts'
 import { extensionCommands } from './commands/extensions.ts'
 import {
@@ -25,7 +25,7 @@ export function createCliDispatcher(vela: Vela): CommandHandler {
     ...statusCommands,
     ...contextCommands,
     ...modelCommands,
-    ...createSkillCommands(velaInternals(vela).skillLoader),
+    ...createSkillCommands({ list: () => inspectVela(vela).skills }),
     ...extensionCommands,
     ...channelCommands,
     ...securityCommands,

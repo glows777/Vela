@@ -1,4 +1,3 @@
-import type { ChannelDefinition } from '../channels/types.ts'
 import type { VelaLogger } from '../logger.ts'
 import type { ProviderDefinition } from '../models/index.ts'
 import type { ToolDefinition } from '../tools/registry.ts'
@@ -109,8 +108,6 @@ export interface ExtensionAPI {
   registerProvider(name: string, provider: ProviderDefinition): void
   /** Registers a `/name` command: `session.prompt('/name args')` runs it instead of sending it to the model. */
   registerCommand(name: string, command: ExtensionCommand): void
-  /** Registers a message channel (Vela-specific): one shared session per chat. */
-  registerChannel(channel: ChannelDefinition): void
   /** Subscribes to an event; handlers run in extension load and registration order. Returns an unsubscribe function. */
   on<K extends ExtensionEventName>(
     event: K,

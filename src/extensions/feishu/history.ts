@@ -1,4 +1,4 @@
-import type { ImageContent } from '../../messages.ts'
+import type { ImageContent } from '../../extension-api.ts'
 import { messageText } from './messages.ts'
 import type {
   FeishuHistoryMessage,

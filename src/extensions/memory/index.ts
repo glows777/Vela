@@ -1,12 +1,15 @@
 import { join } from 'node:path'
-import { channelScopes, chatDirectory } from '../../channels/scope.ts'
-import type { VelaSession } from '../../vela-session.ts'
+import type {
+  ExtensionConfigDefinition,
+  SessionScope,
+  VelaExtension,
+  VelaSession,
+} from '../../extension-api.ts'
 import {
   customMessageIfChanged,
   customMessageMissing,
   lastCustomMessage,
-} from '../custom-message.ts'
-import type { VelaExtension } from '../types.ts'
+} from '../../extension-api.ts'
 import { MEMORY_RULES, MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
 
@@ -40,10 +43,9 @@ export function memory(): VelaExtension {
     )
     store.init()
     const groups = new Map<string, MemoryStore>()
-    const forSession = (registry?: object): MemoryStore => {
-      const scope = registry && channelScopes.get(registry)
-      if (scope?.chatKind !== 'group') return store
-      const dir = chatDirectory(vela.dataDir, scope.channel, scope.chatId)
+    const forSession = (scope?: Readonly<SessionScope>): MemoryStore => {
+      if (scope?.kind !== 'shared') return store
+      const dir = scope.dataDir
       let group = groups.get(dir)
       if (!group) {
         group = new MemoryStore(
@@ -57,11 +59,11 @@ export function memory(): VelaExtension {
       return group
     }
     vela.registerTool(
-      createMemoryTool(store, (context) => forSession(context?.registry)),
+      createMemoryTool(store, (context) => forSession(context?.scope)),
     )
 
     const contentFor = (session: VelaSession): string | null => {
-      const local = forSession(session.registry)
+      const local = forSession(session.scope)
       const index =
         local === store
           ? local.buildIndex()
@@ -84,7 +86,7 @@ export function memory(): VelaExtension {
     const indexed = new WeakSet<VelaSession>()
 
     vela.on('before_agent_start', (event, ctx) => {
-      if (ctx.session.registry.decide('memory') === 'deny') return
+      if (ctx.session.toolDecision('memory') === 'deny') return
       event.sections.memory = MEMORY_RULES
       const content = contentFor(ctx.session)
       const message = content
@@ -109,9 +111,9 @@ export function memory(): VelaExtension {
       description:
         'List memories; /memory search <keywords> to search, /memory lint to check',
       handler: (args, ctx) => {
-        if (ctx.session.registry.decide('memory') === 'deny')
+        if (ctx.session.toolDecision('memory') === 'deny')
           return ctx.ui.notify('Memory is not enabled for this session.')
-        const local = forSession(ctx.session.registry)
+        const local = forSession(ctx.session.scope)
         if (args === 'lint') return ctx.ui.notify(lintReport(local))
         if (args.startsWith('search ')) {
           const query = args.slice('search '.length).trim()
@@ -136,7 +138,7 @@ export function memory(): VelaExtension {
       description:
         'Have the model clean up the memory store (merge duplicates, delete stale entries)',
       handler: async (_args, ctx) => {
-        if (ctx.session.registry.decide('memory') === 'deny')
+        if (ctx.session.toolDecision('memory') === 'deny')
           return ctx.ui.notify('Memory is not enabled for this session.')
         ctx.ui.notify('[dream] Starting memory cleanup...')
         await ctx.session.prompt(DREAM_PROMPT, { signal: ctx.signal })
@@ -182,4 +184,11 @@ function searchReport(store: MemoryStore, query: string): string {
         `  [score=${h.score.toFixed(2)}] [${h.entry.type}] ${h.entry.name} — ${h.entry.description}`,
     ),
   ].join('\n')
+}
+
+export const memoryConfig: ExtensionConfigDefinition = {
+  name: 'memory',
+  resolve(section) {
+    return { ...section }
+  },
 }

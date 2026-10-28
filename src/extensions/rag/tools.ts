@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import z from 'zod'
-import type { ToolDefinition } from '../../tools/registry.ts'
+import type { ToolDefinition } from '../../extension-api.ts'
 import { chunkDocument } from './chunker.ts'
 import { type EmbeddingFn, embed } from './embedder.ts'
 import type { SqliteVectorStore } from './sqlite-store.ts'

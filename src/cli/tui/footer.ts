@@ -4,8 +4,8 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import { formatUsd } from '../../usage/format.ts'
-import type { VelaSession } from '../../vela-session.ts'
+import type { VelaSession } from '../../core.ts'
+import { formatUsd } from '../format.ts'
 import { sanitize } from './components.ts'
 import { theme } from './theme.ts'
 
