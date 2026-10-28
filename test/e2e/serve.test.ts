@@ -70,7 +70,7 @@ function spawnServe(
   })
 }
 
-test('serve loads extension-owned webhook settings, handles signed input and closes ingress on SIGTERM', async () => {
+async function verifyWebhookServe(adapter: 'github' | 'generic') {
   const dir = tempDir('vela-serve-hooks-')
   const home = tempDir('vela-serve-hooks-home-')
   dirs.push(dir, home)
@@ -84,10 +84,13 @@ test('serve loads extension-owned webhook settings, handles signed input and clo
         channel: {
           eventReceiver: {
             port: 0,
-            github: {
-              secret: '$WEBHOOK_FIXTURE_SECRET',
-              repositories: ['owner/repo'],
-            },
+            [adapter]:
+              adapter === 'github'
+                ? {
+                    secret: '$WEBHOOK_FIXTURE_SECRET',
+                    repositories: ['owner/repo'],
+                  }
+                : { secret: '$WEBHOOK_FIXTURE_SECRET', source: 'sentry' },
           },
         },
       },
@@ -103,8 +106,11 @@ test('serve loads extension-owned webhook settings, handles signed input and clo
               name: 'channel_subscriptions',
               input: {
                 action: 'create',
-                source: 'github',
-                key: 'github:owner/repo#pr/1',
+                source: adapter === 'github' ? 'github' : 'sentry',
+                key:
+                  adapter === 'github'
+                    ? 'github:owner/repo#pr/1'
+                    : 'sentry:project',
               },
             },
           ],
@@ -130,7 +136,9 @@ test('serve loads extension-owned webhook settings, handles signed input and clo
   try {
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
-      url = stderr.match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)?.[0]
+      url = stderr.match(
+        /http:\/\/127\.0\.0\.1:\d+\/events\/(?:github|generic)/,
+      )?.[0]
       if (
         url &&
         existsSync(replies) &&
@@ -140,26 +148,36 @@ test('serve loads extension-owned webhook settings, handles signed input and clo
       await Bun.sleep(1)
     }
     expect(url).toBeDefined()
-    const raw = JSON.stringify({
-      action: 'closed',
-      repository: { full_name: 'owner/repo' },
-      pull_request: {
-        number: 1,
-        merged: true,
-        title: 'Fixture',
-        user: { login: 'author' },
-        head: { sha: 'a'.repeat(40) },
-        html_url: 'https://github.com/owner/repo/pull/1',
-      },
-    })
+    const raw = JSON.stringify(
+      adapter === 'generic'
+        ? { key: 'sentry:project', summary: '!stop', final: true }
+        : {
+            action: 'closed',
+            repository: { full_name: 'owner/repo' },
+            pull_request: {
+              number: 1,
+              merged: true,
+              title: 'Fixture',
+              user: { login: 'author' },
+              head: { sha: 'a'.repeat(40) },
+              html_url: 'https://github.com/owner/repo/pull/1',
+            },
+          },
+    )
     expect(
       (
         await fetch(url!, {
           method: 'POST',
           headers: {
-            'x-github-event': 'pull_request',
-            'x-github-delivery': 'serve-fixture',
-            'x-hub-signature-256': `sha256=${createHmac('sha256', 'fixture-only').update(raw).digest('hex')}`,
+            ...(adapter === 'github'
+              ? { 'x-github-event': 'pull_request' }
+              : {}),
+            [adapter === 'github' ? 'x-github-delivery' : 'x-vela-delivery']:
+              'serve-fixture',
+            [adapter === 'github'
+              ? 'x-hub-signature-256'
+              : 'x-vela-signature-256']:
+              `sha256=${createHmac('sha256', 'fixture-only').update(raw).digest('hex')}`,
           },
           body: raw,
         })
@@ -181,7 +199,12 @@ test('serve loads extension-owned webhook settings, handles signed input and clo
   expect(proc.exitCode).toBe(0)
   expect(await new Response(proc.stdout).text()).toBe('')
   expect(await fetch(url!).catch(() => undefined)).toBeUndefined()
-})
+}
+
+test.each(['github', 'generic'] as const)(
+  'serve loads %s webhook settings, handles signed input and closes ingress on SIGTERM',
+  verifyWebhookServe,
+)
 
 /** Starts the CLI and waits for it to exit; the caller asserts on the result */
 async function runServe(

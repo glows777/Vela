@@ -211,7 +211,7 @@ try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']
 assert.equal(stopped,1);console.log('standard channel sdk ok')
 const hookLogs:string[]=[]
 const hookModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'github',key:'github:owner/repo#pr/1'}),fauxText('webhook subscribed'),fauxText('webhook handled')]})
-const hooks=createChannelVela({contextFiles:false,model:hookModel,extensions:[probe],extensionConfig:{channel:{eventReceiver:{port:0,github:{secret:'packed-fixture',repositories:['owner/repo']}}}},logger:{debug(){},info(s){hookLogs.push(s)},warn(){},error(s){hookLogs.push(s)}}})
+const hooks=createChannelVela({contextFiles:false,model:hookModel,extensions:[probe],extensionConfig:{channel:{eventReceiver:{port:0,github:{secret:'packed-fixture',repositories:['owner/repo']},generic:{secret:'packed-generic',source:'sentry'}}}},logger:{debug(){},info(s){hookLogs.push(s)},warn(){},error(s){hookLogs.push(s)}}})
 let hookURL=''
 try{
   await hooks.startChannels();hookURL=hookLogs.join(' ').match(/http:\\/\\/127\\.0\\.0\\.1:\\d+\\/events\\/github/)![0]
@@ -223,6 +223,17 @@ try{
   const calls=hookModel.calls.length;assert(replies.includes('webhook handled'));assert.equal((await post(signed)).status,202);await drainChannels(hooks);assert.equal(hookModel.calls.length,calls)
   assert.equal((await post(signed,'x'.repeat(1048577))).status,413)
   console.log('packed signed HTTP -> GitHub final event -> channel queue ok; wrong signature/duplicate/oversize blocked')
+  hookModel.push(fauxToolCall('channel_subscriptions',{action:'create',source:'sentry',key:'sentry:project'}),fauxText('generic subscribed'),fauxText('generic handled'))
+  receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'subscribe generic'});await drainChannels(hooks)
+  const genericBody=JSON.stringify({key:'sentry:project',summary:'!stop',final:true})
+  const genericPost=(body:string,signature:string,id='packed-http')=>fetch(hookURL.replace('/events/github','/events/generic'),{method:'POST',headers:{'x-vela-delivery':id,'x-vela-signature-256':signature},body})
+  const genericSignature='sha256='+createHmac('sha256','packed-generic').update(genericBody).digest('hex')
+  assert.equal((await genericPost(genericBody,'sha256=bad')).status,403)
+  assert.equal((await genericPost(genericBody,genericSignature)).status,202);await drainChannels(hooks);assert(replies.includes('generic handled'))
+  const genericCalls=hookModel.calls.length;assert.equal((await genericPost(genericBody,genericSignature)).status,202);await drainChannels(hooks);assert.equal(hookModel.calls.length,genericCalls)
+  const outside=JSON.stringify({key:'github:owner/repo#pr/1',summary:'outside'})
+  assert.equal((await genericPost(outside,'sha256='+createHmac('sha256','packed-generic').update(outside).digest('hex'),'outside')).status,400)
+  console.log('packed generic signed HTTP -> fixed-source final queue ok; same delivery ID isolated from GitHub, duplicates ignored')
 }finally{await hooks.dispose()}
 assert.equal(await fetch(hookURL).catch(()=>undefined),undefined);console.log('packed HTTP ingress disposal ok')
 `

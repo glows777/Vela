@@ -6,6 +6,7 @@ import {
 } from 'node:http'
 import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
+import { genericEvent, genericOptions } from './generic-events.ts'
 import { githubEvents, githubOptions } from './github-events.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelEvent } from './types.ts'
@@ -13,9 +14,21 @@ import type { ChannelEvent } from './types.ts'
 const optionsSchema = z
   .object({
     port: z.number().int().min(0).max(65535).default(8787),
-    github: githubOptions,
+    github: githubOptions.optional(),
+    generic: genericOptions.optional(),
   })
   .strict()
+  .refine(
+    (options) => options.github || options.generic,
+    'Configure at least one adapter',
+  )
+  .refine(
+    (options) =>
+      !options.github ||
+      !options.generic ||
+      options.github.secret !== options.generic.secret,
+    'GitHub and generic adapters require separate secrets',
+  )
 const MAX_BODY = 1024 * 1024
 const MAX_SEEN = 1000
 
@@ -107,9 +120,11 @@ export class EventReceiver {
     this.accepting = true
     const address = server.address()
     if (address && typeof address !== 'string')
-      this.logger.info(
-        `[events] Listening on http://127.0.0.1:${address.port}/events/github`,
-      )
+      for (const name of ['github', 'generic'] as const)
+        if (this.options[name])
+          this.logger.info(
+            `[events] Listening on http://127.0.0.1:${address.port}/events/${name}`,
+          )
   }
 
   async stop(): Promise<void> {
@@ -144,11 +159,17 @@ export class EventReceiver {
     }
     try {
       if (!this.accepting) throw new HttpError(503, 'Receiver stopping')
-      if (req.url !== '/events/github') throw new HttpError(404, 'Not found')
+      const github =
+        req.url === '/events/github' ? this.options.github : undefined
+      const generic =
+        req.url === '/events/generic' ? this.options.generic : undefined
+      if (!github && !generic) throw new HttpError(404, 'Not found')
+      const adapter = github ? 'github' : 'generic'
       if (req.method !== 'POST') throw new HttpError(405, 'POST required')
       const raw = await readBody(req)
-      const header = req.headers['x-hub-signature-256']
-      const expected = createHmac('sha256', this.options.github.secret)
+      const header =
+        req.headers[github ? 'x-hub-signature-256' : 'x-vela-signature-256']
+      const expected = createHmac('sha256', (github ?? generic!).secret)
         .update(raw)
         .digest()
       if (
@@ -157,34 +178,38 @@ export class EventReceiver {
         !timingSafeEqual(expected, Buffer.from(header.slice(7), 'hex'))
       )
         throw new HttpError(403, 'Invalid signature')
-      const id = req.headers['x-github-delivery']
+      const id = req.headers[github ? 'x-github-delivery' : 'x-vela-delivery']
       const type = req.headers['x-github-event']
       if (
         typeof id !== 'string' ||
         !id.trim() ||
         id.length > 512 ||
-        typeof type !== 'string'
+        (github && typeof type !== 'string')
       )
-        throw new HttpError(400, 'Missing or invalid GitHub delivery headers')
+        throw new HttpError(
+          400,
+          `Missing or invalid ${github ? 'GitHub' : 'generic'} delivery headers`,
+        )
       // Synchronous, per original delivery, before mapping/fanout; failures do not undo seen IDs.
-      if (this.seen.has(id)) {
+      const cacheKey = JSON.stringify([adapter, id])
+      if (this.seen.has(cacheKey)) {
         respond(202, 'Duplicate delivery ignored')
         return
       }
-      this.seen.add(id)
+      this.seen.add(cacheKey)
       if (this.seen.size > MAX_SEEN)
         this.seen.delete(this.seen.values().next().value!)
       let events: ChannelEvent[]
       try {
-        events = githubEvents(
-          type,
-          JSON.parse(raw.toString('utf8')),
-          id,
-          this.options.github,
-          this.logger,
-        )
+        const input = JSON.parse(raw.toString('utf8'))
+        events = github
+          ? githubEvents(type as string, input, id, github, this.logger)
+          : [genericEvent(input, id, generic!)]
       } catch {
-        throw new HttpError(400, 'Invalid GitHub payload')
+        throw new HttpError(
+          400,
+          `Invalid ${github ? 'GitHub' : 'generic'} payload`,
+        )
       }
       for (const event of events) await this.publish(event)
       respond(202, 'Accepted; execution is not guaranteed')
