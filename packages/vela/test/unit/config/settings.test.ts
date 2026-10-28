@@ -39,6 +39,43 @@ function setup(files: Record<string, string> = {}) {
 
 const json = (value: unknown) => JSON.stringify(value)
 
+test('channel receiver config reuses extension-owned settings interpolation and project trust', () => {
+  const options = setup({
+    'home/settings.json': json({
+      extensionConfig: {
+        channel: {
+          eventReceiver: {
+            port: 8787,
+            github: {
+              secret: '$WEBHOOK_FIXTURE_SECRET',
+              repositories: ['owner/repo'],
+            },
+          },
+        },
+      },
+    }),
+    'project/.vela/settings.json': json({
+      extensionConfig: { channel: { eventReceiver: { port: 9999 } } },
+    }),
+  })
+  expect(
+    loadConfig({ ...options, env: { WEBHOOK_FIXTURE_SECRET: 'fixture' } })
+      .extensionConfig.channel,
+  ).toEqual({
+    eventReceiver: {
+      port: 8787,
+      github: { secret: 'fixture', repositories: ['owner/repo'] },
+    },
+  })
+  expect(
+    loadConfig({
+      ...options,
+      trusted: true,
+      env: { WEBHOOK_FIXTURE_SECRET: 'fixture' },
+    }).extensionConfig.channel?.eventReceiver,
+  ).toMatchObject({ port: 9999 })
+})
+
 test('event default target stays in umbrella settings and validates an explicit existing-chat address', () => {
   const target = { channel: 'lark', chatId: 'oc_group' }
   expect(
