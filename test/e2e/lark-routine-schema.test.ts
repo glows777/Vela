@@ -2,8 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadModels } from '@glows777/vela-core'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { responsesReply } from '../support/responses.ts'
 import { RoutineClock } from '../support/routine-clock.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
@@ -38,14 +38,14 @@ test('the real Responses request exports an object-root routine schema and can c
     const body = JSON.parse(String(init?.body))
     requests.push(body)
     const parameters = body.tools?.find(
-      (tool: { name: string }) => tool.name === 'feishu_routines',
+      (tool: { name: string }) => tool.name === 'lark_routines',
     )?.parameters
     // Match the real provider's rejection at the actual SDK request boundary.
     if (parameters?.type !== 'object')
       return Response.json(
         {
           error: {
-            message: `Invalid schema for function 'feishu_routines': schema must be a JSON Schema of 'type: "object"', got 'type: ${parameters?.type ?? 'null'}'.`,
+            message: `Invalid schema for function 'lark_routines': schema must be a JSON Schema of 'type: "object"', got 'type: ${parameters?.type ?? 'null'}'.`,
             type: 'invalid_request_error',
             code: 'invalid_function_parameters',
           },
@@ -57,7 +57,7 @@ test('the real Responses request exports an object-root routine schema and can c
       undefined,
       requests.length === 1
         ? {
-            name: 'feishu_routines',
+            name: 'lark_routines',
             arguments: JSON.stringify({
               action: 'create',
               message: 'Review the PR',
@@ -67,14 +67,14 @@ test('the real Responses request exports an object-root routine schema and can c
         : undefined,
     )
   }) as typeof fetch
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     cwd: dir.path,
     providers: loadModels({ agentDir: dir.path }),
     model: 'compat/deepseek-flash',
-    extensionConfig: { feishu: { timezone: 'UTC' } },
+    extensionConfig: { lark: { timezone: 'UTC' } },
     extensions: [
-      feishu({
+      lark({
         owners: ['ou_alice'],
         chats: [{ id: 'oc_group', tools: [] }],
         transport: fake.transport,
@@ -84,7 +84,7 @@ test('the real Responses request exports an object-root routine schema and can c
   t.internals.gateway.routines.clock = new RoutineClock()
   await t.vela.startChannels()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       root_id: 'root',
       thread_id: 'thread',
       content: '{"text":"Remind this topic at 09:00 to review the PR"}',
@@ -100,19 +100,17 @@ test('the real Responses request exports an object-root routine schema and can c
   expect(requests).toHaveLength(2)
   for (const request of requests)
     expect(
-      request.tools?.find((tool) => tool.name === 'feishu_routines')?.parameters
+      request.tools?.find((tool) => tool.name === 'lark_routines')?.parameters
         .type,
     ).toBe('object')
   expect(t.eventsOf('tool_execution_end')).toContainEqual(
-    expect.objectContaining({ toolName: 'feishu_routines', isError: false }),
+    expect.objectContaining({ toolName: 'lark_routines', isError: false }),
   )
-  expect(t.internals.gateway.routines.list('feishu', 'oc_group')).toMatchObject(
-    [
-      {
-        message: 'Review the PR',
-        creator: { id: 'ou_alice' },
-        schedule: { at: '2026-01-05T09:00:00.000Z' },
-      },
-    ],
-  )
+  expect(t.internals.gateway.routines.list('lark', 'oc_group')).toMatchObject([
+    {
+      message: 'Review the PR',
+      creator: { id: 'ou_alice' },
+      schedule: { at: '2026-01-05T09:00:00.000Z' },
+    },
+  ])
 }, 10000)

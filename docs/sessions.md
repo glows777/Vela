@@ -72,7 +72,7 @@ Review an export before you share it: it can contain your prompts, the model's a
 
 ## Multiple sessions
 
-One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Feishu needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
+One Vela can run many sessions at once. They share tool definitions, extensions, skills, memory, the knowledge base and channels; each keeps its own history, queues, compaction, usage, tool results and run lock. This is a difference from pi, where one process holds one active session. A channel like Lark needs it: every chat gets its own shared session, and one slow conversation doesn't block the others. Messages in one chat are handled in order.
 
 The CLI shows one session at a time; `vela serve` runs the channel sessions in its process instead. In the SDK, open as many as you need with `vela.session(id)`; see [03-multi-session.ts](../examples/sdk/03-multi-session.ts).
 

@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Feishu identifiers are now Lark throughout Vela.** Import `lark()` and the corresponding `Lark*` types from `@glows777/vela-lark` or `@glows777/vela`. Replace `builtin:feishu`, `extensionConfig.feishu`, `feishu_*` tools/loadouts/permission references, prompt keys `feishuChannel`/`feishuTopic`, `FEISHU_APP_ID`/`FEISHU_APP_SECRET`/`FEISHU_OWNERS` and `WAKE_FEISHU_VELA_WEBHOOK_URL` with their Lark equivalents. Old public aliases are removed. Stop ingress and follow the [dry-run-first migration guide](docs/lark-migration.md) before restarting an existing deployment. Routing changes preserve physical session IDs, JSONL, original workspace/memory/attachment paths and append-only usage. Collisions and orphaned legacy state stop for explicit resolution. Upstream SDK/domains/events/regions and historical evidence remain unchanged; this is not a provider-region migration.
+
 ### Added
 
 - Experimental frontend helpers in `@glows777/vela-core/diagnostics` share core session rendering, validation and trust rules with the CLI. Recording resolves models without constructing an extra Vela; exact public development mappings make focused tests and the watched CLI observe source edits immediately, while builds and packed consumers retain real artifact resolution.
@@ -12,7 +16,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
-- Six jointly versioned Bun workspace packages separate core SDK, channel runtime/interfaces, Lark transport, MCP, RAG and the umbrella CLI. Existing `@glows777/vela` and `/testing` imports, `vela` executable, Feishu identifiers and behavior remain compatible. Lightweight consumers can install `@glows777/vela-core` or `@glows777/vela-channels`; each package has an explicit export map, declared runtime dependencies and API snapshot.
+- Six jointly versioned Bun workspace packages separate core SDK, channel runtime/interfaces, Lark transport, MCP, RAG and the umbrella CLI. Existing `@glows777/vela` and `/testing` imports, `vela` executable and non-adapter behavior remain compatible; the separately listed Lark rename is breaking. Lightweight consumers can install `@glows777/vela-core` or `@glows777/vela-channels`; each package has an explicit export map, declared runtime dependencies and API snapshot.
 
 - Opening an existing session may establish its first routing binding; matching bindings are accepted and conflicting routes throw `SessionRoutingConflictError` with the session ID and both routes. Existing cwd, tools, permissions and model options remain first-open-only. Forks and clones do not inherit routing authority.
 - Save-success observer failures are logged without replaying already committed history. Ordinary `save()` still flushes and rejects on storage failure without emitting a failure event; only `reportFailure: true` emits the existing event.

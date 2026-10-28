@@ -52,7 +52,7 @@ export interface ProviderContext {
    * change them while the model is in use. Throws when a refresh fails.
    */
   credential(): Promise<Credential | undefined>
-  /** The channel the requesting session answers on (e.g. `feishu`), undefined for local sessions; read per request */
+  /** The channel the requesting session answers on (e.g. `lark`), undefined for local sessions; read per request */
   channel(): string | undefined
 }
 

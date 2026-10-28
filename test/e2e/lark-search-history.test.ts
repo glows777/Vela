@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -15,7 +15,7 @@ async function until(condition: () => boolean) {
 }
 
 test('history search bounds pages, matches and characters and uses the logical group in channels and restarted topics', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const calls: {
     chatId: string
     startTime: string
@@ -27,7 +27,7 @@ test('history search bounds pages, matches and characters and uses the logical g
   fake.transport.searchMessages = async (chatId, options) => {
     calls.push({ chatId, ...options })
     if (mode === 'denied')
-      throw new Error('Feishu 99991672: history permission denied')
+      throw new Error('Lark 99991672: history permission denied')
     const page = Number(options.pageToken ?? 0)
     if (mode === 'scope')
       return {
@@ -64,7 +64,7 @@ test('history search bounds pages, matches and characters and uses the logical g
     start_time: '2025-10-09T08:00:00Z',
     end_time: '2025-10-09T09:00:00Z',
   }
-  const search = () => fauxToolCall('feishu_search_history', query)
+  const search = () => fauxToolCall('lark_search_history', query)
   const answer = (
     req: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
@@ -85,7 +85,7 @@ test('history search bounds pages, matches and characters and uses the logical g
     ],
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group', 'oc_other'],
@@ -99,7 +99,7 @@ test('history search bounds pages, matches and characters and uses the logical g
   async function run(chatId = 'oc_group', topic = false) {
     const count = fake.sent.length
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: `search-${++serial}`,
         chat_id: chatId,
         ...(topic ? { root_id: 'root', thread_id: 'thread' } : {}),
@@ -154,7 +154,7 @@ test('history search bounds pages, matches and characters and uses the logical g
   expect(calls[0]?.chatId).toBe('oc_other')
   // A fresh physical session id must still resolve the topic's original group.
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'restart',
       chat_id: 'oc_other',
       root_id: 'root',
@@ -174,7 +174,7 @@ test('history search bounds pages, matches and characters and uses the logical g
 })
 
 test('history reports exact returned sender counts and ISO times without implying thread-reply coverage', async () => {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   fake.transport.searchMessages = async () => ({
     items: [
       {
@@ -191,11 +191,11 @@ test('history reports exact returned sender counts and ISO times without implyin
   })
   const t = createTestVela({
     responses: [
-      fauxToolCall('feishu_search_history', { keyword: 'cobalt' }),
+      fauxToolCall('lark_search_history', { keyword: 'cobalt' }),
       (req) => fauxText(req.toolResults.at(-1)!.output),
     ],
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -205,7 +205,7 @@ test('history reports exact returned sender counts and ISO times without implyin
   })
   await t.vela.ready()
   await t.vela.startChannels()
-  fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => fake.sent.length === 1)
   const result = JSON.parse(fake.sent[0]!.text.replace(/^<at[^>]*><\/at> /, ''))
   expect(result.matchCounts).toEqual({ total: 3, user: 1, app: 1, unknown: 1 })

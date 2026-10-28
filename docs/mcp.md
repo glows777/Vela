@@ -54,7 +54,7 @@ Rules, the same as pi's:
 
 ## Connections
 
-One set of connections serves all sessions of a Vela: a Feishu bot with many conversations starts each stdio server once. (pi connects per session; Vela runs many sessions at once.) Servers connect in the background when the first session starts and close when the Vela is disposed; closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
+One set of connections serves all sessions of a Vela: a Lark bot with many conversations starts each stdio server once. (pi connects per session; Vela runs many sessions at once.) Servers connect in the background when the first session starts and close when the Vela is disposed; closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
 
 - The first prompt waits up to 10 seconds only for servers with `direct` tools, which must be in its request. A server still connecting is named in the system prompt, and `tool_search` waits for every server before it searches.
 - Connecting to an HTTP server is retried twice after a network error or a 408, 429 or 5xx status. Tool calls are never retried, because the server may already have acted.

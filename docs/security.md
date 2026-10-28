@@ -12,10 +12,10 @@ This page describes what Vela protects and what it does not. To report a vulnera
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
 | Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
 | `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt |
-| Members of an enabled Feishu chat | Yes, all members | Full access: bash, files, memory and extension tools |
+| Members of an enabled Lark chat | Yes, all members | Full access: bash, files, memory and extension tools |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
 
-Feishu enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with the same access as the user running Vela. This is not a sandbox, a per-member boundary, or protection against extensions or the model acting for that user.
+Lark enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with the same access as the user running Vela. This is not a sandbox, a per-member boundary, or protection against extensions or the model acting for that user.
 
 ## Tools run as you
 
@@ -49,7 +49,7 @@ There are no roles (like pi): every session has the same tools, prompt and comma
 
 ### Channel senders
 
-Feishu accepts only chats listed in `extensionConfig.feishu.chats`, plus direct chats from the open_ids in `owners` (or `FEISHU_OWNERS`). Unlisted groups and DMs are ignored, even when an owner speaks in an unlisted group. Empty `chats` means owners' DMs only.
+Lark accepts only chats listed in `extensionConfig.lark.chats`, plus direct chats from the open_ids in `owners` (or `LARK_OWNERS`). Unlisted groups and DMs are ignored, even when an owner speaks in an unlisted group. Empty `chats` means owners' DMs only.
 
 **Everyone in an enabled chat shares one session and its full access.** They share its history, and can ask the agent to read/write files, run bash, access memory and use extension/MCP tools. Group members added later inherit this access. Enable only chats whose entire membership you trust, and restrict what the operating-system account can reach. Group @-mention gating controls when the bot runs; it is not a tool-permission boundary. Earlier group messages are sent to the model as context when someone mentions the bot.
 
@@ -77,7 +77,7 @@ Keys are tool names, or `*` for all other tools; an exact name beats `*`. `vela.
 
 The model reads text from many places: files, command output, web pages from the `web` extension, knowledge base results, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
 
-Enabled Feishu chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider the built-in `permission-gate` (`"extensions": ["+builtin:permission-gate"]` in [settings](settings.md)) or an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts) for writing your own).
+Enabled Lark chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider the built-in `permission-gate` (`"extensions": ["+builtin:permission-gate"]` in [settings](settings.md)) or an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts) for writing your own).
 
 ## Secrets on disk
 
@@ -102,7 +102,7 @@ Review sessions and recordings before you share them. Keep API keys out of confi
 - Use version control or backups before larger changes.
 - Give Vela only the credentials it needs, and prefer short-lived, narrowly scoped ones.
 - Review extensions before loading them and trust only projects you know.
-- Enable only Feishu chats whose entire membership you trust with bash and files. Use separate restricted SDK sessions (`tools` / `permissions`) when serving untrusted people, and keep private data out of the knowledge base when those people can reach it.
+- Enable only Lark chats whose entire membership you trust with bash and files. Use separate restricted SDK sessions (`tools` / `permissions`) when serving untrusted people, and keep private data out of the knowledge base when those people can reach it.
 - Use `permissions: { bash: 'ask' }` or a confirming extension for sessions where a person should approve commands.
 
 ## Reporting a vulnerability

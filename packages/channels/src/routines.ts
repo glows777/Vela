@@ -72,7 +72,7 @@ const routineSchema = z
     lastFiredAt: instant.nullable(),
   })
   .strict()
-const fileSchema = z
+export const channelRoutinesSchema = z
   .object({ version: z.literal(1), routines: z.array(routineSchema) })
   .strict()
 
@@ -139,7 +139,7 @@ export class ChannelRoutines {
       })
     }
     try {
-      const data = fileSchema.parse(JSON.parse(text))
+      const data = channelRoutinesSchema.parse(JSON.parse(text))
       if (new Set(data.routines.map((r) => r.id)).size !== data.routines.length)
         throw new Error('Duplicate routine id')
       this.records = data.routines

@@ -3,16 +3,16 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { FeishuMessageEvent } from '@glows777/vela'
+import type { LarkMessageEvent } from '@glows777/vela'
 import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
 import {
   fauxStreamError,
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import { type FeishuOptions, feishu } from '@glows777/vela-lark'
+import { type LarkOptions, lark } from '@glows777/vela-lark'
 import { messageTime } from '../../packages/lark/src/history.ts'
-import { fakeFeishu, feishuEvent, historyMessage } from '../support/feishu.ts'
+import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 const roots: string[] = []
@@ -36,9 +36,9 @@ async function root() {
 }
 function setup(
   options: Parameters<typeof createTestVela>[0] = {},
-  chats: FeishuOptions['chats'] = ['oc_group'],
+  chats: LarkOptions['chats'] = ['oc_group'],
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const logs: string[] = []
   const t = createTestVela({
     ...options,
@@ -49,7 +49,7 @@ function setup(
       error: (line) => logs.push(line),
     },
     extensions: [
-      feishu({
+      lark({
         appId: 'test_app',
         owners: ['ou_alice'],
         chats,
@@ -65,9 +65,9 @@ function setup(
   return { t, fake, logs, start }
 }
 const passive = (message_id: string, text: string) =>
-  feishuEvent({ message_id, mentions: [], content: JSON.stringify({ text }) })
+  larkEvent({ message_id, mentions: [], content: JSON.stringify({ text }) })
 
-/** `[HH:MM] ` for a Feishu create_time in the machine's local time */
+/** `[HH:MM] ` for a Lark create_time in the machine's local time */
 const at = (ms: string) => `[${messageTime(ms)}] `
 const reactionLog = (run: ReturnType<typeof setup>) =>
   run.fake.reactions.map(({ messageId, emoji, removed }) => ({
@@ -76,7 +76,7 @@ const reactionLog = (run: ReturnType<typeof setup>) =>
     removed: !!removed,
   }))
 async function idle(run: ReturnType<typeof setup>) {
-  await until(() => !run.t.vela.session('feishu-oc_group').isRunning)
+  await until(() => !run.t.vela.session('lark-oc_group').isRunning)
 }
 
 test('a passive group input carries the message send time', async () => {
@@ -103,14 +103,14 @@ test('default-on intake queues each unique message, skips silently, treats comma
       cwd,
       responses: [
         (req) => {
-          expect(req.tools).toContain('feishu_skip_reply')
-          return fauxToolCall('feishu_skip_reply', {})
+          expect(req.tools).toContain('lark_skip_reply')
+          return fauxToolCall('lark_skip_reply', {})
         },
         fauxText('this text must stay silent'),
         fauxText('A useful short answer'),
         (req) => {
           expect(req.lastUserText).toContain('Alice: /danger')
-          return fauxToolCall('feishu_skip_reply', {})
+          return fauxToolCall('lark_skip_reply', {})
         },
         fauxText('also silent'),
         fauxText('explicit while busy'),
@@ -141,7 +141,7 @@ test('default-on intake queues each unique message, skips silently, treats comma
     first.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
     first.fake.deliver(passive('answer', 'a useful short question'))
     first.fake.deliver(passive('command', '/danger'))
-    first.fake.deliver(feishuEvent({ message_id: 'explicit-busy' }))
+    first.fake.deliver(larkEvent({ message_id: 'explicit-busy' }))
   } finally {
     release()
   }
@@ -174,9 +174,9 @@ test('default-on intake queues each unique message, skips silently, treats comma
   expect(first.t.events.filter((e) => e.type === 'channel_reply')).toHaveLength(
     2,
   )
-  const stored = await first.t.readData('sessions/feishu-oc_group.jsonl')
+  const stored = await first.t.readData('sessions/lark-oc_group.jsonl')
   expect(stored).toContain('Alice: colleagues discussing lunch')
-  expect(stored).toContain('feishu_skip_reply')
+  expect(stored).toContain('lark_skip_reply')
   expect(stored).toContain('"passive":true')
   await first.t.cleanup({ keepDir: true })
   const second = setup({ cwd, responses: [fauxText('new input only')] })
@@ -207,26 +207,26 @@ test('off, disabled groups, self and other bots, and unsupported passive message
     },
   })
   run.fake.deliver(disabled)
-  const unknownSender: FeishuMessageEvent = {
-    ...feishuEvent({ chat_id: 'oc_on', message_id: 'unknown-sender' }),
+  const unknownSender: LarkMessageEvent = {
+    ...larkEvent({ chat_id: 'oc_on', message_id: 'unknown-sender' }),
     // @ts-expect-error Custom transports must classify senders before delivery.
     sender: { sender_id: { open_id: 'ou_unknown' } },
   }
   run.fake.deliver(unknownSender)
   for (const sender of ['ou_bot', 'ou_other_bot']) {
-    const event = feishuEvent({ chat_id: 'oc_on' }, sender)
+    const event = larkEvent({ chat_id: 'oc_on' }, sender)
     Object.assign(event.sender, { sender_type: 'bot' })
     run.fake.deliver(event)
   }
   run.fake.deliver(
-    feishuEvent({
+    larkEvent({
       chat_id: 'oc_on',
       mentions: [],
       message_type: 'audio',
       content: '{}',
     }),
   )
-  run.fake.deliver(feishuEvent({ message_id: 'explicit' }))
+  run.fake.deliver(larkEvent({ message_id: 'explicit' }))
   await until(() => run.fake.sent.length > 0)
   await run.t.internals.gateway.stopAll()
   expect(run.t.model.calls).toHaveLength(1)
@@ -238,10 +238,10 @@ test('off, disabled groups, self and other bots, and unsupported passive message
   expect(run.fake.nameCalls).toEqual(['ou_alice'])
   expect(run.fake.resourceCalls).toEqual([])
   expect(
-    existsSync(join(run.t.vela.dataDir, 'channels', 'feishu-oc_disabled')),
+    existsSync(join(run.t.vela.dataDir, 'channels', 'lark-oc_disabled')),
   ).toBe(false)
   expect(
-    existsSync(join(run.t.vela.dataDir, 'sessions', 'feishu-oc_on.jsonl')),
+    existsSync(join(run.t.vela.dataDir, 'sessions', 'lark-oc_on.jsonl')),
   ).toBe(false)
 })
 
@@ -250,7 +250,7 @@ test('supported passive files use the existing attachment store and preparation 
     responses: [
       (req) => {
         expect(req.lastUserText).toContain('brief.txt')
-        return fauxToolCall('feishu_skip_reply', {})
+        return fauxToolCall('lark_skip_reply', {})
       },
       fauxText(''),
     ],
@@ -258,7 +258,7 @@ test('supported passive files use the existing attachment store and preparation 
   run.fake.resources.set('brief', [Buffer.from('shared brief')])
   await run.start()
   run.fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'file',
       mentions: [],
       message_type: 'file',
@@ -267,7 +267,7 @@ test('supported passive files use the existing attachment store and preparation 
   )
   await until(() => run.t.model.calls.length === 2)
   run.fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'bad-file',
       mentions: [],
       message_type: 'file',
@@ -288,7 +288,7 @@ test('a top-level card answer is a history boundary after process restart regard
   const first = setup({ cwd, responses: [fauxText('first answer')] }, [
     { id: 'oc_group', readUntagged: false },
   ])
-  // Emulate Feishu rendering the delivered answer as an interactive card in history.
+  // Emulate Lark rendering the delivered answer as an interactive card in history.
   first.fake.transport.reply = async (messageId, text) => {
     await first.fake.transport.sendCard(
       'oc_group',
@@ -303,7 +303,7 @@ test('a top-level card answer is a history boundary after process restart regard
     return { messageId: 'own-card', createTime: '2000' }
   }
   await first.start()
-  first.fake.deliver(feishuEvent({ message_id: 'first', create_time: '1500' }))
+  first.fake.deliver(larkEvent({ message_id: 'first', create_time: '1500' }))
   await until(() => first.fake.sent.length > 0)
   await first.t.cleanup({ keepDir: true })
   const second = setup(
@@ -331,9 +331,7 @@ test('a top-level card answer is a history boundary after process restart regard
     historyMessage('old', 'ou_bob', 'already answered discussion', '1000'),
   )
   await second.start()
-  second.fake.deliver(
-    feishuEvent({ message_id: 'second', create_time: '4000' }),
-  )
+  second.fake.deliver(larkEvent({ message_id: 'second', create_time: '4000' }))
   await until(() => second.fake.sent.length > 0)
   expect(second.fake.sent.at(-1)?.text).toBe('second answer')
 })
@@ -341,7 +339,7 @@ test('a top-level card answer is a history boundary after process restart regard
 test.each([true, false])(
   'a custom transport without appId retains its reply boundary (receipt in history: %s)',
   async (includeReceipt) => {
-    const fake = fakeFeishu()
+    const fake = fakeLark()
     fake.transport.reply = async (messageId, text) => {
       fake.sent.push({ messageId, text })
       return { messageId: 'own-reply', createTime: '2000' }
@@ -349,14 +347,14 @@ test.each([true, false])(
     const t = createTestVela({
       responses: [fauxText('first answer'), fauxText('second answer')],
       extensions: [
-        feishu({
+        lark({
           chats: [{ id: 'oc_group', readUntagged: false }],
           transport: fake.transport,
         }),
       ],
     })
     await t.vela.startChannels()
-    fake.deliver(feishuEvent({ message_id: 'first', create_time: '1500' }))
+    fake.deliver(larkEvent({ message_id: 'first', create_time: '1500' }))
     await until(() => fake.sent.length === 1)
     fake.history.push(
       historyMessage('new', 'ou_bob', 'new discussion', '3000'),
@@ -382,7 +380,7 @@ test.each([true, false])(
         : []),
       historyMessage('old', 'ou_bob', 'already answered discussion', '1000'),
     )
-    fake.deliver(feishuEvent({ message_id: 'second', create_time: '4000' }))
+    fake.deliver(larkEvent({ message_id: 'second', create_time: '4000' }))
     await until(() => fake.sent.length === 2)
     const input = t.model.calls[1]!.lastUserText
     expect(input).toContain('new discussion')
@@ -427,7 +425,7 @@ test('a passive session blocked by repeated storage failures stays operator-only
 
 test('a passive evaluation that stays silent never marks its trigger', async () => {
   const run = setup({
-    responses: [fauxToolCall('feishu_skip_reply', {}), fauxText('')],
+    responses: [fauxToolCall('lark_skip_reply', {}), fauxText('')],
   })
   await run.start()
   run.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
@@ -470,7 +468,7 @@ test('a passive answer marks the trigger once text starts and leaves DONE on del
 test('a passive run that writes text and then stays silent removes the marker', async () => {
   const run = setup({
     responses: [
-      fauxToolCall('feishu_skip_reply', {}, { text: 'I considered answering' }),
+      fauxToolCall('lark_skip_reply', {}, { text: 'I considered answering' }),
       fauxText(''),
     ],
   })
@@ -496,7 +494,7 @@ test('a passive run that hands off to a topic removes the marker', async () => {
   const run = setup({
     responses: [
       fauxToolCall(
-        'feishu_start_topic',
+        'lark_start_topic',
         {
           title: 'Investigate the pricing question',
           brief: 'Investigate the pricing question',
@@ -517,8 +515,8 @@ test('a passive run that hands off to a topic removes the marker', async () => {
   )
   await until(
     () =>
-      !run.t.vela.session('feishu-oc_group').isRunning &&
-      !run.t.vela.session('feishu-oc_group-handoff').isRunning,
+      !run.t.vela.session('lark-oc_group').isRunning &&
+      !run.t.vela.session('lark-oc_group-handoff').isRunning,
   )
   expect(run.fake.sent).toHaveLength(1)
   expect(run.fake.sent[0]?.messageId).toBe('topic_handoff')
@@ -563,7 +561,7 @@ test('an explicit mention still acknowledges at admission', async () => {
   })
   await run.start()
   try {
-    run.fake.deliver(feishuEvent({ message_id: 'explicit' }))
+    run.fake.deliver(larkEvent({ message_id: 'explicit' }))
     await until(() =>
       run.fake.reactions.some(
         (item) => item.messageId === 'explicit' && item.emoji === 'OnIt',

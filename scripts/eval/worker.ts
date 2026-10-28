@@ -239,10 +239,10 @@ export async function runAttempt(
   >['extensions'] = []
   let server: ReturnType<typeof Bun.serve> | undefined
   let fake:
-    | ReturnType<typeof import('../../test/support/feishu.ts')['fakeFeishu']>
+    | ReturnType<typeof import('../../test/support/lark.ts')['fakeLark']>
     | undefined
   let eventFactory:
-    | typeof import('../../test/support/feishu.ts')['feishuEvent']
+    | typeof import('../../test/support/lark.ts')['larkEvent']
     | undefined
   if (config.scenario === 'C3') {
     const { web } = await load<
@@ -257,17 +257,31 @@ export async function runAttempt(
     })
   }
   if (config.scenario.startsWith('G')) {
-    const helpers = await load<typeof import('../../test/support/feishu.ts')>(
+    const runtimeHelpers = await load<Record<string, unknown>>(
       config.runtime,
-      'test/support/feishu.ts',
+      paths.helpers,
     )
-    const { feishu } = await load<
-      typeof import('../../packages/lark/src/index.ts')
-    >(config.runtime, paths.feishu)
-    fake = helpers.fakeFeishu()
-    eventFactory = helpers.feishuEvent
+    const helpers = {
+      fakeLark: runtimeHelpers[
+        paths.channelName === 'lark' ? 'fakeLark' : 'fakeFeishu'
+      ] as typeof import('../../test/support/lark.ts')['fakeLark'],
+      larkEvent: runtimeHelpers[
+        paths.channelName === 'lark' ? 'larkEvent' : 'feishuEvent'
+      ] as typeof import('../../test/support/lark.ts')['larkEvent'],
+      historyMessage:
+        runtimeHelpers.historyMessage as typeof import('../../test/support/lark.ts')['historyMessage'],
+    }
+    const adapter = await load<Record<string, unknown>>(
+      config.runtime,
+      paths.lark,
+    )
+    const lark = adapter[
+      paths.channelName
+    ] as typeof import('../../packages/lark/src/index.ts')['lark']
+    fake = helpers.fakeLark()
+    eventFactory = helpers.larkEvent
     extensions.push(
-      feishu({
+      lark({
         appId: 'eval-bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -344,9 +358,13 @@ export async function runAttempt(
   let phase = 0
   const recallScenario = config.scenario === 'G7' || config.scenario === 'G8'
   const workspace = scope
-    ? scope.groupWorkspace(t.dataDir, 'feishu', 'oc_group')
+    ? scope.groupWorkspace(t.dataDir, paths.channelName, 'oc_group')
     : config.cwd
-  const recallSessionId = channelSessionId('feishu', 'oc_group', topicRoots[1])
+  const recallSessionId = channelSessionId(
+    paths.channelName,
+    'oc_group',
+    topicRoots[1],
+  )
   if (recallScenario) {
     evidence.recallPaths = {
       workspace,
@@ -375,12 +393,16 @@ export async function runAttempt(
       typeof event.message.content === 'string'
     )
       evidence.recallMemory!.push(event.message.content)
-    if (event.type === 'agent_start' && sessionId.startsWith('feishu-'))
+    if (
+      event.type === 'agent_start' &&
+      sessionId.startsWith(`${paths.channelName}-`)
+    )
       channelStarted = true
     if (event.type === 'channel_error') channelError = event.error
     if (exitScenario && event.type === 'channel_reply') {
       const topicRootId = topicRoots.find(
-        (root) => channelSessionId('feishu', 'oc_group', root) === sessionId,
+        (root) =>
+          channelSessionId(paths.channelName, 'oc_group', root) === sessionId,
       )
       evidence.deliveries.push({
         scope: topicRootId ? 'topic' : 'group',
@@ -485,7 +507,7 @@ export async function runAttempt(
             // before the fresh topic starts so its writes cannot earn store credit.
             const store = new MemoryStore(
               join(
-                scope!.chatDirectory(t.dataDir, 'feishu', 'oc_group'),
+                scope!.chatDirectory(t.dataDir, paths.channelName, 'oc_group'),
                 'memory',
               ),
             )

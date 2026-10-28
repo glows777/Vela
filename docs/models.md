@@ -58,7 +58,7 @@ OAuth access tokens with less than 5 minutes left are refreshed before the reque
 
 Vela opens the browser and waits for the redirect on `http://127.0.0.1:1455/auth/callback`. When the browser runs on another machine, paste the final redirect URL into Vela instead. Port 1455 is shared with the Codex CLI, so finish or cancel a sign-in there first.
 
-OpenAI documents this sign-in for local agents that the signed-in person runs. Use it only in the terminal on your own machine: not for a Feishu bot, a server or any agent that other people talk to. Vela enforces part of this: channel sessions (Feishu) that would use the ChatGPT sign-in fail with an error, so give `openai` an API key or pick another model for them.
+OpenAI documents this sign-in for local agents that the signed-in person runs. Use it only in the terminal on your own machine: not for a Lark bot, a server or any agent that other people talk to. Vela enforces part of this: channel sessions (Lark) that would use the ChatGPT sign-in fail with an error, so give `openai` an API key or pick another model for them.
 
 The token is only sent to `https://api.openai.com`: with `OPENAI_API_BASE_URL` (or an `openai` `baseUrl` in models.json) pointing elsewhere, requests fail instead of sending your ChatGPT token to that server.
 

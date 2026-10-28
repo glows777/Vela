@@ -58,7 +58,7 @@ const LOCK_TIMEOUT_MS = 20_000
 /**
  * Credentials in a JSON file (the CLI's `~/.vela/auth.json`, same format as pi's): `{ "<provider>": credential }`,
  * created with mode 0600 in a 0700 directory. Writes take a lock file next to it (`auth.json.lock`), so several
- * Vela processes (a terminal and a Feishu server) refresh a token once; the file is rewritten atomically.
+ * Vela processes (a terminal and a Lark server) refresh a token once; the file is rewritten atomically.
  */
 export function fileCredentialStore(path: string): CredentialStore {
   const serialize = serializer()

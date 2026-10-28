@@ -123,7 +123,7 @@ export interface VelaOptions {
   /**
    * Extensions to load, run in order (like pi; the SDK includes no built-in extensions by default).
    * Memory, knowledge base and web tools are extensions too: `[memory(), rag({ embedder }), web({ tavilyKey })]`.
-   * Extension config is passed as factory arguments, e.g. `feishu({ appId, appSecret })`.
+   * Extension config is passed as factory arguments, e.g. `lark({ appId, appSecret })`.
    */
   extensions?: VelaExtension[]
 }

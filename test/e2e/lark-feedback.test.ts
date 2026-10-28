@@ -6,9 +6,9 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -23,12 +23,12 @@ function setup(
   responses: NonNullable<Parameters<typeof createTestVela>[0]>['responses'],
   extensions: VelaExtension[] = [],
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     responses,
     allowPendingResponses: true,
     extensions: [
-      feishu({
+      lark({
         appId: 'bot',
         owners: ['ou_alice'],
         chats: ['oc_group'],
@@ -47,7 +47,7 @@ function setup(
   }
 }
 const topic = (message_id = 'trigger') =>
-  feishuEvent({ message_id, root_id: 'root', thread_id: 'thread' })
+  larkEvent({ message_id, root_id: 'root', thread_id: 'thread' })
 
 test('acknowledges an admitted mention before name preparation and completes its reaction', async () => {
   const { fake, t, start } = setup([fauxText('answer')])
@@ -99,7 +99,7 @@ test('one progress card follows a held tool and steers without replacing the req
       fake.patches.some((p) => JSON.stringify(p.card).includes('pause')),
     )
     fake.deliver(
-      feishuEvent(
+      larkEvent(
         {
           message_id: 'steer',
           root_id: 'root',
@@ -153,7 +153,7 @@ test('Stop finalizes the same card and reaction while retaining the topic for th
   await until(() => fake.reactions.some((r) => r.emoji === 'CrossMark'))
   expect(fake.patches.at(-1)?.card.header.title.content).toBe('Stopped')
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'next',
       root_id: 'root',
       thread_id: 'thread',
@@ -173,10 +173,10 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   const respond = (
     request: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => {
-    if (request.tools.includes('feishu_start_topic'))
+    if (request.tools.includes('lark_start_topic'))
       return request.toolResults.length
         ? fauxText('handed off')
-        : fauxToolCall('feishu_start_topic', {
+        : fauxToolCall('lark_start_topic', {
             title: 'investigate',
             brief: 'investigate',
           })
@@ -202,8 +202,8 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   ])
   await start()
   try {
-    fake.deliver(feishuEvent({ message_id: 'original' }))
-    await until(() => entered && !t.vela.session('feishu-oc_group').isRunning)
+    fake.deliver(larkEvent({ message_id: 'original' }))
+    await until(() => entered && !t.vela.session('lark-oc_group').isRunning)
     expect(fake.reactions).toEqual([
       { messageId: 'original', emoji: 'OnIt', id: 'reaction_0' },
     ])
@@ -287,9 +287,9 @@ test('a failed final send emits channel_error and leaves a failure reaction', as
 test('ignored top-level and unowned topic messages never get reactions or preparation', async () => {
   const { fake, t, start } = setup([])
   await start()
-  fake.deliver(feishuEvent({ mentions: [] }))
+  fake.deliver(larkEvent({ mentions: [] }))
   fake.deliver(
-    feishuEvent({ mentions: [], root_id: 'unknown', thread_id: 'thread' }),
+    larkEvent({ mentions: [], root_id: 'unknown', thread_id: 'thread' }),
   )
   await t.internals.gateway.stopAll()
   expect(fake.reactions).toEqual([])
@@ -433,7 +433,7 @@ test('Stop finalizes an untagged steer still downloading its attachment', async 
     fake.deliver(topic())
     await until(() => t.model.calls.length === 1)
     fake.deliver(
-      feishuEvent(
+      larkEvent(
         {
           message_id: 'steer',
           root_id: 'root',

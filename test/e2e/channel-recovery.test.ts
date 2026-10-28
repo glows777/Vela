@@ -16,8 +16,8 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
-import { feishu } from '@glows777/vela-lark'
-import { fakeFeishu, feishuEvent } from '../support/feishu.ts'
+import { lark } from '@glows777/vela-lark'
+import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 const roots: string[] = []
@@ -80,12 +80,12 @@ function setup(
   >['responses'] = [],
   chats = ['oc_group'],
 ) {
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const t = createTestVela({
     cwd,
     responses,
     extensions: [
-      feishu({ owners: ['ou_alice'], chats, transport: fake.transport }),
+      lark({ owners: ['ou_alice'], chats, transport: fake.transport }),
     ],
   })
   const start = async () => {
@@ -111,7 +111,7 @@ test('a killed process resumes its saved unanswered user through topic feedback 
   expect(fake.topicHistoryCalls).toEqual([])
   expect(fake.nameCalls).toEqual([])
   const users = t.vela
-    .session('feishu-oc_group-root')
+    .session('lark-oc_group-root')
     .getBranch()
     .filter((e) => e.type === 'message' && e.message.role === 'user')
   expect(users).toHaveLength(1)
@@ -143,24 +143,24 @@ test('completed topics survive restart and a top-level follow-up forwards to the
   const cwd = await root()
   const first = setup(cwd, [fauxText('cobalt done')])
   await first.start()
-  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => first.fake.sent.length > 0)
   await first.t.cleanup({ keepDir: true })
   const second = setup(cwd, [
-    fauxToolCall('feishu_list_topics', {}),
+    fauxToolCall('lark_list_topics', {}),
     (req) => {
       expect(JSON.stringify(req.toolResults)).toContain('thread')
-      return fauxToolCall('feishu_forward_to_topic', { root_id: 'root' })
+      return fauxToolCall('lark_forward_to_topic', { root_id: 'root' })
     },
     (req) =>
       fauxText(
-        req.tools.includes('feishu_start_topic')
+        req.tools.includes('lark_start_topic')
           ? 'forwarded'
           : 'follow-up answer',
       ),
     (req) =>
       fauxText(
-        req.tools.includes('feishu_start_topic')
+        req.tools.includes('lark_start_topic')
           ? 'forwarded'
           : 'follow-up answer',
       ),
@@ -169,7 +169,7 @@ test('completed topics survive restart and a top-level follow-up forwards to the
   expect(second.fake.sent).toEqual([])
   expect(second.t.model.calls).toEqual([])
   second.fake.deliver(
-    feishuEvent({
+    larkEvent({
       message_id: 'followup',
       content: '{"text":"continue cobalt"}',
     }),
@@ -187,7 +187,7 @@ test('Stop is durable and a restart does not revive the cancelled topic', async 
   const cwd = await root()
   const first = setup(cwd, [fauxHang()])
   await first.start()
-  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => first.t.model.calls.length > 0)
   first.fake.click(0, 'stop')
   await until(() => first.fake.sent.some((m) => m.text.includes('Stopped')))
@@ -203,7 +203,7 @@ test('unowned untagged input writes neither a directory nor a session and produc
   const { fake, t, start } = setup(cwd)
   await start()
   fake.deliver(
-    feishuEvent({
+    larkEvent({
       root_id: 'unknown',
       thread_id: 'unknown-thread',
       mentions: [],
@@ -278,11 +278,11 @@ test('graceful shutdown preserves the interrupted run and its unsaved steer for 
   const cwd = await root()
   const first = setup(cwd, [fauxHang()])
   await first.start()
-  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => first.t.model.calls.length === 1)
-  const session = first.t.vela.session('feishu-oc_group-root')
+  const session = first.t.vela.session('lark-oc_group-root')
   first.fake.deliver(
-    feishuEvent(
+    larkEvent(
       {
         message_id: 'pending',
         root_id: 'root',
@@ -319,7 +319,7 @@ test('a delivered terminal execution failure is not retried after restart', asyn
   const cwd = await root()
   const first = setup(cwd, [fauxError('400 permanent provider failure')])
   await first.start()
-  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => first.fake.sent.some((m) => m.text.includes('Task failed')))
   await first.t.cleanup({ keepDir: true })
   expect((await records(first.t.vela.dataDir))[0]?.state).toBe('done')
@@ -335,7 +335,7 @@ test('failed final delivery stays recoverable and delivers the saved answer with
   const first = setup(cwd, [fauxText('answer awaiting delivery')])
   first.fake.failReply()
   await first.start()
-  first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+  first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
   await until(() => first.t.eventsOf('channel_error').length > 0)
   await first.t.cleanup({ keepDir: true })
   expect((await records(first.t.vela.dataDir))[0]?.state).toBe('running')
@@ -353,11 +353,11 @@ for (const active of [false, true]) {
     const first = setup(cwd, active ? [fauxHang()] : [])
     await first.start()
     if (active) {
-      first.fake.deliver(feishuEvent({ root_id: 'root', thread_id: 'thread' }))
+      first.fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
       await until(() => first.t.model.calls.length === 1)
     }
     first.fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id: 'rejected',
         root_id: 'root',
         thread_id: 'thread',
@@ -387,7 +387,7 @@ test('a recovered top-level group input retains channel tools and prompt classif
   const { fake, t, start } = setup(cwd, [fauxText('group recovered')])
   await start()
   await until(() => fake.sent.some((m) => m.text.includes('group recovered')))
-  expect(t.model.calls[0]?.tools).toContain('feishu_start_topic')
+  expect(t.model.calls[0]?.tools).toContain('lark_start_topic')
   expect(t.model.calls[0]?.system).toContain('channel session for this group')
   expect(fake.sent.at(-1)?.messageId).toBe('trigger')
 })
@@ -395,16 +395,16 @@ test('a recovered top-level group input retains channel tools and prompt classif
 test('a recovered group run forwards its saved input without needing a live raw event (SDK regression)', async () => {
   const cwd = await crash('forward')
   const { fake, t, start } = setup(cwd, [
-    fauxToolCall('feishu_forward_to_topic', { root_id: 'root' }),
+    fauxToolCall('lark_forward_to_topic', { root_id: 'root' }),
     (req) =>
       fauxText(
-        req.tools.includes('feishu_start_topic')
+        req.tools.includes('lark_start_topic')
           ? 'forwarded'
           : 'recovered forward answer',
       ),
     (req) =>
       fauxText(
-        req.tools.includes('feishu_start_topic')
+        req.tools.includes('lark_start_topic')
           ? 'forwarded'
           : 'recovered forward answer',
       ),
@@ -416,15 +416,14 @@ test('a recovered group run forwards its saved input without needing a live raw 
   expect(fake.forwards).toEqual([{ messageId: 'trigger', threadId: 'thread' }])
   expect(fake.topics).toEqual([])
   expect(
-    t.model.calls.filter(
-      (call) => !call.tools.includes('feishu_start_topic'),
-    )[0]?.lastUserText,
+    t.model.calls.filter((call) => !call.tools.includes('lark_start_topic'))[0]
+      ?.lastUserText,
   ).toContain('remember cobalt')
 })
 
 test('restart drops active and queued passive work with operator diagnostics and does not replay duplicate delivery', async () => {
   const cwd = await crash('passive')
-  const fake = fakeFeishu()
+  const fake = fakeLark()
   const logs: string[] = []
   const t = createTestVela({
     cwd,
@@ -434,18 +433,18 @@ test('restart drops active and queued passive work with operator diagnostics and
       info: (line) => logs.push(line),
       warn: (line) => logs.push(line),
     },
-    extensions: [feishu({ chats: ['oc_group'], transport: fake.transport })],
+    extensions: [lark({ chats: ['oc_group'], transport: fake.transport })],
   })
   await t.vela.startChannels()
   for (const message_id of ['trigger', 'queued-passive'])
     fake.deliver(
-      feishuEvent({
+      larkEvent({
         message_id,
         mentions: [],
         content: '{"text":"duplicate discussion"}',
       }),
     )
-  fake.deliver(feishuEvent({ message_id: 'explicit-after' }))
+  fake.deliver(larkEvent({ message_id: 'explicit-after' }))
   await until(() =>
     fake.sent.some(
       (item) =>

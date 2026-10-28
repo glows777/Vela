@@ -173,7 +173,9 @@ function contaminated(call: Call, e: Evidence): boolean {
     const absolute = resolve(e.recallPaths?.workspace ?? '.', path)
     if (memoryPaths(e).some((root) => within(root, absolute))) return false
     if (
-      /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|feishu-[^/]*\.jsonl/u.test(path)
+      /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|(?:feishu|lark)-[^/]*\.jsonl/u.test(
+        path,
+      )
     )
       return true
     if (!e.recallPaths || within(e.recallPaths.workspace, absolute))
@@ -194,7 +196,7 @@ function recallSource(
       !/^(?:No memories|File not found:|Read failed:)/u.test(text) &&
       fact(text)
     )
-  if (call.name === 'feishu_search_history') {
+  if (call.name === 'lark_search_history') {
     try {
       const history = text ? JSON.parse(text) : call.output
       return (
@@ -282,6 +284,15 @@ function bashSection(answer: string): string {
 }
 
 export function grade(id: ScenarioId, e: Evidence): Check[] {
+  // Normalize routing/tool identifiers only. Paths, arguments, results and saved evidence stay raw.
+  e = {
+    ...e,
+    calls: e.calls.map((call) => ({
+      ...call,
+      name: call.name.replace(/^feishu_/, 'lark_'),
+      sessionId: call.sessionId?.replace(/^feishu-/, 'lark-'),
+    })),
+  }
   const checks: Check[] = []
   const check = (name: string, pass: boolean) => checks.push({ name, pass })
   const answer = e.answers.at(-1) ?? ''
@@ -388,7 +399,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       break
     case 'G2': {
-      const starts = calls('feishu_start_topic')
+      const starts = calls('lark_start_topic')
       const title = String(starts[0]?.args.title ?? '').trim()
       const brief = String(starts[0]?.args.brief ?? '')
       check('one topic call', starts.length === 1)
@@ -413,11 +424,11 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       break
     }
     case 'G3':
-      check('skip called', calls('feishu_skip_reply').length > 0)
+      check('skip called', calls('lark_skip_reply').length > 0)
       check('silent', e.deliveries.length === 0 && e.topics.length === 0)
       break
     case 'G4':
-      check('wait called', calls('feishu_wait_for_input').length > 0)
+      check('wait called', calls('lark_wait_for_input').length > 0)
       check('one question', (delivered.match(/[?？]/g) ?? []).length === 1)
       break
     case 'G5':
@@ -461,7 +472,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       const recallCalls = e.calls.filter(
         (call) =>
           call.phase === 1 &&
-          call.sessionId === `feishu-oc_group-${id.toLowerCase()}_recall`,
+          call.sessionId === `lark-oc_group-${id.toLowerCase()}_recall`,
       )
       check(
         'recall',

@@ -130,13 +130,20 @@ export class ChannelGateway {
 
     channel.connect?.({
       scope: (id) => {
-        const record = this.directory.get(this.directory.keyForSession(id))
+        const record =
+          this.directory.get(this.directory.keyForSession(id)) ??
+          this.directory
+            .entries(channel.name)
+            .find(
+              (entry) => channelSessionId(channel.name, entry.chatId) === id,
+            )
         return record
           ? resolveChannelScope(
               this.options.dataDir ?? process.cwd(),
               record.channel,
               record.chatId,
               record.chatKind,
+              record.storageKey,
             )
           : undefined
       },

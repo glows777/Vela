@@ -1,13 +1,9 @@
 import type { Readable } from 'node:stream'
 import * as lark from '@larksuiteoapi/node-sdk'
-import type {
-  FeishuCard,
-  FeishuCardAction,
-  FeishuCardResponse,
-} from './cards.ts'
+import type { LarkCard, LarkCardAction, LarkCardResponse } from './cards.ts'
 
 /** The parts of an `im.message.receive_v1` event the channel reads */
-export interface FeishuMessageEvent {
+export interface LarkMessageEvent {
   message: {
     message_id?: string
     root_id?: string
@@ -23,8 +19,8 @@ export interface FeishuMessageEvent {
   sender: { sender_id?: { open_id?: string }; sender_type: string }
 }
 
-/** History items returned newest first by Feishu's message API. Times are milliseconds. */
-export interface FeishuHistoryMessage {
+/** History items returned newest first by Lark's message API. Times are milliseconds. */
+export interface LarkHistoryMessage {
   message_id?: string
   create_time?: string
   msg_type?: string
@@ -34,32 +30,28 @@ export interface FeishuHistoryMessage {
   deleted?: boolean
 }
 
-export interface FeishuSentMessage {
+export interface LarkSentMessage {
   messageId: string
   createTime: string
 }
 
-/** The connection to Feishu: receives message events and sends text to a chat (lark's long connection by default). */
-export interface FeishuTransport {
+/** The connection to Lark: receives message events and sends text to a chat (lark's long connection by default). */
+export interface LarkTransport {
   start(
-    onMessage: (event: FeishuMessageEvent) => void,
-    onAction: (event: FeishuCardAction) => FeishuCardResponse,
+    onMessage: (event: LarkMessageEvent) => void,
+    onAction: (event: LarkCardAction) => LarkCardResponse,
   ): Promise<void>
   stop(): void
   startTopic(
     messageId: string,
     title: string,
-  ): Promise<FeishuSentMessage & { rootId: string; threadId: string }>
-  forward(messageId: string, threadId: string): Promise<FeishuSentMessage>
+  ): Promise<LarkSentMessage & { rootId: string; threadId: string }>
+  forward(messageId: string, threadId: string): Promise<LarkSentMessage>
   // biome-ignore lint/suspicious/noConfusingVoidType: public shape: callers may ignore the sent message (Promise<void>)
-  send(chatId: string, text: string): Promise<void | FeishuSentMessage>
-  reply(messageId: string, text: string): Promise<FeishuSentMessage>
-  sendCard(
-    chatId: string,
-    card: FeishuCard,
-    replyToId?: string,
-  ): Promise<string>
-  patchCard(messageId: string, card: FeishuCard): Promise<void>
+  send(chatId: string, text: string): Promise<void | LarkSentMessage>
+  reply(messageId: string, text: string): Promise<LarkSentMessage>
+  sendCard(chatId: string, card: LarkCard, replyToId?: string): Promise<string>
+  patchCard(messageId: string, card: LarkCard): Promise<void>
   addReaction(
     messageId: string,
     emoji: 'OnIt' | 'DONE' | 'CrossMark',
@@ -75,7 +67,7 @@ export interface FeishuTransport {
   listTopicMessages(
     threadId: string,
     pageToken?: string,
-  ): Promise<{ items: FeishuHistoryMessage[]; pageToken?: string }>
+  ): Promise<{ items: LarkHistoryMessage[]; pageToken?: string }>
   searchMessages(
     chatId: string,
     options: {
@@ -84,34 +76,30 @@ export interface FeishuTransport {
       limit: number
       pageToken?: string
     },
-  ): Promise<{ items: FeishuHistoryMessage[]; pageToken?: string }>
+  ): Promise<{ items: LarkHistoryMessage[]; pageToken?: string }>
   listMessages(
     chatId: string,
     options: { before?: string; limit: number },
-  ): Promise<FeishuHistoryMessage[]>
+  ): Promise<LarkHistoryMessage[]>
 }
 
 function checked<T extends { code?: number; msg?: string }>(response: T): T {
   if (response.code !== undefined && response.code !== 0)
     throw new Error(
-      `Feishu ${response.code}: ${response.msg ?? 'request failed'}`,
+      `Lark ${response.code}: ${response.msg ?? 'request failed'}`,
     )
   return response
 }
 
-export function larkTransport(
-  appId: string,
-  appSecret: string,
-): FeishuTransport {
+export function larkTransport(appId: string, appSecret: string): LarkTransport {
   const client = new lark.Client({ appId, appSecret })
   let wsClient: lark.WSClient | undefined
   return {
     async start(onMessage, onAction) {
       const dispatcher = new lark.EventDispatcher({})
       dispatcher.register({
-        'im.message.receive_v1': (data) =>
-          onMessage(data as FeishuMessageEvent),
-        'card.action.trigger': (data: FeishuCardAction) => onAction(data),
+        'im.message.receive_v1': (data) => onMessage(data as LarkMessageEvent),
+        'card.action.trigger': (data: LarkCardAction) => onAction(data),
       })
       wsClient = new lark.WSClient({
         appId,
@@ -140,7 +128,7 @@ export function larkTransport(
         !data.root_id ||
         !data.thread_id
       )
-        throw new Error('Feishu topic reply returned no root/thread receipt')
+        throw new Error('Lark topic reply returned no root/thread receipt')
       return {
         messageId: data.message_id,
         createTime: data.create_time,
@@ -157,7 +145,7 @@ export function larkTransport(
         }),
       )
       if (!data?.message_id || !data.create_time)
-        throw new Error('Feishu forward returned no message receipt')
+        throw new Error('Lark forward returned no message receipt')
       return { messageId: data.message_id, createTime: data.create_time }
     },
     async send(chatId, text) {
@@ -172,7 +160,7 @@ export function larkTransport(
         }),
       )
       if (!data?.message_id || !data.create_time)
-        throw new Error('Feishu send returned no message receipt')
+        throw new Error('Lark send returned no message receipt')
       return { messageId: data.message_id, createTime: data.create_time }
     },
     async sendCard(chatId, card, replyToId) {
@@ -189,7 +177,7 @@ export function larkTransport(
             }),
       )
       if (!response.data?.message_id)
-        throw new Error('Feishu card returned no message ID')
+        throw new Error('Lark card returned no message ID')
       return response.data.message_id
     },
     async patchCard(messageId, card) {
@@ -208,7 +196,7 @@ export function larkTransport(
         }),
       )
       if (!response.data?.reaction_id)
-        throw new Error('Feishu reaction returned no reaction ID')
+        throw new Error('Lark reaction returned no reaction ID')
       return response.data.reaction_id
     },
     async removeReaction(messageId, reactionId) {
@@ -227,7 +215,7 @@ export function larkTransport(
       )
       const data = response.data
       if (!data?.message_id || !data.create_time)
-        throw new Error('Feishu reply returned no message receipt')
+        throw new Error('Lark reply returned no message receipt')
       return { messageId: data.message_id, createTime: data.create_time }
     },
     async getResource(messageId, key, type) {
@@ -246,7 +234,7 @@ export function larkTransport(
         }>({ url: '/open-apis/bot/v3/info', method: 'GET' }),
       )
       if (!response.bot?.open_id)
-        throw new Error('Feishu bot info returned no open_id')
+        throw new Error('Lark bot info returned no open_id')
       return response.bot.open_id
     },
     async getSenderName(openId) {

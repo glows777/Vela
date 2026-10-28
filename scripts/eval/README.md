@@ -119,10 +119,10 @@ captured JSON objects in fields that its unchanged schema requires to be arrays;
 they remain errors. See the local calibration guide for commands and safe
 diagnostic-helper source. This investigation does not change any grade threshold.
 
-G1–G5 fake only Feishu transport. Cards/reactions are not answers; empty G2 group
+G1–G5 fake only Lark transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
 
-G6/G7/G8 also use `fakeFeishu()` with the real extension, gateway, tools and separate
+G6/G7/G8 also use the revision-local fake transport (`fakeLark()` today) with the real extension, gateway, tools and separate
 topic sessions in one group. G6 starts B (`g6_b`) needing a code, then asks A
 (`g6_a`) to read `task/handoff.txt` in the actual group workspace and hand the
 fact to B. Neither task prompt contains the code. Only B's last delivered answer
@@ -138,7 +138,7 @@ name without importing topic 1's conversation. `store` checks entry content in
 that snapshot; `recall` requires topic 2's last delivered answer to contain the
 fact and an observed source in that topic: a memory read/search/list/lint result,
 an injected memory index, `read_file`/`grep` of its legitimate memory files, or
-matching `feishu_search_history` message text. A tool name, save acknowledgement,
+matching `lark_search_history` (historically `feishu_search_history`) message text. A tool name, save acknowledgement,
 empty search, Bash output alone or guessed answer is not a source. Recall-topic
 disk-tool references to raw sessions, the eval artifact tree or another attempt
 fail recall, even if a valid memory/history result was also retrieved. The grader resolves ordinary
@@ -198,3 +198,5 @@ real-model behavior, provider compatibility or billing.
 The exit tests exercise the real worker with injected scripted models: readable
 group fixtures, isolated persisted topic sessions, memory snapshots, successful
 and unsuccessful independent grades, and model errors excluded from grading.
+
+The runtime layout adapter selects the target revision's Lark or historical Feishu factory/helpers. Grading normalizes only structured tool and session identifiers, leaving raw paths, arguments, output and saved evidence untouched. G7/G8 contamination recognizes both physical session-name schemes; their source and timing predicates are unchanged.

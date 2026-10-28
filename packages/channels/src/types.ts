@@ -128,7 +128,7 @@ export interface ChannelRunFeedback {
   finish(outcome: ChannelOutcome): Promise<void>
 }
 
-/** Channel hooks remain experimental: only Feishu is implemented so far; stabilization waits for a second channel implementation. */
+/** Channel hooks remain experimental: only Lark is implemented so far; stabilization waits for a second channel implementation. */
 export interface ChannelDefinition {
   name: string
   description: string

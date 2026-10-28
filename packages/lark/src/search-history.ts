@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { messageText } from './messages.ts'
-import type { FeishuTransport } from './transport.ts'
+import type { LarkTransport } from './transport.ts'
 
 export const historySearchSchema = z.object({
   keyword: z
@@ -25,7 +25,7 @@ export const historySearchSchema = z.object({
 
 /** Bounded, stateless chat listing; the caller supplies trusted logical group scope. */
 export async function searchHistory(
-  transport: FeishuTransport,
+  transport: LarkTransport,
   chatId: string,
   input: z.infer<typeof historySearchSchema>,
 ) {
