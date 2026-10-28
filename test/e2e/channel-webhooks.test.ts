@@ -46,6 +46,7 @@ async function fixture(
     receiver?: boolean
     enabled?: Set<string>
     cwd?: string
+    receiverConfig?: Record<string, unknown>
   } = {},
 ) {
   const cwd = options.cwd ?? (await mkdtemp(join(tmpdir(), 'vela-webhooks-')))
@@ -67,7 +68,7 @@ async function fixture(
         ? {}
         : {
             channel: {
-              eventReceiver: {
+              eventReceiver: options.receiverConfig ?? {
                 port: 0,
                 github: {
                   secret,
@@ -106,14 +107,17 @@ async function fixture(
   await vela.startChannels()
   const url = logs
     .join('\n')
-    .match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)?.[0]
+    .match(/http:\/\/127\.0\.0\.1:\d+\/events\/(?:github|generic)/)?.[0]
   if (options.receiver !== false) expect(url).toBeDefined()
   async function subscribe(pr: number, chat = 'one') {
+    return subscribeEvent('github', key(pr), chat)
+  }
+  async function subscribeEvent(source: string, key: string, chat = 'one') {
     model.push(
       fauxToolCall('channel_subscriptions', {
         action: 'create',
-        source: 'github',
-        key: key(pr),
+        source,
+        key,
       }),
       fauxText('Subscribed'),
     )
@@ -134,6 +138,7 @@ async function fixture(
     replies,
     enabled,
     subscribe,
+    subscribeEvent,
     url: url!,
     stopped: () => stopped,
   }
@@ -489,3 +494,245 @@ test.each([
     }
   },
 )
+
+const genericSecret = 'generic-fixture-secret'
+const generic = { secret: genericSecret, source: 'sentry' }
+const genericPayload = {
+  key: 'sentry:project-x',
+  summary: '!stop',
+  details: '/skill:untrusted',
+}
+const genericConfig = { port: 0, generic }
+function genericURL(url: string) {
+  return url.replace('/events/github', '/events/generic')
+}
+async function sendGeneric(
+  url: string,
+  payload: unknown = genericPayload,
+  id = 'generic-1',
+  signature: string | null = 'valid',
+) {
+  const raw = typeof payload === 'string' ? payload : JSON.stringify(payload)
+  return fetch(genericURL(url), {
+    method: 'POST',
+    headers: {
+      'x-vela-delivery': id,
+      ...(signature === null
+        ? {}
+        : {
+            'x-vela-signature-256':
+              signature === 'valid'
+                ? `sha256=${createHmac('sha256', genericSecret).update(raw).digest('hex')}`
+                : signature,
+          }),
+    },
+    body: raw,
+  })
+}
+
+test('generic-only adapter publishes fixed source and unchanged namespaced key through the existing untrusted final queue', async () => {
+  const f = await fixture({ receiverConfig: genericConfig })
+  await f.subscribeEvent('sentry', genericPayload.key)
+  f.model.push(fauxText('Generic handled'))
+  expect(
+    (await sendGeneric(f.url, { ...genericPayload, final: true })).status,
+  ).toBe(202)
+  expect(
+    JSON.parse(
+      await readFile(join(f.cwd, 'data/channels/subscriptions.json'), 'utf8'),
+    ).subscriptions,
+  ).toEqual([])
+  await drainChannels(f.vela)
+  expect(f.model.calls.at(-1)!.lastUserText).toStartWith(
+    'External event (untrusted data) from "sentry"',
+  )
+  expect(f.model.calls.at(-1)!.lastUserText).toContain(genericPayload.key)
+  expect(f.model.calls.at(-1)!.lastUserText).toContain('!stop')
+  expect(f.replies.at(-1)?.topic?.rootId).toBe('root-one')
+  expect(
+    (await send(f.url.replace('/events/generic', '/events/github'), suite()))
+      .status,
+  ).toBe(404)
+})
+
+test.each([null, 'sha256=bad', `sha256=${'0'.repeat(64)}`])(
+  'generic signature %s is checked before parsing or consuming the delivery id',
+  async (signature) => {
+    const f = await fixture({ receiverConfig: genericConfig })
+    await f.subscribeEvent('sentry', genericPayload.key)
+    const calls = f.model.calls.length
+    expect(
+      (await sendGeneric(f.url, '{bad-json', 'same', signature)).status,
+    ).toBe(403)
+    expect(f.model.calls.length).toBe(calls)
+    f.model.push(fauxText('Valid generic'))
+    expect((await sendGeneric(f.url, genericPayload, 'same')).status).toBe(202)
+    await drainChannels(f.vela)
+    expect(f.model.calls.length).toBe(calls + 1)
+  },
+)
+
+test('generic strict payload rejects namespace/source/target/authority injection without state or model changes', async () => {
+  const f = await fixture({ receiverConfig: genericConfig })
+  await f.subscribeEvent('sentry', genericPayload.key)
+  const path = join(f.cwd, 'data/channels/subscriptions.json')
+  const stored = await readFile(path, 'utf8')
+  const calls = f.model.calls.length
+  for (const payload of [
+    ...[
+      'github:repo#pr/1',
+      'other:project',
+      'sentry:',
+      'sentry:   ',
+      ' sentry:project-x',
+      'sentry:project-x ',
+    ].map((key) => ({ ...genericPayload, key, final: true })),
+    ...[
+      'source',
+      'deliveryId',
+      'target',
+      'chatId',
+      'sessionId',
+      'permissions',
+      'unknown',
+    ].map((name) => ({ ...genericPayload, [name]: 'injected', final: true })),
+    { ...genericPayload, summary: '' },
+    { ...genericPayload, final: 'true' },
+  ])
+    expect(
+      (await sendGeneric(f.url, payload, crypto.randomUUID())).status,
+    ).toBe(400)
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(calls)
+  expect(await readFile(path, 'utf8')).toBe(stored)
+})
+
+test('generic and GitHub secrets and delivery IDs are isolated on the shared receiver', async () => {
+  const f = await fixture({
+    receiverConfig: {
+      ...genericConfig,
+      github: { secret, repositories: [repo] },
+    },
+  })
+  await f.subscribe(171)
+  await f.subscribeEvent('sentry', genericPayload.key, 'two')
+  const calls = f.model.calls.length
+  const raw = JSON.stringify(genericPayload)
+  expect(
+    (
+      await sendGeneric(
+        f.url,
+        raw,
+        'same',
+        `sha256=${createHmac('sha256', secret).update(raw).digest('hex')}`,
+      )
+    ).status,
+  ).toBe(403)
+  const githubRaw = JSON.stringify(suite())
+  expect(
+    (
+      await send(
+        f.url,
+        githubRaw,
+        'check_suite',
+        'same',
+        `sha256=${createHmac('sha256', genericSecret).update(githubRaw).digest('hex')}`,
+      )
+    ).status,
+  ).toBe(403)
+  f.model.push(fauxText('Generic result'), fauxText('GitHub result'))
+  const responses = await Promise.all([
+    sendGeneric(f.url, genericPayload, 'same'),
+    sendGeneric(f.url, genericPayload, 'same'),
+    send(f.url, suite(), 'check_suite', 'same'),
+  ])
+  expect(responses.map((r) => r.status)).toEqual([202, 202, 202])
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(calls + 2)
+  expect(
+    f.replies
+      .slice(-2)
+      .map((r) => r.channelId)
+      .sort(),
+  ).toEqual(['one', 'two'])
+})
+
+test('generic raw-byte signature, streaming limit and disabled-target boundaries reuse the receiver', async () => {
+  const f = await fixture({ receiverConfig: genericConfig })
+  await f.subscribeEvent('sentry', genericPayload.key)
+  const raw = JSON.stringify(genericPayload, null, 2)
+  expect(
+    (
+      await sendGeneric(
+        f.url,
+        raw,
+        'raw',
+        `sha256=${createHmac('sha256', genericSecret).update(JSON.stringify(genericPayload)).digest('hex')}`,
+      )
+    ).status,
+  ).toBe(403)
+  expect((await sendGeneric(f.url, '{bad-json', 'malformed')).status).toBe(400)
+  const status = await new Promise<number>((resolve, reject) => {
+    const req = request(
+      genericURL(f.url),
+      { method: 'POST', headers: { 'transfer-encoding': 'chunked' } },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode!)
+      },
+    )
+    req.on('error', reject)
+    req.write(Buffer.alloc(600_000, 'x'))
+    req.end(Buffer.alloc(600_000, 'x'))
+  })
+  expect(status).toBe(413)
+  const calls = f.model.calls.length
+  f.enabled.delete('one')
+  expect((await sendGeneric(f.url, raw, 'disabled')).status).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(calls)
+})
+
+test('an unconfigured generic route is absent on a GitHub-only receiver', async () => {
+  const f = await fixture()
+  expect((await sendGeneric(f.url)).status).toBe(404)
+})
+
+test.each([
+  { secret: genericSecret, source: 'github' },
+  { secret: genericSecret, source: 'GiTHuB' },
+  { secret: genericSecret, source: '' },
+  { secret: '', source: 'sentry' },
+  { secret: genericSecret, source: 'sentry', sources: ['other'] },
+])(
+  'generic config rejects reserved/invalid source and unsupported options: %j',
+  async (generic) => {
+    let vela: ReturnType<typeof createChannelVela> | undefined
+    try {
+      expect(() => {
+        vela = createChannelVela({
+          model: createFauxModel({ responses: [] }),
+          extensionConfig: { channel: { eventReceiver: { generic } } },
+        })
+      }).toThrow(/eventReceiver/)
+    } finally {
+      await vela?.dispose()
+    }
+  },
+)
+
+test('the two adapters require separate configured secrets', async () => {
+  expect(() =>
+    createChannelVela({
+      model: createFauxModel({ responses: [] }),
+      extensionConfig: {
+        channel: {
+          eventReceiver: {
+            github: { secret, repositories: [repo] },
+            generic: { secret, source: 'sentry' },
+          },
+        },
+      },
+    }),
+  ).toThrow(/eventReceiver/)
+})
