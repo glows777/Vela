@@ -81,6 +81,11 @@ export class ChannelEvents {
     private logger: VelaLogger,
     private defaultTarget?: { channel: string; chatId: string },
   ) {
+    if (defaultTarget)
+      this.defaultTarget = {
+        channel: defaultTarget.channel.trim(),
+        chatId: defaultTarget.chatId.trim(),
+      }
     this.path = dataDir
       ? join(dataDir, 'channels', 'subscriptions.json')
       : undefined
@@ -277,7 +282,8 @@ export class ChannelEvents {
       channelId: record.chatId,
       senderId: record.requester.id,
       senderName: record.requester.name,
-      replyToId: record.rootId ?? record.replyTarget,
+      // A top-level external event has no incoming human message to reply to.
+      replyToId: record.rootId,
       ...(record.rootId && record.threadId
         ? { topic: { rootId: record.rootId, threadId: record.threadId } }
         : {}),

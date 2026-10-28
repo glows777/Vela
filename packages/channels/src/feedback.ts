@@ -391,7 +391,7 @@ export class RunFeedback {
     this.options.logger.error(
       `[${channelName}] Feedback failed: ${errorMessage(error)}`,
     )
-    if (msg.passive) return
+    if (msg.passive || msg.externalEvent) return
     try {
       await this.options.channel(channelName)?.send({
         ...msg,

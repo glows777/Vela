@@ -1,6 +1,6 @@
 // Run through vela-verify.sh exec: only the model and Lark transport are fake.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type ChannelEvent, createVela, loadConfig } from '@glows777/vela'
 import { createFauxModel, fauxText, fauxToolCall } from '@glows777/vela/testing'
@@ -9,7 +9,7 @@ import { lark } from '@glows777/vela-lark'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
 
 const fake = fakeLark()
-const warnings: string[] = []
+const diagnostics: string[] = []
 let stops = 0
 fake.transport.stop = () => {
   stops++
@@ -39,8 +39,8 @@ const vela = createVela({
   logger: {
     debug() {},
     info() {},
-    error() {},
-    warn: (text) => warnings.push(text),
+    error: (text) => diagnostics.push(text),
+    warn: (text) => diagnostics.push(text),
   },
   extensions: [
     lark({
@@ -81,11 +81,34 @@ try {
   await drainChannels(vela)
   assert.equal(fake.sent.length, failedSent)
   assert.equal(model.calls.length, failedCalls)
-  assert(warnings.some((text) => text.includes('fixture announcement denied')))
+  assert(
+    diagnostics.some((text) => text.includes('fixture announcement denied')),
+  )
   assert.equal(JSON.parse(await readFile(path, 'utf8')).subscriptions.length, 1)
   fake.transport.send = send
   console.log(
     'PASS rejected announcement: diagnostic only, no old-human reply/model call; subscription retained',
+  )
+  const indexPath = join(vela.dataDir, 'channels/index.json')
+  const indexContent = await readFile(indexPath, 'utf8')
+  await rm(indexPath)
+  await mkdir(indexPath)
+  try {
+    await vela.publishEvent({
+      ...event,
+      deliveryId: 'failed-admission',
+      final: false,
+    })
+    await drainChannels(vela)
+    assert.equal(fake.sent.length, failedSent)
+    assert.equal(model.calls.length, failedCalls)
+    assert(diagnostics.some((text) => /EISDIR|ENOTDIR/.test(text)))
+  } finally {
+    await rm(indexPath, { recursive: true })
+    await writeFile(indexPath, indexContent)
+  }
+  console.log(
+    'PASS index admission failure: diagnostic only, no old-human reply/announcement/model call',
   )
   const previous = fake.sent.length
   await vela.publishEvent(event)
@@ -128,3 +151,31 @@ await assert.rejects(vela.publishEvent(event), /stopping|not running/)
 console.log(
   'PASS lifecycle rejects publication before startup/after stop; transport stopped once',
 )
+
+const fallback = fakeLark()
+const defaultModel = createFauxModel({
+  responses: [fauxText('SDK default wake')],
+})
+const defaultVela = createVela({
+  model: defaultModel,
+  dataDir: '.vela-data',
+  eventDefaultTarget: { channel: ' lark ', chatId: ' oc_group ' },
+  extensions: [
+    lark({
+      owners: ['ou_alice'],
+      chats: ['oc_group'],
+      transport: fallback.transport,
+    }),
+  ],
+})
+try {
+  await defaultVela.startChannels()
+  await defaultVela.publishEvent({ ...event, key: 'unmatched', final: false })
+  await drainChannels(defaultVela)
+  assert(fallback.sent.at(-1)!.text.includes('SDK default wake'))
+  console.log(
+    'PASS direct SDK default target whitespace reaches the existing chat',
+  )
+} finally {
+  await defaultVela.dispose()
+}

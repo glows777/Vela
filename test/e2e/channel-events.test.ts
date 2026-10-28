@@ -298,27 +298,35 @@ test('final publishes enqueue to every target before cleanup without steering or
   expect(external).toHaveLength(2)
 })
 
-test('disabled matching targets never leak to default; only unmatched events use the existing default', async () => {
-  const f = await fixture({ defaultTarget: { channel: 'chat', chatId: 'two' } })
-  await f.vela.startChannels()
-  await f.subscription({
-    action: 'create',
-    source: event.source,
-    key: event.key,
-  })
-  f.model.push(fauxText('Default chat exists'))
-  await f.human('Hello', 'two', false)
-  f.enabled.delete('one')
-  const before = f.model.calls.length
-  await f.vela.publishEvent(event)
-  await drainChannels(f.vela)
-  expect(f.model.calls).toHaveLength(before)
-  f.model.push(fauxText('Default event'))
-  await f.vela.publishEvent({ ...event, key: 'unmatched' })
-  await drainChannels(f.vela)
-  expect(f.model.calls).toHaveLength(before + 1)
-  expect(f.sent.at(-1)!.message.text).toBe('Default event')
-})
+test.each(['exact', 'padded'] as const)(
+  'disabled matching targets never leak to default; only unmatched events use the existing %s SDK default',
+  async (address) => {
+    const f = await fixture({
+      defaultTarget:
+        address === 'exact'
+          ? { channel: 'chat', chatId: 'two' }
+          : { channel: ' chat ', chatId: ' two ' },
+    })
+    await f.vela.startChannels()
+    await f.subscription({
+      action: 'create',
+      source: event.source,
+      key: event.key,
+    })
+    f.model.push(fauxText('Default chat exists'))
+    await f.human('Hello', 'two', false)
+    f.enabled.delete('one')
+    const before = f.model.calls.length
+    await f.vela.publishEvent(event)
+    await drainChannels(f.vela)
+    expect(f.model.calls).toHaveLength(before)
+    f.model.push(fauxText('Default event'))
+    await f.vela.publishEvent({ ...event, key: 'unmatched' })
+    await drainChannels(f.vela)
+    expect(f.model.calls).toHaveLength(before + 1)
+    expect(f.sent.at(-1)!.message.text).toBe('Default event')
+  },
+)
 
 test('generic subscription visibility works on both channels, respects curated tools and hides from ordinary sessions', async () => {
   const f = await fixture()
@@ -510,8 +518,8 @@ test.each(['group', 'topic'] as const)(
   },
 )
 
-test.each(['rejected', 'missing receipt'] as const)(
-  'a %s Lark external announcement skips delivery without replying to the previous human',
+test.each(['rejected', 'missing receipt', 'index write failure'] as const)(
+  'a %s Lark external input skips delivery without replying to the previous human',
   async (failure) => {
     const cwd = await mkdtemp(join(tmpdir(), 'vela-event-announcement-'))
     const fake = fakeLark()
@@ -566,31 +574,79 @@ test.each(['rejected', 'missing receipt'] as const)(
     const before = fake.sent.length
     const calls = model.calls.length
     const send = fake.transport.send
+    const indexPath = join(cwd, 'data/channels/index.json')
+    const indexContent = await readFile(indexPath, 'utf8')
     let announcements = 0
     fake.transport.send = async () => {
       announcements++
       if (failure === 'rejected') throw new Error('announcement send denied')
+      if (failure === 'index write failure')
+        return send('oc_group', 'Unexpected announcement')
       return undefined
     }
-    await vela.publishEvent(event)
-    await drainChannels(vela)
-    expect(announcements).toBe(1)
-    expect(fake.sent.slice(before)).toEqual([])
-    expect(model.calls).toHaveLength(calls)
-    expect(logs.join('\n')).toContain('External event skipped')
-    if (failure === 'rejected')
-      expect(logs.join('\n')).toContain('announcement send denied')
-    const index = JSON.parse(
-      await readFile(join(cwd, 'data/channels/index.json'), 'utf8'),
-    )
-    expect(index.records[0].pendingMessageIds).toEqual([])
-    fake.transport.send = send
-    model.push(fauxText('New event after transport recovery'))
-    await vela.publishEvent({ ...event, deliveryId: 'next-delivery' })
-    await drainChannels(vela)
+    if (failure === 'index write failure') {
+      await rm(indexPath)
+      await mkdir(indexPath)
+    }
+    try {
+      await vela.publishEvent(event)
+      await drainChannels(vela)
+      expect(announcements).toBe(failure === 'index write failure' ? 0 : 1)
+      expect(fake.sent.slice(before)).toEqual([])
+      expect(model.calls).toHaveLength(calls)
+      expect(logs.join('\n')).toMatch(
+        failure === 'index write failure'
+          ? /EISDIR|ENOTDIR/
+          : /External event skipped/,
+      )
+      if (failure === 'rejected')
+        expect(logs.join('\n')).toContain('announcement send denied')
+      if (failure !== 'index write failure') {
+        const index = JSON.parse(
+          await readFile(join(cwd, 'data/channels/index.json'), 'utf8'),
+        )
+        expect(index.records[0].pendingMessageIds).toEqual([])
+      }
+    } finally {
+      if (failure === 'index write failure') {
+        await rm(indexPath, { recursive: true })
+        await writeFile(indexPath, indexContent)
+      }
+      fake.transport.send = send
+      model.push(fauxText('New event after transport recovery'))
+      await vela.publishEvent({ ...event, deliveryId: 'next-delivery' })
+      await drainChannels(vela)
+    }
     expect(fake.sent.at(-1)!.messageId).not.toBe('om_human')
     expect(fake.sent.at(-1)!.text).toContain(
       'New event after transport recovery',
     )
   },
 )
+
+test('a human input still receives its own admission-write error reply', async () => {
+  const f = await fixture()
+  await f.vela.startChannels()
+  f.model.push(fauxText('Original human result'))
+  await f.human('First human task')
+  const path = join(f.cwd, 'data/channels/index.json')
+  const committed = await readFile(path, 'utf8')
+  await rm(path)
+  await mkdir(path)
+  const before = f.sent.length
+  try {
+    await f.human('New human task')
+    expect(f.sent.slice(before).map((s) => s.message)).toEqual([
+      expect.objectContaining({
+        replyToId: 'human-2',
+        text: expect.stringContaining("Couldn't update task feedback:"),
+      }),
+    ])
+    expect(f.model.calls).toHaveLength(1)
+  } finally {
+    await rm(path, { recursive: true })
+    await writeFile(path, committed)
+    f.model.push(fauxText('After storage recovery'))
+    await f.human('New request after recovery')
+  }
+})

@@ -221,6 +221,8 @@ Event input has a fixed untrusted-data prefix, so command-looking payloads do no
 
 Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. This first stage provides no HTTP receiver, GitHub adapter, tunnel or independent-process client; those belong to the later stages of #171. The existing notification workflow is separate.
 
+External top-level inputs never borrow a previous human reply ID. Lark establishes a new announcement receipt before prompting; admission or preparation errors are recorded in operator diagnostics without a synthetic feedback reply. Human input retains its own error feedback. CLI and direct SDK default-target addresses both trim surrounding whitespace.
+
 ## Gateway lifecycle
 
 On receiving a message, the gateway:
