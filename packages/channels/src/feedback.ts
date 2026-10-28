@@ -170,7 +170,8 @@ export class RunFeedback {
     msg: IncomingMessage,
     admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
-    if (msg.passive || msg.routine) return async () => false
+    if (msg.passive || msg.routine || msg.externalEvent)
+      return async () => false
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
     if (
@@ -363,7 +364,7 @@ export class RunFeedback {
           channel,
           msg,
           (error) => this.feedbackError(channel.name, msg, error),
-          acknowledge,
+          acknowledge && !msg.externalEvent,
         ),
       ]
       this.acknowledgements.set(msg, inputs)
@@ -390,7 +391,7 @@ export class RunFeedback {
     this.options.logger.error(
       `[${channelName}] Feedback failed: ${errorMessage(error)}`,
     )
-    if (msg.passive) return
+    if (msg.passive || msg.externalEvent) return
     try {
       await this.options.channel(channelName)?.send({
         ...msg,

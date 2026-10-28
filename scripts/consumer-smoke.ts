@@ -200,19 +200,19 @@ if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||
 }
 const CHANNELS = `
 import assert from 'node:assert/strict'
-import {createChannelVela,type ChannelExtension,type IncomingMessage} from '@glows777/vela-channels'
+import {createChannelVela,type ChannelExtension,type IncomingMessage,type ChannelEvent} from '@glows777/vela-channels'
 import {drainChannels} from '@glows777/vela-channels/testing'
-import {createFauxModel,fauxText} from '@glows777/vela-core/testing'
+import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
 let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
 const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:'standard adapter',start(){},stop(){stopped++},onMessage(next){receive=next},async send(m){replies.push(m.text)}})
-const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('channel received')]}),extensions:[probe]})
-try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private')}finally{await vela.dispose()}
+const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('channel received'),fauxText('event received'),fauxText('default received')]}),eventDefaultTarget:{channel:' probe ',chatId:' room '},extensions:[probe]})
+try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private');const event:ChannelEvent={source:'consumer',key:'build',deliveryId:'packed',summary:'!stop',final:true};await vela.publishEvent(event);await drainChannels(vela);assert(replies.includes('event received'));await vela.publishEvent({...event,key:'unmatched',deliveryId:'packed-default',final:false});await drainChannels(vela);assert(replies.includes('default received'))}finally{await vela.dispose()}
 assert.equal(stopped,1);console.log('standard channel sdk ok')
 `
 const LARK = `
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
-import {mkdir,symlink,readFile,realpath,writeFile} from 'node:fs/promises'
+import {mkdir,symlink,readFile,realpath,writeFile,rm} from 'node:fs/promises'
 import {resolve,join} from 'node:path'
 import {lark,type LarkOptions,type LarkTransport,type LarkMessageEvent} from '@glows777/vela-lark'
 // @ts-expect-error breaking rename removes old public factory
@@ -238,6 +238,12 @@ const vela=createChannelVela({dataDir:linked,contextFiles:false,model,extensions
 try{await vela.startChannels();receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'incoming',message_type:'text',content:JSON.stringify({text:'hello'}),create_time:String(Date.now())}});await drainChannels(vela);assert(sent.some(text=>text.includes('lark received')));receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'direct',chat_type:'p2p',message_id:'file',message_type:'file',content:JSON.stringify({file_key:'resource',file_name:'notes.txt'}),create_time:String(Date.now())}});await drainChannels(vela);const path=join(await realpath(actual),'channels/lark-direct/files/file-notes.txt');assert.equal(await readFile(path,'utf8'),'canonical packed attachment');assert(model.calls[1]!.lastUserText.includes('saved at '+path+']'))}finally{await vela.dispose()}
 assert.equal(await readFile(join(actual,'sessions',archiveId+'.jsonl'),'utf8'),archive);assert.equal(await readFile(join(actual,'sessions',archiveId,'output.txt'),'utf8'),'retained old output');assert(!vela.sessions().some(session=>session.id===archiveId));assert(!JSON.stringify(model.calls.map(call=>call.prompt)).includes('ORCHID-PRIVATE'))
 console.log('lark fake transport sdk, retained archive privacy and symlink-root attachment ok')
+// An announcement may fail even while replying to the previous human still works.
+const {fauxToolCall}=await import('@glows777/vela-core/testing')
+const eventModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('subscribed')]})
+const eventVela=createChannelVela({dataDir:resolve('event-data'),contextFiles:false,model:eventModel,extensions:[lark({...options,chats:['oc_group']})]})
+try{await eventVela.startChannels();let finish!:()=>void;const done=new Promise<void>(resolve=>{finish=resolve});const off=eventVela.subscribe(e=>{if(e.type==='channel_reply'&&e.text==='subscribed')finish()});receive({sender:{sender_type:'user',sender_id:{open_id:'ou_alice'}},message:{chat_id:'oc_group',chat_type:'group',message_id:'om_human',message_type:'text',mentions:[{key:'@_user_1',id:{open_id:'ou_bot'}}],content:JSON.stringify({text:'subscribe'}),create_time:String(Date.now())}});await done;off();await drainChannels(eventVela);const before=sent.length;const calls=eventModel.calls.length;const announce=transport.send;transport.send=async()=>{throw new Error('announcement denied')};await eventVela.publishEvent({source:'consumer',key:'build',deliveryId:'failed-send',summary:'build finished'});await drainChannels(eventVela);assert.equal(sent.length,before);assert.equal(eventModel.calls.length,calls);console.log('failed event announcement skipped without a human-message reply');transport.send=announce;const index=join(eventVela.dataDir,'channels/index.json');const committed=await readFile(index,'utf8');await rm(index);await mkdir(index);try{await eventVela.publishEvent({source:'consumer',key:'build',deliveryId:'failed-index',summary:'build finished'});await drainChannels(eventVela);assert.equal(sent.length,before);assert.equal(eventModel.calls.length,calls)}finally{await rm(index,{recursive:true});await writeFile(index,committed);eventModel.push(fauxText('storage restored'));await eventVela.publishEvent({source:'consumer',key:'build',deliveryId:'restored-index',summary:'new event'});await drainChannels(eventVela)}assert(sent.at(-1)!.includes('storage restored'));console.log('failed event index admission skipped without a human-message reply; later event delivered')}finally{await eventVela.dispose()}
+
 `
 const MCP = `
 import assert from 'node:assert/strict'
@@ -261,7 +267,9 @@ const checks: Record<string, string> = {
   lark: LARK,
   mcp: MCP,
   rag: RAG,
-  vela: SMOKE,
+  vela:
+    SMOKE +
+    "\nif (typeof vela.publishEvent !== 'function') throw new Error('umbrella publishEvent missing')\n",
 }
 const forbidden = [
   '@larksuiteoapi/node-sdk',

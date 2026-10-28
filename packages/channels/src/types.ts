@@ -4,6 +4,16 @@ import type {
   VelaEvent,
 } from '@glows777/vela-core/extension-api'
 
+/** A source event is untrusted data, with routing determined only by local subscriptions. */
+export interface ChannelEvent {
+  source: string
+  key: string
+  summary: string
+  details?: string
+  deliveryId: string
+  final?: boolean
+}
+
 export interface IncomingMessage {
   /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
   channelId: string
@@ -24,6 +34,8 @@ export interface IncomingMessage {
   passive?: boolean
   /** Scheduled inputs have no incoming service message ID and always queue. */
   routine?: { id: string; scheduledAt: string }
+  /** Queued external data, never a human command or a steer. */
+  externalEvent?: ChannelEvent
   raw?: unknown
 }
 

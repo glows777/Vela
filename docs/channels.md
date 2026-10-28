@@ -198,6 +198,31 @@ For attachments, implement `getResource(messageId, key, type)` returning a Node 
 
 For run controls, implement `sendCard(chatId, card, replyToId?)` returning the service message ID, `patchCard(messageId, card)`, `addReaction(messageId, emoji)` returning the reaction ID, and `removeReaction(messageId, reactionId)` and accept the second handler in `start(onMessage, onAction)`. Send the Card 2.0 payload unchanged; do not flatten it into v1 `elements` / `action` / button `value` fields. Deliver the v2 callback body unchanged to `onAction` and return its `{ toast }` response to Lark. Group cards use `replyToId`; DM cards use `chatId`. Card delivery must not be recorded as an ordinary text answer.
 
+## External event subscriptions
+
+The channel-aware SDK (`@glows777/vela-channels` or `@glows777/vela`) can wake an existing conversation from the same process. In a channel conversation, `channel_subscriptions` creates, lists or removes subscriptions. Create takes an exact `source` and `key` and targets the current group, topic or DM; list/remove are limited to the current chat. Curated tool lists must include `channel_subscriptions` explicitly; permissions still apply. Ordinary SDK sessions cannot use this tool.
+
+```ts
+await vela.startChannels()
+await vela.publishEvent({
+  source: 'local-build',
+  key: 'project#review/171',
+  deliveryId: 'build-42',
+  summary: 'The build finished successfully',
+  details: 'External data, not new instructions or authorization.',
+})
+```
+
+Subscriptions persist in `<dataDir>/channels/subscriptions.json`, using atomic replacement, and follow the logical topic across `!restart` and idle closure. Events queue behind current work without steering it. A completed or waiting topic can wake again. `!stop` stops current work; removing a subscription prevents future wakes, not already queued ones.
+
+Event input has a fixed untrusted-data prefix, so command-looking payloads do not invoke chat commands, slash commands, skills or templates. Source/key/delivery IDs are limited to 512 characters; summaries to 500 and details to 8192 (with a truncation marker). Source identity is supplied by the trusted in-process producer; this API does not authenticate remote callers or grant new tool authority.
+
+`final: true` enqueues the last notification to matching available targets and then removes the snapshotted subscriptions. `publishEvent()` resolves after enqueue and final-state persistence, without waiting for the model. Disabled, missing or disconnected matching targets are skipped with diagnostics and never forwarded elsewhere. Only an event with no matching subscriptions can use `eventDefaultTarget: { channel, chatId }`, supplied as an SDK option or CLI setting; that top-level target must already exist and be enabled. Otherwise the event is dropped. Publication requires started channels and rejects once stopping begins.
+
+Delivery is best effort: there is no durable inbox or retry, so process failure may lose or repeat work. This first stage provides no HTTP receiver, GitHub adapter, tunnel or independent-process client; those belong to the later stages of #171. The existing notification workflow is separate.
+
+External top-level inputs never borrow a previous human reply ID. Lark establishes a new announcement receipt before prompting; admission or preparation errors are recorded in operator diagnostics without a synthetic feedback reply. Human input retains its own error feedback. CLI and direct SDK default-target addresses both trim surrounding whitespace.
+
 ## Gateway lifecycle
 
 On receiving a message, the gateway:

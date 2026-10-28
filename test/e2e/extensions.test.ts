@@ -111,6 +111,13 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
       commands: [],
       channels: [],
     },
+    {
+      name: 'channel',
+      tools: ['channel_subscriptions'],
+      providers: [],
+      commands: [],
+      channels: [],
+    },
   ])
 })
 
