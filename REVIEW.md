@@ -6,7 +6,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 
 - A user-visible regression through a real entry point: the CLI/TUI, the SDK's public API, a channel message, a model or provider response, or the file system.
 - An error swallowed or replaced by a silent "safe" default. Vela fails loudly: errors say what went wrong and how to fix it.
-- `src/` using `Bun.*` globals or `bun:` modules (the package must run on Node ≥ 22.18), or a relative import without `.ts`.
+- `packages/*/src/` using `Bun.*` globals or `bun:` modules (the packages must run on Node ≥ 22.18), or a relative import without `.ts`.
 - A public API change without an updated `api/public-api.txt`, or a user-facing change without a CHANGELOG line.
 - Behavior that departs from pi without the PR saying why.
 - Security: channel access outside the enabled-chat list, path or command injection, secrets in logs. These are never optional.

@@ -1,10 +1,12 @@
 # Vela
 
-Vela is an AI agent you can run in your terminal or embed in a TypeScript app.
+Vela is an AI coworker for your team's group chats, built on a terminal agent and TypeScript SDK.
 
-Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. The same agent is a small SDK: open as many sessions as you need in one process, subscribe to their events, and connect them to chat apps through channels. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels, or connect [MCP servers](docs/mcp.md).
+Add Vela to a group chat and it works like a teammate: it answers short questions in the group, opens a topic for each larger task, keeps the topic's progress card up to date, remembers what the group told it and can wake itself on a schedule. Chat platforms plug in through a standard [channel](docs/channels.md) interface; Lark (Feishu) ships built in. Run `vela serve` on a machine you trust and enable the chats you want it in.
 
-Vela's design follows [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). It adds concurrent sessions, enabled-chat lists for channels, per-chat `tools`, per-session `permissions`, and built-in memory and knowledge base extensions.
+Underneath is a general agent you can also use on its own. Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. Use it in your terminal, script it with JSON or RPC mode, or embed it as an SDK that runs many sessions in one process. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels, or connect [MCP servers](docs/mcp.md).
+
+The CLI and SDK follow [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). Vela adds concurrent sessions, a standard channel interface with enabled-chat lists, per-chat `tools`, per-session `permissions`, and built-in memory and knowledge base extensions.
 
 ## Getting started
 
@@ -63,6 +65,21 @@ The SDK reads no environment variables and persists nothing unless you pass `dat
 - Automating: [JSON mode](docs/json.md), [RPC mode](docs/rpc.md)
 - Building on Vela: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [built-in extensions](docs/built-in-extensions.md), [MCP servers](docs/mcp.md), [channels](docs/channels.md), [testing](docs/testing.md), [session format](docs/session-format.md)
 - [Security](docs/security.md): Vela runs tools with your permissions and has no sandbox. Read this before running it on untrusted input.
+
+## Packages
+
+Vela is a Bun workspace of six npm packages under [`packages/`](packages/). Most people only need `@glows777/vela`, which ships the CLI and re-exports the SDK.
+
+| Package | What it contains |
+| --- | --- |
+| [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI and `vela serve`, plus SDK and testing re-exports |
+| [`@glows777/vela-core`](packages/core) | The SDK (`createVela`), the extension API, offline testing helpers and the light built-in extensions (memory, web, permission-gate) |
+| [`@glows777/vela-channels`](packages/channels) | The standard channel interface and the channel runtime (group triage, topics, routines) |
+| [`@glows777/vela-lark`](packages/lark) | The Lark (Feishu) channel adapter |
+| [`@glows777/vela-mcp`](packages/mcp) | The MCP extension |
+| [`@glows777/vela-rag`](packages/rag) | The knowledge base (RAG) extension with SQLite vector storage |
+
+Upgrading a Feishu deployment from 0.4 or earlier? Follow the [Lark migration guide](docs/lark-migration.md) first.
 
 ## Development
 

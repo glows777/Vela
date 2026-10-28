@@ -10,6 +10,7 @@ alwaysApply: false
 - Define an observable done condition first. Authorized, reversible implementation, checks and fixes are carried through to completion, not handed back after the first patch; pause only for unknowns that change scope or outcome, or for irreversible or external writes.
 - Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost to the user and get their buy-in. Do not silently expand scope for theoretical robustness.
 - Pick verification by risk: run the affected Bun tests for targeted regressions; widen to the full `bun test`, typecheck or build for cross-module, runtime or protocol changes. Don't run unrelated full suites for low-risk changes.
+- When diagnosing tool findings, read the relevant [agent lessons](docs/agent-lessons.md) on demand; don't preload unrelated incident history.
 - `.skills/<name>/SKILL.md` is an on-demand workflow entry point. Keep a skill's trigger description short and precise; put multi-flow content behind references or scripts (progressive disclosure), don't preload unrelated text, and don't write one task's temporary steps into shared rules.
 - **Prompt the What, not the How.** When exploration is needed, the agent builds its own iterative tools, such as several variants and checks that can be compared. It does not go back and forth with a human on trial and error.
 
@@ -25,7 +26,7 @@ Default to using Bun instead of Node.js.
 
 ## APIs
 
-`src/` is the npm package (compiled to `dist/`) and must run on Node ≥ 22.18 and Bun: use only `node:` modules and web-standard APIs, never `Bun.*` globals or `bun:` modules (RAG's SQLite goes through `src/extensions/rag/sqlite.ts`, which adapts both). Relative imports carry the `.ts` extension. `bun run build` emits `dist/`; `bun run smoke:consumer` checks the package in empty Node and Bun projects. The Bun API advice below applies only to `scripts/` and `test/`.
+`packages/*/src/` contains the six npm packages (each compiled to its own `dist/`) and must run on Node ≥ 22.18 and Bun: use only `node:` modules and web-standard APIs, never `Bun.*` globals or `bun:` modules (RAG's SQLite goes through `packages/rag/src/sqlite.ts`, which adapts both). Relative imports carry the `.ts` extension. `bun run build` emits `dist/`; `bun run smoke:consumer` checks each package independently in empty Node and Bun projects. The Bun API advice below applies only to `scripts/` and `test/`.
 
 All code, comments, messages and docs in the repo are in English.
 
@@ -42,7 +43,7 @@ All code, comments, messages and docs in the repo are in English.
 How tests are organized, how to verify a change and how to add tests: see [test/README.md](test/README.md) (read it before changing tests or the agent loop, assembly, events, context or CLI). In short:
 
 - `bun run test` runs unit + e2e (about 1–2 minutes, no network, no environment variables); target with `bun test test/unit/<module>` or `bun test test/e2e/<scenario>`.
-- Unit tests live in `test/unit/`, mirroring `src/`; end-to-end flows live in `test/e2e/` and use `createTestVela()` from `test/support/vela.ts` and the scripted faux model from `src/testing/faux.ts`.
+- Package unit tests live in `packages/*/test/unit/`, mirroring their own `src/`; workspace architecture tests live in `test/unit/`; end-to-end flows live in `test/e2e/` and use `createTestVela()` from `test/support/vela.ts` and the scripted faux model from `packages/core/src/testing/faux.ts`.
 - Fix a bug by first writing a faux scenario that reproduces it; when you change events, the faux interface or test conventions, update test/README.md.
 
 ## Review
