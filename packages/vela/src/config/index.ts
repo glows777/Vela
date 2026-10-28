@@ -67,6 +67,11 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     throw new Error(
       `${core.files.join(', ')}: eventDefaultTarget must be { channel, chatId } with nonempty strings`,
     )
+  if (target)
+    settings.eventDefaultTarget = {
+      channel: target.channel.trim(),
+      chatId: target.chatId.trim(),
+    }
   const projectDir = join(core.cwd, '.vela')
   const section = mcpConfig.resolve(
     {},

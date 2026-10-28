@@ -509,3 +509,88 @@ test.each(['group', 'topic'] as const)(
     ).toEqual({ id: 'ou_alice', name: 'Alice' })
   },
 )
+
+test.each(['rejected', 'missing receipt'] as const)(
+  'a %s Lark external announcement skips delivery without replying to the previous human',
+  async (failure) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'vela-event-announcement-'))
+    const fake = fakeLark()
+    const logs: string[] = []
+    const model = createFauxModel({
+      responses: [
+        fauxToolCall('channel_subscriptions', {
+          action: 'create',
+          source: event.source,
+          key: event.key,
+        }),
+        fauxText('Subscribed'),
+      ],
+    })
+    const vela = createVela({
+      cwd,
+      dataDir: 'data',
+      model,
+      logger: {
+        debug() {},
+        info() {},
+        warn: (text) => logs.push(text),
+        error: (text) => logs.push(text),
+      },
+      extensions: [
+        lark({
+          owners: ['ou_alice'],
+          chats: ['oc_group'],
+          transport: fake.transport,
+        }),
+      ],
+    })
+    cleanups.push(
+      () => rm(cwd, { recursive: true, force: true }),
+      () => vela.dispose(),
+    )
+    await vela.startChannels()
+    const subscribed = Promise.withResolvers<void>()
+    const off = vela.subscribe((e) => {
+      if (e.type === 'channel_reply' && e.text === 'Subscribed')
+        subscribed.resolve()
+    })
+    fake.deliver(
+      larkEvent({
+        message_id: 'om_human',
+        content: '{"text":"Subscribe to this build"}',
+      }),
+    )
+    await subscribed.promise
+    off()
+    await drainChannels(vela)
+    const before = fake.sent.length
+    const calls = model.calls.length
+    const send = fake.transport.send
+    let announcements = 0
+    fake.transport.send = async () => {
+      announcements++
+      if (failure === 'rejected') throw new Error('announcement send denied')
+      return undefined
+    }
+    await vela.publishEvent(event)
+    await drainChannels(vela)
+    expect(announcements).toBe(1)
+    expect(fake.sent.slice(before)).toEqual([])
+    expect(model.calls).toHaveLength(calls)
+    expect(logs.join('\n')).toContain('External event skipped')
+    if (failure === 'rejected')
+      expect(logs.join('\n')).toContain('announcement send denied')
+    const index = JSON.parse(
+      await readFile(join(cwd, 'data/channels/index.json'), 'utf8'),
+    )
+    expect(index.records[0].pendingMessageIds).toEqual([])
+    fake.transport.send = send
+    model.push(fauxText('New event after transport recovery'))
+    await vela.publishEvent({ ...event, deliveryId: 'next-delivery' })
+    await drainChannels(vela)
+    expect(fake.sent.at(-1)!.messageId).not.toBe('om_human')
+    expect(fake.sent.at(-1)!.text).toContain(
+      'New event after transport recovery',
+    )
+  },
+)

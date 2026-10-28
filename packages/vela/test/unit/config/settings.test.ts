@@ -46,6 +46,15 @@ test('event default target stays in umbrella settings and validates an explicit 
       setup({ 'home/settings.json': json({ eventDefaultTarget: target }) }),
     ).settings.eventDefaultTarget,
   ).toEqual(target)
+  expect(
+    loadConfig(
+      setup({
+        'home/settings.json': json({
+          eventDefaultTarget: { channel: ' lark ', chatId: ' oc_group ' },
+        }),
+      }),
+    ).settings.eventDefaultTarget,
+  ).toEqual(target)
   for (const eventDefaultTarget of [
     'oc_group',
     { channel: 'lark' },

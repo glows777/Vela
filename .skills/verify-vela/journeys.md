@@ -6,7 +6,7 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 
 ## Tools and the TUI ([tools](../../docs/tools.md), [cli](../../docs/cli.md))
 
-External event SDK: run `exec $RUN events bun $REPO/.skills/verify-vela/scripts/event-journeys.ts` in an isolated fixture. The real SDK/gateway and fake Lark transport create a subscription, publish command-looking untrusted data, check the real reply anchor, clean up final subscriptions, and reject publication outside the channel lifecycle. There is no HTTP or live webhook in this journey.
+External event SDK: run `exec $RUN events bun $REPO/.skills/verify-vela/scripts/event-journeys.ts` in an isolated fixture. The real SDK/gateway and fake Lark transport create a subscription, reject an announcement while old-human replies remain available (diagnostic only; no reply or model call), then publish command-looking untrusted data, check the real reply anchor, clean up final subscriptions, normalize fixture settings and reject publication outside the channel lifecycle. There is no HTTP or live webhook in this journey.
 
 | Feature | Drive | Check |
 |---|---|---|
