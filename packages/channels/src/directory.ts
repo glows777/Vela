@@ -27,7 +27,9 @@ const recordSchema = z
     state: z.enum(['running', 'waiting', 'done', 'stopped']),
     waitingReason: z.string().optional(),
     passive: z.boolean().optional(),
-    handoff: z.object({ from: z.string(), depth: z.number() }).optional(),
+    handoff: z
+      .object({ id: z.string(), from: z.string(), depth: z.number() })
+      .optional(),
     routine: z
       .object({
         id: z.string(),

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import {
   mkdir,
   mkdtemp,
@@ -157,6 +158,20 @@ test('a hand-off note interrupted mid-run reruns after restart and the previous 
   ])
   expect(fake.sent[1]?.messageId).toBe('root')
   expect(t.model.calls).toHaveLength(1)
+})
+
+test('a hand-off note killed before it reached the session is dropped without reposting the previous answer', async () => {
+  const cwd = await crash('note-early')
+  const { fake, t, start } = setup(cwd)
+  await start()
+  await until(() =>
+    JSON.parse(
+      readFileSync(join(t.vela.dataDir, 'channels/index.json'), 'utf8'),
+    ).records.every((record: { state: string }) => record.state !== 'running'),
+  )
+  await Bun.sleep(50)
+  expect(fake.sent).toEqual([])
+  expect(t.model.calls).toEqual([])
 })
 
 test('completed topics survive restart and a top-level follow-up forwards to the existing thread', async () => {

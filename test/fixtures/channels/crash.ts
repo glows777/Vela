@@ -13,6 +13,7 @@ import { fakeLark, larkEvent } from '../../support/lark.ts'
 const [cwd, mode] = process.argv.slice(2)
 const fake = fakeLark()
 const ready = () => console.log('CRASH_READY')
+let held = false
 if (mode === 'image')
   fake.resources.set('screenshot', [
     readFileSync(new URL('../images/wide.png', import.meta.url)),
@@ -41,19 +42,31 @@ const note = (req: FauxRequest) => {
 }
 const t = createTestVela({
   cwd,
-  responses:
-    mode === 'note'
-      ? Array(5).fill(note)
-      : [
-          ...(mode === 'forward' ? [fauxText('topic established')] : []),
-          mode === 'answer' ? fauxText('saved answer') : fauxHang(),
-        ],
+  responses: mode?.startsWith('note')
+    ? Array(5).fill(note)
+    : [
+        ...(mode === 'forward' ? [fauxText('topic established')] : []),
+        mode === 'answer' ? fauxText('saved answer') : fauxHang(),
+      ],
   extensions: [
     lark({
       owners: ['ou_alice'],
       chats: ['oc_group'],
       transport: fake.transport,
     }),
+    // 'note-early': the process dies after the note run began but before the note is appended.
+    (api) => {
+      api.on('before_agent_start', (_event, { session }) => {
+        if (
+          mode !== 'note-early' ||
+          session.id !== 'lark-oc_group-root' ||
+          !session.messages.some((message) => message.role === 'assistant')
+        )
+          return
+        held = true
+        return new Promise(() => {})
+      })
+    },
   ],
 })
 await t.vela.ready()
@@ -120,7 +133,7 @@ if (
   }
   ready()
 }
-if (mode === 'note') {
+if (mode?.startsWith('note')) {
   while (fake.sent.length < 1) await Bun.sleep(1)
   fake.deliver(
     larkEvent({
@@ -130,7 +143,7 @@ if (mode === 'note') {
       content: '{"text":"hand cobalt to root"}',
     }),
   )
-  // Topic other has finished; root's note run is in progress.
+  // Topic other has finished; root's note run is in progress (or held before its note is appended).
   const index = `${t.vela.dataDir}/channels/index.json`
   const otherDone = () =>
     JSON.parse(readFileSync(index, 'utf8')).records.some(
@@ -138,8 +151,11 @@ if (mode === 'note') {
         record.rootId === 'other' && record.state === 'done',
     )
   while (
-    !t.model.calls.some((call) =>
-      call.lastUserText.includes('cobalt is ready'),
+    !(
+      held ||
+      t.model.calls.some((call) =>
+        call.lastUserText.includes('cobalt is ready'),
+      )
     ) ||
     !otherDone()
   )
@@ -153,7 +169,7 @@ if (mode === 'note') {
           'cobalt is ready',
         ),
     )
-  while (!saved()) await Bun.sleep(5)
+  if (mode === 'note') while (!saved()) await Bun.sleep(5)
   ready()
 }
 setInterval(() => {}, 1000)

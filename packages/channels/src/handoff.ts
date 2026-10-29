@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import type {
   ExtensionAPI,
@@ -61,7 +62,7 @@ export class ChannelHandoff {
       throw new Error(
         'Hand-off chain limit reached: tell the requester in your reply instead',
       )
-    return { record, handoff: { from: label(record), depth } }
+    return { record, handoff: { id: randomUUID(), from: label(record), depth } }
   }
 
   register(api: ExtensionAPI): void {

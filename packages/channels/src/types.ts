@@ -36,8 +36,11 @@ export interface IncomingMessage {
   routine?: { id: string; scheduledAt: string }
   /** Queued external data, never a human command or a steer. */
   externalEvent?: ChannelEvent
-  /** A note from another Vela session in this group, never a human command or a steer. `depth` counts hops since the last human input. */
-  handoff?: { from: string; depth: number }
+  /**
+   * A note from another Vela session in this group, never a human command or a steer. `depth` counts hops since the
+   * last human input; `id` lets recovery tell whether the note reached the session before a crash.
+   */
+  handoff?: { id: string; from: string; depth: number }
   raw?: unknown
 }
 

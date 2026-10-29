@@ -149,7 +149,7 @@
   interface IncomingMessage
     channelId: string
     externalEvent?: ChannelEvent | undefined
-    handoff?: { from: string; depth: number; } | undefined
+    handoff?: { id: string; from: string; depth: number; } | undefined
     images?: ImageContent[] | undefined
     isNewTopic?: boolean | undefined
     passive?: boolean | undefined
@@ -169,7 +169,7 @@
     tools: string[]
   interface OutgoingMessage
     channelId: string
-    handoff?: { from: string; depth: number; } | undefined
+    handoff?: { id: string; from: string; depth: number; } | undefined
     recipientId?: string | undefined
     replyToId?: string | undefined
     routine?: { id: string; scheduledAt: string; } | undefined
