@@ -289,18 +289,18 @@ test('a note keeps a person’s pending decision and the receiving topic can sta
   await until(
     () => t.model.calls.filter(isNote).length === 2 && fake.sent.length === 2,
   )
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // Wait for B's note run to finish, not a fixed delay.
+  const recordB = () =>
+    JSON.parse(
+      readFileSync(join(t.vela.dataDir, 'channels', 'index.json'), 'utf8'),
+    ).records.find((record: { rootId?: string }) => record.rootId === 'root_b')
+  await until(() => recordB()?.state !== 'running')
   // B's silent note run posts nothing; only B's question and A's reply are visible.
   expect(fake.sent.map((item) => item.text)).toEqual([
     '<at user_id="ou_alice"></at> Which region?',
     '<at user_id="ou_alice"></at> sent',
   ])
-  const index = JSON.parse(
-    readFileSync(join(t.vela.dataDir, 'channels', 'index.json'), 'utf8'),
-  )
-  const b = index.records.find(
-    (record: { rootId?: string }) => record.rootId === 'root_b',
-  )
+  const b = recordB()
   expect(b).toMatchObject({
     state: 'waiting',
     waitingReason: 'Which region?',
