@@ -139,6 +139,26 @@ test('a running record with a saved final answer delivers that answer without re
   expect(t.model.calls).toEqual([])
 })
 
+test('a hand-off note interrupted mid-run reruns after restart and the previous answer is not reposted', async () => {
+  const cwd = await crash('note')
+  const { fake, t, start } = setup(cwd, [
+    (req) =>
+      fauxText(
+        req.lastUserText.includes('cobalt is ready')
+          ? 'cobalt confirmed'
+          : 'unexpected',
+      ),
+  ])
+  await start()
+  await until(() => fake.sent.some((m) => m.text.includes('cobalt confirmed')))
+  expect(fake.sent.map((m) => m.text)).toEqual([
+    expect.stringContaining('interrupted'),
+    expect.stringContaining('cobalt confirmed'),
+  ])
+  expect(fake.sent[1]?.messageId).toBe('root')
+  expect(t.model.calls).toHaveLength(1)
+})
+
 test('completed topics survive restart and a top-level follow-up forwards to the existing thread', async () => {
   const cwd = await root()
   const first = setup(cwd, [fauxText('cobalt done')])

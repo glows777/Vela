@@ -1,6 +1,12 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { fauxHang, fauxText } from '@glows777/vela-core/testing'
+import {
+  type FauxRequest,
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { fakeLark, larkEvent } from '../../support/lark.ts'
 
@@ -21,12 +27,27 @@ if (mode === 'answer')
     ready()
     return new Promise(() => {})
   }
+// 'note': topic root answers, topic other hands it a note, and the process dies during the note run.
+const note = (req: FauxRequest) => {
+  if (req.lastUserText.startsWith("Message from Vela's")) return fauxHang()
+  if (req.lastUserText.includes('remember cobalt'))
+    return fauxText('first answer')
+  return req.toolResults.length
+    ? fauxText('handed')
+    : fauxToolCall('channel_message_topic', {
+        root_id: 'root',
+        text: 'cobalt is ready',
+      })
+}
 const t = createTestVela({
   cwd,
-  responses: [
-    ...(mode === 'forward' ? [fauxText('topic established')] : []),
-    mode === 'answer' ? fauxText('saved answer') : fauxHang(),
-  ],
+  responses:
+    mode === 'note'
+      ? Array(5).fill(note)
+      : [
+          ...(mode === 'forward' ? [fauxText('topic established')] : []),
+          mode === 'answer' ? fauxText('saved answer') : fauxHang(),
+        ],
   extensions: [
     lark({
       owners: ['ou_alice'],
@@ -97,6 +118,42 @@ if (
     while (!readFileSync(index, 'utf8').includes('queued-passive'))
       await Bun.sleep(1)
   }
+  ready()
+}
+if (mode === 'note') {
+  while (fake.sent.length < 1) await Bun.sleep(1)
+  fake.deliver(
+    larkEvent({
+      message_id: 'other',
+      root_id: 'other',
+      thread_id: 'thread_other',
+      content: '{"text":"hand cobalt to root"}',
+    }),
+  )
+  // Topic other has finished; root's note run is in progress.
+  const index = `${t.vela.dataDir}/channels/index.json`
+  const otherDone = () =>
+    JSON.parse(readFileSync(index, 'utf8')).records.some(
+      (record: { rootId?: string; state: string }) =>
+        record.rootId === 'other' && record.state === 'done',
+    )
+  while (
+    !t.model.calls.some((call) =>
+      call.lastUserText.includes('cobalt is ready'),
+    ) ||
+    !otherDone()
+  )
+    await Bun.sleep(1)
+  // Session entries are written as they are appended; wait for the note to reach the file.
+  const saved = () =>
+    readdirSync(t.vela.dataDir, { recursive: true, encoding: 'utf8' }).some(
+      (name) =>
+        name.endsWith('lark-oc_group-root.jsonl') &&
+        readFileSync(join(t.vela.dataDir, name), 'utf8').includes(
+          'cobalt is ready',
+        ),
+    )
+  while (!saved()) await Bun.sleep(5)
   ready()
 }
 setInterval(() => {}, 1000)
