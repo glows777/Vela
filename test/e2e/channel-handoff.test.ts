@@ -159,7 +159,6 @@ test('a topic note reaches the group session, which passes it on silently', asyn
   expect(
     t.model.calls.find((call) => call.lastUserText === hopText)?.lastUserText,
   ).toBe(hopText)
-  // Nothing was posted for the group run, the note or the hop.
   await new Promise((resolve) => setTimeout(resolve, 50))
   expect(fake.sent).toHaveLength(3)
   expect(fake.forwards).toEqual([])
