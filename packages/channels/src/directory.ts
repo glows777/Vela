@@ -222,11 +222,16 @@ export class ChannelDirectory {
     msg: IncomingMessage,
   ): Promise<void> {
     const record = this.observe(key, channel, msg)
-    record.waitingReason = undefined
-    if (record.state === 'waiting') record.state = 'done'
+    // A note from another session never answers a person's pending decision.
+    if (!msg.handoff) {
+      record.waitingReason = undefined
+      if (record.state === 'waiting') record.state = 'done'
+    }
+    // A note has no service message of its own: its reply target is the topic root.
     if (
       msg.replyToId &&
       !msg.routine &&
+      !msg.handoff &&
       !record.pendingMessageIds.some(
         (input) => pendingMessageId(input) === msg.replyToId,
       )
@@ -320,9 +325,13 @@ export class ChannelDirectory {
     return this.write()
   }
 
-  /** Drops the oldest `count` notes once a session has saved them. */
-  dropNotes(key: string, count: number): Promise<void> {
-    const rest = this.pendingNotes(key).slice(count)
+  /** Drops these delivered notes once a session has saved them; newer ones stay. */
+  dropNotes(key: string, delivered: readonly string[]): Promise<void> {
+    const rest = [...this.pendingNotes(key)]
+    for (const note of delivered) {
+      const index = rest.indexOf(note)
+      if (index >= 0) rest.splice(index, 1)
+    }
     if (rest.length) this.notes.set(key, rest)
     else this.notes.delete(key)
     return this.write()

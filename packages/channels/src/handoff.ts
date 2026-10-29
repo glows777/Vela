@@ -33,7 +33,7 @@ const handoffPrompt = `Sessions in this group work like a team. The group sessio
 /** Hand-offs between a group's sessions: ordinary queued messages plus status lines that need no model call. */
 export class ChannelHandoff {
   /** Notes each session has received but not saved yet. */
-  private delivered = new Map<string, { key: string; count: number }>()
+  private delivered = new Map<string, { key: string; notes: string[] }>()
 
   constructor(
     private directory: ChannelDirectory,
@@ -81,7 +81,7 @@ export class ChannelHandoff {
       channel: true,
       executionMode: 'sequential',
       description:
-        'Send a note to another owned topic in this group, for example a result it is waiting for. Nothing is posted in the chat: the topic runs with the note after its current run and replies in its own topic. Use only when that topic depends on it. Returns without waiting for the topic.',
+        'Send a note to another owned topic in this group, for example a result it is waiting for. Nothing is posted in the chat: the topic runs with the note after its current run and replies in its own topic. Use only when that topic depends on it. Returns without waiting for the topic; a note still queued when Vela restarts is dropped.',
       inputSchema: z.object({
         root_id: z.string().trim().min(1),
         text: z.string().trim().min(1).max(4000),
@@ -123,7 +123,7 @@ export class ChannelHandoff {
       channel: true,
       executionMode: 'sequential',
       description:
-        'Send a note from this topic to the group session, for work outside this topic or when the requester must be told outside it. Nothing is posted in the chat; the group session decides whether to reply in the group, pass it to another topic or only note it. Do not use it to report completion: the group session receives that automatically. Returns without waiting.',
+        'Send a note from this topic to the group session, for work outside this topic or when the requester must be told outside it. Nothing is posted in the chat; the group session decides whether to reply in the group, pass it to another topic or only note it. Do not use it to report completion: the group session receives that automatically. Returns without waiting; a note still queued when Vela restarts is dropped.',
       inputSchema: z.object({ text: z.string().trim().min(1).max(4000) }),
       execute: async ({ text }, ctx) => {
         const { record, handoff } = this.source(ctx)
@@ -182,7 +182,7 @@ export class ChannelHandoff {
       )
     const notes = this.directory.pendingNotes(key)
     if (!notes.length) return
-    this.delivered.set(session.id, { key, count: notes.length })
+    this.delivered.set(session.id, { key, notes: [...notes] })
     await session.sendMessage(
       {
         customType: 'channel.status',
@@ -199,7 +199,7 @@ export class ChannelHandoff {
     if (!delivered) return
     this.delivered.delete(id)
     void this.directory
-      .dropNotes(delivered.key, delivered.count)
+      .dropNotes(delivered.key, delivered.notes)
       .catch((error) =>
         this.logger.error(
           `[channels] Could not clear delivered status notes: ${errorMessage(error)}`,

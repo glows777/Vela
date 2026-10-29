@@ -23,12 +23,8 @@ export const handoffToolNames = [
   'channel_message_topic',
   'channel_message_group',
 ]
-/** Topics may look around and hand off, but only the group session starts, forwards or stays silent. */
-const groupOnlyToolNames = [
-  'lark_start_topic',
-  'lark_forward_to_topic',
-  'lark_skip_reply',
-]
+/** Topics may look around and hand off, but only the group session starts or forwards topics. */
+const groupOnlyToolNames = ['lark_start_topic', 'lark_forward_to_topic']
 const channelPrompt =
   'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply, without tools. Manage scheduled wake-ups directly with lark_routines in the conversation where they should run; do not start a topic just to create, list or cancel a wake-up. For any other request (investigation, execution, tool-based work, or a longer exchange) start a topic with lark_start_topic: a request that needs work must not be answered in the group. The title is posted as the topic’s first visible message: name the task the way a person would, in one line of at most 40 characters, with no requirements, method or status. The brief is sent only to the topic session and holds the goal of the requester and the facts it needs, including the requirements. Neither holds a plan or method. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. The task field is the original title of the topic, not a summary of every later request. waitingReason describes the current required input after follow-up work; a difference from the original title alone does not indicate corrupt or misassigned data. Report the current state and waitingReason without inventing a mismatch. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the title passed to lark_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the brief.'
 const topicPrompt =
@@ -76,8 +72,8 @@ export class LarkTopics {
     }
   }
 
-  /** The group session's active run; `anchored` also needs a person's message to start or forward from. */
-  private source(ctx?: ToolContext, anchored = true) {
+  /** The group session's active run, anchored on a person's message to start or forward from. */
+  private source(ctx?: ToolContext) {
     const id = ctx?.sessionId
     const runtime = this.runtime
     const msg = id && runtime?.context(id)
@@ -85,11 +81,11 @@ export class LarkTopics {
       throw new Error(
         'Topic dispatch requires an active Lark group channel session',
       )
-    if (anchored && !msg.replyToId)
+    if (!msg.replyToId)
       throw new Error(
         'A hand-off note has no person’s message to start or forward a topic from; tell the requester in your reply instead',
       )
-    return { id, msg, runtime, messageId: msg.replyToId ?? '' }
+    return { id, msg, runtime, messageId: msg.replyToId }
   }
 
   /** Any session of an enabled group: the group session or one of its topics. */
@@ -99,13 +95,18 @@ export class LarkTopics {
     const msg = id && runtime?.context(id)
     if (!runtime || !msg || !(msg.topic || isChannel(msg)))
       throw new Error('Topics require an active Lark group session')
-    return { msg, runtime }
+    return { id, msg, runtime }
   }
 
   register(vela: ExtensionAPI): void {
     vela.on('before_agent_start', (event, { session }) => {
       const msg = this.runtime?.context(session.id)
-      if (msg?.topic) event.sections.larkTopic = topicPrompt
+      if (msg?.topic)
+        event.sections.larkTopic =
+          topicPrompt +
+          (msg.handoff
+            ? '\nThis input is a note from another Vela session, not a person’s message. Use it for this topic’s task. Reply in the topic only when the requester should see something new; otherwise call lark_skip_reply.'
+            : '')
       else if (msg && isChannel(msg))
         event.sections.larkChannel =
           channelPrompt +
@@ -140,11 +141,11 @@ export class LarkTopics {
       name: 'skip_reply',
       channel: 'lark',
       description:
-        'Remain silent for this untagged group discussion or Vela hand-off note. Call this when no useful reply is warranted, then end the run.',
+        'Remain silent for this untagged group discussion or a note from another Vela session. Call this when no useful reply is warranted, then end the run.',
       inputSchema: z.object({}),
       executionMode: 'sequential',
       execute: async (_input, ctx) => {
-        const { id, runtime } = this.source(ctx, false)
+        const { id, runtime } = this.group(ctx)
         runtime.skipReply(id)
         return 'No reply will be sent. End the run.'
       },

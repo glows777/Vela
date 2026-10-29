@@ -68,7 +68,8 @@ export class ChannelRecovery {
       if (event.type !== 'message_start' || event.message.role !== 'user')
         return
       const input = this.inputs.get(session)?.shift()
-      if (!input || (!input.replyToId && !input.routine)) return
+      if (!input || input.handoff || (!input.replyToId && !input.routine))
+        return
       const messageId = input.replyToId
       session.appendEntry(INPUT_MARKER, {
         messageId: input.routine ? undefined : messageId,

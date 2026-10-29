@@ -264,3 +264,46 @@ test('a topic reads another topic’s visible messages and lists the group’s t
     pageToken: undefined,
   })
 })
+
+test('a note keeps a person’s pending decision and the receiving topic can stay silent', async () => {
+  const { fake, t, start, topic } = setup((req) => {
+    if (isNote(req))
+      return req.toolResults.length
+        ? fauxText('')
+        : fauxToolCall('lark_skip_reply', {})
+    if (topicOf(req) === 'root_b')
+      return req.toolResults.length
+        ? fauxText('Which region?')
+        : fauxToolCall('lark_wait_for_input', { reason: 'Which region?' })
+    return req.toolResults.length
+      ? fauxText('sent')
+      : fauxToolCall('channel_message_topic', {
+          root_id: 'root_b',
+          text: 'FYI the build is green',
+        })
+  })
+  await start()
+  topic('root_b', 'deploy the release')
+  await until(() => fake.sent.length === 1)
+  topic('root_a', 'tell B the build is green')
+  await until(
+    () => t.model.calls.filter(isNote).length === 2 && fake.sent.length === 2,
+  )
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  // B's silent note run posts nothing; only B's question and A's reply are visible.
+  expect(fake.sent.map((item) => item.text)).toEqual([
+    '<at user_id="ou_alice"></at> Which region?',
+    '<at user_id="ou_alice"></at> sent',
+  ])
+  const index = JSON.parse(
+    readFileSync(join(t.vela.dataDir, 'channels', 'index.json'), 'utf8'),
+  )
+  const b = index.records.find(
+    (record: { rootId?: string }) => record.rootId === 'root_b',
+  )
+  expect(b).toMatchObject({
+    state: 'waiting',
+    waitingReason: 'Which region?',
+    pendingMessageIds: [],
+  })
+})

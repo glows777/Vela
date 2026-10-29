@@ -10,6 +10,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- Topics and the group session hand off work, like threads and the coordinator in Claude Projects ([#241](https://github.com/glows777/Vela/issues/241)). `channel_message_topic` sends a note from any group session to another owned topic, and `channel_message_group` sends one from a topic to the group session. Notes are queued like other channel input, never steer, post nothing in the chat, and a chain stops after three hops. A finished, waiting or stopped topic adds a status line to the group session's next run without a model call. A new topic starts with its title, requester, shared workspace files and the requester's original message verbatim. Topics can list topics and read another topic with `lark_read_topic`. `IncomingMessage.handoff` and `OutgoingMessage.handoff` are new. A note still queued when Vela restarts is dropped.
+
 - Channel conversations can manage durable `channel_subscriptions`; the channel-aware SDK publishes untrusted external events through the existing queue, with logical-topic routing, optional existing-chat fallback and final-event cleanup. Generic channel tools use `ToolDefinition.channel: true` without exposing them to ordinary SDK sessions.
   External event admission/announcement failures are diagnosed without replying to the preceding human message; CLI and SDK default event targets normalize surrounding whitespace.
 

@@ -225,7 +225,14 @@ export class RunFeedback {
           if (run.stopped) consumed = true
         })
     }
-    if (run && !run.trigger.passive && this.runIsLive(run) && channel) {
+    // A person's message never steers into a note's run: it would inherit the note's hop count and limits.
+    if (
+      run &&
+      !run.trigger.passive &&
+      !run.trigger.handoff &&
+      this.runIsLive(run) &&
+      channel
+    ) {
       if (msg.topic) {
         decision = (run.steering ?? Promise.resolve()).then(() =>
           apply('steer'),
@@ -570,7 +577,8 @@ export class RunFeedback {
       await this.options.directory.finish(
         id,
         outcome === 'stopped' ? 'stopped' : 'done',
-        outcome === 'done' && !!answer,
+        // A note's run leaves a person's pending decision open, even when silent.
+        outcome === 'done' && (!!answer || !!msg.handoff),
       )
       await this.options.finished(id, msg, outcome, answer)
     }
