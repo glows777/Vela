@@ -154,9 +154,11 @@ test('a topic note reaches the group session, which passes it on silently', asyn
     'Message from Vela\'s topic "find the code" (root_id root_a) (not from a person), about a request from Alice:\nTopic B needs the code ORBIT-73',
   )
   expect(group.system).toContain('This input is a note from a topic')
-  expect(t.model.calls.at(-1)?.lastUserText).toBe(
-    "Message from Vela's group session (not from a person):\nTopic A found ORBIT-73",
-  )
+  const hopText =
+    "Message from Vela's group session (not from a person):\nTopic A found ORBIT-73"
+  expect(
+    t.model.calls.find((call) => call.lastUserText === hopText)?.lastUserText,
+  ).toBe(hopText)
   // Nothing was posted for the group run, the note or the hop.
   await new Promise((resolve) => setTimeout(resolve, 50))
   expect(fake.sent).toHaveLength(3)

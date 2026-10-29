@@ -29,3 +29,11 @@ Forge reproduced [PR #235's failed external-event announcement](https://github.c
 The adapter now treats that rejection as failed preparation: diagnose and skip, without a model call or fallback reply. The mechanism is the source faux regression plus the event SDK verify-vela journey, both rejecting announcement send while leaving reply available and asserting no human-message reply. The packed Lark consumer repeats the boundary on Node and Bun. This preserves ordinary feedback errors instead of globally suppressing them.
 
 The [follow-up review](https://github.com/glows777/Vela/pull/235#issuecomment-6465110866) reached the same failure class earlier, when directory admission could not write its index. External top-level inputs must not borrow a prior human reply ID at construction, and their shared feedback-error path records diagnostics without synthesizing a message. Admission-write failure now joins announcement failure in the source, SDK journey and packed consumer checks, with a human-input control preserving its own error reply.
+
+## Do not sample a shared faux call log by position
+
+[Issue #243](https://github.com/glows777/Vela/issues/243). The silent topic-to-group-to-topic case in `test/e2e/channel-handoff.test.ts` asserted `t.model.calls.at(-1)?.lastUserText` was the hop note to topic B. Lark still showed B's answer, and the offline handoff journey passed. The assertion failed when the group session started another turn after B's hop turn.
+
+`createFauxModel` appends a call when the request starts. `lastUserText` is the last user message, so a follow-up after `channel_message_topic` and `lark_skip_reply` still carries the topic's earlier note. That follow-up can be `at(-1)` while the hop note is already in the array.
+
+AI/bot review should have caught it. The case now finds the hop with `lastUserText`. The mechanism is the channel end-to-end item in [REVIEW.md](../REVIEW.md). Do not assert `model.calls.at(-1)` across concurrent channel sessions. Run `bun test test/e2e/channel-handoff.test.ts` before merging a handoff change.

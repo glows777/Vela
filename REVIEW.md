@@ -23,6 +23,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 - Checks, fallbacks, retries or caches for situations no faux scenario can reach. Validate at boundaries (user input, channel messages, network and model responses, file contents); trust internal code and extensions.
 - Tests that don't map to an acceptance item, a fixed bug or a valid finding.
 - A PR that grows with each review round. That usually means defenses are piling up instead of the root cause being fixed.
+- A channel end-to-end test that reads `model.calls.at(-1)` while more than one channel session shares that faux log. A later follow-up on the group session keeps the earlier note as `lastUserText` and can start last. Find the call by `lastUserText`, or wait until that call exists. Handoff changes run `bun test test/e2e/channel-handoff.test.ts` before merge, including the silent group pass-on case.
 
 ## Rounds
 
