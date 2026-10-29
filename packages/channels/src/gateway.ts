@@ -12,6 +12,7 @@ import { TopicCommands } from './commands.ts'
 import { ChannelDirectory } from './directory.ts'
 import { ChannelEvents } from './events.ts'
 import { RunFeedback } from './feedback.ts'
+import { ChannelHandoff } from './handoff.ts'
 import { errorMessage } from './log.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { ChannelRoutines } from './routines.ts'
@@ -46,6 +47,7 @@ const MAX_SAVE_FAILURES = 3
 export class ChannelGateway {
   readonly routines: ChannelRoutines
   readonly events: ChannelEvents
+  readonly handoff: ChannelHandoff
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
   private readonly sessions: ChannelSessions
@@ -105,6 +107,8 @@ export class ChannelGateway {
       reply: (session, name, msg, text) =>
         this.sendReply(session, name, msg, text),
       logger: this.logger,
+      finished: (key, msg, outcome, answer) =>
+        this.handoff.finished(key, msg, outcome, answer),
     })
     this.commands = new TopicCommands({
       directory: this.directory,
@@ -117,6 +121,15 @@ export class ChannelGateway {
       closing: (key) => this.closing.get(key),
       routines: (name, chatId) => this.routines.formatList(name, chatId),
     })
+    const liveTrigger = (id: string) => {
+      const run = this.feedback.runs.get(this.directory.keyForSession(id))
+      return run?.session.id === id && this.feedback.runIsLive(run)
+        ? run.trigger
+        : undefined
+    }
+    const enqueue = (name: string, msg: IncomingMessage) => {
+      void this.handleIncoming(name, msg)
+    }
     this.events = new ChannelEvents(
       options.dataDir,
       this.directory,
@@ -124,23 +137,34 @@ export class ChannelGateway {
       (name) =>
         !this.stopped &&
         (name ? this.started.has(name) : this.started.size > 0),
-      (id) => {
-        const run = this.feedback.runs.get(this.directory.keyForSession(id))
-        return run?.session.id === id && this.feedback.runIsLive(run)
-          ? run.trigger
-          : undefined
-      },
-      (name, msg) => {
-        void this.handleIncoming(name, msg)
-      },
+      liveTrigger,
+      enqueue,
       this.logger,
       options.eventDefaultTarget,
+    )
+    this.handoff = new ChannelHandoff(
+      this.directory,
+      liveTrigger,
+      (name, chatId) => this.topics(name, chatId),
+      enqueue,
+      this.logger,
     )
   }
 
   /** Internal storage-success notification, including saves outside a channel prompt. */
   sessionSaved(id: string): void {
     this.saveFailures.delete(this.directory.keyForSession(id))
+    this.handoff.saved(id)
+  }
+
+  private topics(channel: string, chatId: string) {
+    return this.admission.list(channel, chatId, (id) =>
+      this.feedback.runs.has(id)
+        ? 'running'
+        : this.queues.has(id)
+          ? 'queued'
+          : (this.directory.get(id)?.state ?? 'done'),
+    )
   }
 
   private find(key: string): VelaSession | undefined {
@@ -182,20 +206,15 @@ export class ChannelGateway {
         if (
           !run ||
           run.session.id !== id ||
-          !run.trigger.passive ||
+          !(run.trigger.passive || run.trigger.handoff) ||
           !this.feedback.runIsLive(run)
         )
-          throw new Error('Silence requires an active passive group run')
+          throw new Error(
+            'Silence requires an active passive or hand-off group run',
+          )
         run.skipReply = true
       },
-      topics: (chatId) =>
-        this.admission.list(channel.name, chatId, (id) =>
-          this.feedback.runs.has(id)
-            ? 'running'
-            : this.queues.has(id)
-              ? 'queued'
-              : (this.directory.get(id)?.state ?? 'done'),
-        ),
+      topics: (chatId) => this.topics(channel.name, chatId),
       waitForInput: (id, reason) => {
         const key = this.directory.keyForSession(id)
         const run = this.feedback.runs.get(key)
@@ -634,6 +653,7 @@ export class ChannelGateway {
       return 'failed'
     }
 
+    await this.handoff.beforeRun(id, session, msg)
     return this.feedback.prompt(
       id,
       channelName,
@@ -655,6 +675,7 @@ export class ChannelGateway {
     if (!replyText || !channel) return false
     const reply: OutgoingMessage = {
       routine: msg.routine,
+      handoff: msg.handoff,
       topic: msg.topic,
       channelId: msg.channelId,
       recipientId: msg.senderId,

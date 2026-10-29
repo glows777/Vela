@@ -435,6 +435,7 @@ export async function runAttempt(
         call.success = !event.isError
         if (
           (recallScenario && sessionId === recallSessionId) ||
+          (config.scenario === 'G6' && sessionId.endsWith('-g6_b')) ||
           (call.name === 'bash' &&
             call.success &&
             ['C2', 'C6'].includes(config.scenario))
@@ -477,13 +478,15 @@ export async function runAttempt(
     if (fake && eventFactory) {
       await t.vela.startChannels()
       if (exitScenario) {
-        for (const [path, content] of Object.entries(files)) {
-          await mkdir(dirname(join(workspace, path)), { recursive: true })
-          await Bun.write(join(workspace, path), content)
-        }
         evidence.inputs = []
         for (const [index, text] of prompts(config.scenario).entries()) {
           phase = index
+          // G6: the code exists only once topic A starts, so B cannot find it before the hand-off.
+          if (index === (config.scenario === 'G6' ? 1 : 0))
+            for (const [path, content] of Object.entries(files)) {
+              await mkdir(dirname(join(workspace, path)), { recursive: true })
+              await Bun.write(join(workspace, path), content)
+            }
           channelStarted = false
           const topicRootId = topicRoots[index]!
           evidence.inputs.push({ topicRootId, text })

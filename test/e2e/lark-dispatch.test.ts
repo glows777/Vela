@@ -86,9 +86,20 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   fake.deliver(larkEvent({ chat_id: 'dm', chat_type: 'p2p', mentions: [] }))
   await until(() => fake.sent.length === 3)
   for (const call of t.model.calls.slice(1)) {
-    expect(call.tools.some((name) => dispatchTools.includes(name))).toBe(false)
+    expect(call.tools).not.toContain('lark_start_topic')
+    expect(call.tools).not.toContain('lark_forward_to_topic')
     expect(call.tools).toContain('read_file')
   }
+  // A topic can look around and hand off like the group session; a DM has no group to work in.
+  const handoffTools = [
+    'lark_list_topics',
+    'lark_read_topic',
+    'channel_message_topic',
+    'channel_message_group',
+  ]
+  expect(t.model.calls[1]?.tools).toEqual(expect.arrayContaining(handoffTools))
+  for (const name of handoffTools)
+    expect(t.model.calls[2]?.tools).not.toContain(name)
   expect(t.model.calls[1]?.system).toContain(
     'This topic contains a conversation about one task.',
   )
@@ -207,8 +218,10 @@ test('starting a topic returns its receipt and frees the channel while its task 
     const taskCall = t.model.calls.find(
       (call) => !call.tools.includes('lark_start_topic'),
     )!
-    expect(taskCall.lastUserText).toContain('Alice: Investigate cobalt')
-    expect(taskCall.lastUserText).not.toContain('unrelated chatter')
+    // The brief comes first; the requester's own words follow verbatim, as in a Claude Projects thread.
+    expect(taskCall.lastUserText).toBe(
+      "Alice: Investigate cobalt\n\n[Alice's original message, verbatim]\ninvestigate cobalt; unrelated chatter",
+    )
     const receipt = t.model.calls.find(
       (call) => call.toolResults.length,
     )?.toolResults

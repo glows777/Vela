@@ -2,7 +2,7 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
-import type { ChannelDirectory } from './directory.ts'
+import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
@@ -29,7 +29,7 @@ export class ChannelSessions {
     }
     if (!channel || !msg) throw new Error('Missing logical channel scope')
     const chatKind =
-      record?.chatKind ?? (msg.topic || msg.replyToId ? 'group' : 'direct')
+      record?.chatKind ?? (isGroupInput(msg) ? 'group' : 'direct')
     if (channel.canRecover?.(msg, chatKind) === false)
       throw new Error('Channel scope is no longer enabled')
     const scope = resolveChannelScope(

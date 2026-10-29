@@ -1,12 +1,19 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { fauxHang, fauxText } from '@glows777/vela-core/testing'
+import {
+  type FauxRequest,
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { fakeLark, larkEvent } from '../../support/lark.ts'
 
 const [cwd, mode] = process.argv.slice(2)
 const fake = fakeLark()
 const ready = () => console.log('CRASH_READY')
+let held = false
 if (mode === 'image')
   fake.resources.set('screenshot', [
     readFileSync(new URL('../images/wide.png', import.meta.url)),
@@ -21,18 +28,45 @@ if (mode === 'answer')
     ready()
     return new Promise(() => {})
   }
+// 'note': topic root answers, topic other hands it a note, and the process dies during the note run.
+const note = (req: FauxRequest) => {
+  if (req.lastUserText.startsWith("Message from Vela's")) return fauxHang()
+  if (req.lastUserText.includes('remember cobalt'))
+    return fauxText('first answer')
+  return req.toolResults.length
+    ? fauxText('handed')
+    : fauxToolCall('channel_message_topic', {
+        root_id: 'root',
+        text: 'cobalt is ready',
+      })
+}
 const t = createTestVela({
   cwd,
-  responses: [
-    ...(mode === 'forward' ? [fauxText('topic established')] : []),
-    mode === 'answer' ? fauxText('saved answer') : fauxHang(),
-  ],
+  responses: mode?.startsWith('note')
+    ? Array(5).fill(note)
+    : [
+        ...(mode === 'forward' ? [fauxText('topic established')] : []),
+        mode === 'answer' ? fauxText('saved answer') : fauxHang(),
+      ],
   extensions: [
     lark({
       owners: ['ou_alice'],
       chats: ['oc_group'],
       transport: fake.transport,
     }),
+    // 'note-early': the process dies after the note run began but before the note is appended.
+    (api) => {
+      api.on('before_agent_start', (_event, { session }) => {
+        if (
+          mode !== 'note-early' ||
+          session.id !== 'lark-oc_group-root' ||
+          !session.messages.some((message) => message.role === 'assistant')
+        )
+          return
+        held = true
+        return new Promise(() => {})
+      })
+    },
   ],
 })
 await t.vela.ready()
@@ -97,6 +131,45 @@ if (
     while (!readFileSync(index, 'utf8').includes('queued-passive'))
       await Bun.sleep(1)
   }
+  ready()
+}
+if (mode?.startsWith('note')) {
+  while (fake.sent.length < 1) await Bun.sleep(1)
+  fake.deliver(
+    larkEvent({
+      message_id: 'other',
+      root_id: 'other',
+      thread_id: 'thread_other',
+      content: '{"text":"hand cobalt to root"}',
+    }),
+  )
+  // Topic other has finished; root's note run is in progress (or held before its note is appended).
+  const index = `${t.vela.dataDir}/channels/index.json`
+  const otherDone = () =>
+    JSON.parse(readFileSync(index, 'utf8')).records.some(
+      (record: { rootId?: string; state: string }) =>
+        record.rootId === 'other' && record.state === 'done',
+    )
+  while (
+    !(
+      held ||
+      t.model.calls.some((call) =>
+        call.lastUserText.includes('cobalt is ready'),
+      )
+    ) ||
+    !otherDone()
+  )
+    await Bun.sleep(1)
+  // Session entries are written as they are appended; wait for the note to reach the file.
+  const saved = () =>
+    readdirSync(t.vela.dataDir, { recursive: true, encoding: 'utf8' }).some(
+      (name) =>
+        name.endsWith('lark-oc_group-root.jsonl') &&
+        readFileSync(join(t.vela.dataDir, name), 'utf8').includes(
+          'cobalt is ready',
+        ),
+    )
+  if (mode === 'note') while (!saved()) await Bun.sleep(5)
   ready()
 }
 setInterval(() => {}, 1000)

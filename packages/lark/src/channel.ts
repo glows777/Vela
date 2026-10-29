@@ -28,11 +28,12 @@ import {
   messageTime,
   readGroupContext,
   readTopicContext,
+  topicLines,
 } from './history.ts'
 import { errorMessage } from './log.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { LarkProgress } from './progress.ts'
-import { LarkTopics, topicToolNames } from './topics.ts'
+import { handoffToolNames, LarkTopics, topicToolNames } from './topics.ts'
 import {
   type LarkMessageEvent,
   type LarkSentMessage,
@@ -95,13 +96,33 @@ export class LarkChannel implements ChannelDefinition {
     },
     (chatId, messageId, createTime) =>
       this.noteHandled(chatId, messageId, createTime),
+    (chatId, threadId) => this.readTopic(chatId, threadId),
   )
+
+  /** Another topic's visible messages as named text lines, for lark_read_topic. */
+  private async readTopic(chatId: string, threadId: string): Promise<string> {
+    if (!this.transport) throw new Error('Lark is not connected')
+    const history = []
+    let pageToken: string | undefined
+    do {
+      const page = await this.transport.listTopicMessages(threadId, pageToken)
+      history.push(...page.items)
+      pageToken = page.pageToken
+    } while (pageToken)
+    const { lines } = await topicLines(history, {
+      chatId,
+      appId: this.config.appId,
+      senderName: (id) => this.senderName(id),
+      downloadImages: async () => [],
+    })
+    return lines.join('\n')
+  }
   connect: NonNullable<ChannelDefinition['connect']> = (runtime) => {
     this.topics.runtime = runtime
   }
   sessionOptions: NonNullable<ChannelDefinition['sessionOptions']> = (msg) => {
     const options = this.topics.sessionOptions(msg)
-    if (!msg.topic && !msg.replyToId) return options
+    if (!msg.topic && !msg.replyToId && !msg.handoff) return options
     const chat = this.chats.get(msg.channelId)
     if (!chat) throw new Error('Lark group is not enabled')
     const cwd = this.workspace(chat.id, !msg.requireExistingSession)
@@ -115,6 +136,7 @@ export class LarkChannel implements ChannelDefinition {
               ...new Set([
                 ...chat.tools,
                 ...topicToolNames,
+                ...handoffToolNames,
                 ...(msg.topic ? ['lark_wait_for_input'] : []),
               ]),
             ],
@@ -380,7 +402,8 @@ export class LarkChannel implements ChannelDefinition {
       return
     }
     const text =
-      message.recipientId && (message.topic || message.routine)
+      message.recipientId &&
+      (message.topic || message.routine || message.handoff)
         ? `<at user_id="${message.recipientId}"></at> ${message.text}`
         : message.text
     // A failed send throws: the gateway reports it as channel_error instead of a channel_reply that never arrived
