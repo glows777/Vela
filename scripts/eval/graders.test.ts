@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { savedGraderAnswers } from './fixtures/saved-grader-answers.ts'
 import { savedTestRuns } from './fixtures/saved-test-runs.ts'
 import * as graders from './graders.ts'
-import { type Evidence, grade, type ScenarioId } from './graders.ts'
+import { type Call, type Evidence, grade, type ScenarioId } from './graders.ts'
 import { type Attempt, emptyUsage, table } from './report.ts'
 import { compactionFixture, fixtures, prompts } from './scenarios.ts'
 
@@ -537,6 +537,7 @@ test('G6: a B answer with the fixture fact and only the two initial tasks passes
     { name: 'B final fact', pass: true },
     { name: 'no human relay', pass: true },
     { name: 'hand-off tool', pass: true },
+    { name: 'B no self-lookup', pass: true },
   ])
 })
 test.each([
@@ -554,6 +555,43 @@ test.each([
   expect(grade('G6', e).find((c) => c.name === 'hand-off tool')?.pass).toBe(
     false,
   )
+})
+test.each([
+  ['a note without the fact', { text: 'Please finish.' }],
+  ['a note to A instead of B', { root_id: 'g6_a' }],
+])('G6: the hand-off must carry the fact to B (%s)', (_, args) => {
+  const e = exitEvidence()
+  e.calls = [{ ...handoff(), args: { ...handoff().args, ...args } }]
+  expect(grade('G6', e).find((c) => c.name === 'hand-off tool')?.pass).toBe(
+    false,
+  )
+})
+const bRead = (call: Partial<Call> = {}): Call => ({
+  ...handoff(),
+  name: 'read_file',
+  args: { path: 'task/handoff.txt' },
+  phase: 0,
+  sessionId: 'lark-oc_group-g6_b',
+  output: 'The release verification code is ORBIT-73.',
+  ...call,
+})
+test.each([
+  ['B reads the fixture', bRead()],
+  [
+    'a B tool output carries the fact',
+    bRead({ name: 'bash', args: { command: 'grep -r ORBIT .' } }),
+  ],
+])('G6: B finding the fact before the hand-off fails (%s)', (_, call) => {
+  const e = exitEvidence()
+  e.calls = [call, handoff()]
+  expect(grade('G6', e).find((c) => c.name === 'B no self-lookup')?.pass).toBe(
+    false,
+  )
+})
+test('G6: B may check the fixture after the hand-off, and a failed read is not a lookup', () => {
+  const e = exitEvidence()
+  e.calls = [bRead({ success: false, output: 'ENOENT' }), handoff(), bRead()]
+  expect(grade('G6', e).every((c) => c.pass)).toBe(true)
 })
 test.each(['g6_a', undefined])(
   'G6: fact delivered outside B (%s) does not pass',
@@ -817,6 +855,7 @@ test('G6 worker starts B first, then A reads the real group fixture; no unsuppor
     { name: 'B final fact', pass: false },
     { name: 'no human relay', pass: true },
     { name: 'hand-off tool', pass: false },
+    { name: 'B no self-lookup', pass: true },
   ])
   expect(calls).toHaveLength(3)
   expect(calls[0]!.lastUserText).toContain('topic A')
@@ -860,9 +899,50 @@ test('G6 worker passes when topic A hands the fact to B with channel_message_top
     { name: 'B final fact', pass: true },
     { name: 'no human relay', pass: true },
     { name: 'hand-off tool', pass: true },
+    { name: 'B no self-lookup', pass: true },
   ])
   expect(result.status).toBe('pass')
   expect(calls).toHaveLength(5)
+})
+test('G6 worker fails when B reads the code itself after a note without it', async () => {
+  const inB = (req: { system: string }) => req.system.includes('(root_id g6_b)')
+  const respond = (req: {
+    system: string
+    lastUserText: string
+    toolResults: { toolName: string; output: string }[]
+  }) => {
+    const last = req.toolResults.at(-1)
+    if (inB(req)) {
+      if (!last) return fauxToolCall('read_file', { path: 'task/handoff.txt' })
+      return fauxText(
+        last.output.includes('ORBIT-73')
+          ? 'Release confirmed ORBIT-73, which I read myself.'
+          : 'Waiting for topic A.',
+      )
+    }
+    return last
+      ? fauxText('Told B.')
+      : fauxToolCall('channel_message_topic', {
+          root_id: 'g6_b',
+          text: 'Please finish.',
+        })
+  }
+  const { result } = await exitAttempt('G6', Array(6).fill(respond))
+  // The code does not exist yet when B first looks; B reads it only after a note that does not carry it.
+  expect(
+    result.evidence!.calls.map((call) => [call.name, call.success]),
+  ).toEqual([
+    ['read_file', false],
+    ['channel_message_topic', true],
+    ['read_file', true],
+  ])
+  expect(result.checks).toEqual([
+    { name: 'B final fact', pass: true },
+    { name: 'no human relay', pass: true },
+    { name: 'hand-off tool', pass: false },
+    { name: 'B no self-lookup', pass: false },
+  ])
+  expect(result.status).toBe('fail')
 })
 test('G7 worker snapshots real group memory after topic 1 and recalls in an isolated fresh topic', async () => {
   const { result, calls, pending } = await exitAttempt('G7', [

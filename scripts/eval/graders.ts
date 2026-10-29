@@ -442,24 +442,46 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       break
     case 'G6': {
+      const fact = (text: string) => /(?<![\w-])ORBIT-73(?![\w-])/i.test(text)
+      const inB = (call: Call) => !!call.sessionId?.endsWith('-g6_b')
       const final =
         e.deliveries
           .filter(
             (item) => item.scope === 'topic' && item.topicRootId === 'g6_b',
           )
           .at(-1)?.text ?? ''
-      check('B final fact', /(?<![\w-])ORBIT-73(?![\w-])/i.test(final))
+      check('B final fact', fact(final))
       check(
         'no human relay',
         e.inputs?.length === 2 &&
           e.inputs[0]?.topicRootId === 'g6_b' &&
           e.inputs[1]?.topicRootId === 'g6_a',
       )
-      // #241: the fact travels through a hand-off tool, not a polling routine.
+      // #241: another session sends B the fact itself through a hand-off tool, not a polling routine.
+      const handedOff = e.calls.findIndex(
+        (call) =>
+          call.name === 'channel_message_topic' &&
+          call.success &&
+          !inB(call) &&
+          call.args.root_id === 'g6_b' &&
+          fact(String(call.args.text ?? '')),
+      )
       check(
         'hand-off tool',
-        calls('channel_message_topic').length > 0 &&
-          calls('lark_routines').length === 0,
+        handedOff >= 0 && calls('lark_routines').length === 0,
+      )
+      // B must not find the fact itself before the hand-off: no fixture read, no tool output carrying it.
+      check(
+        'B no self-lookup',
+        !e.calls
+          .slice(0, handedOff < 0 ? undefined : handedOff)
+          .some(
+            (call) =>
+              inB(call) &&
+              call.success &&
+              (/handoff/i.test(JSON.stringify(call.args)) ||
+                fact(JSON.stringify(call.output ?? ''))),
+          ),
       )
       break
     }
