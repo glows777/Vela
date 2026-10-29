@@ -27,6 +27,7 @@ const recordSchema = z
     state: z.enum(['running', 'waiting', 'done', 'stopped']),
     waitingReason: z.string().optional(),
     passive: z.boolean().optional(),
+    handoff: z.object({ from: z.string(), depth: z.number() }).optional(),
     routine: z
       .object({
         id: z.string(),
@@ -51,8 +52,18 @@ export const channelIndexSchema = z.object({
   version: z.literal(1),
   createdAt: z.string(),
   records: z.array(recordSchema),
+  /** Status lines waiting for a group session's next run, by group key. */
+  notes: z.record(z.string(), z.array(z.string())).optional(),
 })
 export type ChannelRecord = z.infer<typeof recordSchema>
+
+/** Hand-off notes exist only in groups and address the group session without a service message. */
+export function isGroupInput(msg: IncomingMessage): boolean {
+  return !!(msg.topic || msg.replyToId || msg.handoff)
+}
+
+const MAX_NOTES = 20
+const MAX_NOTE_CHARS = 300
 
 /** Passive metadata travels with the existing pending ID, never in a second ID registry. */
 export function pendingMessageId(
@@ -64,6 +75,7 @@ export function pendingMessageId(
 /** One directory for recovery and topic discovery. No input text is copied here except the task label. */
 export class ChannelDirectory {
   private records = new Map<string, ChannelRecord>()
+  private notes = new Map<string, string[]>()
   private loaded?: Promise<void>
   private writing: Promise<void> = Promise.resolve()
   private readonly path?: string
@@ -119,6 +131,7 @@ export class ChannelDirectory {
       }
       this.createdAt = data.createdAt
       this.records = new Map(data.records.map((record) => [record.key, record]))
+      this.notes = new Map(Object.entries(data.notes ?? {}))
     } catch (error) {
       throw new Error(
         `Invalid channel directory ${this.path}: ${String(error)}`,
@@ -184,7 +197,7 @@ export class ChannelDirectory {
         key,
         channel,
         chatId: msg.channelId,
-        chatKind: msg.topic || msg.replyToId ? 'group' : 'direct',
+        chatKind: isGroupInput(msg) ? 'group' : 'direct',
         rootId: msg.topic?.rootId,
         threadId: msg.topic?.threadId,
         requester: { id: msg.senderId, name: msg.senderName },
@@ -229,6 +242,7 @@ export class ChannelDirectory {
     if (!record) return
     record.state = 'running'
     record.passive = msg.passive
+    record.handoff = msg.handoff
     record.routine = msg.routine
       ? { ...msg.routine, creator: { id: msg.senderId, name: msg.senderName } }
       : undefined
@@ -294,15 +308,39 @@ export class ChannelDirectory {
     )
   }
 
+  /** Status lines for a group session's next run, oldest first. */
+  pendingNotes(key: string): readonly string[] {
+    return this.notes.get(key) ?? []
+  }
+
+  addNote(key: string, line: string): Promise<void> {
+    const note =
+      line.length > MAX_NOTE_CHARS ? `${line.slice(0, MAX_NOTE_CHARS)}…` : line
+    this.notes.set(key, [...this.pendingNotes(key), note].slice(-MAX_NOTES))
+    return this.write()
+  }
+
+  /** Drops the oldest `count` notes once a session has saved them. */
+  dropNotes(key: string, count: number): Promise<void> {
+    const rest = this.pendingNotes(key).slice(count)
+    if (rest.length) this.notes.set(key, rest)
+    else this.notes.delete(key)
+    return this.write()
+  }
+
   flush(): Promise<void> {
     return this.writing
   }
 
   private save(record: ChannelRecord, replace = false): Promise<void> {
     record.updatedAt = new Date().toISOString()
+    return this.write(replace ? record : undefined)
+  }
+
+  private write(replacement?: ChannelRecord): Promise<void> {
     const path = this.path
     if (!path) {
-      if (replace) this.records.set(record.key, record)
+      if (replacement) this.records.set(replacement.key, replacement)
       return Promise.resolve()
     }
     const write = this.writing
@@ -313,10 +351,11 @@ export class ChannelDirectory {
           version: 1,
           createdAt: this.createdAt,
           records: [...this.records.values()].map((current) =>
-            replace && current.key === record.key ? record : current,
+            current.key === replacement?.key ? replacement : current,
           ),
+          ...(this.notes.size ? { notes: Object.fromEntries(this.notes) } : {}),
         })
-        if (replace) this.records.set(record.key, record)
+        if (replacement) this.records.set(replacement.key, replacement)
       })
     this.writing = write
     return write

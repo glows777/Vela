@@ -26,6 +26,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
     replyToId: record.replyTarget,
     text: '',
     passive: record.passive,
+    handoff: record.handoff,
     routine: record.routine,
     ...(record.rootId && record.threadId
       ? { topic: { rootId: record.rootId, threadId: record.threadId } }

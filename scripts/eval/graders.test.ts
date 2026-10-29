@@ -29,6 +29,14 @@ const memoryRead = () => ({
   output:
     '---\nname: staging-server\n---\nThe staging server is called kestrel.',
 })
+const handoff = () => ({
+  name: 'channel_message_topic',
+  args: { root_id: 'g6_b', text: 'ORBIT-73' },
+  phase: 1,
+  sessionId: 'lark-oc_group-g6_a',
+  success: true,
+  output: '{"queued":true}',
+})
 const report =
   'Completed the release checklist and archived the deployment evidence for the team.'
 const requirements = [
@@ -119,6 +127,7 @@ const good = {
     deliveries: [{ scope: 'topic', text: 'You’re welcome.' }],
   }),
   G6: evidence({
+    calls: [handoff()],
     inputs: [
       { topicRootId: 'g6_b', text: 'Wait for A.' },
       { topicRootId: 'g6_a', text: 'Read the fixture.' },
@@ -508,6 +517,7 @@ test('C5: ballast is admitted in staged user messages, not paginated notes', () 
 // Issue #219: these cases were added and run before the exit graders/harness.
 const exitEvidence = () =>
   evidence({
+    calls: [handoff()],
     inputs: [
       {
         topicRootId: 'g6_b',
@@ -526,7 +536,24 @@ test('G6: a B answer with the fixture fact and only the two initial tasks passes
   expect(grade('G6', exitEvidence())).toEqual([
     { name: 'B final fact', pass: true },
     { name: 'no human relay', pass: true },
+    { name: 'hand-off tool', pass: true },
   ])
+})
+test.each([
+  ['no hand-off call', []],
+  [
+    'a polling routine',
+    [
+      { ...handoff(), name: 'lark_routines', args: { action: 'create' } },
+      handoff(),
+    ],
+  ],
+])('G6: the fact must travel through a hand-off tool (%s)', (_, calls) => {
+  const e = exitEvidence()
+  e.calls = calls
+  expect(grade('G6', e).find((c) => c.name === 'hand-off tool')?.pass).toBe(
+    false,
+  )
 })
 test.each(['g6_a', undefined])(
   'G6: fact delivered outside B (%s) does not pass',
@@ -789,6 +816,7 @@ test('G6 worker starts B first, then A reads the real group fixture; no unsuppor
   expect(result.checks).toEqual([
     { name: 'B final fact', pass: false },
     { name: 'no human relay', pass: true },
+    { name: 'hand-off tool', pass: false },
   ])
   expect(calls).toHaveLength(3)
   expect(calls[0]!.lastUserText).toContain('topic A')
@@ -804,6 +832,37 @@ test('G6 worker starts B first, then A reads the real group fixture; no unsuppor
   expect(result.sessionFiles.some((file) => file.includes('g6_b'))).toBe(true)
   expect(result.sessionFiles.some((file) => file.includes('g6_a'))).toBe(true)
   expect(pending).toBe(0)
+})
+test('G6 worker passes when topic A hands the fact to B with channel_message_topic', async () => {
+  const inB = (req: { system: string }) => req.system.includes('(root_id g6_b)')
+  const respond = (req: {
+    system: string
+    lastUserText: string
+    toolResults: { toolName: string }[]
+  }) => {
+    if (inB(req))
+      return fauxText(
+        req.lastUserText.includes('ORBIT-73')
+          ? 'Release confirmed: ORBIT-73.'
+          : 'Waiting for topic A.',
+      )
+    const last = req.toolResults.at(-1)?.toolName
+    if (!last) return fauxToolCall('read_file', { path: 'task/handoff.txt' })
+    if (last === 'read_file')
+      return fauxToolCall('channel_message_topic', {
+        root_id: 'g6_b',
+        text: 'The release verification code is ORBIT-73.',
+      })
+    return fauxText('Handed the code to topic B.')
+  }
+  const { result, calls } = await exitAttempt('G6', Array(5).fill(respond))
+  expect(result.checks).toEqual([
+    { name: 'B final fact', pass: true },
+    { name: 'no human relay', pass: true },
+    { name: 'hand-off tool', pass: true },
+  ])
+  expect(result.status).toBe('pass')
+  expect(calls).toHaveLength(5)
 })
 test('G7 worker snapshots real group memory after topic 1 and recalls in an isolated fresh topic', async () => {
   const { result, calls, pending } = await exitAttempt('G7', [

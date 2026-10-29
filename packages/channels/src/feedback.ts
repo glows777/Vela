@@ -154,6 +154,13 @@ interface FeedbackOptions {
     text: string,
   ) => Promise<boolean>
   logger: VelaLogger
+  /** A run ended with this outcome and delivered answer. */
+  finished: (
+    key: string,
+    message: IncomingMessage,
+    outcome: ChannelOutcome,
+    answer: string,
+  ) => Promise<void>
 }
 
 /** Coordinates admitted inputs and controls without owning the gateway's queues. */
@@ -170,7 +177,7 @@ export class RunFeedback {
     msg: IncomingMessage,
     admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
-    if (msg.passive || msg.routine || msg.externalEvent)
+    if (msg.passive || msg.routine || msg.externalEvent || msg.handoff)
       return async () => false
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
@@ -364,7 +371,7 @@ export class RunFeedback {
           channel,
           msg,
           (error) => this.feedbackError(channel.name, msg, error),
-          acknowledge && !msg.externalEvent,
+          acknowledge && !msg.externalEvent && !msg.handoff,
         ),
       ]
       this.acknowledgements.set(msg, inputs)
@@ -565,6 +572,7 @@ export class RunFeedback {
         outcome === 'stopped' ? 'stopped' : 'done',
         outcome === 'done' && !!answer,
       )
+      await this.options.finished(id, msg, outcome, answer)
     }
     return outcome
   }

@@ -455,6 +455,12 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
           e.inputs[0]?.topicRootId === 'g6_b' &&
           e.inputs[1]?.topicRootId === 'g6_a',
       )
+      // #241: the fact travels through a hand-off tool, not a polling routine.
+      check(
+        'hand-off tool',
+        calls('channel_message_topic').length > 0 &&
+          calls('lark_routines').length === 0,
+      )
       break
     }
     case 'G7':

@@ -113,7 +113,11 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
     },
     {
       name: 'channel',
-      tools: ['channel_subscriptions'],
+      tools: [
+        'channel_subscriptions',
+        'channel_message_topic',
+        'channel_message_group',
+      ],
       providers: [],
       commands: [],
       channels: [],
