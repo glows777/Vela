@@ -36,6 +36,11 @@ export interface IncomingMessage {
   routine?: { id: string; scheduledAt: string }
   /** Queued external data, never a human command or a steer. */
   externalEvent?: ChannelEvent
+  /**
+   * A note from another Vela session in this group, never a human command or a steer. `depth` counts hops since the
+   * last human input; `id` lets recovery tell whether the note reached the session before a crash.
+   */
+  handoff?: { id: string; from: string; depth: number }
   raw?: unknown
 }
 
@@ -68,6 +73,8 @@ export interface ChannelRoutineInfo extends ChannelRoutine {
 
 export interface OutgoingMessage {
   routine?: IncomingMessage['routine']
+  /** Set on the reply to a hand-off note; a top-level reply then mentions its recipient. */
+  handoff?: IncomingMessage['handoff']
   topic?: IncomingMessage['topic']
   channelId: string
   /** Optional person to mention; a reply target alone addresses a service message. */

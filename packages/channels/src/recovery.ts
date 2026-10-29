@@ -26,6 +26,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
     replyToId: record.replyTarget,
     text: '',
     passive: record.passive,
+    handoff: record.handoff,
     routine: record.routine,
     ...(record.rootId && record.threadId
       ? { topic: { rootId: record.rootId, threadId: record.threadId } }
@@ -46,14 +47,18 @@ export class ChannelRecovery {
     ) => Promise<void> = async () => {},
   ) {}
 
-  hasInput(session: VelaSession, id: string): boolean {
+  hasInput(
+    session: VelaSession,
+    id: string,
+    field: 'messageId' | 'handoffId' = 'messageId',
+  ): boolean {
     return session
       .getEntries()
       .some(
         (entry) =>
           entry.type === 'custom' &&
           entry.customType === INPUT_MARKER &&
-          (entry.data as { messageId?: string })?.messageId === id,
+          (entry.data as Record<string, unknown> | undefined)?.[field] === id,
       )
   }
 
@@ -67,10 +72,14 @@ export class ChannelRecovery {
       if (event.type !== 'message_start' || event.message.role !== 'user')
         return
       const input = this.inputs.get(session)?.shift()
-      if (!input || (!input.replyToId && !input.routine)) return
-      const messageId = input.replyToId
+      if (!input || (!input.replyToId && !input.routine && !input.handoff))
+        return
+      // A note's reply target is a topic root, not a message of its own.
+      const messageId =
+        input.routine || input.handoff ? undefined : input.replyToId
       session.appendEntry(INPUT_MARKER, {
-        messageId: input.routine ? undefined : messageId,
+        messageId,
+        handoffId: input.handoff?.id,
         passive: input.passive,
         routine: input.routine,
         timestamp: Date.now(),
@@ -80,7 +89,9 @@ export class ChannelRecovery {
         .then(() =>
           input.routine
             ? this.routineSaved(input)
-            : this.directory.forget(key, [messageId!]),
+            : messageId
+              ? this.directory.forget(key, [messageId])
+              : undefined,
         )
       // Keep the failure for the run's awaited drain; do not create an unhandled rejection.
       void save.catch(() => {})
@@ -156,6 +167,18 @@ export class ChannelRecovery {
           text: RESEND_NOTICE,
         })
       await this.directory.forget(record.key, [id])
+    }
+    if (
+      record.state === 'running' &&
+      record.handoff &&
+      !this.hasInput(session, record.handoff.id, 'handoffId')
+    ) {
+      // The note never reached the session: drop it like a queued note, and do not resend the previous answer.
+      this.logger.info(
+        `[${record.channel}] Dropped a hand-off note interrupted before it was saved`,
+      )
+      await this.directory.finish(record.key, 'done', true)
+      return
     }
     if (missingTrigger || record.passive) {
       await this.directory.finish(record.key, 'done')

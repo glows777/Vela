@@ -48,8 +48,13 @@ test('Lark mentions in two topics run concurrently with separate transcripts', a
     await until(() => t.model.calls.length === 1)
     fake.deliver(second)
     await until(() => t.model.calls.length === 2)
-    expect(JSON.stringify(t.model.calls[0]!.prompt)).not.toContain('task beta')
-    expect(JSON.stringify(t.model.calls[1]!.prompt)).not.toContain('task alpha')
+    const transcript = (index: number) =>
+      t.model.calls[index]!.prompt.filter(
+        (message) => message.role !== 'system',
+      )
+    // The topic context lists other topics; transcripts stay separate.
+    expect(JSON.stringify(transcript(0))).not.toContain('task beta')
+    expect(JSON.stringify(transcript(1))).not.toContain('task alpha')
     const sessions = t.vela
       .sessions()
       .filter((session) => session.channel === 'lark')
@@ -464,8 +469,11 @@ test('topic Stop affects only its run, expires, and preserves context for the ne
         (message) => message.text === '<at user_id="ou_alice"></at> continued',
       ),
     )
-    expect(JSON.stringify(t.model.calls[2]?.prompt)).toContain('task alpha')
-    expect(JSON.stringify(t.model.calls[2]?.prompt)).not.toContain('task beta')
+    const transcript = t.model.calls[2]?.prompt.filter(
+      (message) => message.role !== 'system',
+    )
+    expect(JSON.stringify(transcript)).toContain('task alpha')
+    expect(JSON.stringify(transcript)).not.toContain('task beta')
   } finally {
     await t.internals.gateway.stopAll()
   }

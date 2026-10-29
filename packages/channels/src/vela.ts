@@ -125,6 +125,7 @@ export function createChannelVela(
   )
   extensions.push(function channel(api) {
     runtime(api).events.register(api)
+    runtime(api).handoff.register(api)
   })
   core = createCoreVela({
     ...options,

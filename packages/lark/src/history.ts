@@ -119,17 +119,34 @@ export async function readTopicContext(
   history: LarkHistoryMessage[],
   options: GroupContextOptions,
 ): Promise<{ text: string; images: ImageContent[] }> {
+  const { lines, images } = await topicLines(
+    history,
+    options,
+    (item) =>
+      item.message_id === options.message.message_id ||
+      (!!options.message.create_time &&
+        Number(item.create_time) > Number(options.message.create_time)),
+  )
+  return {
+    text: `[Topic history]\n${lines.join('\n')}\n\n[Question]\n${options.question.name}: ${options.question.text}`,
+    images,
+  }
+}
+
+/** Named text lines of a topic, in order; own-app messages are named Vela. */
+export async function topicLines(
+  history: LarkHistoryMessage[],
+  options: Pick<
+    GroupContextOptions,
+    'chatId' | 'appId' | 'senderName' | 'downloadImages'
+  >,
+  skip: (item: LarkHistoryMessage) => boolean = () => false,
+): Promise<{ lines: string[]; images: ImageContent[] }> {
   const lines: string[] = []
   const images: ImageContent[] = []
   const seen = new Set<string>()
   for (const item of history) {
-    if (
-      item.deleted ||
-      item.message_id === options.message.message_id ||
-      (options.message.create_time &&
-        Number(item.create_time) > Number(options.message.create_time))
-    )
-      continue
+    if (item.deleted || skip(item)) continue
     if (item.message_id && seen.has(item.message_id)) continue
     if (item.message_id) seen.add(item.message_id)
     const message = {
@@ -148,8 +165,5 @@ export async function readTopicContext(
     lines.push(`${name}: ${text}`)
     images.push(...(await options.downloadImages(message, 4 - images.length)))
   }
-  return {
-    text: `[Topic history]\n${lines.join('\n')}\n\n[Question]\n${options.question.name}: ${options.question.text}`,
-    images,
-  }
+  return { lines, images }
 }

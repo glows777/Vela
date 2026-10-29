@@ -154,6 +154,13 @@ interface FeedbackOptions {
     text: string,
   ) => Promise<boolean>
   logger: VelaLogger
+  /** A run ended with this outcome and delivered answer. */
+  finished: (
+    key: string,
+    message: IncomingMessage,
+    outcome: ChannelOutcome,
+    answer: string,
+  ) => Promise<void>
 }
 
 /** Coordinates admitted inputs and controls without owning the gateway's queues. */
@@ -170,7 +177,7 @@ export class RunFeedback {
     msg: IncomingMessage,
     admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
-    if (msg.passive || msg.routine || msg.externalEvent)
+    if (msg.passive || msg.routine || msg.externalEvent || msg.handoff)
       return async () => false
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
@@ -218,7 +225,14 @@ export class RunFeedback {
           if (run.stopped) consumed = true
         })
     }
-    if (run && !run.trigger.passive && this.runIsLive(run) && channel) {
+    // A person's message never steers into a note's run: it would inherit the note's hop count and limits.
+    if (
+      run &&
+      !run.trigger.passive &&
+      !run.trigger.handoff &&
+      this.runIsLive(run) &&
+      channel
+    ) {
       if (msg.topic) {
         decision = (run.steering ?? Promise.resolve()).then(() =>
           apply('steer'),
@@ -364,7 +378,7 @@ export class RunFeedback {
           channel,
           msg,
           (error) => this.feedbackError(channel.name, msg, error),
-          acknowledge && !msg.externalEvent,
+          acknowledge && !msg.externalEvent && !msg.handoff,
         ),
       ]
       this.acknowledgements.set(msg, inputs)
@@ -563,8 +577,10 @@ export class RunFeedback {
       await this.options.directory.finish(
         id,
         outcome === 'stopped' ? 'stopped' : 'done',
-        outcome === 'done' && !!answer,
+        // A note's run leaves a person's pending decision open, even when silent.
+        outcome === 'done' && (!!answer || !!msg.handoff),
       )
+      await this.options.finished(id, msg, outcome, answer)
     }
     return outcome
   }
