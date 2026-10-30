@@ -45,6 +45,18 @@ describe('channel guide', () => {
     ).toEqual([])
   })
 
+  test('ignores a registerTool that is only a comment or a string', () => {
+    const text = `// api.registerTool({ name: 'gone' })
+const note = 'api.registerTool({ name: "also_gone" })'
+api.registerTool({ name: 'start_topic' })
+`
+    expect(
+      channelToolsInSource('packages/lark/src/topics.ts', text, 'lark').map(
+        (ref) => ref.name,
+      ),
+    ).toEqual(['lark_start_topic'])
+  })
+
   test('rejects a registerTool call whose name the check cannot see', () => {
     expect(() =>
       channelToolsInSource(
