@@ -8,6 +8,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 - An error swallowed or replaced by a silent "safe" default. Vela fails loudly: errors say what went wrong and how to fix it.
 - `packages/*/src/` using `Bun.*` globals or `bun:` modules (the packages must run on Node ≥ 22.18), or a relative import without `.ts`.
 - A public API change without an updated `api/public-api.txt`, or a user-facing change without a CHANGELOG line.
+- A channel tool or behavior a person or model can see, without `docs/channels.md` updated in the same change as the CHANGELOG entry. `bun run quality` fails when a `registerTool` name under `packages/channels` or `packages/lark` is missing from that guide and from the allowlist.
 - Behavior that departs from pi without the PR saying why.
 - Security: channel access outside the enabled-chat list, path or command injection, secrets in logs. These are never optional.
 

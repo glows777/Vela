@@ -40,4 +40,4 @@ AI/bot review should have caught it. The case now finds the hop with `lastUserTe
 
 ## A channel change updates the channels guide
 
-[Issue #244](https://github.com/glows777/Vela/issues/244). PR #242 shipped the hand-off tools, status lines and topic start context but updated only `CHANGELOG.md` and the verify-vela journeys, so `docs/channels.md` kept the pre-handoff dispatch story until a separate issue. A channel tool or behavior a person or model can see updates `docs/channels.md` in the same PR as the changelog entry.
+[Issue #244](https://github.com/glows777/Vela/issues/244). PR #242 shipped the hand-off tools, status lines and topic start context but updated only `CHANGELOG.md` and the verify-vela journeys, so `docs/channels.md` kept the pre-handoff dispatch story until a separate issue. A channel tool or behavior a person or model can see updates `docs/channels.md` in the same PR as the changelog entry. The mechanism is the channels-guide item in [REVIEW.md](../REVIEW.md) and the registered-name check in `bun run quality`. Behavior that does not add a tool name still needs the review item. The check only sees new `registerTool` names.
