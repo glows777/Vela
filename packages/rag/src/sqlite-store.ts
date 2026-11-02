@@ -28,6 +28,18 @@ interface ChunkRow {
   embedding: string
 }
 
+function storedChunk(row: ChunkRow): StoredChunk {
+  return {
+    id: row.id,
+    text: row.text,
+    source: row.source,
+    index: row.chunk_index,
+    tokenEstimate: Math.ceil(row.text.length / 4),
+    embedding: JSON.parse(row.embedding),
+    addedAt: 0,
+  }
+}
+
 /** Embedder id used when the embedding function has none */
 const UNNAMED_EMBEDDER = 'custom'
 
@@ -215,15 +227,7 @@ export class SqliteVectorStore {
       .all(buf, topK) as (ChunkRow & { distance: number })[]
 
     return rows.map((r) => ({
-      chunk: {
-        id: r.id,
-        text: r.text,
-        source: r.source,
-        index: r.chunk_index,
-        tokenEstimate: Math.ceil(r.text.length / 4),
-        embedding: JSON.parse(r.embedding),
-        addedAt: 0,
-      },
+      chunk: storedChunk(r),
       score: 1 - r.distance, // distance → similarity
     }))
   }
@@ -248,15 +252,7 @@ export class SqliteVectorStore {
       .all(ftsQuery, topK) as (ChunkRow & { rank: number })[]
 
     return rows.map((r) => ({
-      chunk: {
-        id: r.id,
-        text: r.text,
-        source: r.source,
-        index: r.chunk_index,
-        tokenEstimate: Math.ceil(r.text.length / 4),
-        embedding: JSON.parse(r.embedding),
-        addedAt: 0,
-      },
+      chunk: storedChunk(r),
       score: r.rank < 0 ? -r.rank / (1 - r.rank) : 1 / (1 + r.rank),
     }))
   }

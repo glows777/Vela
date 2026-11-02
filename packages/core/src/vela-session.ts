@@ -1435,8 +1435,9 @@ export class VelaSession {
     })
   }
 
-  /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
-  private async compactForOverflow(signal?: AbortSignal): Promise<void> {
+  private async compactionRequest(
+    signal?: AbortSignal,
+  ): Promise<RequestSnapshot> {
     const request = await createRequestSnapshot(
       this.requestModel(),
       this.buildSystem(),
@@ -1447,6 +1448,12 @@ export class VelaSession {
     if (!canSummarize(request.messages))
       throw new Error('Nothing to compact (session too small)')
     request.maxOutputTokens = this.modelInfo.maxTokens
+    return request
+  }
+
+  /** The provider rejected a request as too long: summarize like /compact (like pi's overflow recovery). */
+  private async compactForOverflow(signal?: AbortSignal): Promise<void> {
+    const request = await this.compactionRequest(signal)
     await this.contextManager.compact(request, undefined, 'overflow')
   }
 
@@ -1458,17 +1465,7 @@ export class VelaSession {
   async compact(focus?: string): Promise<void> {
     await this.exclusive('compact', async (signal) => {
       await this.start()
-      const request = await createRequestSnapshot(
-        this.requestModel(),
-        this.buildSystem(),
-        this.registry.toAISDKFormat(),
-        this.messages,
-        signal,
-      )
-      // Like pi: say so plainly when there is no earlier turn to summarize
-      if (!canSummarize(request.messages))
-        throw new Error('Nothing to compact (session too small)')
-      request.maxOutputTokens = this.modelInfo.maxTokens
+      const request = await this.compactionRequest(signal)
       await this.contextManager.compact(request, focus)
       await this.saveOrReport()
     })
