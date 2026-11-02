@@ -4,6 +4,7 @@ import {
   Container,
   Input,
   Markdown,
+  type SelectItem,
   Spacer,
   stripTerminalSequences,
   Text,
@@ -15,6 +16,20 @@ import { isToolContent } from '@glows777/vela-core/diagnostics'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
 import { markdownTheme, theme } from './theme.ts'
+
+export interface DialogHost {
+  select(
+    title: string,
+    items: SelectItem[],
+    selected?: string,
+  ): Promise<string | undefined>
+  input(
+    title: string,
+    placeholder?: string,
+    signal?: AbortSignal,
+    secret?: boolean,
+  ): Promise<string | undefined>
+}
 
 /** Render image metadata only; inline base64 belongs in session storage, never the terminal. */
 export function imagePlaceholder(image: unknown): string | undefined {
