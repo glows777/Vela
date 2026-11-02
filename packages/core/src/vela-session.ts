@@ -424,6 +424,11 @@ export class VelaSession {
     } catch {
       return this.thinking
     }
+    return this.thinkingLevelFor(info)
+  }
+
+  /** The requested level clamped to what `info` supports (the getter uses the current model). */
+  private thinkingLevelFor(info: ModelInfo): ThinkingLevel {
     return clampThinkingLevel(this.thinking, info, THINKING_LEVELS)
   }
 
@@ -1366,7 +1371,6 @@ export class VelaSession {
       this.modelChoice = info.ref
       this.store.appendModelChange(info.ref)
     }
-    const reasoning = reasoningOption(this.thinkingLevel, info)
     inputs = await Promise.all(
       inputs.map((message) => this.messageQueue.normalizeInput(message)),
     )
@@ -1394,7 +1398,9 @@ export class VelaSession {
     await agentLoop({
       model: this.requestModel(),
       supportsImages: info.input?.includes('image') ?? true,
-      reasoning,
+      // Like pi, read per request: a level changed during the run applies to the next step. It is
+      // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
+      reasoning: () => reasoningOption(this.thinkingLevelFor(info), info),
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,
