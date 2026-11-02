@@ -25,6 +25,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **`write_file` no longer overwrites an existing file the session has not read to the end or written itself.** The session must have read the file through to EOF with `read_file`, or written it with `write_file` / `edit_file`, and the file must not have changed on disk since; the refusal asks for a full read or a targeted `edit_file`. The record is per session and in memory, so a resumed session reads again. New files and `edit_file` are unchanged. See [Tools](docs/tools.md#write_file).
+
 - Six jointly versioned Bun workspace packages separate core SDK, channel runtime/interfaces, Lark transport, MCP, RAG and the umbrella CLI. Existing `@glows777/vela` and `/testing` imports, `vela` executable and non-adapter behavior remain compatible; the separately listed Lark rename is breaking. Lightweight consumers can install `@glows777/vela-core` or `@glows777/vela-channels`; each package has an explicit export map, declared runtime dependencies and API snapshot.
 
 - Opening an existing session may establish its first routing binding; matching bindings are accepted and conflicting routes throw `SessionRoutingConflictError` with the session ID and both routes. Existing cwd, tools, permissions and model options remain first-open-only. Forks and clones do not inherit routing authority.

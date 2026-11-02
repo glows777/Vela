@@ -47,7 +47,7 @@ For text files, one call returns at most `limit` lines and at most 50KB (UTF-8),
 | `path` | string | File path |
 | `content` | string | Full file content |
 
-Replaces the whole file and creates missing parent directories.
+Replaces the whole file and creates missing parent directories. Overwriting an existing file also needs this session to have read it to the end with `read_file` or written it with `write_file` / `edit_file`, and the file must not have changed on disk since; otherwise the call fails and asks for a full read or a targeted `edit_file`.
 
 ### edit_file
 
