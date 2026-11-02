@@ -2,7 +2,7 @@
 
 <!-- What changes for users, and which issue this closes. -->
 
-<!-- How verified, Evidence, and How to revert are required. An empty section is a bounce. That bounce does not count as a bug-fix review round. -->
+<!-- How verified, Docs, Evidence, and How to revert are required. An empty section is a bounce. That bounce does not count as a bug-fix review round. -->
 
 ## How verified
 
@@ -13,6 +13,10 @@
 | Test / check | Covers |
 |---|---|
 | | |
+
+## Docs
+
+<!-- Which docs pages this PR updates, or why none describe the changed behavior. -->
 
 ## Evidence
 
