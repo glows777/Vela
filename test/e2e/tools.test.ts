@@ -202,6 +202,111 @@ test('write_file writes into cwd and is reported as an audit event; edit_file ch
   expect(t.eventsOf('tool_execution_end').filter((e) => e.isError)).toEqual([])
 })
 
+const longFile = (lines: number) =>
+  Array.from({ length: lines }, (_, i) => `rule ${i + 1}\n`).join('')
+
+test('write_file refuses to overwrite a file this session only partly read', async () => {
+  const content = longFile(2001)
+  const t = createTestVela({
+    files: { 'rules.md': content },
+    responses: [
+      fauxToolCall('read_file', { path: 'rules.md' }),
+      fauxToolCall('write_file', { path: 'rules.md', content: 'short\n' }),
+      fauxText('I need to read the rest first'),
+    ],
+  })
+
+  await t.run('Rewrite rules.md')
+
+  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain(
+    'More content exists',
+  )
+  const result = t.model.calls[2]!.toolResults[0]!
+  expect(result.toolName).toBe('write_file')
+  expect(result.raw).toMatchObject({ type: 'error-text' })
+  expect(result.output).toBe(
+    'Refusing to overwrite "rules.md": this session has not read the whole file. Read it with read_file through to the end first, or use edit_file for a targeted change.',
+  )
+  expect(await t.readFile('rules.md')).toBe(content)
+})
+
+test('write_file overwrites a file read to EOF until the file changes on disk', async () => {
+  const content = longFile(2001)
+  const file = 'rules.md'
+  const t = createTestVela({
+    files: { [file]: content },
+    responses: [
+      fauxToolCall('read_file', { path: file, limit: 3000 }),
+      fauxToolCall('write_file', { path: file, content: 'first rewrite\n' }),
+      () => {
+        writeFileSync(join(t.cwd, file), 'changed outside the session\n')
+        return fauxToolCall('write_file', { path: file, content: 'second\n' })
+      },
+      fauxText('The file changed'),
+    ],
+  })
+
+  await t.run('Rewrite rules.md after reading it')
+
+  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toBe(content)
+  expect(String(t.model.calls[2]!.toolResults[0]!.output)).toBe(
+    'Wrote 14 characters to rules.md',
+  )
+  const result = t.model.calls[3]!.toolResults[0]!
+  expect(result.raw).toMatchObject({ type: 'error-text' })
+  expect(result.output).toBe(
+    'Refusing to overwrite "rules.md": the file changed on disk since this session read or wrote it. Read it again, or use edit_file for a targeted change.',
+  )
+  expect(await t.readFile(file)).toBe('changed outside the session\n')
+})
+
+test('write_file accepts a read that follows the footer to EOF', async () => {
+  const t = createTestVela({
+    files: { 'rules.md': 'one\ntwo\n' },
+    responses: [
+      fauxToolCall('read_file', { path: 'rules.md', limit: 1 }),
+      fauxToolCall('read_file', {
+        path: 'rules.md',
+        offset: 2,
+        column: 0,
+        limit: 1,
+      }),
+      fauxToolCall('write_file', { path: 'rules.md', content: 'rewritten\n' }),
+      fauxText('Done'),
+    ],
+  })
+
+  await t.run('Read rules.md to the end and rewrite it')
+
+  expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain(
+    'offset=2, column=0',
+  )
+  expect(String(t.model.calls[2]!.toolResults[0]!.output)).toBe('two\n')
+  expect(await t.readFile('rules.md')).toBe('rewritten\n')
+})
+
+test('write_file creates new files and rewrites a file it wrote or edited', async () => {
+  const t = createTestVela({
+    files: { 'notes.txt': 'hello world\n' },
+    responses: [
+      fauxToolCall('write_file', { path: 'out/new.md', content: 'first\n' }),
+      fauxToolCall('write_file', { path: 'out/new.md', content: 'second\n' }),
+      fauxToolCall('edit_file', {
+        path: 'notes.txt',
+        edits: [{ oldText: 'world', newText: 'vela' }],
+      }),
+      fauxToolCall('write_file', { path: 'notes.txt', content: 'rewritten\n' }),
+      fauxText('Done'),
+    ],
+  })
+
+  await t.run('Write files')
+
+  expect(await t.readFile('out/new.md')).toBe('second\n')
+  expect(await t.readFile('notes.txt')).toBe('rewritten\n')
+  expect(t.eventsOf('tool_execution_end').filter((e) => e.isError)).toEqual([])
+})
+
 test('bash runs in cwd and returns plain output', async () => {
   const t = createTestVela({
     files: { 'marker.txt': 'here' },
