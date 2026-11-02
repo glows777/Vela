@@ -285,6 +285,36 @@ test('write_file accepts a read that follows the footer to EOF', async () => {
   expect(await t.readFile('rules.md')).toBe('rewritten\n')
 })
 
+test('write_file refuses a file that changed between read pages', async () => {
+  const t = createTestVela({
+    files: { 'rules.md': 'one\ntwo\n' },
+    responses: [
+      fauxToolCall('read_file', { path: 'rules.md', limit: 1 }),
+      () => {
+        writeFileSync(join(t.cwd, 'rules.md'), 'changed\ntwo\n')
+        return fauxToolCall('read_file', {
+          path: 'rules.md',
+          offset: 2,
+          column: 0,
+          limit: 1,
+        })
+      },
+      fauxToolCall('write_file', { path: 'rules.md', content: 'rewritten\n' }),
+      fauxText('Read it again'),
+    ],
+  })
+
+  await t.run('Rewrite rules.md')
+
+  expect(String(t.model.calls[2]!.toolResults[0]!.output)).toBe('two\n')
+  const result = t.model.calls[3]!.toolResults[0]!
+  expect(result.raw).toMatchObject({ type: 'error-text' })
+  expect(result.output).toBe(
+    'Refusing to overwrite "rules.md": this session has not read the whole file. Read it with read_file through to the end first, or use edit_file for a targeted change.',
+  )
+  expect(await t.readFile('rules.md')).toBe('changed\ntwo\n')
+})
+
 test('write_file creates new files and rewrites a file it wrote or edited', async () => {
   const t = createTestVela({
     files: { 'notes.txt': 'hello world\n' },
