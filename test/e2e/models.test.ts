@@ -500,6 +500,7 @@ test('a model switched during a run keeps the reasoning with the model of that r
   const blocked = new Promise<void>((resolve) => (release = resolve))
   const providers = {
     fake: {
+      models: [{ id: 'a' }, { id: 'b', reasoning: false }],
       createModel: (id: string) => {
         if (id === 'a') return a
         if (id === 'b') return b
@@ -534,6 +535,8 @@ test('a model switched during a run keeps the reasoning with the model of that r
   expect(JSON.stringify(a.calls[1]!.prompt).includes('thinking of a')).toBe(
     true,
   )
+  // B has no thinking, but A, which serves this run, keeps the level it was started with
+  expect(a.calls.map((c) => c.reasoning)).toEqual(['medium', 'medium'])
   // Both assistant messages of the run belong to A, not to the model chosen meanwhile
   const producer = describeModel(a).ref
   const producedBy = t.session
