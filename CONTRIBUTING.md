@@ -23,7 +23,7 @@ Run these before opening a pull request. CI runs the same ones.
 bun run test            # unit + e2e tests, offline, about 1–2 minutes
 bun run typecheck
 bun run lint            # biome check: formatting, import order and lint; bun run lint:fix fixes what it can
-bun run quality        # Knip, strict production dependencies, Madge, size limits and package boundaries
+bun run quality        # Knip, strict production dependencies, Madge, size limits, package boundaries and channel tool names in docs/channels.md
 bun run smoke:consumer  # builds and packs all six, installs each alone in empty Node and Bun projects
 ```
 

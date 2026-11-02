@@ -15,6 +15,7 @@ import { $, Glob } from 'bun'
 // @ts-expect-error madge ships no type definitions
 import madge from 'madge'
 import { checkBoundaries } from './check-boundaries.ts'
+import { checkChannelDocs } from './check-channel-docs.ts'
 import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -188,6 +189,12 @@ report(
   boundaries.length === 0,
   `package boundaries: ${boundaries.length === 0 ? 'ok' : 'failed'}`,
   boundaries,
+)
+const channelDocs = await checkChannelDocs(ROOT)
+report(
+  channelDocs.length === 0,
+  `channel guide: ${channelDocs.length === 0 ? 'registered tools are documented' : 'failed'}`,
+  channelDocs,
 )
 const elapsed = ((performance.now() - started) / 1000).toFixed(1)
 
