@@ -4,7 +4,12 @@ import type { ToolContext, ToolRegistry } from './registry.ts'
 /** Size and modification time of a file at one moment, used to notice changes made outside the session. */
 export type FileStat = { mtimeMs: number; size: number }
 
-type ReadChain = { line: number; col: number; fromStart: boolean }
+type ReadChain = {
+  line: number
+  col: number
+  fromStart: boolean
+  stat: FileStat
+}
 
 const notReadError = (path: string) =>
   `Refusing to overwrite "${path}": this session has not read the whole file. Read it with read_file through to the end first, or use edit_file for a targeted change.`
@@ -19,8 +24,9 @@ const sameStat = (recorded: FileStat | undefined, current: FileStat) =>
 
 /**
  * What one session's file tools know about the files they read and wrote. A page continues the
- * read only when it starts where the previous page ended (the footer's offset/column); reaching the
- * end of a chain that began at the start of the file marks it complete.
+ * read only when it starts where the previous page ended (the footer's offset/column) and the file
+ * has not changed since; reaching the end of a chain that began at the start of the file marks it
+ * complete.
  */
 export class SessionFileState {
   private readonly chain = new Map<string, ReadChain | 'complete'>()
@@ -49,9 +55,14 @@ export class SessionFileState {
       if (previous !== 'complete') this.chain.delete(path)
       return
     }
+    if (continues && !sameStat(continues.stat, stat)) {
+      // The pages cover different versions of the file, so together they prove nothing
+      this.chain.delete(path)
+      return
+    }
     const fromStart = startsAtBeginning || continues?.fromStart === true
     if (next) {
-      this.chain.set(path, { line: next.line, col: next.col, fromStart })
+      this.chain.set(path, { line: next.line, col: next.col, fromStart, stat })
       return
     }
     if (!fromStart) return
