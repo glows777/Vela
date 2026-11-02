@@ -25,6 +25,15 @@ import {
   truncatedToolCallResult,
 } from './step.ts'
 
+type ReasoningOption =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+
 interface AgentLoopParameter {
   model: LanguageModel
   systemPrompt: string | (() => string)
@@ -53,8 +62,11 @@ interface AgentLoopParameter {
   limits?: Partial<VelaLimits>
   /** Whether the selected model accepts image input; unknown models default to true. */
   supportsImages?: boolean
-  /** AI SDK reasoning option (mapped from the thinking level); not sent when omitted */
-  reasoning?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /**
+   * AI SDK reasoning option (mapped from the thinking level); not sent when omitted. A function is
+   * called before every request, so a change during the run applies to the next step (like pi).
+   */
+  reasoning?: ReasoningOption | (() => ReasoningOption | undefined)
   /**
    * Takes queued steer messages (like pi's getSteeringMessages): called once after each step's tools
    * finish and before the next model request; the messages are appended to the history. If the model
@@ -133,6 +145,8 @@ export const agentLoop = async ({
 
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
+  const currentReasoning = () =>
+    typeof reasoning === 'function' ? reasoning() : reasoning
   try {
     // Like pi: no turn limit. Run until the model stops calling tools and nothing is queued
     // (or until aborted / stopped by loop detection)
@@ -206,6 +220,7 @@ export const agentLoop = async ({
                 }
             }
           }
+          const requestReasoning = currentReasoning()
           const result = streamText({
             model,
             // Messages are copied here, so compaction or an abort never sees cache markers in history
@@ -215,7 +230,7 @@ export const agentLoop = async ({
               messages: modelMessages,
             }),
             maxRetries: 0, // No retries inside streamText; the loop below handles retries
-            ...(reasoning ? { reasoning } : {}),
+            ...(requestReasoning ? { reasoning: requestReasoning } : {}),
             abortSignal,
             // Errors are thrown in the 'error' branch below and reported via events, not printed by the SDK
             onError: () => {},

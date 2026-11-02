@@ -32,6 +32,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - Opening an existing session may establish its first routing binding; matching bindings are accepted and conflicting routes throw `SessionRoutingConflictError` with the session ID and both routes. Existing cwd, tools, permissions and model options remain first-open-only. Forks and clones do not inherit routing authority.
 - Save-success observer failures are logged without replaying already committed history. Ordinary `save()` still flushes and rejects on storage failure without emitting a failure event; only `reportFailure: true` emits the existing event.
 
+### Fixed
+
+- Changing the thinking level during a run now applies from the next model request instead of waiting for the next prompt ([#238](https://github.com/glows777/Vela/issues/238)).
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

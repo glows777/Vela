@@ -155,6 +155,8 @@ The default is `medium`. Set it with:
 - `defaultThinkingLevel` in [settings](settings.md) for new sessions,
 - `/thinking [level]` or Shift+Tab (cycles through the levels the model supports) in the terminal UI.
 
+A change applies from the next model request, including while the agent is running.
+
 The level is saved with the session and restored on resume; `--thinking` wins over the saved value. Each provider maps `reasoning` to its own options through the AI SDK; OpenRouter receives it as `reasoning: { effort }`.
 
 Like pi, a level the model doesn't support is clamped to the nearest supported one instead of failing:

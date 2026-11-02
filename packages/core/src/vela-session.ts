@@ -1366,7 +1366,6 @@ export class VelaSession {
       this.modelChoice = info.ref
       this.store.appendModelChange(info.ref)
     }
-    const reasoning = reasoningOption(this.thinkingLevel, info)
     inputs = await Promise.all(
       inputs.map((message) => this.messageQueue.normalizeInput(message)),
     )
@@ -1394,7 +1393,9 @@ export class VelaSession {
     await agentLoop({
       model: this.requestModel(),
       supportsImages: info.input?.includes('image') ?? true,
-      reasoning,
+      // Like pi, read per request: a level changed during the run applies to the next step
+      reasoning: () =>
+        reasoningOption(this.thinkingLevel, this.resolveModel().info),
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,

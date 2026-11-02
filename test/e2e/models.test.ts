@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { ProviderDefinition, VelaLogger } from '@glows777/vela-core'
-import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { wrapLanguageModel } from 'ai'
 import { z } from 'zod'
 import { DEFAULT_LIMITS } from '../../packages/core/src/limits.ts'
@@ -174,6 +178,35 @@ test('thinking levels map to the reasoning call option', async () => {
   ])
   expect(plain.calls[0]!.reasoning).toBeUndefined()
   expect(() => t.session.setThinkingLevel('huge' as never)).toThrow()
+})
+
+test('a thinking level changed during a run applies from the next request', async () => {
+  const { big, providers } = fakeProvider()
+  big.push(fauxToolCall('thinking_switch', {}), fauxText('done'))
+  let changeLevel = () => {}
+  const t = createTestVela({
+    model: 'fake/big',
+    providers,
+    extensions: [
+      function thinking(vela) {
+        vela.registerTool({
+          name: 'switch',
+          description: 'Change the thinking level',
+          inputSchema: z.object({}),
+          execute: async () => {
+            changeLevel()
+            return 'changed'
+          },
+        })
+      },
+    ],
+  })
+  changeLevel = () => t.session.setThinkingLevel('high')
+
+  await t.run('change it while the tool runs')
+
+  // The change lands on the request after the tool, not only on the next prompt
+  expect(big.calls.map((c) => c.reasoning)).toEqual(['medium', 'high'])
 })
 
 test('the Vela-level thinking level is the default for new sessions', async () => {
