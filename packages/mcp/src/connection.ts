@@ -289,14 +289,7 @@ export class McpConnection implements McpToolCaller {
   async callTool(
     name: string,
     args: Record<string, unknown>,
-    options: {
-      signal?: AbortSignal
-      onProgress?: (progress: {
-        progress: number
-        total?: number
-        message?: string
-      }) => void
-    },
+    options: Parameters<McpToolCaller['callTool']>[2],
   ): Promise<CallToolResult> {
     const client = await this.connect()
     // Tool calls are not retried: the server may already have performed them (like pi)

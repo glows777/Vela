@@ -446,6 +446,30 @@ function makeToolCallChunks(
   return chunks
 }
 
+function makeTextChunks(
+  state: DemoState,
+  text: string,
+  prompt: Prompt,
+): LanguageModelV3StreamPart[] {
+  const id = 'text-1'
+  return [
+    { type: 'text-start', id },
+    ...text.split('').map(
+      (char): LanguageModelV3StreamPart => ({
+        type: 'text-delta',
+        id,
+        delta: char,
+      }),
+    ),
+    { type: 'text-end', id },
+    {
+      type: 'finish',
+      finishReason: { unified: 'stop', raw: undefined },
+      usage: makeUsage(state, prompt),
+    },
+  ]
+}
+
 export function createMockModel(): DemoModel {
   const state: DemoState = {
     retryTestCount: 0,
@@ -542,24 +566,7 @@ export function createMockModel(): DemoModel {
           throw new Error('429 Too Many Requests - Rate limit exceeded')
         }
         state.retryTestCount = 0
-        const reply = 'Retry succeeded!'
-        const id = 'text-1'
-        const chunks: LanguageModelV3StreamPart[] = [
-          { type: 'text-start', id },
-          ...reply.split('').map(
-            (char): LanguageModelV3StreamPart => ({
-              type: 'text-delta',
-              id,
-              delta: char,
-            }),
-          ),
-          { type: 'text-end', id },
-          {
-            type: 'finish',
-            finishReason: { unified: 'stop', raw: undefined },
-            usage: makeUsage(state, prompt),
-          },
-        ]
+        const chunks = makeTextChunks(state, 'Retry succeeded!', prompt)
         return {
           stream: simulateReadableStream({
             chunks: chunks,
@@ -588,24 +595,7 @@ export function createMockModel(): DemoModel {
         }
       }
 
-      const replyText = pickTextResponse(prompt)
-      const id = 'text-1'
-      const chunks: LanguageModelV3StreamPart[] = [
-        { type: 'text-start', id },
-        ...replyText.split('').map(
-          (char): LanguageModelV3StreamPart => ({
-            type: 'text-delta',
-            id,
-            delta: char,
-          }),
-        ),
-        { type: 'text-end', id },
-        {
-          type: 'finish',
-          finishReason: { unified: 'stop', raw: undefined },
-          usage: makeUsage(state, prompt),
-        },
-      ]
+      const chunks = makeTextChunks(state, pickTextResponse(prompt), prompt)
       return {
         stream: simulateReadableStream({ chunks: chunks, chunkDelayInMs: 30 }),
       }

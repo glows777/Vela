@@ -1,23 +1,16 @@
-import type { SelectItem } from '@earendil-works/pi-tui'
 import type { SessionEntry, VelaSession } from '@glows777/vela-core'
 import { sessionContentText as messageText } from '@glows777/vela-core/diagnostics'
-import { errorMessage, oneLine, sanitize } from './components.ts'
+import {
+  type DialogHost,
+  errorMessage,
+  oneLine,
+  sanitize,
+} from './components.ts'
 import { nearestShown, treeItems } from './tree-selector.ts'
 
-interface TreeHost {
+interface TreeHost extends DialogHost {
   session: VelaSession
   options: { newSessionId: () => string }
-  select(
-    title: string,
-    items: SelectItem[],
-    selected?: string,
-  ): Promise<string | undefined>
-  input(
-    title: string,
-    placeholder?: string,
-    signal?: AbortSignal,
-    secret?: boolean,
-  ): Promise<string | undefined>
   addNotice(text: string, level?: 'info' | 'warning' | 'error' | 'dim'): void
   busyNotice(): boolean
   startLoader(message: string): void

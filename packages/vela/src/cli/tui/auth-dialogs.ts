@@ -1,4 +1,3 @@
-import type { SelectItem } from '@earendil-works/pi-tui'
 import type {
   AuthInteraction,
   AuthPrompt,
@@ -6,22 +5,11 @@ import type {
 } from '@glows777/vela-core'
 import type { Vela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
-import { errorMessage } from './components.ts'
+import { type DialogHost, errorMessage } from './components.ts'
 
-interface AuthHost {
+interface AuthHost extends DialogHost {
   vela: Vela
   options: { openBrowser?: (url: string) => void; loginOptions?: LoginOptions }
-  select(
-    title: string,
-    items: SelectItem[],
-    selected?: string,
-  ): Promise<string | undefined>
-  input(
-    title: string,
-    placeholder?: string,
-    signal?: AbortSignal,
-    secret?: boolean,
-  ): Promise<string | undefined>
   addNotice(text: string, level?: 'info' | 'warning' | 'error' | 'dim'): void
   renderHeader(modelOk: boolean): void
 }
