@@ -46,7 +46,7 @@ If you change any package export, run `bun run api:update` and commit its `packa
 
 - One change per pull request, with a description of what changes for users and how you tested it.
 - Add tests for new behavior and bug fixes.
-- Update the docs in `docs/` when you change user-facing behavior.
+- When a person or a model can see the change, update the pages in `docs/` that describe that behavior, in the same pull request as the CHANGELOG entry.
 - If the change affects users, add a line to the top section of [CHANGELOG.md](CHANGELOG.md) under the right heading (New Features, Breaking Changes, Added, Changed, Fixed). A breaking change must say how to migrate.
 
 ## Releasing
