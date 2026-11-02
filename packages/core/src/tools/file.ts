@@ -13,6 +13,7 @@ import {
   splitBom,
 } from './edit-diff.ts'
 import { withFileMutationQueue } from './file-mutation-queue.ts'
+import { fileStat, stateFor, statIfExists } from './file-write-guard.ts'
 import type { ToolDefinition } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
 
@@ -140,6 +141,8 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     const file = resolveIn(cwd, path)
     const image = await readSpecialFile(file, path, context?.signal)
     if (image) return image
+    const state = stateFor(context)
+    const snapshot = await fileStat(file)
     const decoder = new TextDecoder('utf-8', { fatal: true })
     // Validate every chunk the pager reads, including bytes past the header.
     // Streaming preserves UTF-8 characters split across chunks.
@@ -194,7 +197,11 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     if (!more) consume(decodeText())
     if (!reachedStart && !(line === offset && col === column))
       throw new Error('offset/column is past the end of the file')
-    if (!more) return body
+    if (!more) {
+      state?.noteRead(file, offset, column, undefined, snapshot)
+      return body
+    }
+    state?.noteRead(file, offset, column, { line, col }, snapshot)
     const next = `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
     return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
   },
@@ -213,10 +220,22 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
   inputSchema: writeFileToolParamSchema,
 
   annotations: { destructiveHint: true, idempotentHint: true },
-  execute: async ({ path, content }: { path: string; content: string }) => {
+  execute: async (
+    { path, content }: { path: string; content: string },
+    context,
+  ) => {
     const resolved = resolveIn(cwd, path)
+    const state = stateFor(context)
     // Writes to the same file queue up; different files are written in parallel (like pi)
-    await withFileMutationQueue(resolved, () => writeText(resolved, content))
+    await withFileMutationQueue(resolved, async () => {
+      if (state) {
+        const current = await statIfExists(resolved)
+        const refusal = state.refusal(resolved, path, current)
+        if (refusal) throw new Error(refusal)
+      }
+      await writeText(resolved, content)
+      if (state) state.noteWritten(resolved, await fileStat(resolved))
+    })
     return `Wrote ${content.length} characters to ${path}`
   },
 })
@@ -329,6 +348,7 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
     const { path, edits } = input
     const resolved = resolveIn(cwd, path)
     const signal = context?.signal
+    const state = stateFor(context)
     return withFileMutationQueue(resolved, async () => {
       // Check the signal after each await instead of rejecting from an abort listener, so the
       // queue stays locked until an in-flight filesystem operation has settled (like pi)
@@ -358,6 +378,7 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
       )
       throwIfAborted()
       await writeFile(resolved, bom + restoreLineEndings(newContent, ending))
+      if (state) state.noteWritten(resolved, await fileStat(resolved))
       throwIfAborted()
       const { diff, firstChangedLine } = generateDiffString(
         baseContent,
