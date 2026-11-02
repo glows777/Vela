@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import type { ProviderDefinition, VelaLogger } from '@glows777/vela-core'
-import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { wrapLanguageModel } from 'ai'
 import { z } from 'zod'
 import { DEFAULT_LIMITS } from '../../packages/core/src/limits.ts'
@@ -174,6 +178,35 @@ test('thinking levels map to the reasoning call option', async () => {
   ])
   expect(plain.calls[0]!.reasoning).toBeUndefined()
   expect(() => t.session.setThinkingLevel('huge' as never)).toThrow()
+})
+
+test('a thinking level changed during a run applies from the next request', async () => {
+  const { big, providers } = fakeProvider()
+  big.push(fauxToolCall('thinking_switch', {}), fauxText('done'))
+  let changeLevel = () => {}
+  const t = createTestVela({
+    model: 'fake/big',
+    providers,
+    extensions: [
+      function thinking(vela) {
+        vela.registerTool({
+          name: 'switch',
+          description: 'Change the thinking level',
+          inputSchema: z.object({}),
+          execute: async () => {
+            changeLevel()
+            return 'changed'
+          },
+        })
+      },
+    ],
+  })
+  changeLevel = () => t.session.setThinkingLevel('high')
+
+  await t.run('change it while the tool runs')
+
+  // The change lands on the request after the tool, not only on the next prompt
+  expect(big.calls.map((c) => c.reasoning)).toEqual(['medium', 'high'])
 })
 
 test('the Vela-level thinking level is the default for new sessions', async () => {
@@ -467,6 +500,7 @@ test('a model switched during a run keeps the reasoning with the model of that r
   const blocked = new Promise<void>((resolve) => (release = resolve))
   const providers = {
     fake: {
+      models: [{ id: 'a' }, { id: 'b', reasoning: false }],
       createModel: (id: string) => {
         if (id === 'a') return a
         if (id === 'b') return b
@@ -501,6 +535,8 @@ test('a model switched during a run keeps the reasoning with the model of that r
   expect(JSON.stringify(a.calls[1]!.prompt).includes('thinking of a')).toBe(
     true,
   )
+  // B has no thinking, but A, which serves this run, keeps the level it was started with
+  expect(a.calls.map((c) => c.reasoning)).toEqual(['medium', 'medium'])
   // Both assistant messages of the run belong to A, not to the model chosen meanwhile
   const producer = describeModel(a).ref
   const producedBy = t.session
