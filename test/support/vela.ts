@@ -18,8 +18,11 @@ export type TestVelaOptions = CoreTestVelaOptions
  * createTestVela() from vela/testing plus the CLI's slash command dispatcher:
  * tests use exactly the same command handling as the CLI, applied to the default session (`t.session`).
  */
-export function createTestVela(options: TestVelaOptions = {}) {
-  const t = createCoreTestVela(options)
+export function createTestVela(
+  options: TestVelaOptions = {},
+  assemble?: Parameters<typeof createCoreTestVela>[1],
+) {
+  const t = createCoreTestVela(options, assemble)
   const internals = velaInternals(t.vela)
 
   const ctx: CommandContext = {

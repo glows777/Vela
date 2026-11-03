@@ -50,6 +50,35 @@ for (const key of [KEYS.enter, KEYS.altEnter]) {
   })
 }
 
+test('a clipboard image read that finishes after shutdown does not write to the deleted temp directory', async () => {
+  let release!: (image: Uint8Array) => void
+  let started!: () => void
+  const readStarted = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const clipboard = new Promise<Uint8Array>((resolve) => {
+    release = resolve
+  })
+  const t = createTestVela()
+  const tui = await startTui(t.vela, {
+    readClipboardImage: () => {
+      started()
+      return clipboard
+    },
+  })
+  await tui.started
+
+  tui.terminal.press(pasteImageKey)
+  await readStarted
+  await tui.mode.shutdown()
+  release(blueImage())
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(Reflect.get(tui.mode, 'clipboardDir')).toBeUndefined()
+  expect(tui.screen()).not.toContain('Clipboard paste failed')
+})
+
 for (const shape of ['native', 'mixed'] as const) {
   test(`resumed ${shape} tool image content never renders base64, including expanded output`, async () => {
     const data = blueImage().toString('base64')
@@ -996,6 +1025,7 @@ test('!cmd runs a shell command in its own block and sends the output with the n
 
   tui.submit('!echo vis$((1+1))')
   await tui.until('vis2')
+  await tui.until(() => !t.vela.session('tui').isBashRunning)
   tui.submit('!!echo hid$((2+2)); exit 4')
   await tui.until('(exit 4)')
   const screen = tui.screen()

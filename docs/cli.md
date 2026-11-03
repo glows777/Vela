@@ -204,7 +204,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 | `/fork` | Pick one of your earlier messages and continue in a new session from just before it (its text goes into the editor). |
 | `/clone` | Copy the current branch into a new session and switch to it. |
 | `/export [path]` | Write the current branch as HTML, or as JSONL when the path ends in `.jsonl`. |
-| `/copy` | Copy the last answer to the clipboard (`pbcopy`, `clip`, `wl-copy`, `xclip` or `xsel`; over SSH or without a display, the terminal's OSC 52). If none works, the error says what to install. |
+| `/copy` | Copy the last answer to the clipboard (`pbcopy`, PowerShell `Set-Clipboard` on Windows, `wl-copy`, `xclip` or `xsel`; over SSH or without a display, the terminal's OSC 52). Windows text is read from a UTF-8 temporary file to preserve Chinese and other Unicode. If none works, the error says what to install. |
 | `/hotkeys` | Show the keyboard shortcuts. |
 | `/quit`, `/exit` | Exit. |
 
