@@ -1,5 +1,4 @@
-import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { type ChildProcess, spawn } from 'node:child_process'
 import { type FileHandle, open, stat } from 'node:fs/promises'
 import { constants } from 'node:os'
 import z from 'zod'
@@ -23,8 +22,12 @@ const bashToolParamSchema = z.object({
 })
 
 export interface BashToolOptions {
-  /** Shell to run commands with (settings `shellPath`). Default: bash on PATH */
+  /** Shell to run commands with (settings `shellPath`). Default: bash on PATH, or bash.exe on Windows */
   shellPath?: string
+}
+
+function defaultShellPath(): string {
+  return process.platform === 'win32' ? 'bash.exe' : 'bash'
 }
 
 export const createBashTool = (
@@ -48,11 +51,6 @@ export const createBashTool = (
       throw new Error(
         `Invalid timeout: must be a positive number of seconds, at most ${MAX_TIMEOUT_SECONDS}`,
       )
-    // A configured shell that doesn't exist is a setup error: fail loudly, like pi
-    if (shellPath && !existsSync(shellPath))
-      throw new Error(
-        `Shell not found: ${shellPath}. Fix or remove shellPath in settings.json.`,
-      )
     const results = context?.results ?? new ToolResultStore()
     // Open before executing: storage failure must not lead to rerunning a command.
     const { path, file } = await results.createFile(context?.callId)
@@ -61,7 +59,7 @@ export const createBashTool = (
     try {
       const run = await runShell(command, file, path, {
         cwd,
-        shellPath,
+        shellPath: shellPath ?? defaultShellPath(),
         timeout,
         signal: context?.signal,
         onUpdate: context?.onUpdate
@@ -78,8 +76,41 @@ export const createBashTool = (
         status = `Command exited with code ${run.exitCode}${run.signal ? ` (signal ${run.signal})` : ''}`
     } catch (error) {
       execution.isError = true
-      execution.error = error instanceof Error ? error.message : String(error)
-      status = `Command failed: ${error}`
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? error.code
+          : undefined
+      let workingDirectoryError: string | undefined
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        const workingDirectory = cwd ?? process.cwd()
+        try {
+          if (!(await stat(workingDirectory)).isDirectory())
+            workingDirectoryError = `Working directory is not a directory: ${workingDirectory}`
+        } catch (directoryError) {
+          const directoryErrorCode =
+            directoryError &&
+            typeof directoryError === 'object' &&
+            'code' in directoryError
+              ? directoryError.code
+              : undefined
+          if (
+            directoryErrorCode === 'ENOENT' ||
+            directoryErrorCode === 'ENOTDIR'
+          )
+            workingDirectoryError = `Working directory not found: ${workingDirectory}`
+        }
+      }
+      const resolvedShell = shellPath ?? defaultShellPath()
+      const shellUnavailable = code === 'ENOENT' && !workingDirectoryError
+      execution.toolUnavailable = shellUnavailable || undefined
+      execution.error =
+        workingDirectoryError ??
+        (shellUnavailable
+          ? `Shell not found: ${resolvedShell}. The command did not run. Bash is disabled for this session; ${process.platform === 'win32' ? 'install Git for Windows or set shellPath to its bin\\bash.exe' : 'install Bash or set shellPath to a Bash-compatible executable'}. Read-only fallback tools may now be available.`
+          : error instanceof Error
+            ? error.message
+            : String(error))
+      status = execution.error
     }
     const { size } = await stat(path)
     const tail = await readTail(path, size)
@@ -128,12 +159,16 @@ async function runShell(
       ? streamOutput(path, options.onUpdate, options.onDelta)
       : undefined
   try {
-    const proc = spawn(options.shellPath ?? 'bash', ['-lc', command], {
-      cwd: options.cwd,
-      stdio: ['ignore', file.fd, file.fd],
-      // POSIX process group lets timeout/cancellation stop pipelines and descendants.
-      detached: process.platform !== 'win32',
-    })
+    const proc = spawn(
+      options.shellPath ?? defaultShellPath(),
+      ['-lc', command],
+      {
+        cwd: options.cwd,
+        stdio: ['ignore', file.fd, file.fd],
+        // POSIX process groups and Windows taskkill /T stop pipelines and descendants.
+        detached: process.platform !== 'win32',
+      },
+    )
     const exited = new Promise<{
       code: number | null
       signal: NodeJS.Signals | null
@@ -141,21 +176,9 @@ async function runShell(
       proc.once('error', reject)
       proc.once('exit', (code, signal) => resolve({ code, signal }))
     })
+    let termination: Promise<void> | undefined
     const terminate = () => {
-      try {
-        if (process.platform === 'win32') proc.kill('SIGKILL')
-        else if (proc.pid !== undefined) process.kill(-proc.pid, 'SIGKILL')
-      } catch (error) {
-        if (
-          !(
-            error &&
-            typeof error === 'object' &&
-            'code' in error &&
-            error.code === 'ESRCH'
-          )
-        )
-          throw error
-      }
+      termination ??= terminateProcessTree(proc)
     }
     let timedOut = false
     const timer =
@@ -169,6 +192,7 @@ async function runShell(
     if (abortSignal?.aborted) terminate()
     try {
       const result = await exited
+      await termination
       return {
         // Killed by a signal: 128 + signal number, as shells report it
         exitCode:
@@ -190,6 +214,45 @@ async function runShell(
       await file.close()
     }
   }
+}
+
+/** Windows child processes do not belong to a POSIX-style process group. */
+function terminateProcessTree(proc: ChildProcess): Promise<void> {
+  if (process.platform === 'win32') {
+    if (proc.pid === undefined) return Promise.resolve()
+    return new Promise((resolve) => {
+      const fallback = () => {
+        try {
+          proc.kill('SIGKILL')
+        } catch {}
+        resolve()
+      }
+      const killer = spawn(
+        'taskkill.exe',
+        ['/PID', String(proc.pid), '/T', '/F'],
+        { stdio: 'ignore', windowsHide: true },
+      )
+      killer.once('error', fallback)
+      killer.once('close', (code) => (code === 0 ? resolve() : fallback()))
+    })
+  }
+
+  if (proc.pid !== undefined) {
+    try {
+      process.kill(-proc.pid, 'SIGKILL')
+    } catch (error) {
+      if (
+        !(
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === 'ESRCH'
+        )
+      )
+        throw error
+    }
+  }
+  return Promise.resolve()
 }
 
 /** A command the user ran themselves (`!cmd`), shaped like pi's `BashResult`. */
@@ -222,12 +285,11 @@ export async function runBash(
     onDelta?: (delta: string) => void
   },
 ): Promise<BashResult> {
-  if (options.shellPath && !existsSync(options.shellPath))
-    throw new Error(
-      `Shell not found: ${options.shellPath}. Fix or remove shellPath in settings.json.`,
-    )
   const { path, file } = await options.results.createFile()
-  const run = await runShell(command, file, path, options)
+  const run = await runShell(command, file, path, {
+    ...options,
+    shellPath: options.shellPath ?? defaultShellPath(),
+  })
   const { size } = await stat(path)
   const tail = await readTail(path, size)
   return {

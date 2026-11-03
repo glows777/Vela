@@ -17,7 +17,7 @@ export function createCoreTools({
   resolveCwd,
 }: {
   cwd?: string
-  /** Shell for the bash tool (settings `shellPath`); default bash on PATH */
+  /** Shell for the bash tool (settings `shellPath`); default bash on PATH, or bash.exe on Windows */
   shellPath?: string
   /** Finds ripgrep / fd for grep / find (default: PATH only) */
   resolveBinary?: BinaryResolver

@@ -11,7 +11,7 @@ import type {
   ToolDefinition,
 } from '../../../src/tools/registry.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
-import { createBashTool } from '../../../src/tools/shell.ts'
+import { createTestBashTool } from '../../support/bash.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-execute-tool-test-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -309,7 +309,7 @@ test('onUpdate emits tool_execution_update until the call settles, also for nest
 })
 
 test('bash streams the tail of its output while it runs', async () => {
-  const { registry, events } = makeSession(createBashTool(root))
+  const { registry, events } = makeSession(createTestBashTool(root))
   await callModelTool(
     registry,
     'bash',
@@ -329,13 +329,15 @@ test('bash streams the tail of its output while it runs', async () => {
 })
 
 test('bash failures are error results; the model reads the output and the status', async () => {
-  const { registry } = makeSession(createBashTool(root))
+  const { registry } = makeSession(createTestBashTool(root))
   await expect(
     callModelTool(registry, 'bash', { command: "printf 'oops\\n'; exit 3" }),
   ).rejects.toThrow(/^oops\n\n\nCommand exited with code 3$/)
   const outcomes = await callCaller(
-    makeSession(createBashTool(root), caller([['bash', { command: 'exit 4' }]]))
-      .registry,
+    makeSession(
+      createTestBashTool(root),
+      caller([['bash', { command: 'exit 4' }]]),
+    ).registry,
   )
   expect(outcomes[0]).toMatchObject({
     isError: true,

@@ -244,6 +244,8 @@ export class ToolRegistry {
   /** Tools selected for the session; undefined means no limit */
   private selection?: ReadonlySet<string>
   private defaultToolStates?: ReadonlyMap<string, boolean> // +name / -name overrides from --tools or defaultTools
+  private readonly unavailableTools = new Set<string>()
+  private readonly runtimeEnabledTools = new Set<string>()
   private channel?: string
   private confirm?: (toolName: string, input: unknown) => Promise<boolean>
 
@@ -284,8 +286,11 @@ export class ToolRegistry {
 
   /** Whether the session's selection or default-tool modifiers allow the tool (permissions aside) */
   private isEnabled(toolName: string): boolean {
+    if (this.unavailableTools.has(toolName)) return false
     if (this.selection) return this.selection.has(toolName)
     const enabled = this.defaultToolStates?.get(toolName)
+    if (enabled === false) return false
+    if (this.runtimeEnabledTools.has(toolName)) return true
     return enabled ?? this.tools.get(toolName)?.activeByDefault !== false
   }
 
@@ -556,6 +561,14 @@ export class ToolRegistry {
       })
       let { output } = result
       const { execution } = result
+      if (execution.toolUnavailable) {
+        this.unavailableTools.add(name)
+        if (name === 'bash' && !this.selection) {
+          for (const fallback of ['list_directory', 'grep', 'find'])
+            if (this.defaultToolStates?.get(fallback) !== false)
+              this.runtimeEnabledTools.add(fallback)
+        }
+      }
       if (pipeline) {
         const post = await pipeline.runPost(name, input, output, hookContext)
         if (post.modifiedOutput !== undefined)

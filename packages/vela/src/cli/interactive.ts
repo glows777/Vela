@@ -903,13 +903,16 @@ export class InteractiveMode {
   }
 
   private async pasteClipboard(): Promise<void> {
+    if (this.shuttingDown) return
     try {
       const bytes = await (
         this.options.readClipboardImage ?? readClipboardImage
       )()
+      if (this.shuttingDown) return
       const text = bytes?.length
         ? undefined
         : await (this.options.readClipboardText ?? readClipboardText)()
+      if (this.shuttingDown) return
       if (!bytes?.length) {
         if (text) {
           this.editor.insertTextAtCursor(text)
@@ -933,6 +936,7 @@ export class InteractiveMode {
       )
       this.tui.requestRender()
     } catch (error) {
+      if (this.shuttingDown) return
       this.addNotice(
         `Clipboard paste failed: ${errorMessage(error)}`,
         'warning',
@@ -1379,6 +1383,7 @@ export class InteractiveMode {
     } finally {
       if (this.clipboardDir)
         rmSync(this.clipboardDir, { recursive: true, force: true })
+      this.clipboardDir = undefined
       if (options.fromSignal) restore()
       for (const cleanup of this.cleanups.splice(0)) cleanup()
       this.resolveExit()

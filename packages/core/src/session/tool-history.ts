@@ -8,6 +8,8 @@ export interface ExecutionMetadata {
   signal?: string | null
   isError?: boolean
   timedOut?: boolean
+  /** The executable could not start, so this tool cannot run in the current session. */
+  toolUnavailable?: boolean
 }
 
 export interface CallRecord {
