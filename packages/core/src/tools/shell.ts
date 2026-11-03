@@ -122,8 +122,6 @@ export const createBashTool = (
   },
 })
 
-export const bashTool = createBashTool()
-
 /** How a command run by `runShell` ended. */
 interface ShellRun {
   /** The exit code, or 128 + the signal number when a signal killed it */
