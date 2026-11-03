@@ -171,6 +171,7 @@
     isError?: boolean | undefined
     signal?: string | null | undefined
     timedOut?: boolean | undefined
+    toolUnavailable?: boolean | undefined
   interface ExtensionAPI
     on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
     onShutdown: (handler: () => void | Promise<void>) => void
@@ -1044,7 +1045,7 @@
   function cleanupTestVelas: () => Promise<void>
   function createFauxEmbedder: (options?: { dims?: number; id?: string; onCall?: (texts: string[]) => void; }) => EmbeddingFn
   function createFauxModel: (options?: FauxModelOptions) => FauxModel
-  function createTestVela: (options?: TestVelaOptions) => Omit<CoreTestVela, "vela"> & { vela: Vela; }
+  function createTestVela: (options?: TestVelaOptions, assemble?: TestVelaAssembler) => Omit<CoreTestVela, "vela"> & { vela: Vela; }
   const fauxError: (error: string | Error) => FauxResponse
   const fauxHang: (partialText?: string) => FauxResponse
   interface FauxModel
@@ -1152,5 +1153,6 @@
     session?: SessionOptions | undefined
     sessionId?: string | undefined
     sessionStorage?: SessionStorage | undefined
+    shellPath?: string | undefined
     skills?: FixtureSkill[] | undefined
     thinkingLevel?: ThinkingLevel | undefined

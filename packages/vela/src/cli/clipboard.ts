@@ -36,6 +36,8 @@ export interface ClipboardOptions {
   platform?: NodeJS.Platform
   /** Writes an OSC 52 sequence to the terminal (the TUI passes its terminal) */
   writeTerminal?: (data: string) => void
+  /** Runs a clipboard helper (also used by tests to avoid changing the host clipboard). */
+  runCommand?: typeof run
 }
 
 /**
@@ -49,6 +51,7 @@ export async function copyToClipboard(
 ): Promise<void> {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
+  const runCommand = options.runCommand ?? run
   const writeTerminal =
     options.writeTerminal ?? ((data: string) => process.stdout.write(data))
   const osc52 = () => {
@@ -59,9 +62,11 @@ export async function copyToClipboard(
   }
 
   const commands: [string, string[]][] = []
+  let copied = false
   if (platform === 'darwin') commands.push(['pbcopy', []])
-  else if (platform === 'win32') commands.push(['clip', []])
-  else {
+  else if (platform === 'win32') {
+    copied = await copyViaWindowsClipboard(text, env, runCommand)
+  } else {
     if (env.TERMUX_VERSION) commands.push(['termux-clipboard-set', []])
     if (env.WAYLAND_DISPLAY) commands.push(['wl-copy', []])
     if (env.DISPLAY)
@@ -70,9 +75,8 @@ export async function copyToClipboard(
         ['xsel', ['--clipboard', '--input']],
       )
   }
-  let copied = false
   for (const [command, args] of commands)
-    if ((await run(command, args, env, text)) !== undefined) {
+    if ((await runCommand(command, args, env, text)) !== undefined) {
       copied = true
       break
     }
@@ -80,7 +84,8 @@ export async function copyToClipboard(
   if (!copied && platform === 'linux' && isWSL(env)) {
     // Windows Terminal supports OSC 52; otherwise go through PowerShell
     if (env.WT_SESSION) osc52Sent = osc52()
-    copied = osc52Sent || (await copyViaWindowsClipboard(text, env))
+    copied =
+      osc52Sent || (await copyViaWindowsClipboard(text, env, runCommand, true))
   }
   // OSC 52 can't be verified, so with a display a failure is reported instead; over SSH it is the
   // only way to reach the client's clipboard, and without a display the only way at all
@@ -131,18 +136,25 @@ function isWSL(env: Record<string, string | undefined>): boolean {
 async function copyViaWindowsClipboard(
   text: string,
   env: Record<string, string | undefined>,
+  runCommand: typeof run,
+  fromWsl = false,
 ): Promise<boolean> {
-  const file = join(tmpdir(), `vela-wsl-clip-${randomUUID()}.txt`)
+  const file = join(tmpdir(), `vela-clip-${randomUUID()}.txt`)
   try {
     writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 })
-    const winPath = (await run('wslpath', ['-w', file], env))
-      ?.toString('utf8')
-      .trim()
+    const winPath = fromWsl
+      ? (await runCommand('wslpath', ['-w', file], env))
+          ?.toString('utf8')
+          .trim()
+      : file
     if (!winPath) return false
     const script = `Set-Clipboard -Value ([System.IO.File]::ReadAllText('${winPath.replaceAll("'", "''")}', [System.Text.Encoding]::UTF8))`
     return (
-      (await run('powershell.exe', ['-NoProfile', '-Command', script], env)) !==
-      undefined
+      (await runCommand(
+        'powershell.exe',
+        ['-NoProfile', '-Command', script],
+        env,
+      )) !== undefined
     )
   } catch {
     return false

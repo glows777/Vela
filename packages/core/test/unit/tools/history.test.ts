@@ -17,8 +17,8 @@ import {
   fauxToolCall,
 } from '../../../src/testing/faux.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
-import { bashTool } from '../../../src/tools/shell.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
+import { testBashTool } from '../../support/bash.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-tool-history-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -194,7 +194,7 @@ test('new sessions get separate histories; session resume reuses exact history a
 test('Bash cancellation persists status and original stdout', async () => {
   const results = new ToolResultStore(join(root, 'cancel', 'outputs'))
   const registry = new ToolRegistry(results)
-  registry.register(bashTool)
+  registry.register(testBashTool)
   const abort = new AbortController()
   const pending = registry.toAISDKFormat().bash!.execute!(
     { command: "printf 'BEFORE_CANCEL\\n'; sleep 30 & wait" },
@@ -227,7 +227,7 @@ test('Bash cancellation persists status and original stdout', async () => {
     expect(result).toMatchObject({
       outputPath: call.plannedOutputPath,
       status: 'cancelled',
-      signal: 'SIGKILL',
+      signal: process.platform === 'win32' ? null : 'SIGKILL',
       isError: true,
     })
   } finally {
@@ -354,7 +354,7 @@ for (const kind of ['bash', 'generic'] as const) {
         executions++
         const result =
           kind === 'bash'
-            ? await bashTool.execute(
+            ? await testBashTool.execute(
                 { command: "printf 'RECOVERY_EVIDENCE\\n'" },
                 context,
               )

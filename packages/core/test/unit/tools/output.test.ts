@@ -20,11 +20,13 @@ import {
 } from '../../../src/testing/faux.ts'
 import { readFileTool } from '../../../src/tools/file.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
-import { bashTool, createBashTool } from '../../../src/tools/shell.ts'
+import { createBashTool } from '../../../src/tools/shell.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
+import { createTestBashTool, testBashTool } from '../../support/bash.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'vela-output-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
+const posixTest = process.platform === 'win32' ? test.skip : test
 
 test('oversized result is saved before returning a preview and can be read through the registry', async () => {
   const registry = new ToolRegistry(new ToolResultStore(join(dir, 'results')))
@@ -96,7 +98,7 @@ test('real Bash captures large stdout and stderr with exit status and a bounded 
   const registry = new ToolRegistry(
     new ToolResultStore(join(dir, 'bash-results')),
   )
-  registry.register(bashTool)
+  registry.register(testBashTool)
   // Like pi, a non-zero exit is an error result: the error text is the bounded tail plus the status
   const error = await registry.toAISDKFormat().bash!.execute!(
     {
@@ -270,13 +272,13 @@ test('Bash storage failure prevents command execution', async () => {
   const results = new ToolResultStore(blocked)
   const marker = join(dir, 'must-not-exist')
   await expect(
-    bashTool.execute({ command: `touch '${marker}'` }, { results }),
+    testBashTool.execute({ command: `touch '${marker}'` }, { results }),
   ).rejects.toThrow('Failed to save tool result')
   expect(await Bun.file(marker).exists()).toBe(false)
 })
 
 test('Bash timeout preserves output already written to disk', async () => {
-  const result = await createBashTool().execute(
+  const result = await createTestBashTool().execute(
     { command: "printf 'BEFORE_TIMEOUT\\n'; sleep 20", timeout: 0.2 },
     { results: new ToolResultStore(join(dir, 'timeout-results')) },
   )
@@ -287,22 +289,43 @@ test('Bash timeout preserves output already written to disk', async () => {
   expect(stored.execution).toMatchObject({ timedOut: true, isError: true })
 })
 
-test('Bash rejects an invalid timeout and a shellPath that does not exist before running anything', async () => {
+test('Bash rejects an invalid timeout and reports a missing shell without running the command', async () => {
   const results = new ToolResultStore(join(dir, 'invalid-bash'))
   for (const timeout of [0, -1, Number.POSITIVE_INFINITY, 3_000_000])
     await expect(
       createBashTool().execute({ command: 'true', timeout }, { results }),
     ).rejects.toThrow(/Invalid timeout/)
-  await expect(
-    createBashTool(undefined, {
-      shellPath: join(dir, 'no-such-shell'),
-    }).execute({ command: 'true' }, { results }),
-  ).rejects.toThrow(
-    /Shell not found: .*no-such-shell\. Fix or remove shellPath/,
-  )
+  const result = await createBashTool(undefined, {
+    shellPath: join(dir, 'no-such-shell'),
+  }).execute({ command: 'true' }, { results })
+  const stored = getStoredResult({ type: 'json', value: result as never })!
+  expect(stored.preview).toContain('The command did not run')
+  expect(stored.execution).toMatchObject({
+    isError: true,
+    toolUnavailable: true,
+  })
 })
 
-test('Bash runs commands with the configured shellPath', async () => {
+test('Bash reports a missing working directory without disabling the shell', async () => {
+  const missingDirectory = join(dir, 'missing-working-directory')
+  const result = await createTestBashTool(missingDirectory).execute(
+    { command: 'echo this must not run' },
+    {
+      results: new ToolResultStore(
+        join(dir, 'missing-working-directory-results'),
+      ),
+    },
+  )
+  const stored = getStoredResult({ type: 'json', value: result as never })!
+
+  expect(stored.preview).toContain(
+    `Working directory not found: ${missingDirectory}`,
+  )
+  expect(stored.execution).toMatchObject({ isError: true })
+  expect(stored.execution?.toolUnavailable).toBeUndefined()
+})
+
+posixTest('Bash runs commands with the configured shellPath', async () => {
   const result = await createBashTool(undefined, {
     shellPath: '/bin/sh',
   }).execute(

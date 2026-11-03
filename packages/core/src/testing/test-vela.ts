@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import type { LanguageModel } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import { memory } from '../extensions/memory/index.ts'
@@ -58,6 +58,8 @@ export interface TestVelaOptions {
   dataDir?: string
   /** Where session history is stored; default is files under `dataDir` (same as createVela) */
   sessionStorage?: SessionStorage
+  /** Shell for Bash tests; Windows fixtures detect Git for Windows automatically. */
+  shellPath?: string
   /** Id of the default session (`t.session`), default 'default' */
   sessionId?: string
   /** Files to create in cwd: relative path → content */
@@ -108,6 +110,7 @@ export function createTestVela(
     cwd,
     dataDir: options.dataDir ?? '.vela-data',
     sessionStorage: options.sessionStorage,
+    shellPath: options.shellPath ?? resolveTestShellPath(),
     providers: options.providers,
     thinkingLevel: options.thinkingLevel,
     limits: { retryBaseMs: 0, ...options.limits },
@@ -195,6 +198,28 @@ export function createTestVela(
   }
   live.add(t)
   return t
+}
+
+/** Core tests are also run directly, without the CLI's shell-path setup. */
+function resolveTestShellPath(): string | undefined {
+  if (process.platform !== 'win32') return
+  const env = process.env
+  const candidates = [
+    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    env['ProgramFiles(x86)'] &&
+      join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    env.ProgramW6432 && join(env.ProgramW6432, 'Git', 'bin', 'bash.exe'),
+    env.LOCALAPPDATA &&
+      join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ].filter((candidate): candidate is string => Boolean(candidate))
+
+  for (const directory of (env.PATH ?? '').split(delimiter)) {
+    if (!directory) continue
+    candidates.push(join(directory, 'bash.exe'))
+    if (/(?:^|[\\/])cmd[\\/]?$/i.test(directory))
+      candidates.push(join(dirname(directory), 'bin', 'bash.exe'))
+  }
+  return candidates.find((candidate) => existsSync(candidate)) ?? 'bash.exe'
 }
 
 export type TestVela = ReturnType<typeof createTestVela>

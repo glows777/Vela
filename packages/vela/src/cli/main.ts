@@ -57,6 +57,7 @@ import {
   USAGE,
   withMcpServers,
 } from './setup.ts'
+import { resolveShellPath } from './shell.ts'
 import { formatContextFileList } from './status-display.ts'
 
 const usageError = (message: string): never => {
@@ -256,7 +257,7 @@ const vela = createVela({
     : config.appendSystemPrompt,
   limits: config.settings.limits,
   autoCompaction: config.settings.autoCompaction,
-  shellPath: config.settings.shellPath,
+  shellPath: resolveShellPath(config.settings.shellPath, { env }),
   eventDefaultTarget: config.settings.eventDefaultTarget,
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off

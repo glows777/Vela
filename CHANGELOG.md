@@ -34,6 +34,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **Windows shell and clipboard handling.** The CLI selects the real Git for Windows `bin\\bash.exe` wrapper instead of `.cmd` shims; the SDK defaults to `bash.exe` on `PATH` unless `shellPath` is set. Bash cancellation kills child processes. If Bash cannot start, Vela disables it for the session and enables read-only discovery tools in default sessions. `/copy` uses PowerShell to read UTF-8 text from a temporary file, and clipboard image reads that finish after TUI shutdown are ignored.
 - Changing the thinking level during a run now applies from the next model request instead of waiting for the next prompt ([#238](https://github.com/glows777/Vela/issues/238)).
 
 ## [0.4.0] - 2026-10-27

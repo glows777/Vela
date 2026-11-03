@@ -180,7 +180,7 @@ export interface SessionDeps {
   dataDir: string
   /** Working directory, recorded in new session files; `executeBash()` runs commands here */
   cwd?: string
-  /** Shell for `executeBash()` (settings `shellPath`); default bash on PATH */
+  /** Shell for `executeBash()` (settings `shellPath`); default bash on PATH, or bash.exe on Windows */
   shellPath?: string
   /** Where session history is stored (file / memory / custom) */
   sessionStorage: SessionStorage

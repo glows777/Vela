@@ -29,7 +29,7 @@ export interface VelaSettings {
   enabledModels?: string[]
   /** Project data directory, relative to cwd; default `<agentDir>/projects/<encoded cwd>` */
   dataDir?: string
-  /** Shell the bash tool runs commands with (like pi); default bash on PATH */
+  /** Shell the bash tool runs commands with (like pi); the CLI selects Git Bash on Windows */
   shellPath?: string
   /**
    * Tools a new session starts with: plain names (or `*` patterns) replace the default set, while

@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 import type { ModelMessage } from '@glows777/vela-core'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { createVela } from '../../packages/vela/src/vela.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -137,6 +139,73 @@ test('closing the session during a command cancels it and still saves it', async
   expect(
     (await entries(t)).filter((entry) => entry.type === 'bash_execution'),
   ).toMatchObject([{ command: 'echo started; sleep 10', cancelled: true }])
+})
+
+test('a missing shell is not retried and enables read-only discovery tools for the session', async () => {
+  const t = createTestVela(
+    {
+      responses: [
+        fauxToolCall('bash', { command: 'echo this must not run' }),
+        (req) => {
+          expect(req.tools).not.toContain('bash')
+          expect(req.tools).toContain('list_directory')
+          expect(req.tools).toContain('grep')
+          expect(req.tools).toContain('find')
+          return fauxToolCall('list_directory', { path: '.' })
+        },
+        fauxText('Used file discovery after Bash became unavailable.'),
+      ],
+    },
+    (options) =>
+      createVela({
+        ...options,
+        shellPath: join(options.cwd!, 'missing-bash.exe'),
+      }),
+  )
+
+  await t.run('inspect the project')
+
+  expect(t.lastAssistantText()).toBe(
+    'Used file discovery after Bash became unavailable.',
+  )
+  expect(t.model.calls[1]!.tools).not.toContain('bash')
+  expect(t.model.calls[1]!.tools).toContain('list_directory')
+  expect(t.model.calls[1]!.tools).toContain('grep')
+  expect(t.model.calls[1]!.tools).toContain('find')
+  const bashResult = t
+    .eventsOf('tool_execution_end')
+    .find((event) => event.toolName === 'bash')
+  expect(bashResult?.isError).toBe(true)
+})
+
+test('a missing shell does not widen an explicit tool allowlist', async () => {
+  const t = createTestVela(
+    {
+      session: { tools: ['bash'] },
+      responses: [
+        fauxToolCall('bash', { command: 'echo this must not run' }),
+        (req) => {
+          expect(req.tools).not.toContain('bash')
+          expect(req.tools).not.toContain('list_directory')
+          expect(req.tools).not.toContain('grep')
+          expect(req.tools).not.toContain('find')
+          return fauxText('The configured tool allowlist remains in force.')
+        },
+      ],
+    },
+    (options) =>
+      createVela({
+        ...options,
+        shellPath: join(options.cwd!, 'missing-bash.exe'),
+      }),
+  )
+
+  await t.run('inspect the project')
+
+  expect(t.lastAssistantText()).toBe(
+    'The configured tool allowlist remains in force.',
+  )
+  expect(t.model.calls[1]!.tools).toEqual([])
 })
 
 test('a session with only `!` commands is listed for resuming', async () => {
