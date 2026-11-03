@@ -97,9 +97,19 @@ export async function startTui(
   })
   started.push(mode)
   const ready = mode.start()
-  const screen = () =>
-    mode.tui
-      .render(terminal.columns)
+  const app = mode as unknown as {
+    header: { render(width: number): string[] }
+    transcript: { render(width: number): string[] }
+    editorArea: { render(width: number): string[] }
+    footer: { render(width: number): string[] }
+  }
+  const screen = () => [
+    ...app.header.render(terminal.columns),
+    ...app.transcript.render(terminal.columns),
+    ...app.editorArea.render(terminal.columns),
+    ...app.footer.render(terminal.columns),
+    ...(mode.tui.hasOverlay() ? mode.tui.getScreenLines() : []),
+  ]
       .map((line) => stripTerminalSequences(line).trimEnd())
       .join('\n')
   /** Wait until a condition holds (polls every 1 ms; on timeout, throws with the current screen) */

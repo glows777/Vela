@@ -10,13 +10,15 @@ import {
   Input,
   Loader,
   ProcessTerminal,
+  ScrollView,
   type SelectItem,
   SelectList,
   Spacer,
   type Terminal,
   Text,
   TruncatedText,
-  TuiMainScreen,
+  TuiAltScreen,
+  VStack,
 } from '@earendil-works/pi-tui'
 import type {
   ImageContent,
@@ -128,13 +130,14 @@ export async function runInteractive(
 }
 
 export class InteractiveMode {
-  readonly tui: TuiMainScreen
+  readonly tui: TuiAltScreen
   private readonly terminal: Terminal
   private readonly vela: Vela
   private readonly options: InteractiveOptions
   private session!: VelaSession
 
   private readonly header = new Container()
+  private readonly transcript = new Container()
   private readonly chat = new Container()
   /** `!` commands run while the agent works; they move to the chat when it stops, where they are recorded (like pi) */
   private readonly pendingBash = new Container()
@@ -142,6 +145,7 @@ export class InteractiveMode {
   private readonly status = new Container()
   private readonly widgets = new Container()
   private readonly editorArea = new Container()
+  private readonly transcriptView: ScrollView
   private readonly footer: Footer
   private readonly editor: VelaEditor
   private readonly dispatch: ReturnType<typeof createCliDispatcher>
@@ -195,22 +199,35 @@ export class InteractiveMode {
     this.options = options
     this.vela = options.vela
     this.terminal = options.terminal ?? new ProcessTerminal()
-    this.tui = new TuiMainScreen(this.terminal)
+    this.tui = new TuiAltScreen(this.terminal, undefined, undefined, {
+      scrollToEndIndicator: () =>
+        theme.fg('dim', '↓ New output · scroll to bottom'),
+    })
     this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
     this.footer = new Footer(this.vela.cwd, () => this.session)
     this.dispatch = createCliDispatcher(this.vela)
     for (const child of [
-      this.header,
       this.chat,
       this.pendingBash,
       this.pending,
       this.status,
       this.widgets,
-      this.editorArea,
-      this.footer,
     ])
-      this.tui.addChild(child)
+      this.transcript.addChild(child)
     this.editorArea.addChild(this.editor)
+    this.transcriptView = new ScrollView(this.transcript, {
+      follow: 'end',
+      primary: true,
+      overscroll: 'chain',
+    })
+    this.tui.setLayoutRoot(
+      new VStack([
+        { component: this.header, basis: 'auto', shrink: 0, minSize: 1 },
+        { component: this.transcriptView, basis: 0, grow: 1, minSize: 1 },
+        { component: this.editorArea, basis: 'auto', shrink: 1, minSize: 1 },
+        { component: this.footer, basis: 'auto', shrink: 1, minSize: 1 },
+      ]),
+    )
     this.setupKeys()
   }
 
