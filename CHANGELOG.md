@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-04
+
 ### Breaking Changes
 
 - **Feishu identifiers are now Lark throughout Vela.** Import `lark()` and the corresponding `Lark*` types from `@glows777/vela-lark` or `@glows777/vela`. Replace `builtin:feishu`, `extensionConfig.feishu`, `feishu_*` tools/loadouts/permission references, prompt keys `feishuChannel`/`feishuTopic`, `FEISHU_APP_ID`/`FEISHU_APP_SECRET`/`FEISHU_OWNERS` and `WAKE_FEISHU_VELA_WEBHOOK_URL` with their Lark equivalents. Old public aliases are removed. Stop ingress and follow the [dry-run-first migration guide](docs/lark-migration.md) before restarting an existing deployment. Routing changes preserve physical session IDs, JSONL, original workspace/memory/attachment paths and append-only usage. Collisions and orphaned legacy state stop for explicit resolution. Upstream SDK/domains/events/regions and historical evidence remain unchanged; this is not a provider-region migration.
