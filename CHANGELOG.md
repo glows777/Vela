@@ -25,6 +25,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **The interactive TUI keeps a fullscreen transcript viewport.** New output is followed while the viewport is at the bottom; scrolling up holds the reading position and shows `↓ New output · scroll to bottom`. Scroll back to the bottom or press Ctrl+End to return to the latest output and resume following. See [CLI](docs/cli.md#interactive-mode).
+
 - **`write_file` no longer overwrites an existing file the session has not read to the end or written itself.** The session must have read the file through to EOF with `read_file`, or written it with `write_file` / `edit_file`, and the file must not have changed on disk since; the refusal asks for a full read or a targeted `edit_file`. The record is per session and in memory, so a resumed session reads again. New files and `edit_file` are unchanged. See [Tools](docs/tools.md#write_file).
 
 - Six jointly versioned Bun workspace packages separate core SDK, channel runtime/interfaces, Lark transport, MCP, RAG and the umbrella CLI. Existing `@glows777/vela` and `/testing` imports, `vela` executable and non-adapter behavior remain compatible; the separately listed Lark rename is breaking. Lightweight consumers can install `@glows777/vela-core` or `@glows777/vela-channels`; each package has an explicit export map, declared runtime dependencies and API snapshot.
