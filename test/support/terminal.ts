@@ -103,13 +103,14 @@ export async function startTui(
     editorArea: { render(width: number): string[] }
     footer: { render(width: number): string[] }
   }
-  const screen = () => [
-    ...app.header.render(terminal.columns),
-    ...app.transcript.render(terminal.columns),
-    ...app.editorArea.render(terminal.columns),
-    ...app.footer.render(terminal.columns),
-    ...(mode.tui.hasOverlay() ? mode.tui.getScreenLines() : []),
-  ]
+  const screen = () =>
+    [
+      ...app.header.render(terminal.columns),
+      ...app.transcript.render(terminal.columns),
+      ...app.editorArea.render(terminal.columns),
+      ...app.footer.render(terminal.columns),
+      ...(mode.tui.hasOverlay() ? mode.tui.getScreenLines() : []),
+    ]
       .map((line) => stripTerminalSequences(line).trimEnd())
       .join('\n')
   /** Wait until a condition holds (polls every 1 ms; on timeout, throws with the current screen) */
