@@ -1,9 +1,9 @@
 import {
+  type Component,
   ScrollView,
+  type Terminal,
   TuiAltScreen,
   VStack,
-  type Component,
-  type Terminal,
 } from '@earendil-works/pi-tui'
 import { theme } from './theme.ts'
 
