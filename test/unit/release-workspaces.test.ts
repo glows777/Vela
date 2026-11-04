@@ -69,6 +69,46 @@ test('a partial publish can resume only missing packages from the same release c
   expect(published).toEqual(['core', 'channels', 'mcp', 'rag', 'lark', 'vela'])
 })
 
+test('a published version the registry does not serve yet is polled until it appears', async () => {
+  const { publishMissing } = await import('../../scripts/workspaces.ts')
+  const existing = new Map<string, { gitHead: string }>()
+  const hidden = new Map<string, number>()
+  let sleeps = 0
+  await publishMissing(packages, 'commit', {
+    lookup: async (name) => {
+      const left = hidden.get(name) ?? 0
+      if (left > 0) {
+        hidden.set(name, left - 1)
+        return undefined
+      }
+      return existing.get(name)
+    },
+    publish: async (pkg) => {
+      existing.set(pkg.name, { gitHead: 'commit' })
+      hidden.set(pkg.name, 2)
+    },
+    sleep: async () => {
+      sleeps++
+    },
+  })
+  expect(existing.size).toBe(6)
+  expect(sleeps).toBe(12)
+})
+test('a published version that never becomes visible stops publication', async () => {
+  const { publishMissing } = await import('../../scripts/workspaces.ts')
+  const published: string[] = []
+  await expect(
+    publishMissing(packages, 'commit', {
+      lookup: async () => undefined,
+      publish: async (pkg) => {
+        published.push(pkg.key)
+      },
+      sleep: async () => {},
+    }),
+  ).rejects.toThrow('not visible after publishing')
+  expect(published).toEqual(['core'])
+})
+
 test('release preparation installs Bun before running the workspace status command', async () => {
   const { parse } = await import('yaml')
   const workflow = parse(

@@ -144,14 +144,20 @@ export async function registryVersion(
     )
   return response.json() as Promise<RegistryVersion>
 }
+// After `npm publish` succeeds the registry may not serve the version for several minutes
+const VISIBILITY_INTERVAL_MS = 15_000
+const VISIBILITY_CHECKS = 60
 export async function publishMissing<T extends ReleasePackage>(
   packages: T[],
   commit: string,
   io: {
     lookup(name: string, version: string): Promise<RegistryVersion | undefined>
     publish(pkg: T): Promise<void>
+    /** Pause between visibility checks; npm can take minutes to serve a new version. */
+    sleep?(ms: number): Promise<void>
   },
 ): Promise<void> {
+  const sleep = io.sleep ?? ((ms: number) => Bun.sleep(ms))
   const known = new Set(packages.map((p) => p.name))
   const same = (pkg: ReleasePackage, record: RegistryVersion) => {
     if (record.gitHead !== commit)
@@ -175,7 +181,11 @@ export async function publishMissing<T extends ReleasePackage>(
         same({ key: name, name, version: pkg.version }, record)
       }
     await io.publish(pkg)
-    const published = await io.lookup(pkg.name, pkg.version)
+    let published = await io.lookup(pkg.name, pkg.version)
+    for (let i = 0; !published && i < VISIBILITY_CHECKS; i++) {
+      await sleep(VISIBILITY_INTERVAL_MS)
+      published = await io.lookup(pkg.name, pkg.version)
+    }
     if (!published)
       throw new Error(
         `${pkg.name}@${pkg.version} is not visible after publishing`,
