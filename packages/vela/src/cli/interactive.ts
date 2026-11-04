@@ -10,15 +10,13 @@ import {
   Input,
   Loader,
   ProcessTerminal,
-  ScrollView,
   type SelectItem,
   SelectList,
   Spacer,
   type Terminal,
   Text,
   TruncatedText,
-  TuiAltScreen,
-  VStack,
+  type TuiAltScreen,
 } from '@earendil-works/pi-tui'
 import type {
   ImageContent,
@@ -68,6 +66,7 @@ import {
 } from './tui/components.ts'
 import { VelaEditor } from './tui/editor.ts'
 import { Footer } from './tui/footer.ts'
+import { createInteractiveTui } from './tui/layout.ts'
 import { cycleModel, selectModel } from './tui/model-selector.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
@@ -145,7 +144,6 @@ export class InteractiveMode {
   private readonly status = new Container()
   private readonly widgets = new Container()
   private readonly editorArea = new Container()
-  private readonly transcriptView: ScrollView
   private readonly footer: Footer
   private readonly editor: VelaEditor
   private readonly dispatch: ReturnType<typeof createCliDispatcher>
@@ -199,12 +197,15 @@ export class InteractiveMode {
     this.options = options
     this.vela = options.vela
     this.terminal = options.terminal ?? new ProcessTerminal()
-    this.tui = new TuiAltScreen(this.terminal, undefined, undefined, {
-      scrollToEndIndicator: () =>
-        theme.fg('dim', '↓ New output · scroll to bottom'),
-    })
-    this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
     this.footer = new Footer(this.vela.cwd, () => this.session)
+    this.tui = createInteractiveTui(
+      this.terminal,
+      this.header,
+      this.transcript,
+      this.editorArea,
+      this.footer,
+    )
+    this.editor = new VelaEditor(this.tui, editorTheme, { paddingX: 1 })
     this.dispatch = createCliDispatcher(this.vela)
     for (const child of [
       this.chat,
@@ -215,19 +216,6 @@ export class InteractiveMode {
     ])
       this.transcript.addChild(child)
     this.editorArea.addChild(this.editor)
-    this.transcriptView = new ScrollView(this.transcript, {
-      follow: 'end',
-      primary: true,
-      overscroll: 'chain',
-    })
-    this.tui.setLayoutRoot(
-      new VStack([
-        { component: this.header, basis: 'auto', shrink: 0, minSize: 1 },
-        { component: this.transcriptView, basis: 0, grow: 1, minSize: 1 },
-        { component: this.editorArea, basis: 'auto', shrink: 1, minSize: 1 },
-        { component: this.footer, basis: 'auto', shrink: 1, minSize: 1 },
-      ]),
-    )
     this.setupKeys()
   }
 
