@@ -58,7 +58,8 @@ jobs:
     needs: [prepare, check]
     if: needs.prepare.outputs.published != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Each of the six packages may wait up to 15 minutes for the registry to serve it
+    timeout-minutes: 100
     environment: npm-publish
     permissions:
       contents: read
