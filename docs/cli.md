@@ -117,7 +117,9 @@ A resumed session restores its history, name, thinking level and model (if the m
 
 The TUI does not start channels; run [`vela serve`](#serve) for those, in a separate process. It has no channel traffic in the chat log.
 
-The screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
+The fullscreen screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
+
+The header, editor and footer stay in place while the transcript scrolls. The transcript follows streamed output while you are at the bottom. If you scroll up, output continues but the viewport stays at your reading position, and Vela shows `↓ New output · scroll to bottom`. Scroll back to the bottom or press Ctrl+End to jump to the latest output and resume following it.
 
 Text you send while the agent is running is a steering message: it is inserted after the current step. Alt+Enter queues a follow-up instead, which runs after the task finishes. Slash commands run immediately even while the agent is running.
 
@@ -144,7 +146,7 @@ Vela's own keys:
 | Ctrl+C | Clear the editor; press twice within half a second to exit. |
 | Ctrl+D | Exit when the editor is empty; otherwise delete the character after the cursor. |
 
-`/hotkeys` shows the same list. The editor itself comes from `@earendil-works/pi-tui` and uses its default keys:
+`/hotkeys` shows the same list. The editor itself comes from `@earendil-works/pi-tui` and uses its default keys. In fullscreen mode, PageUp and PageDown scroll the transcript, and Ctrl+End jumps to the latest output:
 
 | Key | Action |
 |---|---|
@@ -155,7 +157,8 @@ Vela's own keys:
 | Alt+Left / Ctrl+Left / Alt+B, Alt+Right / Ctrl+Right / Alt+F | Move by word |
 | Home / Ctrl+A, End / Ctrl+E | Line start, line end |
 | Ctrl+], Ctrl+Alt+] | Jump forward or backward to a character |
-| PageUp, PageDown | Scroll by page |
+| PageUp, PageDown | Scroll the transcript by page |
+| Ctrl+End | Jump to the latest output and resume following it |
 | Backspace, Delete | Delete character backward, forward |
 | Ctrl+W / Alt+Backspace, Alt+D / Alt+Delete | Delete word backward, forward |
 | Ctrl+U, Ctrl+K | Delete to line start, to line end |

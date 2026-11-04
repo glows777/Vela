@@ -416,6 +416,61 @@ test('a prompt shows the user message, tool calls with results and the streamed 
   expect(tui.screen()).not.toContain('Esc to interrupt)')
 })
 
+test('long streaming output follows the bottom, then preserves the reading position when scrolled up', async () => {
+  const answer = (label: string) =>
+    Array.from(
+      { length: 36 },
+      (_, index) => `**${label}-${index}** ${'streamed detail '.repeat(4)}`,
+    ).join('\n\n')
+  const t = createTestVela({
+    responses: [
+      fauxText(answer('first'), { reasoning: answer('thinking') }),
+      fauxText(answer('second'), { reasoning: answer('second-thinking') }),
+    ],
+    faux: { chunkSize: 64 },
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+
+  const viewport = tui.mode.tui as unknown as {
+    mode: string
+    viewportTop: number
+    isFollowingOutput: boolean
+    getScreenLines(): string[]
+    scrollBy(lines: number): void
+    scrollToBottom(): void
+  }
+  const session = t.vela.session('tui')
+
+  tui.submit('first long answer')
+  await tui.until(() => !session.isRunning)
+  tui.mode.tui.renderNow(true)
+
+  expect(viewport.mode).toBe('fullscreen')
+  expect(viewport.isFollowingOutput).toBe(true)
+  expect(viewport.getScreenLines().join('\n')).toContain('first-35')
+  const bottom = viewport.viewportTop
+  expect(bottom).toBeGreaterThan(0)
+
+  viewport.scrollBy(-8)
+  tui.mode.tui.renderNow(true)
+  const readingPosition = viewport.viewportTop
+  expect(readingPosition).toBeLessThan(bottom)
+  expect(viewport.isFollowingOutput).toBe(false)
+
+  tui.submit('second long answer')
+  await tui.until(() => session.isRunning)
+  await tui.until(() => !session.isRunning)
+  tui.mode.tui.renderNow(true)
+
+  expect(viewport.viewportTop).toBe(readingPosition)
+  expect(viewport.isFollowingOutput).toBe(false)
+
+  viewport.scrollToBottom()
+  tui.mode.tui.renderNow(true)
+  expect(viewport.isFollowingOutput).toBe(true)
+})
+
 test('a retried response keeps its partial text marked as failed, and the retry is a new message (like pi)', async () => {
   const t = createTestVela({
     responses: [
