@@ -32,7 +32,7 @@
     },
     "packages/channels": {
       "name": "@glows777/vela-channels",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@glows777/vela-core": "workspace:*",
         "zod": "^4.4.3",
@@ -40,7 +40,7 @@
     },
     "packages/core": {
       "name": "@glows777/vela-core",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.74",
         "@ai-sdk/openai": "^4.0.86",
@@ -56,7 +56,7 @@
     },
     "packages/lark": {
       "name": "@glows777/vela-lark",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@glows777/vela-channels": "workspace:*",
         "@glows777/vela-core": "workspace:*",
@@ -66,7 +66,7 @@
     },
     "packages/mcp": {
       "name": "@glows777/vela-mcp",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@glows777/vela-core": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.32.1",
@@ -75,7 +75,7 @@
     },
     "packages/rag": {
       "name": "@glows777/vela-rag",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@ai-sdk/openai": "^4.0.86",
         "@glows777/vela-core": "workspace:*",
@@ -86,7 +86,7 @@
     },
     "packages/vela": {
       "name": "@glows777/vela",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "bin": {
         "vela": "dist/cli/main.js",
       },
