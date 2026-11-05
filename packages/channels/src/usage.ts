@@ -12,7 +12,7 @@ import type {
 import type { ChannelDirectory } from './directory.ts'
 
 const count = z.number().finite().nonnegative()
-export const channelUsageRowSchema = z.object({
+const channelUsageRowSchema = z.object({
   key: z.string(),
   chatId: z.string(),
   model: z.string(),

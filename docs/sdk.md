@@ -35,7 +35,7 @@ The examples on this page import from `@glows777/vela`, which bundles everything
 |---|---|
 | `@glows777/vela-core` | Root SDK (including images, memory, web and permission gate), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
 | `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
-| `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config; see [migration](lark-migration.md) for older Feishu deployments |
+| `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config |
 | `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
 | `@glows777/vela-rag` | Root RAG factory; depends on core |
 | `@glows777/vela` | Compatibility SDK, built-in composition and CLI/TUI; depends on all five |

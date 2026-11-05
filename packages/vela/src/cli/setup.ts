@@ -322,15 +322,6 @@ export function selectTools(
   defaultTools?: readonly string[],
 ): ToolLoadout | undefined {
   const entries = args.tools ?? []
-  const legacy = [
-    ...entries,
-    ...args.excludeTools,
-    ...(defaultTools ?? []),
-  ].find((name) => /^[+-]?feishu_/.test(name))
-  if (legacy)
-    throw new Error(
-      `Legacy tool selector ${legacy} -> ${legacy.replace('feishu_', 'lark_')}; migrate current selectors and permission rules explicitly`,
-    )
   const listError = getToolListError(entries)
   if (listError) throw new Error(`Invalid --tools list: ${listError}`)
   const plain = entries.filter((entry) => !isToolModifier(entry))
@@ -583,10 +574,6 @@ export async function loadCliExtensions(
     try {
       let extension: VelaExtension
       if ('builtin' in entry) {
-        if (entry.name === 'feishu')
-          throw new Error(
-            'builtin:feishu -> builtin:lark; update -e and migrate settings with scripts/migrate-lark.ts (dry run first)',
-          )
         const factory = BUILTIN_EXTENSIONS[entry.name]
         if (!factory)
           throw new Error(`Unknown built-in extension builtin:${entry.name}`)

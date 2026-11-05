@@ -3,7 +3,6 @@ import type { ExtensionConfigDefinition } from '@glows777/vela-core/extension-ap
 import { configString, configStrings } from '@glows777/vela-core/extension-api'
 import { LarkChannel } from './channel.ts'
 import type { LarkChat } from './chats.ts'
-import { assertLarkEnv, assertLarkState } from './legacy.ts'
 import type { LarkTransport } from './transport.ts'
 
 export interface LarkOptions {
@@ -22,7 +21,6 @@ export interface LarkOptions {
 /** Lark bot channel (long-connection mode), one shared session per enabled chat and topic. Options not passed are read from the config section (`extensionConfig.lark`). */
 export function lark(options: LarkOptions = {}): VelaExtension {
   return function lark(vela) {
-    assertLarkState(vela.dataDir)
     const channel = new LarkChannel({
       appId: options.appId ?? configString(vela.config, 'appId') ?? '',
       appSecret:
@@ -42,7 +40,6 @@ export function lark(options: LarkOptions = {}): VelaExtension {
 export const larkConfig: ExtensionConfigDefinition = {
   name: 'lark',
   resolve(section, context) {
-    assertLarkEnv(context.env)
     return {
       appId: context.env.LARK_APP_ID,
       appSecret: context.env.LARK_APP_SECRET,

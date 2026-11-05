@@ -79,8 +79,6 @@ Vela is a Bun workspace of six npm packages under [`packages/`](packages/). Most
 | [`@glows777/vela-mcp`](packages/mcp) | The MCP extension |
 | [`@glows777/vela-rag`](packages/rag) | The knowledge base (RAG) extension with SQLite vector storage |
 
-Upgrading a Feishu deployment from 0.4 or earlier? Follow the [Lark migration guide](docs/lark-migration.md) first.
-
 ## Development
 
 ```bash
