@@ -50,7 +50,7 @@ Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.
 
 | Behavior | Recipe | Check | Covered in |
 |---|---|---|---|
-| One turn | `responses: [fauxText('hi')]`, `t.run('x')` | Events start `agent_start`, end `agent_settled`; 2 messages; `sessions/default.jsonl` exists | e2e/basic |
+| One turn | `responses: [fauxText('hi')]`, `t.run('x')` | Events start `agent_start`, end `agent_settled`; 2 messages; `sessions/default/transcript.jsonl` exists | e2e/basic |
 | Parallel tools | `[[call('read_file',{path:'a.txt'}), call('read_file',{path:'b.txt'})], fauxText('ok')]` | `t.model.calls[1].toolResults.length === 2` | e2e/tools |
 | Retry | `[fauxError('429 Too Many Requests'), fauxText('ok')]` | One `auto_retry_start`, answer `ok` | e2e/resilience |
 | No retry on 4xx | `[fauxError('400 Bad Request: …')]` | `run` rejects with the 400; no `auto_retry_start` | e2e/resilience |

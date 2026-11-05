@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs'
 import {
   appendFile,
   mkdir,
@@ -6,6 +7,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { silentLogger, type VelaLogger } from '../logger.ts'
@@ -98,16 +100,87 @@ export function sessionArtifactsUseDataDir(
 }
 
 /**
- * File storage: `<dir>/<id>.jsonl`, one entry per line, appended (like pi), mode 0600.
- * A version-1 file (one checkpoint) is converted and rewritten by atomic replace when loaded.
+ * File storage: `<dir>/<id>/transcript.jsonl`, one entry per line, appended (like pi), mode 0600.
+ * A 0.5.0 flat file `<dir>/<id>.jsonl` is moved into that directory when the session is first read
+ * or written. A version-1 file (one checkpoint) is converted and rewritten by atomic replace when loaded.
  */
 export function fileSessionStorage(
   dir: string,
   logger: VelaLogger = silentLogger,
 ): SessionStorage {
-  const pathOf = (id: string) => join(dir, `${id}.jsonl`)
-  const read = async (id: string) => {
-    const path = pathOf(id)
+  const transcriptOf = (id: string) => join(dir, id, 'transcript.jsonl')
+  const flatOf = (id: string) => join(dir, `${id}.jsonl`)
+
+  /** Whether this path is a file: a directory is never a transcript, and `<dir>/<id>/…` below a file is ENOENT or ENOTDIR. */
+  const isFile = async (path: string) => {
+    try {
+      return (await stat(path)).isFile()
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false
+      throw error
+    }
+  }
+
+  /** Makes `<dir>/<id>/` usable, converting a flat session that occupies the name first. */
+  const makeDirectory = async (id: string): Promise<void> => {
+    const target = join(dir, id)
+    let blocked = false
+    try {
+      await mkdir(target, { recursive: true, mode: 0o700 })
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EEXIST' && code !== 'ENOTDIR') throw error
+      blocked = true
+    }
+    if (!blocked) return
+    // Ids may contain `.`, so the flat file of session `a.jsonl` is the directory session `a` needs.
+    // Converting that session frees the name; every step drops one `.jsonl`, so the chain ends.
+    const owner = id.endsWith('.jsonl') ? id.slice(0, -'.jsonl'.length) : ''
+    if (!owner || !(await isFile(target)))
+      throw new Error(
+        `Cannot store session ${id}: ${target} exists and is not a session transcript`,
+      )
+    if (!(await convert(owner)))
+      throw new Error(
+        `Cannot store session ${id}: ${target} is a leftover flat transcript of session ${owner}, whose directory form already has its history in ${transcriptOf(owner)}; delete ${target} to free the name`,
+      )
+    await mkdir(target, { recursive: true, mode: 0o700 })
+  }
+
+  /**
+   * Moves a 0.5.0 flat transcript into `<dir>/<id>/transcript.jsonl` with one rename inside `dir`.
+   * Returns false when a flat file is left in place, because the directory form already has the session
+   * (a leftover file from an older process) and must not be replaced by it.
+   */
+  const convert = async (id: string): Promise<boolean> => {
+    const flat = flatOf(id)
+    // Only a file is a transcript: `<dir>/<id>.jsonl` may be the directory of session `<id>.jsonl`
+    if (!(await isFile(flat))) return false
+    if (await isFile(transcriptOf(id))) return false
+    await makeDirectory(id)
+    try {
+      await rename(flat, transcriptOf(id))
+    } catch (error) {
+      // Another process may have converted it first: only trust that when the new path is there
+      if (
+        (error as NodeJS.ErrnoException).code !== 'ENOENT' ||
+        !(await isFile(transcriptOf(id)))
+      )
+        throw error
+    }
+    return true
+  }
+
+  /** The transcript to read and append to; converts a flat session first, undefined when there is none yet. */
+  const resolve = async (id: string): Promise<string | undefined> => {
+    if (await isFile(transcriptOf(id))) return transcriptOf(id)
+    if (!(await isFile(flatOf(id)))) return undefined
+    await convert(id)
+    return transcriptOf(id)
+  }
+
+  const readAt = async (path: string) => {
     let text: string
     try {
       text = await readFile(path, 'utf8')
@@ -117,10 +190,12 @@ export function fileSessionStorage(
     }
     return { path, text, lines: parseLines(text, path, logger) }
   }
+
   const storage: ReportingStorage = {
-    persistence: (id) => ({ type: 'file', path: pathOf(id) }),
+    persistence: (id) => ({ type: 'file', path: transcriptOf(id) }),
     async load(id) {
-      const file = await read(id)
+      const path = await resolve(id)
+      const file = path ? await readAt(path) : undefined
       if (!file?.lines.length) return
       if (!isSessionV1(file.lines)) {
         // A write cut off mid-line leaves no trailing newline: end it so the next append starts a new line (like pi)
@@ -134,25 +209,39 @@ export function fileSessionStorage(
     },
     async append(id, entries) {
       await mkdir(dir, { recursive: true, mode: 0o700 })
+      let path = await resolve(id)
+      // A new session: the transcript goes into its own directory, which the write creates
+      if (!path) {
+        await makeDirectory(id)
+        path = transcriptOf(id)
+      }
       await appendFile(
-        pathOf(id),
+        path,
         entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''),
         { mode: 0o600 },
       )
     },
     async list() {
-      let names: string[]
+      let names: Dirent[]
       try {
-        names = await readdir(dir)
+        names = await readdir(dir, { withFileTypes: true })
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
         throw error
       }
+      // Listing never writes: a directory form wins over a leftover flat file of the same id
+      const found = new Map<string, string>()
+      for (const entry of names)
+        if (entry.isDirectory() && (await isFile(transcriptOf(entry.name))))
+          found.set(entry.name, transcriptOf(entry.name))
+      for (const entry of names) {
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+        const id = entry.name.slice(0, -'.jsonl'.length)
+        if (!found.has(id)) found.set(id, join(dir, entry.name))
+      }
       const summaries: SessionSummary[] = []
-      for (const name of names) {
-        if (!name.endsWith('.jsonl')) continue
-        const id = name.slice(0, -'.jsonl'.length)
-        const file = await read(id)
+      for (const [id, path] of found) {
+        const file = await readAt(path)
         if (!file) continue
         summaries.push(
           summarizeSession(

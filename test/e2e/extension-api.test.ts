@@ -201,7 +201,7 @@ test('a custom message alone starts the session file; earlier entries are writte
   first.session.appendEntry('state', { n: 1 })
   await first.session.save()
   // Extension state alone is not a conversation (like pi)
-  expect(first.exists('sessions/default.jsonl')).toBe(false)
+  expect(first.exists('sessions/default/transcript.jsonl')).toBe(false)
   await first.session.sendMessage({
     customType: 'note',
     content: 'Saved note',

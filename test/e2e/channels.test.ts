@@ -76,12 +76,16 @@ test('senders in one chat share a persisted session', async () => {
     ['u2', 'Hello u2'],
   ])
   expect(channelSessionId('fake', 'c1')).toBe('fake-c1')
-  expect(await t.readData('sessions/fake-c1.jsonl')).toContain('I am u1')
-  expect(await t.readData('sessions/fake-c1.jsonl')).toContain('I am u2')
+  expect(await t.readData('sessions/fake-c1/transcript.jsonl')).toContain(
+    'I am u1',
+  )
+  expect(await t.readData('sessions/fake-c1/transcript.jsonl')).toContain(
+    'I am u2',
+  )
   expect(t.eventsIn('fake-c1').map((e) => e.type)).toContain('channel_reply')
   // The CLI's default session is unaffected
   expect(t.session.messages).toEqual([])
-  expect(t.exists('sessions/default.jsonl')).toBe(false)
+  expect(t.exists('sessions/default/transcript.jsonl')).toBe(false)
 })
 
 test('a sender continues the conversation after a restart', async () => {
@@ -189,7 +193,9 @@ test('a channel session closed while idle resumes its history when reopened', as
 
   await deliver('u1', 'What color do I like?')
   expect(sent.at(-1)?.text).toBe('blue')
-  expect(await t.readData('sessions/fake-c1.jsonl')).toContain('I like blue')
+  expect(await t.readData('sessions/fake-c1/transcript.jsonl')).toContain(
+    'I like blue',
+  )
 })
 
 test('idle channel sessions are closed, so many chats do not stay in memory; the next message resumes', async () => {
@@ -290,8 +296,8 @@ test('sessions are keyed by conversation: group members share history and direct
     ['group', 'u2', 'clean'],
     ['dm_u1', 'u1', 'same chat'],
   ])
-  expect(t.exists('sessions/fake-dm_u1.jsonl')).toBe(true)
-  expect(t.exists('sessions/fake-group.jsonl')).toBe(true)
+  expect(t.exists('sessions/fake-dm_u1/transcript.jsonl')).toBe(true)
+  expect(t.exists('sessions/fake-group/transcript.jsonl')).toBe(true)
   expect(t.vela.sessions().filter((s) => s.channel === 'fake')).toHaveLength(2)
 })
 
@@ -401,9 +407,9 @@ test('Lark enabled group members share a persisted session and both display name
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Alice: first')
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Bob: second')
   expect(f.t.model.calls[1]?.tools).toContain('bash')
-  expect(await f.t.readData('sessions/lark-oc_group.jsonl')).toContain(
-    'Alice: first',
-  )
+  expect(
+    await f.t.readData('sessions/lark-oc_group/transcript.jsonl'),
+  ).toContain('Alice: first')
 })
 
 test('Lark readUntagged off keeps mention-only top-level behavior', async () => {

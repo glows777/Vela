@@ -168,9 +168,9 @@ test('Steer joins the active run with both named questions and sends one combine
     `${at('3000')}Alice: original question`,
     `${at('5000')}Bob: use blue`,
   ])
-  expect(await f.t.readData('sessions/lark-oc_group.jsonl')).toContain(
-    'Bob: use blue',
-  )
+  expect(
+    await f.t.readData('sessions/lark-oc_group/transcript.jsonl'),
+  ).toContain('Bob: use blue')
 })
 
 test('Stop aborts the active run, visibly confirms on the second message, and does not run that message later', async () => {

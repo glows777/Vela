@@ -174,7 +174,9 @@ test('default-on intake queues each unique message, skips silently, treats comma
   expect(first.t.events.filter((e) => e.type === 'channel_reply')).toHaveLength(
     2,
   )
-  const stored = await first.t.readData('sessions/lark-oc_group.jsonl')
+  const stored = await first.t.readData(
+    'sessions/lark-oc_group/transcript.jsonl',
+  )
   expect(stored).toContain('Alice: colleagues discussing lunch')
   expect(stored).toContain('lark_skip_reply')
   expect(stored).toContain('"passive":true')
@@ -241,7 +243,9 @@ test('off, disabled groups, self and other bots, and unsupported passive message
     existsSync(join(run.t.vela.dataDir, 'channels', 'lark-oc_disabled')),
   ).toBe(false)
   expect(
-    existsSync(join(run.t.vela.dataDir, 'sessions', 'lark-oc_on.jsonl')),
+    existsSync(
+      join(run.t.vela.dataDir, 'sessions', 'lark-oc_on', 'transcript.jsonl'),
+    ),
   ).toBe(false)
 })
 

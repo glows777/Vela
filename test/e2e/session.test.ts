@@ -19,8 +19,8 @@ afterEach(cleanupTestVelas)
  * is complete (storage.load() ends such a line the same way).
  */
 async function savedRoles(t: TestVela): Promise<string[]> {
-  const text = t.exists('sessions/default.jsonl')
-    ? await t.readData('sessions/default.jsonl')
+  const text = t.exists('sessions/default/transcript.jsonl')
+    ? await t.readData('sessions/default/transcript.jsonl')
     : ''
   if (!text.endsWith('\n')) return []
   return text
@@ -88,8 +88,10 @@ test('a session file caught mid-write is not parsed until its record is complete
     async append(id, entries) {
       if (!held) {
         held = true
-        await mkdir(sessions, { recursive: true, mode: 0o700 })
-        await writeFile(join(sessions, `${id}.jsonl`), '', { mode: 0o600 })
+        await mkdir(join(sessions, id), { recursive: true, mode: 0o700 })
+        await writeFile(join(sessions, id, 'transcript.jsonl'), '', {
+          mode: 0o600,
+        })
         await holding
       }
       await storage.append(id, entries)
@@ -106,7 +108,7 @@ test('a session file caught mid-write is not parsed until its record is complete
   running.catch(() => {})
   try {
     // The file exists, but its first record is still being written
-    while (!t.exists('sessions/default.jsonl')) await Bun.sleep(1)
+    while (!t.exists('sessions/default/transcript.jsonl')) await Bun.sleep(1)
     expect(await savedRoles(t)).toEqual([])
     release()
     while ((await savedRoles(t)).length < 3) await Bun.sleep(1)
@@ -138,7 +140,7 @@ test('prompting a saved session that was not resumed fails instead of mixing two
 test('a version-1 session file resumes with its settings and is rewritten in the new format', async () => {
   const t = createTestVela({
     files: {
-      '.vela-data/sessions/default.jsonl': `${JSON.stringify({
+      '.vela-data/sessions/default/transcript.jsonl': `${JSON.stringify({
         type: 'checkpoint',
         version: 1,
         timestamp: '2026-10-01T00:00:00.000Z',
@@ -172,7 +174,7 @@ test('a version-1 session file resumes with its settings and is rewritten in the
   expect(t.session.thinkingLevel).toBe('low')
   await t.run('new question')
   expect(t.lastAssistantText()).toBe('kept')
-  const lines = (await t.readData('sessions/default.jsonl'))
+  const lines = (await t.readData('sessions/default/transcript.jsonl'))
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
@@ -203,9 +205,11 @@ test('sessions with different ids are stored separately', async () => {
       responses: [fauxText('B')],
     })
     await b.run('in b')
-    expect(a.exists('sessions/a.jsonl')).toBe(true)
-    expect(b.exists('sessions/b.jsonl')).toBe(true)
-    expect(await a.readData('sessions/a.jsonl')).not.toContain('in b')
+    expect(a.exists('sessions/a/transcript.jsonl')).toBe(true)
+    expect(b.exists('sessions/b/transcript.jsonl')).toBe(true)
+    expect(await a.readData('sessions/a/transcript.jsonl')).not.toContain(
+      'in b',
+    )
 
     const again = createTestVela({ cwd: dir.path, sessionId: 'a' })
     await again.session.resume()
@@ -226,7 +230,7 @@ test('dataDir keeps sessions, memory, usage and knowledge base out of the workin
   await t.run('hi')
 
   for (const path of [
-    'sessions/default.jsonl',
+    'sessions/default/transcript.jsonl',
     'memory/MEMORY.md',
     'usage/requests.jsonl',
     'rag/knowledge.db',

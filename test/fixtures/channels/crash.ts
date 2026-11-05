@@ -164,7 +164,7 @@ if (mode?.startsWith('note')) {
   const saved = () =>
     readdirSync(t.vela.dataDir, { recursive: true, encoding: 'utf8' }).some(
       (name) =>
-        name.endsWith('lark-oc_group-root.jsonl') &&
+        name.endsWith('lark-oc_group-root/transcript.jsonl') &&
         readFileSync(join(t.vela.dataDir, name), 'utf8').includes(
           'cobalt is ready',
         ),

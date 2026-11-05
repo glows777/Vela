@@ -72,7 +72,9 @@ test('image prompt reaches the provider as an image and history uses one inline 
     role: 'user',
     content: [{ type: 'text', text: 'Describe the image' }, image],
   })
-  expect(await t.readData('sessions/default.jsonl')).toContain(image.data)
+  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+    image.data,
+  )
 })
 
 test('oversized prompt image is resized before it reaches the provider', async () => {

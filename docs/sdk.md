@@ -306,7 +306,7 @@ Sessions in one Vela run concurrently. Tool definitions, extensions, skills, mem
 | Setup | Storage |
 |---|---|
 | `sessionStorage` given | That storage |
-| `dataDir` given | `fileSessionStorage('<dataDir>/sessions')`: one `<id>.jsonl` per session |
+| `dataDir` given | `fileSessionStorage('<dataDir>/sessions')`: one `<id>/transcript.jsonl` per session |
 | neither | `memorySessionStorage()`: gone when the process exits |
 
 ```typescript
