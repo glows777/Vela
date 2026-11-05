@@ -114,6 +114,7 @@ export type {
   ProviderDefinition,
   ThinkingLevel,
 } from './models/index.ts'
+export { verifyProviderModel, writeProviderPreset } from './models/setup.ts'
 export {
   type ContextFile,
   loadContextFiles,

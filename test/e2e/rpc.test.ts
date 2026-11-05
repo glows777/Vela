@@ -235,7 +235,7 @@ test.concurrent('rpc: a prompt that fails before the loop starts gets a failed r
   expect(failed).toMatchObject({ type: 'response', command: 'prompt' })
   // The CLI's hint on how to pick a model, not the SDK's createVela() / setModel() hint
   expect(String(failed.error)).toContain(
-    'No model available. Sign in with /login',
+    'No model available. Run vela setup; Sign in with /login',
   )
   expect(String(failed.error)).not.toContain('createVela')
   const compact = await rpc.call({ type: 'compact' })

@@ -12,6 +12,7 @@ GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/sc
 
 | Feature | Drive | Check |
 |---|---|---|
+| First-run model setup | `npm pack` and install the current CLI into a fresh temporary project; use an empty HOME and VELA_DIR, run `vela` in a terminal with a faux provider, complete setup and send a first prompt; rerun `vela setup` | Verification occurs before saving; displayed paths match the files written; the first prompt receives an answer; retaining the configuration leaves files unchanged. Report a faux provider as such, not as a live credential check. |
 | edit_file | `send "test edit"`, `wait 'Successfully replaced'` | Diff `-1`/`+1`, an `[audit] edit_file → sample-data.txt` line, `grab sample-data.txt` line 1 ends `(updated)` |
 | list / read / bash | `list files`, `read a.txt`, `test bash` | `a.txt` in the `ls` output; the fixture text; `Hello from bash!` |
 | Parallel tools | `send "test parallel"`, `wait 'parallel-2'` | Three `bash` calls (`ls` and two echoes), no error |

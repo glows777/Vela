@@ -101,6 +101,7 @@
   interface ChannelVela
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
+    configureProvider: (name: string, provider: ProviderDefinition) => void
     dispose: () => Promise<void>
     extensions: () => LoadedChannelExtension[]
     listSessions: () => Promise<SessionSummary[]>
@@ -117,6 +118,7 @@
     runningChannels: () => string[]
     session: (id?: string, options?: SessionOptions) => VelaSession
     sessions: () => VelaSession[]
+    setDefaults: (model: string | LanguageModel, thinkingLevel: ThinkingLevel) => void
     startChannels: () => Promise<void>
     subscribe: (listener: VelaSessionEventListener) => () => void
   interface ChannelVelaOptions

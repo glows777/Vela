@@ -123,6 +123,13 @@ export class ModelRegistry {
     this.providers.set(name, provider)
   }
 
+  /** Update a user-configured provider after a successful setup. */
+  configure(name: string, provider: ProviderDefinition): void {
+    if (!PROVIDER_NAME.test(name))
+      throw new Error(`Invalid provider name "${name}"`)
+    this.providers.set(name, provider)
+  }
+
   /** Where a provider's credential comes from, or undefined when it has none */
   authSource(name: string): string | undefined {
     const def = this.providers.get(name)

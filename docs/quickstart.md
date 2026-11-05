@@ -39,7 +39,13 @@ npm link
 
 `bun run start` in the clone starts Vela with the clone itself as the working folder.
 
-## 2. Sign in or set an API key
+## 2. Configure a model
+
+Run `vela` in your working folder. If no usable model is configured, the setup wizard starts automatically. Choose a provider and authentication method, select or enter a model, then confirm a minimal verification request. This request may incur a small charge. After verification, choose the thinking level and save the user-level configuration. Run `vela setup` to revisit it later.
+
+DeepSeek is provided as a preset. For another OpenAI-compatible endpoint, enter its URL and a model ID. Connecting Lark from the wizard is not available yet; use the [manual Lark guide](channels.md#lark) for now.
+
+### Manual configuration
 
 Three providers are built in. Give Vela a key for one of them, and it picks that provider's default model:
 
@@ -54,7 +60,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 vela
 ```
 
-Or start `vela` without a key and run `/login`: it stores an API key, signs in with your ChatGPT Plus/Pro plan (Sign in with ChatGPT, for use on your own machine), or signs in to OpenRouter. See [Credentials and /login](models.md#credentials-and-login).
+You can also run `/login` inside Vela: it stores an API key, signs in with your ChatGPT Plus/Pro plan (Sign in with ChatGPT, for use on your own machine), or signs in to OpenRouter. See [Credentials and /login](models.md#credentials-and-login).
 
 To use another model, pass `--model provider/id`, pick one with `/model`, or save it as `defaultModel` in `~/.vela/settings.json`:
 

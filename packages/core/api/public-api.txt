@@ -253,7 +253,7 @@
     name: string
     providers: string[]
     tools: string[]
-  function loadModels: (options: { agentDir: string; env?: Env; }) => Record<string, ProviderDefinition>
+  function loadModels: (options: { agentDir: string; env?: Env; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
   interface LoginOptions
     agentName?: string | undefined
     getDeviceId?: (() => string) | undefined
@@ -617,6 +617,7 @@
       | (Exclude<AIUserContent, string>[number] | ImageContent)[]
   interface Vela
     commands: () => { name: string; description?: string; extension: string; }[]
+    configureProvider: (name: string, provider: ProviderDefinition) => void
     dispose: () => Promise<void>
     extensions: () => LoadedExtension[]
     listSessions: () => Promise<SessionSummary[]>
@@ -631,6 +632,7 @@
     ready: () => Promise<void>
     session: (id?: string, options?: SessionOptions) => VelaSession
     sessions: () => VelaSession[]
+    setDefaults: (model: string | LanguageModel, thinkingLevel: ThinkingLevel) => void
     subscribe: (listener: VelaSessionEventListener) => () => void
   interface VelaConfig
     agentDir: string
@@ -887,12 +889,14 @@
     prompts?: string[] | undefined
     shellPath?: string | undefined
     skills?: string[] | undefined
+  function verifyProviderModel: (ref: string, providers: Record<string, ProviderDefinition>, credentials: CredentialStore, signal?: AbortSignal) => Promise<void>
   function web: (options?: WebOptions) => VelaExtension
   const webConfig: ExtensionConfigDefinition
   interface WebOptions
     serperKey?: string | undefined
     tavilyKey?: string | undefined
   function withFileMutationQueue: <T>(filePath: string, fn: () => Promise<T>) => Promise<T>
+  function writeProviderPreset: (agentDir: string, provider: string, preset: ProviderConfig) => string
 
 # @glows777/vela-core/testing
 

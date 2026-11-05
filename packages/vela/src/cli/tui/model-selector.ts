@@ -1,5 +1,5 @@
 import type { Component } from '@earendil-works/pi-tui'
-import type { VelaSession } from '@glows777/vela-core'
+import type { ModelInfo, VelaSession } from '@glows777/vela-core'
 import type { Vela } from '../../vela.ts'
 import { nextModel, scopedModels } from '../model-cycle.ts'
 import { dialogBox, errorMessage } from './components.ts'
@@ -38,7 +38,18 @@ export async function selectModel(host: ModelHost): Promise<void> {
     )
     return
   }
-  const ref = await host.dialog<string | undefined>((done) => {
+  const ref = await pickModel(host, models, current)
+  if (ref) switchModel(host, ref)
+}
+
+export async function pickModel(
+  host: Pick<ModelHost, 'dialog'>,
+  models: ModelInfo[],
+  current?: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (signal?.aborted) return undefined
+  return host.dialog<string | undefined>((done) => {
     const list = new SearchSelect(
       models.map((m) => ({
         value: m.ref,
@@ -55,8 +66,18 @@ export async function selectModel(host: ModelHost): Promise<void> {
       selectListTheme,
       current,
     )
-    list.onSelect = (item) => done(item.value)
-    list.onCancel = () => done(undefined)
+    let closed = false
+    const close = (value: string | undefined) => {
+      if (closed) return
+      closed = true
+      signal?.removeEventListener('abort', abort)
+      done(value)
+    }
+    const abort = () => close(undefined)
+    if (signal?.aborted) queueMicrotask(abort)
+    else signal?.addEventListener('abort', abort, { once: true })
+    list.onSelect = (item) => close(item.value)
+    list.onCancel = () => close(undefined)
     return {
       component: dialogBox(
         'Select Model',
@@ -66,7 +87,6 @@ export async function selectModel(host: ModelHost): Promise<void> {
       focus: list,
     }
   })
-  if (ref) switchModel(host, ref)
 }
 
 function switchModel(host: ModelHost, ref: string): void {

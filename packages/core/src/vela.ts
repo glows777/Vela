@@ -140,6 +140,10 @@ export interface Vela {
    * and `--list-models`; `{ all: true }` includes providers without one.
    */
   models(options?: { all?: boolean }): ModelInfo[]
+  /** Update a configured provider for subsequent model selections. */
+  configureProvider(name: string, provider: ProviderDefinition): void
+  /** Set defaults for subsequently created sessions, without changing open sessions. */
+  setDefaults(model: string | LanguageModel, thinkingLevel: ThinkingLevel): void
   /** Providers `/login` can sign in to, with their current credential source */
   loginProviders(): LoginProvider[]
   /**
@@ -217,7 +221,8 @@ export function createVela(options: VelaOptions = {}): Vela {
     (ephemeral
       ? memorySessionStorage()
       : fileSessionStorage(join(dataDir, 'sessions'), options.logger))
-  const { model } = options
+  let { model } = options
+  let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
   const models = new ModelRegistry(options.providers, options.credentials)
   const resolveModel = (
     requested: string | LanguageModel | undefined,
@@ -326,7 +331,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       {
         model,
         resolveModel,
-        thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+        thinkingLevel: defaultThinkingLevel,
         autoCompaction: options.autoCompaction ?? true,
         openSession: (newId, newOptions) => {
           if (sessions.has(newId))
@@ -402,6 +407,16 @@ export function createVela(options: VelaOptions = {}): Vela {
     },
     limits,
     models: (opts) => (opts?.all ? models.list() : models.available()),
+    configureProvider: (name, provider) => {
+      models.configure(name, provider)
+      defaultModel = undefined
+    },
+    setDefaults: (nextModel, thinkingLevel) => {
+      resolveModel(nextModel)
+      model = nextModel
+      defaultThinkingLevel = thinkingLevel
+      defaultModel = undefined
+    },
     loginProviders: () => models.loginProviders(),
     login: (provider, method, interaction, loginOptions) =>
       models.login(provider, method, interaction, loginOptions),

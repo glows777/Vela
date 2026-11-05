@@ -2,6 +2,10 @@
 
 Vela talks to models through the [AI SDK](https://ai-sdk.dev). A model is named `provider/id`, for example `openai/gpt-5.5` or `anthropic/claude-opus-4-8`. Three providers are built in (`anthropic`, `openai`, `openrouter`); others are added in `~/.vela/models.json` or by extensions. A built-in model catalog, generated from pi's, gives the built-in providers their model lists and every known model its context window, output limit, price and thinking levels.
 
+## Setup wizard
+
+Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek is a preset; other OpenAI-compatible services accept a base URL and model ID. Existing environment variables and the manual configuration below remain supported.
+
 ## Selecting a model
 
 The CLI uses the first of these that is set:
@@ -13,7 +17,7 @@ The CLI uses the first of these that is set:
 5. `openai/$OPENAI_API_MODEL_NAME`, when that variable is set.
 6. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`); else the first available model. These are pi's defaults.
 
-If none applies (no provider has a credential), Vela says how to sign in or set a key. In interactive mode it still opens so you can run `/login`; in print mode it exits with code 1.
+If none applies, interactive Vela starts the setup wizard. Print mode exits with code 1 and points to `vela setup`; RPC and serve keep their existing behavior.
 
 Inside a session:
 
