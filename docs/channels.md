@@ -12,6 +12,10 @@ Each group's workspace is a default path, **not a security sandbox**. Absolute p
 
 The built-in `lark` extension uses Lark's long connection (WebSocket), so no public URL is needed. It is loaded by default in the CLI.
 
+Run `vela setup lark` in an interactive terminal to configure a group. The wizard validates the app credentials, waits for a human to mention the bot in a group, and asks for confirmation before enabling it. Every member of an enabled group has full access to Vela tools. It saves credentials in user-level `settings.json` (mode 0600), sends a connection message, and instructs you to run `vela serve`. Card callbacks and other permissions are checklist items, not verified by setup; use the manual reference below. Project settings can override user-level values.
+
+After setup, run `vela serve` and mention the bot again to check a real model-backed reply.
+
 1. Create and publish a Lark custom app with bot capability enabled.
 2. In **Events & Callbacks**, choose long-connection mode, subscribe to the event `im.message.receive_v1`, and add the callback subscription **Card action trigger** (`card.action.trigger`). Use the callback subscription, not the older card request-URL setting; this integration dispatches v2 callbacks over the same long connection.
 3. Grant the API permissions below and add the bot to groups you intend to enable.

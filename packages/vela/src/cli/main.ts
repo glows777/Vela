@@ -521,6 +521,12 @@ if (mode === 'print' || mode === 'json') {
     agentDir,
     attachLogger: interactiveLogger?.attach,
     setupOnly: args.setup,
+    setupTarget: args.setupTarget,
+    projectSettingsPath: config.files.find(
+      (file) =>
+        file === join(config.cwd, '.vela', 'settings.json') &&
+        file !== join(agentDir, 'settings.json'),
+    ),
     onConfigured: () => {
       args.model = undefined
       args.thinking = undefined

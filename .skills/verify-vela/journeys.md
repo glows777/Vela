@@ -112,3 +112,7 @@ GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/sc
 ## Not reachable offline
 
 Say so in the report instead of counting these as verified: real providers and `/login` OAuth, `web_search` (needs a Tavily or Serper key), RAG (needs an embedding endpoint; the SDK tests use a faux embedder), and live Lark permissions, callback delivery, card rendering, mention notifications and on-time routine delivery in the deployment timezone (need app credentials and a running deployment). The SDK can drive the actual Lark extension and gateway offline with a fake transport; that does not verify Lark's service.
+
+### Lark setup
+
+Run `vela setup lark` in an interactive terminal. Confirm the checklist marks card callback unverified, the secret input is masked, and cancel leaves settings unchanged. With a fresh real app and group, validate credentials, mention the bot, confirm the group only after reading the full-tool-access warning, and check the connection message. Run `vela serve`, mention the bot again and record the time to a model-backed reply. Offline fake transport does not verify live platform permissions.

@@ -46,6 +46,8 @@ export interface InteractiveOptions {
   /** Configured agent directory (`VELA_DIR` or `~/.vela`), for `/status` path shortening */
   agentDir?: string
   setupOnly?: boolean
+  setupTarget?: 'lark'
+  projectSettingsPath?: string
   hasUsableModel?: (session: VelaSession) => boolean
   onConfigured?: () => void
 }
