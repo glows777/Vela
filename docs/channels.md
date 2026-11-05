@@ -1,7 +1,5 @@
 # Channels
 
-Existing Feishu deployments must follow the [breaking Lark migration](lark-migration.md) before running this version.
-
 A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `lark-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history. Messages queue in order by default; Lark also offers Steer and Stop during a run.
 
 **Enabling a chat means trusting everyone in it with this machine.** Lark gives every member of an enabled chat full access, including bash, files, memory and extension tools. There is no sandbox or per-member boundary. See [Security](security.md#channel-senders) before enabling a group.
@@ -198,11 +196,7 @@ Use application (`tenant_access_token`) permissions. The bot must be enabled/pub
 - Download message images and files: `im:resource`. The bot must be in the same chat as the message.
 - [Identify this bot](https://open.feishu.cn/document/client-docs/bot-v3/obtain-bot-info): no additional API permission beyond enabled bot capability and the app's tenant token.
 
-### Migration
-
-This is a breaking channel change. A deployment that sets only `owners` now answers **only those owners' DMs**. Add each trusted group's chat_id to `chats` before expecting group replies. All members of that group receive full access; review the membership first.
-
-Session ids change from `<channel>-<chat_id>-<sender_id>` to `<channel>-<chat_id>`. Old per-sender files remain on disk and are not automatically combined or resumed as shared history. The Lark rename migration recognizes valid historical sender archives and leaves their transcripts/artifacts in place; unrecognized orphaned state still requires explicit reconciliation. The new chat starts a separate persisted session; keep old files if you need their transcripts. This avoids silently exposing a previous private sender history to the whole group.
+### Custom transports
 
 Custom `LarkTransport` implementations must provide `getBotId`, `getSenderName`, `listMessages`, `listTopicMessages`, `reply`, `startTopic` and `forward`. `listTopicMessages(threadId, pageToken?)` returns `{ items, pageToken? }` in ascending creation order, with a next token only when more pages remain; use a thread container, page size 50 and no time filters. `listMessages` returns newest-first history with millisecond `create_time`; `reply` returns `{ messageId, createTime }` from the service's successful reply receipt. Sends/replies and API errors must reject, so the gateway reports failure instead of a successful reply.
 
@@ -353,7 +347,7 @@ Channel sessions have no UI: permissions set to `ask` are rejected, and extensio
 
 ## Writing a channel
 
-**Channel hooks remain experimental.** Lark is the only channel implementation so far; the hooks will be stabilized once a second channel is implemented. Their signatures may change in the meantime; consult the migration notes when upgrading. This does not change the stability policy for the rest of the SDK.
+**Channel hooks remain experimental.** Lark is the only channel implementation so far; the hooks will be stabilized once a second channel is implemented. Their signatures may change in the meantime. This does not change the stability policy for the rest of the SDK.
 
 Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The channel types and `createChannelVela` come from `@glows777/vela-channels` (also re-exported by `@glows777/vela`); an adapter for another platform depends on it and `@glows777/vela-core`, like `@glows777/vela-lark` does. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
 
