@@ -130,6 +130,8 @@ The model gets a one-line count summary back, not a copy of the list it just sen
 
 **SDK.** `todo()` takes no options. The CLI loads it by default; the SDK loads it explicitly.
 
+## rag
+
 A local knowledge base with hybrid search, stored in SQLite.
 
 **Tools.**
