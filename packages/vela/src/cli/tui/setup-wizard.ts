@@ -38,6 +38,7 @@ interface Host {
   setSummary(text: string): void
   onConfigured?(): void
   openBrowser?: (url: string) => void
+  signal?: AbortSignal
 }
 
 function readObject(path: string): Record<string, unknown> {
@@ -167,6 +168,9 @@ export async function setupWizard(host: Host): Promise<boolean> {
           method = selected as 'api_key' | 'oauth'
         }
         const controller = new AbortController()
+        host.signal?.addEventListener('abort', () => controller.abort(), {
+          once: true,
+        })
         const interaction: AuthInteraction = {
           signal: controller.signal,
           prompt: async (prompt) => {
@@ -264,9 +268,10 @@ export async function setupWizard(host: Host): Promise<boolean> {
         return false
       }
       try {
-        await verifyProviderModel(ref, finalProviders, memory)
+        await verifyProviderModel(ref, finalProviders, memory, host.signal)
         break
       } catch (error) {
+        if (host.signal?.aborted) return false
         const message = error instanceof Error ? error.message : String(error)
         host.addNotice(`Verification failed: ${message}`, 'error')
         const retry = await host.select(`Verification failed: ${message}`, [

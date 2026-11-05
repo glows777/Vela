@@ -889,7 +889,7 @@
     prompts?: string[] | undefined
     shellPath?: string | undefined
     skills?: string[] | undefined
-  function verifyProviderModel: (ref: string, providers: Record<string, ProviderDefinition>, credentials: CredentialStore) => Promise<void>
+  function verifyProviderModel: (ref: string, providers: Record<string, ProviderDefinition>, credentials: CredentialStore, signal?: AbortSignal) => Promise<void>
   function web: (options?: WebOptions) => VelaExtension
   const webConfig: ExtensionConfigDefinition
   interface WebOptions

@@ -46,7 +46,9 @@ export async function pickModel(
   host: Pick<ModelHost, 'dialog'>,
   models: ModelInfo[],
   current?: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  if (signal?.aborted) return undefined
   return host.dialog<string | undefined>((done) => {
     const list = new SearchSelect(
       models.map((m) => ({
@@ -64,8 +66,18 @@ export async function pickModel(
       selectListTheme,
       current,
     )
-    list.onSelect = (item) => done(item.value)
-    list.onCancel = () => done(undefined)
+    let closed = false
+    const close = (value: string | undefined) => {
+      if (closed) return
+      closed = true
+      signal?.removeEventListener('abort', abort)
+      done(value)
+    }
+    const abort = () => close(undefined)
+    if (signal?.aborted) queueMicrotask(abort)
+    else signal?.addEventListener('abort', abort, { once: true })
+    list.onSelect = (item) => close(item.value)
+    list.onCancel = () => close(undefined)
     return {
       component: dialogBox(
         'Select Model',

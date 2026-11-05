@@ -177,6 +177,41 @@ test.skipIf(!hasScript)(
 )
 
 test.skipIf(!hasScript)(
+  'exiting while verification hangs stops the CLI and leaves no config',
+  async () => {
+    let exit: (() => void) | undefined
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        setTimeout(() => exit?.(), 100)
+        return new Promise<Response>(() => {})
+      },
+    })
+    try {
+      const result = await cli(['setup'], {
+        model: '',
+        onTerminal: (send) => {
+          exit = () => send('\x04')
+        },
+        terminal: [
+          ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+          ['Provider name', 'local\r'],
+          ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API key for local', 'fake-key\r'],
+          ['Model ID', 'test-model\r'],
+          ['may incur', '\r'],
+        ],
+      })
+      expect(result.code).toBe(0)
+      for (const name of ['auth.json', 'models.json', 'settings.json'])
+        expect(existsSync(join(result.agentDir, name))).toBe(false)
+    } finally {
+      server.stop(true)
+    }
+  },
+)
+
+test.skipIf(!hasScript)(
   'first run configures DeepSeek and answers through the real CLI',
   async () => {
     const preload = `
@@ -252,6 +287,7 @@ async function cli(
     env?: Record<string, string>
     stdin?: string
     preload?: string
+    onTerminal?: (send: (text: string) => void) => void
     /** Run in a pseudo-terminal (interactive mode): once the first item appears on screen, type the second (in order) */
     terminal?: [waitFor: string, send: string][]
   },
@@ -288,6 +324,10 @@ async function cli(
       ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null'],
       { cwd, env, stdout: 'pipe', stderr: 'pipe', stdin: 'pipe' },
     )
+    options.onTerminal?.((text) => {
+      proc.stdin.write(text)
+      void proc.stdin.flush()
+    })
     // A CLI that hangs is killed before the test times out, so it doesn't outlive the suite
     const timer = setTimeout(() => proc.kill('SIGKILL'), 25_000)
     const steps = [...options.terminal]

@@ -2,9 +2,45 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileCredentialStore, loadModels } from '@glows777/vela-core'
+import {
+  fileCredentialStore,
+  loadModels,
+  memoryCredentialStore,
+  verifyProviderModel,
+} from '@glows777/vela-core'
 import { setupWizard } from '../../packages/vela/src/cli/tui/setup-wizard.ts'
 import { createVela } from '../../packages/vela/src/vela.ts'
+import { responsesReply } from '../support/responses.ts'
+
+test('OpenAI setup verification uses a Responses-compatible output limit', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-setup-openai-'))
+  const original = globalThis.fetch
+  let outputLimit = 0
+  globalThis.fetch = (async (
+    _input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) => {
+    const body = JSON.parse(String(init?.body))
+    outputLimit = body.max_output_tokens
+    return outputLimit < 16
+      ? Response.json(
+          { error: { message: 'max_output_tokens must be at least 16' } },
+          { status: 400 },
+        )
+      : responsesReply(body)
+  }) as unknown as typeof fetch
+  try {
+    await verifyProviderModel(
+      'openai/gpt-5.5',
+      loadModels({ agentDir: dir }),
+      memoryCredentialStore({ openai: { type: 'api_key', key: 'fake' } }),
+    )
+    expect(outputLimit).toBeGreaterThanOrEqual(16)
+  } finally {
+    globalThis.fetch = original
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('setup preserves a successful browser callback when the paste prompt closes', async () => {
   const originalFetch = globalThis.fetch

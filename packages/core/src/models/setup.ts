@@ -10,12 +10,14 @@ export async function verifyProviderModel(
   ref: string,
   providers: Record<string, ProviderDefinition>,
   credentials: CredentialStore,
+  signal?: AbortSignal,
 ): Promise<void> {
   await generateText({
     model: resolveModel(ref, { providers, credentials }),
     prompt: 'Reply OK.',
-    maxOutputTokens: 8,
+    maxOutputTokens: 16,
     maxRetries: 0,
+    abortSignal: signal,
   })
 }
 
