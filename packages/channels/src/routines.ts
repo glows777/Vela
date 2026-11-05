@@ -72,7 +72,7 @@ const routineSchema = z
     lastFiredAt: instant.nullable(),
   })
   .strict()
-export const channelRoutinesSchema = z
+const channelRoutinesSchema = z
   .object({ version: z.literal(1), routines: z.array(routineSchema) })
   .strict()
 

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -50,7 +49,7 @@ const recordSchema = z
     (record) => !!record.rootId === !!record.threadId,
     'Incomplete topic address',
   )
-export const channelIndexSchema = z.object({
+const channelIndexSchema = z.object({
   version: z.literal(1),
   createdAt: z.string(),
   records: z.array(recordSchema),
@@ -94,14 +93,6 @@ export class ChannelDirectory {
 
   private async read(): Promise<void> {
     if (!this.path) return
-    const marker = join(this.path, '..', 'migration.json')
-    if (existsSync(marker)) {
-      const migration = JSON.parse(await readFile(marker, 'utf8'))
-      if (migration.version !== 1 || migration.status !== 'complete')
-        throw new Error(
-          'Channel migration is incomplete; rerun the migration utility before starting transports',
-        )
-    }
     let text: string
     try {
       text = await readFile(this.path, 'utf8')
