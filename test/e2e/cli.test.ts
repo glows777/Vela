@@ -78,6 +78,12 @@ test.skipIf(!hasScript)(
         ['Every member of an enabled group', '\r'],
       ],
     })
+    if (result.code !== 0)
+      console.log(
+        'Lark setup terminal:',
+        result.stdout.slice(-8000),
+        result.stderr,
+      )
     expect(result.code).toBe(0)
     const settings = JSON.parse(
       readFileSync(join(result.agentDir, 'settings.json'), 'utf8'),
