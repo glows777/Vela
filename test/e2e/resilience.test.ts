@@ -111,7 +111,9 @@ test('a 400 is not retried: the run fails and the user message stays in the save
     reason: 'error',
   })
   expect(t.session.busy.locked).toBe(false)
-  expect(await t.readData('sessions/default.jsonl')).toContain('"hi"')
+  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+    '"hi"',
+  )
 })
 
 test('retries give up after maxRetries', async () => {
@@ -197,7 +199,7 @@ test('a content-filtered response fails the run with the provider reason and kee
   expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
   expect(t.eventsOf('turn_end')).toHaveLength(t.eventsOf('turn_start').length)
   expect(t.session.busy.locked).toBe(false)
-  expect(await t.readData('sessions/default.jsonl')).toContain(
+  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
     'Half a filtered ans',
   )
 
@@ -271,7 +273,9 @@ test('aborting while the model is streaming stops the run; the next run works', 
     stopReason: 'aborted',
     message: { content: [{ type: 'text', text: t.streamedText() }] },
   })
-  expect(await t.readData('sessions/default.jsonl')).toContain('"aborted"')
+  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+    '"aborted"',
+  )
 
   await t.run('Again')
   expect(t.lastAssistantText()).toBe('Second run works')

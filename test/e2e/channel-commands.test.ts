@@ -396,7 +396,7 @@ test.each([false, true])(
     const freshId = index.records[0].activeSessionId
     expect(freshId).not.toBe(oldId)
     expect(index.records[0].previousSessionIds).toEqual([oldId])
-    expect(await t.readData(`sessions/${oldId}.jsonl`)).toContain(
+    expect(await t.readData(`sessions/${oldId}/transcript.jsonl`)).toContain(
       'original task',
     )
     fake.topicHistory.push([

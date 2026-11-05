@@ -119,7 +119,7 @@ t.model.calls                     // requests the model received
 t.dispatch('/context')            // the CLI's own slash commands; returns false / true / a Promise (async commands); output goes to console.log, capture it with captureConsole()
 await t.command('/skill x')       // async command, waits for it to finish
 await t.run('/memory')            // extension commands go through session.prompt(); their output is notify events: t.eventsOf('notify')
-t.readFile('a.txt'); t.readData('sessions/default.jsonl'); t.exists('rag/knowledge.db')  // inside the data dir: sessions/ usage/ memory/ rag/
+t.readFile('a.txt'); t.readData('sessions/default/transcript.jsonl'); t.exists('rag/knowledge.db')  // inside the data dir: sessions/ usage/ memory/ rag/
 await t.cleanup({ keepDir: true }) // usually left to cleanupTestVelas()
 ```
 

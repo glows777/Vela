@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { VelaEvent } from '@glows777/vela-core'
 import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { z } from 'zod'
@@ -35,8 +36,12 @@ test('two sessions run at the same time with separate history, files, locks and 
   expect(a.messages.map((m) => m.role)).toEqual(['user'])
   expect(a.getEntries().at(-1)).toMatchObject({ stopReason: 'aborted' })
 
-  expect(await t.readData('sessions/b.jsonl')).toContain('answer for b')
-  expect(await t.readData('sessions/a.jsonl')).not.toContain('answer for b')
+  expect(await t.readData('sessions/b/transcript.jsonl')).toContain(
+    'answer for b',
+  )
+  expect(await t.readData('sessions/a/transcript.jsonl')).not.toContain(
+    'answer for b',
+  )
   expect(b.usage.totals.steps).toBe(1)
   expect(a.usage.totals.steps).toBe(0)
   expect(t.session.messages).toEqual([])
@@ -204,7 +209,9 @@ test('close() stops a running prompt, saves it and removes the session', async (
   await s.close()
   await expect(running).rejects.toThrow()
   expect(t.vela.sessions().map((x) => x.id)).toEqual(['default'])
-  expect(await t.readData('sessions/closing.jsonl')).toContain('keep thinking')
+  expect(await t.readData('sessions/closing/transcript.jsonl')).toContain(
+    'keep thinking',
+  )
   await expect(s.prompt('again')).rejects.toThrow('is closed')
   // Reopening the same id gives a new session that can resume from disk
   const reopened = t.vela.session('closing')
@@ -293,4 +300,86 @@ test('saved sessions are listed newest first with name, size and first message',
   const again = resumed.vela.session('newer')
   expect(await again.resume()).toBe(true)
   expect(again.name).toBe('Refactor discussion')
+})
+
+test('a session in the 0.5.0 flat layout lists, resumes and is converted on open', async () => {
+  const first = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'echo legacy' }),
+      fauxText('saved'),
+    ],
+  })
+  await first.run('Run the legacy command')
+  const history = readFileSync(first.session.registry.results.indexPath, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  // A pre-change session stored the whole reference instead of a preview plus a full-output path
+  const legacy = {
+    kind: 'vela-tool-result',
+    path: history[1].outputPath,
+    indexPath: first.session.registry.results.indexPath,
+    bytes: 7,
+    preview: 'legacy\n',
+    read: 'Only a preview is shown. Use read_file to read more.',
+  }
+  await first.cleanup({ keepDir: true })
+
+  // Rewrite the tool result and put the session back in the 0.5.0 flat layout
+  const flat = first.dataPath('sessions/default.jsonl')
+  const transcript = first.dataPath('sessions/default/transcript.jsonl')
+  const entries = readFileSync(
+    existsSync(transcript) ? transcript : flat,
+    'utf8',
+  )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  entries.find(
+    (entry) => entry.type === 'message' && entry.message.role === 'tool',
+  ).message.content[0].output = { type: 'json', value: legacy }
+  writeFileSync(
+    flat,
+    `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+  )
+  rmSync(transcript, { force: true })
+
+  const second = createTestVela({
+    cwd: first.cwd,
+    responses: [
+      (req) => {
+        const output = req.prompt
+          .flatMap((message) =>
+            message.role === 'tool' ? message.content : [],
+          )
+          .find((part) => part.type === 'tool-result')!.output
+        expect(output).toEqual({ type: 'text', value: 'legacy\n' })
+        return fauxText('continued')
+      },
+    ],
+  })
+  expect((await second.vela.listSessions()).map((s) => s.id)).toContain(
+    'default',
+  )
+  expect(await second.session.resume()).toBe(true)
+  expect(readFileSync(legacy.path, 'utf8')).toBe('legacy\n')
+  await second.run('Continue the legacy session')
+  expect(second.lastAssistantText()).toBe('continued')
+
+  const converted = readFileSync(transcript, 'utf8')
+  expect(converted).toContain('Run the legacy command')
+  expect(converted).toContain('Continue the legacy session')
+  expect(existsSync(flat)).toBe(false)
+  await second.cleanup({ keepDir: true })
+
+  // Resuming again reads the converted file and leaves it alone
+  const third = createTestVela({
+    cwd: first.cwd,
+    responses: [fauxText('again')],
+  })
+  expect(await third.session.resume()).toBe(true)
+  expect(readFileSync(transcript, 'utf8')).toBe(converted)
+  await third.run('Ask once more')
+  expect(third.lastAssistantText()).toBe('again')
+  expect(readFileSync(transcript, 'utf8')).toContain('Ask once more')
 })

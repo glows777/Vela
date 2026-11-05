@@ -43,7 +43,7 @@ test('entries are appended in order with ids and parents; loadSaved rebuilds the
   await store.flush()
 
   const lines = fs
-    .readFileSync(path.join(dir, 'default.jsonl'), 'utf8')
+    .readFileSync(path.join(dir, 'default', 'transcript.jsonl'), 'utf8')
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
@@ -74,7 +74,9 @@ test('like pi, nothing is written until the session has a user or assistant mess
   store.appendThinkingLevelChange('low')
   store.appendSessionInfo('Name')
   await store.flush()
-  expect(fs.existsSync(path.join(dir, 'default.jsonl'))).toBe(false)
+  expect(fs.existsSync(path.join(dir, 'default', 'transcript.jsonl'))).toBe(
+    false,
+  )
   expect(await store.loadSaved()).toBeUndefined()
 })
 

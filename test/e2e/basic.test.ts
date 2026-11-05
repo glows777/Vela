@@ -60,7 +60,7 @@ test('plain text reply streams, ends the loop and saves the session', async () =
   expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
   expect(t.lastAssistantText()).toBe('Hi, this is Vela.')
 
-  const session = await t.readData('sessions/default.jsonl')
+  const session = await t.readData('sessions/default/transcript.jsonl')
   expect(session).toContain('Hi, this is Vela')
   expect(t.exists('usage/requests.jsonl')).toBe(true)
 })

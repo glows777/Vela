@@ -81,7 +81,7 @@ test('microcompact folds old tool results once more than five calls have complet
   const path = text.match(/Full output: (.+?);/)![1]!
   expect(await Bun.file(path).text()).toContain('// file 0')
   // Folded results can be recovered from their path
-  const saved = await t.readData('sessions/default.jsonl')
+  const saved = await t.readData('sessions/default/transcript.jsonl')
   expect(saved).toContain('tool result preview omitted')
   expect(t.lastAssistantText()).toBe('Read them all')
 })
@@ -260,7 +260,9 @@ test('session.compact() summarizes old history on demand, with an optional focus
   expect(generate.inputTokens).toBeLessThan(stream.inputTokens)
   expect(JSON.stringify(generate.prompt)).not.toContain('Question 1')
   expect(t.session.contextManager.state.summary).toContain('## Goal')
-  expect(await t.readData('sessions/default.jsonl')).toContain('Question 0')
+  expect(await t.readData('sessions/default/transcript.jsonl')).toContain(
+    'Question 0',
+  )
   expect(t.session.isRunning).toBe(false)
 })
 

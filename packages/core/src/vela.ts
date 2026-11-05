@@ -88,7 +88,7 @@ export interface VelaOptions {
    * The CLI uses `~/.vela/projects/<encoded cwd>` (see loadConfig).
    */
   dataDir?: string
-  /** Where session history is stored; defaults to `<dataDir>/sessions/*.jsonl` with dataDir, otherwise memory */
+  /** Where session history is stored; defaults to `<dataDir>/sessions/<id>/transcript.jsonl` with dataDir, otherwise memory */
   sessionStorage?: SessionStorage
   /**
    * Skill directories or `.md` files (Agent Skills format, see docs/skills.md), in priority order: the first skill
@@ -159,7 +159,7 @@ export interface Vela {
   /** Removes a provider's stored credential (`/logout`); returns false when none was stored */
   logout(provider: string): Promise<boolean>
   /**
-   * Opens a session (or returns it if already open); with file storage the id is the file name in `sessions/<id>.jsonl`.
+   * Opens a session (or returns it if already open); with file storage the id names the directory `sessions/<id>/`.
    * Options apply on first open, except a first scope/channel routing binding may attach to an existing object. Call `await session.resume()` to restore history.
    */
   session(id?: string, options?: SessionOptions): VelaSession

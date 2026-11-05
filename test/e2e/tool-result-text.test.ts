@@ -179,7 +179,7 @@ test('a pre-change StoredToolResult session resumes with its original result tex
     preview: 'legacy\n',
     read: 'Only a preview is shown. Use read_file to read more.',
   }
-  const saved = `${first.dataDir}/sessions/default.jsonl`
+  const saved = `${first.dataDir}/sessions/default/transcript.jsonl`
   await first.cleanup({ keepDir: true })
   const entries = readFileSync(saved, 'utf8')
     .trim()
@@ -253,7 +253,7 @@ test('a resumed truncated legacy generic result keeps its full-output recovery p
     preview: `${body.slice(0, 1800)}\n\n[preview: first 1800 and last 1200 of ${body.length} UTF-16 code units; ${body.length - 3000} omitted here, full output saved]\n\n${body.slice(-1200)}`,
     read: 'Only a preview is shown. Use read_file with path, offset, limit and column to read more.',
   }
-  const saved = `${first.dataDir}/sessions/default.jsonl`
+  const saved = `${first.dataDir}/sessions/default/transcript.jsonl`
   const entries = readFileSync(saved, 'utf8')
     .trim()
     .split('\n')

@@ -420,9 +420,10 @@ async function cli(
 /** Session files saved in the data dir (each run starts a new session; the id is a timestamp + random suffix) */
 function sessionFiles(dataDir: string): string[] {
   try {
-    return readdirSync(join(dataDir, 'sessions'))
-      .filter((name) => name.endsWith('.jsonl'))
-      .map((name) => join(dataDir, 'sessions', name))
+    return readdirSync(join(dataDir, 'sessions'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(dataDir, 'sessions', entry.name, 'transcript.jsonl'))
+      .filter((path) => existsSync(path))
   } catch {
     return []
   }
@@ -730,7 +731,7 @@ test.concurrent('-p prints only the final answer to stdout and saves a new sessi
   expect(stdout).toBe('Hello, this is Vela (faux replay).\n')
   const files = sessionFiles(dataDir)
   expect(files).toHaveLength(1)
-  expect(files[0]).toMatch(/\/\d{8}-\d{6}-[0-9a-f]{4}\.jsonl$/)
+  expect(files[0]).toMatch(/(^|\/)\d{8}-\d{6}-[0-9a-f]{4}\/transcript\.jsonl$/)
   expect(await Bun.file(files[0]!).text()).toContain('faux replay')
 })
 
@@ -1047,8 +1048,8 @@ test.concurrent('--session opens a named session id; -r needs interactive mode',
     model: `faux:${scenario('hello')}`,
   })
   expect(first.code).toBe(0)
-  expect(sessionFiles(first.dataDir).map((f) => f.split('/').at(-1))).toEqual([
-    'work.jsonl',
+  expect(sessionFiles(first.dataDir).map((f) => f.split('/').at(-2))).toEqual([
+    'work',
   ])
   const resume = await cli(['-p', 'hello', '-r'], {
     model: `faux:${scenario('hello')}`,
@@ -1072,7 +1073,7 @@ test.concurrent('--fork copies a saved session into a new one; --export writes a
   const forked = await cli(['-p', 'again', '--fork', 'work'], opts)
   expect(forked.code).toBe(0)
   const files = sessionFiles(first.dataDir).filter(
-    (f) => !f.endsWith('/work.jsonl'),
+    (f) => f.split('/').at(-2) !== 'work',
   )
   expect(files).toHaveLength(1)
   const lines = readFileSync(files[0]!, 'utf8').trim().split('\n')
@@ -1713,7 +1714,7 @@ test('-p: SIGTERM stops a running bash command with its process group, then exit
     expect(alive(pid)).toBe(false)
     // The session was closed before exiting: the cancelled bash call is saved with its result
     const saved = await Array.fromAsync(
-      new Bun.Glob('projects/*/sessions/*.jsonl').scan({
+      new Bun.Glob('projects/*/sessions/*/transcript.jsonl').scan({
         cwd: home.path,
         absolute: true,
       }),

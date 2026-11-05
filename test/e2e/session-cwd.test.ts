@@ -88,7 +88,7 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
       expect(
         JSON.parse(
           readFileSync(
-            join(vela.dataDir, 'sessions', `${session.id}.jsonl`),
+            join(vela.dataDir, 'sessions', session.id, 'transcript.jsonl'),
             'utf8',
           ).split('\n')[0]!,
         ),

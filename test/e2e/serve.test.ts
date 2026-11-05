@@ -272,9 +272,12 @@ test('serve answers a channel message on stderr and stops cleanly on SIGTERM', a
   )
   expect(await Bun.file(replyFile).text()).toBe('pong\n')
   // The channel session was saved before the process exited
-  const sessions = readdirSync(
-    join(projectDataDir(home.path, dir.path), 'sessions'),
-  ).filter((name) => name.endsWith('.jsonl'))
+  const sessionsDir = join(projectDataDir(home.path, dir.path), 'sessions')
+  const sessions = readdirSync(sessionsDir, { withFileTypes: true }).filter(
+    (entry) =>
+      entry.isDirectory() &&
+      existsSync(join(sessionsDir, entry.name, 'transcript.jsonl')),
+  )
   expect(sessions).toHaveLength(1)
 })
 

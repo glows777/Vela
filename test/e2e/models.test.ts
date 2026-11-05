@@ -336,7 +336,9 @@ test('a model passed as an object is not saved with the session', async () => {
   try {
     const a = createTestVela({ cwd: dir.path, responses: [fauxText('x')] })
     await a.run('hi')
-    expect(await a.readData('sessions/default.jsonl')).not.toContain('"model"')
+    expect(await a.readData('sessions/default/transcript.jsonl')).not.toContain(
+      '"model"',
+    )
     await a.cleanup()
   } finally {
     dir.cleanup()

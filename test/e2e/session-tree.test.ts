@@ -93,7 +93,7 @@ test('moving to a user message puts its text back; sending it again starts a new
   // Both branches stay in the file; q2 and q2b share a parent
   const entries = t.session.getEntries()
   expect(entryOf(entries, 'q2b').parentId).toBe(q2.parentId)
-  const file = await t.readData('sessions/default.jsonl')
+  const file = await t.readData('sessions/default/transcript.jsonl')
   expect(file).toContain('"q2"')
   expect(file).toContain('q2b')
   // The tree has one root and branches below a1
@@ -217,7 +217,7 @@ test('fork copies the branch before a user message into a new open session; the 
     'assistant',
   ])
   const header = JSON.parse(
-    (await t.readData('sessions/forked.jsonl')).split('\n')[0]!,
+    (await t.readData('sessions/forked/transcript.jsonl')).split('\n')[0]!,
   )
   expect(header).toMatchObject({
     type: 'session',
@@ -226,8 +226,9 @@ test('fork copies the branch before a user message into a new open session; the 
   })
   // The tool call history came along, under the fork's own history id
   expect(header.toolHistoryId).not.toBe(
-    JSON.parse((await t.readData('sessions/default.jsonl')).split('\n')[0]!)
-      .toolHistoryId,
+    JSON.parse(
+      (await t.readData('sessions/default/transcript.jsonl')).split('\n')[0]!,
+    ).toolHistoryId,
   )
   expect(await Bun.file(forked.store.results.history.path).text()).toContain(
     'a.txt',
@@ -250,7 +251,7 @@ test('forking from the first message starts an empty session that records its pa
   expect(session!.messages).toEqual([])
   await session!.prompt('new start')
   const header = JSON.parse(
-    (await t.readData('sessions/fresh.jsonl')).split('\n')[0]!,
+    (await t.readData('sessions/fresh/transcript.jsonl')).split('\n')[0]!,
   )
   expect(header.parentSession).toBe('default')
 })

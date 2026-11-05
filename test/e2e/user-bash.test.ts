@@ -9,7 +9,7 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 afterEach(cleanupTestVelas)
 
 const entries = async (t: ReturnType<typeof createTestVela>) =>
-  (await t.readData('sessions/default.jsonl'))
+  (await t.readData('sessions/default/transcript.jsonl'))
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))

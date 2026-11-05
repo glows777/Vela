@@ -45,7 +45,7 @@ test('/status reports the session, model and context usage', async () => {
   expect(plain).toContain('[status]')
   expect(plain).toContain(`Session: refactor (${t.session.id})`)
   expect(plain).toContain(
-    `Path: ${join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)}`,
+    `Path: ${join(t.vela.dataDir, 'sessions', t.session.id, 'transcript.jsonl')}`,
   )
   expect(plain).toContain(`Cwd: ${t.vela.cwd}`)
   expect(plain).toContain(`Model: ${t.session.modelInfo.ref}`)
@@ -56,7 +56,7 @@ test('/status reports the session, model and context usage', async () => {
   )
   expect(plain).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
   expect(plain).not.toMatch(/Usage:.*\$/)
-  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(true)
+  expect(t.exists(`sessions/${t.session.id}/transcript.jsonl`)).toBe(true)
 })
 
 test('/status on a fresh session shows identity and omits usage totals', async () => {
@@ -66,12 +66,17 @@ test('/status on a fresh session shows identity and omits usage totals', async (
     expect(t.dispatch('/status')).toBe(true)
   })
   expect(output).toContain(`Session: ${t.session.id}\n`)
-  const destination = join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`)
+  const destination = join(
+    t.vela.dataDir,
+    'sessions',
+    t.session.id,
+    'transcript.jsonl',
+  )
   expect(output).toContain(
     `Path: not written yet (will save to ${destination})`,
   )
   expect(output).not.toContain(`Path: ${destination}`)
-  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
+  expect(t.exists(`sessions/${t.session.id}/transcript.jsonl`)).toBe(false)
   expect(output).toContain('Thinking: low')
   expect(output).toContain('Channel: lark')
   expect(output).toContain('Messages: 0')
@@ -132,11 +137,11 @@ test('/status says a memory session is not saved instead of inventing a file pat
   expect(output).toContain('Path: in-memory (not saved)')
   expect(output).not.toContain('.jsonl')
   expect(output).not.toContain(
-    join(t.vela.dataDir, 'sessions', `${t.session.id}.jsonl`),
+    join(t.vela.dataDir, 'sessions', t.session.id, 'transcript.jsonl'),
   )
   expect(output).toContain('Messages: 2')
   expect(output).toMatch(/Usage: ↑1\.0k ↓20 \(1 step\)/)
-  expect(t.exists(`sessions/${t.session.id}.jsonl`)).toBe(false)
+  expect(t.exists(`sessions/${t.session.id}/transcript.jsonl`)).toBe(false)
 })
 
 test('/status strips control sequences from the working directory and session path', async () => {
@@ -158,7 +163,9 @@ test('/status strips control sequences from the working directory and session pa
       .replaceAll('\u001b[0m', '')
     expect(output).toContain(`Cwd: ${shownCwd}`)
     expect(output).toContain('Path: not written yet (will save to ')
-    expect(output).toContain(`data-DIR/sessions/${t.session.id}.jsonl`)
+    expect(output).toContain(
+      `data-DIR/sessions/${t.session.id}/transcript.jsonl`,
+    )
     expect(output).not.toContain('\u001b')
     expect(output).not.toContain('in-memory')
   } finally {
@@ -191,7 +198,7 @@ test('a durable custom storage that omits persistence() is not called in-memory'
     expect(output).not.toContain('in-memory (not saved)')
     expect(output).not.toContain('.jsonl')
     expect(
-      existsSync(join(root.path, 'sessions', `${t.session.id}.jsonl`)),
+      existsSync(join(root.path, 'sessions', t.session.id, 'transcript.jsonl')),
     ).toBe(true)
     await t.cleanup()
 

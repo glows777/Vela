@@ -1,5 +1,5 @@
 /** Revision-local paths: immutable flat snapshots and the workspace layout share one worker. */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 export function runtimePaths(runtime: string) {
@@ -16,8 +16,22 @@ export function runtimePaths(runtime: string) {
         ? current.replace('/dist/', '/src/').replace(/\.js$/, '.ts')
         : current
   const lark = existsSync(join(runtime, 'test/support/lark.ts'))
+  // A session transcript moved into `<id>/transcript.jsonl` (#267); older snapshots keep `<id>.jsonl`
+  const storage = [
+    'packages/core/src/session/storage.ts',
+    'packages/core/dist/session/storage.js',
+    'src/session/storage.ts',
+  ]
+    .map((path) => join(runtime, path))
+    .find((path) => existsSync(path))
+  const sessionDirectory =
+    storage !== undefined &&
+    readFileSync(storage, 'utf8').includes('transcript.jsonl')
   return {
     channelName: lark ? ('lark' as const) : ('feishu' as const),
+    /** The transcript path of a session id, relative to the sessions directory. */
+    sessionTranscript: (id: string) =>
+      sessionDirectory ? `${id}/transcript.jsonl` : `${id}.jsonl`,
     helpers: `test/support/${lark ? 'lark' : 'feishu'}.ts`,
     workspace,
     source,
