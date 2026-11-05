@@ -102,7 +102,7 @@ export function larkTransport(
   const client = new lark.Client({
     appId,
     appSecret,
-    ...(quiet ? { logger: silent, disableTokenCache: true } : {}),
+    ...(quiet ? { logger: silent } : {}),
   })
   let wsClient: lark.WSClient | undefined
   return {
