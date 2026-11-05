@@ -54,6 +54,44 @@ test.skipIf(!hasScript)(
 )
 
 test.skipIf(!hasScript)(
+  'Lark setup completes through the CLI with a fake connection',
+  async () => {
+    const preload = `
+      import { mock } from 'bun:test'
+      import * as real from ${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}
+      mock.module('@glows777/vela-lark', () => ({ ...real,
+        connectLarkSetup: async () => ({
+          waitForMention: async () => ({ chatId: 'oc_fake' }),
+          send: async (chatId, text) => { await Bun.write(process.env.VELA_DIR + '/sent.json', JSON.stringify({ chatId, text })) },
+          stop: () => {},
+        }),
+      }))
+    `
+    const result = await cli(['setup', 'lark', '--no-approve'], {
+      model: 'mock',
+      files: { 'fake-lark.ts': preload },
+      preload: 'fake-lark.ts',
+      terminal: [
+        ['Create and publish a Lark app', '\r'],
+        ['Lark App ID', 'cli_fake\r'],
+        ['App Secret', 'fake-secret\r'],
+        ['Every member of an enabled group', '\r'],
+      ],
+    })
+    expect(result.code).toBe(0)
+    const settings = JSON.parse(
+      readFileSync(join(result.agentDir, 'settings.json'), 'utf8'),
+    )
+    expect(settings.extensionConfig.lark.chats).toEqual(['oc_fake'])
+    expect(
+      JSON.parse(readFileSync(join(result.agentDir, 'sent.json'), 'utf8'))
+        .chatId,
+    ).toBe('oc_fake')
+    expect(result.stdout).not.toContain('fake-secret')
+  },
+)
+
+test.skipIf(!hasScript)(
   'existing offline model does not start setup',
   async () => {
     const result = await cli([], {
