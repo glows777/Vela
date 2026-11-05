@@ -111,22 +111,13 @@ export function fileSessionStorage(
   const transcriptOf = (id: string) => join(dir, id, 'transcript.jsonl')
   const flatOf = (id: string) => join(dir, `${id}.jsonl`)
 
-  const exists = async (path: string) => {
-    try {
-      await stat(path)
-      return true
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      // `<dir>/<id>` is a file: the transcript below it cannot exist
-      if (code === 'ENOENT' || code === 'ENOTDIR') return false
-      throw error
-    }
-  }
+  /** Whether this path is a file: a directory is never a transcript, and `<dir>/<id>/…` below a file is ENOENT or ENOTDIR. */
   const isFile = async (path: string) => {
     try {
       return (await stat(path)).isFile()
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false
       throw error
     }
   }
@@ -157,7 +148,8 @@ export function fileSessionStorage(
   /** Moves a 0.5.0 flat transcript into `<dir>/<id>/transcript.jsonl` with one rename inside `dir`. */
   const convert = async (id: string): Promise<void> => {
     const flat = flatOf(id)
-    if (!(await exists(flat))) return
+    // Only a file is a transcript: `<dir>/<id>.jsonl` may be the directory of session `<id>.jsonl`
+    if (!(await isFile(flat))) return
     await makeDirectory(id)
     try {
       await rename(flat, transcriptOf(id))
@@ -165,7 +157,7 @@ export function fileSessionStorage(
       // Another process may have converted it first: only trust that when the new path is there
       if (
         (error as NodeJS.ErrnoException).code !== 'ENOENT' ||
-        !(await exists(transcriptOf(id)))
+        !(await isFile(transcriptOf(id)))
       )
         throw error
     }
@@ -173,8 +165,8 @@ export function fileSessionStorage(
 
   /** The transcript to read and append to; converts a flat session first, undefined when there is none yet. */
   const resolve = async (id: string): Promise<string | undefined> => {
-    if (await exists(transcriptOf(id))) return transcriptOf(id)
-    if (!(await exists(flatOf(id)))) return undefined
+    if (await isFile(transcriptOf(id))) return transcriptOf(id)
+    if (!(await isFile(flatOf(id)))) return undefined
     await convert(id)
     return transcriptOf(id)
   }
@@ -229,19 +221,17 @@ export function fileSessionStorage(
         throw error
       }
       // Listing never writes: a directory form wins over a leftover flat file of the same id
-      const ids: string[] = names
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
+      const found = new Map<string, string>()
+      for (const entry of names)
+        if (entry.isDirectory() && (await isFile(transcriptOf(entry.name))))
+          found.set(entry.name, transcriptOf(entry.name))
       for (const entry of names) {
         if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
         const id = entry.name.slice(0, -'.jsonl'.length)
-        if (!ids.includes(id)) ids.push(id)
+        if (!found.has(id)) found.set(id, join(dir, entry.name))
       }
       const summaries: SessionSummary[] = []
-      for (const id of ids) {
-        const path = (await exists(transcriptOf(id)))
-          ? transcriptOf(id)
-          : flatOf(id)
+      for (const [id, path] of found) {
         const file = await readAt(path)
         if (!file) continue
         summaries.push(

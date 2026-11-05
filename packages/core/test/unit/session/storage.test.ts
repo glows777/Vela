@@ -132,6 +132,23 @@ test("a flat file of session 'a' that blocks the name of session 'a.jsonl' is co
   expect(existsSync(join(sessions, 'a.jsonl.jsonl'))).toBe(false)
 })
 
+test("a saved session 'a.jsonl' is not mistaken for the flat transcript of session 'a'", async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  await storage.append('a.jsonl', [header('a.jsonl'), message('inner')])
+  // Opening `a` must not rename the directory `a.jsonl/` (session a.jsonl's home) into `a/transcript.jsonl`
+  expect(await storage.load('a')).toBeUndefined()
+  expect(contents(await storage.load('a.jsonl'))).toEqual(['inner'])
+  await storage.append('a', [header('a'), message('outer')])
+  expect(contents(await storage.load('a'))).toEqual(['outer'])
+  expect(contents(await storage.load('a.jsonl'))).toEqual(['inner'])
+  expect((await storage.list?.())?.map((summary) => summary.id).sort()).toEqual(
+    ['a', 'a.jsonl'],
+  )
+})
+
 test('listing reads both layouts without converting, and the directory form wins', async () => {
   const dir = tempDir()
   dirs.push(dir)
