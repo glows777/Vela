@@ -149,6 +149,29 @@ test("a saved session 'a.jsonl' is not mistaken for the flat transcript of sessi
   )
 })
 
+test("a leftover flat file of session 'a' never replaces the converted transcript when 'a.jsonl' frees the name", async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  await storage.append('a', [header('a'), message('newer')])
+  // An older process recreated the flat file after the conversion
+  writeFileSync(
+    join(sessions, 'a.jsonl'),
+    `${[header('a'), message('stale')].map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+  )
+  // The directory form wins, and appending leaves the leftover file alone
+  expect(contents(await storage.load('a'))).toEqual(['newer'])
+  await storage.append('a', [message('after')])
+  expect(contents(await storage.load('a'))).toEqual(['newer', 'after'])
+  // Session `a.jsonl` cannot take the name without destroying session `a`
+  await expect(
+    storage.append('a.jsonl', [header('a.jsonl'), message('inner')]),
+  ).rejects.toThrow(/delete .*a\.jsonl to free the name/)
+  expect(contents(await storage.load('a'))).toEqual(['newer', 'after'])
+  expect(readFileSync(join(sessions, 'a.jsonl'), 'utf8')).toContain('"stale"')
+})
+
 test('listing reads both layouts without converting, and the directory form wins', async () => {
   const dir = tempDir()
   dirs.push(dir)

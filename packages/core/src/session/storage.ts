@@ -135,21 +135,29 @@ export function fileSessionStorage(
     }
     if (!blocked) return
     // Ids may contain `.`, so the flat file of session `a.jsonl` is the directory session `a` needs.
-    // Converting that session first frees the name; every step drops one `.jsonl`, so the chain ends.
+    // Converting that session frees the name; every step drops one `.jsonl`, so the chain ends.
     const owner = id.endsWith('.jsonl') ? id.slice(0, -'.jsonl'.length) : ''
     if (!owner || !(await isFile(target)))
       throw new Error(
         `Cannot store session ${id}: ${target} exists and is not a session transcript`,
       )
-    await convert(owner)
+    if (!(await convert(owner)))
+      throw new Error(
+        `Cannot store session ${id}: ${target} is a leftover flat transcript of session ${owner}, whose directory form already has its history in ${transcriptOf(owner)}; delete ${target} to free the name`,
+      )
     await mkdir(target, { recursive: true, mode: 0o700 })
   }
 
-  /** Moves a 0.5.0 flat transcript into `<dir>/<id>/transcript.jsonl` with one rename inside `dir`. */
-  const convert = async (id: string): Promise<void> => {
+  /**
+   * Moves a 0.5.0 flat transcript into `<dir>/<id>/transcript.jsonl` with one rename inside `dir`.
+   * Returns false when a flat file is left in place, because the directory form already has the session
+   * (a leftover file from an older process) and must not be replaced by it.
+   */
+  const convert = async (id: string): Promise<boolean> => {
     const flat = flatOf(id)
     // Only a file is a transcript: `<dir>/<id>.jsonl` may be the directory of session `<id>.jsonl`
-    if (!(await isFile(flat))) return
+    if (!(await isFile(flat))) return false
+    if (await isFile(transcriptOf(id))) return false
     await makeDirectory(id)
     try {
       await rename(flat, transcriptOf(id))
@@ -161,6 +169,7 @@ export function fileSessionStorage(
       )
         throw error
     }
+    return true
   }
 
   /** The transcript to read and append to; converts a flat session first, undefined when there is none yet. */
