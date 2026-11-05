@@ -111,3 +111,7 @@ GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/sc
 ## Not reachable offline
 
 Say so in the report instead of counting these as verified: real providers and `/login` OAuth, `web_search` (needs a Tavily or Serper key), RAG (needs an embedding endpoint; the SDK tests use a faux embedder), and live Lark permissions, callback delivery, card rendering, mention notifications and on-time routine delivery in the deployment timezone (need app credentials and a running deployment). The SDK can drive the actual Lark extension and gateway offline with a fake transport; that does not verify Lark's service.
+
+## First-run model setup
+
+Pack and install the current CLI in a fresh temporary environment. With an empty HOME and VELA_DIR, run `vela` in a terminal, select a provider, complete verification, save and send a first prompt. Record the displayed paths and compare them with the files written. A faux provider may replace the remote model; do not claim a real credential was verified when using one. Run `vela setup` again and check that keeping the existing configuration leaves files unchanged.

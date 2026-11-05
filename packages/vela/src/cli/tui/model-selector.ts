@@ -1,5 +1,5 @@
 import type { Component } from '@earendil-works/pi-tui'
-import type { VelaSession } from '@glows777/vela-core'
+import type { ModelInfo, VelaSession } from '@glows777/vela-core'
 import type { Vela } from '../../vela.ts'
 import { nextModel, scopedModels } from '../model-cycle.ts'
 import { dialogBox, errorMessage } from './components.ts'
@@ -38,7 +38,16 @@ export async function selectModel(host: ModelHost): Promise<void> {
     )
     return
   }
-  const ref = await host.dialog<string | undefined>((done) => {
+  const ref = await pickModel(host, models, current)
+  if (ref) switchModel(host, ref)
+}
+
+export async function pickModel(
+  host: Pick<ModelHost, 'dialog'>,
+  models: ModelInfo[],
+  current?: string,
+): Promise<string | undefined> {
+  return host.dialog<string | undefined>((done) => {
     const list = new SearchSelect(
       models.map((m) => ({
         value: m.ref,
@@ -66,7 +75,6 @@ export async function selectModel(host: ModelHost): Promise<void> {
       focus: list,
     }
   })
-  if (ref) switchModel(host, ref)
 }
 
 function switchModel(host: ModelHost, ref: string): void {

@@ -16,11 +16,221 @@ const ENTRY = join(ROOT, 'packages/vela/src/cli/main.ts')
 const scenario = (name: string) =>
   join(ROOT, 'test/fixtures/scenarios', `${name}.json`)
 
+setDefaultTimeout(30_000)
+
 const hasScript =
   process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
 
-// Every test spawns a CLI process and they run concurrently; with a dozen processes starting at once on slow CI machines, the default 5 s is not enough
-setDefaultTimeout(30_000)
+test('no configured model points print-mode users to setup', async () => {
+  const result = await cli(['-p', 'hello'], { model: '' })
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain('vela setup')
+})
+
+test.skipIf(!hasScript)(
+  'setup cancellation leaves user configuration untouched',
+  async () => {
+    const result = await cli(['setup'], {
+      model: '',
+      terminal: [['Choose a provider', '\x1b']],
+    })
+    expect(result.code).toBe(0)
+    for (const name of ['auth.json', 'models.json', 'settings.json'])
+      expect(existsSync(join(result.agentDir, name))).toBe(false)
+    const afterKey = await cli(['setup'], {
+      model: '',
+      terminal: [
+        ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+        ['Provider name', 'local\r'],
+        ['Base URL', 'http://localhost:12345/v1\r'],
+        ['API key for local', 'temporary-key\r'],
+        ['Model ID', 'test-model\r'],
+        ['may incur', '\x1b'],
+      ],
+    })
+    for (const name of ['auth.json', 'models.json', 'settings.json'])
+      expect(existsSync(join(afterKey.agentDir, name))).toBe(false)
+  },
+)
+
+test.skipIf(!hasScript)(
+  'existing offline model does not start setup',
+  async () => {
+    const result = await cli([], {
+      model: 'mock',
+      terminal: [['session', '\x04']],
+    })
+    expect(result.code).toBe(0)
+    expect(result.stdout).not.toContain('Choose a provider')
+  },
+)
+
+test.skipIf(!hasScript)(
+  'setup verifies a compatible provider and preserves unrelated settings on rerun',
+  async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          id: 'test',
+          object: 'chat.completion',
+          created: 1,
+          model: 'test-model',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: 'ok' },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+    })
+    try {
+      const home = tempDir('vela-setup-home-')
+      dirs.push(home)
+      await Bun.write(
+        join(home.path, 'settings.json'),
+        JSON.stringify({ hideThinking: true }),
+      )
+      const result = await cli(['setup'], {
+        agentDir: home.path,
+        model: '',
+        terminal: [
+          ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+          ['Provider name', 'local\r'],
+          ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API key for local', 'test-key\r'],
+          ['Model ID', 'test-model\r'],
+          ['may incur', '\r'],
+          ['Thinking level', '\r'],
+          ['Connect Lark', '\r'],
+          ['Save configuration', '\r'],
+        ],
+      })
+      if (result.code !== 0)
+        console.log(result.stdout.slice(-5000), result.stderr)
+      expect(result.code).toBe(0)
+      expect(
+        JSON.parse(readFileSync(join(home.path, 'settings.json'), 'utf8')),
+      ).toMatchObject({ hideThinking: true, defaultModel: 'local/test-model' })
+      expect(
+        JSON.parse(readFileSync(join(home.path, 'models.json'), 'utf8'))
+          .providers.local.baseUrl,
+      ).toBe(`http://127.0.0.1:${server.port}/v1`)
+      expect(
+        JSON.parse(readFileSync(join(home.path, 'auth.json'), 'utf8')).local
+          .key,
+      ).toBe('test-key')
+      for (const name of ['settings.json', 'models.json', 'auth.json'])
+        expect(result.stdout).toContain(name)
+      const files = ['settings.json', 'models.json', 'auth.json']
+      const before = files.map((name) =>
+        readFileSync(join(home.path, name), 'utf8'),
+      )
+      const rerun = await cli(['setup'], {
+        agentDir: home.path,
+        model: '',
+        terminal: [['Current model:', '\r']],
+      })
+      expect(rerun.code).toBe(0)
+      expect(
+        files.map((name) => readFileSync(join(home.path, name), 'utf8')),
+      ).toEqual(before)
+    } finally {
+      server.stop(true)
+    }
+  },
+)
+
+test.skipIf(!hasScript)(
+  'failed verification displays provider error and writes no configuration',
+  async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json(
+          { error: { message: 'invalid test key' } },
+          { status: 401 },
+        ),
+    })
+    try {
+      const result = await cli(['setup'], {
+        model: '',
+        terminal: [
+          ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+          ['Provider name', 'local\r'],
+          ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API key for local', 'bad-key\r'],
+          ['Model ID', 'test-model\r'],
+          ['may incur', '\r'],
+          ['invalid test key', '\x1b'],
+        ],
+      })
+      expect(result.stdout).toContain('invalid test key')
+      for (const name of ['auth.json', 'models.json', 'settings.json'])
+        expect(existsSync(join(result.agentDir, name))).toBe(false)
+    } finally {
+      server.stop(true)
+    }
+  },
+)
+
+test.skipIf(!hasScript)(
+  'first run configures DeepSeek and answers through the real CLI',
+  async () => {
+    const preload = `
+    import { appendFileSync } from 'node:fs';
+    const original = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (!url.startsWith('https://api.deepseek.com/')) return original(input, init);
+      const request = JSON.parse(init.body);
+      appendFileSync('requests.jsonl', JSON.stringify(request) + '\\n');
+      if (!request.stream) return Response.json({ id:'verify', object:'chat.completion', created:1, model:'deepseek-chat', choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}], usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2} });
+      const chunk = (delta, finish_reason = null) => 'data: ' + JSON.stringify({id:'answer',object:'chat.completion.chunk',created:1,model:'deepseek-chat',choices:[{index:0,delta,finish_reason}]}) + '\\n\\n';
+      return new Response(chunk({role:'assistant',content:'faux first answer'}) + chunk({}, 'stop') + 'data: [DONE]\\n\\n', {headers:{'content-type':'text/event-stream'}});
+    };
+  `
+    const result = await cli([], {
+      model: '',
+      preload: 'fake-provider.ts',
+      files: { 'fake-provider.ts': preload },
+      terminal: [
+        ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+        ['API key for deepseek', 'fake-key\r'],
+        ['Select Model', '\x1b[B\r'],
+        ['may incur', '\r'],
+        ['Thinking level', '\r'],
+        ['Connect Lark', '\r'],
+        ['Save configuration', '\r'],
+        ['Saved:', 'hello\r'],
+        ['faux first answer', '\x04'],
+      ],
+    })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('faux first answer')
+    const models = JSON.parse(
+      readFileSync(join(result.agentDir, 'models.json'), 'utf8'),
+    )
+    const settings = JSON.parse(
+      readFileSync(join(result.agentDir, 'settings.json'), 'utf8'),
+    )
+    const auth = JSON.parse(
+      readFileSync(join(result.agentDir, 'auth.json'), 'utf8'),
+    )
+    expect(models.providers.deepseek.baseUrl).toBe('https://api.deepseek.com')
+    expect(settings.defaultModel).toBe('deepseek/deepseek-reasoner')
+    expect(auth.deepseek.key).toBe('fake-key')
+    const requests = readFileSync(join(result.cwd, 'requests.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(requests.at(-1).model).toBe('deepseek-reasoner')
+    for (const name of ['auth.json', 'models.json', 'settings.json'])
+      expect(result.stdout).toContain(name)
+  },
+)
 
 const dirs: { cleanup(): void }[] = []
 // Tests run concurrently (each spawns a process), so temp dirs are cleaned up once at the end
@@ -41,6 +251,7 @@ async function cli(
     files?: Record<string, string | Uint8Array>
     env?: Record<string, string>
     stdin?: string
+    preload?: string
     /** Run in a pseudo-terminal (interactive mode): once the first item appears on screen, type the second (in order) */
     terminal?: [waitFor: string, send: string][]
   },
@@ -66,7 +277,12 @@ async function cli(
     VELA_MODEL: options.model,
     ...options.env,
   }
-  const command = ['bun', ENTRY, ...args]
+  const command = [
+    'bun',
+    ...(options.preload ? ['--preload', join(cwd, options.preload)] : []),
+    ENTRY,
+    ...args,
+  ]
   if (options.terminal) {
     const proc = Bun.spawn(
       ['script', '-qec', command.map((a) => `'${a}'`).join(' '), '/dev/null'],
@@ -1281,7 +1497,9 @@ test.concurrent('an unknown --model or no model at all stops with a clear messag
 
   const none = await cli(['-p', 'hello'], { model: '' })
   expect(none.code).toBe(1)
-  expect(none.stderr).toContain('No model available. Sign in with /login')
+  expect(none.stderr).toContain(
+    'No model available. Run vela setup; Sign in with /login',
+  )
 
   const missingKey = await cli(
     ['-p', 'hello', '--model', 'anthropic/claude-x'],
@@ -1447,7 +1665,7 @@ test.concurrent('VELA_RECORD without a model preserves the CLI configuration gui
   expect(result.code).toBe(1)
   expect(result.stdout).toBe('')
   expect(result.stderr).toContain(
-    '[record] No model available. Sign in with /login',
+    '[record] No model available. Run vela setup; Sign in with /login',
   )
 })
 

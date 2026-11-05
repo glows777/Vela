@@ -66,8 +66,9 @@ import {
 import { VelaEditor } from './tui/editor.ts'
 import { Footer } from './tui/footer.ts'
 import { createInteractiveTui } from './tui/layout.ts'
-import { cycleModel, selectModel } from './tui/model-selector.ts'
+import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
+import { setupWizard } from './tui/setup-wizard.ts'
 import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
@@ -83,6 +84,8 @@ export async function runInteractive(
 ): Promise<void> {
   const mode = new InteractiveMode(options)
   await mode.start()
+  if (options.setupOnly && mode.setupSummary)
+    process.stdout.write(`${mode.setupSummary}\n`)
   for (const [index, message] of (options.messages ?? []).entries()) {
     await mode.submit(message, index === 0 ? options.images : undefined)
   }
@@ -90,6 +93,7 @@ export async function runInteractive(
 }
 
 export class InteractiveMode {
+  setupSummary?: string
   readonly tui: TuiAltScreen
   private readonly terminal: Terminal
   private readonly vela: Vela
@@ -204,6 +208,39 @@ export class InteractiveMode {
       this.addNotice(errorMessage(error), 'error')
     }
     await this.openSession(sessionId, resume)
+    let modelOk = true
+    try {
+      void this.session.modelInfo
+      modelOk = options.hasUsableModel?.(this.session) ?? true
+    } catch {
+      modelOk = false
+    }
+    if ((options.setupOnly || !modelOk) && options.agentDir) {
+      try {
+        const saved = await setupWizard({
+          vela: this.vela,
+          session: this.session,
+          agentDir: options.agentDir,
+          select: this.select.bind(this),
+          input: this.input.bind(this),
+          addNotice: this.addNotice.bind(this),
+          openBrowser: options.openBrowser,
+          onConfigured: () => options.onConfigured?.(),
+          pickModel: (models, current) =>
+            pickModel({ dialog: this.dialog.bind(this) }, models, current),
+          setSummary: (summary) => {
+            this.setupSummary = summary
+          },
+        })
+        this.renderHeader(saved || modelOk)
+      } catch (error) {
+        this.addNotice(`Setup failed: ${errorMessage(error)}`, 'error')
+      }
+      if (options.setupOnly) {
+        await this.shutdown()
+        return
+      }
+    }
     const contextFiles = formatContextFileList(inspectVela(vela).contextFiles, {
       cwd: vela.cwd,
       homeDir: homedir(),

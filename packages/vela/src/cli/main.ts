@@ -97,6 +97,8 @@ const mode: 'serve' | 'interactive' | 'print' | 'json' | 'rpc' = args.serve
           !process.stdout.isTTY
         ? 'print'
         : 'interactive'
+if (args.setup && mode !== 'interactive')
+  usageError('vela setup requires an interactive terminal')
 // Non-interactive modes keep stdout for results / protocol: console output from extensions and the SDK goes to stderr
 if (mode !== 'interactive') redirectConsoleToStderr()
 if (mode === 'rpc' && args.messages.length)
@@ -184,10 +186,18 @@ function cliErrorMessage(error: unknown): string {
       resolveModel(undefined, { providers: {} })
     } catch (resolutionError) {
       return resolutionError instanceof Error
-        ? resolutionError.message
+        ? resolutionError.message.replace(
+            'No model available.',
+            'No model available. Run vela setup;',
+          )
         : String(resolutionError)
     }
   }
+  if (message.startsWith('No model available.'))
+    return message.replace(
+      'No model available.',
+      'No model available. Run vela setup;',
+    )
   return message
 }
 
@@ -208,12 +218,12 @@ async function chooseModel(): Promise<LanguageModel | string | undefined> {
   )
 }
 // --list-models needs neither a runnable model nor a recorder
-const chosenModel = args.listModels ? undefined : await chooseModel()
+let chosenModel = args.listModels ? undefined : await chooseModel()
 
 // VELA_RECORD=<file.json>: record this run's model responses and user input as a faux scenario; replay with VELA_MODEL=faux:<file>
 // (records the default model only; a model chosen by name is resolved here via models.json / built-in providers, so extension providers can't be recorded)
 let recorder: ReturnType<typeof recordModel> | undefined
-if (env.VELA_RECORD && !args.listModels) {
+if (env.VELA_RECORD && !args.listModels && !args.setup) {
   try {
     recorder = recordModel(
       resolveModel(chosenModel, {
@@ -510,6 +520,20 @@ if (mode === 'print' || mode === 'json') {
     loginOptions: { getDeviceId: () => installationId(agentDir) },
     agentDir,
     attachLogger: interactiveLogger?.attach,
+    setupOnly: args.setup,
+    onConfigured: () => {
+      args.model = undefined
+      args.thinking = undefined
+      chosenModel = undefined
+    },
+    hasUsableModel: (session) => {
+      const provider = session.modelInfo.provider
+      const definition = config.providers[provider]
+      return (
+        !definition?.authSource ||
+        definition.authSource(config.credentials.get(provider)) !== undefined
+      )
+    },
     onExit: async () => {
       await vela.dispose()
       await recorder?.flush()

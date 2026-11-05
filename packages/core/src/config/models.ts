@@ -113,10 +113,11 @@ const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
 export function loadModels(options: {
   agentDir: string
   env?: Env
+  overrides?: Record<string, ProviderConfig>
 }): Record<string, ProviderDefinition> {
   const env = options.env ?? {}
   const file = join(options.agentDir, 'models.json')
-  const fromFile = readModelsFile(file)
+  const fromFile = { ...readModelsFile(file), ...options.overrides }
   const names = new Set([
     ...Object.keys(BUILTIN_PROVIDERS),
     ...Object.keys(fromFile),

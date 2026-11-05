@@ -45,4 +45,7 @@ export interface InteractiveOptions {
   enabledModels?: string[]
   /** Configured agent directory (`VELA_DIR` or `~/.vela`), for `/status` path shortening */
   agentDir?: string
+  setupOnly?: boolean
+  hasUsableModel?: (session: VelaSession) => boolean
+  onConfigured?: () => void
 }
