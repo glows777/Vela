@@ -59,7 +59,7 @@ test.skipIf(!hasScript)(
     const preload = `
       import { mock } from 'bun:test'
       import * as real from ${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}
-      mock.module('@glows777/vela-lark', () => ({ ...real,
+      mock.module(${JSON.stringify(join(ROOT, 'packages/lark/src/index.ts'))}, () => ({ ...real,
         connectLarkSetup: async () => ({
           waitForMention: async () => ({ chatId: 'oc_fake' }),
           send: async (chatId, text) => { await Bun.write(process.env.VELA_DIR + '/sent.json', JSON.stringify({ chatId, text })) },
