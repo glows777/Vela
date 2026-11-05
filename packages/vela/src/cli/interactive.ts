@@ -7,11 +7,9 @@ import {
   CombinedAutocompleteProvider,
   type Component,
   Container,
-  Input,
   Loader,
   ProcessTerminal,
   type SelectItem,
-  SelectList,
   Spacer,
   type Terminal,
   Text,
@@ -51,24 +49,24 @@ import {
   CustomMessageBlock,
   compactionLine,
   contextLine,
-  dialogBox,
   errorMessage,
   imagePlaceholder,
   isDeadTerminalError,
   lastAnswer,
   notice,
   oneLine,
-  SecretInput,
   sanitize,
   ToolBlock,
   UserMessage,
 } from './tui/components.ts'
 import { VelaEditor } from './tui/editor.ts'
 import { Footer } from './tui/footer.ts'
+import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
 import { createInteractiveTui } from './tui/layout.ts'
-import { cycleModel, selectModel } from './tui/model-selector.ts'
+import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
-import { editorTheme, selectListTheme, theme } from './tui/theme.ts'
+import { setupWizard } from './tui/setup-wizard.ts'
+import { editorTheme, theme } from './tui/theme.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
 export type { InteractiveOptions } from './tui/types.ts'
@@ -83,6 +81,9 @@ export async function runInteractive(
 ): Promise<void> {
   const mode = new InteractiveMode(options)
   await mode.start()
+  if (options.setupOnly && mode.setupSummary)
+    process.stdout.write(`${mode.setupSummary}\n`)
+  if (mode.stopped) return mode.exited
   for (const [index, message] of (options.messages ?? []).entries()) {
     await mode.submit(message, index === 0 ? options.images : undefined)
   }
@@ -90,6 +91,11 @@ export async function runInteractive(
 }
 
 export class InteractiveMode {
+  get stopped(): boolean {
+    return this.shuttingDown
+  }
+  private readonly setupAbort = new AbortController()
+  setupSummary?: string
   readonly tui: TuiAltScreen
   private readonly terminal: Terminal
   private readonly vela: Vela
@@ -204,6 +210,56 @@ export class InteractiveMode {
       this.addNotice(errorMessage(error), 'error')
     }
     await this.openSession(sessionId, resume)
+    let modelOk = true
+    try {
+      void this.session.modelInfo
+      modelOk = options.hasUsableModel?.(this.session) ?? true
+    } catch {
+      modelOk = false
+    }
+    if ((options.setupOnly || !modelOk) && options.agentDir) {
+      try {
+        const saved = await setupWizard({
+          vela: this.vela,
+          session: this.session,
+          agentDir: options.agentDir,
+          select: (title, choices, selected) =>
+            this.select(title, choices, selected, this.setupAbort.signal),
+          input: (title, placeholder, signal, secret) =>
+            this.input(
+              title,
+              placeholder,
+              signal
+                ? AbortSignal.any([signal, this.setupAbort.signal])
+                : this.setupAbort.signal,
+              secret,
+            ),
+          addNotice: this.addNotice.bind(this),
+          openBrowser: options.openBrowser,
+          signal: this.setupAbort.signal,
+          onConfigured: () => options.onConfigured?.(),
+          pickModel: (models, current) =>
+            pickModel(
+              { dialog: this.dialog.bind(this) },
+              models,
+              current,
+              this.setupAbort.signal,
+            ),
+          setSummary: (summary) => {
+            this.setupSummary = summary
+          },
+        })
+        if (!this.shuttingDown) this.renderHeader(saved || modelOk)
+      } catch (error) {
+        if (!this.shuttingDown)
+          this.addNotice(`Setup failed: ${errorMessage(error)}`, 'error')
+      }
+      if (options.setupOnly) {
+        await this.shutdown()
+        return
+      }
+    }
+    if (this.shuttingDown) return
     const contextFiles = formatContextFileList(inspectVela(vela).contextFiles, {
       cwd: vela.cwd,
       homeDir: homedir(),
@@ -1223,25 +1279,15 @@ export class InteractiveMode {
     title: string,
     items: SelectItem[],
     selected?: string,
+    signal?: AbortSignal,
   ): Promise<string | undefined> {
-    return this.dialog<string | undefined>((done) => {
-      const list = new SelectList(items, 10, selectListTheme)
-      const index = items.findIndex((item) => item.value === selected)
-      if (index > 0) list.setSelectedIndex(index)
-      list.onSelect = (item) => done(item.value)
-      list.onCancel = () => done(undefined)
-      return {
-        component: dialogBox(
-          title,
-          list,
-          '↑↓ navigate · Enter select · Esc cancel',
-        ),
-        focus: list,
-      }
-    })
+    if (signal?.aborted) return Promise.resolve(undefined)
+    return this.dialog((done) =>
+      selectDialog(title, items, selected, signal, done),
+    )
   }
 
-  /** A one-line input dialog; `signal` closes it (resolving undefined) from outside; `secret` masks what is typed */
+  /** A one-line input dialog; signal closes it, and secret masks the input. */
   input(
     title: string,
     placeholder?: string,
@@ -1249,25 +1295,9 @@ export class InteractiveMode {
     secret = false,
   ): Promise<string | undefined> {
     if (signal?.aborted) return Promise.resolve(undefined)
-    return this.dialog<string | undefined>((close) => {
-      let closed = false
-      const done = (value: string | undefined) => {
-        if (closed) return
-        closed = true
-        close(value)
-      }
-      // A prompt closed while it waited behind another dialog closes as soon as it opens
-      if (signal?.aborted) queueMicrotask(() => done(undefined))
-      else
-        signal?.addEventListener('abort', () => done(undefined), { once: true })
-      const input = secret ? new SecretInput() : new Input()
-      input.onSubmit = (value) => done(value.trim() || undefined)
-      input.onEscape = () => done(undefined)
-      const hint = placeholder
-        ? `${placeholder} · Enter confirm · Esc cancel`
-        : 'Enter confirm · Esc cancel'
-      return { component: dialogBox(title, input, hint), focus: input }
-    })
+    return this.dialog((done) =>
+      inputDialog(title, placeholder, signal, secret, done),
+    )
   }
 
   // ---------------------------------------------------------------- Exit
@@ -1336,6 +1366,7 @@ export class InteractiveMode {
   async shutdown(options: { fromSignal?: boolean } = {}): Promise<void> {
     if (this.shuttingDown) return
     this.shuttingDown = true
+    this.setupAbort.abort()
     this.stopLoader()
     const restore = () => {
       try {

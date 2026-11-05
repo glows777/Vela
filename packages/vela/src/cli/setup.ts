@@ -41,6 +41,7 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
 export const DEFAULT_OFF_BUILTINS: readonly string[] = ['permission-gate']
 
 export interface CliArgs {
+  setup?: boolean
   /** `serve`: run the configured channels without the TUI, until a signal stops the process */
   serve: boolean
   /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
@@ -90,7 +91,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -98,9 +99,11 @@ export const HELP = `vela - terminal agent with pi-style extensions
 Usage:
   vela [options] [prompt...]
   vela serve [options]
+  vela setup
 
 Modes:
   (default)                     Interactive TUI when stdin and stdout are a terminal
+  setup                         Configure a model provider interactively
   serve                         Run the configured channels without the TUI: one line per channel
                                 event on stderr, stops on Ctrl-C / SIGTERM
   -p, --print                   Run the prompts and exit; stdout gets only the last answer
@@ -216,7 +219,8 @@ export function parseArgs(argv: string[]): CliArgs {
       if (next === undefined) throw new Error(`${arg} requires a value`)
       return next
     }
-    if (i === 0 && arg === 'serve') args.serve = true
+    if (i === 0 && arg === 'setup') args.setup = true
+    else if (i === 0 && arg === 'serve') args.serve = true
     else if (arg === '-h' || arg === '--help') args.help = true
     else if (arg === '-v' || arg === '--version') args.version = true
     else if (arg === '-p' || arg === '--print') args.print = true
@@ -278,6 +282,22 @@ export function parseArgs(argv: string[]): CliArgs {
     ].filter(Boolean).length > 1
   )
     throw new Error('Use only one of -c, -r, --session and --fork')
+  if (
+    args.setup &&
+    (args.messages.length ||
+      args.mode ||
+      args.print ||
+      args.serve ||
+      args.resume ||
+      args.continue ||
+      args.session ||
+      args.fork ||
+      args.export ||
+      args.listModels)
+  )
+    throw new Error(
+      'vela setup does not take a prompt, run mode or session option',
+    )
   // `serve` has no single session and no prompt: a flag that only configures one would be ignored
   if (args.serve) {
     const unsupported = [

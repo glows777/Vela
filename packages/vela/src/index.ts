@@ -155,10 +155,12 @@ export {
   ToolExecutionResult,
   type VelaLogger,
   VelaSession,
+  verifyProviderModel,
   type WebOptions,
   web,
   webConfig,
   withFileMutationQueue,
+  writeProviderPreset,
 } from '@glows777/vela-core'
 export {
   inspectSession,

@@ -80,6 +80,8 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `model` | Default `LanguageModel`; a name is resolved on first access. Throws if none was given or it cannot be resolved. |
 | `limits` | Limits in effect (defaults plus overrides) |
 | `models(options?)` | Available models: those of providers that have a credential, like pi (`ModelInfo`: `provider`, `id`, `ref`, `name`, `contextWindow`, `maxTokens`, `reasoning`, `thinkingLevelMap`, `input`, `cost`). `{ all: true }` returns every listed model. |
+| `configureProvider(name, definition)` | Replace or add a provider for subsequent model selections, for example after saving setup. Existing sessions switch with `setModel()`. |
+| `setDefaults(model, thinkingLevel)` | Set defaults for subsequently created sessions without changing open sessions. |
 | `loginProviders()`, `login(provider, method, interaction, options?)`, `logout(provider)` | What `/login` and `/logout` do: list the providers that take a sign-in, run one (`method` `oauth` or `api_key`; `interaction` shows links and asks for input) and store the credential, or remove it. See [Models](models.md#credentials-and-login). |
 | `session(id?, options?)` | Opens a session, or returns it if it is already open. `id` defaults to `default`. |
 | `sessions()` | Open sessions |
@@ -383,7 +385,7 @@ const vela = createVela({
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
 | `defaultOffBuiltins` | `[]` | Names in `builtins` that stay off until settings enable them with `+builtin:<name>` (the CLI uses this for `permission-gate`) |
 
-The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `credentials` (the `~/.vela/auth.json` store), `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env })` returns only the providers. See [Settings](settings.md) and [Models](models.md).
+The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `credentials` (the `~/.vela/auth.json` store), `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env, overrides? })` returns only the providers and can preview a preset without saving it. `verifyProviderModel(ref, providers, credentials, signal?)` sends one minimal model request and may incur a charge; an optional abort signal cancels it. `writeProviderPreset(agentDir, name, preset)` merges a provider into user-level `models.json` and returns its path. See [Settings](settings.md) and [Models](models.md).
 
 The CLI also fills built-in extension config from environment variables such as `TAVILY_API_KEY`; with the SDK, put those values in `extensionConfig` or pass them to the extension factories.
 
