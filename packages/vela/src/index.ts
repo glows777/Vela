@@ -152,6 +152,7 @@ export {
   silentLogger,
   summarizeSession,
   type ThinkingLevelChangeEntry,
+  todo,
   ToolExecutionResult,
   type VelaLogger,
   VelaSession,
