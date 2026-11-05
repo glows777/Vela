@@ -75,7 +75,7 @@ Vela is a Bun workspace of six npm packages under [`packages/`](packages/). Most
 | Package | What it contains |
 | --- | --- |
 | [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI and `vela serve`, plus SDK and testing re-exports |
-| [`@glows777/vela-core`](packages/core) | The SDK (`createVela`), the extension API, offline testing helpers and the light built-in extensions (memory, web, permission-gate) |
+| [`@glows777/vela-core`](packages/core) | The SDK (`createVela`), the extension API, offline testing helpers and the light built-in extensions (memory, todo, web, permission-gate) |
 | [`@glows777/vela-channels`](packages/channels) | The standard channel interface and the channel runtime (group triage, topics, routines) |
 | [`@glows777/vela-lark`](packages/lark) | The Lark (Feishu) channel adapter |
 | [`@glows777/vela-mcp`](packages/mcp) | The MCP extension |

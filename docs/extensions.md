@@ -39,7 +39,7 @@ The factory can be synchronous or `async`. It runs once per Vela instance, not o
 
 The CLI loads extensions in this order:
 
-1. Built-in extensions (`memory`, `rag`, `web`, `lark`, `mcp`). All are on by default except `permission-gate`, which stays off until you enable it.
+1. Built-in extensions (`memory`, `todo`, `rag`, `web`, `lark`, `mcp`). All are on by default except `permission-gate`, which stays off until you enable it.
 2. `~/.vela/extensions/` (or `$VELA_DIR/extensions/`).
 3. `<cwd>/.vela/extensions/`, only when the project is trusted (see [Project trust](settings.md#project-trust)).
 4. Paths listed in the `extensions` array of `settings.json`, user settings before project settings.

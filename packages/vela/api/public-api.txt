@@ -651,6 +651,7 @@
     thinkingLevel: ThinkingLevel
     timestamp: string
     type: "thinking_level_change"
+  function todo: () => VelaExtension
   interface TokenStatus
     needsAction: boolean
     percent: number

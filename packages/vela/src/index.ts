@@ -153,6 +153,7 @@ export {
   summarizeSession,
   type ThinkingLevelChangeEntry,
   ToolExecutionResult,
+  todo,
   type VelaLogger,
   VelaSession,
   verifyProviderModel,

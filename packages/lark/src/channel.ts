@@ -11,6 +11,7 @@ import type {
   OutgoingMessage,
 } from '@glows777/vela-channels'
 import { channelSessionId, chatDirectory } from '@glows777/vela-channels'
+import { latestTodoList } from '@glows777/vela-core/diagnostics'
 import type {
   ImageContent,
   VelaLogger,
@@ -278,8 +279,14 @@ export class LarkChannel implements ChannelDefinition {
         card,
         msg.replyToId,
       )
-      if (report)
-        return new LarkProgress(this.transport, messageId, card, report)
+      if (report) {
+        // A new run's card starts from the session's checklist, not only this run's tool calls
+        const session = this.topics.runtime?.session(
+          channelSessionId(this.name, msg.channelId, msg.topic?.rootId),
+        )
+        const items = session && latestTodoList(session.getBranch())?.items
+        return new LarkProgress(this.transport, messageId, card, report, items)
+      }
     } catch (error) {
       clear()
       throw error

@@ -200,6 +200,7 @@ export class ChannelGateway {
       ),
       context: (id) =>
         this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
+      session: (id) => this.find(id),
       topicCoverage: () => this.directory.coverage,
       skipReply: (id) => {
         const run = this.feedback.runs.get(this.directory.keyForSession(id))
