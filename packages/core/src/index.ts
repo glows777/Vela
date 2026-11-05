@@ -58,6 +58,7 @@ export {
   permissionGateConfig,
 } from './extensions/permission-gate/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
+export { todo } from './extensions/todo/index.ts'
 export type {
   AfterProviderResponseEvent,
   BeforeAgentStartEvent,

@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import { todo } from '@glows777/vela-core'
 import {
   fauxError,
   fauxHang,
@@ -124,6 +125,59 @@ test('one progress card follows a held tool and steers without replacing the req
     expect(fake.sent[0]?.text).toBe('<at user_id="ou_alice"></at> result')
   } finally {
     release?.()
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('the progress card shows the todo checklist above the tool rows', async () => {
+  const { fake, t, start } = setup(
+    [
+      fauxToolCall('todo', {
+        items: [
+          { text: 'Read the issue', status: 'done' },
+          { text: 'Write the extension', status: 'in_progress' },
+          { text: 'Run [the] tests', status: 'pending' },
+        ],
+      }),
+      fauxText('result'),
+    ],
+    [todo()],
+  )
+  await start()
+  try {
+    fake.deliver(topic())
+    await until(() => fake.reactions.some((r) => r.emoji === 'DONE'))
+    const content = fake.patches.at(-1)?.card.body.elements[0]?.content ?? ''
+    expect(content).toContain('☑ Read the issue')
+    expect(content).toContain('◐ Write the extension')
+    expect(content).toContain('☐ Run the tests')
+    expect(content).not.toContain('[the]')
+    expect(content.indexOf('☑ Read the issue')).toBeLessThan(
+      content.indexOf('Finished: todo'),
+    )
+  } finally {
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('the progress card caps a long todo checklist', async () => {
+  const items = Array.from({ length: 12 }, (_, index) => ({
+    text: `Step ${index + 1}`,
+    status: 'pending' as const,
+  }))
+  const { fake, t, start } = setup(
+    [fauxToolCall('todo', { items }), fauxText('result')],
+    [todo()],
+  )
+  await start()
+  try {
+    fake.deliver(topic())
+    await until(() => fake.reactions.some((r) => r.emoji === 'DONE'))
+    const content = fake.patches.at(-1)?.card.body.elements[0]?.content ?? ''
+    expect(content).toContain('☐ Step 10')
+    expect(content).not.toContain('Step 11')
+    expect(content).toContain('… and 2 more')
+  } finally {
     await t.internals.gateway.stopAll()
   }
 })

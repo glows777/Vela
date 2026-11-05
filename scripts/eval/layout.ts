@@ -49,6 +49,10 @@ export function runtimePaths(runtime: string) {
       'src/extensions/web/index.ts',
       'packages/core/dist/extensions/web/index.js',
     ),
+    todo: path(
+      'src/extensions/todo/index.ts',
+      'packages/core/dist/extensions/todo/index.js',
+    ),
     lark: path('src/extensions/feishu/index.ts', 'packages/lark/dist/index.js'),
     channelId: path(
       'src/channels/session-id.ts',

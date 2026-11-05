@@ -30,6 +30,11 @@ Options:
 | `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
 | `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm |
 
+`VELA_EVAL_TODO=1` in the invoking environment loads the `todo` extension in the
+new arm when that revision provides it. Revisions without the extension (the old
+arm and older checkouts) are unchanged. Use it to compare a revision that adds
+the extension against a clean checkout without turning it on by default.
+
 Install the selected checkout's dependencies first. Git, Bun, ripgrep and fd must
 be on PATH. The runner installs each selected baseline's frozen dependencies in
 an owned temporary worktree. C1–C6 and G1–G5 retain `OLD_COMMIT`;

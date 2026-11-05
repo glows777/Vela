@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **A built-in `todo` extension.** The model keeps one task list up to date for multi-step work. The whole list travels in every `todo` call, so the latest call in the session is the current list and a resumed session reads it back from history; no new event type or storage is involved. Lark's progress card shows the list above the tool rows, capped at ten items ([#282](https://github.com/glows777/Vela/issues/282)).
+
 - **First-run model setup.** Interactive Vela starts a setup wizard when no usable model is configured; `vela setup` revisits it. Configure built-in providers, DeepSeek or an OpenAI-compatible endpoint, verify a model and save user-level settings. Verification sends a small request that may incur a charge ([#270](https://github.com/glows777/Vela/issues/270)).
 
 ### Changed

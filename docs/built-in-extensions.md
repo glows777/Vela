@@ -1,10 +1,11 @@
 # Built-in extensions
 
-Vela ships six extensions: `memory`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `web` and `permission-gate` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all six (see [Packages](sdk.md#packages)).
+Vela ships seven extensions: `memory`, `todo`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `todo`, `web` and `permission-gate` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
+| `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
 | `web` | `web_fetch`, and `web_search` when a search API key is set |
 | `lark` | The Lark bot channel (see [Channels](channels.md)) |
@@ -13,7 +14,7 @@ Vela ships six extensions: `memory`, `rag`, `web`, `lark`, `mcp` and `permission
 
 ## Loading
 
-**CLI.** Five load by default, before any discovered or `-e` extensions; `permission-gate` stays off until you enable it. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** Six load by default, before any discovered or `-e` extensions; `permission-gate` stays off until you enable it. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
 To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. To enable `permission-gate`, add `+builtin:permission-gate` the same way, or load it for one run with `-e builtin:permission-gate`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
@@ -61,7 +62,7 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 
 ## Tool names
 
-Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
+Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`, and the todo tool is `todo`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
 Deny any of them with session `permissions`; see [Security](security.md#per-session-permissions).
 
@@ -110,7 +111,23 @@ Extension commands run in every session; an input naming a registered command ru
 
 **SDK.** `memory()` takes no options.
 
-## rag
+## todo
+
+A task checklist the model keeps up to date. The model sends the complete list on every call, so the last `todo` call in a session is the current list; reloading or resuming a session reads it back from history. Nothing else is stored, and no new event type is involved: the tool result's details carry `{ items }` on `tool_execution_end`.
+
+**Tool.** `todo`, with one parameter:
+
+| Parameter | Description |
+|---|---|
+| `items` | The complete list, in order: `{ text, status }` with `status` one of `pending`, `in_progress`, `done`. An empty list clears it |
+
+The model gets a one-line count summary back, not a copy of the list it just sent.
+
+**Prompt.** The tool description asks the model to use it for multi-step work, keep at most one item in progress, and skip it for a single simple step.
+
+**Lark progress card.** When the current run has a list, the shared progress card shows it above the tool rows: `☐` pending, `◐` in progress, `☑` done. More than ten items are cut off with `… and N more`; the full list stays in the session.
+
+**SDK.** `todo()` takes no options.
 
 A local knowledge base with hybrid search, stored in SQLite.
 
