@@ -64,6 +64,7 @@ The SDK reads no environment variables and persists nothing unless you pass `dat
 - [Quickstart](docs/quickstart.md)
 - Using the CLI: [CLI](docs/cli.md), [settings](docs/settings.md), [models](docs/models.md), [tools](docs/tools.md), [sessions](docs/sessions.md)
 - Automating: [JSON mode](docs/json.md), [RPC mode](docs/rpc.md)
+- Serving chats: [deploy `vela serve`](docs/deploy.md) under a dedicated user with systemd
 - Building on Vela: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [built-in extensions](docs/built-in-extensions.md), [MCP servers](docs/mcp.md), [channels](docs/channels.md), [testing](docs/testing.md), [session format](docs/session-format.md)
 - [Security](docs/security.md): Vela runs tools with your permissions and has no sandbox. Read this before running it on untrusted input.
 

@@ -31,4 +31,4 @@ Runnable examples are in [examples/](../examples/).
 
 ## Work safely
 
-Vela's tools and extensions run with your permissions and there is no sandbox. Read [Security](security.md) before running Vela on untrusted repositories, connecting a channel or leaving it unattended.
+Vela's tools and extensions run with your permissions and there is no sandbox. Read [Security](security.md) before running Vela on untrusted repositories, connecting a channel or leaving it unattended. For a chat bot, [deploy `vela serve`](deploy.md) under a dedicated user.

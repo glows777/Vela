@@ -32,7 +32,7 @@ The built-in `lark` extension uses Lark's long connection (WebSocket), so no pub
 
    `owners` and legacy `chats` accept string arrays or comma-separated strings. `chats` also accepts objects with `id` and an optional `tools` list (see below). `LARK_APP_ID`, `LARK_APP_SECRET` and `LARK_OWNERS` remain environment defaults; settings take precedence. To supply chat ids from an environment variable, set `"chats": "$LARK_CHATS"` in settings.
 
-5. Run `vela serve` and keep it running. The SDK equivalent is `lark({ appId, appSecret, owners, chats })`, followed by `await vela.ready()` and `await vela.startChannels()`.
+5. Run `vela serve` and keep it running; [deploy `vela serve`](deploy.md) has a systemd unit for a dedicated user. The SDK equivalent is `lark({ appId, appSecret, owners, chats })`, followed by `await vela.ready()` and `await vela.startChannels()`.
 
 ### Enablement and replies
 
