@@ -17,11 +17,13 @@ import { THINKING_LEVELS } from '@glows777/vela-core/diagnostics'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
+import { larkSetup } from './lark-setup.ts'
 
 interface Host {
   vela: Vela
   session: VelaSession
   agentDir: string
+  projectSettingsPath?: string
   select(
     title: string,
     choices: SelectItem[],
@@ -304,15 +306,11 @@ export async function setupWizard(host: Host): Promise<boolean> {
     )
     if (!thinking) return false
     const lark = await host.select('Connect Lark?', [
-      { value: 'yes', label: 'Yes, show connection information' },
       { value: 'later', label: 'Not now' },
+      { value: 'yes', label: 'Yes, connect Lark' },
     ])
     if (!lark) return false
-    const larkNote =
-      lark === 'yes'
-        ? 'Lark setup is coming soon. Manual setup: https://github.com/glows777/Vela/blob/main/docs/channels.md#lark'
-        : ''
-    if (larkNote) host.addNotice(larkNote)
+    const larkNote = ''
     const save = await host.select(
       `Save configuration for ${ref}\nThinking: ${thinking}\nCredentials: ${authPath}\nModels: ${modelsPath}\nSettings: ${settingsPath}`,
       [
@@ -354,6 +352,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       const summary = `Saved:\n${written.join('\n')}\nChange these files later or run vela setup again.${larkNote ? `\n${larkNote}` : ''}`
       host.addNotice(summary)
       host.setSummary(summary)
+      if (lark === 'yes') await larkSetup(host)
       return true
     } catch (error) {
       const summary = `Setup failed: ${error instanceof Error ? error.message : String(error)}\nAlready written: ${written.join(', ') || 'none'}`

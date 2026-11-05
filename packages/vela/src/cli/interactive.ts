@@ -62,6 +62,7 @@ import {
 import { VelaEditor } from './tui/editor.ts'
 import { Footer } from './tui/footer.ts'
 import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
+import { larkSetup } from './tui/lark-setup.ts'
 import { createInteractiveTui } from './tui/layout.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
@@ -219,10 +220,11 @@ export class InteractiveMode {
     }
     if ((options.setupOnly || !modelOk) && options.agentDir) {
       try {
-        const saved = await setupWizard({
+        const host: Parameters<typeof setupWizard>[0] = {
           vela: this.vela,
           session: this.session,
           agentDir: options.agentDir,
+          projectSettingsPath: options.projectSettingsPath,
           select: (title, choices, selected) =>
             this.select(title, choices, selected, this.setupAbort.signal),
           input: (title, placeholder, signal, secret) =>
@@ -248,7 +250,11 @@ export class InteractiveMode {
           setSummary: (summary) => {
             this.setupSummary = summary
           },
-        })
+        }
+        const saved =
+          options.setupTarget === 'lark'
+            ? await larkSetup(host)
+            : await setupWizard(host)
         if (!this.shuttingDown) this.renderHeader(saved || modelOk)
       } catch (error) {
         if (!this.shuttingDown)

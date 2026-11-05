@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Lark setup.** `vela setup lark` verifies app credentials, discovers a group via a bot mention, and saves the confirmed group to user settings. Existing groups and restrictions are preserved. A connection message verifies sending; card callbacks remain a manual check. ([#272](https://github.com/glows777/Vela/issues/272)).
+
 - **First-run model setup.** Interactive Vela starts a setup wizard when no usable model is configured; `vela setup` revisits it. Configure built-in providers, DeepSeek or an OpenAI-compatible endpoint, verify a model and save user-level settings. Verification sends a small request that may incur a charge ([#270](https://github.com/glows777/Vela/issues/270)).
 
 ### Changed
