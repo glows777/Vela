@@ -522,7 +522,7 @@ test('a clone of an in-memory session still reads a long tool result after the s
   expect(latestToolText(copy.messages)).toBe(ZEROS.slice(200))
   expect(
     fileNames(t.dataDir).filter(
-      (name) => name === 'tool-history.jsonl' || name === 'today.jsonl',
+      (name) => name === 'tool-history.jsonl' || name === 'requests.jsonl',
     ),
   ).toEqual([])
 })
