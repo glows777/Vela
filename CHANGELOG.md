@@ -10,7 +10,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
-- **Usage is logged to `usage/requests.jsonl`.** The ledger holds every request, not only today's, so the old `today.jsonl` name was misleading. On first run Vela renames an existing `usage/today.jsonl`, so recorded usage carries over unchanged.
+- **Usage is logged to `usage/requests.jsonl`.** The ledger holds every request, not only today's, so the old `today.jsonl` name was misleading. The next run that logs usage renames an existing `usage/today.jsonl`, so recorded usage carries over unchanged.
 
 ### Removed
 
