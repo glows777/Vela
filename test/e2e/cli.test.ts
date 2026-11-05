@@ -137,6 +137,37 @@ test.skipIf(!hasScript)(
       expect(
         files.map((name) => readFileSync(join(home.path, name), 'utf8')),
       ).toEqual(before)
+      const changed = await cli(['setup'], {
+        agentDir: home.path,
+        model: '',
+        terminal: [
+          ['Current model:', '\x1b[B\r'],
+          ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+          ['Provider name', 'local\r'],
+          ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['Credential for local is configured', '\r'],
+          ['Model ID', 'test-model\r'],
+          ['may incur', '\r'],
+          ['Thinking level', '\x1b[B\r'],
+          ['Connect Lark', '\r'],
+          ['Save configuration', '\r'],
+        ],
+      })
+      expect(changed.code).toBe(0)
+      const changedSettings = JSON.parse(
+        readFileSync(join(home.path, 'settings.json'), 'utf8'),
+      )
+      expect(changedSettings).toMatchObject({
+        hideThinking: true,
+        defaultModel: 'local/test-model',
+        defaultThinkingLevel: 'high',
+      })
+      expect(readFileSync(join(home.path, 'auth.json'), 'utf8')).toBe(
+        before[2]!,
+      )
+      expect(
+        JSON.parse(readFileSync(join(home.path, 'models.json'), 'utf8')),
+      ).toEqual(JSON.parse(before[1]!))
     } finally {
       server.stop(true)
     }
@@ -255,6 +286,7 @@ test.skipIf(!hasScript)(
       readFileSync(join(result.agentDir, 'auth.json'), 'utf8'),
     )
     expect(models.providers.deepseek.baseUrl).toBe('https://api.deepseek.com')
+    expect(models.providers.deepseek.api).toBe('openai-completions')
     expect(settings.defaultModel).toBe('deepseek/deepseek-reasoner')
     expect(auth.deepseek.key).toBe('fake-key')
     const requests = readFileSync(join(result.cwd, 'requests.jsonl'), 'utf8')
@@ -262,8 +294,10 @@ test.skipIf(!hasScript)(
       .split('\n')
       .map((line) => JSON.parse(line))
     expect(requests.at(-1).model).toBe('deepseek-reasoner')
+    expect(requests[0].stream).not.toBe(true)
+    expect(requests.some((request) => request.stream === true)).toBe(true)
     for (const name of ['auth.json', 'models.json', 'settings.json'])
-      expect(result.stdout).toContain(name)
+      expect(result.stdout).toContain(join(result.agentDir, name))
   },
 )
 
