@@ -164,7 +164,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
         │   ├── <session id>.jsonl    the conversation
         │   └── <session id>/         long tool output and tool call history
         ├── memory/                   memory extension (MEMORY.md and one file per memory)
-        ├── usage/today.jsonl         token usage records
+        ├── usage/requests.jsonl      token usage records
         └── rag/knowledge.db          rag extension
 ```
 

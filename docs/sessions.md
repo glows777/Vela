@@ -191,6 +191,6 @@ Every model request records input, output, cache-read and cache-write tokens and
 - `/context` shows how the context window is filled: system prompt, tool definitions, memory, the skills index and messages, plus the autocompact buffer, the part of the window above `summaryThreshold`.
 - The footer in interactive mode shows the current context estimate as a percentage of the window.
 - `session.usage` in the SDK returns `{ tokens, percent, needsAction, totals }`.
-- Each request is appended to `<dataDir>/usage/today.jsonl`. `--no-session` keeps the same totals in memory and does not write that file.
+- Each request is appended to `<dataDir>/usage/requests.jsonl`. Versions up to 0.5 wrote `today.jsonl`; the next run that logs usage renames it, so earlier records stay in the ledger. `--no-session` keeps the same totals in memory and does not write that file.
 
 `usage` events carry the same numbers per request. See [SDK](sdk.md#events).

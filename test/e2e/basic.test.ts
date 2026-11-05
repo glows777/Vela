@@ -62,7 +62,7 @@ test('plain text reply streams, ends the loop and saves the session', async () =
 
   const session = await t.readData('sessions/default.jsonl')
   expect(session).toContain('Hi, this is Vela')
-  expect(t.exists('usage/today.jsonl')).toBe(true)
+  expect(t.exists('usage/requests.jsonl')).toBe(true)
 })
 
 test('the model receives the system prompt, the tool list and the user message', async () => {

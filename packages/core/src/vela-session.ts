@@ -77,6 +77,7 @@ import { UserBash } from './session/user-bash.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { BashResult } from './tools/shell.ts'
 import { getToolListError, isToolModifier } from './tools/tool-selection.ts'
+import { usageLedgerPath } from './usage/ledger.ts'
 import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
 
 export type { SessionUsage } from './session/options.ts'
@@ -294,10 +295,10 @@ export class VelaSession {
       this.registry.setDefaultToolModifiers(options.tools)
     else this.registry.setSelection(options.tools)
     // --no-session keeps usage in memory. /usage and /status still read the tracker;
-    // they must not append usage/today.jsonl under the data directory.
+    // they must not append usage/requests.jsonl under the data directory.
     this.tracker = new TokenTracker(
       sessionArtifactsUseDataDir(deps.sessionStorage, id, deps.temporaryDataDir)
-        ? join(deps.dataDir, 'usage', 'today.jsonl')
+        ? usageLedgerPath(deps.dataDir)
         : undefined,
     )
     this.contextManager = new ContextManager(

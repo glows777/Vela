@@ -228,7 +228,7 @@ test('dataDir keeps sessions, memory, usage and knowledge base out of the workin
   for (const path of [
     'sessions/default.jsonl',
     'memory/MEMORY.md',
-    'usage/today.jsonl',
+    'usage/requests.jsonl',
     'rag/knowledge.db',
   ])
     expect(t.exists(path)).toBe(true)
@@ -249,7 +249,7 @@ test('token usage is appended to the usage log for every model step', async () =
   await t.run('1')
   await t.run('2')
 
-  const rows = (await t.readData('usage/today.jsonl'))
+  const rows = (await t.readData('usage/requests.jsonl'))
     .trim()
     .split('\n')
     .map((l) => JSON.parse(l))
