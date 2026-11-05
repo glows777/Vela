@@ -49,6 +49,7 @@ export const DEFAULT_OFF_BUILTINS: readonly string[] = ['permission-gate']
 
 export interface CliArgs {
   setup?: boolean
+  setupTarget?: 'lark'
   /** `serve`: run the configured channels without the TUI, until a signal stops the process */
   serve: boolean
   /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
@@ -98,7 +99,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -106,7 +107,7 @@ export const HELP = `vela - terminal agent with pi-style extensions
 Usage:
   vela [options] [prompt...]
   vela serve [options]
-  vela setup
+  vela setup [lark]
 
 Modes:
   (default)                     Interactive TUI when stdin and stdout are a terminal
@@ -226,8 +227,13 @@ export function parseArgs(argv: string[]): CliArgs {
       if (next === undefined) throw new Error(`${arg} requires a value`)
       return next
     }
-    if (i === 0 && arg === 'setup') args.setup = true
-    else if (i === 0 && arg === 'serve') args.serve = true
+    if (i === 0 && arg === 'setup') {
+      args.setup = true
+      if (argv[i + 1] === 'lark') {
+        args.setupTarget = 'lark'
+        i++
+      }
+    } else if (i === 0 && arg === 'serve') args.serve = true
     else if (arg === '-h' || arg === '--help') args.help = true
     else if (arg === '-v' || arg === '--version') args.version = true
     else if (arg === '-p' || arg === '--print') args.print = true

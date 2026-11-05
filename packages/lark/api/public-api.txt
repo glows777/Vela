@@ -1,5 +1,7 @@
 # @glows777/vela-lark
 
+  function connectLarkSetup: (appId: string, appSecret: string, signal?: AbortSignal) => Promise<{ waitForMention: () => Promise<{ chatId: string; }>; send: (chatId: string, text: string) => Promise<void | LarkSentMessage>; stop: () => void; }>
+  function discoverLarkGroup: (transport: LarkTransport, signal?: AbortSignal) => Promise<{ chatId: string; }>
   function lark: (options?: LarkOptions) => VelaExtension
   interface LarkCard
     body: { elements: { tag: "markdown" | "column_set"; content?: string; columns?: { tag: "column"; width: "weighted"; weight: number; elements: { tag: "button"; text: { tag: "plain_text"; content: string; }; type: "primary" | "default" | "danger"; behaviors: { type: "callback"; value: { action: string; token: string; }; }[]; }[]; }[]; }[]; }
