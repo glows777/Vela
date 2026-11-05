@@ -8,6 +8,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **First-run model setup.** Interactive Vela starts a setup wizard when no usable model is configured; `vela setup` revisits it. Configure built-in providers, DeepSeek or an OpenAI-compatible endpoint, verify a model and save user-level settings. Verification sends a small request that may incur a charge ([#270](https://github.com/glows777/Vela/issues/270)).
 
+### Changed
+
+- **Usage is logged to `usage/requests.jsonl`.** The ledger holds every request, not only today's, so the old `today.jsonl` name was misleading. On first run Vela renames an existing `usage/today.jsonl`, so recorded usage carries over unchanged.
+
 ### Removed
 
 - **The Feishu → Lark migration utility is gone.** Vela 0.6 does not migrate 0.4-era Feishu settings or data. Upgrade through 0.5.x first, where the migration utility is still available; deployments already on 0.5 using `LARK_*` and `builtin:lark` need no changes ([#269](https://github.com/glows777/Vela/issues/269)).
