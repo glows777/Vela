@@ -238,11 +238,14 @@ export async function runAttempt(
     Parameters<typeof createTestVela>[0]
   >['extensions'] = []
   // Opt-in: evaluate the todo extension when the new-arm revision provides it (VELA_EVAL_TODO=1).
-  if (process.env.VELA_EVAL_TODO === '1') {
+  if (
+    process.env.VELA_EVAL_TODO === '1' &&
+    existsSync(join(config.runtime, paths.todo))
+  ) {
     const todo = await load<
       typeof import('../../packages/core/src/extensions/todo/index.ts')
-    >(config.runtime, paths.todo).catch(() => undefined)
-    if (todo) extensions.push(todo.todo())
+    >(config.runtime, paths.todo)
+    extensions.push(todo.todo())
   }
   let server: ReturnType<typeof Bun.serve> | undefined
   let fake:

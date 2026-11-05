@@ -21,12 +21,13 @@ To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for e
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
 ```ts
-import { createEmbedder, createVela, memory, rag, web } from '@glows777/vela'
+import { createEmbedder, createVela, memory, todo, rag, web } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
   extensions: [
     memory(),
+    todo(),
     rag({
       embedder: createEmbedder({
         url: 'https://api.openai.com/v1',
@@ -127,7 +128,7 @@ The model gets a one-line count summary back, not a copy of the list it just sen
 
 **Lark progress card.** When the current run has a list, the shared progress card shows it above the tool rows: `☐` pending, `◐` in progress, `☑` done. More than ten items are cut off with `… and N more`; the full list stays in the session.
 
-**SDK.** `todo()` takes no options.
+**SDK.** `todo()` takes no options. The CLI loads it by default; the SDK loads it explicitly.
 
 A local knowledge base with hybrid search, stored in SQLite.
 

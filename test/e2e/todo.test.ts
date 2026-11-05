@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { todo } from '@glows777/vela-core'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { latestTodoList } from '../../packages/core/src/extensions/todo/list.ts'
+import type { TodoList } from '../../packages/core/src/extensions/todo/tool.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
@@ -34,11 +35,11 @@ test('the last todo call is the checklist, and a resume keeps it', async () => {
   // Registered under the extension's own name, not todo_todo
   expect(t.model.calls[0]!.tools).toContain('todo')
   expect(t.model.calls[0]!.tools).not.toContain('todo_todo')
-  const latest = {
+  const latest: TodoList = {
     items: [
-      { text: 'Read the issue', status: 'done' as const },
-      { text: 'Write the extension', status: 'done' as const },
-      { text: 'Run the tests', status: 'in_progress' as const },
+      { text: 'Read the issue', status: 'done' },
+      { text: 'Write the extension', status: 'done' },
+      { text: 'Run the tests', status: 'in_progress' },
     ],
   }
   expect(latestTodoList(t.session.messages)).toEqual(latest)
