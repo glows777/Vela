@@ -741,6 +741,7 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import * as larkHelpers from '../../test/support/lark.ts'
+import { runtimePaths } from './layout.ts'
 import { options } from './run.ts'
 import * as scenarios from './scenarios.ts'
 import { command, runAttempt } from './worker.ts'
@@ -750,6 +751,7 @@ const exitRuntime =
 const exitHelperName = existsSync(join(exitRuntime, 'test/support/lark.ts'))
   ? 'fakeLark'
   : 'fakeFeishu'
+const exitSessions = runtimePaths(exitRuntime).sessionTranscript
 const exitHelpers: typeof larkHelpers & {
   fakeFeishu: typeof larkHelpers.fakeLark
 } = await import(
@@ -1369,7 +1371,7 @@ for (const id of ['G7', 'G8'] as const) {
     [
       'read_file',
       {
-        path: `../../../sessions/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-g8_store.jsonl`,
+        path: `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-g8_store`)}`,
       },
     ],
     ['bash', { command: 'grep -R kestrel ../../../sessions' }],
@@ -1457,7 +1459,7 @@ for (const id of ['G7', 'G8'] as const) {
       fauxText('Kestrel.'),
       fauxToolCall('bash', { command: 'pwd' }),
       fauxToolCall('read_file', {
-        path: `../../../sessions/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${topic}_store.jsonl`,
+        path: `../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${topic}_store`)}`,
       }),
       fauxToolCall('memory', stagingMemory),
       fauxText('Kestrel.'),
@@ -1486,7 +1488,7 @@ for (const id of ['G7', 'G8'] as const) {
         filename: 'project_staging-server.md',
       }),
       fauxToolCall('bash', {
-        command: `grep -i kestrel ../../../sessions/${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store.jsonl`,
+        command: `grep -i kestrel ../../../sessions/${exitSessions(`${exitHelperName === 'fakeLark' ? 'lark' : 'feishu'}-oc_group-${id.toLowerCase()}_store`)}`,
       }),
       fauxText('Kestrel.'),
     ])

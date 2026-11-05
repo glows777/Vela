@@ -242,11 +242,11 @@ for (const [label, response, error] of [
     for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
     const messages = JSON.stringify(t.messages)
     const entries = t.session.getEntries()
-    const saved = await t.readData('sessions/default.jsonl')
+    const saved = await t.readData('sessions/default/transcript.jsonl')
     await expect(t.session.compact()).rejects.toThrow(error)
     expect(JSON.stringify(t.messages)).toBe(messages)
     expect(t.session.getEntries()).toEqual(entries)
-    expect(await t.readData('sessions/default.jsonl')).toBe(saved)
+    expect(await t.readData('sessions/default/transcript.jsonl')).toBe(saved)
     expect(t.session.contextManager.state.summary).toBe('')
     expect(t.eventsOf('compaction_end').at(-1)).toMatchObject({
       reason: 'manual',
@@ -282,7 +282,7 @@ test('interrupting a summary preserves history and a later prompt still works', 
   const t = createTestVela({ model })
   for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
   const messages = JSON.stringify(t.messages)
-  const saved = await t.readData('sessions/default.jsonl')
+  const saved = await t.readData('sessions/default/transcript.jsonl')
   const compacting = t.session.compact()
   const rejected = compacting.catch((error: unknown) => error)
   await generating
@@ -291,7 +291,7 @@ test('interrupting a summary preserves history and a later prompt still works', 
   await aborting
   expect(await rejected).toBeInstanceOf(Error)
   expect(JSON.stringify(t.messages)).toBe(messages)
-  expect(await t.readData('sessions/default.jsonl')).toBe(saved)
+  expect(await t.readData('sessions/default/transcript.jsonl')).toBe(saved)
   expect(t.eventsOf('compaction_end').at(-1)).toMatchObject({
     aborted: true,
     willRetry: false,

@@ -6,15 +6,15 @@ For the API, see [SDK](sdk.md#sessions). For the file contents, see [Session for
 
 ## Session ids and storage
 
-Every session has an id, which is also its file name. Ids use letters, digits, `.`, `_` and `-`, don't start with `.`, and are at most 128 characters.
+Every session has an id, which is also the name of its directory. Ids use letters, digits, `.`, `_` and `-`, don't start with `.`, and are at most 128 characters.
 
 - The CLI starts a new session on every launch with an id made from the local time and four random characters, such as `20261008-081441-da14`.
 - Channel sessions get `<channel>-<conversationId>`, one shared session per chat (hashed when the ids have other characters). See [Channels](channels.md).
 - In the SDK you choose the id: `vela.session('support-42')`. The default is `default`.
 
-The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>.jsonl` holds the session's entries (messages, compactions, setting changes) and `sessions/<id>/` the long tool output and tool call history. `--no-session` keeps the transcript, tool history and usage log out of that directory; tool history and long output go to a temporary directory removed when the session closes. Memory and the knowledge base are unchanged.
+The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>/transcript.jsonl` holds the session's entries (messages, compactions, setting changes), next to the long tool output and tool call history in the same directory. Vela 0.5 kept the transcript as `sessions/<id>.jsonl`; such a session is listed from that file and moved into its directory the first time it is opened or written. Stop other Vela processes on the data directory before upgrading, so an older process cannot recreate the old file after the move. `--no-session` keeps the transcript, tool history and usage log out of that directory; tool history and long output go to a temporary directory removed when the session closes. Memory and the knowledge base are unchanged.
 
-To delete a session, delete `<id>.jsonl` and the `<id>/` directory.
+To delete a session, delete its `<id>/` directory.
 
 In the SDK, sessions are stored in `<dataDir>/sessions/` when you pass `dataDir`, in memory when you don't, or wherever a custom `sessionStorage` puts them. See [SDK](sdk.md#session-storage).
 

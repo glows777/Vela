@@ -25,7 +25,7 @@ export interface ForkOptions {
   sessionId?: string
 }
 
-/** Session ids become file names: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
+/** Session ids become directory names: only letters, digits, `.`, `_` and `-`, and no leading `.`. */
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/
 
 /** @experimental Shared frontend contract. */

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
 import type { SessionFileEntry, SessionHeader } from '../../../src/index.ts'
@@ -49,11 +49,11 @@ test('memory storage appends per id and hands out copies', async () => {
   expect(await storage.load('b')).toBeUndefined()
 })
 
-test('file storage appends lines to <dir>/<id>.jsonl; corrupt lines are skipped and a cut-off line is ended', async () => {
+test('file storage appends lines to <dir>/<id>/transcript.jsonl; corrupt lines are skipped and a cut-off line is ended', async () => {
   const dir = tempDir()
   dirs.push(dir)
   const storage = fileSessionStorage(join(dir.path, 'sessions'))
-  const path = join(dir.path, 'sessions/a.jsonl')
+  const path = join(dir.path, 'sessions/a/transcript.jsonl')
   expect(storage.persistence?.('a')).toEqual({ type: 'file', path })
   expect(existsSync(path)).toBe(false)
   await storage.append('a', [header('a'), message('hi')])
@@ -66,6 +66,102 @@ test('file storage appends lines to <dir>/<id>.jsonl; corrupt lines are skipped 
   expect(contents(await storage.load('a'))).toEqual(['hi', 'again'])
   await storage.append('a', [message('after')])
   expect(contents(await storage.load('a'))).toEqual(['hi', 'again', 'after'])
+})
+
+test('a 0.5.0 flat session is converted on load, keeping its entries and appending to the new path', async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  mkdirSync(sessions, { recursive: true })
+  writeFileSync(
+    join(sessions, 'a.jsonl'),
+    `${[header('a'), message('hi')].map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+  )
+  expect(contents(await storage.load('a'))).toEqual(['hi'])
+  expect(existsSync(join(sessions, 'a.jsonl'))).toBe(false)
+  expect(readFileSync(join(sessions, 'a/transcript.jsonl'), 'utf8')).toContain(
+    '"hi"',
+  )
+  await storage.append('a', [message('again')])
+  expect(contents(await storage.load('a'))).toEqual(['hi', 'again'])
+})
+
+test('appending without loading converts the flat session first instead of starting a second transcript', async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  mkdirSync(sessions, { recursive: true })
+  writeFileSync(
+    join(sessions, 'a.jsonl'),
+    `${[header('a'), message('hi')].map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+  )
+  await storage.append('a', [message('after')])
+  expect(contents(await storage.load('a'))).toEqual(['hi', 'after'])
+  expect(existsSync(join(sessions, 'a.jsonl'))).toBe(false)
+  expect(
+    readFileSync(join(sessions, 'a/transcript.jsonl'), 'utf8')
+      .trim()
+      .split('\n'),
+  ).toHaveLength(3)
+})
+
+test("a flat file of session 'a' that blocks the name of session 'a.jsonl' is converted first", async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  mkdirSync(sessions, { recursive: true })
+  const flat = (id: string, text: string) =>
+    writeFileSync(
+      join(sessions, `${id}.jsonl`),
+      `${[header(id), message(text)].map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+    )
+  flat('a', 'one')
+  flat('a.jsonl', 'two')
+  // Opening the inner session needs the directory that the outer one's flat file occupies
+  expect(contents(await storage.load('a.jsonl'))).toEqual(['two'])
+  expect(contents(await storage.load('a'))).toEqual(['one'])
+  expect(readFileSync(join(sessions, 'a/transcript.jsonl'), 'utf8')).toContain(
+    '"one"',
+  )
+  expect(
+    readFileSync(join(sessions, 'a.jsonl/transcript.jsonl'), 'utf8'),
+  ).toContain('"two"')
+  expect(existsSync(join(sessions, 'a.jsonl.jsonl'))).toBe(false)
+})
+
+test('listing reads both layouts without converting, and the directory form wins', async () => {
+  const dir = tempDir()
+  dirs.push(dir)
+  const sessions = join(dir.path, 'sessions')
+  const storage = fileSessionStorage(sessions)
+  const lines = (id: string, text: string, timestamp: string) =>
+    `${[header(id), message(text, timestamp)].map((entry) => JSON.stringify(entry)).join('\n')}\n`
+  mkdirSync(join(sessions, 'new'), { recursive: true })
+  writeFileSync(
+    join(sessions, 'flat.jsonl'),
+    lines('flat', 'old', '2026-10-06T00:00:00.000Z'),
+  )
+  writeFileSync(
+    join(sessions, 'new/transcript.jsonl'),
+    lines('new', 'directory', '2026-10-08T00:00:00.000Z'),
+  )
+  // A leftover flat copy of a converted session loses to its directory
+  writeFileSync(
+    join(sessions, 'new.jsonl'),
+    lines('new', 'leftover', '2026-10-08T00:00:00.000Z'),
+  )
+  // Tool output for a session without a transcript yet, and the shared tool-result directory
+  mkdirSync(join(sessions, '.shared/tool-results'), { recursive: true })
+
+  expect((await storage.list?.())?.map((s) => [s.id, s.firstMessage])).toEqual([
+    ['new', 'directory'],
+    ['flat', 'old'],
+  ])
+  expect(existsSync(join(sessions, 'flat.jsonl'))).toBe(true)
+  expect(existsSync(join(sessions, 'new.jsonl'))).toBe(true)
 })
 
 test('file storage converts version-1 files (checkpoint and one message per line) and writes them back', async () => {
@@ -93,6 +189,7 @@ test('file storage converts version-1 files (checkpoint and one message per line
   const old = await storage.load('old')
   expect(old?.[0]).toMatchObject({ type: 'session', version: 2, id: 'old' })
   expect(contents(old)).toEqual(['one', 'two'])
+  expect(existsSync(join(sessions, 'old.jsonl'))).toBe(false)
 
   writeFileSync(
     join(sessions, 'checkpoint.jsonl'),
@@ -121,7 +218,10 @@ test('file storage converts version-1 files (checkpoint and one message per line
     'session_info',
   ])
   // Written back as version 2: loading again reads the same entries
-  const text = readFileSync(join(sessions, 'checkpoint.jsonl'), 'utf8')
+  const text = readFileSync(
+    join(sessions, 'checkpoint/transcript.jsonl'),
+    'utf8',
+  )
   expect(JSON.parse(text.split('\n')[0] as string).type).toBe('session')
   expect(await storage.load('checkpoint')).toEqual(migrated)
 })
@@ -132,7 +232,7 @@ test('a file whose header line is damaged is not mistaken for version 1 and rewr
   const sessions = join(dir.path, 'sessions')
   const storage = fileSessionStorage(sessions)
   await storage.append('cut', [header('cut'), message('kept')])
-  const path = join(sessions, 'cut.jsonl')
+  const path = join(sessions, 'cut/transcript.jsonl')
   const [, ...rest] = readFileSync(path, 'utf8').split('\n')
   const damaged = ['{"type":"sess', ...rest].join('\n')
   writeFileSync(path, damaged)

@@ -103,7 +103,9 @@ test('without a dataDir nothing is persisted: sessions live in memory and scratc
     await session.prompt('one')
     // Long tool output and tool history go to a temp data dir (the model can read them with read_file); the session itself writes no files
     expect(existsSync(join(vela.dataDir, 'sessions/x'))).toBe(true)
-    expect(existsSync(join(vela.dataDir, 'sessions/x.jsonl'))).toBe(false)
+    expect(existsSync(join(vela.dataDir, 'sessions/x/transcript.jsonl'))).toBe(
+      false,
+    )
     await session.close()
 
     const reopened = vela.session('x')

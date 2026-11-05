@@ -9,10 +9,12 @@ Source, in `packages/core/src/session/`: `entries.ts` (entry types, rebuilding t
 ## File location
 
 ```
-<dataDir>/sessions/<id>.jsonl
+<dataDir>/sessions/<id>/transcript.jsonl
 ```
 
-In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)). Unlike pi (`<timestamp>_<uuid>.jsonl`), the file is named by the session id, which the caller chooses (`--session`, a channel, `vela.session(id)`).
+In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directory) under `~/.vela/projects/`. `<id>` is the session id (letters, digits, `.`, `_`, `-`; see [Sessions](sessions.md#session-ids-and-storage)). Unlike pi (`<timestamp>_<uuid>.jsonl`), the file is named by the session id, which the caller chooses (`--session`, a channel, `vela.session(id)`), and it sits in the session's own directory next to its tool output.
+
+Vela 0.5 wrote `<dataDir>/sessions/<id>.jsonl`. A session in that layout is listed from the old file and moved to `<id>/transcript.jsonl` with one rename the first time it is opened or written, so the old file never holds half a session. Stop other Vela processes on the data directory before upgrading: an older process that keeps writing recreates the old file beside the converted one, and the session directory wins on the next read.
 
 Entries are appended as they happen; like pi, a session is written only once it has a user or assistant message, so opening a session and closing it leaves no file. Files are created with mode `0600` and the directory with `0700`. A line cut off by a crash is skipped when the file is read (and reported to the logger). A failed write is retried with the next entry; if the failed attempt had already written some entries, the repeated copies are ignored on resume (the first entry with an id counts). A file whose first entry is not a header (and not a version 1 file) fails to resume instead of being converted.
 
@@ -132,7 +134,7 @@ Next to the session file, each session has a directory:
   <historyId>/snapshots/through-<seq>.jsonl  fixed views of the history at a summary
 ```
 
-`--no-session` does not write this tree under the data directory. The same files live in a temporary directory for the life of the process and are removed when the session closes.
+`transcript.jsonl` sits beside these files; `--no-session` does not write this tree under the data directory. The same files live in a temporary directory for the life of the process and are removed when the session closes.
 
 `tool-history.jsonl` has one record per line, numbered by `seq`:
 

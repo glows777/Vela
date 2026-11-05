@@ -123,7 +123,7 @@ test.each(['text', 'summary'] as const)(
       .join('')
     expect(thinking).toBe('Check the result.')
     expect(t.lastAssistantText()).toBe('OK')
-    const saved = (await t.readData('sessions/default.jsonl'))
+    const saved = (await t.readData('sessions/default/transcript.jsonl'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))

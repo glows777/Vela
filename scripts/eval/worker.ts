@@ -670,11 +670,18 @@ mock.module(${JSON.stringify(modulePath)}, () => ({ ...actual, sumPositive(numbe
     })
     server?.stop(true)
     const sessions = join(config.artifactDir, 'data', 'sessions')
-    for (const name of await readdir(sessions).catch(() => []))
-      if (name.endsWith('.jsonl'))
+    const entries = await readdir(sessions, { withFileTypes: true }).catch(
+      () => [],
+    )
+    for (const entry of entries) {
+      const file = entry.isDirectory()
+        ? join(entry.name, 'transcript.jsonl')
+        : entry.name
+      if (file.endsWith('.jsonl') && existsSync(join(sessions, file)))
         result.sessionFiles.push(
-          relative(config.artifactDir, join(sessions, name)),
+          relative(config.artifactDir, join(sessions, file)),
         )
+    }
     result.finalChars = chars(evidence.answers.at(-1) ?? '')
     if (config.scenario === 'C4')
       result.repetition = repetition(evidence.answers)
