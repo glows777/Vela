@@ -52,6 +52,12 @@ function setup(
 }
 const topic = (message_id = 'trigger') =>
   larkEvent({ message_id, root_id: 'root', thread_id: 'thread' })
+const topicCommand = (text: string) =>
+  larkEvent({
+    root_id: 'root',
+    thread_id: 'thread',
+    content: JSON.stringify({ text: `@_user_1 ${text}` }),
+  })
 
 test('acknowledges an admitted mention before name preparation and completes its reaction', async () => {
   const { fake, t, start } = setup([fauxText('answer')])
@@ -226,6 +232,46 @@ test('a resumed topic starts its card from the stored checklist', async () => {
     await second.t.internals.gateway.stopAll()
     await second.t.cleanup()
     rmSync(first.t.cwd, { recursive: true, force: true })
+  }
+})
+
+test('a restarted topic keeps the checklist of its fresh session', async () => {
+  const { fake, t, start } = setup(
+    [
+      fauxToolCall('todo', {
+        items: [{ text: 'Old generation step', status: 'in_progress' }],
+      }),
+      fauxText('old answer'),
+      fauxToolCall('todo', {
+        items: [
+          { text: 'New generation unfinished step', status: 'in_progress' },
+        ],
+      }),
+      fauxText('fresh answer'),
+      fauxText('follow-up answer'),
+    ],
+    [todo()],
+  )
+  await start()
+  try {
+    fake.deliver(topic())
+    await until(() => fake.sent.some((m) => m.text.includes('old answer')))
+    fake.deliver(topicCommand('!restart'))
+    await until(() =>
+      fake.sent.some((m) => m.text.includes('Restarted with a fresh session')),
+    )
+    // The fresh session writes a new list; the next card of that session must start from it
+    fake.deliver(topic('second'))
+    await until(() => fake.sent.some((m) => m.text.includes('fresh answer')))
+    fake.deliver(topic('third'))
+    await until(() =>
+      fake.sent.some((m) => m.text.includes('follow-up answer')),
+    )
+    const content = fake.patches.at(-1)?.card.body.elements[0]?.content ?? ''
+    expect(content).toContain('◐ New generation unfinished step')
+    expect(content).not.toContain('Old generation step')
+  } finally {
+    await t.internals.gateway.stopAll()
   }
 })
 

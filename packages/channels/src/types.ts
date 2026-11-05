@@ -111,7 +111,7 @@ export interface ChannelRuntime {
     cancel(sessionId: string, id: string): Promise<boolean>
   }
   context(sessionId: string): IncomingMessage | undefined
-  /** The open session for a logical channel session id, for read-only display state such as progress cards. */
+  /** The open session for a logical channel session id, mapped to its current generation (after `!restart` too), for read-only display state such as progress cards. */
   session(id: string): VelaSession | undefined
   topics(chatId: string): ChannelTopic[]
   topicCoverage(): string
