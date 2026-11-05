@@ -126,7 +126,7 @@ The model gets a one-line count summary back, not a copy of the list it just sen
 
 **Prompt.** The tool description asks the model to use it for multi-step work, keep at most one item in progress, and skip it for a single simple step.
 
-**Lark progress card.** When the current run has a list, the shared progress card shows it above the tool rows: `☐` pending, `◐` in progress, `☑` done. More than ten items are cut off with `… and N more`; the full list stays in the session.
+**Lark progress card.** The shared progress card shows the current list above the tool rows: `☐` pending, `◐` in progress, `☑` done. A new run in the same topic starts from the list stored in the session, so a follow-up that makes no `todo` call still shows it, including after a restart. More than ten items are cut off with `… and N more`; the full list stays in the session.
 
 **SDK.** `todo()` takes no options. The CLI loads it by default; the SDK loads it explicitly.
 

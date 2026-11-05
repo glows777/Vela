@@ -92,6 +92,7 @@ export async function inspectSession(
 
 export { defaultAgentDir } from './config/paths.ts'
 export { extensionName, projectTrustRequired } from './config/settings.ts'
+export { latestTodoList } from './extensions/todo/list.ts'
 export { isToolContent } from './messages.ts'
 export { THINKING_LEVELS } from './models/catalog.ts'
 export { resolveModel } from './models/index.ts'

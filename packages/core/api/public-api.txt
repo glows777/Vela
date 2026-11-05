@@ -1492,6 +1492,7 @@
   function isToolContent: (value: unknown) => value is ToolContent
   @experimental
   function isToolModifier: (entry: string) => boolean
+  function latestTodoList: (entries: readonly SessionEntry[]) => TodoList | null
   @experimental
   function newSessionId: (now?: Date) => string
   @experimental

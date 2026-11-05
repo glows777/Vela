@@ -6,7 +6,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
-- **A built-in `todo` extension.** The model keeps one task list up to date for multi-step work. The whole list travels in every `todo` call, so the latest call in the session is the current list and a resumed session reads it back from history; no new event type or storage is involved. Lark's progress card shows the list above the tool rows, capped at ten items. It is on by default in the CLI; the SDK loads it explicitly ([#282](https://github.com/glows777/Vela/issues/282)).
+- **A built-in `todo` extension.** The model keeps one task list up to date for multi-step work. The whole list travels in every `todo` call, so the latest call in the session is the current list and a resumed session reads it back from history; no new event type or storage is involved. Lark's progress card shows the list above the tool rows — starting each new run in a topic from the list stored in the session — capped at ten items. It is on by default in the CLI; the SDK loads it explicitly ([#282](https://github.com/glows777/Vela/issues/282)).
 
 - **Lark setup.** `vela setup lark` verifies app credentials, discovers a group via a bot mention, and saves the confirmed group to user settings. Existing groups and restrictions are preserved. A connection message verifies sending; card callbacks remain a manual check. ([#272](https://github.com/glows777/Vela/issues/272)).
 

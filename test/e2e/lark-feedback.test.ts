@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
+import { rmSync } from 'node:fs'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import { todo } from '@glows777/vela-core'
 import {
@@ -23,11 +24,13 @@ async function until(check: () => boolean) {
 function setup(
   responses: NonNullable<Parameters<typeof createTestVela>[0]>['responses'],
   extensions: VelaExtension[] = [],
+  cwd?: string,
 ) {
   const fake = fakeLark()
   const t = createTestVela({
     responses,
     allowPendingResponses: true,
+    cwd,
     extensions: [
       lark({
         appId: 'bot',
@@ -157,6 +160,72 @@ test('the progress card shows the todo checklist above the tool rows', async () 
     )
   } finally {
     await t.internals.gateway.stopAll()
+  }
+})
+
+test('a new run in the same topic starts its card from the stored checklist', async () => {
+  const { fake, t, start } = setup(
+    [
+      fauxToolCall('todo', {
+        items: [
+          { text: 'Read the issue', status: 'done' },
+          { text: 'Write the extension', status: 'in_progress' },
+        ],
+      }),
+      fauxText('first answer'),
+      fauxText('second answer'),
+    ],
+    [todo()],
+  )
+  await start()
+  try {
+    fake.deliver(topic())
+    await until(() => fake.reactions.some((r) => r.emoji === 'DONE'))
+    expect(fake.patches.at(-1)?.card.body.elements[0]?.content).toContain(
+      '◐ Write the extension',
+    )
+    fake.deliver(topic('second'))
+    await until(
+      () => fake.reactions.filter((r) => r.emoji === 'DONE').length === 2,
+    )
+    // The second run made no todo call; its card starts from the session's history
+    expect(t.eventsOf('tool_execution_end')).toHaveLength(1)
+    expect(fake.patches.at(-1)?.card.body.elements[0]?.content).toContain(
+      '◐ Write the extension',
+    )
+  } finally {
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('a resumed topic starts its card from the stored checklist', async () => {
+  const first = setup(
+    [
+      fauxToolCall('todo', {
+        items: [{ text: 'Run the tests', status: 'pending' }],
+      }),
+      fauxText('first answer'),
+    ],
+    [todo()],
+  )
+  await first.start()
+  first.fake.deliver(topic())
+  await until(() => first.fake.reactions.some((r) => r.emoji === 'DONE'))
+  await first.t.internals.gateway.stopAll()
+  await first.t.cleanup({ keepDir: true })
+
+  const second = setup([fauxText('next answer')], [todo()], first.t.cwd)
+  await second.start()
+  try {
+    second.fake.deliver(topic('second'))
+    await until(() => second.fake.reactions.some((r) => r.emoji === 'DONE'))
+    expect(
+      second.fake.patches.at(-1)?.card.body.elements[0]?.content,
+    ).toContain('☐ Run the tests')
+  } finally {
+    await second.t.internals.gateway.stopAll()
+    await second.t.cleanup()
+    rmSync(first.t.cwd, { recursive: true, force: true })
   }
 })
 

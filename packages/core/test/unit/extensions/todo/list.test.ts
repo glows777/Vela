@@ -1,42 +1,52 @@
 import { expect, test } from 'bun:test'
 import { latestTodoList } from '../../../../src/extensions/todo/list.ts'
-import type { ModelMessage } from '../../../../src/messages.ts'
+import type { SessionEntry } from '../../../../src/session/entries.ts'
 
-let calls = 0
-function call(input: unknown): ModelMessage {
+let sequence = 0
+/** A tool message as the session stores it: the display data is `details`, keyed by tool call id. */
+function result(details: unknown, toolName = 'todo'): SessionEntry {
+  const id = `entry-${++sequence}`
+  const toolCallId = `${id}-call`
   return {
-    role: 'assistant',
-    content: [
-      {
-        type: 'tool-call',
-        toolCallId: `call-${++calls}`,
-        toolName: 'todo',
-        input,
-      },
-    ],
+    type: 'message',
+    id,
+    parentId: null,
+    timestamp: '2026-11-05T00:00:00.000Z',
+    message: {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId,
+          toolName,
+          output: { type: 'text', value: 'ok' },
+        },
+      ],
+    },
+    details: { [toolCallId]: details },
   }
 }
 
-test('the last todo call is the current list', () => {
+test('the last successful todo call is the current list', () => {
   expect(
     latestTodoList([
-      call({
+      result({
         items: [
           { text: 'first', status: 'done' },
           { text: 'second', status: 'in_progress' },
         ],
       }),
-      { role: 'user', content: 'next' },
-      call({ items: [{ text: 'second', status: 'done' }] }),
+      result({ ok: true }, 'bash'),
+      result({ items: [{ text: 'second', status: 'done' }] }),
     ]),
   ).toEqual({ items: [{ text: 'second', status: 'done' }] })
 })
 
-test('an invalid todo call does not replace the last valid list', () => {
+test('a call without todo display data does not replace the last list', () => {
   expect(
     latestTodoList([
-      call({ items: [{ text: 'keep me', status: 'pending' }] }),
-      call({ items: [{ text: 'bad status', status: 'blocked' }] }),
+      result({ items: [{ text: 'keep me', status: 'pending' }] }),
+      result({ items: [{ text: 'bad status', status: 'blocked' }] }),
     ]),
   ).toEqual({ items: [{ text: 'keep me', status: 'pending' }] })
 })
@@ -44,12 +54,12 @@ test('an invalid todo call does not replace the last valid list', () => {
 test('an empty list clears the checklist', () => {
   expect(
     latestTodoList([
-      call({ items: [{ text: 'done', status: 'done' }] }),
-      call({ items: [] }),
+      result({ items: [{ text: 'done', status: 'done' }] }),
+      result({ items: [] }),
     ]),
   ).toEqual({ items: [] })
 })
 
 test('a session without a todo call has no checklist', () => {
-  expect(latestTodoList([{ role: 'user', content: 'hello' }])).toBeNull()
+  expect(latestTodoList([])).toBeNull()
 })

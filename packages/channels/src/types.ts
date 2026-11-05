@@ -2,6 +2,7 @@ import type {
   ImageContent,
   PermissionRules,
   VelaEvent,
+  VelaSession,
 } from '@glows777/vela-core/extension-api'
 
 /** A source event is untrusted data, with routing determined only by local subscriptions. */
@@ -110,6 +111,8 @@ export interface ChannelRuntime {
     cancel(sessionId: string, id: string): Promise<boolean>
   }
   context(sessionId: string): IncomingMessage | undefined
+  /** The open session for a logical channel session id, for read-only display state such as progress cards. */
+  session(id: string): VelaSession | undefined
   topics(chatId: string): ChannelTopic[]
   topicCoverage(): string
   /** Suppress this active passive run's reply; the tool call is its only durable decision. */

@@ -84,7 +84,9 @@ export class LarkProgress {
     private messageId: string,
     private card: LarkCard,
     private report: (error: unknown) => Promise<void>,
+    initialTodos?: readonly TodoItem[],
   ) {
+    if (initialTodos?.length) this.todos = [...initialTodos]
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
   }
 

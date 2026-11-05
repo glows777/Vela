@@ -42,7 +42,7 @@ test('the last todo call is the checklist, and a resume keeps it', async () => {
       { text: 'Run the tests', status: 'in_progress' },
     ],
   }
-  expect(latestTodoList(t.session.messages)).toEqual(latest)
+  expect(latestTodoList(t.session.getBranch())).toEqual(latest)
   expect(
     t.eventsOf('tool_execution_end').map((event) => event.details),
   ).toEqual([
@@ -58,5 +58,5 @@ test('the last todo call is the checklist, and a resume keeps it', async () => {
 
   const again = createTestVela({ cwd: t.cwd, extensions: [todo()] })
   expect(await again.session.resume()).toBe(true)
-  expect(latestTodoList(again.session.messages)).toEqual(latest)
+  expect(latestTodoList(again.session.getBranch())).toEqual(latest)
 })

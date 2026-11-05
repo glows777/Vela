@@ -1,20 +1,20 @@
-import type { ModelMessage } from '../../messages.ts'
+import type { SessionEntry } from '../../session/entries.ts'
 import { type TodoList, todoInputSchema } from './tool.ts'
 
 /**
- * The list from the latest `todo` call in `messages`, or null when there is none. The tool always
- * replaces the whole list, so the last call in history is the current checklist.
+ * The list from the latest successful `todo` call in `entries` (a branch), or null when there is
+ * none. The tool always replaces the whole list, so the last call is the current one, and its
+ * display data is what a frontend renders (a failed or rejected call did not change the list).
  */
 export function latestTodoList(
-  messages: readonly ModelMessage[],
+  entries: readonly SessionEntry[],
 ): TodoList | null {
   let latest: TodoList | null = null
-  for (const message of messages) {
-    if (message.role !== 'assistant' || typeof message.content === 'string')
-      continue
-    for (const part of message.content) {
-      if (part.type !== 'tool-call' || part.toolName !== 'todo') continue
-      const parsed = todoInputSchema.safeParse(part.input)
+  for (const entry of entries) {
+    if (entry.type !== 'message' || entry.message.role !== 'tool') continue
+    for (const part of entry.message.content) {
+      if (part.type !== 'tool-result' || part.toolName !== 'todo') continue
+      const parsed = todoInputSchema.safeParse(entry.details?.[part.toolCallId])
       if (parsed.success) latest = parsed.data
     }
   }
