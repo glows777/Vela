@@ -78,6 +78,7 @@
     dispatch: (sourceSessionId: string, message: IncomingMessage, label?: string) => void
     routines: { create(sessionId: string, message: string, schedule: RoutineSchedule): Promise<ChannelRoutineInfo>; list(sessionId: string): { timezone: string; routines: ChannelRoutineInfo[]; }; cancel(sessionId: string, id: string): Promise<boolean>; }
     scope: (sessionId: string) => ChannelScope | undefined
+    session: (id: string) => VelaSession | undefined
     skipReply: (sessionId: string) => void
     topicCoverage: () => string
     topics: (chatId: string) => ChannelTopic[]

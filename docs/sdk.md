@@ -411,12 +411,13 @@ Extensions get the same logger as `vela.logger`.
 The SDK loads no extensions by default. The CLI's built-in extensions are exported as factories:
 
 ```typescript
-import { createVela, memory, rag, createEmbedder, web, lark, mcp } from '@glows777/vela'
+import { createVela, memory, todo, rag, createEmbedder, web, lark, mcp } from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
   extensions: [
     memory(),
+    todo(),
     rag({ embedder: createEmbedder({ modelId, apiKey, url }) }),
     web({ tavilyKey: process.env.TAVILY_API_KEY }),
     mcp({ servers: { docs: { url: 'https://example.com/mcp' } } }),

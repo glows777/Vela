@@ -11,6 +11,44 @@ function plain(value: string, limit: number): string {
     .slice(0, limit)
 }
 
+interface TodoItem {
+  text: string
+  status: 'pending' | 'in_progress' | 'done'
+}
+
+const TODO_MARKERS: Record<TodoItem['status'], string> = {
+  pending: '☐',
+  in_progress: '◐',
+  done: '☑',
+}
+
+/** Keep the shared card short; the full list stays in the session history. */
+const TODO_LIMIT = 10
+
+function todoItems(details: unknown): TodoItem[] | undefined {
+  if (!details || typeof details !== 'object') return undefined
+  const items = (details as { items?: unknown }).items
+  if (!Array.isArray(items)) return undefined
+  const valid = items.every(
+    (item): item is TodoItem =>
+      !!item &&
+      typeof item === 'object' &&
+      typeof (item as TodoItem).text === 'string' &&
+      ['pending', 'in_progress', 'done'].includes((item as TodoItem).status),
+  )
+  return valid ? items : undefined
+}
+
+function todoLines(items: readonly TodoItem[]): string[] {
+  const shown = items.slice(0, TODO_LIMIT)
+  const lines = shown.map(
+    (item) => `${TODO_MARKERS[item.status]} ${plain(item.text, 80)}`,
+  )
+  if (items.length > shown.length)
+    lines.push(`… and ${items.length - shown.length} more`)
+  return lines
+}
+
 function inputSummary(args: unknown): string {
   if (!args || typeof args !== 'object') return ''
   const values = args as Record<string, unknown>
@@ -31,6 +69,7 @@ function inputSummary(args: unknown): string {
 /** One ordered writer for one shared card. Event listeners never await network I/O. */
 export class LarkProgress {
   private rows = new Map<string, { state: string; label: string }>()
+  private todos?: TodoItem[]
   private readonly startedAt = Date.now()
   private stage = 'Working'
   private pending = false
@@ -45,7 +84,9 @@ export class LarkProgress {
     private messageId: string,
     private card: LarkCard,
     private report: (error: unknown) => Promise<void>,
+    initialTodos?: readonly TodoItem[],
   ) {
+    if (initialTodos?.length) this.todos = [...initialTodos]
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
   }
 
@@ -74,6 +115,14 @@ export class LarkProgress {
           : `${plain(event.toolName, 80)}${summary ? ` — ${summary}` : ''}`
       this.rows.set(event.toolCallId, { state, label })
       if (this.rows.size > 8) this.rows.delete(this.rows.keys().next().value!)
+      if (
+        event.type === 'tool_execution_end' &&
+        !event.isError &&
+        event.toolName === 'todo'
+      ) {
+        const items = todoItems(event.details)
+        if (items) this.todos = items.length ? items : undefined
+      }
       this.schedule()
     } else if (
       event.type === 'message_update' &&
@@ -100,7 +149,7 @@ export class LarkProgress {
         elements: [
           {
             tag: 'markdown',
-            content: `${this.stage} · ${elapsed}\n${[...this.rows.values()].map(({ state, label }) => `${state}: ${label}`).join('\n')}`,
+            content: `${this.stage} · ${elapsed}\n${this.todos ? `${todoLines(this.todos).join('\n')}\n` : ''}${[...this.rows.values()].map(({ state, label }) => `${state}: ${label}`).join('\n')}`,
           },
           ...(terminal ? [] : this.card.body.elements.slice(1)),
         ],

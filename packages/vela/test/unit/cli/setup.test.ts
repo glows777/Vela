@@ -322,6 +322,7 @@ test('the removed supabase built-in is unknown, so an old -builtin:supabase fail
     'web',
     'lark',
     'mcp',
+    'todo',
     'permission-gate',
   ])
   expect(extensionConfigFromEnv({ SUPABASE_URL: 'u' }, {})).not.toHaveProperty(

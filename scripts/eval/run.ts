@@ -38,6 +38,9 @@ export async function workerEnvironment(artifactDir: string, scratch: string) {
   await Bun.write(bashEnv, `export PATH='${path.replaceAll("'", "'\\''")}'\n`)
   return {
     ...networkEnvironment(),
+    ...(process.env.VELA_EVAL_TODO
+      ? { VELA_EVAL_TODO: process.env.VELA_EVAL_TODO }
+      : {}),
     PATH: path,
     HOME: home,
     VELA_DIR: join(home, '.vela'),

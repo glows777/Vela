@@ -4,7 +4,13 @@ import { createInterface } from 'node:readline'
 import { fuzzyFilter } from '@earendil-works/pi-tui'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import type { ModelInfo, ThinkingLevel } from '@glows777/vela-core'
-import { memory, permissionGate, web, webConfig } from '@glows777/vela-core'
+import {
+  memory,
+  permissionGate,
+  todo,
+  web,
+  webConfig,
+} from '@glows777/vela-core'
 import {
   assertSessionId,
   getToolListError,
@@ -34,6 +40,7 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   web: () => web(),
   lark: () => lark(),
   mcp: () => mcp(),
+  todo: () => todo(),
   'permission-gate': () => permissionGate(),
 }
 
