@@ -25,7 +25,7 @@ The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `g
 - Vela does not filter `bash` commands by default: a command the model writes runs. The built-in [`permission-gate`](built-in-extensions.md#permission-gate) extension is off by default; enable it to confirm a short list of dangerous patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) in interactive mode, and to block them when no UI can ask. This is a heuristic to catch mistakes, not a security control; it is easy to get around.
 - Vela does not ask before each tool call unless you set a session permission to `ask` (see [Per-session permissions](#per-session-permissions)) or load an extension that asks.
 
-To contain what Vela can do, run it as a dedicated user, or inside a container or virtual machine with only the files, credentials and network access the task needs.
+Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/settings.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela serve` deploy recipe](deploy.md) sets up such a user.
 
 ## Extensions are trusted code
 
