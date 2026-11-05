@@ -91,8 +91,19 @@ function checked<T extends { code?: number; msg?: string }>(response: T): T {
   return response
 }
 
-export function larkTransport(appId: string, appSecret: string): LarkTransport {
-  const client = new lark.Client({ appId, appSecret })
+export function larkTransport(
+  appId: string,
+  appSecret: string,
+  quiet = false,
+  onSetupError?: (error: Error) => void,
+  onSetupReady?: () => void,
+): LarkTransport {
+  const silent = { error() {}, warn() {}, info() {}, debug() {}, trace() {} }
+  const client = new lark.Client({
+    appId,
+    appSecret,
+    ...(quiet ? { logger: silent, disableTokenCache: true } : {}),
+  })
   let wsClient: lark.WSClient | undefined
   return {
     async start(onMessage, onAction) {
@@ -105,6 +116,19 @@ export function larkTransport(appId: string, appSecret: string): LarkTransport {
         appId,
         appSecret,
         loggerLevel: lark.LoggerLevel.warn,
+        ...(quiet
+          ? {
+              logger: silent,
+              autoReconnect: true,
+              handshakeTimeoutMs: 15000,
+              onError: onSetupError,
+              onReady: onSetupReady,
+              onReconnecting: () =>
+                onSetupError?.(
+                  new Error('Lark connection dropped; retry setup'),
+                ),
+            }
+          : {}),
       })
       await wsClient.start({ eventDispatcher: dispatcher })
     },
