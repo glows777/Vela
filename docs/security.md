@@ -53,7 +53,7 @@ Lark accepts only chats listed in `extensionConfig.lark.chats`, plus direct chat
 
 **Everyone in an enabled chat shares one session and its full access.** They share its history, and can ask the agent to read/write files, run bash, access memory and use extension/MCP tools. Group members added later inherit this access. Enable only chats whose entire membership you trust, and restrict what the operating-system account can reach. Group @-mention gating controls when the bot runs; it is not a tool-permission boundary. Earlier group messages are sent to the model as context when someone mentions the bot.
 
-Channel ids now omit the sender id. Old per-sender sessions are not automatically combined into shared sessions; see [Gateway lifecycle](channels.md#gateway-lifecycle). Different chats have separate transcripts but still share the same machine, tools, memory and extensions.
+Channel ids now omit the sender id. Old per-sender sessions are not automatically combined into shared sessions; see [Gateway lifecycle](channels-reference.md#gateway-lifecycle). Different chats have separate transcripts but still share the same machine, tools, memory and extensions.
 
 Every sender in a chat gets the same session and the same tools. A custom channel must enforce its own enablement boundary before delivering messages; there is no per-sender restriction, and it cannot hide earlier turns in a shared chat transcript.
 

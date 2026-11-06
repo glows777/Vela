@@ -233,7 +233,7 @@ If you only need a different base URL or key for an OpenAI- or Anthropic-compati
 
 Example: [echo-channel.ts](../examples/extensions/echo-channel.ts)
 
-A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`. Channel hooks remain experimental: Lark is the only channel implementation so far, and the hooks will be stabilized once a second channel is implemented. See [Writing a channel](channels.md#writing-a-channel) for every hook and the `startRun` feedback lifecycle.
+A channel brings messages from outside (a chat app, a webhook) into Vela. Each chat shares one session, and replies go back through the channel's `send()`. Channel hooks remain experimental: Lark is the only channel implementation so far, and the hooks will be stabilized once a second channel is implemented. See [Writing a channel](channels-reference.md#writing-a-channel) for every hook and the `startRun` feedback lifecycle.
 
 ```ts
 vela.registerChannel({

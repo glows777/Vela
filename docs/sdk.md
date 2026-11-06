@@ -62,7 +62,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `promptTemplateDirs` | `<cwd>/.vela/prompts` | Prompt template directories or files; `/<name> args` expands one. See [Prompt templates](settings.md#prompt-templates). |
 | `contextFiles` | `loadContextFiles({ cwd })` | `AGENTS.md` / `CLAUDE.md` files (`{ path, content }[]`) put into the system prompt; `false` for none. `loadContextFiles({ cwd, agentDir })` finds them like the CLI. See [Context files](settings.md#context-files). |
 | `appendSystemPrompt` | none | Text appended to the system prompt in an `<addendum>` section. |
-| `channelIdleMs` | `600000` | A channel session with no new message for this long is closed and resumed on the next message; `0` closes it after each reply; at most `2147483647` (other values throw). See [Channels](channels.md#running-channels). |
+| `channelIdleMs` | `600000` | A channel session with no new message for this long is closed and resumed on the next message; `0` closes it after each reply; at most `2147483647` (other values throw). See [Channels](channels-reference.md#gateway-lifecycle). |
 | `extensionConfig` | `{}` | Config section per extension, keyed by extension name. An extension reads its own section as `vela.config`. |
 | `limits` | see below | Overrides for retry, compaction and timeout limits (`Partial<VelaLimits>`). Unknown keys throw. |
 | `logger` | silent | A `VelaLogger` for diagnostics that are not events. See [Logger](#logger). |
@@ -92,7 +92,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `commands()` | Slash commands registered by extensions |
 | `channels()` | Channels registered by extensions |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
-| `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels.md#external-event-subscriptions). |
+| `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
 | `dispose()` | Stops channels, closes all sessions (aborting running work and saving) and deletes the temp data dir if there is one |
 
 ## Sessions
