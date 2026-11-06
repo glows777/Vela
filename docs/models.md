@@ -17,7 +17,7 @@ The CLI uses the first of these that is set:
 5. `openai/$OPENAI_API_MODEL_NAME`, when that variable is set.
 6. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`); else the first available model. These are pi's defaults.
 
-If none applies, interactive Vela starts the setup wizard. Print mode exits with code 1 and points to `vela setup`; RPC and serve keep their existing behavior.
+If none applies, interactive Vela starts the setup wizard and leaves the `/model` guidance out while it runs; cancelling it brings the hint back. Print mode exits with code 1 and points to `vela setup`; RPC and serve keep their existing behavior.
 
 Inside a session:
 
