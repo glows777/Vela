@@ -211,7 +211,6 @@ export class InteractiveMode {
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
     }
-    // First open: the setup wizard may run right after, and it owns the model messages
     const modelOk = await this.openSession(sessionId, resume, true)
     if ((options.setupOnly || !modelOk) && options.agentDir) {
       try {
@@ -252,8 +251,9 @@ export class InteractiveMode {
             : await setupWizard(host)
         if (!this.shuttingDown) this.renderHeader(saved || modelOk)
       } catch (error) {
-        if (!this.shuttingDown)
-          this.addNotice(`Setup failed: ${errorMessage(error)}`, 'error')
+        if (this.shuttingDown) return
+        this.addNotice(`Setup failed: ${errorMessage(error)}`, 'error')
+        this.renderHeader(modelOk)
       }
       if (options.setupOnly) {
         await this.shutdown()
