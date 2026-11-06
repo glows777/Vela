@@ -179,7 +179,7 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 
 When the current model offers a supported provider-hosted search and `web_search` is allowed, Vela uses it without a separate search key. Otherwise it uses [Tavily](https://tavily.com) or [Serper](https://serper.dev); Tavily wins if both keys are set. A hosted search may incur provider search charges in addition to token charges; Vela's token cost estimate does not include those charges.
 
-With `web_search: ask`, hosted search cannot be approved per query before the provider executes it. Vela uses a configured independent provider and asks for each call instead; without one, search is unavailable. A `tool_call` extension hook also prevents hosted substitution because the provider's internal query cannot be intercepted. Disabled, denied or unselected tools remain unavailable.
+With `web_search: ask`, hosted search cannot be approved per query before the provider executes it. Vela uses a configured independent provider and asks for each call instead; without one, search is unavailable. A matching `tool_call` extension hook also prevents hosted substitution because the provider's internal query cannot be intercepted. Disabled, denied or unselected tools remain unavailable.
 
 Enabled channel chats can call both tools. Deny either one with session `permissions`.
 

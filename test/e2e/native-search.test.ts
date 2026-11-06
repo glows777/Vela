@@ -136,6 +136,28 @@ test('a web_search-scoped blocking hook prevents hosted search', async () => {
   ).toBe(false)
 })
 
+test('bash permission gate does not suppress hosted web search', async () => {
+  const { web, permissionGate } = await import('@glows777/vela-core')
+  const { openai } = await import('@ai-sdk/openai')
+  const model = Object.assign(
+    createFauxModel({ responses: [fauxText('OK')] }),
+    {
+      hostedTools: async () => ({ web_search: openai.tools.webSearch({}) }),
+    },
+  )
+  let request: LanguageModelV4CallOptions | undefined
+  const stream = model.doStream.bind(model)
+  model.doStream = async (options) => {
+    request = options
+    return stream(options)
+  }
+  const t = createTestVela({ model, extensions: [web(), permissionGate()] })
+  await t.run('Search')
+  expect(request?.tools).toContainEqual(
+    expect.objectContaining({ type: 'provider', name: 'web_search' }),
+  )
+})
+
 test('default MCP extension does not suppress hosted search', async () => {
   const { web } = await import('@glows777/vela-core')
   const { mcp } = await import('@glows777/vela-mcp')
