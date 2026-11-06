@@ -59,7 +59,7 @@ The first run opens the setup wizard in the terminal. It asks, in order:
 
 6. **Connect Lark?** Choose `Not now` to keep the wizard to the model, then follow step 3 below; `Yes, connect Lark` runs the same Lark setup described there.
 
-7. **Save configuration.** The screen lists the model, thinking level and the `auth.json`, `models.json` and `settings.json` paths it will write. `Save configuration` writes them; a provider preset also goes to `~/.vela/models.json`.
+7. **Save configuration.** The screen lists the model, thinking level and the `auth.json`, `models.json` and `settings.json` locations. `Save configuration` writes the credential and settings; a provider preset also goes to `~/.vela/models.json`.
 
 After saving, Vela opens the terminal UI. Press Ctrl+D on an empty editor to exit before running the next command. Run `vela setup` later to change the model or sign-in. It first shows the current model, thinking level and whether a credential is saved in `auth.json`, and offers `Keep current configuration` or `Change configuration`. For environment variables or a hand-written `models.json`, see [Manual configuration](#manual-configuration).
 

@@ -1,6 +1,6 @@
 # Channels reference
 
-This page is for building on the channel interface: the gateway lifecycle, writing a channel, custom Lark transports and external event subscriptions. To run Vela in a group chat, see [Channels](channels.md).
+This page is for building on the channel interface: writing a channel, the gateway lifecycle, custom Lark transports and external event subscriptions. To run Vela in a group chat, see [Channels](channels.md).
 
 ## Writing a channel
 
@@ -57,7 +57,7 @@ The gateway keeps one versioned directory at `<dataDir>/channels/index.json`, sh
 
 Records contain the channel/chat kind, topic root/thread IDs, requester/reply target, task label, active and previous session IDs, run state, pending service-message IDs and timestamps. Input content remains in the session JSONL. The directory does not backfill pre-M2 topics or reconstruct hashed routing IDs; an older topic joins on its next admitted message. `runtime.topicCoverage()` reports that boundary.
 
-After the channel connects, the gateway drops passive work as described above and restores indexed unfinished @/topic work through `session.resume()` and the existing run feedback lifecycle. A saved unanswered user turn (including images) is replayed by navigating to that turn's parent and prompting its saved input. The old branch remains in history. The topic receives an interruption/continuation notice before model work, and fresh Stop controls. A run whose branch already ends in a final assistant answer delivers that answer without another model call. Completed, waiting and explicitly stopped runs stay quiet.
+After the channel connects, the gateway drops passive work as described in [the channel guide](channels.md#untagged-top-level-discussion-and-cost) and restores indexed unfinished @/topic work through `session.resume()` and the existing run feedback lifecycle. A saved unanswered user turn (including images) is replayed by navigating to that turn's parent and prompting its saved input. The old branch remains in history. The topic receives an interruption/continuation notice before model work, and fresh Stop controls. A run whose branch already ends in a final assistant answer delivers that answer without another model call. Completed, waiting and explicitly stopped runs stay quiet.
 
 Graceful shutdown leaves interrupted runs and unsaved steers recoverable, while an explicit Stop remains terminal. An execution failure whose terminal explanation was delivered is complete for recovery purposes; a failed result delivery stays recoverable. Inputs handled during preparation, such as unsupported attachments, are removed from pending admissions. Resend notices reply to the unsaved message without mentioning the original task requester, who may be a different person.
 
