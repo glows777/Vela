@@ -23,7 +23,8 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 - [Extensions](extensions.md): add tools, slash commands, model providers and channels, and hook into the agent loop.
 - [Built-in extensions](built-in-extensions.md): memory, the RAG knowledge base, web, Lark and MCP.
 - [MCP servers](mcp.md): connect Model Context Protocol servers and use their tools.
-- [Channels](channels.md): connect chat apps, with one session per conversation.
+- [Channels](channels.md): run Vela in group chats: enabling chats, topics, schedules, costs and permissions.
+- [Channels reference](channels-reference.md): writing a channel, the gateway lifecycle, custom transports and external events.
 - [Testing](testing.md): test extensions and SDK code offline with the faux model.
 - [Session format](session-format.md): the on-disk session file.
 
