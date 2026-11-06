@@ -84,6 +84,153 @@ test('supported OpenAI Responses requests expose hosted search without independe
   }
 })
 
+test('GPT-5 minimal reasoning keeps independent search; higher reasoning uses hosted search', async () => {
+  const { loadModels, web } = await import('@glows777/vela-core')
+  const { responsesReply } = await import('../support/responses.ts')
+  const { tempDir } = await import('../support/vela.ts')
+  const dir = tempDir('vela-gpt5-minimal-')
+  const originalFetch = globalThis.fetch
+  const requests: Array<{ tools?: Array<{ type: string; name?: string }> }> = []
+  globalThis.fetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    requests.push(body)
+    return responsesReply(body)
+  }) as typeof fetch
+  try {
+    const providers = loadModels({
+      agentDir: dir.path,
+      env: { OPENAI_API_KEY: 'test' },
+    })
+    const t = createTestVela({
+      model: 'openai/gpt-5',
+      providers,
+      extensions: [web({ tavilyKey: 'test' })],
+    })
+    t.session.setThinkingLevel('minimal')
+    await t.run('First request')
+    t.session.setThinkingLevel('low')
+    await t.run('Second request')
+    expect(requests[0]?.tools).toContainEqual(
+      expect.objectContaining({ type: 'function', name: 'web_search' }),
+    )
+    expect(requests[0]?.tools?.some((tool) => tool.type === 'web_search')).toBe(
+      false,
+    )
+    expect(requests[1]?.tools).toContainEqual(
+      expect.objectContaining({ type: 'web_search' }),
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+})
+
+test('GPT-5 reasoning map to minimal keeps independent search', async () => {
+  const { loadModels, web } = await import('@glows777/vela-core')
+  const { responsesReply } = await import('../support/responses.ts')
+  const { tempDir } = await import('../support/vela.ts')
+  const { writeFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const dir = tempDir('vela-gpt5-map-')
+  writeFileSync(
+    join(dir.path, 'models.json'),
+    JSON.stringify({
+      providers: {
+        openai: {
+          models: [
+            {
+              id: 'gpt-5',
+              reasoning: true,
+              thinkingLevelMap: { low: 'minimal' },
+            },
+          ],
+        },
+      },
+    }),
+  )
+  const originalFetch = globalThis.fetch
+  const requests: Array<{ tools?: Array<{ type: string; name?: string }> }> = []
+  globalThis.fetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    requests.push(body)
+    return responsesReply(body)
+  }) as typeof fetch
+  try {
+    const t = createTestVela({
+      model: 'openai/gpt-5',
+      providers: loadModels({
+        agentDir: dir.path,
+        env: { OPENAI_API_KEY: 'test' },
+      }),
+      extensions: [web({ tavilyKey: 'test' })],
+    })
+    t.session.setThinkingLevel('low')
+    await t.run('Search')
+    expect(requests[0]?.tools).toContainEqual(
+      expect.objectContaining({ type: 'function', name: 'web_search' }),
+    )
+    expect(requests[0]?.tools?.some((tool) => tool.type === 'web_search')).toBe(
+      false,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+})
+
+test.each(['providerOptions', 'reasoning'] as const)(
+  'late GPT-5 minimal override via %s falls back before a provider request',
+  async (mode) => {
+    const { loadModels, web } = await import('@glows777/vela-core')
+    const { responsesReply } = await import('../support/responses.ts')
+    const { tempDir } = await import('../support/vela.ts')
+    const dir = tempDir('vela-gpt5-hook-')
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ tools?: Array<{ type: string; name?: string }> }> =
+      []
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body))
+      requests.push(body)
+      return responsesReply(body)
+    }) as typeof fetch
+    try {
+      const extension = (vela: ExtensionAPI) => {
+        vela.on('before_provider_request', (event) => {
+          if (mode === 'reasoning') event.params.reasoning = 'minimal'
+          else
+            event.params.providerOptions = {
+              ...event.params.providerOptions,
+              openai: {
+                ...event.params.providerOptions?.openai,
+                reasoningEffort: 'minimal',
+              },
+            }
+        })
+      }
+      const t = createTestVela({
+        model: 'openai/gpt-5',
+        providers: loadModels({
+          agentDir: dir.path,
+          env: { OPENAI_API_KEY: 'test' },
+        }),
+        extensions: [web({ tavilyKey: 'test' }), extension],
+      })
+      t.session.setThinkingLevel('low')
+      await t.run('Search')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools).toContainEqual(
+        expect.objectContaining({ type: 'function', name: 'web_search' }),
+      )
+      expect(
+        requests[0]?.tools?.some((tool) => tool.type === 'web_search'),
+      ).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      dir.cleanup()
+    }
+  },
+)
+
 test('a tool_search-scoped hook does not disable hosted web_search', async () => {
   const { web } = await import('@glows777/vela-core')
   const { openai } = await import('@ai-sdk/openai')

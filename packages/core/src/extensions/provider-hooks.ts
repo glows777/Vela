@@ -6,6 +6,18 @@ import type {
 import { type LanguageModel, wrapLanguageModel } from 'ai'
 import type { HostedToolModel } from '../models/index.ts'
 
+/** The request hook changed GPT-5 to minimal after hosted-tool selection; no provider request was sent. */
+export class HostedSearchFallback extends Error {}
+
+export function isGpt5(id: string): boolean {
+  return [
+    'gpt-5',
+    'gpt-5-2025-08-07',
+    'openai/gpt-5',
+    'openai/gpt-5-2025-08-07',
+  ].includes(id)
+}
+
 /** What the provider hook middleware calls (the extension runner, bound to one session). */
 export interface ProviderHooks {
   /** Whether anyone handles the event, so idle hooks cost nothing */
@@ -35,10 +47,12 @@ export function withProviderHooks(
   hooks: ProviderHooks,
 ): LanguageModel {
   if (typeof model === 'string') return model
-  const before = async (params: LanguageModelV4CallOptions) =>
-    hooks.has('before_provider_request')
+  const before = async (params: LanguageModelV4CallOptions) => {
+    const request = hooks.has('before_provider_request')
       ? await hooks.beforeRequest(params)
       : params
+    return request
+  }
   const after = async (headers: SharedV4Headers | undefined) => {
     if (hooks.has('after_provider_response'))
       await hooks.afterResponse(stringHeaders(headers))
@@ -85,8 +99,8 @@ export function withProviderHooks(
   const hostedTools = (model as HostedToolModel).hostedTools
   return hostedTools
     ? Object.assign(wrapped, {
-        hostedTools: async () => {
-          const tools = await hostedTools.call(model)
+        hostedTools: async (options?: { reasoning?: string }) => {
+          const tools = await hostedTools.call(model, options)
           return Object.fromEntries(
             Object.entries(tools).filter(
               ([name]) => !hooks.has('tool_call', name),

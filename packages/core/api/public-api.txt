@@ -207,7 +207,7 @@
     selectedText?: string | undefined
     session?: VelaSession | undefined
   type HostedToolModel = Exclude<LanguageModel, string> & {
-      hostedTools?: () => Promise<ToolSet>
+      hostedTools?: (options?: { reasoning?: string }) => Promise<ToolSet>
       }
   interface ImageContent
     data: string

@@ -10,6 +10,7 @@ import {
 } from '../auth/oauth/openai-chatgpt.ts'
 import { openRouterLogin } from '../auth/oauth/openrouter.ts'
 import type { Credential, FetchFunction, OAuthLogin } from '../auth/types.ts'
+import { HostedSearchFallback, isGpt5 } from '../extensions/provider-hooks.ts'
 import {
   catalogLookup,
   catalogModels,
@@ -356,7 +357,19 @@ function createProvider(
       const declareHosted = (model: Exclude<LanguageModel, string>) => {
         if (!supportsHosted) return model
         return Object.assign(model, {
-          hostedTools: async () => {
+          hostedTools: async (options?: { reasoning?: string }) => {
+            if (
+              api === 'openai-responses' &&
+              isGpt5(id) &&
+              (spec?.thinkingLevelMap?.[
+                options?.reasoning === 'none'
+                  ? 'off'
+                  : ((options?.reasoning ?? 'off') as keyof NonNullable<
+                      ModelSpec['thinkingLevelMap']
+                    >)
+              ] ?? options?.reasoning) === 'minimal'
+            )
+              return {}
             try {
               const auth = await requestKey(ctx)
               if (auth.oauth) return {}
@@ -428,6 +441,19 @@ function createProvider(
                 typeof effort === 'string'
               )
                 openai.reasoningEffort = effort
+              if (
+                isGpt5(id) &&
+                (openai.reasoningEffort ?? params.reasoning) === 'minimal' &&
+                params.tools?.some(
+                  (tool) =>
+                    tool.type === 'provider' &&
+                    tool.name === 'web_search' &&
+                    tool.id.startsWith('openai.'),
+                )
+              )
+                throw new HostedSearchFallback(
+                  'GPT-5 minimal reasoning cannot use hosted web search',
+                )
               // DeepSeek treats developer messages as user messages. Keep the system instruction's role.
               if (deepseekResponses) {
                 // DeepSeek is stateless: let the SDK serialize history inline.

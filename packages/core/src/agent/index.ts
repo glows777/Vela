@@ -5,6 +5,7 @@ import {
   estimateRequestTokens,
   type RequestSnapshot,
 } from '../context/request.ts'
+import { HostedSearchFallback } from '../extensions/provider-hooks.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
 import { describeModel, type HostedToolModel } from '../models/index.ts'
@@ -160,14 +161,17 @@ export const agentLoop = async ({
       emit({ type: 'turn_start', turn })
 
       // Prepare context before every actual model request, including tool continuations.
+      const requestReasoning = currentReasoning()
+      const hostedTools =
+        typeof model === 'string'
+          ? {}
+          : ((await (model as HostedToolModel).hostedTools?.({
+              reasoning: requestReasoning,
+            })) ?? {})
       const request = await createRequestSnapshot(
         model,
         currentSystem(),
-        toolRegistry.toAISDKFormat(
-          typeof model === 'string'
-            ? {}
-            : ((await (model as HostedToolModel).hostedTools?.()) ?? {}),
-        ),
+        toolRegistry.toAISDKFormat(hostedTools),
         messages,
         abortSignal,
       )
@@ -207,6 +211,7 @@ export const agentLoop = async ({
       // Retry attempts that already failed (auto_retry_start was emitted for each)
       let retried = 0
       let compactedForOverflow = false
+      let rebuiltWithoutHostedSearch = false
 
       const started = performance.now()
       for (;;) {
@@ -237,7 +242,6 @@ export const agentLoop = async ({
                 }
             }
           }
-          const requestReasoning = currentReasoning()
           const result = streamText({
             model,
             // Messages are copied here, so compaction or an abort never sees cache markers in history
@@ -378,6 +382,33 @@ export const agentLoop = async ({
             emit({ type: 'auto_retry_end', success: true, attempt: retried })
           break
         } catch (error) {
+          if (
+            error instanceof HostedSearchFallback &&
+            !rebuiltWithoutHostedSearch &&
+            !step.toolsStarted
+          ) {
+            rebuiltWithoutHostedSearch = true
+            const { web_search: _search, ...otherHosted } = hostedTools
+            step.endInterrupted('error', error.message)
+            Object.assign(
+              request,
+              await createRequestSnapshot(
+                model,
+                inferenceSystem,
+                toolRegistry.toAISDKFormat(otherHosted),
+                messages,
+                abortSignal,
+              ),
+            )
+            if (
+              estimateRequestTokens(request, requestMessages) >
+              limits.maxInputTokens
+            )
+              throw new Error(
+                'Request exceeds the safe input size; this turn was stopped.',
+              )
+            continue
+          }
           if (abortSignal?.aborted) {
             // Keep what this step produced: the text and whole tool calls so far, each call answered
             // (its real result, or "Operation aborted" like pi), so the model knows what already happened

@@ -226,7 +226,7 @@ vela.registerProvider('corp', {
 
 Credentials are stored like the built-in ones, in `~/.vela/auth.json` for the CLI.
 
-A provider model may declare `hostedTools: async () => ToolSet` on the model returned by `createModel`. Keys are Vela tool names. Vela resolves the declaration for each request and substitutes a same-name active tool only when its permission is `allow`; `ask`, `deny`, unselected tools and sessions with a matching `tool_call` handler do not use the hosted equivalent. Resolve changing credentials in the callback and return only tools actually supported by that model and endpoint. Provider-hosted tools run remotely, not through local `execute` or its per-call hooks.
+A provider model may declare `hostedTools: async () => ToolSet` on the model returned by `createModel`. Keys are Vela tool names. Vela resolves the declaration for each request and substitutes a same-name active tool only when its permission is `allow`; `ask`, `deny`, unselected tools and sessions with a matching `tool_call` handler do not use the hosted equivalent. Resolve changing credentials in the callback and return only tools actually supported by that model and endpoint. Provider-hosted tools run remotely, not through local `execute` or its per-call hooks. For GPT-5, if a `before_provider_request` hook changes the final reasoning effort to `minimal`, Vela rebuilds the request with independent search before sending it; `before_provider_request` handlers run again on the rebuilt request.
 
 `ctx.channel()` names the channel the requesting session answers on (for example `lark`), or returns undefined for local sessions. Read it per request too; a sign-in meant only for the person at the terminal can refuse channel sessions with it, as Sign in with ChatGPT does.
 

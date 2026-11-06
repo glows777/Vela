@@ -58,7 +58,7 @@ export interface ProviderContext {
 
 /** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
 export type HostedToolModel = Exclude<LanguageModel, string> & {
-  hostedTools?: () => Promise<ToolSet>
+  hostedTools?: (options?: { reasoning?: string }) => Promise<ToolSet>
 }
 
 /**
