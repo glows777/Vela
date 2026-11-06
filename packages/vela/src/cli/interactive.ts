@@ -64,6 +64,7 @@ import { Footer } from './tui/footer.ts'
 import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
 import { larkSetup } from './tui/lark-setup.ts'
 import { createInteractiveTui } from './tui/layout.ts'
+import { isModelUsable } from './tui/model-availability.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
@@ -210,14 +211,8 @@ export class InteractiveMode {
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
     }
-    await this.openSession(sessionId, resume)
-    let modelOk = true
-    try {
-      void this.session.modelInfo
-      modelOk = options.hasUsableModel?.(this.session) ?? true
-    } catch {
-      modelOk = false
-    }
+    // First open: the setup wizard may run right after, and it owns the model messages
+    const modelOk = await this.openSession(sessionId, resume, true)
     if ((options.setupOnly || !modelOk) && options.agentDir) {
       try {
         const host: Parameters<typeof setupWizard>[0] = {
@@ -315,7 +310,7 @@ export class InteractiveMode {
 
   // ---------------------------------------------------------------- Sessions
 
-  private async openSession(id: string, resume: boolean): Promise<void> {
+  private async openSession(id: string, resume: boolean, startup = false) {
     const session = this.vela.session(id, { ui: this.ui })
     this.session = session
     this.resetChat()
@@ -330,8 +325,12 @@ export class InteractiveMode {
         )
       }
     }
-    const modelOk = this.options.configure(session)
-    this.renderHeader(modelOk)
+    const setupNext = startup && Boolean(this.options.agentDir)
+    const silent =
+      setupNext && !isModelUsable(session, this.options.hasUsableModel)
+    this.options.configure(session, { quiet: silent })
+    const modelOk = isModelUsable(session, this.options.hasUsableModel)
+    this.renderHeader(modelOk || setupNext)
     if (resumed) {
       this.renderHistory(session.getBranch())
       this.addNotice(
@@ -355,6 +354,7 @@ export class InteractiveMode {
     }
     this.updatePending()
     this.updateBorder()
+    return modelOk
   }
 
   private async switchSession(id: string, resume: boolean): Promise<void> {

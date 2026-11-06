@@ -41,3 +41,9 @@ AI/bot review should have caught it. The case now finds the hop with `lastUserTe
 ## A channel change updates the channels guide
 
 [Issue #244](https://github.com/glows777/Vela/issues/244). PR #242 shipped the hand-off tools, status lines and topic start context but updated only `CHANGELOG.md` and the verify-vela journeys, so `docs/channels.md` kept the pre-handoff dispatch story until a separate issue. Behavior that a person or a model can see needs the docs pages that describe it, in the same pull request as the changelog entry. The mechanism is the docs item in [REVIEW.md](../REVIEW.md) and the Docs section of the pull request template.
+
+## A first-run wizard hides the recovery hint it replaces
+
+[Issue #279](https://github.com/glows777/Vela/issues/279). A first run without a model rendered the header's `/model` hint and the `[model] No model available…` diagnostic before the setup wizard opened, so the screen told the user to do what the wizard was already doing, and both strings stayed in the transcript afterwards.
+
+Model guidance belongs to a state the wizard is about to leave: while the startup wizard runs, it owns those messages, and a cancelled setup brings the hint back. The mechanism is the prefix assertion in `test/e2e/cli.test.ts` (no hint or diagnostic before `Choose a provider`) and the in-process TUI case that checks the hint returns after cancel; both fail without the quiet startup open.
