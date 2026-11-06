@@ -6,7 +6,7 @@ import {
 } from '../context/request.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
-import { describeModel } from '../models/index.ts'
+import { describeModel, type HostedToolModel } from '../models/index.ts'
 import { getStoredResult } from '../session/tool-results.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
@@ -126,6 +126,8 @@ export const agentLoop = async ({
   // session stamps its messages with it and leaves other models' reasoning out of them.
   const producer = describeModel(model).ref
   let turn = 0
+  let hostedPauses = 0
+  const hostedCalls = new Set<string>()
   // Each agent loop has its own call history, so concurrent sessions don't interfere
   const loopDetector = new LoopDetector()
   const emit = (event: VelaEvent) => onEvent?.(event)
@@ -160,7 +162,11 @@ export const agentLoop = async ({
       const request = await createRequestSnapshot(
         model,
         currentSystem(),
-        toolRegistry.toAISDKFormat(),
+        toolRegistry.toAISDKFormat(
+          typeof model === 'string'
+            ? {}
+            : ((await (model as HostedToolModel).hostedTools?.()) ?? {}),
+        ),
         messages,
         abortSignal,
       )
@@ -182,11 +188,21 @@ export const agentLoop = async ({
         )
 
       let shouldBreak = false
+      const sources = new Map<string, string>()
       let loopWarning: string | undefined
       let finalStep:
         | Awaited<ReturnType<typeof streamText>['finalStep']>
         | undefined
       let step!: StepMessage
+      let sourcesShown = false
+      const showSources = () => {
+        if (sourcesShown || !sources.size || step.ended) return
+        sourcesShown = true
+        const text = `\n\nSources:\n${[...sources].map(([url, title]) => `- ${title}: ${url}`).join('\n')}`
+        step.textStart('web-search-sources')
+        step.textDelta('web-search-sources', text)
+        step.textEnd('web-search-sources')
+      }
       // Retry attempts that already failed (auto_retry_start was emitted for each)
       let retried = 0
       let compactedForOverflow = false
@@ -264,17 +280,23 @@ export const agentLoop = async ({
               case 'reasoning-end':
                 step.thinkingEnd(part.id, part.providerMetadata)
                 break
+              case 'source':
+                if (part.sourceType === 'url')
+                  sources.set(part.url, part.title ?? part.url)
+                break
               case 'tool-input-start':
                 step.toolCallStart(
                   part.id,
                   part.toolName,
                   part.providerMetadata,
+                  part.providerExecuted,
                 )
                 break
               case 'tool-input-delta':
                 await step.toolCallDelta(part.id, part.delta)
                 break
               case 'tool-call': {
+                if (part.providerExecuted) hostedCalls.add(part.toolCallId)
                 step.toolCallEnd(part)
                 const detectResult = loopDetector.detect(
                   part.toolName,
@@ -298,27 +320,45 @@ export const agentLoop = async ({
                 break
               }
               case 'tool-error': {
-                step.endBeforeResults()
+                const hosted = hostedCalls.has(part.toolCallId)
+                if (!hosted) {
+                  showSources()
+                  step.endBeforeResults()
+                }
                 toolRegistry.takeDetails(part.toolCallId)
-                step.result(part, { error: part.error })
-                await toolRegistry.recordRejection(
-                  part.toolName,
-                  part.toolCallId,
-                  part.input,
-                  part.error,
+                step.result(
+                  part,
+                  { error: part.error },
+                  hosted && !step.providerExecuted(part.toolCallId),
                 )
+                if (!hosted)
+                  await toolRegistry.recordRejection(
+                    part.toolName,
+                    part.toolCallId,
+                    part.input,
+                    part.error,
+                  )
                 toolRegistry.assertHealthy()
                 break
               }
               case 'tool-result': {
-                step.endBeforeResults()
-                step.result(part, {
-                  output: part.output,
-                  details: toolRegistry.takeDetails(part.toolCallId),
-                })
+                const hosted = hostedCalls.has(part.toolCallId)
+                if (!hosted) {
+                  showSources()
+                  step.endBeforeResults()
+                }
+                step.result(
+                  part,
+                  {
+                    output: part.output,
+                    details: toolRegistry.takeDetails(part.toolCallId),
+                  },
+                  hosted && !step.providerExecuted(part.toolCallId),
+                )
                 break
               }
               case 'finish-step':
+                showSources()
                 step.end(part.finishReason)
                 break
               case 'error': {
@@ -345,7 +385,12 @@ export const agentLoop = async ({
           }
           const errorMessage = errorMessageOf(error)
           // Once tools ran, sending the request again would run them twice
-          const canResend = !step.toolsStarted
+          // A provider-hosted tool can execute before its first stream event arrives.
+          const canResend =
+            !step.toolsStarted &&
+            !Object.values(request.tools).some(
+              (tool) => tool.type === 'provider',
+            )
           if (
             canResend &&
             !compactedForOverflow &&
@@ -452,6 +497,16 @@ export const agentLoop = async ({
                 ),
               },
       )
+      if (sources.size) {
+        const message = responseMessages.find(
+          (item) => item.role === 'assistant',
+        )
+        if (message && Array.isArray(message.content))
+          message.content.push({
+            type: 'text',
+            text: `\n\nSources:\n${[...sources].map(([url, title]) => `- ${title}: ${url}`).join('\n')}`,
+          })
+      }
       if (finalStep.finishReason === 'length' && step.toolCalls.length) {
         // Like pi: the AI SDK runs no tools for a truncated response, and their arguments may be cut off.
         // Answer each call with an error so the history stays valid and the model re-issues them.
@@ -459,7 +514,7 @@ export const agentLoop = async ({
           step.result(call, {
             error: new Error(truncatedToolCallResult(call.toolName)),
           })
-        const toolMessage = step.toolMessage()
+        const toolMessage = step.toolMessage(true)
         if (toolMessage) responseMessages.push(toolMessage)
       }
       if (
@@ -471,7 +526,7 @@ export const agentLoop = async ({
           step.result(call, {
             error: new Error(failedToolCallResult(CONTENT_FILTER_ERROR)),
           })
-        const toolMessage = step.toolMessage()
+        const toolMessage = step.toolMessage(true)
         if (toolMessage) responseMessages.push(toolMessage)
       }
       // The assistant message was announced while it streamed
@@ -482,7 +537,18 @@ export const agentLoop = async ({
           message.role === 'assistant',
       ) ?? { role: 'assistant', content: [] }
       const toolResults = toolResultsOf(responseMessages)
-      const needToolCall = step.toolCalls.length > 0
+      const pausedHosted =
+        finalStep.rawFinishReason === 'pause_turn' &&
+        step.toolCalls.some((call) => call.providerExecuted)
+      if (pausedHosted && ++hostedPauses > 3) {
+        emit({ type: 'turn_end', turn, message: assistant, toolResults })
+        throw new Error(
+          'Provider-hosted tool did not finish after three continuations',
+        )
+      }
+      if (!pausedHosted) hostedPauses = 0
+      const needToolCall =
+        pausedHosted || step.toolCalls.some((call) => !call.providerExecuted)
 
       if (finalStep.finishReason === 'content-filter') {
         // Like pi: a blocked response is final. Keep what streamed in history, end its turn, then fail the run.
@@ -557,11 +623,34 @@ export const agentLoop = async ({
     openCallResult: string,
   ): void {
     step.endInterrupted(stopReason, errorMessage)
-    const assistant = step.snapshot({ complete: step.complete })
+    let assistant = step.snapshot({ complete: step.complete })
     step.closeOpenCalls(openCallResult)
     // A call that finished after the stream stopped never reached its tool-result: drop its details
     for (const call of step.toolCalls) toolRegistry.takeDetails(call.toolCallId)
-    const toolMessage = step.toolMessage()
+    const hosted = step.toolCalls.filter((call) => call.providerExecuted)
+    if (hosted.length && Array.isArray(assistant.content)) {
+      const ids = new Set(hosted.map((call) => call.toolCallId))
+      assistant = {
+        ...assistant,
+        content: assistant.content.flatMap((part) => {
+          if (part.type !== 'tool-call' || !ids.has(part.toolCallId))
+            return [part]
+          const result = step.results.get(part.toolCallId)
+          const detail = JSON.stringify(result?.output, (key, value) =>
+            key === 'encrypted_content' || key === 'encryptedContent'
+              ? undefined
+              : value,
+          )
+          return [
+            {
+              type: 'text' as const,
+              text: `Provider search: ${JSON.stringify(part.input)}\nProvider search result: ${detail ?? 'unavailable'}`,
+            },
+          ]
+        }),
+      }
+    }
+    const toolMessage = step.toolMessage(true)
     if (!step.complete && !step.toolsStarted) {
       if (assistant.content.length) onInterrupted?.(assistant, stopReason)
     } else {

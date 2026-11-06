@@ -94,6 +94,8 @@ export interface ToolDefinition {
   channel?: string | true
   /** Whether the tool is on without being named (like pi's `defaultActive`); default true. `false` keeps it registered but off until a session names it */
   activeByDefault?: false
+  /** Only available when the model supplies a provider-hosted equivalent. */
+  hostedOnly?: true
 }
 
 const EXPOSURES: readonly ToolExposure[] = [
@@ -371,9 +373,15 @@ export class ToolRegistry {
     return Array.from(this.tools.values())
   }
 
-  toAISDKFormat(): ToolSet {
+  toAISDKFormat(hostedTools: ToolSet = {}): ToolSet {
     const result: Record<string, Tool> = {}
     for (const tool of this.getActiveTools()) {
+      const hosted = hostedTools[tool.name]
+      if (this.decide(tool.name) === 'allow' && hosted) {
+        result[tool.name] = hosted
+        continue
+      }
+      if (tool.hostedOnly) continue
       result[tool.name] = AITool({
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -392,9 +400,8 @@ export class ToolRegistry {
               toolCallId: options?.toolCallId,
               abortSignal: options?.abortSignal,
             })
-            // Throw the reason string. An Error would prefix "Error: " on the text the
-            // model reads, and the event result would be that Error instead of the string
-            // ctx.executeTool already returns. The model still reads the reason and can continue.
+            // Throw the reason string so the model and events receive the same text as ctx.executeTool,
+            // without an Error prefix. The model can still continue.
             if (output instanceof ToolRejection) throw output.reason
             return output
           }),
@@ -424,6 +431,8 @@ export class ToolRegistry {
       return new ToolRejection(reason)
     }
     const decision = this.decide(name)
+    if (tool.hostedOnly)
+      return await reject(`[Rejected] ${name} is unavailable locally`)
     if (decision === 'deny') {
       return await reject(
         this.isEnabled(name)

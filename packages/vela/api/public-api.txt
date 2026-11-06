@@ -234,6 +234,9 @@
     cancelled: boolean
     selectedText?: string | undefined
     session?: VelaSession | undefined
+  type HostedToolModel = Exclude<LanguageModel, string> & {
+      hostedTools?: () => Promise<ToolSet>
+      }
   interface ImageContent
     data: string
     mimeType: string
@@ -398,7 +401,12 @@
     parentId: string | null
     timestamp: string
     type: "model_change"
+  interface ModelCompat
+    hostedTools?: "web_search"[] | undefined
+    includeWebSearchSources?: boolean | undefined
+    store?: boolean | undefined
   interface ModelInfo
+    compat?: ModelCompat | undefined
     contextWindow?: number | undefined
     cost?: ModelPricing | undefined
     id: string
@@ -418,6 +426,7 @@
     input: number
     output: number
   interface ModelSpec
+    compat?: ModelCompat | undefined
     contextWindow?: number | undefined
     cost?: ModelPricing | undefined
     id: string
@@ -474,6 +483,7 @@
     api?: ProviderApi | undefined
     apiKey?: string | undefined
     baseUrl?: string | undefined
+    compat?: ModelCompat | undefined
     headers?: Record<string, string> | undefined
     models?: ModelSpec[] | undefined
   interface ProviderContext
@@ -483,7 +493,7 @@
   interface ProviderDefinition
     apiKeyLogin?: boolean | undefined
     authSource?: ((credential: Credential | undefined) => string | undefined) | undefined
-    createModel: (id: string, ctx: ProviderContext) => LanguageModel
+    createModel: (id: string, ctx: ProviderContext) => LanguageModel | HostedToolModel
     defaultModel?: string | undefined
     models?: ModelSpec[] | undefined
     oauth?: OAuthLogin | undefined
@@ -692,6 +702,7 @@
     execute: (input: any, context?: ToolContext) => Promise<unknown>
     executionMode?: ToolExecutionMode | undefined
     exposure?: ToolExposure | undefined
+    hostedOnly?: true | undefined
     inputSchema: FlexibleSchema<any>
     maxResultChars?: number | undefined
     name: string

@@ -7,7 +7,7 @@ Vela ships seven extensions: `memory`, `todo`, `rag`, `web`, `lark`, `mcp` and `
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
-| `web` | `web_fetch`, and `web_search` when a search API key is set |
+| `web` | `web_fetch`, and `web_search` with a supported hosted search or a search API key |
 | `lark` | The Lark bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
 | `permission-gate` | Confirms a few dangerous `bash` commands; off by default |
@@ -177,7 +177,9 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 | `web_fetch` | `url` | Fetch a page and convert it to Markdown (scripts, styles, navigation, headers, footers and iframes removed); 15-second timeout; reads at most 5 MB of the response and notes when it cut the page |
 | `web_search` | `query`, `max_results` (default 5) | Search the web |
 
-`web_search` is registered only when a key is set. With a Tavily key it uses [Tavily](https://tavily.com) and returns an answer summary plus page content; with a Serper key it uses [Serper](https://serper.dev) and returns Google result snippets. If both are set, Tavily is used.
+When the current model offers a supported provider-hosted search and `web_search` is allowed, Vela uses it without a separate search key. Otherwise it uses [Tavily](https://tavily.com) or [Serper](https://serper.dev); Tavily wins if both keys are set. A hosted search may incur provider search charges in addition to token charges; Vela's token cost estimate does not include those charges.
+
+With `web_search: ask`, hosted search cannot be approved per query before the provider executes it. Vela uses a configured independent provider and asks for each call instead; without one, search is unavailable. A `tool_call` extension hook also prevents hosted substitution because the provider's internal query cannot be intercepted. Disabled, denied or unselected tools remain unavailable.
 
 Enabled channel chats can call both tools. Deny either one with session `permissions`.
 

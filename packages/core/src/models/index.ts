@@ -1,4 +1,4 @@
-import type { LanguageModel } from 'ai'
+import type { LanguageModel, ToolSet } from 'ai'
 import { resolveCredential } from '../auth/resolve.ts'
 import { memoryCredentialStore } from '../auth/store.ts'
 import type {
@@ -12,7 +12,7 @@ import { DEFAULT_LIMITS, type VelaLimits } from '../limits.ts'
 import { MODEL_CATALOG } from './catalog.generated.ts'
 import type { CatalogModel, ModelSpec, ThinkingLevel } from './catalog.ts'
 
-export type { ModelSpec, ThinkingLevel } from './catalog.ts'
+export type { ModelCompat, ModelSpec, ThinkingLevel } from './catalog.ts'
 export { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from './catalog.ts'
 
 /** Catalog models of one provider (empty for providers the catalog doesn't know). */
@@ -56,6 +56,11 @@ export interface ProviderContext {
   channel(): string | undefined
 }
 
+/** Optional provider-hosted equivalents for Vela tools, resolved for each request. */
+export type HostedToolModel = Exclude<LanguageModel, string> & {
+  hostedTools?: () => Promise<ToolSet>
+}
+
 /**
  * A model provider: lists known models and creates AI SDK LanguageModels by id. Unlisted ids work too, with
  * metadata from the built-in catalog when it knows the id.
@@ -74,7 +79,7 @@ export interface ProviderDefinition {
    * Without this function a provider counts as always configured.
    */
   authSource?(credential: Credential | undefined): string | undefined
-  createModel(id: string, ctx: ProviderContext): LanguageModel
+  createModel(id: string, ctx: ProviderContext): LanguageModel | HostedToolModel
 }
 
 /** A provider `/login` can sign in to. */

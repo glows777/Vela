@@ -108,7 +108,9 @@ export type {
   UserContent,
 } from './messages.ts'
 export type {
+  HostedToolModel,
   LoginProvider,
+  ModelCompat,
   ModelInfo,
   ModelSpec,
   ProviderContext,

@@ -4,7 +4,13 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Provider base URLs are explicit.** Vela no longer implicitly honors the AI SDK's `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` environment variables. Move the endpoint to the provider's `models.json` `baseUrl`; the built-in OpenAI CLI provider also supports `OPENAI_API_BASE_URL`.
+
 ### Added
+
+- **Provider-hosted web search.** Supported OpenAI Responses and Anthropic Messages models can search without a separate search key. Existing independent search and per-call approval remain available; provider search charges are not included in token cost estimates ([#293](https://github.com/glows777/Vela/issues/293)).
 
 - **A built-in `todo` extension.** The model keeps one task list up to date for multi-step work. The whole list travels in every `todo` call, so the latest call in the session is the current list and a resumed session reads it back from history; no new event type or storage is involved. Lark's progress card shows the list above the tool rows — starting each new run in a topic, including one after a restart or `!restart`, from the list stored in the session — capped at ten items. It is on by default in the CLI; the SDK loads it explicitly ([#282](https://github.com/glows777/Vela/issues/282)).
 

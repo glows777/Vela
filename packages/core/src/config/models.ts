@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createAnthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
+import { anthropic, createAnthropic } from '@ai-sdk/anthropic'
+import { createOpenAI, openai } from '@ai-sdk/openai'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
 import {
@@ -13,6 +13,7 @@ import type { Credential, FetchFunction, OAuthLogin } from '../auth/types.ts'
 import {
   catalogLookup,
   catalogModels,
+  type ModelCompat,
   type ModelSpec,
   type ProviderContext,
   type ProviderDefinition,
@@ -42,6 +43,7 @@ export interface ProviderConfig {
   apiKey?: string
   headers?: Record<string, string>
   models?: ModelSpec[]
+  compat?: ModelCompat
 }
 
 interface BuiltinProvider {
@@ -185,6 +187,7 @@ function readModelsFile(file: string): Record<string, ProviderConfig> {
       throw new Error(
         `${file}: providers.${name}.api must be one of ${APIS.join(' / ')}`,
       )
+    validateCompat(config.compat, `${file}: providers.${name}.compat`)
     const models = config.models
     if (
       models !== undefined &&
@@ -194,8 +197,30 @@ function readModelsFile(file: string): Record<string, ProviderConfig> {
       throw new Error(
         `${file}: providers.${name}.models must be an array of objects with an id`,
       )
+    if (Array.isArray(models))
+      for (const [index, model] of models.entries())
+        validateCompat(
+          model.compat,
+          `${file}: providers.${name}.models[${index}].compat`,
+        )
   }
   return providers as Record<string, ProviderConfig>
+}
+
+function validateCompat(value: unknown, label: string): void {
+  if (value === undefined) return
+  if (!isPlainObject(value)) throw new Error(`${label} must be an object`)
+  if (
+    value.hostedTools !== undefined &&
+    (!Array.isArray(value.hostedTools) ||
+      value.hostedTools.some((tool) => tool !== 'web_search'))
+  )
+    throw new Error(
+      `${label}.hostedTools must be an array containing only web_search`,
+    )
+  for (const key of ['store', 'includeWebSearchSources'] as const)
+    if (value[key] !== undefined && typeof value[key] !== 'boolean')
+      throw new Error(`${label}.${key} must be a boolean`)
 }
 
 /** Placeholder the AI SDK sends until the auth fetch replaces it with the key of this request */
@@ -279,6 +304,16 @@ function createProvider(
       if (!config.api)
         throw new Error(`${file}: providers.${name} is missing api`)
       const api = config.api
+      const spec =
+        config.models?.find((m) => m.id === id) ?? catalogLookup(name, id)
+      const compat = { ...config.compat, ...spec?.compat }
+      if (
+        compat.hostedTools?.includes('web_search') &&
+        api === 'openai-completions'
+      )
+        throw new Error(
+          `${file}: hosted web_search is not supported for openai-completions`,
+        )
       // Each request asks for the current key (OAuth tokens expire and are refreshed, /login can switch accounts)
       const fetchWithAuth: FetchFunction = async (input, init) => {
         const { key, oauth: isOAuth } = await requestKey(ctx)
@@ -298,12 +333,51 @@ function createProvider(
             : base
         return send(input, { ...init, headers: requestHeaders, body })
       }
+      const configuredBaseUrl = read(config.baseUrl)
       const settings = {
         apiKey: MANAGED_KEY,
-        baseURL: read(config.baseUrl),
+        baseURL:
+          configuredBaseUrl ??
+          (api === 'anthropic-messages'
+            ? 'https://api.anthropic.com/v1'
+            : 'https://api.openai.com/v1'),
         headers,
         name,
         fetch: fetchWithAuth as typeof globalThis.fetch,
+      }
+      const defaultHosted =
+        !configuredBaseUrl &&
+        ((name === 'anthropic' &&
+          builtin &&
+          api === 'anthropic-messages' &&
+          id === 'claude-sonnet-4-5') ||
+          (name === 'openai' &&
+            builtin &&
+            api === 'openai-responses' &&
+            id === 'gpt-5.5'))
+      const supportsHosted =
+        compat.hostedTools === undefined
+          ? defaultHosted
+          : compat.hostedTools.includes('web_search')
+      const declareHosted = (model: Exclude<LanguageModel, string>) => {
+        if (!supportsHosted) return model
+        return Object.assign(model, {
+          hostedTools: async () => {
+            try {
+              const auth = await requestKey(ctx)
+              if (auth.oauth) return {}
+              return api === 'anthropic-messages'
+                ? {
+                    web_search: anthropic.tools.webSearch_20250305({
+                      maxUses: 1,
+                    }),
+                  }
+                : { web_search: openai.tools.webSearch({}) }
+            } catch {
+              return {}
+            }
+          },
+        })
       }
       let model: LanguageModel
       switch (api) {
@@ -321,15 +395,14 @@ function createProvider(
       if (
         (api !== 'openai-responses' && !transform) ||
         typeof model === 'string'
-      )
-        return model
-      const spec =
-        config.models?.find((m) => m.id === id) ?? catalogLookup(name, id)
+      ) {
+        return typeof model === 'string' ? model : declareHosted(model)
+      }
       const deepseekResponses =
         api === 'openai-responses' &&
-        settings.baseURL !== undefined &&
+        configuredBaseUrl !== undefined &&
         new URL(settings.baseURL).hostname === 'api.deepseek.com'
-      return wrapLanguageModel({
+      const wrapped = wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
@@ -337,6 +410,13 @@ function createProvider(
           transformParams: async ({ params }) => {
             if (api === 'openai-responses') {
               const openai = { ...params.providerOptions?.openai }
+              if (compat.store !== undefined && openai.store === undefined)
+                openai.store = compat.store
+              if (
+                compat.includeWebSearchSources !== undefined &&
+                openai.includeWebSearchSources === undefined
+              )
+                openai.includeWebSearchSources = compat.includeWebSearchSources
               // The SDK infers capability from IDs; positive metadata also enables custom IDs.
               if (
                 openai.forceReasoning === undefined &&
@@ -373,6 +453,7 @@ function createProvider(
           },
         },
       })
+      return declareHosted(wrapped)
     },
   }
 }

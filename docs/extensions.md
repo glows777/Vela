@@ -139,6 +139,7 @@ The model sees the tool as `<extension name>_<tool name>`: `greet` in `hello.ts`
 | `executionMode` | `parallel` (default) runs calls alongside other tool calls; `sequential` runs the call alone within its session (other sessions are not affected). Same as pi's `executionMode`. A tool that writes files can instead wrap the write in `withFileMutationQueue(path, fn)` (exported from `@glows777/vela`, same as pi) so it queues with `write_file` / `edit_file` on the same file |
 | `annotations` | Hints about the tool, same as pi and MCP: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Vela does not decide permissions from them; a permission extension can |
 | `maxResultChars` | Results longer than this (default 51,200) are saved to a file and the model gets a preview and the path to read the rest |
+| `hostedOnly` | When `true`, the tool is offered only if the current model declares a same-name hosted equivalent and the tool is allowed. It is never executed locally |
 | `exposure` | `direct` (default) puts the tool in the tool list. `deferred` only names it in the system prompt; the model loads it with `tool_search` first. `model-only` tools are for the model only, `codemode` tools only for other tools, and `hidden` tools for neither. See [Tools](tools.md#deferred-tools-and-tool_search) |
 | `namespace` | `{ name, description?, instructions? }`: groups related tools (such as one MCP server's). The deferred tool list shows the namespace once instead of each tool, and `tool_search` returns its `instructions` with the tools it loads |
 | `searchHint` | Short hint shown next to a deferred tool's name |
@@ -224,6 +225,8 @@ vela.registerProvider('corp', {
 ```
 
 Credentials are stored like the built-in ones, in `~/.vela/auth.json` for the CLI.
+
+A provider model may declare `hostedTools: async () => ToolSet` on the model returned by `createModel`. Keys are Vela tool names. Vela resolves the declaration for each request and substitutes a same-name active tool only when its permission is `allow`; `ask`, `deny`, unselected tools and sessions with `tool_call` handlers do not use the hosted equivalent. Resolve changing credentials in the callback and return only tools actually supported by that model and endpoint. Provider-hosted tools run remotely, not through local `execute` or its per-call hooks.
 
 `ctx.channel()` names the channel the requesting session answers on (for example `lark`), or returns undefined for local sessions. Read it per request too; a sign-in meant only for the person at the terminal can refuse channel sessions with it, as Sign in with ChatGPT does.
 

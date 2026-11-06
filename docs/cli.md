@@ -259,11 +259,11 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 | `OPENAI_API_BASE_URL` | Base URL of the built-in `openai` provider, for proxies and OpenAI-compatible services. |
 | `OPENAI_API_MODEL_NAME` | Fallback model: used as `openai/<name>` when neither `--model` nor `defaultModel` is set. |
 | `ANTHROPIC_API_KEY` | API key of the built-in `anthropic` provider. |
-| `TAVILY_API_KEY`, `SERPER_API_KEY` | Search keys for the `web` extension (`extensionConfig.web.tavilyKey`, `.serperKey`). Without one there is no `web_search` tool; Tavily wins if both are set. |
+| `TAVILY_API_KEY`, `SERPER_API_KEY` | Independent search keys for the `web` extension (`extensionConfig.web.tavilyKey`, `.serperKey`). Tavily wins if both are set; supported models may use provider-hosted search without either key. |
 | `LARK_APP_ID`, `LARK_APP_SECRET` | Credentials for the `lark` channel (`extensionConfig.lark.appId`, `.appSecret`); without them it does not connect. |
 | `LARK_OWNERS` | Comma-separated Lark open_ids whose direct chats are always enabled (`extensionConfig.lark.owners`). |
 | `EMBEDDING_MODEL_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_MODEL_KEY` | Embedding API for the `rag` extension (`extensionConfig.rag.embedding.baseUrl`, `.model`, `.apiKey`); the knowledge base is enabled only when all three are set. |
 
-The extension variables are defaults for the `extensionConfig` keys shown in parentheses: a value set in `settings.json` overrides them, and an empty string counts as unset. `models.json` and `extensionConfig` can read any other variable with `$NAME` or `${NAME}`. Because the providers are built on the AI SDK, an `openai-*` or `anthropic-messages` provider with no base URL also honors the SDK's own `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`.
+The extension variables are defaults for the `extensionConfig` keys shown in parentheses: a value set in `settings.json` overrides them, and an empty string counts as unset. `models.json` and `extensionConfig` can read any other variable with `$NAME` or `${NAME}`. Vela does not implicitly read the SDK's `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; configure a provider `baseUrl` instead.
 
 The installed `vela` command does not load `.env` files. Bun does, from the current folder, when you run the source with `bun packages/vela/src/cli/main.ts`.
