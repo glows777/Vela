@@ -73,6 +73,10 @@ export async function startTui(
     readClipboardText?: () => Promise<string | undefined>
     openBrowser?: (url: string) => void
     enabledModels?: string[]
+    /** Model check for the setup wizard: false runs it (first run without a usable model) */
+    configure?: () => boolean
+    hasUsableModel?: () => boolean
+    agentDir?: string
   } = {},
 ) {
   const terminal = new FakeTerminal()
@@ -84,12 +88,14 @@ export async function startTui(
     resume: options.resume ?? false,
     pick: options.pick ?? false,
     newSessionId: options.newSessionId ?? (() => `tui-new-${++ids}`),
-    configure: () => true,
+    configure: options.configure ?? (() => true),
     copyToClipboard: options.copyToClipboard,
     readClipboardImage: options.readClipboardImage,
     readClipboardText: options.readClipboardText,
     openBrowser: options.openBrowser ?? (() => {}),
     enabledModels: options.enabledModels,
+    hasUsableModel: options.hasUsableModel,
+    agentDir: options.agentDir,
     onExit: async () => {
       exited = true
     },

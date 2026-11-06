@@ -22,6 +22,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **The Feishu → Lark migration utility is gone.** Vela 0.6 does not migrate 0.4-era Feishu settings or data. Upgrade through 0.5.x first, where the migration utility is still available; deployments already on 0.5 using `LARK_*` and `builtin:lark` need no changes ([#269](https://github.com/glows777/Vela/issues/269)).
 
+### Fixed
+
+- **The first-run setup wizard no longer shows the model guidance it replaces.** The header's `/model` hint and the `[model] No model available…` diagnostic used to appear before and during the wizard; both now wait until a cancelled setup leaves Vela without a model ([#279](https://github.com/glows777/Vela/issues/279)).
+
 ## [0.5.0] - 2026-11-04
 
 ### Breaking Changes

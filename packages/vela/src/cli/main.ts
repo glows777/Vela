@@ -401,9 +401,13 @@ if (recorder)
  * Applies --tools / --no-tools / --exclude-tools to each session the CLI opens.
  * A resumed session carries its saved model and thinking level. Explicit command-line values win, and so do
  * VELA_MODEL=mock / faux and VELA_RECORD-wrapped models (otherwise --continue would bypass replay / recording
- * and use the saved real model). Returns whether the model is usable.
+ * and use the saved real model). Returns whether the model is usable; `quiet` skips the diagnostic the
+ * setup wizard is about to replace.
  */
-function applyModelArgs(target: VelaSession): boolean {
+function applyModelArgs(
+  target: VelaSession,
+  { quiet = false }: { quiet?: boolean } = {},
+): boolean {
   recordedSession = target.id
   if (toolLoadout?.selection) target.setActiveTools(toolLoadout.selection)
   else if (toolLoadout?.modifiers)
@@ -419,9 +423,10 @@ function applyModelArgs(target: VelaSession): boolean {
     else void target.modelInfo
     return true
   } catch (error) {
-    console.error(
-      `[model] ${cliErrorMessage(chosenModel === undefined && !args.model ? new Error('No model selected') : error)}`,
-    )
+    if (!quiet)
+      console.error(
+        `[model] ${cliErrorMessage(chosenModel === undefined && !args.model ? new Error('No model selected') : error)}`,
+      )
     return false
   }
 }

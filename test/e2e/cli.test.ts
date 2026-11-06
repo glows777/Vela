@@ -21,6 +21,12 @@ setDefaultTimeout(30_000)
 const hasScript =
   process.platform === 'linux' && Bun.spawnSync(['script', '-V']).exitCode === 0
 
+/** Accumulated screen text before the setup wizard opens, so later frames neither hide nor satisfy these checks. */
+const beforeSetup = (stdout: string): string => {
+  const at = stdout.indexOf('Choose a provider')
+  return at === -1 ? stdout : stdout.slice(0, at)
+}
+
 test('no configured model points print-mode users to setup', async () => {
   const result = await cli(['-p', 'hello'], { model: '' })
   expect(result.code).toBe(1)
@@ -35,6 +41,9 @@ test.skipIf(!hasScript)(
       terminal: [['Choose a provider', '\x1b']],
     })
     expect(result.code).toBe(0)
+    const atSetup = beforeSetup(result.stdout)
+    expect(atSetup).not.toContain('/model provider/id')
+    expect(atSetup).not.toContain('No model available')
     for (const name of ['auth.json', 'models.json', 'settings.json'])
       expect(existsSync(join(result.agentDir, name))).toBe(false)
     const afterKey = await cli(['setup'], {
@@ -48,6 +57,9 @@ test.skipIf(!hasScript)(
         ['may incur', '\x1b'],
       ],
     })
+    const atSetupOnly = beforeSetup(afterKey.stdout)
+    expect(atSetupOnly).not.toContain('/model provider/id')
+    expect(atSetupOnly).not.toContain('No model available')
     for (const name of ['auth.json', 'models.json', 'settings.json'])
       expect(existsSync(join(afterKey.agentDir, name))).toBe(false)
   },
@@ -319,6 +331,9 @@ test.skipIf(!hasScript)(
       ],
     })
     expect(result.code).toBe(0)
+    const atSetup = beforeSetup(result.stdout)
+    expect(atSetup).not.toContain('/model provider/id')
+    expect(atSetup).not.toContain('No model available')
     expect(result.stdout).toContain('faux first answer')
     const models = JSON.parse(
       readFileSync(join(result.agentDir, 'models.json'), 'utf8'),

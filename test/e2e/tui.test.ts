@@ -13,7 +13,7 @@ import z from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import todo from '../../examples/extensions/todo-command.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(async () => {
   await stopTuis()
@@ -644,6 +644,45 @@ test('slash commands still run while the agent is busy instead of being steered'
   tui.submit('/usage')
   await tui.until('Usage Summary')
   expect(t.vela.session('tui').queue.steering).toEqual([])
+})
+
+test('first-run setup replaces the model hint while it runs and restores it when cancelled', async () => {
+  const t = createTestVela({})
+  const agentDir = tempDir('vela-setup-hint-')
+  try {
+    const tui = await startTui(t.vela, {
+      configure: () => false,
+      hasUsableModel: () => false,
+      agentDir: agentDir.path,
+    })
+    await tui.until('Choose a provider')
+    expect(tui.screen()).not.toContain('/model provider/id')
+    tui.terminal.press(KEYS.escape)
+    await tui.until('/model provider/id')
+    await tui.started
+  } finally {
+    agentDir.cleanup()
+  }
+})
+
+test('a setup wizard that fails restores the model hint', async () => {
+  const t = createTestVela({})
+  const agentDir = tempDir('vela-setup-failure-')
+  try {
+    const tui = await startTui(t.vela, {
+      configure: () => false,
+      hasUsableModel: () => false,
+      agentDir: agentDir.path,
+    })
+    await tui.until('Choose a provider')
+    tui.terminal.press(KEYS.enter)
+    await tui.until('API key')
+    tui.terminal.press(KEYS.escape)
+    await tui.until('/model provider/id')
+    await tui.started
+  } finally {
+    agentDir.cleanup()
+  }
 })
 
 test('model and thinking selectors; Shift+Tab cycles thinking', async () => {
