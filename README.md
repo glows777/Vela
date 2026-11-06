@@ -16,23 +16,32 @@ Vela needs Node.js 22.18 or newer, or Bun 1.4 or newer.
 npm install -g @glows777/vela
 ```
 
-Start Vela in the folder you want it to work in:
+Run Vela in the folder it should work in:
 
 ```bash
 cd /path/to/project
 vela
 ```
 
-On first run, the setup wizard helps you select a provider, verify a credential and choose a default model. Run `vela setup` to configure it again. Verification sends a small model request that may incur a charge. For manual setup with environment variables or `models.json`, see [Models](docs/models.md).
+On first run the setup wizard asks for a provider and how to sign in, lets you select a model, sends one small verification request (it may incur a charge) and asks for a thinking level. It then offers **Connect Lark**; choose **Not now** here and connect the bot in the next step. When the wizard finishes, Vela opens the terminal UI; leave it with Ctrl+D on an empty editor before running the next command. Run `vela setup` to change the model or sign-in later.
 
-No API key yet? `VELA_MODEL=mock vela` runs a built-in offline demo model. See the [quickstart](docs/quickstart.md) for the full setup.
-
-Run it non-interactively with `-p`, or pipe input in:
+Connect a Lark group. Create a custom app first as described in [Channels](docs/channels.md#lark), then run:
 
 ```bash
-vela -p "List the TODOs in src/"
-git diff | vela -p "Review this change"
+vela setup lark
 ```
+
+The wizard asks for the App ID and App Secret, checks them against Lark, then waits while you mention the bot in the group. Confirm the group to enable it. **Every member of an enabled group has full access to Vela's tools.**
+
+Run the bot:
+
+```bash
+vela serve
+```
+
+It keeps the configured channels running without a terminal until Ctrl+C, and writes one line per message, reply and error to stderr. To keep it running after the shell closes, follow [Deploy `vela serve`](docs/deploy.md).
+
+No API key yet? `VELA_MODEL=mock vela` runs a built-in offline demo model. See the [quickstart](docs/quickstart.md) for every setup screen and for manual provider configuration.
 
 ## Use the SDK
 
@@ -59,13 +68,24 @@ await vela.dispose()
 
 The SDK reads no environment variables and persists nothing unless you pass `dataDir`; temporary files are deleted by `dispose()`. See the [SDK docs](docs/sdk.md) and the runnable [examples](examples/).
 
+## Use it from the terminal
+
+Vela is also an agent in the folder you start it in: ask for a task and it reads files, runs commands and edits code until it is done, showing each tool call. Run it non-interactively with `-p`, or pipe input in:
+
+```bash
+vela -p "List the TODOs in src/"
+git diff | vela -p "Review this change"
+```
+
+See [CLI](docs/cli.md) for flags, run modes and keys.
+
 ## Documentation
 
 - [Quickstart](docs/quickstart.md)
 - Using the CLI: [CLI](docs/cli.md), [settings](docs/settings.md), [models](docs/models.md), [tools](docs/tools.md), [sessions](docs/sessions.md)
 - Automating: [JSON mode](docs/json.md), [RPC mode](docs/rpc.md)
-- Serving chats: [deploy `vela serve`](docs/deploy.md) under a dedicated user with systemd
-- Building on Vela: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [built-in extensions](docs/built-in-extensions.md), [MCP servers](docs/mcp.md), [channels](docs/channels.md), [testing](docs/testing.md), [session format](docs/session-format.md)
+- Serving chats: [channels](docs/channels.md), [deploy `vela serve`](docs/deploy.md) under a dedicated user with systemd
+- Building on Vela: [SDK](docs/sdk.md), [extensions](docs/extensions.md), [built-in extensions](docs/built-in-extensions.md), [MCP servers](docs/mcp.md), [channel reference](docs/channels-reference.md), [testing](docs/testing.md), [session format](docs/session-format.md)
 - [Security](docs/security.md): Vela runs tools with your permissions and has no sandbox. Read this before running it on untrusted input.
 
 ## Packages
