@@ -195,9 +195,9 @@ export function mcp(options: McpOptions = {}): VelaExtension {
         ].join('\n')
     })
 
-    vela.on('tool_call', async (event) => {
+    vela.on('tool_call', 'tool_search', async () => {
       // tool_search waits for servers that are still connecting, so it can find their tools
-      if (event.toolName === 'tool_search' && started) await started
+      if (started) await started
     })
 
     vela.registerCommand('mcp', {

@@ -347,14 +347,8 @@ function createProvider(
       }
       const defaultHosted =
         !configuredBaseUrl &&
-        ((name === 'anthropic' &&
-          builtin &&
-          api === 'anthropic-messages' &&
-          id === 'claude-sonnet-4-5') ||
-          (name === 'openai' &&
-            builtin &&
-            api === 'openai-responses' &&
-            id === 'gpt-5.5'))
+        ((name === 'anthropic' && builtin && api === 'anthropic-messages') ||
+          (name === 'openai' && builtin && api === 'openai-responses'))
       const supportsHosted =
         compat.hostedTools === undefined
           ? defaultHosted

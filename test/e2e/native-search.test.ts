@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
+import type { ExtensionAPI } from '@glows777/vela-core'
 import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -80,6 +82,73 @@ test('supported OpenAI Responses requests expose hosted search without independe
     globalThis.fetch = originalFetch
     dir.cleanup()
   }
+})
+
+test('a tool_search-scoped hook does not disable hosted web_search', async () => {
+  const { web } = await import('@glows777/vela-core')
+  const { openai } = await import('@ai-sdk/openai')
+  const model = Object.assign(
+    createFauxModel({ responses: [fauxText('OK')] }),
+    {
+      hostedTools: async () => ({ web_search: openai.tools.webSearch({}) }),
+    },
+  )
+  let request: LanguageModelV4CallOptions | undefined
+  const stream = model.doStream.bind(model)
+  model.doStream = async (options) => {
+    request = options
+    return stream(options)
+  }
+  const extension = (vela: ExtensionAPI) => {
+    vela.on('tool_call', 'tool_search', () => {})
+  }
+  const t = createTestVela({ model, extensions: [web(), extension] })
+  await t.run('Search')
+  expect(request?.tools).toContainEqual(
+    expect.objectContaining({ type: 'provider', name: 'web_search' }),
+  )
+})
+
+test('a web_search-scoped blocking hook prevents hosted search', async () => {
+  const { web } = await import('@glows777/vela-core')
+  const { openai } = await import('@ai-sdk/openai')
+  const model = Object.assign(
+    createFauxModel({ responses: [fauxText('OK')] }),
+    {
+      hostedTools: async () => ({ web_search: openai.tools.webSearch({}) }),
+    },
+  )
+  let request: LanguageModelV4CallOptions | undefined
+  const stream = model.doStream.bind(model)
+  model.doStream = async (options) => {
+    request = options
+    return stream(options)
+  }
+  const extension = (vela: ExtensionAPI) => {
+    vela.on('tool_call', 'web_search', () => ({ block: true }))
+  }
+  const t = createTestVela({ model, extensions: [web(), extension] })
+  await t.run('Search')
+  expect(
+    request?.tools?.some(
+      (tool) => tool.type === 'provider' && tool.name === 'web_search',
+    ),
+  ).toBe(false)
+})
+
+test('default MCP extension does not suppress hosted search', async () => {
+  const { web } = await import('@glows777/vela-core')
+  const { mcp } = await import('@glows777/vela-mcp')
+  const { openai } = await import('@ai-sdk/openai')
+  const model = Object.assign(
+    createFauxModel({ responses: [fauxText('OK')] }),
+    {
+      hostedTools: async () => ({ web_search: openai.tools.webSearch({}) }),
+    },
+  )
+  const t = createTestVela({ model, extensions: [web(), mcp()] })
+  await t.run('Search')
+  expect(model.calls[0]?.tools).toContain('web_search')
 })
 
 test.each([
@@ -235,6 +304,79 @@ test('supported Anthropic Messages requests expose hosted search without indepen
     })
     const t = createTestVela({
       model: 'anthropic/claude-sonnet-4-5',
+      providers,
+      extensions: [web()],
+    })
+    await t.run('Search for current information')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.tools).toContainEqual(
+      expect.objectContaining({
+        type: 'web_search_20250305',
+        name: 'web_search',
+      }),
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    dir.cleanup()
+  }
+})
+
+test('default Anthropic Opus supports hosted search', async () => {
+  const { loadModels, web } = await import('@glows777/vela-core')
+  const { tempDir } = await import('../support/vela.ts')
+  const dir = tempDir('vela-anthropic-search-')
+  const originalFetch = globalThis.fetch
+  const requests: Array<{ tools?: Array<{ type: string; name?: string }> }> = []
+  globalThis.fetch = (async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)))
+    const events = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_test',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4-5',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'OK' },
+      },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 1 },
+      },
+      { type: 'message_stop' },
+    ]
+    return new Response(
+      events
+        .map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        )
+        .join(''),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )
+  }) as typeof fetch
+  try {
+    const providers = loadModels({
+      agentDir: dir.path,
+      env: { ANTHROPIC_API_KEY: 'test' },
+    })
+    const t = createTestVela({
+      model: 'anthropic/claude-opus-4-8',
       providers,
       extensions: [web()],
     })

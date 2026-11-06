@@ -146,7 +146,7 @@
     timedOut?: boolean | undefined
     toolUnavailable?: boolean | undefined
   interface ExtensionAPI
-    on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
     onShutdown: (handler: () => void | Promise<void>) => void
     readonly config: Readonly<Record<string, unknown>>
     readonly cwd: string
@@ -1062,7 +1062,7 @@
     onUpdate?: ((partialResult: unknown) => void) | undefined
     signal?: AbortSignal | undefined
   interface ExtensionAPI
-    on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
     onShutdown: (handler: () => void | Promise<void>) => void
     readonly config: Readonly<Record<string, unknown>>
     readonly cwd: string

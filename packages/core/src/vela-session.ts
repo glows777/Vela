@@ -136,7 +136,7 @@ interface SessionExtensionHooks {
     entryId: string,
     position: 'before' | 'at',
   ): Promise<boolean>
-  hasHandlers(event: ExtensionEventName): boolean
+  hasHandlers(event: ExtensionEventName, toolName?: string): boolean
   /** Text after the input handlers; undefined when a handler handled it */
   input(
     session: VelaSession,
@@ -369,7 +369,8 @@ export class VelaSession {
 
   private requestModel(): LanguageModel {
     this.hooked ??= withProviderHooks(this.model, {
-      has: (event) => this.deps.extensions.hasHandlers(event),
+      has: (event, toolName) =>
+        this.deps.extensions.hasHandlers(event, toolName),
       beforeRequest: (params) =>
         this.deps.extensions.beforeProviderRequest(this, params),
       afterResponse: (headers) =>

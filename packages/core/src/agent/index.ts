@@ -1,3 +1,4 @@
+import { APICallError } from '@ai-sdk/provider'
 import { type AssistantModelMessage, type LanguageModel, streamText } from 'ai'
 import {
   createRequestSnapshot,
@@ -392,7 +393,10 @@ export const agentLoop = async ({
               (tool) => tool.type === 'provider',
             )
           if (
-            canResend &&
+            (canResend ||
+              (!step.toolsStarted &&
+                APICallError.isInstance(error) &&
+                (error.statusCode === 400 || error.statusCode === 413))) &&
             !compactedForOverflow &&
             compactOnOverflow &&
             isContextOverflow(error)

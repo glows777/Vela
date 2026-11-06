@@ -15,6 +15,7 @@ export interface ProviderHooks {
       | 'after_provider_response'
       | 'provider_stream_event'
       | 'tool_call',
+    toolName?: string,
   ): boolean
   beforeRequest(
     params: LanguageModelV4CallOptions,
@@ -84,10 +85,14 @@ export function withProviderHooks(
   const hostedTools = (model as HostedToolModel).hostedTools
   return hostedTools
     ? Object.assign(wrapped, {
-        hostedTools: () =>
-          hooks.has('tool_call')
-            ? Promise.resolve({})
-            : hostedTools.call(model),
+        hostedTools: async () => {
+          const tools = await hostedTools.call(model)
+          return Object.fromEntries(
+            Object.entries(tools).filter(
+              ([name]) => !hooks.has('tool_call', name),
+            ),
+          )
+        },
       })
     : wrapped
 }
