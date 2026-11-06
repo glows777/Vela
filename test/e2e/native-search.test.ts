@@ -43,6 +43,13 @@ test('a provider-executed search completes in one turn and retains its answer', 
   await t.run('Search for the answer')
   expect(faux.calls).toHaveLength(1)
   expect(JSON.stringify(t.messages)).toContain('The answer is 42.')
+  expect(t.eventsOf('turn_end')[0]?.toolResults).toContainEqual(
+    expect.objectContaining({
+      type: 'tool-result',
+      toolCallId: 'search-1',
+      toolName: 'web_search',
+    }),
+  )
 })
 
 // Real SDK serialization with a fake transport: no provider request leaves the test.
@@ -933,6 +940,13 @@ test('an interrupted hosted search does not leave an orphan result after switchi
   })
   const t = createTestVela({ model: first })
   await expect(t.run('Search example')).rejects.toThrow('ECONNRESET')
+  expect(t.eventsOf('turn_end')[0]?.toolResults).toContainEqual(
+    expect.objectContaining({
+      type: 'tool-result',
+      toolCallId: 'search-1',
+      toolName: 'web_search',
+    }),
+  )
   t.session.setModel(second)
   await t.run('Continue')
   const prompt = JSON.stringify(second.calls[0]?.prompt)

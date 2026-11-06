@@ -399,10 +399,11 @@ export class StepMessage {
   }
 }
 
-/** The tool-result parts of a step's tool messages (for turn_end). */
+/** Tool results in tool messages and provider-executed assistant content (for turn_end). */
 export function toolResultsOf(messages: ModelMessage[]): ToolResultPart[] {
   return messages.flatMap((message) =>
-    message.role === 'tool'
+    (message.role === 'tool' || message.role === 'assistant') &&
+    typeof message.content !== 'string'
       ? message.content.filter(
           (part): part is ToolResultPart => part.type === 'tool-result',
         )

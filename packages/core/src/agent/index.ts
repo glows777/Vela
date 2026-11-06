@@ -696,7 +696,7 @@ export const agentLoop = async ({
       type: 'turn_end',
       turn,
       message: assistant,
-      toolResults: toolMessage ? toolResultsOf([toolMessage]) : [],
+      toolResults: [...step.results.values()],
     })
   }
 }
