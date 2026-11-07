@@ -21,6 +21,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
   const sender = record.routine?.creator ?? record.requester
   return {
     channelId: record.chatId,
+    chatKind: record.chatKind,
     senderId: sender.id,
     senderName: sender.name,
     replyToId: record.replyTarget,

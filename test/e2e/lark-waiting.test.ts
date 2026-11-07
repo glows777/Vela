@@ -11,11 +11,11 @@ test('overview explains a reused topic label while preserving its current waitin
   const t = createTestVela({
     responses: [
       fauxText('File checked.'),
-      fauxToolCall('lark_wait_for_input', {
+      fauxToolCall('channel_wait_for_input', {
         reason: 'Choose the title color',
       }),
       fauxText('Which color should the title use?'),
-      fauxToolCall('lark_list_topics', {}),
+      fauxToolCall('channel_list_topics', {}),
       (req) => fauxText(req.toolResults.at(-1)!.output),
     ],
     extensions: [
@@ -63,7 +63,7 @@ test.each(['empty', 'failed'] as const)(
     const fake = fakeLark()
     const t = createTestVela({
       responses: [
-        fauxToolCall('lark_wait_for_input', {
+        fauxToolCall('channel_wait_for_input', {
           reason: 'Choose blue or green',
         }),
         answer === 'empty' ? fauxText('') : fauxError('400 model failed'),
@@ -88,7 +88,7 @@ test.each(['empty', 'failed'] as const)(
     await t.vela.dispose()
     const record = JSON.parse(await t.readData('channels/index.json'))
       .records[0]
-    expect(t.model.calls[0]?.tools).toContain('lark_wait_for_input')
+    expect(t.model.calls[0]?.tools).toContain('channel_wait_for_input')
     expect(record.state).toBe('done')
     expect(record.waitingReason).toBeUndefined()
   },

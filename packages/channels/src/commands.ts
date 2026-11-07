@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { VelaSession } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
 import type { ChannelDirectory } from './directory.ts'
@@ -6,6 +7,12 @@ import type { ChannelDefinition, IncomingMessage } from './types.ts'
 import type { ChannelUsage } from './usage.ts'
 
 type TopicCommand = 'stop' | 'restart' | 'status' | 'routines'
+
+interface ProcessingRun {
+  stopped: boolean
+  runId: string
+  preparing: boolean
+}
 
 /** Match only a complete normalized topic message, before history or sender decoration. */
 function topicCommand(msg: IncomingMessage): TopicCommand | undefined {
@@ -32,18 +39,44 @@ interface CommandOptions {
 /** Topic command barriers and preparation cancellation; the gateway owns normal message queues. */
 export class TopicCommands {
   private commands = new Map<string, Promise<void>>()
-  private processing = new Map<string, { stopped: boolean }>()
+  private processing = new Map<string, ProcessingRun>()
   readonly active = new Set<Promise<void>>()
 
   constructor(private options: CommandOptions) {}
 
-  begin(key: string): { stopped: boolean } {
-    const state = { stopped: false }
+  begin(key: string): ProcessingRun {
+    const state = { stopped: false, runId: randomUUID(), preparing: true }
     this.processing.set(key, state)
     return state
   }
 
-  end(key: string, state: { stopped: boolean }): void {
+  controllable(key: string): ProcessingRun | undefined {
+    const current = this.processing.get(key)
+    const run = this.options.feedback.runs.get(key)
+    return current &&
+      !current.stopped &&
+      (current.preparing ||
+        (run && !run.stopped && !run.lifetime.signal.aborted))
+      ? current
+      : undefined
+  }
+
+  /** The API shares command cancellation but does not consume a queued human message. */
+  async stop(key: string, runId: string): Promise<boolean> {
+    const current = this.controllable(key)
+    if (
+      !current ||
+      current.stopped ||
+      current.runId !== runId ||
+      this.options.stopped()
+    )
+      return false
+    current.stopped = true
+    await this.options.feedback.stop(key)
+    return true
+  }
+
+  end(key: string, state: ProcessingRun): void {
     if (this.processing.get(key) === state) this.processing.delete(key)
   }
 
@@ -84,7 +117,13 @@ export class TopicCommands {
         this.active.delete(next)
         if (this.commands.get(key) === next) this.commands.delete(key)
       })
-      return { command: next, blocks, blocked: !!barrier, available: admitted }
+      return {
+        command: next,
+        blocks,
+        blocked: !!barrier,
+        available: admitted,
+        admitted,
+      }
     }
     // Later messages must not steer the generation being archived.
     const available = barrier
@@ -93,7 +132,7 @@ export class TopicCommands {
           return accepted
         })
       : admitted
-    return { blocked: !!barrier, available }
+    return { blocked: !!barrier, available, admitted }
   }
 
   private async handleCommand(

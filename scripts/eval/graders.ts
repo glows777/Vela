@@ -289,7 +289,12 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
     ...e,
     calls: e.calls.map((call) => ({
       ...call,
-      name: call.name.replace(/^feishu_/, 'lark_'),
+      name: call.name
+        .replace(/^feishu_/, 'lark_')
+        .replace(
+          /^lark_(start_topic|forward_to_topic|list_topics|read_topic|skip_reply|wait_for_input|routines)$/,
+          'channel_$1',
+        ),
       sessionId: call.sessionId?.replace(/^feishu-/, 'lark-'),
     })),
   }
@@ -399,7 +404,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       break
     case 'G2': {
-      const starts = calls('lark_start_topic')
+      const starts = calls('channel_start_topic')
       const title = String(starts[0]?.args.title ?? '').trim()
       const brief = String(starts[0]?.args.brief ?? '')
       check('one topic call', starts.length === 1)
@@ -424,11 +429,11 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       break
     }
     case 'G3':
-      check('skip called', calls('lark_skip_reply').length > 0)
+      check('skip called', calls('channel_skip_reply').length > 0)
       check('silent', e.deliveries.length === 0 && e.topics.length === 0)
       break
     case 'G4':
-      check('wait called', calls('lark_wait_for_input').length > 0)
+      check('wait called', calls('channel_wait_for_input').length > 0)
       check('one question', (delivered.match(/[?？]/g) ?? []).length === 1)
       break
     case 'G5':
@@ -468,7 +473,7 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       )
       check(
         'hand-off tool',
-        handedOff >= 0 && calls('lark_routines').length === 0,
+        handedOff >= 0 && calls('channel_routines').length === 0,
       )
       // B must not find the fact itself before the hand-off: no fixture read, no tool output carrying it.
       check(

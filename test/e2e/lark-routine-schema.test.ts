@@ -43,14 +43,14 @@ test('the real Responses request exports an object-root routine schema and can c
     const body = JSON.parse(String(init?.body))
     requests.push(body)
     const parameters = body.tools?.find(
-      (tool: { name: string }) => tool.name === 'lark_routines',
+      (tool: { name: string }) => tool.name === 'channel_routines',
     )?.parameters
     // Match the real provider's rejection at the actual SDK request boundary.
     if (parameters?.type !== 'object')
       return Response.json(
         {
           error: {
-            message: `Invalid schema for function 'lark_routines': schema must be a JSON Schema of 'type: "object"', got 'type: ${parameters?.type ?? 'null'}'.`,
+            message: `Invalid schema for function 'channel_routines': schema must be a JSON Schema of 'type: "object"', got 'type: ${parameters?.type ?? 'null'}'.`,
             type: 'invalid_request_error',
             code: 'invalid_function_parameters',
           },
@@ -62,7 +62,7 @@ test('the real Responses request exports an object-root routine schema and can c
       undefined,
       requests.length === 1
         ? {
-            name: 'lark_routines',
+            name: 'channel_routines',
             arguments: JSON.stringify({
               action: 'create',
               message: 'Review the PR',
@@ -105,11 +105,11 @@ test('the real Responses request exports an object-root routine schema and can c
   expect(requests).toHaveLength(2)
   for (const request of requests)
     expect(
-      request.tools?.find((tool) => tool.name === 'lark_routines')?.parameters
-        .type,
+      request.tools?.find((tool) => tool.name === 'channel_routines')
+        ?.parameters.type,
     ).toBe('object')
   expect(t.eventsOf('tool_execution_end')).toContainEqual(
-    expect.objectContaining({ toolName: 'lark_routines', isError: false }),
+    expect.objectContaining({ toolName: 'channel_routines', isError: false }),
   )
   expect(t.internals.gateway.routines.list('lark', 'oc_group')).toMatchObject([
     {

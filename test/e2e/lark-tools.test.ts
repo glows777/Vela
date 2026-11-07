@@ -8,13 +8,13 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 afterEach(cleanupTestVelas)
 
 const larkTools = [
-  'lark_routines',
-  'lark_skip_reply',
-  'lark_wait_for_input',
+  'channel_routines',
+  'channel_skip_reply',
+  'channel_wait_for_input',
   'lark_search_history',
-  'lark_start_topic',
-  'lark_forward_to_topic',
-  'lark_list_topics',
+  'channel_start_topic',
+  'channel_forward_to_topic',
+  'channel_list_topics',
 ]
 
 async function until(condition: () => boolean) {
@@ -54,13 +54,16 @@ test('Lark tools reach channel sessions only', async () => {
   fake.deliver(larkEvent({ message_id: 'group-message' }))
   await until(() => t.model.calls.length === 2)
   const group = t.model.calls[1]!.tools
+  expect(group.filter((name) => name.startsWith('lark_'))).toEqual([
+    'lark_search_history',
+  ])
   expect(group).toEqual(
     expect.arrayContaining(
-      larkTools.filter((name) => name !== 'lark_wait_for_input'),
+      larkTools.filter((name) => name !== 'channel_wait_for_input'),
     ),
   )
   // The group channel's own deny list still hides the topic-only tool.
-  expect(group).not.toContain('lark_wait_for_input')
+  expect(group).not.toContain('channel_wait_for_input')
   expect(group).toContain('read_file')
 
   fake.deliver(larkEvent({ root_id: 'root', thread_id: 'thread' }))
@@ -68,12 +71,12 @@ test('Lark tools reach channel sessions only', async () => {
   const topic = t.model.calls[2]!.tools
   expect(topic).toEqual(
     expect.arrayContaining([
-      'lark_routines',
+      'channel_routines',
       'lark_search_history',
-      'lark_wait_for_input',
+      'channel_wait_for_input',
     ]),
   )
-  expect(topic).not.toContain('lark_start_topic')
+  expect(topic).not.toContain('channel_start_topic')
   expect(topic).toContain('read_file')
 })
 

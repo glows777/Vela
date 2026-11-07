@@ -14,6 +14,7 @@
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
     timezone?: unknown
+    topicCapabilities?: ChannelTopicCapabilities | undefined
     validateTools?: ((names: readonly string[]) => void) | undefined
   interface ChannelEvent
     deliveryId: string
@@ -76,10 +77,14 @@
   interface ChannelRuntime
     context: (sessionId: string) => IncomingMessage | undefined
     dispatch: (sourceSessionId: string, message: IncomingMessage, label?: string) => void
+    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
     routines: { create(sessionId: string, message: string, schedule: RoutineSchedule): Promise<ChannelRoutineInfo>; list(sessionId: string): { timezone: string; routines: ChannelRoutineInfo[]; }; cancel(sessionId: string, id: string): Promise<boolean>; }
     scope: (sessionId: string) => ChannelScope | undefined
     session: (id: string) => VelaSession | undefined
+    sessions: (chatId: string) => ChannelSessionSnapshot[]
     skipReply: (sessionId: string) => void
+    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
+    submit: (message: IncomingMessage) => Promise<{ sessionId: string; }>
     topicCoverage: () => string
     topics: (chatId: string) => ChannelTopic[]
     waitForInput: (sessionId: string, reason: string) => Promise<void>
@@ -91,6 +96,24 @@
     readonly id: string
     readonly kind: "private" | "shared"
   const channelSessionId: (channel: string, conversationId: string, topicRootId?: string) => string
+  interface ChannelSessionSnapshot
+    chatId: string
+    chatKind: "group" | "direct"
+    requester: { id: string; name: string; }
+    runId?: string | undefined
+    sessionId: string
+    state: "done" | "stopped" | "running" | "queued" | "waiting"
+    task: string
+    topic?: { rootId: string; threadId: string; } | undefined
+    updatedAt: string
+    waitingReason?: string | undefined
+  interface ChannelStatusLine
+    chatId: string
+    rootId: string
+    text: string
+  interface ChannelTarget
+    chatId: string
+    rootId?: string | undefined
   interface ChannelTopic
     requester: { id: string; name: string; }
     rootId: string
@@ -99,6 +122,13 @@
     threadId: string
     updatedAt: string
     waitingReason?: string | undefined
+  interface ChannelTopicCapabilities
+    forwardToTopic: (message: IncomingMessage, target: ChannelTopic) => Promise<IncomingMessage>
+    handled?: ((message: IncomingMessage) => void) | undefined
+    originalText?: ((message: IncomingMessage) => string | undefined) | undefined
+    readTopic: (chatId: string, threadId: string) => Promise<string>
+    startTopic: (message: IncomingMessage, title: string) => Promise<{ messageId: string; rootId: string; threadId: string; }>
+    triggerImages?: ((message: IncomingMessage) => ImageContent[] | undefined) | undefined
   interface ChannelVela
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
@@ -149,8 +179,10 @@
   function chatDirectory: (dataDir: string, channel: string, chatId: string) => string
   function createChannelVela: (options?: ChannelVelaOptions) => ChannelVela
   function groupWorkspace: (dataDir: string, channel: string, chatId: string, create?: boolean) => string
+  const handoffToolNames: string[]
   interface IncomingMessage
     channelId: string
+    chatKind?: "group" | "direct" | undefined
     externalEvent?: ChannelEvent | undefined
     handoff?: { id: string; from: string; depth: number; } | undefined
     images?: ImageContent[] | undefined
@@ -184,6 +216,8 @@
       days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
       }
   const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ create: "create"; list: "list"; cancel: "cancel"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>], "action">>
+  function topicSessionOptions: (msg: IncomingMessage) => { permissions: { [k: string]: "deny"; }; }
+  const topicToolNames: string[]
 
 # @glows777/vela-channels/testing
 

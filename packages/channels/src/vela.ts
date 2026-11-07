@@ -133,6 +133,7 @@ export function createChannelVela(
       github.success ? github.data.repositories : undefined,
     )
     runtime(api).handoff.register(api)
+    runtime(api).topicTools.register(api)
   })
   core = createCoreVela({
     ...options,

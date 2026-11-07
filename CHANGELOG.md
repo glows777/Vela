@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
+- **Topic tools are channel-neutral.** Replace `lark_start_topic`, `lark_forward_to_topic`, `lark_list_topics`, `lark_read_topic`, `lark_wait_for_input`, `lark_skip_reply` and `lark_routines` with their `channel_*` names in explicit tool selections, permission rules and prompts. There are no legacy aliases. Lark still automatically supplies its mandatory topic tools; `lark_search_history` remains platform-specific. Prompt sections `larkChannel` / `larkTopic` become `channelGroup` / `channelTopic`. Existing session data and routing IDs do not migrate ([#281](https://github.com/glows777/Vela/issues/281)).
+
 - **DeepSeek compatibility is explicit.** Provider names other than `deepseek` no longer gain Responses fixes from the `api.deepseek.com` hostname. Add `compat: { "store": false, "supportsDeveloperRole": false, "deepseekReasoningStream": true }` to those entries before upgrading. Existing `deepseek` entries retain their overrides and inherit the defaults; configuration files are not rewritten. See [migration](docs/models.md#migrating-existing-deepseek-configurations) ([#289](https://github.com/glows777/Vela/issues/289)).
 
 - **Provider base URLs are explicit.** Vela no longer implicitly honors the AI SDK's `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` environment variables. Move the endpoint to the provider's `models.json` `baseUrl`; the built-in OpenAI CLI provider also supports `OPENAI_API_BASE_URL`.
@@ -13,6 +15,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 ### Added
 
 - **GitHub webhook setup.** `vela setup github owner/repo --url https://public-origin` saves private user receiver settings and creates or updates matching repository hooks through GitHub CLI 2.57 or newer. Authentication checks use only the active account; an expired inactive account does not trigger manual fallback or print the secret. Missing authentication leaves manual setup instructions. Topics with GitHub ingress are guided to subscribe to PR events rather than poll; tunnels and live delivery remain operator checks ([#274](https://github.com/glows777/Vela/issues/274)).
+
+- **Adapter-facing channel runtime.** Channel adapters can declare topic capabilities and use shared dispatch/routine tools, explicit conversation kind, admission receipts, scoped session snapshots, run-bound Stop and persisted status-line notifications. This prepares the Local channel; it does not yet start a Local HTTP service ([#281](https://github.com/glows777/Vela/issues/281)).
 
 - **Custom provider setup.** The setup wizard supports OpenAI Chat Completions, OpenAI Responses and Anthropic Messages endpoints, optional headers and model capabilities, and verifies the chosen configuration before saving. Optional headers and context window use direct inputs: empty Enter keeps existing values or defaults, while Escape cancels without saving. Existing provider and model fields are preserved when unchanged ([#289](https://github.com/glows777/Vela/issues/289)).
 

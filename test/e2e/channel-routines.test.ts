@@ -123,7 +123,7 @@ test.each(['routine', 'human'] as const)(
     let overviewRequester: unknown
     if (recovering === 'human') {
       first.t.model.push(
-        fauxToolCall('lark_list_topics', {}),
+        fauxToolCall('channel_list_topics', {}),
         fauxText('Overview'),
       )
       const overviewDone = Promise.withResolvers<void>()

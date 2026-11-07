@@ -103,14 +103,14 @@ test('default-on intake queues each unique message, skips silently, treats comma
       cwd,
       responses: [
         (req) => {
-          expect(req.tools).toContain('lark_skip_reply')
-          return fauxToolCall('lark_skip_reply', {})
+          expect(req.tools).toContain('channel_skip_reply')
+          return fauxToolCall('channel_skip_reply', {})
         },
         fauxText('this text must stay silent'),
         fauxText('A useful short answer'),
         (req) => {
           expect(req.lastUserText).toContain('Alice: /danger')
-          return fauxToolCall('lark_skip_reply', {})
+          return fauxToolCall('channel_skip_reply', {})
         },
         fauxText('also silent'),
         fauxText('explicit while busy'),
@@ -178,7 +178,7 @@ test('default-on intake queues each unique message, skips silently, treats comma
     'sessions/lark-oc_group/transcript.jsonl',
   )
   expect(stored).toContain('Alice: colleagues discussing lunch')
-  expect(stored).toContain('lark_skip_reply')
+  expect(stored).toContain('channel_skip_reply')
   expect(stored).toContain('"passive":true')
   await first.t.cleanup({ keepDir: true })
   const second = setup({ cwd, responses: [fauxText('new input only')] })
@@ -254,7 +254,7 @@ test('supported passive files use the existing attachment store and preparation 
     responses: [
       (req) => {
         expect(req.lastUserText).toContain('brief.txt')
-        return fauxToolCall('lark_skip_reply', {})
+        return fauxToolCall('channel_skip_reply', {})
       },
       fauxText(''),
     ],
@@ -429,7 +429,7 @@ test('a passive session blocked by repeated storage failures stays operator-only
 
 test('a passive evaluation that stays silent never marks its trigger', async () => {
   const run = setup({
-    responses: [fauxToolCall('lark_skip_reply', {}), fauxText('')],
+    responses: [fauxToolCall('channel_skip_reply', {}), fauxText('')],
   })
   await run.start()
   run.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
@@ -472,7 +472,11 @@ test('a passive answer marks the trigger once text starts and leaves DONE on del
 test('a passive run that writes text and then stays silent removes the marker', async () => {
   const run = setup({
     responses: [
-      fauxToolCall('lark_skip_reply', {}, { text: 'I considered answering' }),
+      fauxToolCall(
+        'channel_skip_reply',
+        {},
+        { text: 'I considered answering' },
+      ),
       fauxText(''),
     ],
   })
@@ -498,7 +502,7 @@ test('a passive run that hands off to a topic removes the marker', async () => {
   const run = setup({
     responses: [
       fauxToolCall(
-        'lark_start_topic',
+        'channel_start_topic',
         {
           title: 'Investigate the pricing question',
           brief: 'Investigate the pricing question',

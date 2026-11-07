@@ -16,9 +16,9 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 const dispatchTools = [
-  'lark_start_topic',
-  'lark_forward_to_topic',
-  'lark_list_topics',
+  'channel_start_topic',
+  'channel_forward_to_topic',
+  'channel_list_topics',
 ]
 
 /** `[HH:MM] ` for a Lark create_time in the machine's local time */
@@ -86,14 +86,14 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   fake.deliver(larkEvent({ chat_id: 'dm', chat_type: 'p2p', mentions: [] }))
   await until(() => fake.sent.length === 3)
   for (const call of t.model.calls.slice(1)) {
-    expect(call.tools).not.toContain('lark_start_topic')
-    expect(call.tools).not.toContain('lark_forward_to_topic')
+    expect(call.tools).not.toContain('channel_start_topic')
+    expect(call.tools).not.toContain('channel_forward_to_topic')
     expect(call.tools).toContain('read_file')
   }
   // A topic can look around and hand off like the group session; a DM has no group to work in.
   const handoffTools = [
-    'lark_list_topics',
-    'lark_read_topic',
+    'channel_list_topics',
+    'channel_read_topic',
     'channel_message_topic',
     'channel_message_group',
   ]
@@ -129,12 +129,13 @@ test('a group work request becomes one topic with a title inside the prompt budg
   const restated =
     'Launch brief: launch on 12 November, cap spending at 700 credits, owner Morgan.'
   const respond = (req: FauxRequest) => {
-    if (!req.tools.includes('lark_start_topic')) return fauxText('brief ready')
+    if (!req.tools.includes('channel_start_topic'))
+      return fauxText('brief ready')
     // Without a title budget the eval's model answered the work request in the group.
     if (!req.system.includes('at most 40 characters')) return fauxText(restated)
     return req.toolResults.length
       ? fauxText('handed off')
-      : fauxToolCall('lark_start_topic', { title, brief })
+      : fauxToolCall('channel_start_topic', { title, brief })
   }
   const { fake, t, start } = setup(Array(4).fill(respond))
   await start()
@@ -155,7 +156,7 @@ test('a group work request becomes one topic with a title inside the prompt budg
       'must not be answered in the group',
     )
     const description =
-      t.internals.registry.get('lark_start_topic')?.description ?? ''
+      t.internals.registry.get('channel_start_topic')?.description ?? ''
     for (const phrase of [
       'at most 40 characters',
       'no requirements, method or status',
@@ -170,12 +171,12 @@ test('a group work request becomes one topic with a title inside the prompt budg
 
 test('starting a topic returns its receipt and frees the channel while its task is still running', async () => {
   const respond = (req: FauxRequest) => {
-    if (!req.tools.includes('lark_start_topic'))
+    if (!req.tools.includes('channel_start_topic'))
       return fauxToolCall('hold_pause', {})
     if (req.lastUserText.includes('second question'))
       return fauxText('second answer')
     if (req.toolResults.length) return fauxText('handed off')
-    return fauxToolCall('lark_start_topic', {
+    return fauxToolCall('channel_start_topic', {
       title: 'Investigate cobalt',
       brief: 'Investigate cobalt',
     })
@@ -216,7 +217,7 @@ test('starting a topic returns its receipt and frees the channel while its task 
     const topic = t.vela.session('lark-oc_group-task')
     expect(topic.isRunning).toBe(true)
     const taskCall = t.model.calls.find(
-      (call) => !call.tools.includes('lark_start_topic'),
+      (call) => !call.tools.includes('channel_start_topic'),
     )!
     // The brief comes first; the requester's own words follow verbatim, as in a Claude Projects thread.
     expect(taskCall.lastUserText).toBe(
@@ -249,11 +250,12 @@ test('a topic start posts only the short title and sends the long brief to the t
     if (req.lastUserText.includes('list the topics'))
       return req.toolResults.length
         ? fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
-        : fauxToolCall('lark_list_topics', {})
-    if (!req.tools.includes('lark_start_topic')) return fauxText('topic result')
+        : fauxToolCall('channel_list_topics', {})
+    if (!req.tools.includes('channel_start_topic'))
+      return fauxText('topic result')
     return req.toolResults.length
       ? fauxText('handed off')
-      : fauxToolCall('lark_start_topic', { title, brief })
+      : fauxToolCall('channel_start_topic', { title, brief })
   }
   const { fake, t, start } = setup(Array(6).fill(respond))
   await start()
@@ -267,10 +269,10 @@ test('a topic start posts only the short title and sends the long brief to the t
     await until(() => fake.topics.length === 1)
     expect(fake.topics).toEqual([{ messageId: 'long_brief', title }])
     await until(() =>
-      t.model.calls.some((call) => !call.tools.includes('lark_start_topic')),
+      t.model.calls.some((call) => !call.tools.includes('channel_start_topic')),
     )
     const topicCall = t.model.calls.find(
-      (call) => !call.tools.includes('lark_start_topic'),
+      (call) => !call.tools.includes('channel_start_topic'),
     )!
     expect(topicCall.lastUserText).toContain(`Alice: ${brief}`)
     fake.deliver(
@@ -299,8 +301,8 @@ test('a topic handoff keeps the handled mention out of the next group input and 
     if (req.lastUserText.includes('new question'))
       return fauxText('second answer')
     if (req.toolResults.length) return fauxText('handed off')
-    if (req.tools.includes('lark_start_topic'))
-      return fauxToolCall('lark_start_topic', {
+    if (req.tools.includes('channel_start_topic'))
+      return fauxToolCall('channel_start_topic', {
         title: 'Handle the request',
         brief: 'Handle the request',
       })
@@ -334,7 +336,7 @@ test('a topic handoff keeps the handled mention out of the next group input and 
     const second = t.model.calls.find(
       (call) =>
         call.lastUserText.includes('new question') &&
-        call.tools.includes('lark_start_topic'),
+        call.tools.includes('channel_start_topic'),
     )
     expect(second?.lastUserText).toBe(
       `[Chat since last reply]\n${at('4000')}Bob: check the tests` +
@@ -348,13 +350,13 @@ test('a topic handoff keeps the handled mention out of the next group input and 
 test('forwarding a channel message feeds the same-group topic once with original sender attribution', async () => {
   const { fake, t, start } = setup([
     fauxText('topic established'),
-    fauxToolCall('lark_forward_to_topic', { root_id: 'root' }),
+    fauxToolCall('channel_forward_to_topic', { root_id: 'root' }),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('forwarded')
         : fauxText('received'),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('forwarded')
         : fauxText('received'),
   ])
@@ -376,7 +378,7 @@ test('forwarding a channel message feeds the same-group topic once with original
   const call = t.model.calls.find(
     (req) =>
       req.lastUserText.includes('Bob: also inspect cobalt') &&
-      !req.tools.includes('lark_start_topic'),
+      !req.tools.includes('channel_start_topic'),
   )!
   expect(call).toBeDefined()
   expect(call.lastUserText.match(/also inspect cobalt/g)).toHaveLength(1)
@@ -385,7 +387,7 @@ test('forwarding a channel message feeds the same-group topic once with original
 
 test('a failed topic creation reports the API cause without starting a task', async () => {
   const { fake, t, start } = setup([
-    fauxToolCall('lark_start_topic', {
+    fauxToolCall('channel_start_topic', {
       title: 'Investigate',
       brief: 'Investigate',
     }),
@@ -410,7 +412,7 @@ test('a failed topic creation reports the API cause without starting a task', as
 test('forwarding rejects a topic from another enabled group before the platform call', async () => {
   const { fake, t, start } = setup([
     fauxText('other group task'),
-    fauxToolCall('lark_forward_to_topic', { root_id: 'other_root' }),
+    fauxToolCall('channel_forward_to_topic', { root_id: 'other_root' }),
     (req) => fauxText(JSON.stringify(req.toolResults)),
   ])
   await start()
@@ -434,13 +436,13 @@ test('forwarding rejects a topic from another enabled group before the platform 
 test('forwarded attachments are prepared from the original service message, not the forward receipt', async () => {
   const { fake, t, start } = setup([
     fauxText('topic established'),
-    fauxToolCall('lark_forward_to_topic', { root_id: 'root' }),
+    fauxToolCall('channel_forward_to_topic', { root_id: 'root' }),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('forwarded')
         : fauxText('file received'),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('forwarded')
         : fauxText('file received'),
   ])
@@ -468,13 +470,13 @@ test('forwarded attachments are prepared from the original service message, not 
   ])
   const input = t.model.calls.find(
     (req) =>
-      !req.tools.includes('lark_start_topic') &&
+      !req.tools.includes('channel_start_topic') &&
       req.lastUserText.includes('notes.txt'),
   )?.lastUserText
   expect(input).toContain('Bob: [file: notes.txt')
 })
 
-const listCall = () => fauxToolCall('lark_list_topics', {})
+const listCall = () => fauxToolCall('channel_list_topics', {})
 const listAnswer = (req: FauxRequest) =>
   fauxText(req.toolResults.at(-1)?.output ?? 'missing result')
 
@@ -614,13 +616,13 @@ test('an earlier-work follow-up has a disclosure instruction and puts its notice
     'The earlier topic could not be found. Continue investigating cobalt.'
   const { fake, t, start } = setup([
     listCall(),
-    fauxToolCall('lark_start_topic', { title: notice, brief: notice }),
+    fauxToolCall('channel_start_topic', { title: notice, brief: notice }),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('handed off')
         : fauxText('continued'),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('handed off')
         : fauxText('continued'),
   ])
@@ -660,11 +662,11 @@ test.each(['start', 'forward'] as const)(
     const { fake, t, start } = setup([
       ...(operation === 'forward' ? [fauxText('target established')] : []),
       operation === 'start'
-        ? fauxToolCall('lark_start_topic', {
+        ? fauxToolCall('channel_start_topic', {
             title: 'cancelled task',
             brief: 'cancelled task',
           })
-        : fauxToolCall('lark_forward_to_topic', { root_id: 'target' }),
+        : fauxToolCall('channel_forward_to_topic', { root_id: 'target' }),
       fauxText('must not run'),
     ])
     const create = fake.transport.startTopic
@@ -719,16 +721,16 @@ test.each(['start', 'forward'] as const)(
 
 test('a screenshot post handoff carries trigger images without copying group history images', async () => {
   const { fake, t, start } = setup([
-    fauxToolCall('lark_start_topic', {
+    fauxToolCall('channel_start_topic', {
       title: 'Fix the broken page in this screenshot',
       brief: 'Fix the broken page in this screenshot',
     }),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('handed off')
         : fauxText('fixed'),
     (req) =>
-      req.tools.includes('lark_start_topic')
+      req.tools.includes('channel_start_topic')
         ? fauxText('handed off')
         : fauxText('fixed'),
   ])
@@ -797,13 +799,13 @@ test('a newly dispatched topic can be listed and forwarded to while its initial 
   const storage = memorySessionStorage()
   const { fake, t, start } = setup(
     [
-      fauxToolCall('lark_start_topic', {
+      fauxToolCall('channel_start_topic', {
         title: 'Investigate cobalt',
         brief: 'Investigate cobalt',
       }),
       listCall(),
       fauxText('listed'),
-      fauxToolCall('lark_forward_to_topic', { root_id: 'source' }),
+      fauxToolCall('channel_forward_to_topic', { root_id: 'source' }),
       fauxText('forwarded'),
       fauxText('first topic answer'),
       fauxText('forwarded input answer'),
@@ -875,7 +877,7 @@ test('topic overview reports running, durable waiting, then done with requester 
       fauxToolCall('hold_pause', {}),
       listCall(),
       listAnswer,
-      fauxToolCall('lark_wait_for_input', {
+      fauxToolCall('channel_wait_for_input', {
         reason: 'Which release should I use?',
       }),
       fauxText('Which release should I use?'),
