@@ -142,6 +142,7 @@ interface ChannelRun {
 }
 
 interface FeedbackOptions {
+  changed: (key: string) => void
   directory: ChannelDirectory
   recovery: ChannelRecovery
   stopped: () => boolean
@@ -296,6 +297,7 @@ export class RunFeedback {
   private async stopRun(run: ChannelRun): Promise<void> {
     run.stopped = true
     run.lifetime.abort()
+    this.options.changed(run.key)
     // These inputs belong to the cancelled run; the gateway's default queue stays intact.
     run.session.clearQueue()
     await Promise.all([
@@ -438,6 +440,7 @@ export class RunFeedback {
       inputs,
     }
     this.runs.set(id, run)
+    this.options.changed(id)
     let feedbackErrorReported = false
     const report = async (error: unknown) => {
       if (feedbackErrorReported) return
@@ -460,7 +463,10 @@ export class RunFeedback {
       } catch (error) {
         pending.push(report(error))
       }
-      if (event.type === 'agent_settled') run.lifetime.abort()
+      if (event.type === 'agent_settled') {
+        run.lifetime.abort()
+        this.options.changed(id)
+      }
     })
     let outcome: ChannelOutcome = 'done'
     let answer = ''
@@ -545,6 +551,7 @@ export class RunFeedback {
       await Promise.all(pending)
       this.runs.delete(id)
       this.active.delete(session)
+      this.options.changed(id)
     }
     await this.options.recovery.settled(session)
     if (run.handedOff) {
@@ -582,7 +589,7 @@ export class RunFeedback {
       )
       await this.options.finished(id, msg, outcome, answer)
     }
-    return outcome
+    return msg.passive && outcome === 'done' && !answer ? 'silent' : outcome
   }
 }
 

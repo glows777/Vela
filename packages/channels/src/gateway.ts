@@ -23,6 +23,7 @@ import { ChannelTopics } from './topics.ts'
 import type {
   ChannelDefinition,
   ChannelOutcome,
+  ChannelSessionUpdate,
   IncomingMessage,
   OutgoingMessage,
 } from './types.ts'
@@ -104,6 +105,7 @@ export class ChannelGateway {
     this.feedback = new RunFeedback({
       directory: this.directory,
       recovery: this.recovery,
+      changed: (key) => this.sessionChanged(key),
       stopped: () => this.stopped,
       channel: (name) => this.channels.get(name),
       find: (id) => this.find(id),
@@ -116,6 +118,7 @@ export class ChannelGateway {
     this.commands = new TopicCommands({
       directory: this.directory,
       feedback: this.feedback,
+      changed: (key) => this.sessionChanged(key),
       admission: this.admission,
       usage: this.usage,
       stopped: () => this.stopped,
@@ -155,13 +158,7 @@ export class ChannelGateway {
         if (record.rootId)
           this.runtimes
             .get(record.channel)
-            ?.status(
-              { chatId: record.chatId, rootId: record.rootId, text },
-              (error) =>
-                this.logger.warn(
-                  `[channels] Status listener failed: ${errorMessage(error)}`,
-                ),
-            )
+            ?.status({ chatId: record.chatId, rootId: record.rootId, text })
       },
     )
     this.topicTools = new ChannelTopics((id) => {
@@ -194,6 +191,12 @@ export class ChannelGateway {
         : (this.directory.get(id)?.state ?? 'done')
   }
 
+  private sessionChanged(key: string, run?: ChannelSessionUpdate['run']): void {
+    const record = this.directory.get(key)
+    if (!record) return
+    this.runtimes.get(record.channel)?.session(key, record.chatId, run)
+  }
+
   private find(key: string): VelaSession | undefined {
     return this.options.find(this.directory.sessionId(key))
   }
@@ -202,6 +205,7 @@ export class ChannelGateway {
     this.channels.set(channel.name, channel)
 
     const runtime = new ScopedChannelRuntime({
+      logger: this.logger,
       channel,
       directory: this.directory,
       dataDir: this.options.dataDir ?? process.cwd(),
@@ -260,12 +264,13 @@ export class ChannelGateway {
           run.skipReply = true
         },
         topics: (chatId) => this.topics(channel.name, chatId),
-        waitForInput: (id, reason) => {
+        waitForInput: async (id, reason) => {
           const key = this.directory.keyForSession(id)
           const run = this.feedback.runs.get(key)
           if (!run || run.session.id !== id || !this.feedback.runIsLive(run))
             throw new Error('The topic run has ended')
-          return this.directory.waitForInput(key, reason)
+          await this.directory.waitForInput(key, reason)
+          this.sessionChanged(key)
         },
         dispatch: (id, msg, label) => {
           const source = this.feedback.runs.get(
@@ -476,6 +481,7 @@ export class ChannelGateway {
           if (!(await this.admission.admit(id, channel, msg))) return false
         }
         await this.directory.admit(id, channelName, msg)
+        this.sessionChanged(id)
         this.logger.debug(
           `[${channelName}] input ${msg.replyToId ?? '-'} admitted at=${new Date().toISOString()}`,
         )
@@ -497,6 +503,7 @@ export class ChannelGateway {
     void next.then(() => {
       if (this.queues.get(id) !== next) return
       this.queues.delete(id)
+      this.sessionChanged(id)
       this.closeWhenIdle(id)
     })
   }
@@ -563,6 +570,7 @@ export class ChannelGateway {
     recovered = false,
   ): Promise<void> {
     const processing = this.commands.begin(id)
+    this.sessionChanged(id, { type: 'started', runId: processing.runId })
     let outcome: ChannelOutcome | undefined = 'failed'
     try {
       outcome = await this.processRun(
@@ -576,6 +584,11 @@ export class ChannelGateway {
       await this.feedback.feedbackError(channelName, msg, error)
     } finally {
       this.commands.end(id, processing)
+      this.sessionChanged(id, {
+        type: 'finished',
+        runId: processing.runId,
+        outcome: outcome ?? 'done',
+      })
       if (outcome)
         await Promise.all(
           (this.feedback.acknowledgements.get(msg) ?? []).map((input) =>

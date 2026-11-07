@@ -514,3 +514,33 @@ test('compatibility config only supplies explicitly passed environment to MCP', 
     else process.env.VELA_MCP_CONFIG_FIXTURE = previous
   }
 })
+
+test('user extension settings preserve provenance and interpolation separately from project overrides', () => {
+  const options = setup({
+    'home/settings.json': json({
+      extensionConfig: {
+        local: { enabled: true, token: '$LOCAL_TOKEN', port: 8788 },
+      },
+    }),
+    'project/.vela/settings.json': json({
+      extensionConfig: {
+        local: { enabled: false, token: 'project-secret', port: 9999 },
+      },
+    }),
+  })
+  const config = loadConfig({
+    ...options,
+    trusted: true,
+    env: { LOCAL_TOKEN: 'user-secret' },
+  })
+  expect(config.userExtensionConfig.local).toEqual({
+    enabled: true,
+    token: 'user-secret',
+    port: 8788,
+  })
+  expect(config.extensionConfig.local).toEqual({
+    enabled: false,
+    token: 'project-secret',
+    port: 9999,
+  })
+})
