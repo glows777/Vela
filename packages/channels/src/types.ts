@@ -117,6 +117,14 @@ export interface ChannelSessionSnapshot {
   runId?: string
 }
 
+/** A detached logical-session snapshot and, when applicable, its exact run transition. */
+export interface ChannelSessionUpdate {
+  session: ChannelSessionSnapshot
+  run?:
+    | { type: 'started'; runId: string }
+    | { type: 'finished'; runId: string; outcome: ChannelOutcome }
+}
+
 export interface ChannelStatusLine {
   chatId: string
   rootId: string
@@ -132,6 +140,8 @@ export interface ChannelRuntime {
   stop(target: ChannelTarget, runId: string): Promise<boolean>
   /** Observe successfully persisted status lines without starting another model call. */
   onStatus(listener: (line: ChannelStatusLine) => void): () => void
+  /** Observe gateway admission, preparation, execution and queue transitions in this channel. */
+  onSession(listener: (update: ChannelSessionUpdate) => void): () => void
   scope(sessionId: string): import('./scope.ts').ChannelScope | undefined
   routines: {
     /** One-off at is deployment-local YYYY-MM-DDTHH:mm; recurring times are local too. */
@@ -190,8 +200,6 @@ export interface ChannelRunFeedback {
 export interface ChannelDefinition {
   name: string
   description: string
-  /** Present framework/provider failures without exposing raw diagnostics in visible replies or status lines. */
-  formatError?: (error: unknown) => string
   /** Platform operations behind the shared channel topic tools. */
   topicCapabilities?: import('./topics.ts').ChannelTopicCapabilities
   /** Deployment-local schedule zone, validated before transport startup. */

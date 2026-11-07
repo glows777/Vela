@@ -72,7 +72,6 @@
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
-    formatError?: ((error: unknown) => string) | undefined
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined

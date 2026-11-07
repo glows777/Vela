@@ -140,6 +140,35 @@ try {
     }),
   )
   check('SSE publishes settled task state', true)
+  for (const sessionId of [project.sessionId, task!.sessionId]) {
+    const runEvents = (type: string) =>
+      events.filter(
+        (event) =>
+          event.event === type &&
+          (event.data as { sessionId?: string }).sessionId === sessionId,
+      )
+    await until(() => runEvents('run_finished').length === 1)
+    const started = runEvents('run_started')
+    const finished = runEvents('run_finished')
+    const start = started[0]?.data as { runId?: string }
+    const finish = finished[0]?.data as { runId?: string }
+    check(
+      `exact lifecycle for ${sessionId}`,
+      started.length === 1 && !!start.runId && start.runId === finish.runId,
+    )
+  }
+  const settled = await client.request<{
+    sessions: { sessionId: string; state: string; runId?: string }[]
+  }>(path)
+  check(
+    'settled task snapshot has no expired Stop target',
+    settled.sessions.some(
+      (session) =>
+        session.sessionId === task!.sessionId &&
+        session.state === 'done' &&
+        session.runId === undefined,
+    ),
+  )
 
   const historyPath = `${path}/${task!.sessionId}/messages`
   const history = await client.request(historyPath)

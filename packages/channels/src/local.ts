@@ -10,6 +10,7 @@ import type {
   LocalSession,
 } from './local-protocol.ts'
 import { LocalStore } from './local-store.ts'
+import { errorMessage } from './log.ts'
 import { channelSessionId } from './session-id.ts'
 import { topicSessionOptions } from './topics.ts'
 import type {
@@ -55,9 +56,8 @@ class LocalChannel implements ChannelDefinition {
   private runtime!: ChannelRuntime
   private http?: LocalHttp
   private unsubscribe?: () => void
-  private readonly runs = new Map<string, string>()
   private readonly observed = new WeakSet<object>()
-  private readonly deferred = new Map<string, ReturnType<typeof setTimeout>>()
+  private unsubscribeSession?: () => void
   private readonly epoch = new Date().toISOString()
 
   constructor(
@@ -66,9 +66,6 @@ class LocalChannel implements ChannelDefinition {
     private logger: VelaLogger,
   ) {
     this.store = new LocalStore(dataDir)
-  }
-  formatError(): string {
-    return 'See daemon diagnostics for details'
   }
 
   get timezone(): string | undefined {
@@ -90,6 +87,26 @@ class LocalChannel implements ChannelDefinition {
         },
       )
     })
+    this.unsubscribeSession = this.runtime.onSession(({ session, run }) => {
+      const address = {
+        projectId: session.chatId,
+        sessionId: session.sessionId,
+      }
+      this.events.publish(
+        { type: 'session', data: { ...session, channel: 'local' } },
+        { ...address, runId: session.runId },
+      )
+      if (run?.type === 'started')
+        this.events.publish(
+          { type: 'run_started', data: {} },
+          { ...address, runId: run.runId },
+        )
+      if (run?.type === 'finished')
+        this.events.publish(
+          { type: 'run_finished', data: { outcome: run.outcome } },
+          { ...address, runId: run.runId },
+        )
+    })
     this.http = new LocalHttp(
       this.options,
       {
@@ -107,8 +124,7 @@ class LocalChannel implements ChannelDefinition {
 
   async stop(): Promise<void> {
     this.unsubscribe?.()
-    for (const timer of this.deferred.values()) clearTimeout(timer)
-    this.deferred.clear()
+    this.unsubscribeSession?.()
     await this.http?.stop()
   }
 
@@ -165,7 +181,6 @@ class LocalChannel implements ChannelDefinition {
         requireExistingSession: !!session.topic,
       })
       this.visible(project.id, message)
-      this.publishSession(project.id, session.sessionId)
       return { ...receipt, messageId: message.id }
     } catch (error) {
       await this.store.remove(project.id, message.id)
@@ -249,71 +264,32 @@ class LocalChannel implements ChannelDefinition {
       message.topic?.rootId,
     )
     const projectId = message.channelId
-    let runId: string | undefined
     return {
       event: (update) => {
         if (update.type !== 'agent') return // Hub inputs queue; task steering belongs to the gateway.
-        const snapshot = this.runtime
-          .sessions(projectId)
-          .find((session) => session.sessionId === sessionId)
-        runId ??= snapshot?.runId
-        if (runId && this.runs.get(sessionId) !== runId) {
-          this.runs.set(sessionId, runId)
-          this.events.publish(
-            { type: 'run_started', data: {} },
-            { projectId, sessionId, runId },
-          )
-          this.publishSession(projectId, sessionId)
-        }
+        // Steering inputs can share an event. Project it once, without tracking run lifetimes here.
         if (this.observed.has(update.event)) return
         this.observed.add(update.event)
-        const data = localProgress(update.event)
-        if (data)
-          this.events.publish(
-            { type: 'progress', data },
-            { projectId, sessionId, runId },
-          )
-      },
-      finish: async (outcome) => {
-        if (runId && this.runs.get(sessionId) === runId) {
-          this.runs.delete(sessionId)
-          this.events.publish(
-            { type: 'run_finished', data: { outcome } },
-            { projectId, sessionId, runId },
-          )
-        }
-        if (outcome === 'failed')
+        if (update.event.type === 'channel_error' && !update.event.aborted)
           this.events.publish(
             {
               type: 'error',
               data: {
                 code: 'run_failed',
-                message:
-                  'Run failed. Reload visible history and inspect daemon diagnostics.',
+                message: `Task failed: ${errorMessage(update.event.error)}`,
               },
             },
-            { projectId, sessionId, runId },
+            { projectId, sessionId },
           )
-        this.observeSettled(projectId, sessionId)
+        const data = localProgress(update.event)
+        if (data)
+          this.events.publish(
+            { type: 'progress', data },
+            { projectId, sessionId },
+          )
       },
+      finish: async () => {}, // Gateway onSession owns preparation, execution and queue lifetimes.
     }
-  }
-
-  private observeSettled(projectId: string, sessionId: string): void {
-    clearTimeout(this.deferred.get(sessionId))
-    // Feedback finishes before the gateway commits status and releases its queue. Observe,
-    // never drive, that boundary; a later run's start also ends this observer.
-    const timer = setTimeout(() => {
-      this.deferred.delete(sessionId)
-      const snapshot = this.runtime
-        .sessions(projectId)
-        .find((item) => item.sessionId === sessionId)
-      if (snapshot?.state === 'queued' && !snapshot.runId)
-        this.observeSettled(projectId, sessionId)
-      else this.publishSession(projectId, sessionId)
-    }, 10)
-    timer.unref?.()
-    this.deferred.set(sessionId, timer)
   }
 
   private visible(projectId: string, message: LocalMessage): void {
@@ -321,16 +297,5 @@ class LocalChannel implements ChannelDefinition {
       { type: 'message', data: message },
       { projectId, sessionId: message.sessionId },
     )
-  }
-
-  private publishSession(projectId: string, sessionId: string): void {
-    const session = this.runtime
-      .sessions(projectId)
-      .find((item) => item.sessionId === sessionId)
-    if (session)
-      this.events.publish(
-        { type: 'session', data: { ...session, channel: 'local' } },
-        { projectId, sessionId, runId: session.runId },
-      )
   }
 }

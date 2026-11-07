@@ -5,6 +5,7 @@ import { hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { local } from '@glows777/vela-channels'
 import { drainChannels } from '@glows777/vela-channels/testing'
+import { memorySessionStorage } from '@glows777/vela-core'
 import {
   type FauxRequest,
   fauxError,
@@ -470,9 +471,9 @@ test('human task input automatically steers the current run', async () => {
   }
 })
 
-test('Local provider failures never expose raw error details through history, status or SSE', async () => {
+test('Local provider failures keep actionable operator details in visible history and SSE', async () => {
   const { t, client } = await setup({
-    responses: [fauxError('PRIVATE_PROVIDER_ERROR_992 token=private-api-key')],
+    responses: [fauxError('Invalid API key')],
     limits: { maxRetries: 0 },
   })
   const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
@@ -481,10 +482,140 @@ test('Local provider failures never expose raw error details through history, st
     await client.request(`${sessionPath(project)}/messages`, { text: 'hello' })
     await drainChannels(t.vela)
     const history = await messages(client, project)
-    expect(history.some((message) => message.role === 'assistant')).toBe(true)
-    expect(JSON.stringify(history)).not.toContain('PRIVATE_PROVIDER_ERROR_992')
-    expect(JSON.stringify(history)).not.toContain('private-api-key')
-    expect(JSON.stringify(watch.events)).not.toContain('private-api-key')
+    expect(history).toContainEqual(
+      expect.objectContaining({
+        role: 'assistant',
+        text: 'Task failed: Invalid API key',
+      }),
+    )
+    await until(() => watch.events.some((event) => event.event === 'error'))
+    expect(
+      watch.events.find((event) => event.event === 'error')?.data,
+    ).toMatchObject({
+      data: { code: 'run_failed', message: 'Task failed: Invalid API key' },
+    })
+  } finally {
+    await watch.close()
+  }
+})
+
+function latch() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+
+test('Local SSE offers Stop during preparation and reports its queued successor without polling', async () => {
+  const held = latch()
+  const entered = latch()
+  const storage = memorySessionStorage()
+  const { t, client } = await setup({
+    responses: [fauxText('Queued after preparation Stop')],
+    allowPendingResponses: true,
+    sessionStorage: {
+      ...storage,
+      async load(id) {
+        if (id.startsWith('local-')) {
+          entered.release()
+          await held.promise
+        }
+        return storage.load(id)
+      },
+    },
+  })
+  const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
+  const watch = await watchLocal(client, project.id)
+  try {
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'Hold preparation',
+    })
+    await entered.promise
+    await until(
+      () => watch.events.some((event) => event.event === 'run_started'),
+      'preparation run_started',
+    )
+    const first = watch.events.find((event) => event.event === 'run_started')!
+      .data as { runId: string }
+    expect(first.runId).toBeTruthy()
+    expect(t.model.calls).toHaveLength(0)
+    expect(
+      watch.events.some(
+        (event) =>
+          event.event === 'session' &&
+          (event.data as { data?: { runId?: string } }).data?.runId ===
+            first.runId,
+      ),
+    ).toBe(true)
+    await client.request(`${sessionPath(project)}/stop`, { runId: first.runId })
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'Queue next',
+    })
+    held.release()
+    await drainChannels(t.vela)
+    await until(
+      () =>
+        watch.events.filter((event) => event.event === 'run_finished')
+          .length === 2,
+      'both lifecycle finishes',
+    )
+    const starts = watch.events
+      .filter((event) => event.event === 'run_started')
+      .map((event) => event.data as { runId: string })
+    const finishes = watch.events
+      .filter((event) => event.event === 'run_finished')
+      .map(
+        (event) => event.data as { runId: string; data: { outcome: string } },
+      )
+    expect(starts).toHaveLength(2)
+    expect(starts[1]!.runId).not.toBe(first.runId)
+    expect(finishes.map((event) => [event.runId, event.data.outcome])).toEqual([
+      [first.runId, 'stopped'],
+      [starts[1]!.runId, 'done'],
+    ])
+    expect(t.model.calls).toHaveLength(1)
+    expect(await messages(client, project)).toContainEqual(
+      expect.objectContaining({ text: 'Queued after preparation Stop' }),
+    )
+  } finally {
+    held.release()
+    await watch.close()
+  }
+})
+
+test('Local SSE finishes a preparation failure before any model event', async () => {
+  const storage = memorySessionStorage()
+  const { t, client } = await setup({
+    sessionStorage: {
+      ...storage,
+      async load(id) {
+        if (id.startsWith('local-'))
+          throw new Error('Project session storage unavailable')
+        return storage.load(id)
+      },
+    },
+  })
+  const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
+  const watch = await watchLocal(client, project.id)
+  try {
+    await client.request(`${sessionPath(project)}/messages`, {
+      text: 'Read project',
+    })
+    await drainChannels(t.vela)
+    await until(
+      () => watch.events.some((event) => event.event === 'run_finished'),
+      'preparation failure lifecycle',
+    )
+    const started = watch.events.find((event) => event.event === 'run_started')!
+      .data as { runId: string }
+    expect(
+      watch.events.find((event) => event.event === 'run_finished')?.data,
+    ).toMatchObject({ runId: started.runId, data: { outcome: 'failed' } })
+    expect(JSON.stringify(await messages(client, project))).toContain(
+      'Project session storage unavailable',
+    )
+    expect(t.model.calls).toHaveLength(0)
   } finally {
     await watch.close()
   }

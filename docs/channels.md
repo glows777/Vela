@@ -81,7 +81,7 @@ A project supplies its hub `sessionId`. The sessions endpoint also returns task 
 
 The registry, deployment ID and visible messages persist under `<dataDir>/local/`; logical channel sessions and core transcripts use the existing channel/session stores. Reconnect or restart against the **same deployment and data directory** to retain identity and history. The CLI's existing default data directory depends on the cwd from which `vela serve` starts, so keep its working directory and data configuration stable. Opening another Local project does not switch the daemon's data directory. A different data directory is a different deployment, even if the same project paths are opened. No existing Lark data or settings migrate for Local.
 
-Visible history contains human messages, delivered assistant replies and visible system text such as task titles or reminders. It is not the core transcript: hidden handoff briefs, internal notes, thinking, tool arguments and tool results are not included. Replies persist even when no SSE client is connected. Progress is a sanitized summary, not a raw model stream; provider/framework failures use safe client-facing text rather than raw diagnostics. Operator diagnostics remain separate. This is not a content filter for normal assistant replies or user-authored text.
+Visible history contains human messages, delivered assistant replies and visible system text such as task titles or reminders. It is not the core transcript: hidden handoff briefs, internal notes, thinking, tool arguments and tool results are not included. Replies persist even when no SSE client is connected. Progress is an allowlisted summary, not a raw model stream. Provider/framework failures retain useful error messages, as on Lark; Local does not mask these failures in visible replies or status lines. Operator diagnostics remain separate. This is not a content filter for assistant replies, errors or user-authored text.
 
 ### HTTP v1 reference
 
@@ -102,7 +102,7 @@ Request constraints:
 
 - `cwd` must be nonempty and resolve to an existing directory. `name`, if provided, is trimmed and must be 1–200 characters.
 - `text` is trimmed and must be 1–100,000 characters. `clientMessageId`, if provided, must be 1–200 characters. `runId` must be 1–200 characters.
-- History is oldest-first, with `limit` defaulting to 50 and accepting integers 1–100. `after` is exclusive and must name a message in that session. Follow `nextCursor` until absent to finish the snapshot; retain the last message ID to request later additions. An unknown cursor is an error, not an empty page.
+- History is oldest-first, with `limit` defaulting to 50 and accepting integers 1–100. `after` is exclusive and must name a message in that session. Follow `nextCursor` until absent to finish the snapshot; retain the last message ID to request later additions. An unknown cursor is an error, not an empty page. There is no `before` cursor or newest-first pagination.
 - A session must belong to the project in the URL. Task IDs cannot be used to target another project.
 
 Response types (optional fields are omitted when unavailable):
@@ -172,13 +172,17 @@ type LocalEvent = {
 | `status` | `{ text: string }` |
 | `error` | `{ code: string, message: string }` |
 
-Tool progress includes only a sanitized tool name (up to 80 characters) and start/finish/failure state; it contains no arguments or results. Retry progress has only `stage: "retry"`. Compaction has start/finish state. A failed run can emit `error` with `code: "run_failed"` and generic text. Status events report saved task status lines, not an additional model response.
+Tool progress includes only a sanitized tool name (up to 80 characters) and start/finish/failure state; it contains no arguments or results. Retry progress has only `stage: "retry"`. Compaction has start/finish state. A failed run can emit `error` with `code: "run_failed"` and its useful failure message. Status events report saved task status lines, not an additional model response.
+
+Session and run events come directly from the shared gateway observer, not periodic polling or inferred model events. `run_started` carries the actual run ID when preparation begins, before model work, so Stop is available during preparation. `run_finished` carries that same ID and the actual outcome, including failed or stopped preparation. A hub dispatch run finishes independently of its child task; wait for the task session or its status to observe task completion. Queue release publishes a final session snapshot without the expired run ID. Progress and error envelopes may omit `runId` when it is unavailable; do not infer lifecycle from them.
 
 Every connection, including the first, begins with `reset`. **There is no event replay; `Last-Event-ID` is ignored.** Event IDs are opaque identifiers, not history cursors or a resumable sequence. On every reset, reload session and visible-message snapshots. Keep live events buffered while loading and reconcile messages by message ID, then refresh sessions after loading if necessary. Do not infer missed replies from missing terminal events. Use `deploymentId` from `/v1/info` to detect a different store and discard stale cached IDs.
 
 The server sends a comment heartbeat (`: heartbeat`) every 15 seconds. It disconnects a slow client as soon as a socket write reports backpressure, rather than buffering indefinitely or blocking model delivery. Reconnect with backoff and reload on reset. A disconnected subscriber does not prevent replies from being saved. Filtering by `projectId` limits live events to that existing project; it is not a separate authorization scope.
 
 ### Script client examples
+
+The runnable [TypeScript client](../examples/local-client.ts) demonstrates snapshot loading and one observed run lifetime: its CLI exits on the first `run_finished`. A hub can finish dispatching before its child task completes. To track that work to completion, keep observing the task session and its status, then reload its visible history.
 
 These shell examples require `curl`, `jq` and an already-running daemon. The client must receive the same `VELA_LOCAL_TOKEN` securely. First check the deployment, open the current directory and submit to its hub:
 

@@ -142,6 +142,7 @@ interface ChannelRun {
 }
 
 interface FeedbackOptions {
+  changed: (key: string) => void
   directory: ChannelDirectory
   recovery: ChannelRecovery
   stopped: () => boolean
@@ -296,6 +297,7 @@ export class RunFeedback {
   private async stopRun(run: ChannelRun): Promise<void> {
     run.stopped = true
     run.lifetime.abort()
+    this.options.changed(run.key)
     // These inputs belong to the cancelled run; the gateway's default queue stays intact.
     run.session.clearQueue()
     await Promise.all([
@@ -410,7 +412,7 @@ export class RunFeedback {
       await this.options.channel(channelName)?.send({
         ...msg,
         recipientId: msg.senderId,
-        text: `Couldn't update task feedback: ${this.options.channel(channelName)?.formatError?.(error) ?? errorMessage(error)}. Check the bot's permissions and connection.`,
+        text: `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
       })
     } catch (sendError) {
       this.options.logger.error(
@@ -438,6 +440,7 @@ export class RunFeedback {
       inputs,
     }
     this.runs.set(id, run)
+    this.options.changed(id)
     let feedbackErrorReported = false
     const report = async (error: unknown) => {
       if (feedbackErrorReported) return
@@ -460,7 +463,10 @@ export class RunFeedback {
       } catch (error) {
         pending.push(report(error))
       }
-      if (event.type === 'agent_settled') run.lifetime.abort()
+      if (event.type === 'agent_settled') {
+        run.lifetime.abort()
+        this.options.changed(id)
+      }
     })
     let outcome: ChannelOutcome = 'done'
     let answer = ''
@@ -499,7 +505,7 @@ export class RunFeedback {
             session,
             channelName,
             msg,
-            `Couldn't show the topic Stop control: ${channel.formatError?.(error) ?? errorMessage(error)}. Check the bot's send permission and retry.`,
+            `Couldn't show the topic Stop control: ${errorMessage(error)}. Check the bot's send permission and retry.`,
           )
           throw error
         }
@@ -529,8 +535,7 @@ export class RunFeedback {
           this.options.logger.error(
             `[${channelName}] Passive evaluation failed: ${errorMessage(error)}`,
           )
-        else
-          answer = `Task failed: ${channel?.formatError?.(error) ?? errorMessage(error)}`
+        else answer = `Task failed: ${errorMessage(error)}`
       }
       publishChannelEvent(session, {
         type: 'channel_error',
@@ -546,6 +551,7 @@ export class RunFeedback {
       await Promise.all(pending)
       this.runs.delete(id)
       this.active.delete(session)
+      this.options.changed(id)
     }
     await this.options.recovery.settled(session)
     if (run.handedOff) {
@@ -583,7 +589,7 @@ export class RunFeedback {
       )
       await this.options.finished(id, msg, outcome, answer)
     }
-    return outcome
+    return msg.passive && outcome === 'done' && !answer ? 'silent' : outcome
   }
 }
 
