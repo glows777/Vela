@@ -58,22 +58,17 @@ export function githubOrigin(value: string): string {
     url.username ||
     url.password ||
     url.protocol !== 'https:' ||
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    /^127\./.test(host) ||
-    host === '0.0.0.0' ||
-    host === '[::]' ||
-    host === '[::1]' ||
-    /^\[::ffff:(?:7f[0-9a-f]{2}:|0:0\])/.test(host)
+    host === 'localhost'
   )
     throw new Error(
-      'The public URL must be an HTTPS origin, not a local or loopback address, and have no credentials',
+      'The public URL must be an HTTPS origin, not localhost, and have no credentials',
     )
   return url.origin
 }
 
 /** Keep saved expressions intact; only the gh payload gets the expanded value. */
 function secretValue(raw: string, env: NodeJS.ProcessEnv): string {
+  // Do not reuse core's interpolate: missing variables must throw, not become empty strings.
   const value = raw.replace(
     /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
     (match, braced: string | undefined, bare: string | undefined) => {
@@ -137,10 +132,7 @@ export function prepareGithubSettings(
   if (github.secret !== undefined && typeof github.secret !== 'string')
     throw new Error('eventReceiver.github.secret must be a string')
   const stored =
-    (github.secret as string | undefined) ??
-    randomBytes(32)
-      .toString('hex')
-      .replace(/\$/g, () => '$$')
+    (github.secret as string | undefined) ?? randomBytes(32).toString('hex')
   const secret = secretValue(stored, env)
   const updated = {
     ...settings,
