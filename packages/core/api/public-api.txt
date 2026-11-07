@@ -146,7 +146,7 @@
     timedOut?: boolean | undefined
     toolUnavailable?: boolean | undefined
   interface ExtensionAPI
-    on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
     onShutdown: (handler: () => void | Promise<void>) => void
     readonly config: Readonly<Record<string, unknown>>
     readonly cwd: string
@@ -206,6 +206,9 @@
     cancelled: boolean
     selectedText?: string | undefined
     session?: VelaSession | undefined
+  type HostedToolModel = Exclude<LanguageModel, string> & {
+      hostedTools?: (options?: { reasoning?: string }) => Promise<ToolSet>
+      }
   interface ImageContent
     data: string
     mimeType: string
@@ -274,7 +277,12 @@
     parentId: string | null
     timestamp: string
     type: "model_change"
+  interface ModelCompat
+    hostedTools?: "web_search"[] | undefined
+    includeWebSearchSources?: boolean | undefined
+    store?: boolean | undefined
   interface ModelInfo
+    compat?: ModelCompat | undefined
     contextWindow?: number | undefined
     cost?: ModelPricing | undefined
     id: string
@@ -294,6 +302,7 @@
     input: number
     output: number
   interface ModelSpec
+    compat?: ModelCompat | undefined
     contextWindow?: number | undefined
     cost?: ModelPricing | undefined
     id: string
@@ -342,6 +351,7 @@
     api?: ProviderApi | undefined
     apiKey?: string | undefined
     baseUrl?: string | undefined
+    compat?: ModelCompat | undefined
     headers?: Record<string, string> | undefined
     models?: ModelSpec[] | undefined
   interface ProviderContext
@@ -351,7 +361,7 @@
   interface ProviderDefinition
     apiKeyLogin?: boolean | undefined
     authSource?: ((credential: Credential | undefined) => string | undefined) | undefined
-    createModel: (id: string, ctx: ProviderContext) => LanguageModel
+    createModel: (id: string, ctx: ProviderContext) => LanguageModel | HostedToolModel
     defaultModel?: string | undefined
     models?: ModelSpec[] | undefined
     oauth?: OAuthLogin | undefined
@@ -556,6 +566,7 @@
     execute: (input: any, context?: ToolContext) => Promise<unknown>
     executionMode?: ToolExecutionMode | undefined
     exposure?: ToolExposure | undefined
+    hostedOnly?: true | undefined
     inputSchema: FlexibleSchema<any>
     maxResultChars?: number | undefined
     name: string
@@ -1051,7 +1062,7 @@
     onUpdate?: ((partialResult: unknown) => void) | undefined
     signal?: AbortSignal | undefined
   interface ExtensionAPI
-    on: <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>) => () => void
+    on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
     onShutdown: (handler: () => void | Promise<void>) => void
     readonly config: Readonly<Record<string, unknown>>
     readonly cwd: string
@@ -1224,6 +1235,7 @@
     execute: (input: any, context?: ToolContext) => Promise<unknown>
     executionMode?: ToolExecutionMode | undefined
     exposure?: ToolExposure | undefined
+    hostedOnly?: true | undefined
     inputSchema: FlexibleSchema<any>
     maxResultChars?: number | undefined
     name: string

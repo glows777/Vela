@@ -267,15 +267,68 @@ export function withoutForeignReasoning(
   producer: string,
   producedBy: ReadonlyMap<ModelMessage, string>,
 ): ModelMessage[] {
+  const foreignHosted = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'assistant' || typeof message.content === 'string')
+      continue
+    const owner = producedBy.get(message)
+    if (owner === undefined || owner === producer) continue
+    for (const part of message.content)
+      if (part.type === 'tool-call' && part.providerExecuted)
+        foreignHosted.add(part.toolCallId)
+  }
   return messages.flatMap((message) => {
+    if (message.role === 'tool') {
+      const hostedResults = message.content.filter(
+        (part): part is ToolResultPart =>
+          part.type === 'tool-result' && foreignHosted.has(part.toolCallId),
+      )
+      if (!hostedResults.length) return [message]
+      const remaining = message.content.filter(
+        (part) =>
+          part.type !== 'tool-result' || !foreignHosted.has(part.toolCallId),
+      )
+      const text = hostedResults
+        .map(
+          (part) =>
+            `Provider search result: ${JSON.stringify(part.output, (key, value) => (key === 'encrypted_content' || key === 'encryptedContent' ? undefined : value))}`,
+        )
+        .join('\n')
+      return [
+        ...(remaining.length
+          ? [{ ...message, content: remaining } as ModelMessage]
+          : []),
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+        } as ModelMessage,
+      ]
+    }
     if (message.role !== 'assistant' || typeof message.content === 'string')
       return [message]
     const owner = producedBy.get(message)
     if (owner === undefined || owner === producer) return [message]
-    const content = message.content.filter(
-      (part) => part.type !== 'reasoning' && part.type !== 'reasoning-file',
-    )
-    if (content.length === message.content.length) return [message]
+    const hosted = foreignHosted
+    const content = message.content.flatMap((part) => {
+      if (part.type === 'reasoning' || part.type === 'reasoning-file') return []
+      if (part.type === 'tool-call' && hosted.has(part.toolCallId))
+        return [
+          {
+            type: 'text' as const,
+            text: `Provider search: ${JSON.stringify(part.input)}`,
+          },
+        ]
+      if (part.type === 'tool-result' && hosted.has(part.toolCallId))
+        return [
+          {
+            type: 'text' as const,
+            text: `Provider search result: ${JSON.stringify(part.output, (key, value) => (key === 'encrypted_content' || key === 'encryptedContent' ? undefined : value))}`,
+          },
+        ]
+      return [part]
+    })
+    if (!hosted.size && content.length === message.content.length)
+      return [message]
     // A message that held nothing but reasoning would reach the provider empty
     return content.length ? [{ ...message, content }] : []
   })

@@ -132,6 +132,36 @@ for (const shape of ['native', 'mixed'] as const) {
   })
 }
 
+test('resumed hosted search renders its completed result', async () => {
+  const t = createTestVela({ sessionId: 'hosted-search-history' })
+  t.session.append({
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool-call',
+        toolCallId: 'hosted',
+        toolName: 'web_search',
+        input: { query: 'example' },
+        providerExecuted: true,
+      },
+      {
+        type: 'tool-result',
+        toolCallId: 'hosted',
+        toolName: 'web_search',
+        output: { type: 'text', value: 'Hosted result evidence' },
+      },
+    ],
+  })
+  await t.session.close()
+  const tui = await startTui(t.vela, {
+    sessionId: 'hosted-search-history',
+    resume: true,
+  })
+  await tui.started
+  tui.terminal.press(KEYS.ctrlO)
+  expect(tui.screen()).toContain('Hosted result evidence')
+})
+
 test('ordinary JSON tool results keep file metadata in resumed history', async () => {
   const t = createTestVela({ sessionId: 'file-metadata' })
   t.session.append({

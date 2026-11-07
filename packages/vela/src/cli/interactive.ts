@@ -457,10 +457,9 @@ export class InteractiveMode {
       }
       if (entry.type !== 'message' || entry.stopReason) continue
       const { message } = entry
-      if (message.role !== 'tool') {
-        this.renderMessage(message, true)
+      if (message.role !== 'tool') this.renderMessage(message, true)
+      if (message.role === 'user' || typeof message.content === 'string')
         continue
-      }
       for (const part of message.content) {
         if (part.type !== 'tool-result') continue
         const block = this.tools.get(part.toolCallId)

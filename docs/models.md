@@ -40,6 +40,8 @@ The part after the first `/` is the model id, so ids that contain `/` work: `ope
 
 Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `models.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `models.json`, or add it as its own provider.
 
+With the `web` extension enabled, the direct API-key paths for built-in OpenAI Responses and Anthropic Messages models can use provider-hosted web search. OAuth, custom endpoints and other protocols do not declare hosted search by default. For OpenAI Responses with effective minimal reasoning, Vela conservatively keeps an independent search provider if configured; OpenAI documents that GPT-5 native web search requires higher reasoning. This policy also applies to opted-in custom Responses endpoints. Search calls may have separate provider charges which are not included in Vela's token cost estimate. See [web search permissions and fallback](built-in-extensions.md#web).
+
 For `openai-responses` endpoints whose hostname is exactly `api.deepseek.com`, Vela sets `providerOptions.openai.store: false` before SDK serialization. [DeepSeek's Responses API](https://api-docs.deepseek.com/guides/responses_api/) is stateless and does not support server-side item references. This option lets the SDK send earlier assistant answers inline, retaining their phase and ordinary function call/result pairs without manually rewriting history. Local history, user messages and other providers are unchanged. This does not fix reasoning-event parsing or establish complete reasoning-history replay support.
 
 ## Credentials and /login
@@ -100,9 +102,10 @@ The plan route accepts fewer request options than the API: Vela sends requests w
 | Field | Description |
 |---|---|
 | `api` | Wire protocol, required for new providers: `openai-completions` (OpenAI Chat Completions), `openai-responses` (OpenAI Responses API) or `anthropic-messages` (Anthropic Messages API). |
-| `baseUrl` | API base URL. Without it the AI SDK default applies (the official endpoint, or `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` if set). |
+| `baseUrl` | API base URL. Without it Vela uses the official endpoint. Built-in OpenAI also supports `OPENAI_API_BASE_URL`. Vela does not implicitly use the SDK's `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`. |
 | `apiKey` | A literal key, or `$NAME` / `${NAME}` to read an environment variable. Local servers that ignore the key still need a placeholder value. A provider without a key is not listed in `/model`. |
 | `headers` | Extra HTTP headers. Values support `$NAME` / `${NAME}`. |
+| `compat` | Explicit wire compatibility settings. `hostedTools: ["web_search"]` opts in to native search, `store: false` requests stateless Responses, and `includeWebSearchSources: false` omits the optional sources include. A model's `compat` fields override the provider's. |
 | `models` | Known models with metadata. Optional: unlisted ids still work. |
 
 `$$` is a literal `$`. An unset variable becomes an empty string, so an `apiKey` that points to an unset variable counts as missing.
@@ -124,6 +127,7 @@ An entry named `anthropic`, `openai` or `openrouter` overrides the built-in prov
 | Field | Description |
 |---|---|
 | `id` | Model id sent to the provider. Required. |
+| `compat` | Per-model overrides for the provider's `compat` fields. |
 | `name` | Display name in `/model`. |
 | `contextWindow` | Context window in tokens. Sets the compaction thresholds and input cap, and the context percentage in the footer. |
 | `maxTokens` | Output token limit. |
@@ -133,6 +137,34 @@ An entry named `anthropic`, `openai` or `openrouter` overrides the built-in prov
 | `cost` | Prices in dollars per million tokens: `input`, `output`, `cacheRead`, `cacheWrite`. Used for the cost in `/usage` and the footer. |
 
 A model id that is not listed in `models.json` takes its metadata from the catalog when the catalog knows that id, first under the same provider and then under any provider (so `deepseek/deepseek-chat` above gets DeepSeek's context window and price). A model the catalog doesn't know has no cost: `/usage` and the footer show its tokens without a dollar amount.
+
+`compat` is an explicit assertion about the configured endpoint and model; Vela does not infer hosted search from a gateway hostname or model name. Only `openai-responses` and `anthropic-messages` can opt into `web_search`. To turn off a provider-level hosted tool for a model, set that model's `compat.hostedTools` to `[]`.
+
+For example, two OpenRouter custom providers can share a key while retaining their original protocol shapes:
+
+```json
+{
+  "providers": {
+    "router-responses": {
+      "api": "openai-responses",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "compat": { "hostedTools": ["web_search"], "store": false, "includeWebSearchSources": false },
+      "models": [{ "id": "openai/gpt-4.1-mini" }]
+    },
+    "router-messages": {
+      "api": "anthropic-messages",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "headers": { "Authorization": "Bearer $OPENROUTER_API_KEY" },
+      "compat": { "hostedTools": ["web_search"] },
+      "models": [{ "id": "anthropic/claude-haiku-4.5" }]
+    }
+  }
+}
+```
+
+Gateway availability, routing and charges depend on the selected provider and model. An opt-in does not establish that the gateway actually uses the upstream provider's search; verify routing and search results. Tests through a gateway do not establish live verification against direct provider endpoints.
 
 An invalid file (bad JSON, unknown `api`, a model without `id`) stops the CLI with a `[config]` error.
 

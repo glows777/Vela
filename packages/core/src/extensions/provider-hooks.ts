@@ -4,6 +4,7 @@ import type {
   SharedV4Headers,
 } from '@ai-sdk/provider'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
+import type { HostedToolModel } from '../models/index.ts'
 
 /** What the provider hook middleware calls (the extension runner, bound to one session). */
 export interface ProviderHooks {
@@ -12,7 +13,9 @@ export interface ProviderHooks {
     event:
       | 'before_provider_request'
       | 'after_provider_response'
-      | 'provider_stream_event',
+      | 'provider_stream_event'
+      | 'tool_call',
+    toolName?: string,
   ): boolean
   beforeRequest(
     params: LanguageModelV4CallOptions,
@@ -32,15 +35,17 @@ export function withProviderHooks(
   hooks: ProviderHooks,
 ): LanguageModel {
   if (typeof model === 'string') return model
-  const before = async (params: LanguageModelV4CallOptions) =>
-    hooks.has('before_provider_request')
+  const before = async (params: LanguageModelV4CallOptions) => {
+    const request = hooks.has('before_provider_request')
       ? await hooks.beforeRequest(params)
       : params
+    return request
+  }
   const after = async (headers: SharedV4Headers | undefined) => {
     if (hooks.has('after_provider_response'))
       await hooks.afterResponse(stringHeaders(headers))
   }
-  return wrapLanguageModel({
+  const wrapped = wrapLanguageModel({
     model,
     middleware: {
       specificationVersion: 'v4',
@@ -79,6 +84,19 @@ export function withProviderHooks(
       },
     },
   })
+  const hostedTools = (model as HostedToolModel).hostedTools
+  return hostedTools
+    ? Object.assign(wrapped, {
+        hostedTools: async (options?: { reasoning?: string }) => {
+          const tools = await hostedTools.call(model, options)
+          return Object.fromEntries(
+            Object.entries(tools).filter(
+              ([name]) => !hooks.has('tool_call', name),
+            ),
+          )
+        },
+      })
+    : wrapped
 }
 
 function stringHeaders(

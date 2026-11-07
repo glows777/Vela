@@ -212,7 +212,9 @@ export async function archiveToolResults(
   store: ToolResultStore,
 ): Promise<void> {
   for (const message of messages) {
-    if (message.role !== 'tool') continue
+    // Provider-executed results are kept in assistant content by the AI SDK.
+    if (message.role !== 'tool' && message.role !== 'assistant') continue
+    if (typeof message.content === 'string') continue
     for (const part of message.content) {
       if (part.type !== 'tool-result') continue
       const stored = getStoredResult(part.output)
