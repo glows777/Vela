@@ -6,18 +6,6 @@ import type {
 import { type LanguageModel, wrapLanguageModel } from 'ai'
 import type { HostedToolModel } from '../models/index.ts'
 
-/** The request hook changed GPT-5 to minimal after hosted-tool selection; no provider request was sent. */
-export class HostedSearchFallback extends Error {}
-
-export function isGpt5(id: string): boolean {
-  return [
-    'gpt-5',
-    'gpt-5-2025-08-07',
-    'openai/gpt-5',
-    'openai/gpt-5-2025-08-07',
-  ].includes(id)
-}
-
 /** What the provider hook middleware calls (the extension runner, bound to one session). */
 export interface ProviderHooks {
   /** Whether anyone handles the event, so idle hooks cost nothing */
