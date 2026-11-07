@@ -42,6 +42,7 @@ export class ChannelHandoff {
     private topics: (channel: string, chatId: string) => ChannelTopic[],
     private enqueue: (channel: string, msg: IncomingMessage) => void,
     private logger: VelaLogger,
+    private status: (record: ChannelRecord, text: string) => void = () => {},
   ) {}
 
   private source(ctx?: ToolContext) {
@@ -210,10 +211,11 @@ export class ChannelHandoff {
 
   private async note(record: ChannelRecord, line: string): Promise<void> {
     try {
-      await this.directory.addNote(
+      const saved = await this.directory.addNote(
         channelSessionId(record.channel, record.chatId),
         line,
       )
+      this.status(record, saved)
     } catch (error) {
       this.logger.error(
         `[channels] Could not record status note: ${errorMessage(error)}`,

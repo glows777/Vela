@@ -281,9 +281,9 @@ test('an empty tool list retains channel controls, hides memory and cannot invok
     (req) => {
       expect(req.tools).toEqual(
         expect.arrayContaining([
-          'lark_start_topic',
-          'lark_forward_to_topic',
-          'lark_list_topics',
+          'channel_start_topic',
+          'channel_forward_to_topic',
+          'channel_list_topics',
         ]),
       )
       expect(req.tools).not.toContain('memory')

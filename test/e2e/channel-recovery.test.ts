@@ -182,20 +182,20 @@ test('completed topics survive restart and a top-level follow-up forwards to the
   await until(() => first.fake.sent.length > 0)
   await first.t.cleanup({ keepDir: true })
   const second = setup(cwd, [
-    fauxToolCall('lark_list_topics', {}),
+    fauxToolCall('channel_list_topics', {}),
     (req) => {
       expect(JSON.stringify(req.toolResults)).toContain('thread')
-      return fauxToolCall('lark_forward_to_topic', { root_id: 'root' })
+      return fauxToolCall('channel_forward_to_topic', { root_id: 'root' })
     },
     (req) =>
       fauxText(
-        req.tools.includes('lark_start_topic')
+        req.tools.includes('channel_start_topic')
           ? 'forwarded'
           : 'follow-up answer',
       ),
     (req) =>
       fauxText(
-        req.tools.includes('lark_start_topic')
+        req.tools.includes('channel_start_topic')
           ? 'forwarded'
           : 'follow-up answer',
       ),
@@ -422,7 +422,7 @@ test('a recovered top-level group input retains channel tools and prompt classif
   const { fake, t, start } = setup(cwd, [fauxText('group recovered')])
   await start()
   await until(() => fake.sent.some((m) => m.text.includes('group recovered')))
-  expect(t.model.calls[0]?.tools).toContain('lark_start_topic')
+  expect(t.model.calls[0]?.tools).toContain('channel_start_topic')
   expect(t.model.calls[0]?.system).toContain('channel session for this group')
   expect(fake.sent.at(-1)?.messageId).toBe('trigger')
 })
@@ -430,16 +430,16 @@ test('a recovered top-level group input retains channel tools and prompt classif
 test('a recovered group run forwards its saved input without needing a live raw event (SDK regression)', async () => {
   const cwd = await crash('forward')
   const { fake, t, start } = setup(cwd, [
-    fauxToolCall('lark_forward_to_topic', { root_id: 'root' }),
+    fauxToolCall('channel_forward_to_topic', { root_id: 'root' }),
     (req) =>
       fauxText(
-        req.tools.includes('lark_start_topic')
+        req.tools.includes('channel_start_topic')
           ? 'forwarded'
           : 'recovered forward answer',
       ),
     (req) =>
       fauxText(
-        req.tools.includes('lark_start_topic')
+        req.tools.includes('channel_start_topic')
           ? 'forwarded'
           : 'recovered forward answer',
       ),
@@ -451,8 +451,9 @@ test('a recovered group run forwards its saved input without needing a live raw 
   expect(fake.forwards).toEqual([{ messageId: 'trigger', threadId: 'thread' }])
   expect(fake.topics).toEqual([])
   expect(
-    t.model.calls.filter((call) => !call.tools.includes('lark_start_topic'))[0]
-      ?.lastUserText,
+    t.model.calls.filter(
+      (call) => !call.tools.includes('channel_start_topic'),
+    )[0]?.lastUserText,
   ).toContain('remember cobalt')
 })
 

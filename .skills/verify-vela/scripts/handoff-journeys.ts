@@ -34,16 +34,16 @@ const call = (name: string, input: unknown): FauxResponse => ({
 function router(req: FauxRequest): FauxResponse {
   const text = req.lastUserText
   const done = req.toolResults.length > 0
-  if (req.tools.includes('lark_start_topic')) {
+  if (req.tools.includes('channel_start_topic')) {
     if (done) return { text: '' }
     if (/release confirmation/.test(text))
-      return call('lark_start_topic', {
+      return call('channel_start_topic', {
         title: 'Release confirmation',
         brief:
           'Prepare the release confirmation; topic "Find the code" supplies the code.',
       })
     if (/verification code/.test(text))
-      return call('lark_start_topic', {
+      return call('channel_start_topic', {
         title: 'Find the code',
         brief:
           'Find the release verification code and give it to the "Release confirmation" topic (root_id group_b).',

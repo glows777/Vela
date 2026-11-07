@@ -82,6 +82,7 @@
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
     timezone?: unknown
+    topicCapabilities?: ChannelTopicCapabilities | undefined
     validateTools?: ((names: readonly string[]) => void) | undefined
   interface ChannelEvent
     deliveryId: string
@@ -244,6 +245,7 @@
   function importExtension: (path: string, name: string) => Promise<VelaExtension>
   interface IncomingMessage
     channelId: string
+    chatKind?: "group" | "direct" | undefined
     externalEvent?: ChannelEvent | undefined
     handoff?: { id: string; from: string; depth: number; } | undefined
     images?: ImageContent[] | undefined

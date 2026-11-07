@@ -9,16 +9,17 @@ import {
 } from '@glows777/vela-core/extension-api'
 import { TopicAdmission } from './admission.ts'
 import { TopicCommands } from './commands.ts'
-import { ChannelDirectory } from './directory.ts'
+import { ChannelDirectory, isGroupInput } from './directory.ts'
 import { ChannelEvents } from './events.ts'
 import { RunFeedback } from './feedback.ts'
 import { ChannelHandoff } from './handoff.ts'
 import { errorMessage } from './log.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { ChannelRoutines } from './routines.ts'
-import { resolveChannelScope } from './scope.ts'
+import { ScopedChannelRuntime } from './runtime.ts'
 import { channelSessionId } from './session-id.ts'
 import { ChannelSessions } from './sessions.ts'
+import { ChannelTopics } from './topics.ts'
 import type {
   ChannelDefinition,
   ChannelOutcome,
@@ -48,6 +49,7 @@ export class ChannelGateway {
   readonly routines: ChannelRoutines
   readonly events: ChannelEvents
   readonly handoff: ChannelHandoff
+  readonly topicTools: ChannelTopics
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
   private readonly sessions: ChannelSessions
@@ -55,6 +57,7 @@ export class ChannelGateway {
   private readonly commands: TopicCommands
   private readonly usage: ChannelUsage
   private channels = new Map<string, ChannelDefinition>()
+  private runtimes = new Map<string, ScopedChannelRuntime>()
   /** Channels whose `start()` reported a connection; `serve` refuses to idle when this is empty */
   private started = new Set<string>()
   /** Messages are processed serially per session: the next message in a chat waits for the previous reply */
@@ -148,7 +151,29 @@ export class ChannelGateway {
       (name, chatId) => this.topics(name, chatId),
       enqueue,
       this.logger,
+      (record, text) => {
+        if (record.rootId)
+          this.runtimes
+            .get(record.channel)
+            ?.status(
+              { chatId: record.chatId, rootId: record.rootId, text },
+              (error) =>
+                this.logger.warn(
+                  `[channels] Status listener failed: ${errorMessage(error)}`,
+                ),
+            )
+      },
     )
+    this.topicTools = new ChannelTopics((id) => {
+      const record = this.directory.get(this.directory.keyForSession(id))
+      const runtime = record && this.runtimes.get(record.channel)?.api
+      return runtime && record.activeSessionId === id
+        ? {
+            runtime,
+            capabilities: this.channels.get(record.channel)?.topicCapabilities,
+          }
+        : undefined
+    })
   }
 
   /** Internal storage-success notification, including saves outside a channel prompt. */
@@ -158,13 +183,15 @@ export class ChannelGateway {
   }
 
   private topics(channel: string, chatId: string) {
-    return this.admission.list(channel, chatId, (id) =>
-      this.feedback.runs.has(id)
-        ? 'running'
-        : this.queues.has(id)
-          ? 'queued'
-          : (this.directory.get(id)?.state ?? 'done'),
-    )
+    return this.admission.list(channel, chatId, (id) => this.state(id))
+  }
+
+  private state(id: string) {
+    return this.feedback.runs.has(id)
+      ? 'running'
+      : this.queues.has(id)
+        ? 'queued'
+        : (this.directory.get(id)?.state ?? 'done')
   }
 
   private find(key: string): VelaSession | undefined {
@@ -174,70 +201,92 @@ export class ChannelGateway {
   register(channel: ChannelDefinition): void {
     this.channels.set(channel.name, channel)
 
-    channel.connect?.({
-      scope: (id) => {
-        const record =
-          this.directory.get(this.directory.keyForSession(id)) ??
-          this.directory
-            .entries(channel.name)
-            .find(
-              (entry) => channelSessionId(channel.name, entry.chatId) === id,
-            )
-        return record
-          ? resolveChannelScope(
-              this.options.dataDir ?? process.cwd(),
-              record.channel,
-              record.chatId,
-              record.chatKind,
-              record.storageKey,
-            )
-          : undefined
-      },
-      routines: this.routines.scoped(
-        channel.name,
-        (id) =>
-          this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
-      ),
-      context: (id) =>
-        this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
-      session: (id) => this.find(id),
-      topicCoverage: () => this.directory.coverage,
-      skipReply: (id) => {
-        const run = this.feedback.runs.get(this.directory.keyForSession(id))
+    const runtime = new ScopedChannelRuntime({
+      channel,
+      directory: this.directory,
+      dataDir: this.options.dataDir ?? process.cwd(),
+      find: (id) => this.find(id),
+      state: (id) => this.state(id),
+      run: (id) => this.commands.controllable(id),
+      submit: async (msg) => {
+        if (this.stopped || !this.started.has(channel.name))
+          throw new Error('Channel is not running')
         if (
-          !run ||
-          run.session.id !== id ||
-          !(run.trigger.passive || run.trigger.handoff) ||
-          !this.feedback.runIsLive(run)
+          channel.canRecover?.(msg, isGroupInput(msg) ? 'group' : 'direct') ===
+          false
         )
-          throw new Error(
-            'Silence requires an active passive or hand-off group run',
-          )
-        run.skipReply = true
+          throw new Error('Channel scope is not enabled')
+        const submission = this.enqueueIncoming(channel.name, msg)
+        if (!(await submission.admitted))
+          throw new Error('Message was not admitted')
+        return {
+          sessionId: channelSessionId(
+            channel.name,
+            msg.channelId,
+            msg.topic?.rootId,
+          ),
+        }
       },
-      topics: (chatId) => this.topics(channel.name, chatId),
-      waitForInput: (id, reason) => {
-        const key = this.directory.keyForSession(id)
-        const run = this.feedback.runs.get(key)
-        if (!run || run.session.id !== id || !this.feedback.runIsLive(run))
-          throw new Error('The topic run has ended')
-        return this.directory.waitForInput(key, reason)
+      stop: async (target, runId) => {
+        if (this.stopped || !this.started.has(channel.name)) return false
+        const key = channelSessionId(channel.name, target.chatId, target.rootId)
+        const record = this.directory.get(key)
+        if (
+          !record ||
+          channel.canRecover?.(storedMessage(record), record.chatKind) === false
+        )
+          return false
+        return this.commands.stop(key, runId)
       },
-      dispatch: (id, msg, label) => {
-        const source = this.feedback.runs.get(this.directory.keyForSession(id))
-        if (!source || !this.feedback.runIsLive(source))
-          throw new Error('The source channel run has ended')
-        const targetId = channelSessionId(
+      operations: {
+        routines: this.routines.scoped(
           channel.name,
-          msg.channelId,
-          msg.topic?.rootId,
-        )
-        this.admission.observe(targetId, channel.name, msg, label)
-        this.feedback.acknowledgements.set(msg, source.inputs)
-        source.handedOff = true
-        void this.handleIncoming(channel.name, msg)
+          (id) =>
+            this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
+        ),
+        context: (id) =>
+          this.feedback.runs.get(this.directory.keyForSession(id))?.trigger,
+        skipReply: (id) => {
+          const run = this.feedback.runs.get(this.directory.keyForSession(id))
+          if (
+            !run ||
+            run.session.id !== id ||
+            !(run.trigger.passive || run.trigger.handoff) ||
+            !this.feedback.runIsLive(run)
+          )
+            throw new Error(
+              'Silence requires an active passive or hand-off group run',
+            )
+          run.skipReply = true
+        },
+        topics: (chatId) => this.topics(channel.name, chatId),
+        waitForInput: (id, reason) => {
+          const key = this.directory.keyForSession(id)
+          const run = this.feedback.runs.get(key)
+          if (!run || run.session.id !== id || !this.feedback.runIsLive(run))
+            throw new Error('The topic run has ended')
+          return this.directory.waitForInput(key, reason)
+        },
+        dispatch: (id, msg, label) => {
+          const source = this.feedback.runs.get(
+            this.directory.keyForSession(id),
+          )
+          if (!source || !this.feedback.runIsLive(source))
+            throw new Error('The source channel run has ended')
+          const targetId = channelSessionId(
+            channel.name,
+            msg.channelId,
+            msg.topic?.rootId,
+          )
+          this.admission.observe(targetId, channel.name, msg, label)
+          this.feedback.acknowledgements.set(msg, source.inputs)
+          source.handedOff = true
+          void this.handleIncoming(channel.name, msg)
+        },
       },
     })
+    this.runtimes.set(channel.name, runtime)
+    channel.connect?.(runtime.api)
     channel.onMessage?.((msg: IncomingMessage) => {
       return this.handleIncoming(channel.name, msg)
     })
@@ -337,6 +386,7 @@ export class ChannelGateway {
         errors.push(error)
       }
     }
+    for (const runtime of this.runtimes.values()) runtime.clear()
     try {
       if (this.channels.size) await this.directory.flush()
     } catch (error) {
@@ -348,6 +398,13 @@ export class ChannelGateway {
 
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
+    return this.enqueueIncoming(channelName, msg).completed
+  }
+
+  private enqueueIncoming(
+    channelName: string,
+    msg: IncomingMessage,
+  ): { admitted: Promise<boolean>; completed: Promise<void> } {
     const id = channelSessionId(channelName, msg.channelId, msg.topic?.rootId)
     clearTimeout(this.idleTimers.get(id))
     this.idleTimers.delete(id)
@@ -364,7 +421,7 @@ export class ChannelGateway {
         this.queues.set(id, incoming.command)
         this.releaseQueue(id, incoming.command)
       } else void incoming.command.then(() => this.closeWhenIdle(id))
-      return incoming.command
+      return { admitted: incoming.admitted, completed: incoming.command }
     }
     const available = incoming.available
     // Keep live controls immediate. Steer waits for its admitted ID before submitting input.
@@ -402,7 +459,7 @@ export class ChannelGateway {
       )
     this.queues.set(id, next)
     this.releaseQueue(id, next)
-    return next
+    return { admitted: incoming.admitted, completed: next }
   }
 
   private admit(
@@ -532,7 +589,7 @@ export class ChannelGateway {
     id: string,
     channelName: string,
     msg: IncomingMessage,
-    processing: { stopped: boolean },
+    processing: { stopped: boolean; preparing: boolean },
     recovered = false,
   ): Promise<ChannelOutcome | undefined> {
     if (this.stopped) return 'stopped'
@@ -576,17 +633,20 @@ export class ChannelGateway {
     this.logger.debug(
       `[${channelName}] input ${msg.replyToId ?? '-'} prepared at=${new Date().toISOString()}`,
     )
-    if (processing.stopped) {
+    const stopped = async (
+      session = topicSession ?? this.sessions.open(id, channelName, msg),
+    ): Promise<ChannelOutcome> => {
       await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
       await this.directory.finish(id, 'stopped')
       await this.sendReply(
-        topicSession ?? this.sessions.open(id, channelName, msg),
+        session,
         channelName,
         msg,
         'Stopped the current run.',
       )
       return 'stopped'
     }
+    if (processing.stopped) return stopped()
     if (!prepared) {
       // Undefined means the adapter handled the input without a model prompt.
       await this.directory.forget(id, msg.replyToId ? [msg.replyToId] : [])
@@ -655,6 +715,8 @@ export class ChannelGateway {
     }
 
     await this.handoff.beforeRun(id, session, msg)
+    if (processing.stopped) return stopped(session)
+    processing.preparing = false
     return this.feedback.prompt(
       id,
       channelName,

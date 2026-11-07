@@ -342,10 +342,10 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   const respond = (
     request: import('../../packages/core/src/testing/faux.ts').FauxRequest,
   ) => {
-    if (request.tools.includes('lark_start_topic'))
+    if (request.tools.includes('channel_start_topic'))
       return request.toolResults.length
         ? fauxText('handed off')
-        : fauxToolCall('lark_start_topic', {
+        : fauxToolCall('channel_start_topic', {
             title: 'investigate',
             brief: 'investigate',
           })

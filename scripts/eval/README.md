@@ -205,3 +205,55 @@ group fixtures, isolated persisted topic sessions, memory snapshots, successful
 and unsuccessful independent grades, and model errors excluded from grading.
 
 The runtime layout adapter selects the target revision's Lark or historical Feishu factory/helpers. Grading normalizes only structured tool and session identifiers, leaving raw paths, arguments, output and saved evidence untouched. G7/G8 contamination recognizes both physical session-name schemes; their source and timing predicates are unchanged.
+
+The `channel_*` topic-tool rename (#281) is breaking at runtime: no `lark_*`
+topic aliases remain. The grader accepts historical `feishu_*` / `lark_*` topic
+identifiers and current `channel_*` identifiers without changing predicates.
+`lark_search_history` remains Lark-specific. This normalization affects grading
+only, never recorded evidence, prompts, fixtures or baseline commits. Compare
+pre/post-rename dispatch/topic runs with identical scenarios, models and settings;
+offline injected-model runs establish routing/tool execution, not live-model
+choice or prompt-quality equivalence.
+
+### #281 reproducible offline rename comparison
+
+Use the checked-in verification script against both checkouts (Bun, Git, ripgrep
+and fd on PATH; install each checkout's frozen dependencies first):
+
+```sh
+CANDIDATE=$PWD
+SCRATCH=$(mktemp -d)
+BASELINE=$SCRATCH/before-runtime
+OUT=$SCRATCH/evidence
+mkdir -p "$OUT" "$SCRATCH/home"
+git worktree add --detach "$BASELINE" 538fd2b1bd153299ca1d639a7559bd46d4383213
+(cd "$BASELINE" && bun install --frozen-lockfile)
+bun install --frozen-lockfile
+SCRIPT=$CANDIDATE/.skills/verify-vela/scripts/dispatch-rename-eval.ts
+env -i PATH="$PATH" HOME="$SCRATCH/home" VELA_DIR="$SCRATCH/home/.vela" VELA_OFFLINE=1 \
+  bun --no-env-file "$SCRIPT" --runtime "$BASELINE" --output "$OUT/before" --prefix lark
+env -i PATH="$PATH" HOME="$SCRATCH/home" VELA_DIR="$SCRATCH/home/.vela" VELA_OFFLINE=1 \
+  bun --no-env-file "$SCRIPT" --runtime "$CANDIDATE" --output "$OUT/after" --prefix channel
+# Preserve $OUT, then remove the baseline worktree when finished.
+git worktree remove "$BASELINE"
+```
+
+The output directory must not already exist. Each run saves `results.json`,
+model-visible `G*/requests.json`, and real worker artifacts/session transcripts.
+Both use unchanged G1–G5 prompts/fixtures, the same scripted faux responses except
+renamed tool identifiers, thinking `off`, one repetition, and fake Lark transport
+through the real extension/gateway/tools. No new grader or threshold is introduced.
+Worker token/cost estimates are synthetic here, not provider usage or billing.
+
+Recorded offline comparison: **G1–G5 passed all 12 checks in both arms**. Model
+request counts were **1/3/2/2/1** in each arm; tool-call counts were **0/1/1/1/0**.
+Checks, deliveries and topic titles matched. Model-visible tool sets matched after
+the exact topic rename, with no old topic aliases and `lark_search_history`
+preserved. Baseline offline eval suite: **188 passed, 0 failed**; candidate suite
+and candidate graders against the baseline runtime: **200 passed, 0 failed**
+(the additional 12 tests cover identifier parity and routine-substitution rejection).
+
+**LIVE BLOCKED:** the required invoking-process `OPENAI_KEY` was unavailable.
+No provider requests were made. These results establish scripted dispatch/tool
+execution only, not live-model tool selection, prompt-quality equivalence or a
+live-model pass rate. The paid before/after comparison remains unverified.
