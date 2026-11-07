@@ -96,6 +96,7 @@ for (const api of [
     'reconfigure',
     'skip',
     'escape',
+    'escape-context',
     'invalid',
   ] as const) {
     test(`custom ${api} setup: ${outcome} verifies before saving and survives restart`, async () => {
@@ -106,6 +107,7 @@ for (const api of [
         name: 'Preserved name',
         maxTokens: 4096,
         reasoning: true,
+        contextWindow: 96000,
         thinkingLevelMap: { max: null },
       }
       if (outcome !== 'save') {
@@ -197,18 +199,17 @@ for (const api of [
               return 'custom'
             }
             if (title === 'API protocol') return api
-            if (
-              [
-                'Custom headers',
-                'Model capabilities',
-                'Context window',
-              ].includes(title)
-            )
-              return outcome === 'skip' ? 'keep' : 'edit'
+            expect([
+              'Custom headers',
+              'Model capabilities',
+              'Context window',
+            ]).not.toContain(title)
             if (title.startsWith('Current model:')) return 'change'
             if (title.startsWith('Credential for')) return 'replace'
-            if (title === 'Image input') return 'yes'
-            if (title === 'Reasoning support') return 'no'
+            if (title === 'Image input')
+              return outcome === 'skip' ? 'keep' : 'yes'
+            if (title === 'Reasoning support')
+              return outcome === 'skip' ? 'keep' : 'no'
             if (title === 'Thinking level') {
               if (outcome === 'skip') {
                 expect(choices.map((c) => c.value)).not.toContain('max')
@@ -225,7 +226,16 @@ for (const api of [
               return outcome === 'retry' ? 'retry' : 'cancel'
             return 'yes'
           },
-          input: async (title, _placeholder, _signal, secret) => {
+          input: async (title, _placeholder, _signal, secret, allowEmpty) => {
+            if (title.endsWith('optional)')) {
+              expect(allowEmpty).toBe(true)
+              if (outcome === 'skip') return ''
+            }
+            if (
+              title === 'Context window (optional)' &&
+              outcome === 'escape-context'
+            )
+              return undefined
             if (title === 'Custom headers (JSON, optional)') {
               expect(secret).toBe(true)
               if (outcome === 'escape') return undefined
@@ -261,8 +271,10 @@ for (const api of [
         if (
           outcome === 'cancel' ||
           outcome === 'failure' ||
-          outcome === 'escape'
+          outcome === 'escape' ||
+          outcome === 'escape-context'
         ) {
+          if (outcome.startsWith('escape')) expect(requests).toHaveLength(0)
           expect(saved).toBe(false)
           expect(snapshot()).toEqual(before)
           return

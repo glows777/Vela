@@ -35,6 +35,7 @@ interface Host {
     placeholder?: string,
     signal?: AbortSignal,
     secret?: boolean,
+    allowEmpty?: boolean,
   ): Promise<string | undefined>
   addNotice(text: string, level?: 'info' | 'warning' | 'error' | 'dim'): void
   pickModel(models: ModelInfo[], current?: string): Promise<string | undefined>
@@ -104,40 +105,32 @@ export async function setupWizard(host: Host): Promise<boolean> {
     ])
     if (!api) return false
     preset = { api: api as ProviderApi, baseUrl }
-    const headers = await host.select('Custom headers', [
-      {
-        value: 'keep',
-        label: 'Keep existing headers (none for a new provider)',
-      },
-      { value: 'edit', label: 'Enter headers as JSON' },
-    ])
-    if (!headers) return false
-    if (headers === 'edit') {
-      for (;;) {
-        const value = await host.input(
-          'Custom headers (JSON, optional)',
-          '{"x-header":"value"}',
-          undefined,
-          true,
+    for (;;) {
+      const value = await host.input(
+        'Custom headers (JSON, optional)',
+        'Empty Enter keeps existing headers (none if new)',
+        undefined,
+        true,
+        true,
+      )
+      if (value === undefined) return false
+      if (!value) break
+      try {
+        const parsed: unknown = JSON.parse(value)
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          Array.isArray(parsed) ||
+          Object.values(parsed).some((v) => typeof v !== 'string')
         )
-        if (value === undefined) return false
-        try {
-          const parsed: unknown = JSON.parse(value)
-          if (
-            !parsed ||
-            typeof parsed !== 'object' ||
-            Array.isArray(parsed) ||
-            Object.values(parsed).some((v) => typeof v !== 'string')
-          )
-            throw new Error('Headers must be a JSON object with string values')
-          preset.headers = parsed as Record<string, string>
-          break
-        } catch {
-          host.addNotice(
-            'Headers must be a JSON object with string values. Use {} for no headers.',
-            'error',
-          )
-        }
+          throw new Error('Headers must be a JSON object with string values')
+        preset.headers = parsed as Record<string, string>
+        break
+      } catch {
+        host.addNotice(
+          'Headers must be a JSON object with string values. Use {} for no headers.',
+          'error',
+        )
       }
     }
   }
@@ -271,59 +264,37 @@ export async function setupWizard(host: Host): Promise<boolean> {
     if (preset && choice === 'custom') {
       const previous = prior.models ?? []
       const model = { ...(previous.find((model) => model.id === id) ?? { id }) }
-      const metadata = await host.select('Model capabilities', [
-        {
-          value: 'keep',
-          label: 'Keep existing capabilities (defaults for a new model)',
-        },
-        {
-          value: 'edit',
-          label: 'Configure context window, image input and reasoning',
-        },
-      ])
-      if (!metadata) return false
-      if (metadata === 'edit') {
-        const context = await host.select('Context window', [
+      for (;;) {
+        const value = await host.input(
+          'Context window (optional)',
+          'Tokens · empty Enter keeps existing value (default if new)',
+          undefined,
+          false,
+          true,
+        )
+        if (value === undefined) return false
+        if (!value) break
+        const tokens = Number(value)
+        if (Number.isSafeInteger(tokens) && tokens > 0) {
+          model.contextWindow = tokens
+          break
+        }
+        host.addNotice('Context window must be a positive integer.', 'error')
+      }
+      for (const title of ['Image input', 'Reasoning support'] as const) {
+        const value = await host.select(title, [
           {
             value: 'keep',
-            label: 'Keep existing context window (default for a new model)',
+            label: 'Keep existing value (default for a new model)',
           },
-          { value: 'edit', label: 'Enter context window in tokens' },
+          { value: 'yes', label: 'Yes' },
+          { value: 'no', label: 'No' },
         ])
-        if (!context) return false
-        if (context === 'edit') {
-          for (;;) {
-            const value = await host.input(
-              'Context window (optional)',
-              'e.g. 128000',
-            )
-            if (value === undefined) return false
-            const tokens = Number(value)
-            if (Number.isSafeInteger(tokens) && tokens > 0) {
-              model.contextWindow = tokens
-              break
-            }
-            host.addNotice(
-              'Context window must be a positive integer.',
-              'error',
-            )
-          }
-        }
-        for (const title of ['Image input', 'Reasoning support'] as const) {
-          const value = await host.select(title, [
-            {
-              value: 'keep',
-              label: 'Keep existing value (default for a new model)',
-            },
-            { value: 'yes', label: 'Yes' },
-            { value: 'no', label: 'No' },
-          ])
-          if (!value) return false
-          if (value !== 'keep') {
-            if (title === 'Image input')
-              model.input = value === 'yes' ? ['text', 'image'] : ['text']
-            else model.reasoning = value === 'yes'
-          }
+        if (!value) return false
+        if (value !== 'keep') {
+          if (title === 'Image input')
+            model.input = value === 'yes' ? ['text', 'image'] : ['text']
+          else model.reasoning = value === 'yes'
         }
       }
       preset.models = previous.some((entry) => entry.id === id)
