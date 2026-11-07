@@ -52,11 +52,18 @@ test.skipIf(!hasScript)(
         ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
         ['Provider name', 'local\r'],
         ['Base URL', 'http://localhost:12345/v1\r'],
+        ['API protocol', '\r'],
+        ['Custom headers (JSON, optional)', '\r'],
         ['API key for local', 'temporary-key\r'],
         ['Model ID', 'test-model\r'],
+        ['Context window (optional)', '\r'],
+        ['Image input', '\r'],
+        ['Reasoning support', '\r'],
         ['may incur', '\x1b'],
       ],
     })
+    expect(afterKey.code).toBe(0)
+    expect(afterKey.stdout).toContain('may incur')
     const atSetupOnly = beforeSetup(afterKey.stdout)
     expect(atSetupOnly).not.toContain('/model provider/id')
     expect(atSetupOnly).not.toContain('No model available')
@@ -64,6 +71,38 @@ test.skipIf(!hasScript)(
       expect(existsSync(join(afterKey.agentDir, name))).toBe(false)
   },
 )
+
+for (const cancelAt of [
+  'Custom headers (JSON, optional)',
+  'Context window (optional)',
+]) {
+  test.skipIf(!hasScript)(
+    `custom setup Escape at ${cancelAt} writes nothing`,
+    async () => {
+      const steps: [string, string][] = [
+        ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
+        ['Provider name', 'local\r'],
+        ['Base URL', 'http://localhost:12345/v1\r'],
+        ['API protocol', '\r'],
+        ['Custom headers (JSON, optional)', '\r'],
+        ['API key for local', 'temporary-key\r'],
+        ['Model ID', 'test-model\r'],
+        ['Context window (optional)', '\r'],
+      ]
+      const end = steps.findIndex(([title]) => title === cancelAt)
+      steps[end]![1] = '\x1b'
+      const result = await cli(['setup'], {
+        model: '',
+        terminal: steps.slice(0, end + 1),
+      })
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(cancelAt)
+      expect(result.stdout).not.toContain('may incur')
+      for (const name of ['auth.json', 'models.json', 'settings.json'])
+        expect(existsSync(join(result.agentDir, name))).toBe(false)
+    },
+  )
+}
 
 test.skipIf(!hasScript)(
   'Lark setup completes through the CLI with a fake connection',
@@ -156,8 +195,13 @@ test.skipIf(!hasScript)(
           ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
           ['Provider name', 'local\r'],
           ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API protocol', '\r'],
+          ['Custom headers (JSON, optional)', '\r'],
           ['API key for local', 'test-key\r'],
           ['Model ID', 'test-model\r'],
+          ['Context window (optional)', '\r'],
+          ['Image input', '\r'],
+          ['Reasoning support', '\r'],
           ['may incur', '\r'],
           ['Thinking level', '\r'],
           ['Connect Lark', '\r'],
@@ -201,8 +245,13 @@ test.skipIf(!hasScript)(
           ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
           ['Provider name', 'local\r'],
           ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API protocol', '\r'],
+          ['Custom headers (JSON, optional)', '\r'],
           ['Credential for local is configured', '\r'],
           ['Model ID', 'test-model\r'],
+          ['Context window (optional)', '\r'],
+          ['Image input', '\r'],
+          ['Reasoning support', '\r'],
           ['may incur', '\r'],
           ['Thinking level', '\x1b[B\r'],
           ['Connect Lark', '\r'],
@@ -248,8 +297,13 @@ test.skipIf(!hasScript)(
           ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
           ['Provider name', 'local\r'],
           ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API protocol', '\r'],
+          ['Custom headers (JSON, optional)', '\r'],
           ['API key for local', 'bad-key\r'],
           ['Model ID', 'test-model\r'],
+          ['Context window (optional)', '\r'],
+          ['Image input', '\r'],
+          ['Reasoning support', '\r'],
           ['may incur', '\r'],
           ['invalid test key', '\x1b'],
         ],
@@ -284,8 +338,13 @@ test.skipIf(!hasScript)(
           ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r'],
           ['Provider name', 'local\r'],
           ['Base URL', `http://127.0.0.1:${server.port}/v1\r`],
+          ['API protocol', '\r'],
+          ['Custom headers (JSON, optional)', '\r'],
           ['API key for local', 'fake-key\r'],
           ['Model ID', 'test-model\r'],
+          ['Context window (optional)', '\r'],
+          ['Image input', '\r'],
+          ['Reasoning support', '\r'],
           ['may incur', '\r'],
         ],
       })

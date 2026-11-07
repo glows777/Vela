@@ -221,7 +221,7 @@ export class InteractiveMode {
           projectSettingsPath: options.projectSettingsPath,
           select: (title, choices, selected) =>
             this.select(title, choices, selected, this.setupAbort.signal),
-          input: (title, placeholder, signal, secret) =>
+          input: (title, placeholder, signal, secret, allowEmpty) =>
             this.input(
               title,
               placeholder,
@@ -229,6 +229,7 @@ export class InteractiveMode {
                 ? AbortSignal.any([signal, this.setupAbort.signal])
                 : this.setupAbort.signal,
               secret,
+              allowEmpty,
             ),
           addNotice: this.addNotice.bind(this),
           openBrowser: options.openBrowser,
@@ -1297,11 +1298,11 @@ export class InteractiveMode {
     title: string,
     placeholder?: string,
     signal?: AbortSignal,
-    secret = false,
+    ...options: [secret?: boolean, allowEmpty?: boolean]
   ): Promise<string | undefined> {
     if (signal?.aborted) return Promise.resolve(undefined)
     return this.dialog((done) =>
-      inputDialog(title, placeholder, signal, secret, done),
+      inputDialog(title, placeholder, signal, done, ...options),
     )
   }
 
