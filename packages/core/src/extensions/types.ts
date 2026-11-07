@@ -113,4 +113,10 @@ export interface ExtensionAPI {
     event: K,
     handler: ExtensionHandler<K>,
   ): () => void
+  /** Handle a single tool name; other tool calls bypass this handler. */
+  on(
+    event: 'tool_call',
+    toolName: string,
+    handler: ExtensionHandler<'tool_call'>,
+  ): () => void
 }

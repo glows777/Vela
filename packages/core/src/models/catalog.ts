@@ -24,9 +24,17 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = [
 /** Default thinking level (like pi). */
 export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'
 
+/** Explicit provider compatibility settings; model fields override provider fields. */
+export interface ModelCompat {
+  hostedTools?: 'web_search'[]
+  store?: boolean
+  includeWebSearchSources?: boolean
+}
+
 /** Model metadata (a models.json model entry or a catalog entry, same field names as pi). */
 export interface ModelSpec {
   id: string
+  compat?: ModelCompat
   /** Display name */
   name?: string
   /** Context window in tokens; when set, compaction thresholds and the input cap derive from it */

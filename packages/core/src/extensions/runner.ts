@@ -32,7 +32,6 @@ import type {
   ExtensionAPI,
   ExtensionCommand,
   ExtensionContext,
-  ExtensionHandler,
   VelaExtension,
 } from './types.ts'
 
@@ -68,7 +67,7 @@ const COMMAND_NAME = /^[A-Za-z0-9][\w-]*$/
 export class ExtensionRunner {
   private readonly handlers = new Map<
     ExtensionEventName,
-    { extension: string; fn: AnyHandler }[]
+    { extension: string; fn: AnyHandler; toolName?: string }[]
   >()
   private readonly commandMap = new Map<
     string,
@@ -211,19 +210,28 @@ export class ExtensionRunner {
         this.commandMap.set(commandName, { extension: name, command })
         loaded.commands.push(commandName)
       },
-      on: <K extends ExtensionEventName>(
-        event: K,
-        handler: ExtensionHandler<K>,
+      on: ((
+        event: ExtensionEventName,
+        handlerOrName: AnyHandler | string,
+        scopedHandler?: AnyHandler,
       ) => {
         const list = this.handlers.get(event) ?? []
-        const entry = { extension: name, fn: handler as AnyHandler }
+        const toolName =
+          typeof handlerOrName === 'string' ? handlerOrName : undefined
+        const handler =
+          typeof handlerOrName === 'string' ? scopedHandler! : handlerOrName
+        const entry = {
+          extension: name,
+          fn: handler,
+          ...(toolName === undefined ? {} : { toolName }),
+        }
         list.push(entry)
         this.handlers.set(event, list)
         return () => {
           const index = list.indexOf(entry)
           if (index !== -1) list.splice(index, 1)
         }
-      },
+      }) as ExtensionAPI['on'],
     }
   }
 
@@ -391,8 +399,13 @@ export class ExtensionRunner {
   }
 
   /** Whether any extension handles `event` (lets callers skip copying data for nobody, like pi's hasHandlers). */
-  hasHandlers(event: ExtensionEventName): boolean {
-    return (this.handlers.get(event)?.length ?? 0) > 0
+  hasHandlers(event: ExtensionEventName, toolName?: string): boolean {
+    return (this.handlers.get(event) ?? []).some(
+      (handler) =>
+        toolName === undefined ||
+        handler.toolName === undefined ||
+        handler.toolName === toolName,
+    )
   }
 
   /**
@@ -548,7 +561,10 @@ export class ExtensionRunner {
     toolName: string,
     input: unknown,
   ): Promise<ToolCallEventResult & { input: unknown }> {
-    const handlers = this.list('tool_call')
+    const handlers = this.list('tool_call').filter(
+      (handler) =>
+        handler.toolName === undefined || handler.toolName === toolName,
+    )
     if (!handlers.length) return { input }
     const before = JSON.stringify(input)
     const event = {

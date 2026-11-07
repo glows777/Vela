@@ -17,8 +17,7 @@ const DANGEROUS_PATTERNS = [
  */
 export function permissionGate(): VelaExtension {
   return function permissionGate(vela) {
-    vela.on('tool_call', async (event, ctx) => {
-      if (event.toolName !== 'bash') return
+    vela.on('tool_call', 'bash', async (event, ctx) => {
       const command = event.input.command
       if (typeof command !== 'string') return
       if (!DANGEROUS_PATTERNS.some((pattern) => pattern.test(command))) return

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { APICallError } from '@ai-sdk/provider'
 import {
   createFauxModel,
   fauxError,
@@ -310,6 +311,36 @@ test('when the provider says the context is too long, Vela compacts once and sen
   expect(t.eventsOf('auto_retry_start')).toHaveLength(0)
   expect(t.session.contextManager.state.summary).toContain('## Goal')
   expect(t.messages.at(-2)).toEqual({ role: 'user', content: 'Question 4' })
+})
+
+test('hosted search still recovers an explicitly rejected oversized request', async () => {
+  const { web } = await import('@glows777/vela-core')
+  const { openai } = await import('@ai-sdk/openai')
+  const model = Object.assign(
+    createFauxModel({
+      responses: [
+        ...Array.from({ length: 4 }, (_, i) => fauxText(`Answer ${i}`)),
+        fauxError(
+          new APICallError({
+            message: 'prompt is too long: 213462 tokens > 200000 maximum',
+            url: 'https://example.test',
+            requestBodyValues: {},
+            statusCode: 400,
+          }),
+        ),
+        fauxText('fits now'),
+      ],
+      generate: [fauxSummary()],
+    }),
+    { hostedTools: async () => ({ web_search: openai.tools.webSearch({}) }) },
+  )
+  const t = createTestVela({ model, extensions: [web()] })
+  for (let i = 0; i < 4; i++) await t.run(`Question ${i}`)
+  await t.run('Question 4')
+  expect(t.lastAssistantText()).toBe('fits now')
+  expect(t.eventsOf('compaction_end')).toEqual([
+    expect.objectContaining({ reason: 'overflow', willRetry: true }),
+  ])
 })
 
 test('an overflow recovers by summarizing only the dropped messages, without tool definitions (like pi)', async () => {

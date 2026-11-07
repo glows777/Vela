@@ -53,6 +53,7 @@ export class StepMessage {
   /** Tool calls that got a result or an error, by id */
   readonly results = new Map<string, ToolResultPart>()
   private readonly executionStarted = new Map<string, number>()
+  private hostedStarted = false
   private started = false
   /** message_end was emitted */
   ended = false
@@ -94,7 +95,7 @@ export class StepMessage {
 
   /** Tool calls have started running, so the request must not be sent again. */
   get toolsStarted(): boolean {
-    return this.executionStarted.size > 0
+    return this.hostedStarted || this.executionStarted.size > 0
   }
 
   private start(): void {
@@ -195,12 +196,17 @@ export class StepMessage {
     id: string,
     toolName: string,
     providerMetadata?: ProviderMetadata,
+    providerExecuted = false,
   ): void {
-    const contentIndex = this.open(
-      id,
-      { type: 'tool-call', toolCallId: id, toolName, input: {} },
-      providerMetadata,
-    )
+    const call: ToolCallPart = {
+      type: 'tool-call',
+      toolCallId: id,
+      toolName,
+      input: {},
+      ...(providerExecuted ? { providerExecuted: true } : {}),
+    }
+    const contentIndex = this.open(id, call, providerMetadata)
+    if (providerExecuted) this.hostedStarted = true
     this.rawToolInput.set(id, '')
     this.update({ type: 'toolcall_start', contentIndex })
   }
@@ -220,17 +226,25 @@ export class StepMessage {
     toolCallId: string
     toolName: string
     input: unknown
+    providerExecuted?: boolean
     providerMetadata?: ProviderMetadata
   }): void {
     if (!this.byStreamId.has(call.toolCallId))
-      this.toolCallStart(call.toolCallId, call.toolName, call.providerMetadata)
+      this.toolCallStart(
+        call.toolCallId,
+        call.toolName,
+        call.providerMetadata,
+        call.providerExecuted,
+      )
     const contentIndex = this.byStreamId.get(call.toolCallId) as number
     const part = this.content[contentIndex] as ToolCallPart
     part.input = call.input
+    if (call.providerExecuted) part.providerExecuted = true
     this.merge(contentIndex, call.providerMetadata)
     const toolCall = { ...part }
     this.toolCalls.push(toolCall)
     this.update({ type: 'toolcall_end', contentIndex, toolCall })
+    if (toolCall.providerExecuted) this.executionStart(toolCall)
     this.endIfReady()
   }
 
@@ -248,8 +262,17 @@ export class StepMessage {
     // Without tool calls nothing runs next: the message ends at finish-step, after the stream delivered all its text
     if (!this.modelEnd?.toolCallIds.length || this.ended) return
     const seen = new Set(this.toolCalls.map((call) => call.toolCallId))
-    if (this.modelEnd.toolCallIds.every((id) => seen.has(id)))
+    if (
+      this.modelEnd.toolCallIds.every((id) => seen.has(id)) &&
+      this.toolCalls.every((call) => !call.providerExecuted)
+    )
       this.end(this.modelEnd.finishReason)
+  }
+
+  providerExecuted(id: string): boolean {
+    return this.toolCalls.some(
+      (call) => call.toolCallId === id && call.providerExecuted === true,
+    )
   }
 
   /** A tool result arrived, so the model finished and its tools ran: end the message if that hasn't happened yet. */
@@ -283,7 +306,9 @@ export class StepMessage {
         ? { errorMessage: CONTENT_FILTER_ERROR }
         : {}),
     })
-    if (runs) for (const call of this.toolCalls) this.executionStart(call)
+    if (runs)
+      for (const call of this.toolCalls)
+        if (!call.providerExecuted) this.executionStart(call)
   }
 
   /** Ends the message as aborted / failed, keeping what streamed so far (no-op if it already ended). */
@@ -314,12 +339,14 @@ export class StepMessage {
   result(
     call: { toolCallId: string; toolName: string; input?: unknown },
     outcome: { output: unknown; details?: unknown } | { error: unknown },
+    alreadyStarted = false,
   ): void {
     if (this.results.has(call.toolCallId)) return
     const known = this.toolCalls.find((c) => c.toolCallId === call.toolCallId)
-    this.executionStart(
-      known ?? { type: 'tool-call', input: call.input, ...call },
-    )
+    if (!alreadyStarted)
+      this.executionStart(
+        known ?? { type: 'tool-call', input: call.input, ...call },
+      )
     const startedAt = this.executionStarted.get(call.toolCallId)
     const isError = 'error' in outcome
     const result = isError ? outcome.error : outcome.output
@@ -363,18 +390,20 @@ export class StepMessage {
   }
 
   /** The tool message for this step's results, in tool-call order (undefined when there are none). */
-  toolMessage(): ToolModelMessage | undefined {
+  toolMessage(excludeHosted = false): ToolModelMessage | undefined {
     const content = this.toolCalls
+      .filter((call) => !excludeHosted || !call.providerExecuted)
       .map((call) => this.results.get(call.toolCallId))
       .filter((part): part is ToolResultPart => part !== undefined)
     return content.length ? { role: 'tool', content } : undefined
   }
 }
 
-/** The tool-result parts of a step's tool messages (for turn_end). */
+/** Tool results in tool messages and provider-executed assistant content (for turn_end). */
 export function toolResultsOf(messages: ModelMessage[]): ToolResultPart[] {
   return messages.flatMap((message) =>
-    message.role === 'tool'
+    (message.role === 'tool' || message.role === 'assistant') &&
+    typeof message.content !== 'string'
       ? message.content.filter(
           (part): part is ToolResultPart => part.type === 'tool-result',
         )
