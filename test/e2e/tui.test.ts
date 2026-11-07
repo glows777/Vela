@@ -22,6 +22,31 @@ afterEach(async () => {
 
 // Interactive mode (pi-tui) runs in a fake terminal: keys go straight to the TUI, and assertions check the rendered screen text.
 
+for (const secret of [false, true]) {
+  for (const allowEmpty of [false, true]) {
+    for (const key of [KEYS.enter, KEYS.escape]) {
+      test(`input dialog secret=${secret} allowEmpty=${allowEmpty} key=${JSON.stringify(key)} preserves cancellation semantics`, async () => {
+        const t = createTestVela()
+        const tui = await startTui(t.vela)
+        await tui.started
+        const answer = tui.mode.input(
+          'Boundary input',
+          undefined,
+          undefined,
+          secret,
+          allowEmpty,
+        )
+        await tui.until('Boundary input')
+        tui.terminal.type('   ')
+        tui.terminal.press(key)
+        expect(await answer).toBe(
+          allowEmpty && key === KEYS.enter ? '' : undefined,
+        )
+      })
+    }
+  }
+}
+
 const pasteImageKey = process.platform === 'win32' ? '\x1bv' : '\x16'
 const blueImage = () =>
   readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))

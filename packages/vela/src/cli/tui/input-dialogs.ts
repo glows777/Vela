@@ -38,8 +38,9 @@ export function inputDialog(
   title: string,
   placeholder: string | undefined,
   signal: AbortSignal | undefined,
-  secret: boolean,
   close: (value: string | undefined) => void,
+  secret = false,
+  allowEmpty = false,
 ) {
   let closed = false
   const done = (value: string | undefined) => {
@@ -50,7 +51,8 @@ export function inputDialog(
   if (signal?.aborted) queueMicrotask(() => done(undefined))
   else signal?.addEventListener('abort', () => done(undefined), { once: true })
   const input = secret ? new SecretInput() : new Input()
-  input.onSubmit = (value) => done(value.trim() || undefined)
+  input.onSubmit = (value) =>
+    done(allowEmpty ? value.trim() : value.trim() || undefined)
   input.onEscape = () => done(undefined)
   const hint = placeholder
     ? `${placeholder} · Enter confirm · Esc cancel`
