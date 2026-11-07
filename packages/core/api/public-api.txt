@@ -278,9 +278,11 @@
     timestamp: string
     type: "model_change"
   interface ModelCompat
+    deepseekReasoningStream?: boolean | undefined
     hostedTools?: "web_search"[] | undefined
     includeWebSearchSources?: boolean | undefined
     store?: boolean | undefined
+    supportsDeveloperRole?: boolean | undefined
   interface ModelInfo
     compat?: ModelCompat | undefined
     contextWindow?: number | undefined

@@ -28,6 +28,10 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'
 export interface ModelCompat {
   hostedTools?: 'web_search'[]
   store?: boolean
+  /** Whether Responses accepts the developer role (pi's supportsDeveloperRole); false keeps system. */
+  supportsDeveloperRole?: boolean
+  /** Recover DeepSeek Responses plaintext reasoning deltas dropped by the OpenAI SDK. */
+  deepseekReasoningStream?: boolean
   includeWebSearchSources?: boolean
 }
 

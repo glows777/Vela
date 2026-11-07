@@ -106,6 +106,23 @@ const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
     oauth: openRouterLogin,
     prepareBody: openRouterBody,
   },
+  deepseek: {
+    config: {
+      // Unlike pi's completions path, Responses supports DeepSeek's native search.
+      api: 'openai-responses',
+      baseUrl: 'https://api.deepseek.com',
+      compat: {
+        store: false,
+        supportsDeveloperRole: false,
+        deepseekReasoningStream: true,
+      },
+      models: [
+        { id: 'deepseek-v4-pro', compat: { hostedTools: ['web_search'] } },
+      ],
+    },
+    envKey: 'DEEPSEEK_API_KEY',
+    defaultModel: 'deepseek-flash',
+  },
 }
 
 /**
@@ -133,9 +150,17 @@ export function loadModels(options: {
       {
         ...builtin?.config,
         ...own,
+        compat: { ...builtin?.config.compat, ...own.compat },
         models: mergeModels(
           name,
-          builtin ? catalogModels(name) : [],
+          mergeModels(
+            name,
+            builtin ? catalogModels(name) : [],
+            // Protocol-specific built-in capabilities must not leak into explicit protocol overrides.
+            own.api === undefined || own.api === builtin?.config.api
+              ? builtin?.config.models
+              : [],
+          ),
           own.models,
         ),
       },
@@ -163,7 +188,13 @@ function mergeModels(
       catalogLookup(provider, model.id) ?? { id: model.id }) as ModelSpec & {
       api?: string
     }
-    byId.set(model.id, { ...known, ...model })
+    byId.set(model.id, {
+      ...known,
+      ...model,
+      ...(known.compat || model.compat
+        ? { compat: { ...known.compat, ...model.compat } }
+        : {}),
+    })
   }
   return [...byId.values()]
 }
@@ -218,7 +249,12 @@ function validateCompat(value: unknown, label: string): void {
     throw new Error(
       `${label}.hostedTools must be an array containing only web_search`,
     )
-  for (const key of ['store', 'includeWebSearchSources'] as const)
+  for (const key of [
+    'store',
+    'includeWebSearchSources',
+    'supportsDeveloperRole',
+    'deepseekReasoningStream',
+  ] as const)
     if (value[key] !== undefined && typeof value[key] !== 'boolean')
       throw new Error(`${label}.${key} must be a boolean`)
 }
@@ -403,15 +439,13 @@ function createProvider(
       ) {
         return typeof model === 'string' ? model : declareHosted(model)
       }
-      const deepseekResponses =
-        api === 'openai-responses' &&
-        configuredBaseUrl !== undefined &&
-        new URL(settings.baseURL).hostname === 'api.deepseek.com'
       const wrapped = wrapLanguageModel({
         model,
         middleware: {
           specificationVersion: 'v4',
-          ...(deepseekResponses ? { wrapStream: deepseekReasoningStream } : {}),
+          ...(api === 'openai-responses' && compat.deepseekReasoningStream
+            ? { wrapStream: deepseekReasoningStream }
+            : {}),
           transformParams: async ({ params }) => {
             if (api === 'openai-responses') {
               const openai = { ...params.providerOptions?.openai }
@@ -439,13 +473,12 @@ function createProvider(
                 typeof effort === 'string'
               )
                 openai.reasoningEffort = effort
-              // DeepSeek treats developer messages as user messages. Keep the system instruction's role.
-              if (deepseekResponses) {
-                // DeepSeek is stateless: let the SDK serialize history inline.
-                openai.store = false
-                if (openai.systemMessageMode === undefined)
-                  openai.systemMessageMode = 'system'
-              }
+              // pi's supportsDeveloperRole: false keeps the system instruction's role.
+              if (
+                compat.supportsDeveloperRole === false &&
+                openai.systemMessageMode === undefined
+              )
+                openai.systemMessageMode = 'system'
               params = {
                 ...params,
                 providerOptions: { ...params.providerOptions, openai },
