@@ -118,7 +118,7 @@ test('topic A hands a result straight to topic B; nothing is posted for the hop'
 
 test('a topic note reaches the group session, which passes it on silently', async () => {
   const { fake, t, start, topic } = setup((req) => {
-    if (req.tools.includes('lark_start_topic')) {
+    if (req.tools.includes('channel_start_topic')) {
       // The group session handling A's note.
       if (!req.toolResults.length)
         return fauxToolCall('channel_message_topic', {
@@ -126,7 +126,7 @@ test('a topic note reaches the group session, which passes it on silently', asyn
           text: 'Topic A found ORBIT-73',
         })
       if (req.toolResults[0]?.toolName === 'channel_message_topic')
-        return fauxToolCall('lark_skip_reply', {})
+        return fauxToolCall('channel_skip_reply', {})
       return fauxText('')
     }
     if (isNote(req)) return fauxText('Release confirmed with ORBIT-73')
@@ -148,7 +148,7 @@ test('a topic note reaches the group session, which passes it on silently', asyn
     '<at user_id="ou_alice"></at> Release confirmed with ORBIT-73',
   ])
   const group = t.model.calls.find((call) =>
-    call.tools.includes('lark_start_topic'),
+    call.tools.includes('channel_start_topic'),
   )!
   expect(group.lastUserText).toBe(
     'Message from Vela\'s topic "find the code" (root_id root_a) (not from a person), about a request from Alice:\nTopic B needs the code ORBIT-73',
@@ -166,7 +166,9 @@ test('a topic note reaches the group session, which passes it on silently', asyn
 
 test('a finished topic adds one status line to the group session without a model call', async () => {
   const respond: Respond = (req) =>
-    fauxText(req.tools.includes('lark_start_topic') ? 'group answer' : 'done')
+    fauxText(
+      req.tools.includes('channel_start_topic') ? 'group answer' : 'done',
+    )
   const first = setup(respond)
   await first.start()
   first.topic('root', 'compile the report')
@@ -235,9 +237,9 @@ test('a topic reads another topic’s visible messages and lists the group’s t
   const { fake, t, start, topic } = setup((req) => {
     if (topicOf(req) === 'root_b') return fauxText('B posted its plan')
     if (!req.toolResults.length)
-      return fauxToolCall('lark_read_topic', { root_id: 'root_b' })
-    if (req.toolResults[0]?.toolName === 'lark_read_topic')
-      return fauxToolCall('lark_read_topic', { root_id: 'missing' })
+      return fauxToolCall('channel_read_topic', { root_id: 'root_b' })
+    if (req.toolResults[0]?.toolName === 'channel_read_topic')
+      return fauxToolCall('channel_read_topic', { root_id: 'missing' })
     return fauxText('read it')
   })
   await start()
@@ -256,7 +258,7 @@ test('a topic reads another topic’s visible messages and lists the group’s t
   await until(() => fake.sent.length === 2)
   const [read, missing] = t.model.calls
     .flatMap((call) => call.toolResults)
-    .filter((result) => result.toolName === 'lark_read_topic')
+    .filter((result) => result.toolName === 'channel_read_topic')
   expect(read?.output).toContain('Vela: Launch on Friday')
   expect(read?.output).toContain('plan the launch')
   expect(missing?.output).toContain('not an observed owned topic')
@@ -271,11 +273,11 @@ test('a note keeps a person’s pending decision and the receiving topic can sta
     if (isNote(req))
       return req.toolResults.length
         ? fauxText('')
-        : fauxToolCall('lark_skip_reply', {})
+        : fauxToolCall('channel_skip_reply', {})
     if (topicOf(req) === 'root_b')
       return req.toolResults.length
         ? fauxText('Which region?')
-        : fauxToolCall('lark_wait_for_input', { reason: 'Which region?' })
+        : fauxToolCall('channel_wait_for_input', { reason: 'Which region?' })
     return req.toolResults.length
       ? fauxText('sent')
       : fauxToolCall('channel_message_topic', {

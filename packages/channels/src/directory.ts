@@ -60,6 +60,7 @@ export type ChannelRecord = z.infer<typeof recordSchema>
 
 /** Hand-off notes exist only in groups and address the group session without a service message. */
 export function isGroupInput(msg: IncomingMessage): boolean {
+  if (msg.chatKind !== undefined) return msg.chatKind === 'group'
   return !!(msg.topic || msg.replyToId || msg.handoff)
 }
 
@@ -311,11 +312,12 @@ export class ChannelDirectory {
     return this.notes.get(key) ?? []
   }
 
-  addNote(key: string, line: string): Promise<void> {
+  async addNote(key: string, line: string): Promise<string> {
     const note =
       line.length > MAX_NOTE_CHARS ? `${line.slice(0, MAX_NOTE_CHARS)}…` : line
     this.notes.set(key, [...this.pendingNotes(key), note].slice(-MAX_NOTES))
-    return this.write()
+    await this.write()
+    return note
   }
 
   /** Drops these delivered notes once a session has saved them; newer ones stay. */

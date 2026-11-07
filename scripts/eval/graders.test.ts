@@ -1608,3 +1608,37 @@ test.each(['G7', 'G8'] as const)(
     )
   },
 )
+
+// Historical evidence keeps its original identifiers; only grading normalizes names.
+for (const prefix of ['feishu', 'lark', 'channel']) {
+  for (const id of ['G2', 'G3', 'G4'] as const) {
+    test(`${id} grades ${prefix} topic tool names identically`, () => {
+      const original = good[id]
+      const renamed = {
+        ...original,
+        calls: original.calls.map((call) => ({
+          ...call,
+          name: call.name.replace(/^feishu_/, `${prefix}_`),
+        })),
+      }
+      expect(grade(id, renamed)).toEqual(grade(id, original))
+      expect(grade(id, renamed).every((check) => check.pass)).toBe(true)
+    })
+  }
+  test(`G6 rejects ${prefix} routine substitution for handoff`, () => {
+    const checks = grade('G6', {
+      ...good.G6,
+      calls: [
+        ...good.G6.calls,
+        {
+          ...handoff(),
+          name: `${prefix}_routines`,
+          args: { action: 'create' },
+        },
+      ],
+    })
+    expect(checks.find((check) => check.name === 'hand-off tool')?.pass).toBe(
+      false,
+    )
+  })
+}

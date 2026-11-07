@@ -10,7 +10,12 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '@glows777/vela-channels'
-import { channelSessionId, chatDirectory } from '@glows777/vela-channels'
+import {
+  channelSessionId,
+  chatDirectory,
+  handoffToolNames,
+  topicToolNames,
+} from '@glows777/vela-channels'
 import { latestTodoList } from '@glows777/vela-core/diagnostics'
 import type {
   ImageContent,
@@ -34,7 +39,7 @@ import {
 import { errorMessage } from './log.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { LarkProgress } from './progress.ts'
-import { handoffToolNames, LarkTopics, topicToolNames } from './topics.ts'
+import { LarkTopics } from './topics.ts'
 import {
   type LarkMessageEvent,
   type LarkSentMessage,
@@ -100,7 +105,11 @@ export class LarkChannel implements ChannelDefinition {
     (chatId, threadId) => this.readTopic(chatId, threadId),
   )
 
-  /** Another topic's visible messages as named text lines, for lark_read_topic. */
+  get topicCapabilities() {
+    return this.topics.capabilities
+  }
+
+  /** Another topic's visible messages as named text lines, for channel_read_topic. */
   private async readTopic(chatId: string, threadId: string): Promise<string> {
     if (!this.transport) throw new Error('Lark is not connected')
     const history = []
@@ -138,7 +147,7 @@ export class LarkChannel implements ChannelDefinition {
                 ...chat.tools,
                 ...topicToolNames,
                 ...handoffToolNames,
-                ...(msg.topic ? ['lark_wait_for_input'] : []),
+                ...(msg.topic ? ['channel_wait_for_input'] : []),
               ]),
             ],
     }

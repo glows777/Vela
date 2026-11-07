@@ -18,6 +18,9 @@ test('canonical Lark factory, config, channel and tools have one public naming s
   await t.vela.ready()
   expect(t.vela.channels().map((ch) => ch.name)).toEqual(['lark'])
   const names = t.internals.registry.getAllTools().map((tool) => tool.name)
-  expect(names).toContain('lark_start_topic')
+  expect(names).toContain('channel_start_topic')
+  expect(names.filter((name) => name.startsWith('lark_'))).toEqual([
+    'lark_search_history',
+  ])
   expect(names.some((name) => name.startsWith('feishu_'))).toBe(false)
 })

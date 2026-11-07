@@ -314,7 +314,7 @@ test('a topic handoff replies in thread and later posts go to the returned topic
       }),
   ]
   await start([
-    fauxToolCall('lark_start_topic', {
+    fauxToolCall('channel_start_topic', {
       title: 'Check cobalt',
       brief: 'Check cobalt prices',
     }),

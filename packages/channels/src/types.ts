@@ -18,6 +18,8 @@ export interface ChannelEvent {
 export interface IncomingMessage {
   /** The conversation the message came from (a group chat or a direct chat); replies go here. Together with the channel name and optional topic root it selects the session. */
   channelId: string
+  /** Explicit conversation topology; absent keeps legacy reply/topic-based inference. */
+  chatKind?: 'group' | 'direct'
   /** Who sent the message */
   senderId: string
   senderName: string
@@ -95,7 +97,41 @@ export interface ChannelTopic {
   waitingReason?: string
 }
 
+/** Logical address within the channel that received the runtime. */
+export interface ChannelTarget {
+  chatId: string
+  rootId?: string
+}
+
+export interface ChannelSessionSnapshot {
+  sessionId: string
+  chatId: string
+  chatKind: 'group' | 'direct'
+  topic?: { rootId: string; threadId: string }
+  task: string
+  state: ChannelTopic['state']
+  requester: { id: string; name: string }
+  updatedAt: string
+  waitingReason?: string
+  /** Current preparation/execution lifetime, never a persisted session generation. */
+  runId?: string
+}
+
+export interface ChannelStatusLine {
+  chatId: string
+  rootId: string
+  text: string
+}
+
 export interface ChannelRuntime {
+  /** Resolve after directory admission, without waiting for preparation, model work or delivery. */
+  submit(message: IncomingMessage): Promise<{ sessionId: string }>
+  /** Read current logical conversations without opening sessions. */
+  sessions(chatId: string): ChannelSessionSnapshot[]
+  /** Reserve Stop for this exact preparation/run; false for an expired, stopped or unknown run. */
+  stop(target: ChannelTarget, runId: string): Promise<boolean>
+  /** Observe successfully persisted status lines without starting another model call. */
+  onStatus(listener: (line: ChannelStatusLine) => void): () => void
   scope(sessionId: string): import('./scope.ts').ChannelScope | undefined
   routines: {
     /** One-off at is deployment-local YYYY-MM-DDTHH:mm; recurring times are local too. */
@@ -150,10 +186,12 @@ export interface ChannelRunFeedback {
   finish(outcome: ChannelOutcome): Promise<void>
 }
 
-/** Channel hooks remain experimental: only Lark is implemented so far; stabilization waits for a second channel implementation. */
+/** Channel hooks remain experimental until Local exercises the public transport contract end to end. */
 export interface ChannelDefinition {
   name: string
   description: string
+  /** Platform operations behind the shared channel topic tools. */
+  topicCapabilities?: import('./topics.ts').ChannelTopicCapabilities
   /** Deployment-local schedule zone, validated before transport startup. */
   timezone?: unknown
   /** Adapt scheduled input routing; undefined skips a wake-up with operator diagnostics. */

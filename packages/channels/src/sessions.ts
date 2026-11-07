@@ -5,6 +5,7 @@ import type {
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
+import { topicSessionOptions } from './topics.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
 /** Every opening path resolves current options from the logical chat, before resume or hooks. */
@@ -25,6 +26,7 @@ export class ChannelSessions {
       ...address,
       ...message,
       channelId: address.channelId,
+      chatKind: address.chatKind,
       topic: address.topic,
     }
     if (!channel || !msg) throw new Error('Missing logical channel scope')
@@ -39,8 +41,20 @@ export class ChannelSessions {
       chatKind,
       this.directory.storageKey(channel.name, msg.channelId),
     )
+    const options = channel.sessionOptions?.(msg)
     return this.session(this.directory.sessionId(key), {
-      ...channel.sessionOptions?.(msg),
+      ...options,
+      permissions: {
+        ...options?.permissions,
+        ...topicSessionOptions({ ...msg, chatKind }).permissions,
+        ...(!channel.topicCapabilities
+          ? {
+              channel_start_topic: 'deny' as const,
+              channel_forward_to_topic: 'deny' as const,
+              channel_read_topic: 'deny' as const,
+            }
+          : {}),
+      },
       channel: channel.name,
       scope: { id: scope.id, kind: scope.kind, dataDir: scope.dataDir },
     })

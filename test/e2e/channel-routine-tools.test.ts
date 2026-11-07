@@ -40,7 +40,7 @@ function setup() {
     sender = 'ou_alice',
   ) {
     const answer = `Result ${++sequence}`
-    t.model.push(fauxToolCall('lark_routines', input), fauxText(answer))
+    t.model.push(fauxToolCall('channel_routines', input), fauxText(answer))
     fake.deliver(
       larkEvent(
         { ...overrides, content: JSON.stringify({ text: 'Manage reminders' }) },
@@ -297,7 +297,7 @@ test('routine tools enforce validation, a per-chat cap and same-chat cancellatio
   r.t.model.push(fauxText('SDK done'))
   await r.t.run('List channel routines')
   // A plain SDK session is not a channel session, so it never sees the routine tool.
-  expect(r.t.model.calls.at(-1)!.tools).not.toContain('lark_routines')
+  expect(r.t.model.calls.at(-1)!.tools).not.toContain('channel_routines')
 })
 
 test.each([

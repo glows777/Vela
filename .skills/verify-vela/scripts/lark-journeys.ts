@@ -34,7 +34,7 @@ async function until(what: string, ok: () => boolean, ms = 5000) {
     await sleep(10)
   }
 }
-/** Deployment-local YYYY-MM-DDTHH:mm, the format lark_routines expects for a one-off. */
+/** Deployment-local YYYY-MM-DDTHH:mm, the format channel_routines expects for a one-off. */
 function local(ms: number): string {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
@@ -65,24 +65,24 @@ function router(req: FauxRequest): FauxResponse {
   const call = (name: string, input: unknown): FauxResponse => ({
     toolCalls: [{ name, input }],
   })
-  if (/investigate/i.test(text) && req.tools.includes('lark_start_topic'))
-    return call('lark_start_topic', {
+  if (/investigate/i.test(text) && req.tools.includes('channel_start_topic'))
+    return call('channel_start_topic', {
       title: 'Investigate the flaky test',
       brief: 'Investigate the flaky test and write down the likely cause.',
     })
   if (text.includes('Investigate the flaky test'))
     return call('write_file', { path: 'notes.md', content: 'cause: timing' })
   if (/remind/i.test(text))
-    return call('lark_routines', {
+    return call('channel_routines', {
       action: 'create',
       message: 'Check the PR',
       schedule: { at: local(dueMs) },
     })
   if (text.includes('Scheduled wake-up'))
     return { text: 'Reminder: check the PR' }
-  if (/list topics/i.test(text)) return call('lark_list_topics', {})
-  if (/lunch/i.test(text) && req.tools.includes('lark_skip_reply'))
-    return call('lark_skip_reply', {})
+  if (/list topics/i.test(text)) return call('channel_list_topics', {})
+  if (/lunch/i.test(text) && req.tools.includes('channel_skip_reply'))
+    return call('channel_skip_reply', {})
   return { text: `ok: ${text.slice(-40)}` }
 }
 
@@ -210,8 +210,8 @@ check(
 fake.deliver(
   larkEvent({ content: JSON.stringify({ text: '@_user_1 list topics' }) }),
 )
-await until('topic list', () => !!sent(fake, 'after lark_list_topics'))
-check('topic list', sent(fake, 'after lark_list_topics'))
+await until('topic list', () => !!sent(fake, 'after channel_list_topics'))
+check('topic list', sent(fake, 'after channel_list_topics'))
 
 // 5. A routine in the topic, then !routines without @ (no model call)
 dueMs = Math.ceil((Date.now() + 30_000) / 60_000) * 60_000
@@ -221,8 +221,8 @@ fake.deliver(
     content: JSON.stringify({ text: '@_user_1 remind me in a minute' }),
   }),
 )
-await until('routine created', () => !!sent(fake, 'after lark_routines'))
-const created = sent(fake, 'after lark_routines') ?? ''
+await until('routine created', () => !!sent(fake, 'after channel_routines'))
+const created = sent(fake, 'after channel_routines') ?? ''
 check('routine created', created, !/error/i.test(created))
 const calls = model.calls.length
 fake.deliver(
