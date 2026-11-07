@@ -161,7 +161,9 @@ External top-level inputs never borrow a previous human reply ID. Lark establish
 
 ### GitHub webhooks
 
-The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent by default. Add this section to user settings, supply the secret through the existing `$VAR` interpolation, and run `vela serve` with at least one enabled, connected channel:
+For the operator setup command, see [GitHub webhook setup](channels.md#github-webhook-setup). `vela setup github owner/repo --url https://your-tunnel-host` writes user settings and configures matching repository hooks through GitHub CLI.
+
+The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent by default. To configure it manually, add this section to user settings, supply the secret through the existing `$VAR` interpolation (or a literal in private user settings), and run `vela serve` with at least one enabled, connected channel:
 
 ```json
 {

@@ -5,6 +5,7 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  channelSessionId,
   createChannelVela,
   type IncomingMessage,
 } from '@glows777/vela-channels'
@@ -14,6 +15,8 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
+
+import { z } from 'zod'
 
 const secret = 'fixture-only-webhook-secret'
 const repo = 'glows777/Vela'
@@ -47,6 +50,8 @@ async function fixture(
     enabled?: Set<string>
     cwd?: string
     receiverConfig?: Record<string, unknown>
+    tools?: string[]
+    permissions?: { [name: string]: 'deny' }
   } = {},
 ) {
   const cwd = options.cwd ?? (await mkdtemp(join(tmpdir(), 'vela-webhooks-')))
@@ -85,6 +90,17 @@ async function fixture(
       error: (s) => logs.push(s),
     },
     extensions: [
+      function githubFixture(api) {
+        api.registerTool({
+          name: 'open_pr',
+          description: 'Open a fixture pull request',
+          inputSchema: z.object({}),
+          execute: async () => ({
+            number: 274,
+            repository: { full_name: repo },
+          }),
+        })
+      },
       (api) =>
         api.registerChannel({
           name: 'chat',
@@ -97,6 +113,10 @@ async function fixture(
             receive = next
           },
           canRecover: (msg) => enabled.has(msg.channelId),
+          sessionOptions: () => ({
+            tools: options.tools,
+            permissions: options.permissions,
+          }),
           async send(msg) {
             replies.push(msg as IncomingMessage)
           },
@@ -132,6 +152,7 @@ async function fixture(
   }
   return {
     vela,
+    receive,
     cwd,
     model,
     logs,
@@ -736,3 +757,86 @@ test('the two adapters require separate configured secrets', async () => {
     }),
   ).toThrow(/eventReceiver/)
 })
+
+test('GitHub topic guidance leads from opening a PR to an exact persisted subscription', async () => {
+  const f = await fixture()
+  f.model.push(
+    (req) => {
+      expect(req.system).toContain('After opening or taking over a PR')
+      expect(req.system).toContain('github:<owner>/<repo>#pr/<n>')
+      expect(req.system).toContain('PR metadata')
+      expect(req.system).toContain('exact')
+      expect(req.system).toContain(repo)
+      expect(req.system).toContain('untrusted')
+      expect(req.system).toContain('no new authority')
+      expect(req.system).not.toContain(secret)
+      return fauxToolCall('githubFixture_open_pr', {})
+    },
+    (req) => {
+      expect(JSON.stringify(req.toolResults)).toContain(repo)
+      return fauxToolCall('channel_subscriptions', {
+        action: 'create',
+        source: 'github',
+        key: key(274),
+      })
+    },
+    fauxText('Opened and subscribed'),
+  )
+  await f.receive({
+    channelId: 'one',
+    senderId: 'alice',
+    senderName: 'Alice',
+    text: 'Open the approved PR and follow its feedback here',
+    topic: { rootId: 'root-one', threadId: 'thread-one' },
+  })
+  expect(f.model.calls[0]!.system).toContain(
+    'After opening or taking over a PR',
+  )
+  expect(f.model.pending()).toBe(0)
+  const saved = JSON.parse(
+    await readFile(join(f.cwd, 'data/channels/subscriptions.json'), 'utf8'),
+  )
+  expect(saved.subscriptions).toEqual([
+    expect.objectContaining({
+      source: 'github',
+      key: 'github:glows777/Vela#pr/274',
+      targetKey: channelSessionId('chat', 'one', 'root-one'),
+      channel: 'chat',
+      chatId: 'one',
+    }),
+  ])
+})
+
+test.each([
+  ['no receiver', { receiver: false }, true],
+  ['generic receiver only', { receiverConfig: genericConfig }, true],
+  ['group run', {}, false],
+  [
+    'curated tools exclude subscriptions',
+    { tools: ['bash'] as string[] },
+    true,
+  ],
+  [
+    'subscriptions denied',
+    { permissions: { channel_subscriptions: 'deny' as const } },
+    true,
+  ],
+] as const)(
+  'GitHub topic guidance is absent for %s',
+  async (_label, options, topic) => {
+    const f = await fixture(options)
+    f.model.push(fauxText('No guidance'))
+    await f.receive({
+      channelId: 'one',
+      senderId: 'alice',
+      senderName: 'Alice',
+      text: 'Hello',
+      ...(topic
+        ? { topic: { rootId: 'root-one', threadId: 'thread-one' } }
+        : {}),
+    })
+    expect(f.model.calls[0]!.system).not.toContain(
+      'After opening or taking over a PR',
+    )
+  },
+)

@@ -12,6 +12,7 @@ import type {
 import { silentLogger } from '@glows777/vela-core/extension-api'
 import { EventReceiver } from './event-receiver.ts'
 import { ChannelGateway } from './gateway.ts'
+import { githubOptions } from './github-events.ts'
 import type { ChannelDefinition, ChannelEvent } from './types.ts'
 
 export interface ChannelExtensionAPI extends CoreExtensionAPI {
@@ -73,6 +74,9 @@ export function createChannelVela(
           (event) => runtime().events.publish(event),
           logger,
         )
+  const github = githubOptions.safeParse(
+    (receiverConfig as { github?: unknown } | undefined)?.github,
+  )
   let stopping = false
   let core: CoreVela
   let gateway: ChannelGateway | undefined
@@ -124,7 +128,10 @@ export function createChannelVela(
     },
   )
   extensions.push(function channel(api) {
-    runtime(api).events.register(api)
+    runtime(api).events.register(
+      api,
+      github.success ? github.data.repositories : undefined,
+    )
     runtime(api).handoff.register(api)
   })
   core = createCoreVela({

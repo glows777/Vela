@@ -2,6 +2,12 @@
 
 After a miss is confirmed, write a lesson. Record the trigger path, the layer that should have caught it, and the mechanism patch. The layer is pre-PR, AI/bot review, CI, human, or post-merge. The patch is a line in [REVIEW.md](../REVIEW.md), a lint, or a verify-vela journey. A lesson with no mechanism change is not closed.
 
+## Check the account that performs GitHub setup
+
+In [PR #298](https://github.com/glows777/Vela/pull/298#discussion_r4501042665), an expired inactive GitHub CLI account made setup choose manual fallback and print the webhook secret even when the active account could manage hooks. The pre-PR fixture modeled only one authentication result, so it missed `gh auth status` checking every saved account.
+
+The fixture now follows the upstream active/inactive account behavior. Real CLI regressions and the packed setup journey fail before the fix and verify automatic creation/update without secret output after it. Invalid active credentials retain manual fallback. Setup uses `--active` and documents GitHub CLI 2.57 or newer; the installed older CLI's help is evidence of compatibility limits, not a live authentication test.
+
 ## A disappearing diagnostic does not prove a fix
 
 ### Incident
