@@ -36,14 +36,14 @@ The first run opens the setup wizard in the terminal. It asks, in order:
      Sign in with ChatGPT
      OpenRouter
      DeepSeek
-     Other OpenAI-compatible
+     Custom provider
    ```
 
-   DeepSeek uses the built-in Responses provider and defaults to `deepseek/deepseek-flash`. For another OpenAI-compatible endpoint, choose `Other OpenAI-compatible` and enter a provider name and base URL.
+   DeepSeek uses the built-in Responses provider and defaults to `deepseek/deepseek-flash`. For another endpoint, choose `Custom provider`, enter a provider name and base URL, then choose OpenAI Chat Completions, OpenAI Responses or Anthropic Messages. Optional custom headers use a JSON object with string values (for example, `{"x-region":"us"}`); entry is masked. Keep existing headers to skip, or enter `{}` to clear them.
 
 2. **Enter a credential.** The wizard asks for an API key, opens a browser for a ChatGPT or OpenRouter sign-in, or offers to keep a credential it already finds in `auth.json`.
 
-3. **Select Model.** A searchable list shows the models for that provider. Type to filter, use the arrow keys and press Enter.
+3. **Select Model.** A searchable list shows the models for that provider. Type to filter, use the arrow keys and press Enter. For a custom provider, enter the model ID instead. You can then configure its context window (a positive token count), image input and reasoning support, or keep the existing values/defaults. Escape cancels setup, including in optional inputs.
 
 4. **Verify.** The wizard sends one small request to the provider:
 

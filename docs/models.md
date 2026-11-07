@@ -4,7 +4,7 @@ Vela talks to models through the [AI SDK](https://ai-sdk.dev). A model is named 
 
 ## Setup wizard
 
-Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek uses the built-in provider and defaults to `deepseek/deepseek-flash`; other OpenAI-compatible services accept a base URL and model ID. Existing environment variables and the manual configuration below remain supported.
+Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek uses the built-in provider and defaults to `deepseek/deepseek-flash`; choose **Custom provider** for OpenAI Chat Completions (`openai-completions`), OpenAI Responses (`openai-responses`) or Anthropic Messages (`anthropic-messages`). Enter a provider name, base URL, API key and model ID. Optional JSON headers, context window, image input and reasoning support are saved in `models.json`; the key is saved in `auth.json`. Keep optional fields to preserve existing values, or use the defaults for a new model. Headers and API keys are masked during entry. Verification uses the selected protocol and headers before anything is saved. Cancel leaves existing configuration unchanged; a failed verification can be retried. Existing environment variables and the manual configuration below remain supported.
 
 ## Selecting a model
 

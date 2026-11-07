@@ -7,6 +7,7 @@ import {
   loadModels,
   type ModelInfo,
   memoryCredentialStore,
+  type ProviderApi,
   type ProviderConfig,
   type ThinkingLevel,
   type VelaSession,
@@ -85,18 +86,60 @@ export async function setupWizard(host: Host): Promise<boolean> {
     { value: 'openai-oauth', label: 'Sign in with ChatGPT' },
     { value: 'openrouter', label: 'OpenRouter' },
     { value: 'deepseek', label: 'DeepSeek' },
-    { value: 'other', label: 'Other OpenAI-compatible' },
+    { value: 'custom', label: 'Custom provider' },
   ])
   if (!choice) return false
   let provider = choice.startsWith('openai-') ? 'openai' : choice
   let preset: ProviderConfig | undefined
-  if (choice === 'other') {
+  if (choice === 'custom') {
     const name = await host.input('Provider name', 'e.g. local')
     if (!name) return false
     provider = name
     const baseUrl = await host.input('Base URL', 'https://example.com/v1')
     if (!baseUrl) return false
-    preset = { api: 'openai-completions', baseUrl }
+    const api = await host.select('API protocol', [
+      { value: 'openai-completions', label: 'OpenAI Chat Completions' },
+      { value: 'openai-responses', label: 'OpenAI Responses' },
+      { value: 'anthropic-messages', label: 'Anthropic Messages' },
+    ])
+    if (!api) return false
+    preset = { api: api as ProviderApi, baseUrl }
+    const headers = await host.select('Custom headers', [
+      {
+        value: 'keep',
+        label: 'Keep existing headers (none for a new provider)',
+      },
+      { value: 'edit', label: 'Enter headers as JSON' },
+    ])
+    if (!headers) return false
+    if (headers === 'edit') {
+      for (;;) {
+        const value = await host.input(
+          'Custom headers (JSON, optional)',
+          '{"x-header":"value"}',
+          undefined,
+          true,
+        )
+        if (value === undefined) return false
+        try {
+          const parsed: unknown = JSON.parse(value)
+          if (
+            !parsed ||
+            typeof parsed !== 'object' ||
+            Array.isArray(parsed) ||
+            Object.values(parsed).some((v) => typeof v !== 'string')
+          )
+            throw new Error('Headers must be a JSON object with string values')
+          preset.headers = parsed as Record<string, string>
+          break
+        } catch {
+          host.addNotice(
+            'Headers must be a JSON object with string values. Use {} for no headers.',
+            'error',
+          )
+        }
+      }
+    }
   }
   const savedProviders = (modelsFile.providers ?? {}) as Record<
     string,
@@ -140,7 +183,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       : 'replace'
     if (!keep) return false
     if (keep === 'replace') {
-      if (choice === 'other') {
+      if (choice === 'custom') {
         const key = await host.input(
           `API key for ${provider}`,
           undefined,
@@ -210,7 +253,8 @@ export async function setupWizard(host: Host): Promise<boolean> {
       newCredential = true
     }
     let id: string | undefined
-    if (choice === 'other') id = await host.input('Model ID', 'e.g. model-name')
+    if (choice === 'custom')
+      id = await host.input('Model ID', 'e.g. model-name')
     else {
       const candidates = temporary
         .models({ all: true })
@@ -224,11 +268,67 @@ export async function setupWizard(host: Host): Promise<boolean> {
       id = selected?.slice(provider.length + 1)
     }
     if (!id) return false
-    if (preset && choice === 'other') {
+    if (preset && choice === 'custom') {
       const previous = prior.models ?? []
-      preset.models = previous.some((model) => model.id === id)
-        ? previous
-        : [...previous, { id }]
+      const model = { ...(previous.find((model) => model.id === id) ?? { id }) }
+      const metadata = await host.select('Model capabilities', [
+        {
+          value: 'keep',
+          label: 'Keep existing capabilities (defaults for a new model)',
+        },
+        {
+          value: 'edit',
+          label: 'Configure context window, image input and reasoning',
+        },
+      ])
+      if (!metadata) return false
+      if (metadata === 'edit') {
+        const context = await host.select('Context window', [
+          {
+            value: 'keep',
+            label: 'Keep existing context window (default for a new model)',
+          },
+          { value: 'edit', label: 'Enter context window in tokens' },
+        ])
+        if (!context) return false
+        if (context === 'edit') {
+          for (;;) {
+            const value = await host.input(
+              'Context window (optional)',
+              'e.g. 128000',
+            )
+            if (value === undefined) return false
+            const tokens = Number(value)
+            if (Number.isSafeInteger(tokens) && tokens > 0) {
+              model.contextWindow = tokens
+              break
+            }
+            host.addNotice(
+              'Context window must be a positive integer.',
+              'error',
+            )
+          }
+        }
+        for (const title of ['Image input', 'Reasoning support'] as const) {
+          const value = await host.select(title, [
+            {
+              value: 'keep',
+              label: 'Keep existing value (default for a new model)',
+            },
+            { value: 'yes', label: 'Yes' },
+            { value: 'no', label: 'No' },
+          ])
+          if (!value) return false
+          if (value !== 'keep') {
+            if (title === 'Image input')
+              model.input = value === 'yes' ? ['text', 'image'] : ['text']
+            else model.reasoning = value === 'yes'
+          }
+        }
+      }
+      preset.models = previous.some((entry) => entry.id === id)
+        ? previous.map((entry) => (entry.id === id ? model : entry))
+        : [...previous, model]
     }
     const finalOverride = preset ? { ...prior, ...preset } : undefined
     const finalProviders = loadModels({
@@ -274,9 +374,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
         if (retry !== 'retry') return false
       }
     }
-    const model = temporary
-      .models({ all: true })
-      .find((m) => m.provider === provider && m.id === id)
+    const model = finalProviders[provider]?.models?.find((m) => m.id === id)
     const levels =
       model?.reasoning === false
         ? ['off']

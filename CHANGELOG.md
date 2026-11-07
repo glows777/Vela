@@ -12,6 +12,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Custom provider setup.** The setup wizard supports OpenAI Chat Completions, OpenAI Responses and Anthropic Messages endpoints, optional headers and model capabilities, and verifies the chosen configuration before saving. Existing provider and model fields are preserved when unchanged ([#289](https://github.com/glows777/Vela/issues/289)).
+
 - **Built-in DeepSeek.** Use `DEEPSEEK_API_KEY`, `auth.json` or `/login deepseek`; first-run setup selects `deepseek/deepseek-flash` on Responses. `deepseek-v4-pro` declares provider-hosted web search at model level; flash does not. Explicit compatibility flags also support DeepSeek gateways with other hostnames ([#289](https://github.com/glows777/Vela/issues/289)).
 
 - **Provider-hosted web search.** Supported OpenAI Responses and Anthropic Messages models can search without a separate search key. Existing independent search and per-call approval remain available; provider search charges are not included in token cost estimates ([#293](https://github.com/glows777/Vela/issues/293)).
