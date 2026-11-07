@@ -19,8 +19,12 @@ const fail = (message: string) => {
   process.stderr.write(message)
   process.exit(1)
 }
+if (state.auth === false) fail('active account token is invalid')
 if (args[0] === 'auth') {
-  if (state.auth === false) fail('not logged in')
+  // gh checks every saved account unless --active skips the inactive entries:
+  // https://github.com/cli/cli/blob/v2.57.0/pkg/cmd/auth/status/status.go
+  if (state.inactiveAuth === false && !args.includes('--active'))
+    fail('inactive account token is invalid')
   save()
   process.exit(0)
 }

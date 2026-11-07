@@ -45,6 +45,7 @@ export interface GhState {
   hooks: Record<string, Hook[]>
   calls: { args: string[]; input: string; settings: unknown }[]
   auth?: boolean
+  inactiveAuth?: boolean
   fail?: string[]
   lost?: boolean
   echoSecret?: boolean

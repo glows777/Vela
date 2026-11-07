@@ -74,7 +74,13 @@ test('fresh model-free CLI saves privately, creates once and updates once with t
     events: githubEvents,
   })
   const calls = f.state().calls
-  expect(calls[0]!.args).toEqual(['auth', 'status', '--hostname', 'github.com'])
+  expect(calls[0]!.args).toEqual([
+    'auth',
+    'status',
+    '--active',
+    '--hostname',
+    'github.com',
+  ])
   expect(calls.filter((call) => call.args.includes('POST'))).toHaveLength(1)
   expect(calls.filter((call) => call.args.includes('PATCH'))).toHaveLength(1)
   for (const call of calls) {
@@ -96,6 +102,54 @@ test('fresh model-free CLI saves privately, creates once and updates once with t
     project,
   )
 })
+
+for (const operation of ['created', 'updated'])
+  test(`valid active account with expired inactive account ${operation} a webhook without exposing the secret`, async () => {
+    const f = githubFixture()
+    f.seed(receiver())
+    f.setState({
+      auth: true,
+      inactiveAuth: false,
+      hooks:
+        operation === 'updated'
+          ? {
+              'acme/widgets': [
+                {
+                  id: 42,
+                  config: { url: 'https://hooks.example.com/events/github' },
+                },
+              ],
+            }
+          : {},
+    })
+    const result = await f.cli(args)
+    const secret =
+      f.settings().extensionConfig.channel.eventReceiver.github.secret
+    expect({
+      code: result.code,
+      automated: result.output.includes(`acme/widgets: ${operation} webhook`),
+      manualFallback: result.output.includes('configure hooks manually'),
+      secretExposed: result.output.includes(secret),
+    }).toEqual({
+      code: 0,
+      automated: true,
+      manualFallback: false,
+      secretExposed: false,
+    })
+    const hooks = f.state().hooks['acme/widgets']!
+    expect(hooks).toHaveLength(1)
+    expect(hooks[0]!.config.secret).toBe(secret)
+    expect(hooks[0]!.events).toEqual(githubEvents)
+    expect(hooks[0]!.active).toBe(true)
+    if (operation === 'updated') expect(hooks[0]!.id).toBe(42)
+    const writes = f.state().calls.filter((call) => call.input)
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.args).toContain(
+      operation === 'created' ? 'POST' : 'PATCH',
+    )
+    for (const call of f.state().calls)
+      expect(call.args.join(' ')).not.toContain(secret)
+  })
 
 for (const missing of [
   ['setup', 'github'],
@@ -292,7 +346,7 @@ for (const mode of ['absent', 'not-authenticated'])
   test(`manual fallback saves configuration when gh is ${mode}`, async () => {
     const f = githubFixture()
     if (mode === 'absent') rmSync(join(f.bin, 'gh'))
-    else f.setState({ auth: false })
+    else f.setState({ auth: false, inactiveAuth: true })
     const result = await f.cli(args)
     expect(result.code).toBe(1)
     expect(f.saved()).toBe(true)

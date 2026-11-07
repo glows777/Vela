@@ -122,7 +122,10 @@ writeFileSync(
 )
 chmodSync(join(bin, 'gh'), 0o700)
 const state = join(evidence, 'gh-state.json')
-writeFileSync(state, JSON.stringify({ hooks: {}, calls: [] }))
+writeFileSync(
+  state,
+  JSON.stringify({ hooks: {}, calls: [], auth: true, inactiveAuth: false }),
+)
 const env = {
   ...process.env,
   PATH: `${bin}:${process.env.PATH}`,
