@@ -8,6 +8,7 @@ vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id>]
      [--approve | --no-approve] [--model provider/id] [--thinking <level>]
      [-h | --help] [-v | --version]
 vela serve [options]
+vela setup github [owner/repo...] [--url https://public-origin]
 ```
 
 An unknown option or a bad value prints the usage line and exits with code 2. There is no `--` separator: every argument that starts with `-` (except a lone `-`) is read as an option. To send a prompt that starts with `-`, pipe it through stdin.
@@ -51,6 +52,10 @@ The tool options apply to every session the CLI opens (also after `/new` and `/r
 `read_file`, `write_file`, `edit_file` and `bash` are on by default; `grep`, `find` and `list_directory` are registered but off (like pi's `ls`, `grep` and `find`). `--tools +grep` turns one on, and `--tools -bash` turns a default tool off. Plain names and patterns replace the `defaultTools` setting, while `+name` / `-name` entries apply on top of it. See [Tools](tools.md) and [Settings](settings.md#defaulttools).
 
 An extension that fails to load is reported on stderr (or in the chat log) and skipped; Vela still starts. Extension loading, discovery and the `builtin:` names are described in [Extensions](extensions.md#where-extensions-load-from) and [Built-in extensions](built-in-extensions.md).
+
+## GitHub setup
+
+`vela setup github owner/repo --url https://public-origin` configures user-level webhook settings and creates or updates repository hooks through authenticated GitHub CLI. Several repository arguments are supported. Missing arguments are prompted only in a terminal; non-interactive missing input exits 2. Setup runs without starting a model, extensions or channels. Success and cancellation exit 0; local configuration or remote API failures exit 1. Missing/unauthed `gh` saves local settings, prints manual values (including the secret), and exits 1. See [GitHub webhook setup](channels.md#github-webhook-setup) for secret storage, permissions, retries and verification.
 
 ## Run modes
 

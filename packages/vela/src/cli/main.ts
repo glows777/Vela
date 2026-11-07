@@ -78,6 +78,22 @@ if (args.help || args.version) {
   process.stdout.write(args.help ? HELP : `${packageVersion()}\n`)
   process.exit(0)
 }
+if (args.setupTarget === 'github') {
+  const { githubSetup } = await import('./github-setup.ts')
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
+  const input = interactive
+    ? (await import('./tui/setup-input.ts')).setupInput
+    : undefined
+  process.exit(
+    await githubSetup({
+      agentDir: defaultAgentDir(process.env),
+      repositories: args.setupRepositories ?? [],
+      url: args.setupUrl,
+      interactive,
+      input,
+    }),
+  )
+}
 const env = process.env
 const cwd = process.cwd()
 

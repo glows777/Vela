@@ -49,7 +49,9 @@ export const DEFAULT_OFF_BUILTINS: readonly string[] = ['permission-gate']
 
 export interface CliArgs {
   setup?: boolean
-  setupTarget?: 'lark'
+  setupTarget?: 'lark' | 'github'
+  setupRepositories?: string[]
+  setupUrl?: string
   /** `serve`: run the configured channels without the TUI, until a signal stops the process */
   serve: boolean
   /** `-p, --print`: run the given prompts and exit; stdout gets only the last answer (like pi) */
@@ -99,7 +101,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -108,6 +110,13 @@ Usage:
   vela [options] [prompt...]
   vela serve [options]
   vela setup [lark]
+  vela setup github owner/repo [owner/repo...] --url https://origin
+
+GitHub setup:
+  Configure repository webhooks using logged-in gh (github.com). Missing inputs are prompted
+  in a terminal. --url is an HTTPS origin, with no credentials, path, query or fragment.
+  Exit codes: 0 success or cancelled; 1 invalid configuration or local/gh/repository failure;
+  2 missing non-interactive inputs or invalid command options.
 
 Modes:
   (default)                     Interactive TUI when stdin and stdout are a terminal
@@ -219,6 +228,26 @@ export function parseArgs(argv: string[]): CliArgs {
     noContextFiles: false,
     noTools: false,
     excludeTools: [],
+  }
+  if (argv[0] === 'setup' && argv[1] === 'github') {
+    args.setup = true
+    args.setupTarget = 'github'
+    args.setupRepositories = []
+    for (let i = 2; i < argv.length; i++) {
+      const arg = argv[i]!
+      if (arg === '--help' || arg === '-h') args.help = true
+      else if (arg === '--url') {
+        if (args.setupUrl !== undefined)
+          throw new Error('--url may only be provided once')
+        const next = argv[++i]
+        if (!next || next.startsWith('-'))
+          throw new Error('--url requires a value')
+        args.setupUrl = next
+      } else if (arg.startsWith('-'))
+        throw new Error(`Unknown GitHub setup option ${arg}`)
+      else args.setupRepositories.push(arg)
+    }
+    return args
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string
