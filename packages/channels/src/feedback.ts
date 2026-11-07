@@ -410,7 +410,7 @@ export class RunFeedback {
       await this.options.channel(channelName)?.send({
         ...msg,
         recipientId: msg.senderId,
-        text: `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
+        text: `Couldn't update task feedback: ${this.options.channel(channelName)?.formatError?.(error) ?? errorMessage(error)}. Check the bot's permissions and connection.`,
       })
     } catch (sendError) {
       this.options.logger.error(
@@ -499,7 +499,7 @@ export class RunFeedback {
             session,
             channelName,
             msg,
-            `Couldn't show the topic Stop control: ${errorMessage(error)}. Check the bot's send permission and retry.`,
+            `Couldn't show the topic Stop control: ${channel.formatError?.(error) ?? errorMessage(error)}. Check the bot's send permission and retry.`,
           )
           throw error
         }
@@ -529,7 +529,8 @@ export class RunFeedback {
           this.options.logger.error(
             `[${channelName}] Passive evaluation failed: ${errorMessage(error)}`,
           )
-        else answer = `Task failed: ${errorMessage(error)}`
+        else
+          answer = `Task failed: ${channel?.formatError?.(error) ?? errorMessage(error)}`
       }
       publishChannelEvent(session, {
         type: 'channel_error',

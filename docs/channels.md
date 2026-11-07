@@ -2,7 +2,7 @@
 
 A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `lark-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history. Messages queue in order by default; Lark also offers Steer and Stop during a run.
 
-This page is for running Vela in a group chat. To write a channel, see [Channels reference](channels-reference.md); it covers writing a channel, the gateway lifecycle, custom transports and external event subscriptions.
+This page covers running Vela in a group chat and connecting a local app or script. To write a channel, see [Channels reference](channels-reference.md); it covers writing a channel, the gateway lifecycle, custom transports and external event subscriptions.
 
 **Enabling a chat means trusting everyone in it with this machine.** Lark gives every member of an enabled chat full access, including bash, files, memory and extension tools. There is no sandbox or per-member boundary. See [Security](security.md#channel-senders) before enabling a group.
 
@@ -13,6 +13,216 @@ The shared topic tools now use `channel_*` on Lark too: `channel_start_topic`, `
 ## Isolation scope
 
 Each group's workspace is a default path, **not a security sandbox**. Absolute paths, traversal, symlinks, bash, shared extensions and credentials can still reach host resources. Memory/global-write restrictions apply to the memory API, not OS access. Enabled chats remain the trust boundary; topics share their group's workspace and notes, and all groups intentionally read global notes. Vela provides routine workspace/context separation, not hostile-user containment.
+
+## Local
+
+Local is an authenticated HTTP/SSE transport for apps and scripts on the daemon's machine. It uses the shared channel gateway: each project has a hub conversation, and work dispatched from the hub has separate task/topic sessions. It does not include an app UI or remote-access service.
+
+### Start the daemon
+
+Configure a model and its credentials first (see [Models](models.md)), then merge this into **user-level** `~/.vela/settings.json` (or `$VELA_DIR/settings.json`):
+
+```json
+{
+  "extensionConfig": {
+    "local": {
+      "enabled": true,
+      "token": "$VELA_LOCAL_TOKEN",
+      "port": 8788,
+      "timezone": "UTC"
+    }
+  }
+}
+```
+
+The timezone is optional and defaults to the process timezone for routines. Supply a nonempty secret through the daemon's environment, not a committed settings file. For example, in a shell with OpenSSL installed:
+
+```sh
+export VELA_LOCAL_TOKEN="$(openssl rand -hex 32)"
+cd /absolute/path/to/daemon-workspace
+vela serve
+```
+
+Keep the same token in the client environment through your normal secret-management mechanism. Do not print it in logs or include it in URLs. A service manager must supply the token and model credentials to the daemon; see [Deployment](deploy.md) for running `vela serve` continuously. Restart after changing settings. Local is disabled by default. Only real `vela serve` enables this listener: interactive, print, JSON, RPC and model-listing modes do not, and `--no-extensions` disables it. Project-level `extensionConfig.local` cannot enable, disable or override it. There is no `builtin:local` selector; use the user-level settings above.
+
+The listener binds **only `127.0.0.1`**, default port **8788**. Every route, including info and SSE, requires `Authorization: Bearer <token>`. Local has no cookie authentication or CORS support. Use an HTTP client that can set an Authorization header; browser `EventSource` cannot set that header. Local's token grants access to the daemon's configured tool authority, including its files and credentials. Loopback and a token are not a sandbox or a multi-user isolation boundary.
+
+**Keep Local separate from the webhook receiver on port 8787. Do not tunnel, proxy publicly or otherwise expose Local.** A webhook tunnel must point only to the webhook listener, never Local. Port configuration does not change this trust model.
+
+### SDK startup
+
+The SDK does not read `extensionConfig.local` to enable the transport. Pass an explicit token to `local(options)`, exported by `@glows777/vela` and `@glows777/vela-channels`, and start channels explicitly:
+
+```ts
+import { createVela, local } from '@glows777/vela'
+
+const token = process.env.VELA_LOCAL_TOKEN
+if (!token) throw new Error('Set VELA_LOCAL_TOKEN')
+const vela = createVela({
+  dataDir: '/absolute/path/to/vela-data',
+  // Configure model/providers/credentials as in your normal SDK application.
+  extensions: [local({ token, port: 8788, timezone: 'UTC' })],
+})
+await vela.ready()
+await vela.startChannels()
+// When the host shuts down:
+// await vela.dispose()
+```
+
+`LocalOptions` has required `token: string` and optional `port: number` and `timezone: string`. The token must not be empty, whitespace-only or contain CR/LF. Ports are integers from 0 through 65535; omit for 8788. Port 0 selects an ephemeral listener (useful for SDK tests); the actual address appears in daemon diagnostics. Choose a fixed port for an app deployment.
+
+### Projects, sessions and persistence
+
+Opening a project requires an existing directory. Its `cwd` is resolved through `realpath`; reopening the same canonical path returns the same project, including its original name. Relative paths resolve on the daemon, not the client; prefer absolute paths. A new name defaults to the directory basename. Project IDs, session IDs and run IDs are opaque: use returned values rather than constructing them.
+
+The project cwd is the default tool working directory, **not a security boundary**. Absolute paths, symlinks and tools can still reach the rest of the host. Opening a Local project does not reload that project's `.vela` settings, extensions, skills or templates: sessions use the daemon's already-loaded configuration. Normal context-file discovery can still supply project instructions. All projects remain under the same daemon/tool authority.
+
+A project supplies its hub `sessionId`. The sessions endpoint also returns task sessions created through shared channel dispatch. POST to the hub to ask for work; there is no separate HTTP task-creation endpoint. The gateway queues hub inputs. Human input to an active task automatically steers that task; an idle task starts another run. There is no client-selectable queue/steer mode. Different task sessions can run concurrently. Stop targets one current run and does not delete history or cancel other queued hub inputs.
+
+The registry, deployment ID and visible messages persist under `<dataDir>/local/`; logical channel sessions and core transcripts use the existing channel/session stores. Reconnect or restart against the **same deployment and data directory** to retain identity and history. The CLI's existing default data directory depends on the cwd from which `vela serve` starts, so keep its working directory and data configuration stable. Opening another Local project does not switch the daemon's data directory. A different data directory is a different deployment, even if the same project paths are opened. No existing Lark data or settings migrate for Local.
+
+Visible history contains human messages, delivered assistant replies and visible system text such as task titles or reminders. It is not the core transcript: hidden handoff briefs, internal notes, thinking, tool arguments and tool results are not included. Replies persist even when no SSE client is connected. Progress is a sanitized summary, not a raw model stream; provider/framework failures use safe client-facing text rather than raw diagnostics. Operator diagnostics remain separate. This is not a content filter for normal assistant replies or user-authored text.
+
+### HTTP v1 reference
+
+All responses below are JSON except the event stream. JSON responses use `Cache-Control: no-store`. POST requests require `Content-Type: application/json` and a JSON object. Bodies are limited to **1 MiB**. Unknown body fields and unknown or repeated query parameters are rejected. There are no multipart/file uploads, remote cwd URLs, host-binding options or token query parameters.
+
+| Method and path | Request | Successful response |
+| --- | --- | --- |
+| `GET /v1/info` | No query | `200 { version: 1, channel: "local", deploymentId, capabilities: ["projects", "sessions", "messages", "stop", "sse-reset"] }` |
+| `GET /v1/projects` | No query | `200 { projects: LocalProject[] }` |
+| `POST /v1/projects` | `{ cwd: string, name?: string }` | `201 LocalProject`, also when reopening an existing project |
+| `GET /v1/projects/:projectId/sessions` | No query | `200 { sessions: LocalSession[] }` |
+| `GET /v1/projects/:projectId/sessions/:sessionId/messages` | Optional `after` message ID and `limit` | `200 { messages: LocalMessage[], nextCursor?: string }` |
+| `POST /v1/projects/:projectId/sessions/:sessionId/messages` | `{ text: string, clientMessageId?: string }` | `202 { sessionId, messageId }` |
+| `POST /v1/projects/:projectId/sessions/:sessionId/stop` | `{ runId: string }` | `200 { stopped: true }` |
+| `GET /v1/events` | Optional `projectId` | `200 text/event-stream` for all projects or the selected project |
+
+Request constraints:
+
+- `cwd` must be nonempty and resolve to an existing directory. `name`, if provided, is trimmed and must be 1–200 characters.
+- `text` is trimmed and must be 1–100,000 characters. `clientMessageId`, if provided, must be 1–200 characters. `runId` must be 1–200 characters.
+- History is oldest-first, with `limit` defaulting to 50 and accepting integers 1–100. `after` is exclusive and must name a message in that session. Follow `nextCursor` until absent to finish the snapshot; retain the last message ID to request later additions. An unknown cursor is an error, not an empty page.
+- A session must belong to the project in the URL. Task IDs cannot be used to target another project.
+
+Response types (optional fields are omitted when unavailable):
+
+```ts
+type LocalProject = {
+  id: string
+  channel: 'local'
+  cwd: string
+  name: string
+  sessionId: string // project hub
+}
+type LocalSession = {
+  channel: 'local'
+  sessionId: string
+  chatId: string // project ID
+  chatKind: 'group' | 'direct'
+  topic?: { rootId: string; threadId: string }
+  task: string
+  state: 'running' | 'queued' | 'waiting' | 'done' | 'stopped'
+  requester: { id: string; name: string }
+  updatedAt: string
+  waitingReason?: string
+  runId?: string
+}
+type LocalMessage = {
+  id: string
+  sessionId: string
+  role: 'user' | 'assistant' | 'system'
+  text: string
+  createdAt: string
+  clientMessageId?: string
+}
+```
+
+Timestamps are ISO strings. Local human input is attributed to `{ id: "local-user", name: "You" }`. A newly opened hub is listed even before its first message. `runId` identifies the current preparation/execution lifetime, not a session generation; it may disappear while reply delivery finishes. Read the current session before offering Stop. An expired, unknown or already-stopped run returns `409`; reload rather than applying an old Stop to a newer run.
+
+**202 means admission, not completion.** It does not guarantee a reply or exactly-once execution. Use session/history snapshots and live events to observe progress. `clientMessageId` is optional correlation stored with the submitted visible input, **not an idempotency key**: repeating a POST admits another message. If a request times out, disconnects or returns an uncertain storage/admission failure, reconcile visible history (including the correlation ID) and current sessions before deciding whether to retry. Do not blindly retry a message POST. A crash can leave admitted work needing resubmission; Local does not promise crash-proof queue delivery or exactly-once processing.
+
+Errors use `{ "error": { "code": "...", "message": "..." } }`. Defined HTTP codes are `400 invalid_request`, `401 unauthorized`, `404 not_found`, `405 method_not_allowed`, `409 conflict`, `413 payload_too_large`, `415 unsupported_media_type` and `503 unavailable`. Unknown routes or unsupported method/route combinations can return 404. Storage/admission failures return a generic 503 that asks the client to reconcile history and inspect daemon diagnostics.
+
+### SSE events and reconnect
+
+Each event is framed as `id: <id>`, `event: <type>` and `data: <JSON envelope>`, followed by a blank line. The envelope is:
+
+```ts
+type LocalEvent = {
+  version: 1
+  id: string
+  time: string
+  projectId?: string
+  sessionId?: string
+  runId?: string
+  type: string
+  data: unknown // one of the exact payloads below
+}
+```
+
+| Type | `data` |
+| --- | --- |
+| `reset` | `{ reason: "connected", reload: ["sessions", "messages"] }` |
+| `message` | `LocalMessage` |
+| `session` | `LocalSession` |
+| `run_started` | `{}` |
+| `run_finished` | `{ outcome: "done" \| "failed" \| "stopped" \| "silent" }` |
+| `progress` | `{ stage: "tool" \| "retry" \| "compaction", tool?: string, state?: "started" \| "finished" \| "failed" }` |
+| `status` | `{ text: string }` |
+| `error` | `{ code: string, message: string }` |
+
+Tool progress includes only a sanitized tool name (up to 80 characters) and start/finish/failure state; it contains no arguments or results. Retry progress has only `stage: "retry"`. Compaction has start/finish state. A failed run can emit `error` with `code: "run_failed"` and generic text. Status events report saved task status lines, not an additional model response.
+
+Every connection, including the first, begins with `reset`. **There is no event replay; `Last-Event-ID` is ignored.** Event IDs are opaque identifiers, not history cursors or a resumable sequence. On every reset, reload session and visible-message snapshots. Keep live events buffered while loading and reconcile messages by message ID, then refresh sessions after loading if necessary. Do not infer missed replies from missing terminal events. Use `deploymentId` from `/v1/info` to detect a different store and discard stale cached IDs.
+
+The server sends a comment heartbeat (`: heartbeat`) every 15 seconds. It disconnects a slow client as soon as a socket write reports backpressure, rather than buffering indefinitely or blocking model delivery. Reconnect with backoff and reload on reset. A disconnected subscriber does not prevent replies from being saved. Filtering by `projectId` limits live events to that existing project; it is not a separate authorization scope.
+
+### Script client examples
+
+These shell examples require `curl`, `jq` and an already-running daemon. The client must receive the same `VELA_LOCAL_TOKEN` securely. First check the deployment, open the current directory and submit to its hub:
+
+```sh
+set -eu
+: "${VELA_LOCAL_TOKEN:?Set the same token as the daemon}"
+BASE=http://127.0.0.1:8788
+curl --fail-with-body -sS -H "Authorization: Bearer $VELA_LOCAL_TOKEN" "$BASE/v1/info"
+PROJECT=$(curl --fail-with-body -sS \
+  -H "Authorization: Bearer $VELA_LOCAL_TOKEN" -H 'Content-Type: application/json' \
+  --data "$(jq -n --arg cwd "$PWD" '{cwd: $cwd}')" "$BASE/v1/projects")
+PROJECT_ID=$(printf '%s' "$PROJECT" | jq -r .id)
+SESSION_ID=$(printf '%s' "$PROJECT" | jq -r .sessionId)
+SESSION_PATH="$BASE/v1/projects/$PROJECT_ID/sessions/$SESSION_ID"
+curl --fail-with-body -sS \
+  -H "Authorization: Bearer $VELA_LOCAL_TOKEN" -H 'Content-Type: application/json' \
+  --data '{"text":"Summarize this project","clientMessageId":"example-1"}' \
+  "$SESSION_PATH/messages"
+```
+
+Read history and sessions, or subscribe to project events in another terminal with the same variables. The stream starts with reset; it does not include earlier replies:
+
+```sh
+curl --fail-with-body -sS -H "Authorization: Bearer $VELA_LOCAL_TOKEN" \
+  "$SESSION_PATH/messages?limit=100"
+curl --fail-with-body -sS -H "Authorization: Bearer $VELA_LOCAL_TOKEN" \
+  "$BASE/v1/projects/$PROJECT_ID/sessions"
+curl --fail-with-body -N -H "Authorization: Bearer $VELA_LOCAL_TOKEN" \
+  "$BASE/v1/events?projectId=$PROJECT_ID"
+```
+
+For a task conversation, set `SESSION_ID` to its value from the sessions response. This example reads a current run ID and attempts Stop once; a race with completion can legitimately return 409:
+
+```sh
+SESSION_PATH="$BASE/v1/projects/$PROJECT_ID/sessions/$SESSION_ID"
+RUN_ID=$(curl --fail-with-body -sS -H "Authorization: Bearer $VELA_LOCAL_TOKEN" \
+  "$BASE/v1/projects/$PROJECT_ID/sessions" | \
+  jq -r --arg id "$SESSION_ID" '.sessions[] | select(.sessionId == $id) | .runId // empty')
+if [ -n "$RUN_ID" ]; then
+  curl --fail-with-body -sS \
+    -H "Authorization: Bearer $VELA_LOCAL_TOKEN" -H 'Content-Type: application/json' \
+    --data "$(jq -n --arg runId "$RUN_ID" '{runId: $runId}')" "$SESSION_PATH/stop"
+fi
+```
 
 ## Lark
 

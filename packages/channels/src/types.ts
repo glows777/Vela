@@ -186,10 +186,12 @@ export interface ChannelRunFeedback {
   finish(outcome: ChannelOutcome): Promise<void>
 }
 
-/** Channel hooks remain experimental until Local exercises the public transport contract end to end. */
+/** Shared transport contract, exercised by Local and Lark. */
 export interface ChannelDefinition {
   name: string
   description: string
+  /** Present framework/provider failures without exposing raw diagnostics in visible replies or status lines. */
+  formatError?: (error: unknown) => string
   /** Platform operations behind the shared channel topic tools. */
   topicCapabilities?: import('./topics.ts').ChannelTopicCapabilities
   /** Deployment-local schedule zone, validated before transport startup. */
@@ -231,7 +233,7 @@ export interface ChannelDefinition {
     activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
 
-  /** Remains experimental pending a second channel implementation. Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
+  /** Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
   startRun?: (
     message: IncomingMessage,
     options: { acknowledge: boolean },

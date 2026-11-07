@@ -4,7 +4,7 @@ This page is for building on the channel interface: writing a channel, the gatew
 
 ## Writing a channel
 
-**Channel hooks remain experimental until the Local transport is exercised end to end.** Shared topic capabilities and adapter-facing admission/control operations are covered by Lark and a non-Lark test adapter. This first part of #281 does not yet ship the Local HTTP/SSE transport. Its completion will determine which hooks can be stabilized; this does not change the stability policy for the rest of the SDK.
+The shared channel contract is exercised by both Lark and the Local HTTP/SSE transport, including admission, task dispatch, run controls and recovery. The documented public interfaces follow the [SDK API stability policy](sdk.md#api-stability); the earlier blanket experimental qualification no longer applies. For the app-facing wire protocol, see [Local](channels.md#local).
 
 Register a `ChannelDefinition` through `vela.registerChannel()` from an extension. The channel types and `createChannelVela` come from `@glows777/vela-channels` (also re-exported by `@glows777/vela`); an adapter for another platform depends on it and `@glows777/vela-core`, like `@glows777/vela-lark` does. The [echo channel](../examples/extensions/echo-channel.ts) is a minimal offline example. Enforce chat enablement before invoking the incoming handler: the gateway gives every sender the session's full access and a shared transcript.
 
@@ -19,6 +19,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
 | `topicCapabilities` | No | Implement `ChannelTopicCapabilities` to use the common topic tools and prompts. Platform creation, forwarding and visible-history retrieval stay in the adapter. |
 | `sessionOptions(message)` | No | Select `{ cwd?, tools?, permissions? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. |
+| `formatError(error)` | No | Return safe client-facing text for a framework/provider failure before it enters visible history or status. Signature: `(error: unknown) => string`. Omit to retain the existing error presentation (including Lark). Local uses a generic diagnostic hint rather than exposing provider details. This does not filter normal model replies or user content. |
 | `validateTools(names)` | No | Check configured names against all registered tools after extension loading. A thrown error rejects startup before transport or recovery. |
 | `prepareMessage(message, activeMessage?)` | No | Asynchronously resolve names/history/attachments when the input is ready. Return the prepared message, or `undefined` when handled without a prompt. A steer receives its active run's original trigger as the second argument; queued inputs do not. Exclude context already present in that trigger. |
 | `startRun(message, { acknowledge })` | No | Begin feedback after admission and before preparation; return a lifecycle with `event(update)` and `finish(outcome)`, or no handle. `acknowledge: false` creates presentation for a handed-off task whose original input already owns feedback. See below. |

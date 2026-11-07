@@ -72,6 +72,7 @@
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
+    formatError?: ((error: unknown) => string) | undefined
     name: string
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
@@ -353,6 +354,62 @@
     providers: string[]
     tools: string[]
   function loadModels: (options: { agentDir: string; env?: Env; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
+  function local: (options: LocalOptions) => ChannelExtension
+  type LocalEvent = LocalEventData & {
+      version: 1
+      id: string
+      time: string
+      projectId?: string
+      sessionId?: string
+      runId?: string
+      }
+  type LocalEventData = | {
+      type: 'reset'
+      data: { reason: 'connected'; reload: ['sessions', 'messages'] }
+      }
+      | { type: 'message'; data: LocalMessage }
+      | { type: 'session'; data: LocalSession }
+      | { type: 'run_started'; data: Record<string, never> }
+      | {
+      type: 'run_finished'
+      data: { outcome: 'done' | 'failed' | 'stopped' | 'silent' }
+      }
+      | { type: 'progress'; data: LocalProgress }
+      | { type: 'status'; data: { text: string } }
+      | { type: 'error'; data: { code: string; message: string } }
+  interface LocalMessage
+    clientMessageId?: string | undefined
+    createdAt: string
+    id: string
+    role: "user" | "system" | "assistant"
+    sessionId: string
+    text: string
+  interface LocalOptions
+    port?: number | undefined
+    timezone?: string | undefined
+    token: string
+  interface LocalProgress
+    stage: "compaction" | "tool" | "retry"
+    state?: "started" | "finished" | "failed" | undefined
+    tool?: string | undefined
+  interface LocalProject
+    channel: "local"
+    cwd: string
+    id: string
+    name: string
+    sessionId: string
+  interface LocalSession
+    channel: "local"
+    chatId: string
+    chatKind: "group" | "direct"
+    requester: { id: string; name: string; }
+    runId?: string | undefined
+    sessionId: string
+    state: "running" | "queued" | "waiting" | "done" | "stopped"
+    task: string
+    topic?: { rootId: string; threadId: string; } | undefined
+    updatedAt: string
+    waitingReason?: string | undefined
   interface LoginOptions
     agentName?: string | undefined
     getDeviceId?: (() => string) | undefined
@@ -805,6 +862,7 @@
     providers: Record<string, ProviderDefinition>
     settings: VelaSettings
     skillDirs: string[]
+    userExtensionConfig: Record<string, Record<string, unknown>>
   type VelaEvent = | { type: 'agent_start'; input: string }
       | { type: 'turn_start'; turn: number }
       | {
