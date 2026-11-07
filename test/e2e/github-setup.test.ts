@@ -192,12 +192,8 @@ for (const url of [
   'https://hooks.example.com/#frag',
   'https://hooks.example.com?',
   'https://localhost',
-  'https://sub.localhost',
-  'https://127.1',
-  'https://[::1]',
-  'https://0.0.0.0',
 ])
-  test(`unsafe origin fails before config or gh: ${url}`, async () => {
+  test(`invalid origin fails before config or gh: ${url}`, async () => {
     const f = githubFixture()
     const result = await f.cli([
       'setup',
@@ -209,6 +205,32 @@ for (const url of [
     expect(result.code).toBe(1)
     expect(f.saved()).toBe(false)
     expect(f.state().calls).toEqual([])
+  })
+for (const url of [
+  'https://sub.localhost',
+  'https://127.1',
+  'https://127.0.0.1',
+  'https://[::1]',
+  'https://0.0.0.0',
+  'https://[::]',
+  'https://[::ffff:127.0.0.1]',
+  'https://[::ffff:0.0.0.0]',
+])
+  test(`non-localhost origin reaches webhook setup: ${url}`, async () => {
+    const f = githubFixture()
+    const result = await f.cli([
+      'setup',
+      'github',
+      'acme/widgets',
+      '--url',
+      url,
+    ])
+    expect(result.code).toBe(0)
+    expect(f.saved()).toBe(true)
+    expect(f.state().hooks['acme/widgets']).toHaveLength(1)
+    expect(f.state().hooks['acme/widgets']![0]!.config.url).toBe(
+      `${new URL(url).origin}/events/github`,
+    )
   })
 for (const repo of [
   'widgets',
