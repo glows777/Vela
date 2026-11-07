@@ -202,6 +202,11 @@ export async function runAttempt(
         eval: {
           api: 'openai-responses',
           baseUrl: 'https://api.deepseek.com',
+          compat: {
+            store: false,
+            supportsDeveloperRole: false,
+            deepseekReasoningStream: true,
+          },
           apiKey: '$OPENAI_KEY',
           models: [
             {

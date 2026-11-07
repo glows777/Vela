@@ -1,10 +1,10 @@
 # Models
 
-Vela talks to models through the [AI SDK](https://ai-sdk.dev). A model is named `provider/id`, for example `openai/gpt-5.5` or `anthropic/claude-opus-4-8`. Three providers are built in (`anthropic`, `openai`, `openrouter`); others are added in `~/.vela/models.json` or by extensions. A built-in model catalog, generated from pi's, gives the built-in providers their model lists and every known model its context window, output limit, price and thinking levels.
+Vela talks to models through the [AI SDK](https://ai-sdk.dev). A model is named `provider/id`, for example `openai/gpt-5.5` or `anthropic/claude-opus-4-8`. Four providers are built in (`anthropic`, `openai`, `openrouter`, `deepseek`); others are added in `~/.vela/models.json` or by extensions. A built-in model catalog, generated from pi's, gives the built-in providers their model lists and every known model its context window, output limit, price and thinking levels.
 
 ## Setup wizard
 
-Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek is a preset; other OpenAI-compatible services accept a base URL and model ID. Existing environment variables and the manual configuration below remain supported.
+Run `vela` interactively without a usable model to start setup, or run `vela setup` to revisit configuration. The wizard verifies the selected model with a minimal request, which may incur a small charge, before saving user-level credentials and settings. DeepSeek uses the built-in provider and defaults to `deepseek/deepseek-flash`; other OpenAI-compatible services accept a base URL and model ID. Existing environment variables and the manual configuration below remain supported.
 
 ## Selecting a model
 
@@ -15,7 +15,7 @@ The CLI uses the first of these that is set:
 3. The model saved with a resumed session (`-c`, `-r`, `--session`, `/resume`).
 4. `defaultModel` in [settings](settings.md).
 5. `openai/$OPENAI_API_MODEL_NAME`, when that variable is set.
-6. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`); else the first available model. These are pi's defaults.
+6. The default model of the first built-in provider that has a credential, in the order `anthropic` (`claude-opus-4-8`), `openai` (`gpt-5.5`), `openrouter` (`moonshotai/kimi-k2.6`), `deepseek` (`deepseek-flash`); else the first available model. The first three retain pi's preference order.
 
 If none applies, interactive Vela starts the setup wizard and leaves the `/model` guidance out while it runs; cancelling it brings the hint back. Print mode exits with code 1 and points to `vela setup`; RPC and serve keep their existing behavior.
 
@@ -37,12 +37,13 @@ The part after the first `/` is the model id, so ids that contain `/` work: `ope
 | `anthropic` | `anthropic-messages` | `ANTHROPIC_API_KEY` | API key |
 | `openai` | `openai-responses` (Responses API) | `OPENAI_API_KEY`; base URL `OPENAI_API_BASE_URL` | Sign in with ChatGPT, or API key |
 | `openrouter` | `openai-completions` | `OPENROUTER_API_KEY` | OpenRouter sign-in (creates a key), or API key |
+| `deepseek` | `openai-responses` | `DEEPSEEK_API_KEY` | API key |
 
 Their models come from the built-in catalog. A provider without a credential fails when its model is used, with a message naming `/login`, the variable and `models.json`. For an OpenAI-compatible service that only speaks Chat Completions, set `"api": "openai-completions"` on `openai` in `models.json`, or add it as its own provider.
 
-With the `web` extension enabled, the direct API-key paths for built-in OpenAI Responses and Anthropic Messages models can use provider-hosted web search. OAuth, custom endpoints and other protocols do not declare hosted search by default. For OpenAI Responses with effective minimal reasoning, Vela conservatively keeps an independent search provider if configured; OpenAI documents that GPT-5 native web search requires higher reasoning. This policy also applies to opted-in custom Responses endpoints. Search calls may have separate provider charges which are not included in Vela's token cost estimate. See [web search permissions and fallback](built-in-extensions.md#web).
+With the `web` extension enabled, built-in OpenAI Responses and Anthropic Messages models and DeepSeek `deepseek-v4-pro` can use provider-hosted web search with an API key. DeepSeek `deepseek-flash` does not declare it. OAuth, other custom providers and other protocols do not declare hosted search by default. A `deepseek` provider URL override retains its declared capabilities; disable `compat.hostedTools` at model level if the gateway does not support search. For OpenAI Responses with effective minimal reasoning, Vela conservatively keeps an independent search provider if configured; OpenAI documents that GPT-5 native web search requires higher reasoning. This policy also applies to opted-in custom Responses endpoints. Search calls may have separate provider charges which are not included in Vela's token cost estimate. See [web search permissions and fallback](built-in-extensions.md#web).
 
-For `openai-responses` endpoints whose hostname is exactly `api.deepseek.com`, Vela sets `providerOptions.openai.store: false` before SDK serialization. [DeepSeek's Responses API](https://api-docs.deepseek.com/guides/responses_api/) is stateless and does not support server-side item references. This option lets the SDK send earlier assistant answers inline, retaining their phase and ordinary function call/result pairs without manually rewriting history. Local history, user messages and other providers are unchanged. This does not fix reasoning-event parsing or establish complete reasoning-history replay support.
+Built-in DeepSeek uses Responses rather than pi's Chat Completions so `deepseek-v4-pro` can use native search. Its compatibility defaults are `store: false`, `supportsDeveloperRole: false` and `deepseekReasoningStream: true`. [DeepSeek's Responses API](https://api-docs.deepseek.com/guides/responses_api/) is stateless: the SDK serializes earlier assistant answers and function call/result pairs inline. Plaintext reasoning is streamed and saved, but reasoning-history replay remains unsupported. These defaults also apply when the built-in provider uses a gateway URL.
 
 ## Credentials and /login
 
@@ -82,10 +83,8 @@ The plan route accepts fewer request options than the API: Vela sends requests w
 {
   "providers": {
     "deepseek": {
-      "api": "openai-completions",
-      "baseUrl": "https://api.deepseek.com",
       "apiKey": "$DEEPSEEK_API_KEY",
-      "models": [{ "id": "deepseek-chat" }]
+      "models": [{ "id": "deepseek-flash", "name": "DeepSeek (work)" }]
     },
     "ollama": {
       "api": "openai-completions",
@@ -105,12 +104,12 @@ The plan route accepts fewer request options than the API: Vela sends requests w
 | `baseUrl` | API base URL. Without it Vela uses the official endpoint. Built-in OpenAI also supports `OPENAI_API_BASE_URL`. Vela does not implicitly use the SDK's `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`. |
 | `apiKey` | A literal key, or `$NAME` / `${NAME}` to read an environment variable. Local servers that ignore the key still need a placeholder value. A provider without a key is not listed in `/model`. |
 | `headers` | Extra HTTP headers. Values support `$NAME` / `${NAME}`. |
-| `compat` | Explicit wire compatibility settings. `hostedTools: ["web_search"]` opts in to native search, `store: false` requests stateless Responses, and `includeWebSearchSources: false` omits the optional sources include. A model's `compat` fields override the provider's. |
+| `compat` | Explicit wire compatibility settings. `hostedTools: ["web_search"]` opts in to native search, `store: false` requests stateless Responses, and `includeWebSearchSources: false` omits the optional sources include. See [compatibility flags](#compatibility-flags). A model's fields override the provider's. |
 | `models` | Known models with metadata. Optional: unlisted ids still work. |
 
 `$$` is a literal `$`. An unset variable becomes an empty string, so an `apiKey` that points to an unset variable counts as missing.
 
-An entry named `anthropic`, `openai` or `openrouter` overrides the built-in provider field by field and adds models to the catalog's list. A listed model id that the catalog knows keeps the catalog's metadata, with your fields on top:
+An entry named `anthropic`, `openai`, `openrouter` or `deepseek` overrides the built-in provider field by field and adds models to the catalog's list. A listed model id that the catalog knows keeps the catalog's metadata, with your fields on top:
 
 ```json
 {
@@ -136,9 +135,50 @@ An entry named `anthropic`, `openai` or `openrouter` overrides the built-in prov
 | `input` | `["text"]` or `["text", "image"]`. |
 | `cost` | Prices in dollars per million tokens: `input`, `output`, `cacheRead`, `cacheWrite`. Used for the cost in `/usage` and the footer. |
 
-A model id that is not listed in `models.json` takes its metadata from the catalog when the catalog knows that id, first under the same provider and then under any provider (so `deepseek/deepseek-chat` above gets DeepSeek's context window and price). A model the catalog doesn't know has no cost: `/usage` and the footer show its tokens without a dollar amount.
+A model id that is not listed in `models.json` takes its metadata from the catalog when the catalog knows that id, first under the same provider and then under any provider (so `deepseek/deepseek-flash` above gets DeepSeek's context window and price). A model the catalog doesn't know has no cost: `/usage` and the footer show its tokens without a dollar amount.
 
-`compat` is an explicit assertion about the configured endpoint and model; Vela does not infer hosted search from a gateway hostname or model name. Only `openai-responses` and `anthropic-messages` can opt into `web_search`. To turn off a provider-level hosted tool for a model, set that model's `compat.hostedTools` to `[]`.
+### Compatibility flags
+
+Compatibility is explicit, not inferred from a hostname or model ID. Provider defaults merge with a provider override field by field; model defaults merge with model overrides the same way. The effective model fields then override provider fields, including explicit `false` and `[]`. For example, setting only `includeWebSearchSources` on the built-in DeepSeek provider keeps its three other defaults. To turn off v4-pro search, set `compat.hostedTools: []` on its model entry.
+
+| Field | Effect |
+|---|---|
+| `hostedTools` | `["web_search"]` opts into provider-hosted search; `[]` disables it. Supported by Responses and Anthropic Messages, not Chat Completions. |
+| `store` | Responses request default. `false` keeps history inline instead of referencing stored provider items. An explicit per-request `providerOptions.openai.store` takes precedence. |
+| `supportsDeveloperRole` | Responses only; `false` keeps the system prompt as `system`. Omitted or `true` leaves the SDK's role selection unchanged. Explicit `providerOptions.openai.systemMessageMode` takes precedence. |
+| `deepseekReasoningStream` | Responses only; `true` recovers `response.reasoning_text.delta` events the OpenAI SDK drops. Omitted or `false` leaves the SDK stream unchanged. |
+| `includeWebSearchSources` | Responses request default for including search sources; `false` omits the optional sources include. Explicit per-request options win. |
+
+`supportsDeveloperRole` follows pi-ai 1.1.0's `OpenAIResponsesCompat` (`src/types.ts:890–892`, `src/api/openai-responses-shared.ts:214–215`). `deepseekReasoningStream` is a Vela adapter flag: pi parses plaintext reasoning directly (`src/api/openai-responses-shared.ts:625`), while Vela must recover it from the SDK's raw stream. `store` and the hosted-search fields reuse Vela's existing Responses integration; pi's completions `thinkingFormat` controls a different request shape and is not used here.
+
+### Migrating existing DeepSeek configurations
+
+An existing provider named `deepseek` retains its explicit `api`, `baseUrl`, key, headers and listed models. Responses entries inherit the built-in compatibility defaults. An explicit Chat Completions override remains Chat Completions, without inherited v4-pro hosted search; remove that `api` override to use the new default Responses path. Vela does not rewrite `models.json` or change saved model references. Existing model IDs are not renamed; their availability remains up to the provider.
+
+**Providers with another name must opt in.** The former exact-`api.deepseek.com` behavior is removed. If a provider such as `openai` or `my-deepseek` relied on that hostname to get DeepSeek compatibility, add the following flags before upgrading. Keep its name, key and URL so saved sessions continue to resolve the same model. The same configuration works behind a different gateway hostname:
+
+```json
+{
+  "providers": {
+    "my-deepseek": {
+      "api": "openai-responses",
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "$GATEWAY_API_KEY",
+      "compat": {
+        "store": false,
+        "supportsDeveloperRole": false,
+        "deepseekReasoningStream": true
+      },
+      "models": [
+        { "id": "deepseek-flash" },
+        { "id": "deepseek-v4-pro", "compat": { "hostedTools": ["web_search"] } }
+      ]
+    }
+  }
+}
+```
+
+Only declare hosted search if that endpoint/model supports it.
 
 For example, two OpenRouter custom providers can share a key while retaining their original protocol shapes:
 
@@ -205,9 +245,9 @@ The clamp looks for the next higher supported level first, then lower. `/thinkin
 
 For `openai-responses` providers loaded from configuration, Vela uses the effective model metadata (your merged model entry, then the catalog) before the SDK serializes the request. `reasoning: true` enables the SDK's reasoning path even for an unfamiliar model id. False or missing metadata leaves the SDK's own capability inference unchanged. String values in `thinkingLevelMap` map the selected level to `reasoning.effort`; missing values retain the generic effort (`off` uses `none`). Explicit `providerOptions.openai.forceReasoning` and `reasoningEffort` take precedence. Native OpenAI model-specific effort validation still applies.
 
-Responses requests to the exact hostname `api.deepseek.com` default to the `system` role: [DeepSeek treats `developer` as `user`](https://api-docs.deepseek.com/guides/responses_api/). An explicit `systemMessageMode` wins; ChatGPT OAuth's existing request rules remain authoritative. Other protocols keep their existing role behavior. On other Responses hosts, enabling reasoning for an unfamiliar model can change the SDK's default role from `system` to `developer`. Custom endpoints requiring `system` can set the existing `providerOptions.openai.systemMessageMode` request option to `'system'` through a [`before_provider_request` hook](extensions.md#intercepting-events) or model wrapper; there is no general `models.json` field for this option.
+For Responses, `compat.supportsDeveloperRole: false` defaults to the `system` role: [DeepSeek treats `developer` as `user`](https://api-docs.deepseek.com/guides/responses_api/). Explicit `systemMessageMode` wins; ChatGPT OAuth's request rules remain authoritative. Other protocols keep their existing role behavior.
 
-This enables thinking controls, not full DeepSeek Responses compatibility. With the installed SDK, forcing reasoning also filters `temperature` and `topP` for unfamiliar model ids, even with effort `none`, and adds `reasoning.encrypted_content` to `include` when `store: false` is used, including the policy enforced for `api.deepseek.com`. DeepSeek documents encrypted reasoning and that include field as unsupported. For `api.deepseek.com`, Vela now parses plaintext reasoning deltas (`response.reasoning_text.delta`) so thinking is displayed and saved in the session. Reasoning replay remains unsupported.
+This does not establish complete DeepSeek Responses compatibility. With the installed SDK, forcing reasoning filters `temperature` and `topP` for unfamiliar IDs even with effort `none`, and `store: false` adds `reasoning.encrypted_content` to `include`. DeepSeek documents encrypted reasoning and that include field as unsupported. With `compat.deepseekReasoningStream: true`, plaintext deltas are displayed and saved. Reasoning replay remains unsupported; live API verification is still needed for endpoint-specific behavior.
 
 ## Extension providers
 

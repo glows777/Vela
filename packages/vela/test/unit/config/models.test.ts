@@ -64,6 +64,8 @@ const call = (model: unknown) =>
 test.each([
   ['https://api.deepseek.com', false],
   ['https://api.deepseek.com/v1', false],
+  ['https://api.deepseek.com', true],
+  ['https://gateway.example/v1', false],
   ['https://api.openai.com/v1', true],
   [undefined, true],
   ['https://api.deepseek.com.example/v1', true],
@@ -75,6 +77,7 @@ test.each([
       loadModels({
         agentDir: agentDir(),
         env: { OPENAI_API_KEY: 'test-key', OPENAI_API_BASE_URL: baseURL },
+        overrides: { openai: { compat: references ? {} : { store: false } } },
       }),
     )
     const model = registry.resolve('openai/deepseek-flash').model
@@ -150,7 +153,7 @@ test.each([
 )
 
 test.each([
-  ['openai-responses', 'https://api.deepseek.com', false],
+  ['openai-responses', 'https://api.deepseek.com', true],
   ['openai-responses', 'https://api.openai.com/v1', true],
   ['openai-completions', 'https://api.deepseek.com', true],
 ] as const)(
@@ -160,7 +163,14 @@ test.each([
     const registry = registryOf(
       loadModels({
         agentDir: agentDir({
-          providers: { local: { api, baseUrl, apiKey: 'test-key' } },
+          providers: {
+            local: {
+              api,
+              baseUrl,
+              apiKey: 'test-key',
+              compat: { store: false },
+            },
+          },
         }),
         env: {},
       }),
@@ -185,12 +195,17 @@ test.each([
   },
 )
 
-test('anthropic, openai and openrouter are built in, with models and defaults from the catalog', () => {
+test('anthropic, openai, openrouter and deepseek are built in, with models and defaults from the catalog', () => {
   const providers = loadModels({ agentDir: agentDir(), env: {} })
-  expect(Object.keys(providers)).toEqual(['anthropic', 'openai', 'openrouter'])
+  expect(Object.keys(providers)).toEqual([
+    'anthropic',
+    'openai',
+    'openrouter',
+    'deepseek',
+  ])
   const registry = registryOf(providers)
   const all = registry.list()
-  for (const provider of ['anthropic', 'openai', 'openrouter'])
+  for (const provider of ['anthropic', 'openai', 'openrouter', 'deepseek'])
     expect(all.some((m) => m.provider === provider)).toBe(true)
   // Like pi: openai speaks the Responses API
   expect(registry.resolve('openai/gpt-5.5').model).toMatchObject({
