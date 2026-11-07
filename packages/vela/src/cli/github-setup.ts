@@ -119,10 +119,10 @@ export async function githubSetup(
       `Saved GitHub receiver settings to ${prepared.path}. Project settings may override user settings; check the effective configuration before serving.`,
     )
     try {
-      gh(['auth', 'status', '--hostname', 'github.com'], env)
+      gh(['auth', 'status', '--active', '--hostname', 'github.com'], env)
     } catch (error) {
       write(
-        `gh is unavailable or not logged in to github.com: ${redact(error)}. Install GitHub CLI and run gh auth login --hostname github.com, then rerun setup, or configure hooks manually:`,
+        `gh is unavailable or its active github.com account could not be verified: ${redact(error)}. Install GitHub CLI 2.57 or newer and run gh auth login --hostname github.com, then rerun setup, or configure hooks manually:`,
       )
       for (const repo of repositories)
         write(`https://github.com/${repo}/settings/hooks`)

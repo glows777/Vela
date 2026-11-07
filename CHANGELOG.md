@@ -12,7 +12,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
-- **GitHub webhook setup.** `vela setup github owner/repo --url https://public-origin` saves private user receiver settings and creates or updates matching repository hooks through GitHub CLI. Missing authentication leaves manual setup instructions. Topics with GitHub ingress are guided to subscribe to PR events rather than poll; tunnels and live delivery remain operator checks ([#274](https://github.com/glows777/Vela/issues/274)).
+- **GitHub webhook setup.** `vela setup github owner/repo --url https://public-origin` saves private user receiver settings and creates or updates matching repository hooks through GitHub CLI 2.57 or newer. Authentication checks use only the active account; an expired inactive account does not trigger manual fallback or print the secret. Missing authentication leaves manual setup instructions. Topics with GitHub ingress are guided to subscribe to PR events rather than poll; tunnels and live delivery remain operator checks ([#274](https://github.com/glows777/Vela/issues/274)).
 
 - **Custom provider setup.** The setup wizard supports OpenAI Chat Completions, OpenAI Responses and Anthropic Messages endpoints, optional headers and model capabilities, and verifies the chosen configuration before saving. Optional headers and context window use direct inputs: empty Enter keeps existing values or defaults, while Escape cancels without saving. Existing provider and model fields are preserved when unchanged ([#289](https://github.com/glows777/Vela/issues/289)).
 

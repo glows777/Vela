@@ -55,7 +55,7 @@ An extension that fails to load is reported on stderr (or in the chat log) and s
 
 ## GitHub setup
 
-`vela setup github owner/repo --url https://public-origin` configures user-level webhook settings and creates or updates repository hooks through authenticated GitHub CLI. Several repository arguments are supported. Missing arguments are prompted only in a terminal; non-interactive missing input exits 2. Setup runs without starting a model, extensions or channels. Success and cancellation exit 0; local configuration or remote API failures exit 1. Missing/unauthed `gh` saves local settings, prints manual values (including the secret), and exits 1. See [GitHub webhook setup](channels.md#github-webhook-setup) for secret storage, permissions, retries and verification.
+`vela setup github owner/repo --url https://public-origin` configures user-level webhook settings and creates or updates repository hooks through the active account in GitHub CLI 2.57 or newer. Several repository arguments are supported. Missing arguments are prompted only in a terminal; non-interactive missing input exits 2. Setup runs without starting a model, extensions or channels. Success and cancellation exit 0; local configuration or remote API failures exit 1. Missing/unauthed `gh` saves local settings, prints manual values (including the secret), and exits 1. See [GitHub webhook setup](channels.md#github-webhook-setup) for secret storage, permissions, retries and verification.
 
 ## Run modes
 
