@@ -15,7 +15,7 @@ bun scripts/eval/run.ts --only C1,C2,C3,C4,C5,C6 --thinking high
 
 Provide `OPENAI_KEY` in the invoking process environment. The model is
 `deepseek-flash` using Responses at `https://api.deepseek.com`, thinking `max`.
-There is no key/protocol fallback or credential discovery. Workers receive the key
+The named `eval` provider sets explicit DeepSeek compatibility flags (stateless history, system role, plaintext reasoning stream); older baseline loaders ignore unknown flags and keep their existing hostname behavior. There is no key/protocol fallback or credential discovery. Workers receive the key
 through stdin and keep it outside their environment and tool subprocesses.
 Each worker gets a private `bun` executable link and a keyless `BASH_ENV` that
 restores PATH after login-shell startup.

@@ -66,7 +66,7 @@ export interface VelaOptions {
    * saved model) before it can prompt.
    */
   model?: LanguageModel | string
-  /** Model providers (built-in anthropic / openai / openrouter + models.json from loadConfig(), or your own) */
+  /** Model providers (built-in anthropic / openai / openrouter / deepseek + models.json from loadConfig(), or your own) */
   providers?: Record<string, ProviderDefinition>
   /**
    * Credentials stored by `/login` and `vela.login()`, read by providers per request. Default: in memory only.

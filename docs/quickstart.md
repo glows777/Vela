@@ -39,7 +39,7 @@ The first run opens the setup wizard in the terminal. It asks, in order:
      Other OpenAI-compatible
    ```
 
-   DeepSeek saves a preset with its base URL and two models. For another OpenAI-compatible endpoint, choose `Other OpenAI-compatible` and enter a provider name and base URL.
+   DeepSeek uses the built-in Responses provider and defaults to `deepseek/deepseek-flash`. For another OpenAI-compatible endpoint, choose `Other OpenAI-compatible` and enter a provider name and base URL.
 
 2. **Enter a credential.** The wizard asks for an API key, opens a browser for a ChatGPT or OpenRouter sign-in, or offers to keep a credential it already finds in `auth.json`.
 
@@ -141,13 +141,14 @@ git diff | vela -p "Review this change"
 
 ## Manual configuration
 
-Three providers are built in. Give Vela a key for one of them, and it picks that provider's default model:
+Four providers are built in. Give Vela a key for one of them, and it picks that provider's default model:
 
 | Provider | Variable | Default model |
 |---|---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` | `anthropic/claude-opus-4-8` |
 | `openai` | `OPENAI_API_KEY`, optional `OPENAI_API_BASE_URL` for a proxy | `openai/gpt-5.5` |
 | `openrouter` | `OPENROUTER_API_KEY` | `openrouter/moonshotai/kimi-k2.6` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek/deepseek-flash` |
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...

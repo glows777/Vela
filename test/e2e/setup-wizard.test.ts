@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -94,8 +100,24 @@ test('setup preserves a successful browser callback when the paste prompt closes
   }
 })
 
-test('saved setup defaults apply to a new session in the same process', async () => {
+test('setup preserves an existing custom DeepSeek provider and applies its defaults to new sessions', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'vela-setup-session-'))
+  const modelsPath = join(dir, 'models.json')
+  const originalModels = JSON.stringify(
+    {
+      providers: {
+        deepseek: {
+          api: 'openai-completions',
+          baseUrl: 'https://custom.example/v1',
+          headers: { 'x-custom': 'preserved' },
+          models: [{ id: 'deepseek-reasoner' }],
+        },
+      },
+    },
+    null,
+    4,
+  )
+  writeFileSync(modelsPath, originalModels)
   const vela = createVela({
     cwd: dir,
     providers: loadModels({ agentDir: dir }),
@@ -138,8 +160,98 @@ test('saved setup defaults apply to a new session in the same process', async ()
     })
     const next = vela.session('new')
     expect(saved).toBe(true)
+    expect(readFileSync(modelsPath, 'utf8')).toBe(originalModels)
     expect(next.modelInfo.ref).toBe('deepseek/deepseek-reasoner')
     expect(next.thinkingLevel).toBe('high')
+  } finally {
+    globalThis.fetch = originalFetch
+    await vela.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('empty-home DeepSeek setup uses the built-in Responses provider for its first answer', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vela-setup-deepseek-'))
+  const authPath = join(dir, 'auth.json')
+  const vela = createVela({
+    cwd: dir,
+    providers: loadModels({ agentDir: dir, env: {} }),
+    credentials: fileCredentialStore(authPath),
+  })
+  const session = vela.session('initial')
+  const originalFetch = globalThis.fetch
+  const requests: {
+    url: string
+    body: { model: string; stream?: boolean }
+    authorization: string | null
+  }[] = []
+  globalThis.fetch = (async (input, init) => {
+    const body = JSON.parse(String(init?.body))
+    requests.push({
+      url: String(input),
+      body,
+      authorization: new Headers(init?.headers).get('authorization'),
+    })
+    return responsesReply(body)
+  }) as typeof fetch
+  try {
+    const saved = await setupWizard({
+      vela,
+      session,
+      agentDir: dir,
+      select: async (title) =>
+        title === 'Choose a provider'
+          ? 'deepseek'
+          : title === 'Thinking level'
+            ? 'high'
+            : title === 'Connect Lark?'
+              ? 'later'
+              : title.startsWith('Verification failed')
+                ? 'cancel'
+                : 'yes',
+      input: async () => 'fake-deepseek-key',
+      pickModel: async (models) => {
+        expect(models.some((model) => model.id === 'deepseek-flash')).toBe(true)
+        expect(models.some((model) => model.id === 'deepseek-v4-pro')).toBe(
+          true,
+        )
+        expect(models.some((model) => model.id === 'deepseek-chat')).toBe(false)
+        return 'deepseek/deepseek-flash'
+      },
+      addNotice: () => {},
+      setSummary: () => {},
+    })
+    expect(saved).toBe(true)
+    expect(existsSync(join(dir, 'models.json'))).toBe(false)
+    expect(fileCredentialStore(authPath).get('deepseek')).toEqual({
+      type: 'api_key',
+      key: 'fake-deepseek-key',
+    })
+    expect(
+      JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')),
+    ).toMatchObject({
+      defaultModel: 'deepseek/deepseek-flash',
+      defaultThinkingLevel: 'high',
+    })
+    expect(session.modelInfo.ref).toBe('deepseek/deepseek-flash')
+    const next = vela.session('new')
+    expect(next.modelInfo.ref).toBe('deepseek/deepseek-flash')
+    expect(next.thinkingLevel).toBe('high')
+    await session.prompt('Hello DeepSeek')
+    expect(requests).toHaveLength(2)
+    for (const request of requests) {
+      expect(request.url).toBe('https://api.deepseek.com/responses')
+      expect(request.body.model).toBe('deepseek-flash')
+      expect(request.authorization).toBe('Bearer fake-deepseek-key')
+    }
+    expect(requests[1]!.body.stream).toBe(true)
+    expect(
+      session.messages.some(
+        (message) =>
+          message.role === 'assistant' &&
+          JSON.stringify(message.content).includes('OK'),
+      ),
+    ).toBe(true)
   } finally {
     globalThis.fetch = originalFetch
     await vela.dispose()

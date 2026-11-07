@@ -52,7 +52,7 @@ npm install @glows777/vela
 ```ts
 import { createVela, loadConfig } from '@glows777/vela'
 
-// Built-in anthropic / openai / openrouter providers plus ~/.vela/models.json, keys from ~/.vela/auth.json and the environment
+// Built-in anthropic / openai / openrouter / deepseek providers plus ~/.vela/models.json, keys from ~/.vela/auth.json and the environment
 const { providers, credentials } = loadConfig({ env: process.env })
 
 const vela = createVela({ model: 'anthropic/claude-opus-4-8', providers, credentials, cwd: process.cwd() })

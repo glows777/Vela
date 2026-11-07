@@ -93,7 +93,7 @@ export interface VelaConfig {
   contextFiles: ContextFile[]
   /** Contents of `.vela/APPEND_SYSTEM.md` (trusted) or `<agentDir>/APPEND_SYSTEM.md`, like pi */
   appendSystemPrompt?: string
-  /** Built-in providers (anthropic / openai / openrouter) plus those in `<agentDir>/models.json`, for createVela's `providers` */
+  /** Built-in providers (anthropic / openai / openrouter / deepseek) plus those in `<agentDir>/models.json`, for createVela's `providers` */
   providers: Record<string, ProviderDefinition>
   /** Credentials stored by `/login` in `<agentDir>/auth.json` (mode 0600), for createVela's `credentials` */
   credentials: CredentialStore

@@ -303,15 +303,14 @@ test.skipIf(!hasScript)(
   async () => {
     const preload = `
     import { appendFileSync } from 'node:fs';
-    const original = globalThis.fetch;
+    import { responsesReply } from ${JSON.stringify(join(ROOT, 'test/support/responses.ts'))};
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (!url.startsWith('https://api.deepseek.com/')) return original(input, init);
+      if (url !== 'https://api.deepseek.com/responses') throw new Error('Unexpected test URL: ' + url);
       const request = JSON.parse(init.body);
       appendFileSync('requests.jsonl', JSON.stringify(request) + '\\n');
-      if (!request.stream) return Response.json({ id:'verify', object:'chat.completion', created:1, model:'deepseek-chat', choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}], usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2} });
-      const chunk = (delta, finish_reason = null) => 'data: ' + JSON.stringify({id:'answer',object:'chat.completion.chunk',created:1,model:'deepseek-chat',choices:[{index:0,delta,finish_reason}]}) + '\\n\\n';
-      return new Response(chunk({role:'assistant',content:'faux first answer'}) + chunk({}, 'stop') + 'data: [DONE]\\n\\n', {headers:{'content-type':'text/event-stream'}});
+      const response = responsesReply(request);
+      return new Response((await response.text()).replaceAll('OK', 'faux first answer'), {headers: response.headers});
     };
   `
     const result = await cli([], {
@@ -321,7 +320,7 @@ test.skipIf(!hasScript)(
       terminal: [
         ['Choose a provider', '\x1b[B\x1b[B\x1b[B\x1b[B\r'],
         ['API key for deepseek', 'fake-key\r'],
-        ['Select Model', '\x1b[B\r'],
+        ['Select Model', '\r'],
         ['may incur', '\r'],
         ['Thinking level', '\r'],
         ['Connect Lark', '\r'],
@@ -335,27 +334,23 @@ test.skipIf(!hasScript)(
     expect(atSetup).not.toContain('/model provider/id')
     expect(atSetup).not.toContain('No model available')
     expect(result.stdout).toContain('faux first answer')
-    const models = JSON.parse(
-      readFileSync(join(result.agentDir, 'models.json'), 'utf8'),
-    )
+    expect(existsSync(join(result.agentDir, 'models.json'))).toBe(false)
     const settings = JSON.parse(
       readFileSync(join(result.agentDir, 'settings.json'), 'utf8'),
     )
     const auth = JSON.parse(
       readFileSync(join(result.agentDir, 'auth.json'), 'utf8'),
     )
-    expect(models.providers.deepseek.baseUrl).toBe('https://api.deepseek.com')
-    expect(models.providers.deepseek.api).toBe('openai-completions')
-    expect(settings.defaultModel).toBe('deepseek/deepseek-reasoner')
+    expect(settings.defaultModel).toBe('deepseek/deepseek-flash')
     expect(auth.deepseek.key).toBe('fake-key')
     const requests = readFileSync(join(result.cwd, 'requests.jsonl'), 'utf8')
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))
-    expect(requests.at(-1).model).toBe('deepseek-reasoner')
+    expect(requests.at(-1).model).toBe('deepseek-flash')
     expect(requests[0].stream).not.toBe(true)
     expect(requests.some((request) => request.stream === true)).toBe(true)
-    for (const name of ['auth.json', 'models.json', 'settings.json'])
+    for (const name of ['auth.json', 'settings.json'])
       expect(result.stdout).toContain(join(result.agentDir, name))
   },
 )

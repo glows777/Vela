@@ -90,15 +90,6 @@ export async function setupWizard(host: Host): Promise<boolean> {
   if (!choice) return false
   let provider = choice.startsWith('openai-') ? 'openai' : choice
   let preset: ProviderConfig | undefined
-  if (
-    choice === 'deepseek' &&
-    !((modelsFile.providers ?? {}) as Record<string, unknown>).deepseek
-  )
-    preset = {
-      api: 'openai-completions',
-      baseUrl: 'https://api.deepseek.com',
-      models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }],
-    }
   if (choice === 'other') {
     const name = await host.input('Provider name', 'e.g. local')
     if (!name) return false
@@ -149,7 +140,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       : 'replace'
     if (!keep) return false
     if (keep === 'replace') {
-      if (choice === 'deepseek' || choice === 'other') {
+      if (choice === 'other') {
         const key = await host.input(
           `API key for ${provider}`,
           undefined,

@@ -26,6 +26,11 @@ test('the real Responses request exports an object-root routine schema and can c
         compat: {
           api: 'openai-responses',
           baseUrl: 'https://api.deepseek.com',
+          compat: {
+            store: false,
+            supportsDeveloperRole: false,
+            deepseekReasoningStream: true,
+          },
           apiKey: 'test',
         },
       },

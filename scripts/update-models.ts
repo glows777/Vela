@@ -14,7 +14,7 @@ const PI_AI_VERSION = process.argv[2] ?? '1.1.0'
 const APIS = ['anthropic-messages', 'openai-responses', 'openai-completions']
 
 /**
- * Providers whose models go into the catalog. The first three are built in; the rest only lend metadata
+ * Providers whose models go into the catalog. The first four are built in; the rest only lend metadata
  * (context window, price, thinking) to models.json providers that use the same model ids.
  */
 const PROVIDERS = [

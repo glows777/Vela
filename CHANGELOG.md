@@ -6,9 +6,13 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
+- **DeepSeek compatibility is explicit.** Provider names other than `deepseek` no longer gain Responses fixes from the `api.deepseek.com` hostname. Add `compat: { "store": false, "supportsDeveloperRole": false, "deepseekReasoningStream": true }` to those entries before upgrading. Existing `deepseek` entries retain their overrides and inherit the defaults; configuration files are not rewritten. See [migration](docs/models.md#migrating-existing-deepseek-configurations) ([#289](https://github.com/glows777/Vela/issues/289)).
+
 - **Provider base URLs are explicit.** Vela no longer implicitly honors the AI SDK's `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` environment variables. Move the endpoint to the provider's `models.json` `baseUrl`; the built-in OpenAI CLI provider also supports `OPENAI_API_BASE_URL`.
 
 ### Added
+
+- **Built-in DeepSeek.** Use `DEEPSEEK_API_KEY`, `auth.json` or `/login deepseek`; first-run setup selects `deepseek/deepseek-flash` on Responses. `deepseek-v4-pro` declares provider-hosted web search at model level; flash does not. Explicit compatibility flags also support DeepSeek gateways with other hostnames ([#289](https://github.com/glows777/Vela/issues/289)).
 
 - **Provider-hosted web search.** Supported OpenAI Responses and Anthropic Messages models can search without a separate search key. Existing independent search and per-call approval remain available; provider search charges are not included in token cost estimates ([#293](https://github.com/glows777/Vela/issues/293)).
 

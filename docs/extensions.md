@@ -194,7 +194,7 @@ vela.registerProvider('local', {
 })
 ```
 
-After this, `local/qwen3:8b` works with `--model`, `/model`, `defaultModel` in settings, `createVela({ model })` and `session.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai` and `openrouter`, and providers from `models.json`) throws.
+After this, `local/qwen3:8b` works with `--model`, `/model`, `defaultModel` in settings, `createVela({ model })` and `session.setModel()`. `createModel(id, ctx)` returns an AI SDK `LanguageModel`; listed models carry metadata such as the context window (an unlisted field falls back to the built-in catalog when it knows the id), and unlisted ids still work. Provider names are not prefixed. Registering a name that already exists (including the built-in `anthropic`, `openai`, `openrouter` and `deepseek`, and providers from `models.json`) throws.
 
 A provider can take part in `/login`:
 

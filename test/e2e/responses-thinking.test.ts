@@ -23,7 +23,12 @@ function fixture(models?: ModelSpec[], reasoning?: 'text' | 'summary') {
       providers: {
         compat: {
           api: 'openai-responses',
-          baseUrl: 'https://api.deepseek.com',
+          baseUrl: 'https://gateway.example/v1',
+          compat: {
+            store: false,
+            supportsDeveloperRole: false,
+            deepseekReasoningStream: true,
+          },
           apiKey: 'test',
           models,
         },

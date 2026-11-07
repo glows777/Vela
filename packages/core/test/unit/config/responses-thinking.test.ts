@@ -31,6 +31,7 @@ function fixture({
   api = 'openai-responses',
   credential,
   reasoning,
+  compat,
 }: {
   id?: string
   name?: string
@@ -39,6 +40,7 @@ function fixture({
   api?: ProviderConfig['api']
   credential?: Credential
   reasoning?: 'text' | 'summary'
+  compat?: Record<string, boolean>
 } = {}) {
   const dir = tempDir('vela-response-options-')
   dirs.push(dir)
@@ -46,7 +48,13 @@ function fixture({
     join(dir.path, 'models.json'),
     JSON.stringify({
       providers: {
-        [name]: { api, baseUrl, apiKey: 'test', models: [{ id, ...spec }] },
+        [name]: {
+          api,
+          baseUrl,
+          apiKey: 'test',
+          compat,
+          models: [{ id, ...spec }],
+        },
       },
     }),
   )
@@ -178,8 +186,8 @@ test('absent and provider-default reasoning do not invent an effort', async () =
 })
 
 test.each([
-  ['https://api.deepseek.com', 'system'],
-  ['https://api.deepseek.com/v1', 'system'],
+  ['https://api.deepseek.com', 'developer'],
+  ['https://api.deepseek.com/v1', 'developer'],
   ['https://api.deepseek.com.evil.test/v1', 'developer'],
   ['https://example.test/api.deepseek.com', 'developer'],
   ['https://example.test/v1', 'developer'],
@@ -189,10 +197,11 @@ test.each([
   expect(requests[0]?.input).toMatchObject([{ role }, { role: 'user' }])
 })
 
-test('official hostname system default is independent of positive capability', async () => {
+test('explicit system compatibility is independent of positive capability', async () => {
   const { model, requests } = fixture({
     baseUrl: 'https://api.deepseek.com',
     id: 'gpt-5.5',
+    compat: { supportsDeveloperRole: false },
     spec: { reasoning: false },
   })
   await model.doGenerate(options())
@@ -205,7 +214,14 @@ test('official hostname system default is independent of positive capability', a
 test.each(['developer', 'system', 'remove'])(
   'explicit systemMessageMode %s wins on DeepSeek',
   async (systemMessageMode) => {
-    const { model, requests } = fixture({ baseUrl: 'https://api.deepseek.com' })
+    const { model, requests } = fixture({
+      baseUrl: 'https://gateway.example/v1',
+      compat: {
+        store: false,
+        supportsDeveloperRole: false,
+        deepseekReasoningStream: true,
+      },
+    })
     await model.doGenerate({
       ...options(),
       providerOptions: { openai: { systemMessageMode } },
@@ -219,7 +235,14 @@ test.each(['developer', 'system', 'remove'])(
 )
 
 test('frozen caller options, inline text/phase and tool pairing survive', async () => {
-  const { model, requests } = fixture({ baseUrl: 'https://api.deepseek.com' })
+  const { model, requests } = fixture({
+    baseUrl: 'https://gateway.example/v1',
+    compat: {
+      store: false,
+      supportsDeveloperRole: false,
+      deepseekReasoningStream: true,
+    },
+  })
   const params: LanguageModelV4CallOptions = {
     ...options(),
     maxOutputTokens: 123,
@@ -400,7 +423,8 @@ test.each([false, true])(
   'DeepSeek plaintext reasoning preserves lifecycle, metadata and raw opt-in %s',
   async (includeRawChunks) => {
     const { model } = fixture({
-      baseUrl: 'https://api.deepseek.com/v1',
+      baseUrl: 'https://gateway.example/v1',
+      compat: { deepseekReasoningStream: true },
       reasoning: 'text',
     })
     const params = freeze({ ...options(), includeRawChunks })
@@ -430,6 +454,7 @@ test.each([false, true])(
 
 test.each([
   'https://api.openai.com/v1',
+  'https://api.deepseek.com/v1',
   'https://api.deepseek.com.evil.test/v1',
   'https://example.test/api.deepseek.com',
 ])('Responses stream behavior stays unchanged at %s', async (baseUrl) => {

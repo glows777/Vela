@@ -94,7 +94,7 @@ export interface LoginProvider {
 }
 
 /** Default model of each built-in provider, in pi's preference order */
-const DEFAULT_PROVIDER_ORDER = ['anthropic', 'openai', 'openrouter']
+const DEFAULT_PROVIDER_ORDER = ['anthropic', 'openai', 'openrouter', 'deepseek']
 
 export interface ResolvedModel {
   model: LanguageModel
