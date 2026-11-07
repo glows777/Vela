@@ -4,14 +4,31 @@ One row per user-facing feature: how a user reaches it, how to drive it here, an
 
 `REPO`, `H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`.
 
+For the packed GitHub setup journey, the normal registry must be reachable for external dependencies. In a proxy-only environment, pass only the installation proxy settings explicitly through the isolated helper:
+
+```sh
+$H exec $RUN github-setup env \
+  "VERIFY_INSTALL_HTTP_PROXY=$HTTP_PROXY" \
+  "VERIFY_INSTALL_HTTPS_PROXY=$HTTPS_PROXY" \
+  "VERIFY_INSTALL_NO_PROXY=$NO_PROXY" \
+  bun "$REPO/.skills/verify-vela/scripts/github-setup-journey.ts"
+cp -r "/tmp/vela-verify/$RUN/work/github-evidence" "/tmp/vela-evidence/$RUN/"
+$H cleanup $RUN
+```
+
+The script adds these settings only to `bun install`, not the CLI. It serves the six unmodified release tarballs using the consumer-smoke scoped registry pattern and installs only the umbrella package as a direct dependency. `--prepare-only` checks build, pack and installation without running setup. Preserve failed run evidence before cleanup too.
+
 ## Tools and the TUI ([tools](../../docs/tools.md), [cli](../../docs/cli.md))
 
 External event SDK: run `exec $RUN events bun $REPO/.skills/verify-vela/scripts/event-journeys.ts` in an isolated fixture. The real SDK/gateway and fake Lark transport create a subscription, reject an announcement and a directory admission write while old-human replies remain available (diagnostic only; no reply or model call), then publish command-looking untrusted data, check the real reply anchor, clean up final subscriptions, normalize CLI/SDK default targets and reject publication outside the channel lifecycle. There is no HTTP or live webhook in this journey.
+
+GitHub topic setup: run `exec $RUN github-topic bun $REPO/.skills/verify-vela/scripts/github-topic-journey.ts`. A simulated PR creation tool returns repository metadata; the real SDK persists the exact subscription for that topic, receives a signed loopback closure, replies to the original topic and removes its final subscription. Save `work/topic-*.json` and `work/topic-data/` before cleanup. The model, PR creation tool and channel transport are simulated; no live GitHub, tunnel or Lark verification is implied.
 
 GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/scripts/webhook-journeys.ts`. Real local HTTP and HMAC feed the real GitHub adapter/queue/storage; a faux model and fake Lark transport verify topic wake, wrong signature, concurrent duplicate, full-body echo filtering, untrusted command text, final cleanup and closed port after dispose. The same journey uses openssl + curl for generic HMAC input, verifies its fixed namespace and independent delivery IDs, and keeps the original Lark topic. Live tunnels/webhooks and replacing a real polling routine require deployment authorization and credentials, and remain unverified offline.
 
 | Feature | Drive | Check |
 |---|---|---|
+| GitHub setup (packed CLI) | `exec $RUN github-setup bun $REPO/.skills/verify-vela/scripts/github-setup-journey.ts`; copy `/tmp/vela-verify/$RUN/work/github-evidence/` to `/tmp/vela-evidence/$RUN/` before `cleanup $RUN` | Builds and packs all six packages through the release packer, installs fresh tarballs outside the workspace, and runs setup twice through a stateful `gh` stub with a valid active account and expired inactive account: empty user settings and default port 8787, one hook, persistent secret absent from output, mode 0600, correct printed settings path, no auth.json, missing-input exit 2. Starts the installed `serve` with a fixture channel and faux model, subscribes, sends a real signed local webhook using the saved secret, observes its reply, and checks SIGTERM exit 0/closed port. No real GitHub mutations, credentials, tunnel or provider; dependency installation may need registry access. |
 | First-run model setup | `npm pack` and install the current CLI into a fresh temporary project; use an empty HOME and VELA_DIR, run `vela` in a terminal with a faux provider, complete setup and send a first prompt; rerun `vela setup` | Verification occurs before saving; displayed paths match the files written; the first prompt receives an answer; retaining the configuration leaves files unchanged. Report a faux provider as such, not as a live credential check. |
 | edit_file | `send "test edit"`, `wait 'Successfully replaced'` | Diff `-1`/`+1`, an `[audit] edit_file → sample-data.txt` line, `grab sample-data.txt` line 1 ends `(updated)` |
 | list / read / bash | `list files`, `read a.txt`, `test bash` | `a.txt` in the `ls` output; the fixture text; `Hello from bash!` |
