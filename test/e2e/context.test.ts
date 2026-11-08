@@ -385,6 +385,8 @@ test('an overflow recovers by summarizing only the dropped messages, without too
 test('the summary does not repeat the dropped text, so a long session of short turns can still recover', async () => {
   const question = (i: number) => `Question ${i}: ${'Background. '.repeat(15)}`
   const t = createTestVela({
+    // This scenario scripts compaction only; dream has its own generate-call scenarios.
+    extensionConfig: { memory: { dream: false } },
     limits: {
       microcompactThreshold: 1e9,
       summaryThreshold: 1e9,

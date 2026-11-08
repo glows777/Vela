@@ -24,11 +24,12 @@ Options:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--only C1,G2` | all fourteen | Comma-separated scenario IDs |
+| `--only C1,G2` | original fourteen | Comma-separated scenario IDs; M1 is explicit-only |
 | `--runs 3` | 3 | Repetitions per arm |
 | `--thinking max` | max | Vela thinking level; `high` is used for the additional CLI round |
 | `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
-| `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm |
+| `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm (both M1 arms) |
+| `--dream on` | off | Run manual dream in the new M1/G8 arm before recall |
 
 `VELA_EVAL_TODO=1` in the invoking environment loads the `todo` extension in the
 new arm when that revision provides it. Revisions without the extension (the old
@@ -257,3 +258,47 @@ and candidate graders against the baseline runtime: **200 passed, 0 failed**
 No provider requests were made. These results establish scripted dispatch/tool
 execution only, not live-model tool selection, prompt-quality equivalence or a
 live-model pass rate. The paid before/after comparison remains unverified.
+
+
+### #306 offline memory consolidation comparison
+
+Run only after approval for the model and total budget (the command makes paid
+`deepseek/deepseek-flash` calls through the existing eval provider):
+
+```sh
+bun --no-env-file scripts/eval/run.ts --only M1,G8 --dream on --runs 3 --max-cost-usd <approved-remaining-budget>
+```
+
+`M1` uses the candidate runtime for **both** arms. It seeds a note saying deploys
+happen on Friday, then a separate correction session says Monday while asking for
+an announcement. Both task sessions expose only memory tools, with an eval-only hook blocking
+write actions, so they cannot silently repair the fixture. Memory remains enabled
+for inbox collection. The new arm calls SDK `session.prompt('/dream')`; the old control does
+not. A fresh memory-only session asks the deployment day, with neither weekday
+in its question. The two checks require a persisted Monday correction and a
+Monday recall answer, excluding Friday in each. Snapshot evidence is saved as
+`memory-after-correction.json`. A useful comparison passes with dream and fails
+without it; report actual results rather than assuming that outcome.
+
+`G8` keeps its existing prompts, fresh group topics, grader and historical
+`v0.4.0` runtime in the old arm. With `--dream on`, only the new arm runs `/dream`
+through the first topic's SDK session before the persisted-memory snapshot and
+second topic. Automatic dream is disabled in eval attempts to make timing explicit.
+[#306](https://github.com/glows777/Vela/issues/306) requests comparison against a
+historical **1/6** reference attributed to #218. The visible [#218 measurement](https://github.com/glows777/Vela/issues/218#issuecomment-6439949087)
+reports **store 0/6** and contaminated recall instead. Resolve the batch and metric
+behind 1/6 before presenting it as a verified baseline. Historical aggregates are
+references, never fabricated attempts in this batch. Save and report new
+store/recall counts, errors and per-run costs.
+G8 without this flag retains its prior behavior.
+
+The existing provider-boundary usage wrapper includes isolated dream calls in
+its `summary` (non-streaming) bucket and total token/cost estimates. The product's
+usage ledger separately identifies them as dream usage. All attempts retain
+`usage.json`, `result.json` and session files, with combined costs in `results.json`.
+This harness does not establish real Lark transport behavior. The v0.6 unified
+acceptance still requires an automatic dream in a real Lark group and `/memory`
+in that group showing the completed run and inbox status.
+
+Offline checks: `bun test scripts/eval/dream.test.ts scripts/eval/graders.test.ts`.
+Faux results prove fixture plumbing and grading, not real-model quality or billing.

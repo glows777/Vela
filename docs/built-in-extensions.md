@@ -86,7 +86,7 @@ Built-ins store their data in the project data directory: in the CLI, the [proje
 
 ## memory
 
-Long-term memory across sessions. Each memory is a Markdown file with front matter (`name`, `description`, `type`, `lastWriteAt`, `lastReadAt`), named `<type>_<slug>.md`. `MEMORY.md` is an index with one line per memory (at most 200 lines; the oldest line is dropped when it is full). Memory files and the index are written with mode `0600` in a `0700` directory; a store written by an older version is tightened when it opens.
+Long-term memory across sessions. Each memory is a Markdown file with front matter (`name`, `description`, `type`, `lastWriteAt`, `lastReadAt`, and dream `sources`), named `<type>_<slug>.md`. `MEMORY.md` is an index with one line per memory. Every entry is retained, including past 200 entries. Injection stays capped at 4,000 characters and explicitly reports how many entries are omitted; use `memory search` to find them. `/memory` warns when the index exceeds its budget. Memory files and the index are written with mode `0600` in a `0700` directory; a store written by an older version is tightened when it opens.
 
 **Tool.** `memory`, with an `action` parameter:
 
@@ -101,9 +101,9 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 
 `read` and `delete` accept only a memory's file name as listed in the index: a path (`../`, `/`), the index itself or a name not ending in `.md` is an error.
 
-`type` is one of `user`, `feedback`, `project` or `reference`. Memory content returned to the model is cut at 4,000 characters.
+`type` is one of `user` (stable facts about the user), `feedback` (corrections to how the assistant works), `project` (durable project decisions and context), or `reference` (where to find useful information). Memory content returned to the model is cut at 4,000 characters.
 
-`lint` reports paths mentioned in a memory that no longer exist, memories not read within their type's shelf life, and duplicate names.
+`lint` reports paths mentioned in a memory that no longer exist and duplicate names. Read age is not a staleness verdict; dream compares notes with recent conversations.
 
 **Prompt.** The short usage rules stay in the system prompt. The index is sent as a message after the user message whenever it changed, so saving a memory does not rewrite the cached system prompt; it is sent again after compaction removed the old one (and restored right away in the request that compaction summarized it from), and deleting the last entry sends an empty-store update. If a session's tools omit `memory`, or its permissions deny `memory`, that session gets none of the rules, the index, or the tool.
 
@@ -111,14 +111,46 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 
 | Command | Description |
 |---|---|
-| `/memory` | List memories, marking those with lint warnings |
+| `/memory` | List memories and warnings, last dream time/change count, and inbox size |
 | `/memory search <keywords>` | Search memories |
 | `/memory lint` | Show the lint report |
-| `/dream` | Ask the model to clean up the store: delete stale entries, merge duplicates, fix descriptions |
+| `/dream` | Run isolated consolidation now and show its report |
 
 Extension commands run in every session; an input naming a registered command runs it instead of going to the model.
 
-**SDK.** `memory()` takes no options.
+**Dream.** After an eligible conversation turn, memory appends a bounded record to
+`<store>/.dream/inbox.jsonl`: session ID, time, user input and final assistant text
+(about 2,000 characters per side), plus tool names, never tool output. The inbox
+is capped at about 100 KB, dropping oldest records and counting dropped records.
+It uses the same private file permissions as memory. Sessions with memory denied
+do not contribute. Local sessions and owner DMs use global memory; a group's
+sessions write only that group's inbox and notes, never another group's or global
+store.
+
+After a reply settles, automatic dream starts in the background when the inbox
+contains at least 20 turns or a turn older than 24 hours. It does not delay the
+reply. Only one dream runs per store. `/dream` runs the same pass immediately.
+Set `extensionConfig.memory.dream` to `false` to disable automatic runs; manual
+`/dream` remains available. The default is enabled, including groups.
+
+Dream makes one isolated model call with no tools. It compares recent conversation
+records with notes and deterministic lint findings, corrects contradicted notes,
+saves missing durable facts, merges duplicates and condenses the index. Large
+stores provide the index plus notes matched to the inbox within a content budget.
+Conversation text is evidence, not instructions. Validated operations go through
+the memory store. A live write since the snapshot makes an update or deletion
+skip that note instead of overwriting it; the report records the skip. The inbox
+is consumed only after successful application, preserving turns arriving during
+the run. Dream messages and tool traces do not enter the user's conversation.
+
+Changed notes retain the last five source session IDs in `sources:` frontmatter.
+`<store>/.dream/log.md` keeps reports for the last 20 runs. Dream model usage is
+included in `/usage` and the usage ledger. `/memory` exposes the latest run and
+pending inbox size so automatic maintenance is visible.
+
+**SDK.** `memory()` takes no options. Configure automatic runs through Vela's
+`extensionConfig: { memory: { dream: false } }`, and invoke manual consolidation
+with `await session.prompt('/dream')`.
 
 ## todo
 

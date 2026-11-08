@@ -18,7 +18,12 @@ const memoryToolParamSchema = z
       .string()
       .optional()
       .describe('One-sentence description (required for save)'),
-    type: z.enum(['user', 'feedback', 'project', 'reference']).optional(),
+    type: z
+      .enum(['user', 'feedback', 'project', 'reference'])
+      .optional()
+      .describe(
+        'user: durable preferences and personal context; feedback: corrections to how the assistant should work; project: decisions and goals not recoverable from code; reference: pointers to useful external resources',
+      ),
     content: z
       .string()
       .optional()

@@ -189,3 +189,26 @@ test('read and delete work on a saved memory by its file name', () => {
   expect(store.list()).toHaveLength(0)
   expect(store.loadIndex()).not.toContain(filename)
 })
+
+test('unread age alone is not a lint finding for any memory type', () => {
+  const store = makeTempStore()
+  for (const type of ['user', 'feedback', 'project', 'reference'] as const) {
+    const filename = store.save({
+      name: type,
+      description: 'Durable fact',
+      type,
+      content: 'Still relevant',
+    })
+    const file = path.join(tempDirs.at(-1)!, filename)
+    fs.writeFileSync(
+      file,
+      fs
+        .readFileSync(file, 'utf8')
+        .replace(
+          /^lastReadAt:.*$/m,
+          `lastReadAt: ${Date.now() - 400 * 86400_000}`,
+        ),
+    )
+  }
+  expect(store.lint()).toEqual([])
+})

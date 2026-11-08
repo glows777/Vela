@@ -298,13 +298,19 @@ test('/memory lists memories, /memory search uses BM25, /memory lint reports hea
   expect(t.model.calls).toHaveLength(0)
 })
 
-test('/dream hands the memory clean-up prompt to the model', async () => {
-  const t = withMemory({ responses: [fauxText('Memories cleaned up')] })
+test('/dream uses an isolated model call without adding conversation messages', async () => {
+  const t = withMemory({
+    generate: [
+      fauxText(JSON.stringify({ ops: [], report: 'Memories cleaned up' })),
+    ],
+  })
+  const before = JSON.stringify(t.session.messages)
   await t.run('/dream')
   expect(t.model.calls).toHaveLength(1)
-  expect(JSON.stringify(t.model.calls[0]!.prompt)).toContain('memory lint')
-  expect(t.lastAssistantText()).toBe('Memories cleaned up')
-  expect(notes(t)).toContain('[dream] Done')
+  expect(t.model.calls[0]!.kind).toBe('generate')
+  expect(t.model.calls[0]!.tools).toEqual([])
+  expect(JSON.stringify(t.session.messages)).toBe(before)
+  expect(notes(t)).toContain('Memories cleaned up')
   expect(t.session.busy.locked).toBe(false)
 })
 
@@ -326,12 +332,13 @@ test('/context shows the fixed memory rules while the index stays a message', as
 })
 
 test('aborting the prompt signal of /dream stops the model run it started', async () => {
-  const t = withMemory({ responses: [fauxHang()] })
+  const t = withMemory({ generate: [fauxHang()] })
   const controller = new AbortController()
   const run = t.run('/dream', { signal: controller.signal })
   while (t.model.calls.length === 0) await Bun.sleep(1)
   controller.abort(new Error('stop dream'))
-  await expect(run).rejects.toThrow()
-  expect(t.eventsOf('agent_end').at(-1)?.reason).toBe('aborted')
+  await run.catch(() => {})
+  expect(t.eventsOf('agent_end')).toHaveLength(0)
+  expect(t.session.messages).toHaveLength(0)
   expect(t.session.busy.locked).toBe(false)
 })

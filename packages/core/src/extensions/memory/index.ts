@@ -10,24 +10,12 @@ import {
   customMessageMissing,
   lastCustomMessage,
 } from '../../extension-api.ts'
+import { MemoryDream } from './dream.ts'
 import { MEMORY_RULES, MemoryStore } from './store.ts'
 import { createMemoryTool } from './tool.ts'
 
 const EMPTY_MEMORY =
   '[memory] No memories stored yet. Use the memory tool to save important information.'
-
-const DREAM_PROMPT = [
-  'Do a full cleanup of the memory store (dream), in the following phases:',
-  '',
-  '**Phase 1: Locate** — Scan the whole store with memory lint (the lint output already includes content previews and the list of issues; no need to read entries one by one).',
-  '**Phase 2: Clean up** — Act directly on the lint report:',
-  '  - Stale paths that have gone unused for a long time: delete them with memory delete (pass filename)',
-  '  - Duplicates with the same name: save the merged version with memory save (same name overwrites automatically), then delete the extras',
-  '  - Content still valid but description inaccurate: overwrite it with memory save',
-  '**Phase 3: Report** — Summarize what this cleanup did in one paragraph.',
-  '',
-  'Note: memory read and delete both take the filename parameter (e.g. project_deploy-process.md), not name. The lint report already lists the filename; use it as is.',
-].join('\n')
 
 /**
  * Cross-session memory: local/direct sessions use `<dataDir>/memory`; groups use their own store
@@ -58,6 +46,41 @@ export function memory(): VelaExtension {
       }
       return group
     }
+    const dreams = new Map<MemoryStore, MemoryDream>()
+    const dreamFor = (local: MemoryStore): MemoryDream => {
+      let dream = dreams.get(local)
+      if (!dream) {
+        dream = new MemoryDream(local)
+        dreams.set(local, dream)
+      }
+      return dream
+    }
+    vela.on('agent_end', (event, ctx) => {
+      if (ctx.session.toolDecision('memory') === 'deny') return
+      dreamFor(forSession(ctx.session.scope)).collect(
+        ctx.session,
+        event.messages,
+      )
+    })
+    vela.on('agent_settled', (_event, ctx) => {
+      if (
+        vela.config.dream === false ||
+        ctx.session.toolDecision('memory') === 'deny'
+      )
+        return
+      const dream = dreamFor(forSession(ctx.session.scope))
+      if (dream.due())
+        void dream
+          .run(ctx.session)
+          .catch((error) =>
+            vela.logger.warn(
+              `[dream] ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          )
+    })
+    vela.onShutdown(async () => {
+      await Promise.all([...dreams.values()].map((dream) => dream.stop()))
+    })
     vela.registerTool(
       createMemoryTool(store, (context) => forSession(context?.scope)),
     )
@@ -123,6 +146,8 @@ export function memory(): VelaExtension {
         const reports = local.lint()
         const lines = [
           `[memory] ${entries.length} memories, ${reports.length} with warnings`,
+          dreamFor(local).status(),
+          ...local.indexWarnings(),
         ]
         for (const e of entries) {
           const flag = reports.some((r) => r.entry.filePath === e.filePath)
@@ -136,26 +161,31 @@ export function memory(): VelaExtension {
 
     vela.registerCommand('dream', {
       description:
-        'Have the model clean up the memory store (merge duplicates, delete stale entries)',
+        'Consolidate memory against recent conversations in an isolated model call',
       handler: async (_args, ctx) => {
         if (ctx.session.toolDecision('memory') === 'deny')
           return ctx.ui.notify('Memory is not enabled for this session.')
-        ctx.ui.notify('[dream] Starting memory cleanup...')
-        await ctx.session.prompt(DREAM_PROMPT, { signal: ctx.signal })
-        ctx.ui.notify('[dream] Done')
+        ctx.ui.notify('[dream] Starting memory consolidation...')
+        try {
+          const report = await dreamFor(forSession(ctx.session.scope)).run(
+            ctx.session,
+            ctx.signal,
+          )
+          ctx.ui.notify(report)
+        } catch (error) {
+          if (ctx.signal?.aborted) throw error
+          ctx.ui.notify(
+            `[dream] Failed: ${error instanceof Error ? error.message : String(error)}. Inbox retained.`,
+          )
+        }
       },
     })
   }
 }
 
 function promptLayer(label: string, store: MemoryStore): string | null {
-  const index = store.buildIndex()
-  if (!index) return null
-  const section = `${label}:\n${index}`
-  const suffix = '\n...(truncated)'
-  return section.length > 4000
-    ? section.slice(0, 4000 - suffix.length) + suffix
-    : section
+  const index = store.buildIndex(4000 - label.length - 2)
+  return index ? `${label}:\n${index}` : null
 }
 
 function lintReport(store: MemoryStore): string {
