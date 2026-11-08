@@ -62,7 +62,7 @@ const COMMAND_NAME = /^[A-Za-z0-9][\w-]*$/
 /**
  * Extension runtime: runs extension factories, keeps the handlers and commands they register, and
  * calls them in registration order at the right time.
- * Tool call interception hangs off the HookPipeline (the same chain as internal hooks such as audit).
+ * Tool call interception hangs off the HookPipeline.
  */
 export class ExtensionRunner {
   private readonly handlers = new Map<
@@ -86,6 +86,7 @@ export class ExtensionRunner {
   constructor(
     private readonly deps: RunnerDeps,
     extensions: readonly VelaExtension[],
+    coreExtensions: readonly VelaExtension[] = [],
   ) {
     deps.hooks.registerPre('extensions', async (toolName, input, context) => {
       const session = context.sessionId
@@ -129,21 +130,28 @@ export class ExtensionRunner {
       },
     )
 
-    const pending: Promise<void>[] = []
-    extensions.forEach((extension, index) => {
-      const name = extension.name || `extension-${index + 1}`
-      const result = extension(this.api(name))
-      if (result instanceof Promise)
-        pending.push(
-          result.catch((error) => {
-            throw new Error(
-              `Extension ${name} failed to load: ${errorMessage(error)}`,
-            )
-          }),
-        )
-    })
-    this.ready = Promise.all(pending).then(() => {})
-    this.settled = Promise.allSettled(pending).then(() => {})
+    const load = (factories: readonly VelaExtension[]) => {
+      const pending: Promise<void>[] = []
+      factories.forEach((extension, index) => {
+        const name = extension.name || `extension-${index + 1}`
+        const result = extension(this.api(name))
+        if (result instanceof Promise)
+          pending.push(
+            result.catch((error) => {
+              throw new Error(
+                `Extension ${name} failed to load: ${errorMessage(error)}`,
+              )
+            }),
+          )
+      })
+      return pending
+    }
+    const pending = load(extensions)
+    // Audit must register last, including after handlers registered by async factories.
+    this.ready = Promise.all(pending)
+      .then(() => Promise.all(load(coreExtensions)))
+      .then(() => {})
+    this.settled = Promise.allSettled([...pending, this.ready]).then(() => {})
     // Avoid an unhandled rejection when nobody awaits it; prompt() awaits it and reports the error
     this.ready.catch(() => {})
   }
