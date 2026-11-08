@@ -11,7 +11,11 @@ import {
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
-import type { ModelMessage, VelaEvent } from '@glows777/vela-core'
+import {
+  agentErrorHint,
+  type ModelMessage,
+  type VelaEvent,
+} from '@glows777/vela-core'
 import { isToolContent } from '@glows777/vela-core/diagnostics'
 import { fitStatusLines, noticeContentWidth } from '../status-display.ts'
 import { renderDiff } from './diff.ts'
@@ -688,6 +692,22 @@ export function isDeadTerminalError(error: unknown): boolean {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Terminal-run notice shared by the interactive event handler. */
+export function agentEndNotice(
+  event: Extract<VelaEvent, { type: 'agent_end' }>,
+): { message: string; level: 'dim' | 'error' } | undefined {
+  if (event.reason === 'aborted')
+    return { message: 'Interrupted', level: 'dim' }
+  if (event.reason === 'loop')
+    return { message: 'Repeated tool calls detected, stopped', level: 'error' }
+  if (event.reason !== 'error') return undefined
+  const hint = agentErrorHint(event.errorKind)
+  return {
+    message: `Error: ${errorMessage(event.error)}${hint ? `\n${hint}` : ''}`,
+    level: 'error',
+  }
 }
 
 export function oneLine(text: string): string {

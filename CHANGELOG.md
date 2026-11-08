@@ -14,6 +14,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Actionable agent failures.** Failed `agent_end` events include `errorKind` for auth, billing, rate limits, network failures, context overflow, provider failures and unknown errors. TUI, print mode and channel replies retain the raw error and add a shared next-step hint. Retry and compaction behavior is unchanged ([#310](https://github.com/glows777/Vela/issues/310)).
+
 - **Offline memory consolidation.** Memory collects private, bounded conversation summaries and automatically runs one isolated dream call after 20 turns or a turn older than 24 hours, once a reply settles. `/dream` runs it manually without adding model/tool messages to the conversation. Notes retain source session IDs, concurrent edits skip the whole operation batch without consuming its inbox, `/memory` shows audit status, and dream usage is accounted for. Dream requires memory permission `allow`; approval-required sessions neither contribute inbox data nor run consolidation. Failed or skipped runs wait for 20 new turns or 24 hours before automatic retry; `/memory` shows their outcome and manual retry stays immediate. Disable automatic runs with `extensionConfig.memory.dream: false`. Memory indexes no longer discard old entries; truncated injection points to search ([#306](https://github.com/glows777/Vela/issues/306)).
 
 - **Independent microcompaction switch.** `limits.microcompact` (default `true`) turns off folding old tool results only; threshold summaries and overflow compaction keep following `autoCompaction`, and `microcompactThreshold` / `minMicroSavings` still tune when it runs ([#290](https://github.com/glows777/Vela/issues/290)).

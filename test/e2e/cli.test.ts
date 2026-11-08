@@ -964,6 +964,7 @@ test.concurrent('--mode json reports a model error in agent_end and exits 1', as
     .map((line) => JSON.parse(line))
     .find((r) => r.type === 'agent_end')
   expect(end.reason).toBe('error')
+  expect(end.errorKind).toBe('provider')
   expect(end.error.message).toContain('400 Bad Request')
   expect(stderr).toContain('400 Bad Request')
 })
@@ -1954,3 +1955,28 @@ test.concurrent('recording a faux model does not require a temporary Vela direct
   expect(recorded.stdout.trim()).toBe('recorded offline')
   expect(await Bun.file(join(dir.path, 'recorded.json')).exists()).toBe(true)
 })
+
+for (const mode of ['-p', '--mode json']) {
+  test.concurrent(`${mode} preserves an auth error through the real CLI`, async () => {
+    const { stdout, stderr, code } = await cli(
+      mode === '-p' ? ['-p', 'hello'] : ['--mode', 'json', 'hello'],
+      {
+        model: `faux:${scenario('bad-key')}`,
+      },
+    )
+    expect(code).toBe(1)
+    expect(stderr).toContain('401 Invalid API key')
+    if (mode === '-p') {
+      expect(stdout).toBe('')
+      expect(stderr).toContain('Check your API key: /login or vela setup.')
+    } else {
+      const end = stdout
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .find((event) => event.type === 'agent_end')
+      expect(end.errorKind).toBe('auth')
+      expect(end.error.message).toBe('401 Invalid API key')
+    }
+  })
+}

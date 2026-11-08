@@ -9,6 +9,16 @@ import type { StepRecord, StepUsage } from '../usage/tracker.ts'
 /** Why an assistant message ended (like pi's `stopReason`; on the event because `ModelMessage` has no such field). */
 export type StopReason = 'stop' | 'length' | 'toolUse' | 'aborted' | 'error'
 
+/** A terminal failure category for hosts; it does not decide retries. */
+export type AgentErrorKind =
+  | 'auth'
+  | 'billing'
+  | 'rate_limit'
+  | 'network'
+  | 'context_overflow'
+  | 'provider'
+  | 'unknown'
+
 /** Why earlier history is summarized (pi's compaction reasons). */
 export type CompactionReason = 'manual' | 'threshold' | 'overflow'
 
@@ -178,6 +188,8 @@ export type VelaEvent =
       messages: ModelMessage[]
       reason: 'done' | 'loop' | 'aborted' | 'error'
       error?: unknown
+      /** Present on failed runs; the original error and prompt rejection stay unchanged. */
+      errorKind?: AgentErrorKind
     }
   /** Queued messages changed (steer / followUp enqueued, dequeued, cleared); both fields hold the full current queue */
   | { type: 'queue_update'; steering: string[]; followUp: string[] }

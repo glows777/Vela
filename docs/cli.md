@@ -87,6 +87,8 @@ vela serve                                   # run the channels, no TUI
 
 ### Print mode
 
+Failed agent runs keep the original error visible and add one [next-step hint](sdk.md#failed-agent-runs) in the TUI and print-mode stderr. For example, a bad key shows `Check your API key: /login or vela setup.` Print mode still exits 1 and writes no answer for the failed run. Retries are unchanged.
+
 Print mode sends each prompt in turn and writes only the final assistant text of this run to stdout. Diagnostics, extension notifications and console output from extensions go to stderr, so stdout stays clean for pipes. When context files were loaded, stderr also has one `[context]` line with their paths. See [Context files](settings.md#context-files). If the reader closes the pipe early (`vela -p "..." | head -2`), Vela stops and exits quietly with code 0.
 
 If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1. Stopped by a signal, print, JSON and RPC modes abort the turn, kill the commands the model started, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.

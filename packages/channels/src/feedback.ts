@@ -1,9 +1,13 @@
 import type {
+  AgentErrorKind,
   ModelMessage,
   VelaLogger,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
-import { publishChannelEvent } from '@glows777/vela-core/extension-api'
+import {
+  agentErrorHint,
+  publishChannelEvent,
+} from '@glows777/vela-core/extension-api'
 import type { ChannelDirectory } from './directory.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
@@ -456,7 +460,14 @@ export class RunFeedback {
           : undefined
     await feedback?.ready
     const pending: Promise<void>[] = []
+    let errorKind: AgentErrorKind | undefined
     const unsubscribe = session.subscribe((event) => {
+      if (
+        event.type === 'agent_end' &&
+        event.reason === 'error' &&
+        errorKind === undefined
+      )
+        errorKind = event.errorKind
       try {
         const update = feedback?.event({ type: 'agent', event })
         if (update) pending.push(Promise.resolve(update).catch(report))
@@ -535,7 +546,10 @@ export class RunFeedback {
           this.options.logger.error(
             `[${channelName}] Passive evaluation failed: ${errorMessage(error)}`,
           )
-        else answer = `Task failed: ${errorMessage(error)}`
+        else {
+          const hint = agentErrorHint(errorKind)
+          answer = `Task failed: ${errorMessage(error)}${hint ? `\n${hint}` : ''}`
+        }
       }
       publishChannelEvent(session, {
         type: 'channel_error',

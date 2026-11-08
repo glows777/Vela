@@ -1,6 +1,7 @@
 /** Acyclic public extension contracts; never import the product/root barrel here. */
 
-export type { VelaEvent } from './agent/events.ts'
+export type { AgentErrorKind, VelaEvent } from './agent/events.ts'
+export { agentErrorHint } from './agent/retry.ts'
 export type {
   ExtensionConfigContext,
   ExtensionConfigDefinition,

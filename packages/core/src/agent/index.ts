@@ -15,7 +15,12 @@ import { withPromptCache } from './cache.ts'
 import type { VelaEvent, VelaEventListener } from './events.ts'
 import { LoopDetector } from './loop-detection.ts'
 import { isContextOverflow } from './overflow.ts'
-import { calculateDelay, isRetryable, sleep } from './retry.ts'
+import {
+  calculateDelay,
+  classifyAgentError,
+  isRetryable,
+  sleep,
+} from './retry.ts'
 import {
   ABORTED_RESULT,
   CONTENT_FILTER_ERROR,
@@ -598,6 +603,7 @@ export const agentLoop = async ({
       messages: newMessages,
       reason: abortSignal?.aborted ? 'aborted' : 'error',
       error,
+      ...(!abortSignal?.aborted && { errorKind: classifyAgentError(error) }),
     })
     throw error
   } finally {

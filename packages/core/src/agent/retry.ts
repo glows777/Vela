@@ -1,6 +1,67 @@
 import { APICallError } from '@ai-sdk/provider'
+import type { AgentErrorKind } from './events.ts'
+import { isContextOverflow } from './overflow.ts'
 
 // --- Error classification ---
+
+// Like pi's quota exclusions, billing evidence takes precedence over a generic 429.
+const BILLING =
+  /insufficient[_ ](?:quota|balance|credits?|funds)|credit balance.*(?:too low|exhausted)|billing[_ ](?:error|limit|hard_limit)|out of (?:credits?|budget)|quota exceeded|exceeded (?:your )?current quota|subscription limit/i
+const NETWORK =
+  /ECONNRESET|EPIPE|ETIMEDOUT|timeout|timed out|fetch failed|network/i
+
+/** Classify only the terminal error. Retry and compaction decisions keep their existing rules. */
+export function classifyAgentError(error: unknown): AgentErrorKind {
+  // SDK transport errors may put their code in a cause (pi also follows causes up to five levels).
+  let current = error
+  let text = ''
+  let status: number | undefined
+  let provider = false
+  let contextOverflow = false
+  for (let depth = 0; depth < 5 && current != null; depth++) {
+    contextOverflow ||= isContextOverflow(current)
+    if (APICallError.isInstance(current)) {
+      provider = true
+      status ??= current.statusCode
+      text += `\n${current.responseBody ?? ''}`
+    }
+    text += `\n${current instanceof Error ? current.message : String(current)}`
+    if (current instanceof Error) {
+      if ('code' in current) text += `\n${String(current.code)}`
+      current = current.cause
+    } else break
+  }
+  // Faux/string provider errors carry their status at the beginning, not in an SDK field.
+  if (status === undefined) {
+    const message = error instanceof Error ? error.message : String(error)
+    const match = /^(?:HTTP[ :]+)?([45]\d{2})\b/i.exec(message)
+    if (match) status = Number(match[1])
+  }
+  if (status === 401 || status === 403) return 'auth'
+  if (status === 402 || BILLING.test(text)) return 'billing'
+  if (contextOverflow) return 'context_overflow'
+  if (status === 429) return 'rate_limit'
+  if (status === undefined && NETWORK.test(text)) return 'network'
+  if (provider || status !== undefined) return 'provider'
+  return 'unknown'
+}
+
+const ERROR_HINTS: Record<AgentErrorKind, string> = {
+  auth: 'Check your API key: /login or vela setup.',
+  billing: 'Check your provider balance and billing limits.',
+  rate_limit: 'Wait a moment and retry, or use another model.',
+  network: 'Check your connection and provider URL, then retry.',
+  context_overflow: 'Shorten the conversation or start a new session.',
+  provider: 'Check the provider status and model settings, then retry.',
+  unknown: 'Check the error above and retry; if it persists, report it.',
+}
+
+/** One shared presentation hint; hosts must also retain the raw error. */
+export function agentErrorHint(
+  kind: AgentErrorKind | undefined,
+): string | undefined {
+  return kind === undefined ? undefined : ERROR_HINTS[kind]
+}
 
 export function isRetryable(error: unknown): boolean {
   // Provider HTTP errors: message is the response body text (e.g. "Rate limit reached ...") without

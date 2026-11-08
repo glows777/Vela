@@ -45,6 +45,7 @@ import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
 import { CLI_COMMANDS, HOTKEYS, TUI_COMMANDS } from './tui/commands.ts'
 import {
   AssistantMessage,
+  agentEndNotice,
   BashExecution,
   CustomMessageBlock,
   compactionLine,
@@ -575,17 +576,14 @@ export class InteractiveMode {
           event.level === 'critical' ? 'error' : 'warning',
         )
         break
-      case 'agent_end':
+      case 'agent_end': {
         this.current = undefined
         for (const block of this.allTools) block.stop()
-        if (event.reason === 'aborted') this.addNotice('Interrupted', 'dim')
-        else if (event.reason === 'loop')
-          this.addNotice('Repeated tool calls detected, stopped', 'error')
-        else if (event.reason === 'error') {
-          this.shownError = event.error
-          this.addNotice(`Error: ${errorMessage(event.error)}`, 'error')
-        }
+        if (event.reason === 'error') this.shownError = event.error
+        const ended = agentEndNotice(event)
+        if (ended) this.addNotice(ended.message, ended.level)
         break
+      }
       case 'agent_settled':
         this.stopLoader()
         this.movePendingBash()
