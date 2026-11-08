@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { type LocalOptions, local } from '@glows777/vela-channels'
 import type { ImageContent, VelaSession } from '@glows777/vela-core'
 import {
   memorySessionStorage,
@@ -36,6 +37,7 @@ import { errorMessage } from './error.ts'
 import { readAttachments } from './files.ts'
 import { runInteractive } from './interactive.ts'
 import { redirectConsoleToStderr, writeStdout } from './json-event.ts'
+import { localServeOptions } from './local-config.ts'
 import { createConsoleLogger, createInteractiveLogger } from './logger.ts'
 import { installationId } from './login.ts'
 import { runPrintMode } from './print-mode.ts'
@@ -166,6 +168,7 @@ if (attachments.text || attachments.images.length)
 // Config: ~/.vela/settings.json + <cwd>/.vela/settings.json once trusted (step 4, see 04-plan.md)
 const agentDir = defaultAgentDir(env)
 let config: VelaConfig
+let localOptions: LocalOptions | undefined
 try {
   const trust = await resolveTrust({
     cwd,
@@ -182,6 +185,10 @@ try {
     builtins: Object.keys(BUILTIN_EXTENSIONS),
     defaultOffBuiltins: DEFAULT_OFF_BUILTINS,
   })
+  localOptions = localServeOptions(
+    config.userExtensionConfig,
+    mode === 'serve' && !args.listModels && !args.noExtensions,
+  )
 } catch (error) {
   console.error(`[config] ${error instanceof Error ? error.message : error}`)
   process.exit(2)
@@ -296,10 +303,13 @@ const vela = createVela({
     config,
   ),
   // Built-in extensions (memory / rag / web / lark) + ~/.vela/extensions + .vela/extensions + settings + -e
-  extensions: await loadCliExtensions(config, args, (message) => {
-    extensionErrors.push(message)
-    console.error(message)
-  }),
+  extensions: [
+    ...(await loadCliExtensions(config, args, (message) => {
+      extensionErrors.push(message)
+      console.error(message)
+    })),
+    ...(localOptions ? [local(localOptions)] : []),
+  ],
 })
 
 // Text mode diagnostics must survive runPrintMode, including the final save during dispose().

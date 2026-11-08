@@ -117,6 +117,14 @@ export interface ChannelSessionSnapshot {
   runId?: string
 }
 
+/** A detached logical-session snapshot and, when applicable, its exact run transition. */
+export interface ChannelSessionUpdate {
+  session: ChannelSessionSnapshot
+  run?:
+    | { type: 'started'; runId: string }
+    | { type: 'finished'; runId: string; outcome: ChannelOutcome }
+}
+
 export interface ChannelStatusLine {
   chatId: string
   rootId: string
@@ -132,6 +140,8 @@ export interface ChannelRuntime {
   stop(target: ChannelTarget, runId: string): Promise<boolean>
   /** Observe successfully persisted status lines without starting another model call. */
   onStatus(listener: (line: ChannelStatusLine) => void): () => void
+  /** Observe gateway admission, preparation, execution and queue transitions in this channel. */
+  onSession(listener: (update: ChannelSessionUpdate) => void): () => void
   scope(sessionId: string): import('./scope.ts').ChannelScope | undefined
   routines: {
     /** One-off at is deployment-local YYYY-MM-DDTHH:mm; recurring times are local too. */
@@ -186,7 +196,7 @@ export interface ChannelRunFeedback {
   finish(outcome: ChannelOutcome): Promise<void>
 }
 
-/** Channel hooks remain experimental until Local exercises the public transport contract end to end. */
+/** Shared transport contract, exercised by Local and Lark. */
 export interface ChannelDefinition {
   name: string
   description: string
@@ -231,7 +241,7 @@ export interface ChannelDefinition {
     activeMessage?: IncomingMessage,
   ) => Promise<IncomingMessage | undefined>
 
-  /** Remains experimental pending a second channel implementation. Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
+  /** Starts after admission, before preparation; false requests presentation without another acknowledgement. No live receive event is required. */
   startRun?: (
     message: IncomingMessage,
     options: { acknowledge: boolean },
