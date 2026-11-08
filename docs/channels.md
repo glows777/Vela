@@ -439,3 +439,5 @@ Rerunning setup with the same payload URL updates the existing hook instead of c
 If `gh` is unavailable or not logged in, local settings are still saved and setup prints manual webhook values, including the secret. Paste that secret only into GitHub's Secret field and avoid sharing the terminal output. Setup exits **1** until remote configuration succeeds; repository/API failures also exit 1 and retain local settings. A failed request may already have changed GitHub: check the hook or rerun to list it before updating. Non-interactive missing input exits **2**, and cancellation exits **0** without changes.
 
 For supported events, signatures, allowlists, subscriptions and delivery limits, see [GitHub webhooks](channels-reference.md#github-webhooks).
+
+When an agent run fails, the `Task failed:` reply keeps the original error text and appends the shared [failure-kind hint](sdk.md#failed-agent-runs). This does not change retry policy, passive-message suppression or cancellation replies.

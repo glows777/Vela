@@ -47,6 +47,7 @@ GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/sc
 
 | Feature | Drive | Check |
 |---|---|---|
+| Agent failures | Replay `test/fixtures/scenarios/bad-key.json` through `run … -p hello`, `run … --mode json hello`, and TUI `launch` / `send`; run an SDK/channel faux failure | Raw `401 Invalid API key` stays visible; text surfaces add one API-key hint, JSON/SDK `agent_end.errorKind` is `auth`, print exits 1; no new retry or event |
 | `-p` | `run $RUN p -p "list files"` | exit 0; stdout is only the answer; empty stderr with no optional services configured |
 | Piped stdin | `echo ctx \| $H run $RUN --stdin pipe -p "list files"` | Same answer, exit 0 |
 | `--mode json` | `run $RUN j --mode json "list files"` | Line 1 `{"type":"session",…}`, then events including `tool_execution_end` |
