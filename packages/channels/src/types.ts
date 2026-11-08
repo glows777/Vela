@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from '@glows777/vela-core'
 import type {
   ImageContent,
   PermissionRules,
@@ -216,6 +217,9 @@ export interface ChannelDefinition {
     cwd?: string
     tools?: string[]
     permissions?: PermissionRules
+    /** Model for the opened session, as `provider/id`; unknown names fail opening with the chat id. */
+    model?: string
+    thinkingLevel?: ThinkingLevel
   }
   /** Validate configured tool names after extensions load, before transport or recovery starts. */
   validateTools?: (names: readonly string[]) => void

@@ -108,7 +108,7 @@ await session.prompt('Summarize the open issues')
 
 A session id becomes a file name: letters, digits, `.`, `_` and `-`, not starting with `.`, at most 128 characters. Other ids throw.
 
-`SessionOptions` apply only when the session is first opened; a second `vela.session(id, options)` returns the open session unchanged.
+`SessionOptions` apply when the session is first opened; a second `vela.session(id, options)` returns the open session unchanged. A `model` or `thinkingLevel` given then also wins over the choice saved in a resumed transcript, so a host's current configuration is not replaced by an older one. `fork()` and `clone()` restore the copied branch's own model and thinking level instead.
 
 | Option | Default | Description |
 |---|---|---|

@@ -63,9 +63,9 @@ export interface SessionOptions {
   tools?: string[]
   /** UI extensions use to interact with the user; without it there is no UI (confirm always returns false) */
   ui?: SessionUI
-  /** Model for this session (`provider/id` or LanguageModel), default Vela's model */
+  /** Model for this session (`provider/id` or LanguageModel), default Vela's model. Also wins over the saved choice of a resumed session. */
   model?: string | LanguageModel
-  /** Thinking level, default Vela's (Vela defaults to medium, like pi) */
+  /** Thinking level, default Vela's (Vela defaults to medium, like pi). Like `model`, wins over a resumed session's saved level. */
   thinkingLevel?: ThinkingLevel
   /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
   autoCompaction?: boolean

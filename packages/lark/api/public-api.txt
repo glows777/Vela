@@ -29,7 +29,7 @@
   interface LarkOptions
     appId?: string | undefined
     appSecret?: string | undefined
-    chats?: (string | { id: string; tools?: string[] | undefined; readUntagged?: boolean | undefined; })[] | undefined
+    chats?: (string | { id: string; tools?: string[]; readUntagged?: boolean; model?: string; thinkingLevel?: ThinkingLevel; topicModel?: string; topicThinkingLevel?: ThinkingLevel; })[] | undefined
     owners?: string[] | undefined
     transport?: LarkTransport | undefined
   interface LarkSentMessage

@@ -2,8 +2,9 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
-import { channelSessionId } from '@glows777/vela-channels'
+import { channelSessionId, chatDirectory } from '@glows777/vela-channels'
 import {
+  createFauxModel,
   type FauxRequest,
   type FauxStep,
   fauxText,
@@ -41,6 +42,36 @@ function setup(
     ],
   })
   return { t, fake }
+}
+
+function modelSetup(chats: unknown, cwd?: string) {
+  const fake = fakeLark()
+  const models = {
+    default: createFauxModel({ responses: [fauxText('default answer')] }),
+    group: createFauxModel({ responses: [fauxText('group answer')] }),
+    topic: createFauxModel({ responses: [fauxText('topic answer')] }),
+    next: createFauxModel({ responses: [fauxText('next answer')] }),
+  }
+  const t = createTestVela({
+    cwd,
+    model: 'p/default',
+    providers: {
+      p: {
+        createModel: (id) =>
+          models[id as keyof typeof models] ?? models.default,
+      },
+    },
+    allowPendingResponses: true,
+    extensionConfig: { lark: { chats } },
+    extensions: [
+      lark({
+        appId: 'cli_bot',
+        owners: ['ou_alice'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  return { t, fake, models }
 }
 
 async function turn(
@@ -308,4 +339,156 @@ test('an empty tool list retains channel controls, hides memory and cannot invok
     ).toBe(false)
     expect(existsSync(join(run.t.cwd, 'forbidden.txt'))).toBe(false)
   }
+})
+
+test('a group entry sets the group and topic models and thinking levels', async () => {
+  const run = modelSetup([
+    {
+      id: 'oc_alpha',
+      model: 'p/group',
+      thinkingLevel: 'high',
+      topicModel: 'p/topic',
+      topicThinkingLevel: 'low',
+    },
+    'oc_beta',
+  ])
+  await run.t.vela.ready()
+  await run.t.vela.startChannels()
+
+  run.fake.deliver(
+    larkEvent({ chat_id: 'oc_alpha', content: '{"text":"group hello"}' }),
+  )
+  await until(() => run.models.group.calls.length === 1)
+  expect(run.models.group.calls[0]?.reasoning).toBe('high')
+  expect(run.models.topic.calls).toHaveLength(0)
+  expect(run.models.default.calls).toHaveLength(0)
+
+  run.fake.deliver(
+    larkEvent({
+      chat_id: 'oc_alpha',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"topic hello"}',
+    }),
+  )
+  await until(() => run.models.topic.calls.length === 1)
+  expect(run.models.topic.calls[0]?.reasoning).toBe('low')
+  expect(run.models.group.calls).toHaveLength(1)
+  expect(run.models.default.calls).toHaveLength(0)
+
+  run.fake.deliver(
+    larkEvent({ chat_id: 'oc_beta', content: '{"text":"plain hello"}' }),
+  )
+  await until(() => run.models.default.calls.length === 1)
+  expect(run.models.group.calls).toHaveLength(1)
+  expect(run.models.topic.calls).toHaveLength(1)
+})
+
+test('a changed group configuration takes effect when the session resumes', async () => {
+  const first = modelSetup([
+    {
+      id: 'oc_alpha',
+      model: 'p/group',
+      thinkingLevel: 'high',
+      topicModel: 'p/topic',
+      topicThinkingLevel: 'low',
+    },
+  ])
+  await first.t.vela.ready()
+  await first.t.vela.startChannels()
+  first.fake.deliver(
+    larkEvent({ chat_id: 'oc_alpha', content: '{"text":"group one"}' }),
+  )
+  await until(() => first.models.group.calls.length === 1)
+  first.fake.deliver(
+    larkEvent({
+      chat_id: 'oc_alpha',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"topic one"}',
+    }),
+  )
+  await until(() => first.models.topic.calls.length === 1)
+  await first.t.vela.dispose()
+
+  const second = modelSetup(
+    [
+      {
+        id: 'oc_alpha',
+        model: 'p/next',
+        thinkingLevel: 'max',
+        topicModel: 'p/next',
+        topicThinkingLevel: 'minimal',
+      },
+    ],
+    first.t.cwd,
+  )
+  await second.t.vela.ready()
+  await second.t.vela.startChannels()
+  second.fake.deliver(
+    larkEvent({ chat_id: 'oc_alpha', content: '{"text":"group two"}' }),
+  )
+  await until(() => second.models.next.calls.length === 1)
+  second.fake.deliver(
+    larkEvent({
+      chat_id: 'oc_alpha',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"topic two"}',
+    }),
+  )
+  await until(() => second.models.next.calls.length === 2)
+  // The saved model and thinking level of the first configuration do not survive the resume
+  expect(second.models.next.calls[0]?.reasoning).toBe('max')
+  expect(second.models.next.calls[1]?.reasoning).toBe('minimal')
+  expect(second.models.group.calls).toHaveLength(0)
+  expect(second.models.topic.calls).toHaveLength(0)
+  expect(second.models.default.calls).toHaveLength(0)
+})
+
+test('a group model that does not resolve fails opening with the chat id', async () => {
+  const run = modelSetup([{ id: 'oc_alpha', model: 'missing/model' }])
+  await run.t.vela.ready()
+  await run.t.vela.startChannels()
+  run.fake.deliver(
+    larkEvent({ chat_id: 'oc_alpha', content: '{"text":"hello"}' }),
+  )
+  await until(() => run.fake.sent.length > 0)
+  expect(run.fake.sent[0]?.text).toContain(
+    'Cannot resolve model "missing/model" for chat oc_alpha',
+  )
+})
+
+test.each(['thinkingLevel', 'topicThinkingLevel'])(
+  'an unknown %s fails loading with the chat id',
+  async (key) => {
+    await expect(
+      (async () => {
+        const { t } = setup([{ id: 'oc_alpha', [key]: 'ultra' }])
+        await t.vela.ready()
+      })(),
+    ).rejects.toThrow('Unknown Lark thinking level "ultra" for chat oc_alpha')
+  },
+)
+
+test("a group workspace's AGENTS.md reaches its topics", async () => {
+  const { t, fake } = setup()
+  const workspace = join(
+    chatDirectory(t.dataDir, 'lark', 'oc_alpha'),
+    'workspace',
+  )
+  mkdirSync(workspace, { recursive: true })
+  writeFileSync(join(workspace, 'AGENTS.md'), 'Always answer as the group.')
+  t.model.push(fauxText('answer'))
+  await t.vela.startChannels()
+  fake.deliver(
+    larkEvent({
+      chat_id: 'oc_alpha',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"topic question"}',
+    }),
+  )
+  await until(() => t.model.calls.length === 1)
+  expect(t.model.calls[0]?.system).toContain('Always answer as the group.')
 })

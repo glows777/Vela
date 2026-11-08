@@ -80,9 +80,9 @@ An opened Local project's canonical cwd changes its tool working directory, not 
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `defaultModel` | `"provider/id"` | none | Model for new sessions. See [Models](models.md#selecting-a-model). |
+| `defaultModel` | `"provider/id"` | none | Model for new sessions. A trusted project's `.vela/settings.json` sets it for sessions started in that project. See [Models](models.md#selecting-a-model). |
 | `enabledModels` | string[] | none | Models Ctrl+P (and RPC `cycle_model`) cycles through, like pi's `enabledModels`. See [Enabled models](#enabled-models). |
-| `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. |
+| `defaultThinkingLevel` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` | `medium` | Thinking level for new sessions. A trusted project's `.vela/settings.json` sets it for sessions started in that project. |
 | `defaultTools` | string[] | `read_file`, `write_file`, `edit_file`, `bash` | Tools a new CLI session starts with. Plain names (or `*` patterns) select exactly those; `+name` / `-name` entries turn default tools on or off. See [defaultTools](#defaulttools). |
 | `dataDir` | string | under `~/.vela/projects/` | The project's data directory (see [Data directory](#data-directory)). A relative path resolves from the working folder. |
 | `eventDefaultTarget` | `{ channel: string, chatId: string }` | none (drop) | Optional fallback for external events with no matching subscription. The top-level conversation must already exist and be enabled; it is never created implicitly. Both fields must be nonempty and surrounding whitespace is trimmed (also for the direct channel-aware SDK option). Matching disabled/unavailable subscriptions never fall through here. See [external events](channels-reference.md#external-event-subscriptions). |

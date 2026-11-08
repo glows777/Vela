@@ -1,8 +1,8 @@
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import type { ThinkingLevel } from '@glows777/vela-core'
 import type { ExtensionConfigDefinition } from '@glows777/vela-core/extension-api'
 import { configString, configStrings } from '@glows777/vela-core/extension-api'
 import { LarkChannel } from './channel.ts'
-import type { LarkChat } from './chats.ts'
 import type { LarkTransport } from './transport.ts'
 
 export interface LarkOptions {
@@ -13,7 +13,20 @@ export interface LarkOptions {
    */
   owners?: string[]
   /** Enabled chat_ids. Every member has full access; the group and each topic have separate sessions. */
-  chats?: (string | LarkChat)[]
+  chats?: (
+    | string
+    | {
+        id: string
+        tools?: string[]
+        readUntagged?: boolean
+        /** `provider/id` for the group session. */
+        model?: string
+        thinkingLevel?: ThinkingLevel
+        /** `provider/id` for the group's topics; defaults to `model`. */
+        topicModel?: string
+        topicThinkingLevel?: ThinkingLevel
+      }
+  )[]
   /** The connection to Lark; default lark's long connection with appId / appSecret (tests pass a fake) */
   transport?: LarkTransport
 }

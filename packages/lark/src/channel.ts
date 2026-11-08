@@ -139,6 +139,9 @@ export class LarkChannel implements ChannelDefinition {
     return {
       ...options,
       cwd,
+      model: (msg.topic ? chat.topicModel : undefined) ?? chat.model,
+      thinkingLevel:
+        (msg.topic ? chat.topicThinkingLevel : undefined) ?? chat.thinkingLevel,
       tools:
         chat.tools === undefined
           ? undefined
