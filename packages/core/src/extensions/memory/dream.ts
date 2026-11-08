@@ -284,16 +284,17 @@ export class MemoryDream {
           throw new Error(`Dream did not read the full note: ${op.filename}`)
         targets.add(op.filename)
       }
-      const details: string[] = []
-      for (const op of result.ops) {
+      const currentNotes = new Map(
+        this.store.list().map((entry) => [basename(entry.filePath), entry]),
+      )
+      // Operations can depend on one another (merge destination + source deletion).
+      // Check every target before any write; no await separates this from application.
+      const conflicts = result.ops.filter((op) => {
         const before = snapshot.get(op.filename)
-        const current = this.store
-          .list()
-          .find((entry) => basename(entry.filePath) === op.filename)
-        const changed =
-          op.action === 'create'
-            ? current !== undefined || before !== undefined
-            : !current ||
+        const current = currentNotes.get(op.filename)
+        return op.action === 'create'
+          ? current !== undefined || before !== undefined
+          : !current ||
               !before ||
               current.lastWriteAt !== before?.lastWriteAt ||
               current.content !== before.content ||
@@ -301,12 +302,15 @@ export class MemoryDream {
               current.description !== before.description ||
               current.type !== before.type ||
               JSON.stringify(current.sources) !== JSON.stringify(before.sources)
-        if (changed) {
-          details.push(
-            `Skipped ${op.action} ${op.filename}: note changed since dream read it.`,
-          )
-          continue
-        }
+      })
+      if (conflicts.length) {
+        const report = `[dream] Skipped all ${result.ops.length} operations: notes changed since dream read them (${conflicts.map((op) => op.filename).join(', ')}). Inbox retained; run /dream to retry.`
+        this.audit(report, 0)
+        return report
+      }
+      const details: string[] = []
+      for (const op of result.ops) {
+        const before = snapshot.get(op.filename)
         if (op.action === 'delete') this.store.delete(op.filename)
         else
           this.store.save(

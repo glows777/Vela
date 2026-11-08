@@ -122,8 +122,8 @@ Extension commands run in every session; an input naming a registered command ru
 `<store>/.dream/inbox.jsonl`: session ID, time, user input and final assistant text
 (about 2,000 characters per side), plus tool names, never tool output. The inbox
 is capped at about 100 KB, dropping oldest records and counting dropped records.
-It uses the same private file permissions as memory. Sessions with memory denied
-do not contribute. Local sessions and owner DMs use global memory; a group's
+It uses the same private file permissions as memory. Only sessions with memory
+permission `allow` contribute; `ask`, `deny` and omitted-memory sessions do not. Local sessions and owner DMs use global memory; a group's
 sessions write only that group's inbox and notes, never another group's or global
 store.
 
@@ -131,17 +131,22 @@ After a reply settles, automatic dream starts in the background when the inbox
 contains at least 20 turns or a turn older than 24 hours. It does not delay the
 reply. Only one dream runs per store. `/dream` runs the same pass immediately.
 Set `extensionConfig.memory.dream` to `false` to disable automatic runs; manual
-`/dream` remains available. The default is enabled, including groups.
+`/dream` remains available. The default is enabled, including groups. Both automatic
+and manual dream require memory permission `allow`. With `ask`, use the memory
+tool for individually approved operations; `/dream` explains this restriction
+without calling the model or changing notes.
 
 Dream makes one isolated model call with no tools. It compares recent conversation
 records with notes and deterministic lint findings, corrects contradicted notes,
 saves missing durable facts, merges duplicates and condenses the index. Large
 stores provide the index plus notes matched to the inbox within a content budget.
 Conversation text is evidence, not instructions. Validated operations go through
-the memory store. A live write since the snapshot makes an update or deletion
-skip that note instead of overwriting it; the report records the skip. The inbox
-is consumed only after successful application, preserving turns arriving during
-the run. Dream messages and tool traces do not enter the user's conversation.
+the memory store. Before applying any operation, dream checks every target for
+changes since the snapshot. A live edit or a newly occupied create target skips
+the entire batch and retains the inbox for retry. This keeps a merge source from
+being deleted when its destination could not be updated. The report names the
+conflicting targets. The inbox is consumed only after successful application,
+preserving turns arriving during the run. Dream messages and tool traces do not enter the user's conversation.
 
 Changed notes retain the last five source session IDs in `sources:` frontmatter.
 `<store>/.dream/log.md` keeps reports for the last 20 runs. Dream model usage is

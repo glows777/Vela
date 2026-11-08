@@ -56,7 +56,7 @@ export function memory(): VelaExtension {
       return dream
     }
     vela.on('agent_end', (event, ctx) => {
-      if (ctx.session.toolDecision('memory') === 'deny') return
+      if (ctx.session.toolDecision('memory') !== 'allow') return
       dreamFor(forSession(ctx.session.scope)).collect(
         ctx.session,
         event.messages,
@@ -65,7 +65,7 @@ export function memory(): VelaExtension {
     vela.on('agent_settled', (_event, ctx) => {
       if (
         vela.config.dream === false ||
-        ctx.session.toolDecision('memory') === 'deny'
+        ctx.session.toolDecision('memory') !== 'allow'
       )
         return
       const dream = dreamFor(forSession(ctx.session.scope))
@@ -165,6 +165,10 @@ export function memory(): VelaExtension {
       handler: async (_args, ctx) => {
         if (ctx.session.toolDecision('memory') === 'deny')
           return ctx.ui.notify('Memory is not enabled for this session.')
+        if (ctx.session.toolDecision('memory') === 'ask')
+          return ctx.ui.notify(
+            '[dream] Memory permission requires approval; dream is unavailable. Use the memory tool for individually approved operations.',
+          )
         ctx.ui.notify('[dream] Starting memory consolidation...')
         try {
           const report = await dreamFor(forSession(ctx.session.scope)).run(

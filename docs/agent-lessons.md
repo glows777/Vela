@@ -2,6 +2,12 @@
 
 After a miss is confirmed, write a lesson. Record the trigger path, the layer that should have caught it, and the mechanism patch. The layer is pre-PR, AI/bot review, CI, human, or post-merge. The patch is a line in [REVIEW.md](../REVIEW.md), a lint, or a verify-vela journey. A lesson with no mechanism change is not closed.
 
+## Background memory work must preserve permission and merge boundaries
+
+[PR #307's review](https://github.com/glows777/Vela/pull/307#discussion_r4504727382) found that a deny-only background gate let `memory: ask` sessions consolidate without approval. The pre-PR tests covered `deny`, but not the approval-required path or an already-due shared inbox. Dream now requires `allow` for collection and both automatic and manual runs; ordinary memory operations still use individual approval.
+
+The [same review](https://github.com/glows777/Vela/pull/307#discussion_r4504727383) found that independently skipping a changed merge destination still deleted its source. The pre-PR single-note race did not cover dependent operations. Dream now checks all targets before applying any operation and retains the whole inbox on conflict. Faux cases reproduce both operation orders and a create collision; the memory SDK journey in [verify-vela](../.skills/verify-vela/journeys.md) covers permission exclusion, a description-only live edit, retained evidence and a successful refreshed retry. AI/bot review caught both misses; these entry-path scenarios are the verification mechanism.
+
 ## Check the account that performs GitHub setup
 
 In [PR #298](https://github.com/glows777/Vela/pull/298#discussion_r4501042665), an expired inactive GitHub CLI account made setup choose manual fallback and print the webhook secret even when the active account could manage hooks. The pre-PR fixture modeled only one authentication result, so it missed `gh auth status` checking every saved account.
