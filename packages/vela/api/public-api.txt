@@ -77,7 +77,7 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
-    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; }) | undefined
+    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
     start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
@@ -311,7 +311,7 @@
   interface LarkOptions
     appId?: string | undefined
     appSecret?: string | undefined
-    chats?: (string | { id: string; tools?: string[] | undefined; readUntagged?: boolean | undefined; })[] | undefined
+    chats?: (string | { id: string; tools?: string[]; readUntagged?: boolean; model?: string; thinkingLevel?: ThinkingLevel; topicModel?: string; topicThinkingLevel?: ThinkingLevel; })[] | undefined
     owners?: string[] | undefined
     transport?: LarkTransport | undefined
   interface LarkSentMessage

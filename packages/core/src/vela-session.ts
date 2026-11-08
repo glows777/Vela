@@ -941,6 +941,14 @@ export class VelaSession {
     if (!saved) return false
     this.displayName = saved.name
     await this.loadBranch(saved)
+    // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
+    if (this.options.thinkingLevel !== undefined)
+      this.thinking = this.options.thinkingLevel
+    if (
+      this.options.model !== undefined &&
+      this.options.model !== this.modelChoice
+    )
+      this.selectModel(this.options.model, false)
     return true
   }
 

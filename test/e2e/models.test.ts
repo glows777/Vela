@@ -257,6 +257,38 @@ test('a resumed session restores its model and thinking level', async () => {
   }
 })
 
+test("a fork keeps the copied branch model and thinking level, not the parent's current ones", async () => {
+  const a = createFauxModel({ modelId: 'a' })
+  const b = createFauxModel({ modelId: 'b' })
+  const t = createTestVela({
+    model: 'p/a',
+    thinkingLevel: 'low',
+    providers: { p: { createModel: (id) => (id === 'b' ? b : a) } },
+  })
+  a.push(fauxText('first'), fauxText('fork answer'))
+  b.push(fauxText('second'))
+  await t.run('one')
+  const first = t.session
+    .getEntries()
+    .find(
+      (entry) => entry.type === 'message' && entry.message.role === 'assistant',
+    )
+  t.session.setModel('p/b')
+  t.session.setThinkingLevel('high')
+  await t.run('two')
+
+  const { session } = await t.session.fork(first!.id, {
+    position: 'at',
+    sessionId: 'forked',
+  })
+  expect(session!.modelInfo.ref).toBe('p/a')
+  expect(session!.thinkingLevel).toBe('low')
+  await session!.prompt('three')
+  expect(a.calls).toHaveLength(2)
+  expect(a.calls[1]!.reasoning).toBe('low')
+  expect(b.calls).toHaveLength(1)
+})
+
 test('the thinking level is clamped to what the model supports, like pi', async () => {
   const { big, plain, providers } = fakeProvider()
   plain.push(fauxText('plain'))

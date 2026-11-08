@@ -42,7 +42,7 @@ export class ChannelSessions {
       this.directory.storageKey(channel.name, msg.channelId),
     )
     const options = channel.sessionOptions?.(msg)
-    return this.session(this.directory.sessionId(key), {
+    const session = this.session(this.directory.sessionId(key), {
       ...options,
       permissions: {
         ...options?.permissions,
@@ -58,5 +58,17 @@ export class ChannelSessions {
       channel: channel.name,
       scope: { id: scope.id, kind: scope.kind, dataDir: scope.dataDir },
     })
+    if (typeof options?.model === 'string') {
+      try {
+        // Resolution is lazy; fail while opening rather than on the first prompt.
+        void session.modelInfo
+      } catch (error) {
+        throw new Error(
+          `Cannot resolve model "${options.model}" for chat ${msg.channelId}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        )
+      }
+    }
+    return session
   }
 }
