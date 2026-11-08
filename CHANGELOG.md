@@ -42,6 +42,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **Memory rules ask the model to read before answering.** The system-prompt usage rules now tell the model to search or read memory before answering a question that depends on the user, the group or past decisions. Measured on `deepseek/deepseek-flash`: G7 recall stayed 3/3 and G8 recall stayed 1/3 (store 1/3 in both arms), so the guidance showed no measurable effect ([#304](https://github.com/glows777/Vela/issues/304)).
+
 - **Core tool auditing uses an extension.** `auditLog` is always installed, including with no SDK extensions and CLI `--no-extensions`; write/edit events retain their final-path, pre-execution timing ([#291](https://github.com/glows777/Vela/issues/291)).
 
 - **Tool interception uses extension handlers directly.** Async `tool_call` and `tool_result` handlers retain their awaited ordering, permissions and original tool history. `/hooks` now lists the extension owners in dispatch order instead of pipeline adapters ([#292](https://github.com/glows777/Vela/issues/292)).
