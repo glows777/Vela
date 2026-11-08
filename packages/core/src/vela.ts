@@ -8,6 +8,7 @@ import type {
   CredentialStore,
   LoginOptions,
 } from './auth/types.ts'
+import { auditLog } from './extensions/audit.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
 import type { VelaExtension } from './extensions/types.ts'
 import { resolveLimits, type VelaLimits } from './limits.ts'
@@ -387,15 +388,8 @@ export function createVela(options: VelaOptions = {}): Vela {
       session: (id) => sessions.get(id),
     },
     options.extensions ?? [],
+    [auditLog],
   )
-  // Audit runs after extensions' tool_call, so it records the path actually written after extensions modify it
-  hooks.registerPre('audit-log', (toolName, input, context) => {
-    if (toolName === 'write_file' || toolName === 'edit_file') {
-      const path = (input as { path?: string } | null)?.path || 'unknown'
-      context.emit({ type: 'audit', toolName, path })
-    }
-    return { action: 'allow' }
-  })
 
   let defaultModel: LanguageModel | undefined
   const vela: Vela = {

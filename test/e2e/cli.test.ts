@@ -1313,6 +1313,52 @@ test.concurrent('project extensions load only when the project is trusted', asyn
   expect(saved.stderr).toContain('[local] loaded')
 }, 20_000)
 
+test.concurrent('--no-extensions keeps core auditing for file writes and edits', async () => {
+  const result = await cli(
+    ['--mode', 'json', '--no-extensions', 'Change the file'],
+    {
+      model: 'faux:audit.json',
+      files: {
+        'audit.json': JSON.stringify({
+          responses: [
+            {
+              toolCalls: [
+                {
+                  name: 'write_file',
+                  input: { path: 'audit.txt', content: 'before' },
+                },
+              ],
+            },
+            {
+              toolCalls: [
+                {
+                  name: 'edit_file',
+                  input: {
+                    path: 'audit.txt',
+                    oldText: 'before',
+                    newText: 'after',
+                  },
+                },
+              ],
+            },
+            { text: 'done' },
+          ],
+        }),
+      },
+    },
+  )
+  expect(result.code).toBe(0)
+  const events = result.stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(events.filter((event) => event.type === 'audit')).toMatchObject([
+    { type: 'audit', toolName: 'write_file', path: 'audit.txt' },
+    { type: 'audit', toolName: 'edit_file', path: 'audit.txt' },
+  ])
+  expect(readFileSync(join(result.cwd, 'audit.txt'), 'utf8')).toBe('after')
+})
+
 test.concurrent('-e loads an extension file; --no-extensions drops built-in and discovered ones', async () => {
   const dir = tempDir('vela-ext-')
   dirs.push(dir)

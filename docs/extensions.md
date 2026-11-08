@@ -6,6 +6,8 @@ An extension runs inside the Vela process with the same permissions as the user 
 
 The built-in memory, knowledge base, web and Lark features are extensions too; see [Built-in extensions](built-in-extensions.md).
 
+Core always installs `auditLog`, including in the SDK with no user extensions and the CLI with `--no-extensions`. After extension factories finish loading, its `tool_call` handlers are registered last so `write_file` and `edit_file` audit events record the final rewritten path before execution. A denied, blocked or throwing check stops before auditing; permission confirmation still follows auditing and uses the final input. This does not enable the optional `permission-gate` extension.
+
 ## Create and load an extension
 
 An extension is a module whose default export is a function that receives the extension API. Put it in `~/.vela/extensions/hello.ts`:
@@ -64,7 +66,7 @@ In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension 
 
 The `builtin:` switches apply in order, user settings first, so a project can re-enable what the user disabled and the other way round. An unknown built-in name is a config error.
 
-`--no-extensions` (or `-ne`) skips built-ins, discovered extensions and those listed in settings. Extensions passed with `-e` still load, and `-e builtin:<name>` loads a single built-in:
+`--no-extensions` (or `-ne`) skips configurable built-ins, discovered extensions and those listed in settings. Extensions passed with `-e` still load, and `-e builtin:<name>` loads a single built-in:
 
 ```bash
 vela --no-extensions -e builtin:memory -e ./hello.ts
