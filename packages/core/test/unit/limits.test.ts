@@ -6,6 +6,7 @@ test('defaults match the values the CLI has always used', () => {
     maxRetries: 3,
     retryBaseMs: 500,
     retryMaxMs: 30_000,
+    microcompact: true,
     microcompactThreshold: 120_000,
     summaryThreshold: 150_000,
     minMicroSavings: 20_000,

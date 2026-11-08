@@ -10,6 +10,11 @@ export interface VelaLimits {
   retryBaseMs: number
   /** Retry backoff cap */
   retryMaxMs: number
+  /**
+   * Whether microcompaction (folding old tool results) is allowed; false skips it only, while
+   * summaries and overflow compaction still follow autoCompaction.
+   */
+  microcompact: boolean
   /** Try microcompaction (fold old tool results) when the estimated input reaches this */
   microcompactThreshold: number
   /** Summarize history when the estimated input reaches this */
@@ -24,6 +29,7 @@ export const DEFAULT_LIMITS: Readonly<VelaLimits> = Object.freeze({
   maxRetries: 3,
   retryBaseMs: 500,
   retryMaxMs: 30_000,
+  microcompact: true,
   microcompactThreshold: 120_000,
   summaryThreshold: 150_000,
   minMicroSavings: 20_000,
@@ -39,10 +45,27 @@ export function assertLimitKeys(limits: object, where = 'limits'): void {
       )
 }
 
+/** Copies an override onto the limits, keeping the default when the value is undefined. */
+function assignLimit<K extends keyof VelaLimits>(
+  limits: VelaLimits,
+  overrides: Partial<VelaLimits>,
+  key: K,
+): void {
+  const value = overrides[key]
+  if (value !== undefined) limits[key] = value
+}
+
+/** Applies the defined overrides in place; the names were checked by assertLimitKeys. */
+export function applyLimits(
+  limits: VelaLimits,
+  overrides: Partial<VelaLimits>,
+): VelaLimits {
+  for (const key of Object.keys(overrides) as (keyof VelaLimits)[])
+    assignLimit(limits, overrides, key)
+  return limits
+}
+
 export function resolveLimits(overrides: Partial<VelaLimits> = {}): VelaLimits {
   assertLimitKeys(overrides)
-  const limits = { ...DEFAULT_LIMITS }
-  for (const [key, value] of Object.entries(overrides))
-    if (value !== undefined) limits[key as keyof VelaLimits] = value
-  return limits
+  return applyLimits({ ...DEFAULT_LIMITS }, overrides)
 }

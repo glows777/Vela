@@ -88,7 +88,7 @@ An opened Local project's canonical cwd changes its tool working directory, not 
 | `eventDefaultTarget` | `{ channel: string, chatId: string }` | none (drop) | Optional fallback for external events with no matching subscription. The top-level conversation must already exist and be enabled; it is never created implicitly. Both fields must be nonempty and surrounding whitespace is trimmed (also for the direct channel-aware SDK option). Matching disabled/unavailable subscriptions never fall through here. See [external events](channels-reference.md#external-event-subscriptions). |
 | `shellPath` | string | `bash` on `PATH`; Git for Windows Bash on Windows | Shell the `bash` tool runs commands with (`<shellPath> -lc <command>`), like pi's `shellPath`. On Windows, Vela looks for Git for Windows at its standard install paths and on `PATH`, preferring `bin\\bash.exe` so a `bash.cmd` shim cannot shadow it. If the shell cannot start, that session disables `bash`; default sessions also turn on `list_directory`, `grep` and `find` unless a tool was explicitly disabled. An explicit tool allowlist stays in force. |
 | `limits` | object | see below | Overrides runtime limits. |
-| `autoCompaction` | boolean | `true` | Compact the context automatically (pi's `compaction.enabled`). `false` turns off microcompaction, threshold summaries and compact-and-retry on overflow; `/compact` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
+| `autoCompaction` | boolean | `true` | Compact the context automatically (pi's `compaction.enabled`). `false` turns off microcompaction, threshold summaries and compact-and-retry on overflow; to turn off only microcompaction, use `limits.microcompact`. `/compact` still works. See [Sessions](sessions.md#turning-automatic-compaction-off). |
 | `extensions` | string[] | `[]` | Extension files or directories, and `builtin:` switches. |
 | `skills` | string[] | `[]` | Extra skill directories or files. |
 | `prompts` | string[] | `[]` | Extra prompt template directories or files. |
@@ -123,14 +123,21 @@ Without the setting, or when no pattern matches, Ctrl+P cycles through all avail
 | `maxRetries` | `3` | Retries for retryable model errors. |
 | `retryBaseMs` | `500` | Base delay of the exponential backoff; `0` retries immediately. |
 | `retryMaxMs` | `30000` | Maximum backoff delay. |
+| `microcompact` | `true` | Fold old tool results (microcompaction). `false` skips microcompaction only; threshold summaries and overflow compaction still follow `autoCompaction`. |
 | `microcompactThreshold` | `120000` | Estimated input tokens at which old tool results are folded (microcompaction). |
 | `summaryThreshold` | `150000` | Estimated input tokens at which the history is summarized. |
 | `minMicroSavings` | `20000` | Microcompaction is applied only if it saves at least this many tokens. |
 | `maxInputTokens` | `183616` | Hard cap for one request; the turn stops if the input is larger. |
 
-The SDK takes the same keys as `createVela({ limits })`; unknown keys are an error in both places.
+The SDK takes the same keys as `createVela({ limits })`; unknown keys are an error in both places. To turn off microcompaction while keeping automatic summaries and overflow recovery:
 
-When the model entry has a `contextWindow` `W` (in `models.json` or an extension provider's model list), the four token limits are derived from it instead of using the defaults above, which correspond to a 200k window:
+```json
+{ "limits": { "microcompact": false } }
+```
+
+Folding a tool result changes that message, so the prompt cache can be reused only up to the first folded result; keeping the original results costs input tokens but leaves the earlier prefix unchanged. Whether that tradeoff helps depends on your provider's prompt-cache pricing.
+
+When the model entry has a `contextWindow` `W` (in `models.json` or an extension provider's model list), the four token thresholds are derived from it instead of using the defaults above, which correspond to a 200k window:
 
 | Limit | Derived value |
 |---|---|
@@ -139,7 +146,7 @@ When the model entry has a `contextWindow` `W` (in `models.json` or an extension
 | `microcompactThreshold` | `min(0.6 W, 0.8 × summaryThreshold)` |
 | `minMicroSavings` | `0.1 W` |
 
-A 128k window gives `111616`, `96000`, `76800` and `12800`. Without `contextWindow` the defaults apply and the footer assumes a 200k window. The limits are recomputed when you switch models, and a value you set in `limits` always wins over the derived one. How compaction uses them is described in [Sessions](sessions.md#compaction).
+`microcompact` is a boolean, not a threshold, so it is never derived. A 128k window gives `111616`, `96000`, `76800` and `12800`. Without `contextWindow` the defaults apply and the footer assumes a 200k window. The limits are recomputed when you switch models, and a value you set in `limits` always wins over the derived one. How compaction uses them is described in [Sessions](sessions.md#compaction).
 
 ### extensions
 
