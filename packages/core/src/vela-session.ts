@@ -789,18 +789,12 @@ export class VelaSession {
     this.registry.discoveredTools = new Set(await this.store.loadedTools())
     for (const [message, info] of context.custom)
       this.messageQueue.customMessages.set(message, info)
-    // Options given at open (a channel's chat entry) win over the saved choice
     if (
-      this.options.thinkingLevel === undefined &&
       context.thinkingLevel &&
       THINKING_LEVELS.includes(context.thinkingLevel)
     )
       this.thinking = context.thinkingLevel
-    if (
-      this.options.model === undefined &&
-      context.model &&
-      context.model !== this.resolved?.info.ref
-    ) {
+    if (context.model && context.model !== this.resolved?.info.ref) {
       // Providers registered by extensions resolve only after extensions load
       await this.deps.extensions.ready.catch(() => {})
       try {
@@ -947,6 +941,14 @@ export class VelaSession {
     if (!saved) return false
     this.displayName = saved.name
     await this.loadBranch(saved)
+    // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
+    if (this.options.thinkingLevel !== undefined)
+      this.thinking = this.options.thinkingLevel
+    if (
+      this.options.model !== undefined &&
+      this.options.model !== this.modelChoice
+    )
+      this.selectModel(this.options.model, false)
     return true
   }
 
