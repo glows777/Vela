@@ -284,7 +284,7 @@ For example, `"chats": ["oc_example_all", { "id": "oc_example_limited", "tools":
 
 A chat entry can also set `model` (`provider/id`) and `thinkingLevel` for its group session, plus `topicModel` and `topicThinkingLevel` for the group's topics. A topic uses its own value when set, otherwise the group's; a group without them uses the user's `defaultModel` / `defaultThinkingLevel`. DMs use the user defaults. Unknown thinking levels fail loading. A model name that does not resolve fails when its session opens, with the chat id in the error.
 
-Current chat configuration is applied from the logical directory record before opening/resuming a session, including idle reopen, process recovery, topic handoff and the fresh physical ID created by `!restart`. A resumed session keeps the model and thinking level saved in its transcript, including a mid-session `/model` or `/thinking` change; configuration changes take effect on a new physical session (use `!restart`). Restart retains the workspace, group notes and attachments. The per-group boolean `readUntagged` defaults to true.
+Current chat configuration is applied from the logical directory record before opening/resuming a session, including idle reopen, process recovery, topic handoff and the fresh physical ID created by `!restart`. A configured model or thinking level is applied again whenever the session opens, so a changed chat entry takes effect on resume. A mid-session `/model` or `/thinking` change survives a resume only for a value the chat entry does not configure. Restart retains the workspace, group notes and attachments. The per-group boolean `readUntagged` defaults to true.
 
 ### Untagged top-level discussion and cost
 

@@ -789,12 +789,18 @@ export class VelaSession {
     this.registry.discoveredTools = new Set(await this.store.loadedTools())
     for (const [message, info] of context.custom)
       this.messageQueue.customMessages.set(message, info)
+    // Options given at open (a channel's chat entry) win over the saved choice
     if (
+      this.options.thinkingLevel === undefined &&
       context.thinkingLevel &&
       THINKING_LEVELS.includes(context.thinkingLevel)
     )
       this.thinking = context.thinkingLevel
-    if (context.model && context.model !== this.resolved?.info.ref) {
+    if (
+      this.options.model === undefined &&
+      context.model &&
+      context.model !== this.resolved?.info.ref
+    ) {
       // Providers registered by extensions resolve only after extensions load
       await this.deps.extensions.ready.catch(() => {})
       try {

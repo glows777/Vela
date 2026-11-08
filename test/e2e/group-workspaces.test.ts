@@ -44,14 +44,16 @@ function setup(
   return { t, fake }
 }
 
-function modelSetup(chats: unknown) {
+function modelSetup(chats: unknown, cwd?: string) {
   const fake = fakeLark()
   const models = {
     default: createFauxModel({ responses: [fauxText('default answer')] }),
     group: createFauxModel({ responses: [fauxText('group answer')] }),
     topic: createFauxModel({ responses: [fauxText('topic answer')] }),
+    next: createFauxModel({ responses: [fauxText('next answer')] }),
   }
   const t = createTestVela({
+    cwd,
     model: 'p/default',
     providers: {
       p: {
@@ -380,6 +382,68 @@ test('a group entry sets the group and topic models and thinking levels', async 
   await until(() => run.models.default.calls.length === 1)
   expect(run.models.group.calls).toHaveLength(1)
   expect(run.models.topic.calls).toHaveLength(1)
+})
+
+test('a changed group configuration takes effect when the session resumes', async () => {
+  const first = modelSetup([
+    {
+      id: 'oc_alpha',
+      model: 'p/group',
+      thinkingLevel: 'high',
+      topicModel: 'p/topic',
+      topicThinkingLevel: 'low',
+    },
+  ])
+  await first.t.vela.ready()
+  await first.t.vela.startChannels()
+  first.fake.deliver(
+    larkEvent({ chat_id: 'oc_alpha', content: '{"text":"group one"}' }),
+  )
+  await until(() => first.models.group.calls.length === 1)
+  first.fake.deliver(
+    larkEvent({
+      chat_id: 'oc_alpha',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"topic one"}',
+    }),
+  )
+  await until(() => first.models.topic.calls.length === 1)
+  await first.t.vela.dispose()
+
+  const second = modelSetup(
+    [
+      {
+        id: 'oc_alpha',
+        model: 'p/next',
+        thinkingLevel: 'max',
+        topicModel: 'p/next',
+        topicThinkingLevel: 'minimal',
+      },
+    ],
+    first.t.cwd,
+  )
+  await second.t.vela.ready()
+  await second.t.vela.startChannels()
+  second.fake.deliver(
+    larkEvent({ chat_id: 'oc_alpha', content: '{"text":"group two"}' }),
+  )
+  await until(() => second.models.next.calls.length === 1)
+  second.fake.deliver(
+    larkEvent({
+      chat_id: 'oc_alpha',
+      root_id: 'root',
+      thread_id: 'thread',
+      content: '{"text":"topic two"}',
+    }),
+  )
+  await until(() => second.models.next.calls.length === 2)
+  // The saved model and thinking level of the first configuration do not survive the resume
+  expect(second.models.next.calls[0]?.reasoning).toBe('max')
+  expect(second.models.next.calls[1]?.reasoning).toBe('minimal')
+  expect(second.models.group.calls).toHaveLength(0)
+  expect(second.models.topic.calls).toHaveLength(0)
+  expect(second.models.default.calls).toHaveLength(0)
 })
 
 test('a group model that does not resolve fails opening with the chat id', async () => {
