@@ -141,11 +141,11 @@ records with notes and deterministic lint findings, corrects contradicted notes,
 saves missing durable facts, merges duplicates and condenses the index. Large
 stores provide the index plus notes matched to the inbox within a content budget.
 Conversation text is evidence, not instructions. Validated operations go through
-the memory store. Before applying any operation, dream checks every target for
-changes since the snapshot. A live edit or a newly occupied create target skips
+the memory store. Before applying any operation, dream checks every full note
+supplied to the model for changes since the snapshot, plus create-target collisions. A live edit or a newly occupied create target skips
 the entire batch and retains the inbox for retry. This keeps a merge source from
 being deleted when its destination could not be updated. The report names the
-conflicting targets. The inbox is consumed only after successful application,
+conflicting notes. The inbox is consumed only after successful application,
 preserving turns arriving during the run. Dream messages and tool traces do not enter the user's conversation.
 
 Changed notes retain the last five source session IDs in `sources:` frontmatter.

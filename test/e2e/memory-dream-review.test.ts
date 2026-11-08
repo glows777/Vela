@@ -318,3 +318,79 @@ test('a concurrent create collision prevents an earlier source deletion and reta
   expect(notices(t)).toMatch(/skip|conflict/i)
   expect(read(t, 'memory/.dream/log.md')).toMatch(/skip|conflict/i)
 })
+
+test('a changed read-only merge destination prevents duplicate deletion and retains the inbox', async () => {
+  const duplicateContent = `${target.content}\n${source.content}`
+  const t = createTestVela({
+    responses: [
+      [
+        fauxToolCall('memory', { action: 'save', ...source }),
+        fauxToolCall('memory', {
+          action: 'save',
+          ...target,
+          content: duplicateContent,
+        }),
+      ],
+      fauxText('Both notes contain the approval requirement'),
+      fauxToolCall('memory', { action: 'save', ...target }),
+      fauxText('The target now contains only the deployment schedule'),
+    ],
+    generate: [
+      (request) => {
+        const input = JSON.parse(request.lastUserText)
+        expect(input.notes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              filename: 'project_deploy-source.md',
+              content: source.content,
+            }),
+            expect.objectContaining({
+              filename: 'project_deploy-target.md',
+              content: duplicateContent,
+            }),
+          ]),
+        )
+        return result([removeSource])
+      },
+    ],
+  })
+  await t.session.prompt('Save these overlapping deployment notes')
+  const sourceBefore = read(t, sourceFile)
+  const gate = gateGeneration(t)
+  const dreaming = t.session.prompt('/dream')
+  let liveTarget = ''
+  let liveIndex = ''
+  let queued = ''
+  try {
+    await gate.entered
+    await t.vela
+      .session('live')
+      .prompt('Keep only the deployment schedule in the target note')
+    liveTarget = read(t, targetFile)
+    liveIndex = read(t, 'memory/MEMORY.md')
+    queued = read(t, inboxFile)
+  } finally {
+    gate.release()
+    await dreaming
+    gate.restore()
+  }
+  expect(liveTarget).not.toContain(source.content)
+  expect({
+    sourceStillExists: existsSync(t.dataPath(sourceFile)),
+    target: read(t, targetFile),
+    index: read(t, 'memory/MEMORY.md'),
+    inbox: read(t, inboxFile),
+  }).toEqual({
+    sourceStillExists: true,
+    target: liveTarget,
+    index: liveIndex,
+    inbox: queued,
+  })
+  expect(read(t, sourceFile)).toBe(sourceBefore)
+  expect(notices(t)).toMatch(/skip|conflict/i)
+  expect(notices(t)).toContain('project_deploy-target.md')
+  expect(read(t, 'memory/.dream/log.md')).toMatch(/skip|conflict/i)
+  expect(JSON.parse(read(t, 'memory/.dream/state.json')).lastRun.changes).toBe(
+    0,
+  )
+})

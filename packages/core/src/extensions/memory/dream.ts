@@ -287,24 +287,29 @@ export class MemoryDream {
       const currentNotes = new Map(
         this.store.list().map((entry) => [basename(entry.filePath), entry]),
       )
-      // Operations can depend on one another (merge destination + source deletion).
-      // Check every target before any write; no await separates this from application.
-      const conflicts = result.ops.filter((op) => {
-        const before = snapshot.get(op.filename)
-        const current = currentNotes.get(op.filename)
-        return op.action === 'create'
-          ? current !== undefined || before !== undefined
-          : !current ||
-              !before ||
-              current.lastWriteAt !== before?.lastWriteAt ||
-              current.content !== before.content ||
-              current.name !== before.name ||
-              current.description !== before.description ||
-              current.type !== before.type ||
-              JSON.stringify(current.sources) !== JSON.stringify(before.sources)
+      // A deletion may depend on a duplicate the model read without updating it.
+      // Check the full read set before any write; no await separates application.
+      const conflicts = notes.flatMap((before) => {
+        const filename = basename(before.filePath)
+        const current = currentNotes.get(filename)
+        return !current ||
+          current.lastWriteAt !== before.lastWriteAt ||
+          current.content !== before.content ||
+          current.name !== before.name ||
+          current.description !== before.description ||
+          current.type !== before.type ||
+          JSON.stringify(current.sources) !== JSON.stringify(before.sources)
+          ? [filename]
+          : []
       })
+      for (const op of result.ops)
+        if (
+          op.action === 'create' &&
+          (snapshot.has(op.filename) || currentNotes.has(op.filename))
+        )
+          conflicts.push(op.filename)
       if (conflicts.length) {
-        const report = `[dream] Skipped all ${result.ops.length} operations: notes changed since dream read them (${conflicts.map((op) => op.filename).join(', ')}). Inbox retained; run /dream to retry.`
+        const report = `[dream] Skipped all ${result.ops.length} operations: notes changed since dream read them (${conflicts.join(', ')}). Inbox retained; run /dream to retry.`
         this.audit(report, 0)
         return report
       }
