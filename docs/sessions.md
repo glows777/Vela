@@ -105,6 +105,8 @@ When the size reaches `microcompactThreshold`, Vela folds old tool results: thei
 
 Microcompaction is applied only if it saves at least `minMicroSavings` tokens and brings the request below `summaryThreshold`. It emits a `context_prepare` event with `action: 'micro'`. Each changed tool message is recorded as a `context_edit` entry (pi's context edit); the original output stays in the session file. Because it changes messages only from the oldest ones forward, most of the cached prompt prefix survives.
 
+Set the `microcompact` [limit](settings.md#limits) to `false` in settings or `createVela({ limits })` to turn microcompaction off; summaries and overflow compaction keep working.
+
 ### Summary
 
 When the size reaches `summaryThreshold` and there is an earlier turn to summarize (and microcompaction wasn't enough), Vela asks the model to summarize the earlier history:
@@ -126,7 +128,7 @@ The summary request uses the same model and system prompt as the main request. I
 
 ### Turning automatic compaction off
 
-Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, set `session.autoCompaction = false`, or send the `set_auto_compaction` RPC command. Then nothing changes the context on its own: no microcompaction, no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). `/compact` still works, and a request above `maxInputTokens` still stops the turn with an error.
+Like pi's `compaction.enabled`, automatic compaction can be turned off: set `"autoCompaction": false` in [settings](settings.md), pass `autoCompaction: false` to `createVela()` or `vela.session()`, set `session.autoCompaction = false`, or send the `set_auto_compaction` RPC command. Then nothing changes the context on its own: no microcompaction, no threshold summary and no compact-and-retry when the provider reports a context overflow (the provider's error is reported as is). To turn off only microcompaction and keep the summaries, use the `microcompact` [limit](settings.md#limits) instead. `/compact` still works, and a request above `maxInputTokens` still stops the turn with an error.
 
 ### Thresholds and context window
 
