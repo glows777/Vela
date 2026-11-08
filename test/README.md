@@ -242,6 +242,8 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | `<package>`: unit/… | other module-level rules; see each file |
 | unit/wake-route, unit/wake-post | wake plans and documented Actions pending-queue model; actual workflow POST step with local fake HTTP endpoints, Lark business/HTTP errors and acknowledgements, bucket saves, missing secrets, and Grok route bodies |
 
+`e2e/audit.test.ts` covers core-installed auditing after async extension initialization and input rewrites, pre-execution timing, denied/blocked calls, nested call identity and the SDK with no user extensions. `e2e/cli.test.ts` checks that `--no-extensions` retains write/edit auditing.
+
 ## Verifying a change
 
 1. Write or update a test that states the expected behavior first (when fixing a bug, make it fail first).

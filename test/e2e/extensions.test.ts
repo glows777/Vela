@@ -103,7 +103,9 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
   await t.run('Say hi')
   expect(t.lastAssistantText()).toBe('Hello, Liam!')
   // Like the CLI, createTestVela loads the built-in memory extension first
-  expect(t.vela.extensions().filter((e) => e.name !== 'memory')).toEqual([
+  expect(
+    t.vela.extensions().filter((e) => !['memory', 'auditLog'].includes(e.name)),
+  ).toEqual([
     {
       name: 'hello',
       tools: ['hello_greet'],
