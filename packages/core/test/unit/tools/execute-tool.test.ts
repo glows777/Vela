@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import z from 'zod'
 import type { ToolCallOutcome, VelaEvent } from '../../../src/index.ts'
-import { HookPipeline } from '../../../src/security/hooks.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import type {
   ToolContext,
@@ -184,20 +183,16 @@ test('executeTool goes through hooks and ask like a model call', async () => {
     }),
     tool('asking'),
   )
-  const hooks = new HookPipeline()
-  hooks.registerPre('test', (name, _input, context) => {
-    seen.push([name, context.toolCallId])
-    if (name === 'guarded') return { action: 'block', reason: 'not today' }
-    if (name === 'rewritten')
-      return { action: 'modify', modifiedInput: { value: 2 } }
-    return { action: 'allow' }
+  base.setInterception({
+    before: (name, input, context) => {
+      seen.push([name, context.toolCallId])
+      if (name === 'guarded') return { input, block: true, reason: 'not today' }
+      if (name === 'rewritten') return { input: { value: 2 } }
+      return { input }
+    },
+    after: (name, _input, output) =>
+      name === 'rewritten' ? `${output}!` : output,
   })
-  hooks.registerPost('test', (name, _input, output) =>
-    name === 'rewritten'
-      ? { action: 'modify', modifiedOutput: `${output}!` }
-      : { action: 'allow' },
-  )
-  base.setHookPipeline(hooks)
   const confirmed = base.fork(registry.results, {
     confirm: async () => {
       asked++

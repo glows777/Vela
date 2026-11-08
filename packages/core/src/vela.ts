@@ -39,7 +39,6 @@ import {
   loadPromptTemplates,
   type PromptTemplate,
 } from './prompt/templates.ts'
-import { HookPipeline } from './security/hooks.ts'
 import { applySessionRouting } from './session/routing.ts'
 import {
   fileSessionStorage,
@@ -187,7 +186,7 @@ export interface Vela {
 export interface VelaInternals {
   logger: VelaLogger
   registry: ToolRegistry
-  hooks: HookPipeline
+  runner: ExtensionRunner
   builder: PromptPipeline
   skillLoader: SkillLoader
   promptTemplates: PromptTemplate[]
@@ -264,8 +263,6 @@ export function createVela(options: VelaOptions = {}): Vela {
     }),
   )
 
-  const hooks = new HookPipeline(logger)
-  registry.setHookPipeline(hooks)
   registerToolSearchTool(registry)
 
   const skillLoader = new SkillLoader(
@@ -384,12 +381,42 @@ export function createVela(options: VelaOptions = {}): Vela {
       logger,
       registry,
       models,
-      hooks,
-      session: (id) => sessions.get(id),
     },
     options.extensions ?? [],
     [auditLog],
   )
+
+  registry.setInterception({
+    before: async (name, input, context) => {
+      const session = context.sessionId
+        ? sessions.get(context.sessionId)
+        : undefined
+      return session
+        ? await runner.toolCall(
+            session,
+            context.toolCallId,
+            context.parentToolCallId,
+            name,
+            input,
+          )
+        : { input }
+    },
+    after: async (name, input, output, context) => {
+      const session = context.sessionId
+        ? sessions.get(context.sessionId)
+        : undefined
+      return session
+        ? await runner.toolResult(
+            session,
+            context.toolCallId,
+            context.parentToolCallId,
+            name,
+            input,
+            output,
+          )
+        : output
+    },
+  })
 
   let defaultModel: LanguageModel | undefined
   const vela: Vela = {
@@ -467,7 +494,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   internals.set(vela, {
     logger,
     registry,
-    hooks,
+    runner,
     builder,
     skillLoader,
     promptTemplates,

@@ -2,13 +2,13 @@ import { afterAll, afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { jsonSchema } from 'ai'
 import { z } from 'zod'
 import {
   cleanupTestVelas,
   createTestVela,
 } from '../../../../../test/support/vela.ts'
-import { HookPipeline } from '../../../src/security/hooks.ts'
 import { decidePermission } from '../../../src/security/permissions.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
@@ -33,9 +33,7 @@ function fixture() {
   const registry = new ToolRegistry(
     new ToolResultStore(join(root, crypto.randomUUID(), 'outputs')),
   )
-  const pipeline = new HookPipeline()
-  registry.setHookPipeline(pipeline)
-  return { registry, pipeline }
+  return { registry }
 }
 function fake(
   name: string,
@@ -154,73 +152,97 @@ test('a permission change rejects an already exposed tool and records rejection'
   expect(calls).toBe(0)
 })
 
-test('pre modifications chain through exceptions, allow, and final execution', async () => {
-  quiet('error')
-  const { registry, pipeline } = fixture()
+test('tool_call modifications chain through handlers into execution and history', async () => {
   const seen: unknown[] = []
-  pipeline.registerPre('first', (_name, input) => {
-    seen.push(input)
-    return { action: 'modify', modifiedInput: { command: 'second' } }
-  })
-  pipeline.registerPre('throws', () => {
-    throw new Error('expected isolated failure')
-  })
-  pipeline.registerPre('second', (_name, input) => {
-    seen.push(input)
-    return { action: 'modify', modifiedInput: { command: 'final' } }
-  })
-  pipeline.registerPre('allow', () => ({ action: 'allow' }))
-  registry.register(
-    fake('read_file', {
-      execute: async (input) => {
-        seen.push(input)
-        return 'done'
+  const t = createTestVela({
+    files: { 'final.txt': 'done' },
+    extensions: [
+      function first(vela) {
+        vela.on('tool_call', (event) => {
+          seen.push({ ...event.input })
+          event.input.path = 'second.txt'
+        })
       },
-    }),
-  )
-  expect(await invoke(registry, 'read_file')).toBe('done')
+      function second(vela) {
+        vela.on('tool_call', (event) => {
+          seen.push({ ...event.input })
+          event.input.path = 'final.txt'
+        })
+      },
+      function allow(vela) {
+        vela.on('tool_call', (event) => {
+          seen.push({ ...event.input })
+        })
+      },
+    ],
+    responses: [
+      fauxToolCall('read_file', { path: 'original.txt' }),
+      fauxText('done'),
+    ],
+  })
+  await t.run('Read the file')
   expect(seen).toEqual([
-    { command: 'echo hello' },
-    { command: 'second' },
-    { command: 'final' },
+    { path: 'original.txt' },
+    { path: 'second.txt' },
+    { path: 'final.txt' },
   ])
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe('done')
   expect(
-    (await rows(registry)).find((row) => row.type === 'tool_call')?.input,
-  ).toEqual({ command: 'final' })
-  expect(pipeline.list().pre).toEqual(['first', 'throws', 'second', 'allow'])
+    (await rows(t.session.registry)).find((row) => row.type === 'tool_call')
+      ?.input,
+  ).toEqual({ path: 'final.txt' })
 })
 
-test('pre block stops following hooks and execution, recording rejection', async () => {
-  const { registry, pipeline } = fixture()
-  let calls = 0
-  pipeline.registerPre('block', () => ({
-    action: 'block',
-    reason: 'acceptance block',
-  }))
-  pipeline.registerPre('unreachable', () => {
-    calls++
-    return { action: 'allow' }
+for (const throws of [false, true]) {
+  test(`tool_call ${throws ? 'exception' : 'block'} stops following handlers and execution`, async () => {
+    let calls = 0
+    const t = createTestVela({
+      extensions: [
+        function block(vela) {
+          vela.on('tool_call', () => {
+            if (throws) throw new Error('acceptance failure')
+            return { block: true, reason: 'acceptance block' }
+          })
+        },
+        function unreachable(vela) {
+          vela.on('tool_call', () => {
+            calls++
+          })
+          vela.registerTool({
+            name: 'probe',
+            description: 'Must not execute',
+            inputSchema: z.object({}),
+            execute: async () => {
+              calls++
+              return 'bad'
+            },
+          })
+        },
+      ],
+      responses: [fauxToolCall('unreachable_probe', {}), fauxText('blocked')],
+    })
+    await t.run('Run the probe')
+    expect(calls).toBe(0)
+    expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+      throws
+        ? 'Extension block check failed: acceptance failure'
+        : 'acceptance block',
+    )
+    expect(
+      (await rows(t.session.registry))
+        .filter((row) => row.type === 'tool_result')
+        .map((row) => row.status),
+    ).toEqual(['rejected'])
   })
-  registry.register(
-    fake('read_file', {
-      execute: async () => {
-        calls++
-        return 'bad'
-      },
-    }),
-  )
-  await rejected(registry, invoke(registry, 'read_file'))
-  expect(calls).toBe(0)
-})
+}
 
 for (const kind of ['zod', 'json'] as const) {
   test(`modified input is validated before execution (${kind} schema)`, async () => {
-    const { registry, pipeline } = fixture()
+    const { registry } = fixture()
     let calls = 0
-    pipeline.registerPre('invalid', () => ({
-      action: 'modify',
-      modifiedInput: { command: 42 },
-    }))
+    registry.setInterception({
+      before: () => ({ input: { command: 42 } }),
+    })
     registry.register(
       fake('read_file', {
         ...(kind === 'json'
@@ -243,33 +265,57 @@ for (const kind of ['zod', 'json'] as const) {
   })
 }
 
-test('post chains modifications, ignores block, and continues after exception', async () => {
-  quiet('error')
-  const pipeline = new HookPipeline()
-  pipeline.registerPost('first', () => ({
-    action: 'modify',
-    modifiedOutput: 'one',
-  }))
-  pipeline.registerPost('block', () => ({ action: 'block' }))
-  pipeline.registerPost('throws', () => {
-    throw new Error('expected isolated failure')
+test('tool_result chains modifications and preserves the previous output after exceptions', async () => {
+  const seen: string[] = []
+  const t = createTestVela({
+    files: { 'source.txt': 'original' },
+    extensions: [
+      function first(vela) {
+        vela.on('tool_result', (event) => {
+          seen.push(event.output)
+          return { output: 'one' }
+        })
+      },
+      function unchanged(vela) {
+        vela.on('tool_result', (event) => {
+          seen.push(event.output)
+        })
+      },
+      function throws(vela) {
+        vela.on('tool_result', (event) => {
+          seen.push(event.output)
+          throw new Error('expected isolated failure')
+        })
+      },
+      function last(vela) {
+        vela.on('tool_result', (event) => {
+          seen.push(event.output)
+          return { output: `${event.output}-two` }
+        })
+      },
+    ],
+    responses: [
+      fauxToolCall('read_file', { path: 'source.txt' }),
+      fauxText('done'),
+    ],
   })
-  pipeline.registerPost('last', (_name, _input, output) => ({
-    action: 'modify',
-    modifiedOutput: `${output}-two`,
-  }))
-  expect((await pipeline.runPost('bash', {}, 'original')).modifiedOutput).toBe(
-    'one-two',
-  )
-  expect(pipeline.list().post).toEqual(['first', 'block', 'throws', 'last'])
+  await t.run('Read the file')
+  expect(seen).toEqual(['original', 'one', 'one', 'one'])
+  expect(t.model.calls[1]!.toolResults[0]!.output).toBe('one-two')
+  expect(
+    (await rows(t.session.registry)).find((row) => row.type === 'tool_result')
+      ?.output,
+  ).toBe('original')
 })
 
 test('post changes model text while history preserves native small result', async () => {
-  const { registry, pipeline } = fixture()
-  pipeline.registerPost('decorate', (_name, input, output) => {
-    expect(input).toEqual({ command: 'echo hello' })
-    expect(output).toBe('original')
-    return { action: 'modify', modifiedOutput: 'decorated' }
+  const { registry } = fixture()
+  registry.setInterception({
+    after: (_name, input, output) => {
+      expect(input).toEqual({ command: 'echo hello' })
+      expect(output).toBe('original')
+      return 'decorated'
+    },
   })
   registry.register(
     fake('read_file', {
@@ -287,11 +333,13 @@ test('post changes model text while history preserves native small result', asyn
 
 for (const preStored of [false, true]) {
   test(`post preserves stored result metadata and original file (preStored=${preStored})`, async () => {
-    const { registry, pipeline } = fixture()
+    const { registry } = fixture()
     const original = 'full output '.repeat(100)
-    pipeline.registerPost('decorate', (_name, _input, output) => {
-      expect(typeof output).toBe('string')
-      return { action: 'modify', modifiedOutput: 'custom preview' }
+    registry.setInterception({
+      after: (_name, _input, output) => {
+        expect(typeof output).toBe('string')
+        return 'custom preview'
+      },
     })
     registry.register(
       fake('read_file', {
@@ -349,12 +397,19 @@ test('pre-aborted call never executes and existing cancelled history survives', 
 })
 
 test('/hooks lists registered hooks', async () => {
-  const t = createTestVela()
-  t.internals.hooks.registerPre('acceptance-pre', () => ({ action: 'allow' }))
-  t.internals.hooks.registerPost('acceptance-post', () => ({ action: 'allow' }))
+  const t = createTestVela({
+    extensions: [
+      function acceptancePre(vela) {
+        vela.on('tool_call', () => {})
+      },
+      function acceptancePost(vela) {
+        vela.on('tool_result', () => {})
+      },
+    ],
+  })
   const log = quiet('log')
   expect(t.dispatch('/hooks')).toBe(true)
-  expect(log.mock.calls.flat().join(' ')).toContain('acceptance-pre')
-  expect(log.mock.calls.flat().join(' ')).toContain('acceptance-post')
+  expect(log.mock.calls.flat().join(' ')).toContain('acceptancePre')
+  expect(log.mock.calls.flat().join(' ')).toContain('acceptancePost')
   expect(t.dispatch('/unrelated')).toBe(false)
 })

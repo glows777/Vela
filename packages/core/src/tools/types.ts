@@ -3,6 +3,29 @@ import { type ToolContent, toolContentText } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
 import type { ExecutionMetadata } from '../session/tool-history.ts'
 
+/** Identity of a call passed to the assembly's awaited interception callbacks. */
+interface InterceptionContext {
+  sessionId?: string
+  toolCallId?: string
+  parentToolCallId?: string
+}
+
+export interface ToolInterception {
+  before?: (
+    name: string,
+    input: unknown,
+    context: InterceptionContext,
+  ) =>
+    | { input: unknown; block?: boolean; reason?: string }
+    | Promise<{ input: unknown; block?: boolean; reason?: string }>
+  after?: (
+    name: string,
+    input: unknown,
+    output: string | ToolContent,
+    context: InterceptionContext,
+  ) => string | ToolContent | Promise<string | ToolContent>
+}
+
 /** A tool's native details plus model-facing text or canonical text/image content. */
 export class ToolExecutionResult {
   readonly text: string
