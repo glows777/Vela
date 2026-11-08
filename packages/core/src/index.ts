@@ -1,5 +1,6 @@
 /** SDK entry, independent of platform, MCP and RAG implementations. */
 export type {
+  AgentErrorKind,
   AssistantMessageEvent,
   CompactionReason,
   CompactionResult,
@@ -9,6 +10,7 @@ export type {
   VelaEventListener,
   VelaSessionEventListener,
 } from './agent/events.ts'
+export { agentErrorHint } from './agent/retry.ts'
 export {
   fileCredentialStore,
   memoryCredentialStore,

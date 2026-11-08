@@ -45,3 +45,45 @@ test('retry backoff is abortable', async () => {
   controller.abort(new Error('cancel retry'))
   await expect(waiting).rejects.toThrow('cancel retry')
 })
+
+test('terminal kinds prefer provider bodies and context detection without changing retry policy', async () => {
+  const { classifyAgentError } = await import('../../../src/agent/retry.ts')
+  const api = (statusCode: number, responseBody: string) =>
+    new APICallError({
+      statusCode,
+      responseBody,
+      message: 'Request failed',
+      url: 'x',
+      requestBodyValues: {},
+    })
+  expect(
+    classifyAgentError(api(429, '{"error":{"code":"insufficient_quota"}}')),
+  ).toBe('billing')
+  expect(
+    classifyAgentError(
+      api(400, '{"error":{"message":"Your credit balance is too low"}}'),
+    ),
+  ).toBe('billing')
+  expect(
+    classifyAgentError(
+      api(400, '{"error":{"code":"context_length_exceeded"}}'),
+    ),
+  ).toBe('context_overflow')
+  expect(
+    classifyAgentError(
+      api(429, '{"error":{"message":"Too many tokens, rate limit reached"}}'),
+    ),
+  ).toBe('rate_limit')
+  expect(
+    classifyAgentError(
+      api(400, '{"error":{"message":"Invalid value: 401 tokens"}}'),
+    ),
+  ).toBe('provider')
+  expect(classifyAgentError(new Error('401 Unauthorized'))).toBe('auth')
+  expect(classifyAgentError(new Error('503 Service unavailable'))).toBe(
+    'provider',
+  )
+  expect(classifyAgentError(new Error('Failure at line 401'))).toBe('unknown')
+  expect(classifyAgentError(new Error('ETIMEDOUT'))).toBe('network')
+  expect(classifyAgentError('something unexpected')).toBe('unknown')
+})

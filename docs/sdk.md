@@ -273,7 +273,7 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `auto_retry_end` | `success`, `attempt`, `finalError?` | Retrying ended: the request succeeded, or failed for good |
 | `usage` | `modelId`, `usage` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`), `record?` (adds `cost` in USD, absent when the model has no known price, `ts`, `model`, `kind` (`main` or `summary`), `durationMs` and the provider's raw `usage`) | After each model request |
 | `turn_end` | `turn`, `message` (the assistant message), `toolResults` (`tool-result` parts) | After each model request and its tools, including one that was aborted or failed |
-| `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `loop`, `aborted`, `error`), `error?` | The loop ended. Queued messages may still start another loop. |
+| `agent_end` | `messages` (the messages this loop added), `reason` (`done`, `loop`, `aborted`, `error`), `error?`, `errorKind?` | The loop ended. Failed runs include a category (below); the original error stays available. Queued messages may still start another loop. |
 | `queue_update` | `steering`, `followUp` | The queues changed; both fields hold the full current queue as strings |
 | `agent_settled` | | All work from `prompt()` is done and the session is idle |
 | `bash_execution_update` | `id?`, `delta` | New output of a running `executeBash()` command (like pi); the `delta`s add up to all of its output. `id` is the one passed to `executeBash()` |
@@ -290,6 +290,22 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 The types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` and `--mode rpc` write these same events as JSON lines, see [JSON mode](json.md).
 
 See [02-events.ts](../examples/sdk/02-events.ts).
+
+### Failed agent runs
+
+When `agent_end.reason === 'error'`, `errorKind` is one of these `AgentErrorKind` values:
+
+- `auth`: HTTP 401 or 403. Check the API key and its access.
+- `billing`: HTTP 402 or a provider body reporting insufficient balance, credits or quota. A quota-related 429 is billing, not rate limiting.
+- `rate_limit`: HTTP 429 without billing evidence.
+- `network`: a transport error, including connection reset, broken pipe, timeout or failed fetch; SDK causes are inspected too.
+- `context_overflow`: the existing provider context-overflow detector matches the error.
+- `provider`: another provider API failure, including other 4xx and 5xx responses.
+- `unknown`: no supported classification matched.
+
+The original `error` and the rejection from `session.prompt()` stay unchanged. Successful, loop-stopped and aborted runs have no `errorKind`. Classification happens only on the terminal failure: retry policy and context recovery do not change. A recovered request still ends successfully. Errors before the agent loop (such as invalid session setup) do not produce this event.
+
+`agentErrorHint(errorKind)` returns one plain, shared next-step hint, or `undefined` when no kind is present. TUI, print mode and channel replies show it beside the original error; SDK hosts can use the same helper or map the closed kinds to their own UI. The type and helper are exported by both `@glows777/vela-core` and `@glows777/vela` (also the core extension API).
 
 ## Multiple sessions
 

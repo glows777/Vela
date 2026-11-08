@@ -88,3 +88,5 @@ vela --mode json "List files" < /dev/null 2>/dev/null \
 ```
 
 For plain text output use `vela -p` instead, which writes only the last answer to stdout. See [CLI](cli.md).
+
+A failed `agent_end` includes `errorKind` alongside the serialized raw `error`; see [failure kinds](sdk.md#failed-agent-runs). JSON and RPC forward that field without replacing the provider message or adding a new event.

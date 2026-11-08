@@ -3,6 +3,7 @@ import { lookup } from 'node:dns/promises'
 import { mkdirSync, readFileSync, symlinkSync } from 'node:fs'
 import { hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
+import { APICallError } from '@ai-sdk/provider'
 import { local } from '@glows777/vela-channels'
 import { drainChannels } from '@glows777/vela-channels/testing'
 import { memorySessionStorage } from '@glows777/vela-core'
@@ -473,7 +474,16 @@ test('human task input automatically steers the current run', async () => {
 
 test('Local provider failures keep actionable operator details in visible history and SSE', async () => {
   const { t, client } = await setup({
-    responses: [fauxError('Invalid API key')],
+    responses: [
+      fauxError(
+        new APICallError({
+          message: 'Invalid API key',
+          statusCode: 401,
+          url: 'https://example.invalid/chat',
+          requestBodyValues: {},
+        }),
+      ),
+    ],
     limits: { maxRetries: 0 },
   })
   const project = await client.request<Project>('/v1/projects', { cwd: t.cwd })
@@ -485,7 +495,7 @@ test('Local provider failures keep actionable operator details in visible histor
     expect(history).toContainEqual(
       expect.objectContaining({
         role: 'assistant',
-        text: 'Task failed: Invalid API key',
+        text: 'Task failed: Invalid API key\nCheck your API key: /login or vela setup.',
       }),
     )
     await until(() => watch.events.some((event) => event.event === 'error'))

@@ -8,6 +8,7 @@ export type {
   LocalSession,
 } from '@glows777/vela-channels'
 export { local } from '@glows777/vela-channels'
+export { agentErrorHint } from '@glows777/vela-core'
 /**
  * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).
  * Export only from here; the CLI lives in cli/main.ts and test helpers in '@glows777/vela/testing'.
@@ -25,6 +26,7 @@ export type {
 } from '@glows777/vela-channels'
 export type {
   AfterProviderResponseEvent,
+  AgentErrorKind,
   ApiKeyCredential,
   AssistantMessageEvent,
   AuthEvent,
