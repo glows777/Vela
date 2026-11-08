@@ -107,7 +107,7 @@ const t = createTestVela({
 })
 
 t.vela                            // what createVela() returned (public API)
-t.internals                       // internals: registry, hooks, builder, gateway… (test/support version only)
+t.internals                       // internals: registry, runner, builder, gateway… (test/support version only)
 t.session                         // the default session (id = sessionId, 'default' by default)
 await t.run('read a.txt')         // = t.session.prompt()
 t.vela.session('other')           // another session on the same Vela
@@ -238,7 +238,8 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | unit/boundary | core modules contain no console, process.stdout/stderr/exit/env or readline |
 | `<package>`: test/public-api | each package’s public export map matches `packages/<name>/api/public-api.txt`; after changing the public surface run `bun run api:update` |
 | unit/changelog | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version; a candidate retry reads the tag snapshot rather than main after that snapshot's entries are stamped |
-| core: unit/security | session permission rules (default allow, exact names before `*`, deny and ask), ask goes through confirm, the hook chain, bash classification, `/hooks` lists registered hooks |
+| e2e/tool-interception | awaited tool-call side effects, async block/throw/cancellation, chained input rewrites through approval/audit/history, and awaited result changes before the next model request |
+| core: unit/security | session permission rules (default allow, exact names before `*`, deny and ask), ask goes through confirm, awaited interception callbacks and extension handler chains, bash classification, `/hooks` lists registered handler owners |
 | `<package>`: unit/… | other module-level rules; see each file |
 | unit/wake-route, unit/wake-post | wake plans and documented Actions pending-queue model; actual workflow POST step with local fake HTTP endpoints, Lark business/HTTP errors and acknowledgements, bucket saves, missing secrets, and Grok route bodies |
 
@@ -268,6 +269,8 @@ Conventions:
 - Assert on events and data, not terminal output; use `captureConsole` only for the output of the command under test.
 - No fixed sleeps; for an "in progress" state use `fauxHang()` or control timing with a Promise inside a tool.
 - One test checks one thing, and its name states the expected behavior.
+
+Tool interception tests register `tool_call` / `tool_result` handlers through extensions. Registry-only tests inject `setInterception({ before, after })`; there is no separate hook pipeline. Use a controlled Promise to prove that async handlers hold execution or the next model request pending, then assert side effects and original history.
 
 ## Known issues
 

@@ -38,6 +38,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Core tool auditing uses an extension.** `auditLog` is always installed, including with no SDK extensions and CLI `--no-extensions`; write/edit events retain their final-path, pre-execution timing ([#291](https://github.com/glows777/Vela/issues/291)).
 
+- **Tool interception uses extension handlers directly.** Async `tool_call` and `tool_result` handlers retain their awaited ordering, permissions and original tool history. `/hooks` now lists the extension owners in dispatch order instead of pipeline adapters ([#292](https://github.com/glows777/Vela/issues/292)).
+
 - **Each session now has its own directory.** The transcript moved from `sessions/<id>.jsonl` to `sessions/<id>/transcript.jsonl`, next to the tool history and long tool output that already lived under `sessions/<id>/`. `listSessions()` and `session.persistence().path` report the new location. A session written by 0.5 is still listed from its old file and is converted with one rename the first time it is opened or written; while it has not been opened, `persistence().path` names the destination that does not exist yet. Stop other Vela processes on the data directory before upgrading, so an older process cannot recreate the old file after the move. Deleting a session is now one directory ([#267](https://github.com/glows777/Vela/issues/267)).
 
 - **Usage is logged to `usage/requests.jsonl`.** The ledger holds every request, not only today's, so the old `today.jsonl` name was misleading. The next run that logs usage renames an existing `usage/today.jsonl`, so recorded usage carries over unchanged.

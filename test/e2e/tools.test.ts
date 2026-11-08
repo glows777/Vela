@@ -517,15 +517,18 @@ test('bash streams its output as tool_execution_update events while it runs', as
 })
 
 test('a tool calling another tool through ctx.executeTool goes through permissions, hooks and the bash check', async () => {
+  const blocked: string[] = []
   const t = createTestVela({
     session: { permissions: { write_file: 'deny' } },
     responses: [fauxToolCall('runner', {}), fauxText('done')],
-  })
-  const blocked: string[] = []
-  t.internals.hooks.registerPre('block-read', (toolName, _input, context) => {
-    if (toolName !== 'read_file') return { action: 'allow' }
-    blocked.push(context.toolCallId ?? '')
-    return { action: 'block', reason: 'reads are off' }
+    extensions: [
+      function blockRead(vela) {
+        vela.on('tool_call', 'read_file', (event) => {
+          blocked.push(event.toolCallId ?? '')
+          return { block: true, reason: 'reads are off' }
+        })
+      },
+    ],
   })
   t.internals.registry.register({
     name: 'runner',

@@ -9,7 +9,6 @@ import {
   withoutForeignReasoning,
 } from '../messages.ts'
 import type { ModelRegistry } from '../models/index.ts'
-import type { HookPipeline } from '../security/hooks.ts'
 import { isJsonSchemaTool } from '../tools/json-schema.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
@@ -42,9 +41,6 @@ interface RunnerDeps {
   logger: VelaLogger
   registry: ToolRegistry
   models: ModelRegistry
-  hooks: HookPipeline
-  /** Look up an open session by id (hooks only know the session id) */
-  session: (id: string) => VelaSession | undefined
 }
 
 export interface LoadedExtension {
@@ -62,7 +58,7 @@ const COMMAND_NAME = /^[A-Za-z0-9][\w-]*$/
 /**
  * Extension runtime: runs extension factories, keeps the handlers and commands they register, and
  * calls them in registration order at the right time.
- * Tool call interception hangs off the HookPipeline.
+ * The executor awaits tool interception directly; ordinary notifications remain non-blocking.
  */
 export class ExtensionRunner {
   private readonly handlers = new Map<
@@ -88,48 +84,6 @@ export class ExtensionRunner {
     extensions: readonly VelaExtension[],
     coreExtensions: readonly VelaExtension[] = [],
   ) {
-    deps.hooks.registerPre('extensions', async (toolName, input, context) => {
-      const session = context.sessionId
-        ? deps.session(context.sessionId)
-        : undefined
-      if (!session) return { action: 'allow' }
-      const result = await this.toolCall(
-        session,
-        context.toolCallId,
-        context.parentToolCallId,
-        toolName,
-        input,
-      )
-      if (result.block)
-        return {
-          action: 'block',
-          reason: result.reason ?? 'Blocked by an extension',
-        }
-      return result.input === input
-        ? { action: 'allow' }
-        : { action: 'modify', modifiedInput: result.input }
-    })
-    deps.hooks.registerPost(
-      'extensions',
-      async (toolName, input, output, context) => {
-        const session = context.sessionId
-          ? deps.session(context.sessionId)
-          : undefined
-        if (!session) return { action: 'allow' }
-        const text = await this.toolResult(
-          session,
-          context.toolCallId,
-          context.parentToolCallId,
-          toolName,
-          input,
-          isToolContent(output) ? output : String(output),
-        )
-        return text === output
-          ? { action: 'allow' }
-          : { action: 'modify', modifiedOutput: text }
-      },
-    )
-
     const load = (factories: readonly VelaExtension[]) => {
       const pending: Promise<void>[] = []
       factories.forEach((extension, index) => {
@@ -273,6 +227,14 @@ export class ExtensionRunner {
   /** A copy of the handler list, so unsubscribing during dispatch does not affect the current dispatch */
   private list(event: ExtensionEventName) {
     return [...(this.handlers.get(event) ?? [])]
+  }
+
+  /** Read-only diagnostic snapshots in actual interception order. */
+  toolHandlers(): { pre: string[]; post: string[] } {
+    return {
+      pre: this.list('tool_call').map(({ extension }) => extension),
+      post: this.list('tool_result').map(({ extension }) => extension),
+    }
   }
 
   private report(extension: string, event: string, error: unknown) {
@@ -562,7 +524,7 @@ export class ExtensionRunner {
    * block (as in pi: better not to run the tool).
    * The returned input is the same object as the one passed in when nothing changed.
    */
-  private async toolCall(
+  async toolCall(
     session: VelaSession,
     toolCallId: string | undefined,
     parentToolCallId: string | undefined,
@@ -586,7 +548,12 @@ export class ExtensionRunner {
     for (const { extension, fn } of handlers) {
       try {
         const result = (await fn(event, ctx)) as ToolCallEventResult | undefined
-        if (result?.block) return { block: true, reason: result.reason, input }
+        if (result?.block)
+          return {
+            block: true,
+            reason: result.reason ?? 'Blocked by an extension',
+            input,
+          }
       } catch (error) {
         this.report(extension, event.type, error)
         return {
@@ -602,7 +569,7 @@ export class ExtensionRunner {
   }
 
   /** tool_result: a handler returns `{ output }` to replace the text the model sees; handlers chain. On error the previous result is kept. */
-  private async toolResult(
+  async toolResult(
     session: VelaSession,
     toolCallId: string | undefined,
     parentToolCallId: string | undefined,

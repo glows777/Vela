@@ -228,7 +228,7 @@ In interactive mode, a line that starts with `/` is a command; any other text, i
 | `/skill`, `/skills` | List skills. |
 | `/extensions` | Loaded extensions and the tools, commands and channels each registered. |
 | `/channel`, `/channel list` | Registered channels. See [Channels](channels.md). |
-| `/hooks` | Registered pre- and post-tool hooks. |
+| `/hooks` | Extension names with registered `tool_call` (pre) and `tool_result` (post) handlers, in dispatch order. |
 | `/cache on`, `/cache off` | Turn the prompt cache simulation of the demo model on or off (`VELA_MODEL=mock` only). |
 
 Two more kinds of `/` input are expanded by the session itself, so they also work in print, JSON and RPC mode: `/skill:<name> [instruction]` sends a skill, and `/<template> [args]` sends a prompt template. See [Skills](settings.md#skills) and [Prompt templates](settings.md#prompt-templates).
