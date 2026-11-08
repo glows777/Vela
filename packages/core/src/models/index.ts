@@ -8,7 +8,7 @@ import type {
   LoginOptions,
   OAuthLogin,
 } from '../auth/types.ts'
-import { DEFAULT_LIMITS, type VelaLimits } from '../limits.ts'
+import { applyLimits, DEFAULT_LIMITS, type VelaLimits } from '../limits.ts'
 import { MODEL_CATALOG } from './catalog.generated.ts'
 import type { CatalogModel, ModelSpec, ThinkingLevel } from './catalog.ts'
 
@@ -332,10 +332,7 @@ export function limitsForModel(
       minMicroSavings: Math.floor(window * 0.1),
     }
   }
-  const limits = { ...DEFAULT_LIMITS, ...derived }
-  for (const [key, value] of Object.entries(overrides))
-    if (value !== undefined) limits[key as keyof VelaLimits] = value
-  return limits
+  return applyLimits({ ...DEFAULT_LIMITS, ...derived }, overrides)
 }
 
 /** @experimental Resolve a model for recording without assembling sessions, tools or resources. */

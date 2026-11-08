@@ -208,7 +208,7 @@ export class ContextManager {
       return
     }
     const micro =
-      before >= this.limits.microcompactThreshold
+      this.limits.microcompact && before >= this.limits.microcompactThreshold
         ? planMicrocompact(request.messages, this.store.results)
         : null
     const microAfter = micro
