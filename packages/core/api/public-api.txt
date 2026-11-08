@@ -662,6 +662,7 @@
     providers: Record<string, ProviderDefinition>
     settings: VelaSettings
     skillDirs: string[]
+    userExtensionConfig: Record<string, Record<string, unknown>>
   type VelaEvent = | { type: 'agent_start'; input: string }
       | { type: 'turn_start'; turn: number }
       | {

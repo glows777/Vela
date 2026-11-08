@@ -365,3 +365,38 @@ test('serve rejects the flags of a single-session run', async () => {
     expect(result.stderr).toContain('Usage: vela')
   }
 })
+
+test.each([undefined, '', '$UNSET_LOCAL_TOKEN'])(
+  'serve fails closed when user Local is enabled without a token (%s)',
+  async (token) => {
+    const dir = tempDir('vela-local-')
+    const home = tempDir('vela-local-home-')
+    dirs.push(dir, home)
+    await Bun.write(
+      join(home.path, 'settings.json'),
+      JSON.stringify({ extensionConfig: { local: { enabled: true, token } } }),
+    )
+    const result = await runServe(['serve'], dir.path, home.path)
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('local.token')
+    expect(result.stdout).toBe('')
+  },
+)
+
+test('project Local settings cannot enable a listener even in a trusted project', async () => {
+  const dir = tempDir('vela-local-')
+  const home = tempDir('vela-local-home-')
+  dirs.push(dir, home)
+  await Bun.write(
+    join(dir.path, '.vela/settings.json'),
+    JSON.stringify({
+      extensionConfig: {
+        local: { enabled: true, token: 'project-secret', port: 0 },
+      },
+    }),
+  )
+  const result = await runServe(['serve', '--approve'], dir.path, home.path)
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain('[serve] no channel started')
+  expect(result.stderr).not.toContain('project-secret')
+})

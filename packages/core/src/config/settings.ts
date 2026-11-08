@@ -81,6 +81,8 @@ export interface VelaConfig {
   dataDir: string
   /** Merged settings (project overrides user) */
   settings: VelaSettings
+  /** User-only extension sections, interpolated before any project overrides. */
+  userExtensionConfig: Record<string, Record<string, unknown>>
   /** Settings files that were read */
   files: string[]
   /** Extensions to load, in order: built-in → ~/.vela/extensions → .vela/extensions → listed in settings */
@@ -158,9 +160,12 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const layers: VelaSettings[] = []
   const userFile = join(agentDir, 'settings.json')
   const projectFile = join(projectDir, 'settings.json')
+  let userExtensionConfig: Record<string, Record<string, unknown>> = {}
   for (const file of trusted ? [userFile, projectFile] : [userFile]) {
     const settings = readSettings(file)
     if (!settings) continue
+    if (file === userFile)
+      userExtensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
     files.push(file)
     layers.push(settings)
   }
@@ -230,6 +235,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       ? resolveConfigPath(cwd, settings.dataDir)
       : projectDataDir(agentDir, cwd),
     settings,
+    userExtensionConfig,
     files,
     extensions,
     skillDirs,

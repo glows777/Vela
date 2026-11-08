@@ -25,6 +25,7 @@ function topicCommand(msg: IncomingMessage): TopicCommand | undefined {
 }
 
 interface CommandOptions {
+  changed: (key: string) => void
   directory: ChannelDirectory
   feedback: RunFeedback
   admission: TopicAdmission
@@ -72,6 +73,7 @@ export class TopicCommands {
     )
       return false
     current.stopped = true
+    this.options.changed(key)
     await this.options.feedback.stop(key)
     return true
   }
@@ -95,7 +97,10 @@ export class TopicCommands {
       command &&
       (command === 'stop' || command === 'restart') &&
       this.processing.get(key)
-    if (processing && !this.options.stopped()) processing.stopped = true
+    if (processing && !this.options.stopped()) {
+      processing.stopped = true
+      this.options.changed(key)
+    }
     const stopping = processing ? this.options.feedback.stop(key) : undefined
     void stopping?.catch(() => {})
     const admitted = admit()

@@ -77,6 +77,7 @@
   interface ChannelRuntime
     context: (sessionId: string) => IncomingMessage | undefined
     dispatch: (sourceSessionId: string, message: IncomingMessage, label?: string) => void
+    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
     routines: { create(sessionId: string, message: string, schedule: RoutineSchedule): Promise<ChannelRoutineInfo>; list(sessionId: string): { timezone: string; routines: ChannelRoutineInfo[]; }; cancel(sessionId: string, id: string): Promise<boolean>; }
     scope: (sessionId: string) => ChannelScope | undefined
@@ -107,6 +108,9 @@
     topic?: { rootId: string; threadId: string; } | undefined
     updatedAt: string
     waitingReason?: string | undefined
+  interface ChannelSessionUpdate
+    run?: { type: "started"; runId: string; } | { type: "finished"; runId: string; outcome: ChannelOutcome; } | undefined
+    session: ChannelSessionSnapshot
   interface ChannelStatusLine
     chatId: string
     rootId: string
@@ -202,6 +206,62 @@
     name: string
     providers: string[]
     tools: string[]
+  function local: (options: LocalOptions) => ChannelExtension
+  type LocalEvent = LocalEventData & {
+      version: 1
+      id: string
+      time: string
+      projectId?: string
+      sessionId?: string
+      runId?: string
+      }
+  type LocalEventData = | {
+      type: 'reset'
+      data: { reason: 'connected'; reload: ['sessions', 'messages'] }
+      }
+      | { type: 'message'; data: LocalMessage }
+      | { type: 'session'; data: LocalSession }
+      | { type: 'run_started'; data: Record<string, never> }
+      | {
+      type: 'run_finished'
+      data: { outcome: 'done' | 'failed' | 'stopped' | 'silent' }
+      }
+      | { type: 'progress'; data: LocalProgress }
+      | { type: 'status'; data: { text: string } }
+      | { type: 'error'; data: { code: string; message: string } }
+  interface LocalMessage
+    clientMessageId?: string | undefined
+    createdAt: string
+    id: string
+    role: "user" | "assistant" | "system"
+    sessionId: string
+    text: string
+  interface LocalOptions
+    port?: number | undefined
+    timezone?: string | undefined
+    token: string
+  interface LocalProgress
+    stage: "tool" | "retry" | "compaction"
+    state?: "failed" | "started" | "finished" | undefined
+    tool?: string | undefined
+  interface LocalProject
+    channel: "local"
+    cwd: string
+    id: string
+    name: string
+    sessionId: string
+  interface LocalSession
+    channel: "local"
+    chatId: string
+    chatKind: "group" | "direct"
+    requester: { id: string; name: string; }
+    runId?: string | undefined
+    sessionId: string
+    state: "done" | "stopped" | "running" | "queued" | "waiting"
+    task: string
+    topic?: { rootId: string; threadId: string; } | undefined
+    updatedAt: string
+    waitingReason?: string | undefined
   interface OutgoingMessage
     channelId: string
     handoff?: { id: string; from: string; depth: number; } | undefined

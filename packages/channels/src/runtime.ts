@@ -1,5 +1,6 @@
-import type { VelaSession } from '@glows777/vela-core/extension-api'
+import type { VelaLogger, VelaSession } from '@glows777/vela-core/extension-api'
 import type { ChannelDirectory, ChannelRecord } from './directory.ts'
+import { errorMessage } from './log.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import { channelSessionId } from './session-id.ts'
@@ -7,10 +8,12 @@ import type {
   ChannelDefinition,
   ChannelRuntime,
   ChannelSessionSnapshot,
+  ChannelSessionUpdate,
   ChannelStatusLine,
 } from './types.ts'
 
 interface RuntimeOptions {
+  logger: VelaLogger
   channel: ChannelDefinition
   directory: ChannelDirectory
   dataDir: string
@@ -35,7 +38,11 @@ export class ScopedChannelRuntime {
   readonly api: ChannelRuntime
   private readonly listeners = new Set<(line: ChannelStatusLine) => void>()
 
-  constructor(options: RuntimeOptions) {
+  private readonly sessionListeners = new Set<
+    (update: ChannelSessionUpdate) => void
+  >()
+
+  constructor(private options: RuntimeOptions) {
     const o = options
     const owned = (id: string): ChannelRecord | undefined => {
       const record = o.directory.get(o.directory.keyForSession(id))
@@ -78,6 +85,12 @@ export class ScopedChannelRuntime {
           ]
         }),
       stop: o.stop,
+      onSession: (listener) => {
+        this.sessionListeners.add(listener)
+        return () => {
+          this.sessionListeners.delete(listener)
+        }
+      },
       onStatus: (listener) => {
         this.listeners.add(listener)
         return () => {
@@ -128,17 +141,36 @@ export class ScopedChannelRuntime {
     }
   }
 
-  status(line: ChannelStatusLine, report: (error: unknown) => void): void {
+  status(line: ChannelStatusLine): void {
     for (const listener of this.listeners) {
       try {
         listener({ ...line })
       } catch (error) {
-        report(error)
+        this.options.logger.warn(
+          `[channels] Status listener failed: ${errorMessage(error)}`,
+        )
+      }
+    }
+  }
+
+  session(key: string, chatId: string, run: ChannelSessionUpdate['run']): void {
+    const snapshot = this.api
+      .sessions(chatId)
+      .find((entry) => entry.sessionId === key)
+    if (!snapshot) return
+    for (const listener of this.sessionListeners) {
+      try {
+        listener(structuredClone({ session: snapshot, run }))
+      } catch (error) {
+        this.options.logger.warn(
+          `[channels] Session listener failed: ${errorMessage(error)}`,
+        )
       }
     }
   }
 
   clear(): void {
+    this.sessionListeners.clear()
     this.listeners.clear()
   }
 }

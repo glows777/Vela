@@ -201,7 +201,10 @@ if(typeof defineJsonSchemaTool!=='function'||typeof imageMimeType!=='function'||
 const CHANNELS = `
 import assert from 'node:assert/strict'
 import {createHmac} from 'node:crypto'
-import {createChannelVela,type ChannelExtension,type IncomingMessage,type ChannelEvent} from '@glows777/vela-channels'
+import {mkdtemp,mkdir,rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent} from '@glows777/vela-channels'
 import {drainChannels} from '@glows777/vela-channels/testing'
 import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
 let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
@@ -236,6 +239,64 @@ try{
   console.log('packed generic signed HTTP -> fixed-source final queue ok; same delivery ID isolated from GitHub, duplicates ignored')
 }finally{await hooks.dispose()}
 assert.equal(await fetch(hookURL).catch(()=>undefined),undefined);console.log('packed HTTP ingress disposal ok')
+
+// Only the channels package is installed directly: Local must work without the CLI or Bun APIs.
+const localRoot=await mkdtemp(join(tmpdir(),'vela-packed-local-'))
+const localProjectDir=join(localRoot,'project')
+await mkdir(localProjectDir)
+const localLogs:string[]=[]
+const localVela=createChannelVela({contextFiles:false,dataDir:join(localRoot,'data'),model:createFauxModel({responses:[fauxText('packed local reply')]}),extensions:[local({token:'packed-local-token',port:0})],logger:{debug(){},info(s){localLogs.push(s)},warn(){},error(s){localLogs.push(s)}}})
+let localURL=''
+try{
+  await localVela.startChannels()
+  assert.deepEqual(localVela.runningChannels(),['local'])
+  localURL=localLogs.join(' ').match(/http:\\/\\/127\\.0\\.0\\.1:\\d+/)?.[0]??''
+  assert(localURL,'Local did not report its listening URL')
+  const request=(path:string,body?:unknown)=>fetch(localURL+path,{headers:{authorization:'Bearer packed-local-token','content-type':'application/json'},...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:AbortSignal.timeout(10000)})
+  const unauthenticated=await fetch(localURL+'/v1/info')
+  assert.equal(unauthenticated.status,401);await unauthenticated.text()
+  const info=await request('/v1/info');assert.equal(info.status,200)
+  assert.equal((await info.json() as {channel:string}).channel,'local')
+  const opened=await request('/v1/projects',{cwd:localProjectDir,name:'Packed Local'})
+  assert.equal(opened.status,201)
+  const project=await opened.json() as LocalProject
+  assert.equal(project.channel,'local');assert(project.id);assert(project.sessionId)
+  const events=await request('/v1/events?projectId='+encodeURIComponent(project.id))
+  assert.equal(events.status,200);assert.match(events.headers.get('content-type')??'',/text\\/event-stream/)
+  const reader=events.body!.getReader()
+  try{
+    let frame='';const decoder=new TextDecoder()
+    while(!frame.includes('\\n\\n')){
+      const chunk=await reader.read();assert(!chunk.done,'SSE ended before reset')
+      frame+=decoder.decode(chunk.value,{stream:true})
+    }
+    const data=frame.split('\\n').find(line=>line.startsWith('data: '))
+    assert(data,'SSE reset omitted data')
+    const reset=JSON.parse(data.slice(6)) as LocalEvent
+    assert.equal(reset.type,'reset');assert.equal(reset.version,1);assert.equal(reset.projectId,project.id)
+    assert.deepEqual(reset.data,{reason:'connected',reload:['sessions','messages']})
+  }finally{await reader.cancel()}
+  const messagesPath='/v1/projects/'+encodeURIComponent(project.id)+'/sessions/'+encodeURIComponent(project.sessionId)+'/messages'
+  const accepted=await request(messagesPath,{text:'Hello from a packed consumer',clientMessageId:'packed-local'})
+  assert.equal(accepted.status,202);await accepted.json()
+  const deadline=Date.now()+10000
+  for(;;){
+    const response=await request(messagesPath);assert.equal(response.status,200)
+    const {messages}=await response.json() as {messages:LocalMessage[]}
+    if(messages.some(message=>message.role==='assistant'&&message.text==='packed local reply')){
+      assert(messages.some(message=>message.role==='user'&&message.text==='Hello from a packed consumer'&&message.clientMessageId==='packed-local'))
+      break
+    }
+    assert(Date.now()<deadline,'Local reply did not become visible over HTTP')
+    await new Promise(resolve=>setTimeout(resolve,20))
+  }
+  console.log('packed Local explicit SDK -> authenticated HTTP 202 -> visible reply and SSE reset ok')
+}finally{
+  try{await localVela.dispose()}finally{await rm(localRoot,{recursive:true,force:true})}
+}
+assert.equal(await fetch(localURL+'/v1/info',{signal:AbortSignal.timeout(2000)}).catch(()=>undefined),undefined)
+console.log('packed Local listener disposal ok')
+
 `
 const LARK = `
 import assert from 'node:assert/strict'

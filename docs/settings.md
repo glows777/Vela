@@ -33,6 +33,32 @@ Project settings are applied on top of user settings:
 
 Relative paths in `extensions`, `skills` and `prompts` resolve from the directory of the settings file that lists them. `~` expands to the home directory.
 
+## Local listener settings
+
+Local is opt-in through **user-level** `extensionConfig.local` in `~/.vela/settings.json` (or `$VELA_DIR/settings.json`). Unlike ordinary extension configuration merging, project settings cannot enable, disable or override this listener. It starts only in real `vela serve`, never interactive, print, JSON, RPC or `--list-models` mode; `--no-extensions` disables it.
+
+```json
+{
+  "extensionConfig": {
+    "local": {
+      "enabled": true,
+      "token": "$VELA_LOCAL_TOKEN",
+      "port": 8788,
+      "timezone": "UTC"
+    }
+  }
+}
+```
+
+- `enabled`: defaults to off; must be `true` to start Local.
+- `token`: required when enabled, after the usual `$VAR` / `${VAR}` expansion. Must be nonempty, not whitespace-only and contain no CR/LF. There is no implicit token environment fallback; reference your chosen variable explicitly.
+- `port`: integer 0–65535, default 8788. Use a fixed port for an app; 0 asks the OS for an ephemeral port reported in startup diagnostics.
+- `timezone`: optional valid IANA timezone for channel routines, otherwise the process timezone.
+
+Local always binds `127.0.0.1` and requires Bearer authentication, including SSE and info. It has no cookie authentication or CORS support. The token grants the daemon's configured tool authority. **Do not tunnel Local**; keep it separate from the webhook listener on 8787. Restart the daemon after changes.
+
+An opened Local project's canonical cwd changes its tool working directory, not the daemon configuration or data directory. Opening it does not load its project settings, extensions or skills and is not a sandbox. Registry, deployment identity and visible history live under the daemon's `<dataDir>/local`; channel sessions use the existing stores. Keep the serve working directory/data directory stable across restarts because the CLI default data directory is cwd-specific. See [Local startup and protocol](channels.md#local) for client examples, SDK explicit-token configuration and persistence boundaries. No existing channel-data migration is required.
+
 ## Keys
 
 ```json

@@ -8,6 +8,7 @@ import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
 import { genericEvent, genericOptions } from './generic-events.ts'
 import { githubEvents, githubOptions } from './github-events.ts'
+import { HttpError, readBody } from './http.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelEvent } from './types.ts'
 
@@ -29,52 +30,7 @@ const optionsSchema = z
       options.github.secret !== options.generic.secret,
     'GitHub and generic adapters require separate secrets',
   )
-const MAX_BODY = 1024 * 1024
 const MAX_SEEN = 1000
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message)
-  }
-}
-
-function readBody(req: IncomingMessage): Promise<Buffer> {
-  if (Number(req.headers['content-length']) > MAX_BODY)
-    return Promise.reject(new HttpError(413, 'Payload too large'))
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    const cleanup = () => {
-      req.off('data', data)
-      req.off('end', end)
-      req.off('error', error)
-      req.off('aborted', aborted)
-    }
-    const error = (err: Error) => {
-      cleanup()
-      reject(err)
-    }
-    const aborted = () => error(new HttpError(400, 'Request aborted'))
-    const end = () => {
-      cleanup()
-      resolve(Buffer.concat(chunks, size))
-    }
-    const data = (chunk: Buffer) => {
-      size += chunk.length
-      if (size > MAX_BODY) {
-        req.pause()
-        error(new HttpError(413, 'Payload too large'))
-      } else chunks.push(chunk)
-    }
-    req.on('data', data)
-    req.once('end', end)
-    req.once('error', error)
-    req.once('aborted', aborted)
-  })
-}
 
 /** Optional ingress owned by the channel assembly; no daemon, persisted cache or provider access. */
 export class EventReceiver {

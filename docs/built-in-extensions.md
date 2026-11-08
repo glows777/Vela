@@ -1,6 +1,6 @@
 # Built-in extensions
 
-Vela ships seven extensions: `memory`, `todo`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `todo`, `web` and `permission-gate` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
+Vela ships seven selectable built-in extensions: `memory`, `todo`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `todo`, `web` and `permission-gate` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|
@@ -11,6 +11,14 @@ Vela ships seven extensions: `memory`, `todo`, `rag`, `web`, `lark`, `mcp` and `
 | `lark` | The Lark bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
 | `permission-gate` | Confirms a few dangerous `bash` commands; off by default |
+
+## Local transport
+
+Vela also ships `local` in `@glows777/vela-channels`, re-exported by `@glows777/vela`. It is an explicitly enabled transport, not another `builtin:*` selector or a default CLI extension. It provides authenticated loopback HTTP/SSE for project hubs, task sessions, visible history and run-bound Stop. Lark and Local share the channel gateway and topic tools.
+
+In the CLI, enable it only through user-level `extensionConfig.local: { "enabled": true, "token": "$VELA_LOCAL_TOKEN", "port": 8788 }` and run `vela serve`. Project settings cannot enable or override it; non-serve modes and `--no-extensions` do not start it. In the SDK, add `local({ token, port: 8788 })` explicitly, then call `await vela.ready()` and `await vela.startChannels()`. Unlike the factories below, Local requires its token as a factory option and does not read it implicitly from extension configuration.
+
+Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie support. Its token grants the daemon's tool authority. Do not tunnel it or share the webhook listener's port (8787). See [Local](channels.md#local) for setup, security, the HTTP/SSE protocol and runnable client examples.
 
 ## Loading
 
@@ -40,7 +48,7 @@ const vela = createVela({
 })
 ```
 
-Factory options take precedence. An option you leave out is read from the extension's config section, `extensionConfig.<name>`, which you can pass to `createVela({ extensionConfig })`.
+For the selectable built-ins below, factory options take precedence. An option you leave out is read from the extension's config section, `extensionConfig.<name>`, which you can pass to `createVela({ extensionConfig })`.
 
 ## Configuration
 
