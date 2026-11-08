@@ -32,7 +32,7 @@ export interface SessionInspection {
 /** @experimental Inspect loaded resources without running extension hooks. */
 export function inspectVela(vela: Vela): VelaInspection {
   const internal = velaInternals(vela)
-  const hooks = internal.hooks.list()
+  const hooks = internal.runner.toolHandlers()
   return {
     contextFiles: internal.loadedContextFiles.map((file) => ({ ...file })),
     skills: internal.skillLoader

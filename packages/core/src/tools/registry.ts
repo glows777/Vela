@@ -8,7 +8,6 @@ import {
   toAIToolOutput,
   toolContentText,
 } from '../messages.ts'
-import type { HookPipeline } from '../security/hooks.ts'
 import {
   decidePermission,
   type PermissionDecision,
@@ -26,6 +25,7 @@ import {
   type ToolExecutionMode,
   ToolExecutionResult,
   type ToolExposure,
+  type ToolInterception,
   type ToolNamespace,
   type ToolRegistryForkOptions,
   ToolResultError,
@@ -127,7 +127,7 @@ interface CallOptions {
  */
 interface SharedToolState {
   tools: Map<string, ToolDefinition>
-  hookPipeline?: HookPipeline
+  interception?: ToolInterception
   logger: VelaLogger
 }
 
@@ -296,8 +296,8 @@ export class ToolRegistry {
     return enabled ?? this.tools.get(toolName)?.activeByDefault !== false
   }
 
-  setHookPipeline(pipeline: HookPipeline): void {
-    this.shared.hookPipeline = pipeline
+  setInterception(interception: ToolInterception): void {
+    this.shared.interception = interception
   }
 
   discoveredTools = new Set<string>() // loaded with tool_search; a resumed session restores it from its history
@@ -440,24 +440,23 @@ export class ToolRegistry {
           : `[Rejected] ${name} is not enabled in this session`,
       )
     }
-    const pipeline = this.shared.hookPipeline
-    const hookContext = {
+    const interception = this.shared.interception
+    const context = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
       ...(options.parentToolCallId === undefined
         ? {}
         : { parentToolCallId: options.parentToolCallId }),
-      emit: (event: Parameters<VelaEventListener>[0]) => this.onEvent?.(event),
     }
-    if (pipeline) {
-      const pre = await pipeline.runPre(name, input, hookContext)
-      if (pre.action === 'block') {
+    if (interception?.before) {
+      const pre = await interception.before(name, input, context)
+      if (pre.block) {
         return await reject(
           `[Blocked by hook] ${pre.reason || 'Operation blocked'}`,
         )
       }
-      if (pre.action === 'modify' && pre.modifiedInput !== undefined) {
-        input = pre.modifiedInput
+      if (pre.input !== input) {
+        input = pre.input
         try {
           input = await validateInput(tool.inputSchema, input)
         } catch (error) {
@@ -578,12 +577,8 @@ export class ToolRegistry {
               this.runtimeEnabledTools.add(fallback)
         }
       }
-      if (pipeline) {
-        const post = await pipeline.runPost(name, input, output, hookContext)
-        if (post.modifiedOutput !== undefined)
-          output = isToolContent(post.modifiedOutput)
-            ? post.modifiedOutput
-            : String(post.modifiedOutput)
+      if (interception?.after) {
+        output = await interception.after(name, input, output, context)
       }
       // Normalize after all post hooks, including replacement image payloads.
       if (isToolContent(output)) output = await normalizeToolContent(output)
