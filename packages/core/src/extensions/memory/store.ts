@@ -22,6 +22,7 @@ const MAX_FILE_CHARS = 4000
 /** Fixed usage rules for the system prompt; only the index (buildIndex) changes between turns. */
 export const MEMORY_RULES = [
   '[memory] How to use memory:',
+  '- Before answering a question that depends on the user, the group or past decisions, search or read memory first',
   '- Save durable facts, preferences and decisions with the memory tool; saving the same name and type overwrites',
   '- Memories are leads, not facts: verify with tools before relying on them (read_file, grep to confirm paths and content still exist)',
   '- Do not store what the code shows (tech stack, directory layout), what git can tell (who changed what), or what docs already say',
