@@ -20,6 +20,11 @@ export const page =
 
 export function prompts(id: ScenarioId, url = ''): string[] {
   switch (id) {
+    case 'M1':
+      return [
+        'Deploys have moved to Monday permanently. Draft a short announcement of the new schedule.',
+        'On which day do deploys happen now?',
+      ]
     case 'C1':
       return [
         'Vela 的工具结果超过多长会被存到文件、只给模型一段预览？默认上限是多少，在哪个文件定义？bash 的结果也一样吗？',

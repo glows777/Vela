@@ -207,6 +207,9 @@ test('idle channel sessions are closed, so many chats do not stay in memory; the
     )
   const t = createTestVela({
     responses: Array.from({ length: 21 }, () => answer),
+    generate: [
+      fauxText(JSON.stringify({ ops: [], report: 'No durable facts' })),
+    ],
     channelIdleMs: 0,
   })
   const { sent, deliver } = fakeChannel(t)

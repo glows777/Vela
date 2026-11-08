@@ -36,7 +36,7 @@ export interface StepUsage {
 }
 
 export interface StepRecord extends StepUsage {
-  kind?: 'main' | 'summary'
+  kind?: 'main' | 'summary' | 'dream'
   usage?: LanguageModelUsage
   durationMs?: number
   /** Unix timestamp when this model request finished. */
@@ -197,9 +197,11 @@ export class TokenTracker {
     details: Pick<StepRecord, 'kind' | 'usage' | 'durationMs'> = {
       kind: 'main',
     },
+    capturedPricing?: { value: ModelPricing | undefined },
   ): StepRecord {
     const price =
-      this.pricing ?? (model === 'mock-model' ? MOCK_PRICING : undefined)
+      (capturedPricing ? capturedPricing.value : this.pricing) ??
+      (model === 'mock-model' ? MOCK_PRICING : undefined)
     let cost: number | undefined
     if (price) {
       cost = computeCost(usage, price)

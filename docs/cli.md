@@ -240,7 +240,7 @@ Two more kinds of `/` input are expanded by the session itself, so they also wor
 | `/memory` | `memory` | List memories, flagging those with warnings. |
 | `/memory search <keywords>` | `memory` | Search memories. |
 | `/memory lint` | `memory` | Check the memory store for problems. |
-| `/dream` | `memory` | Ask the model to clean up the memory store (merge duplicates, delete stale entries). |
+| `/dream` | `memory` | Consolidate memory against recent conversations in an isolated call and show the report. |
 | `/rag` | `rag` | Show the knowledge base size and sources. |
 | `/rag ingest <path>` | `rag` | Ingest a document into the knowledge base. |
 | `/rag clear` | `rag` | Delete every chunk, for example after changing the embedding model. |

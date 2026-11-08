@@ -12,6 +12,7 @@ export interface MemoryEntry {
   filePath: string
   lastWriteAt?: number
   lastReadAt?: number
+  sources?: string[]
 }
 
 const INDEX_FILE = 'MEMORY.md'
@@ -29,7 +30,7 @@ export const MEMORY_RULES = [
 ].join('\n')
 
 /** Writes a memory file readable only by the owner (0600, like session files); also tightens an existing file. */
-function writePrivate(filePath: string, content: string): void {
+export function writePrivate(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 })
   fs.chmodSync(filePath, 0o600)
 }
@@ -40,7 +41,7 @@ export class MemoryStore {
    * `projectDir`: base for relative paths when lint checks whether paths mentioned in memories still exist.
    */
   constructor(
-    private readonly memoryDir: string,
+    readonly memoryDir: string,
     private logger?: VelaLogger,
     private readonly projectDir = '.',
   ) {}
@@ -68,15 +69,21 @@ export class MemoryStore {
 
   save(
     entry: Omit<MemoryEntry, 'filePath' | 'lastWriteAt' | 'lastReadAt'>,
+    targetFilename?: string,
   ): string {
     this.init()
     const slug = entry.name
       .toLowerCase()
       .replace(/[^a-z0-9一-鿿]+/g, '-')
       .replace(/^-|-$/g, '')
-    const filename = `${entry.type}_${slug}.md`
-    const filePath = path.join(this.memoryDir, filename)
-    const now = Date.now()
+    const filename = targetFilename ?? `${entry.type}_${slug}.md`
+    const filePath = this.memoryFile(filename)
+    const previous = fs.existsSync(filePath)
+      ? this.parseFrontmatter(fs.readFileSync(filePath, 'utf-8'))
+      : null
+    // Same-millisecond saves must still invalidate an in-flight dream snapshot.
+    const now = Math.max(Date.now(), (previous?.lastWriteAt ?? 0) + 1)
+    const sources = entry.sources ?? previous?.sources
 
     const fileContent = [
       '---',
@@ -85,6 +92,9 @@ export class MemoryStore {
       `type: ${entry.type}`,
       `lastWriteAt: ${now}`,
       `lastReadAt: ${now}`,
+      ...(sources?.length
+        ? [`sources: ${JSON.stringify(sources.slice(-5))}`]
+        : []),
       '---',
       '',
       entry.content,
@@ -109,13 +119,12 @@ export class MemoryStore {
     if (existingIdx >= 0) {
       lines[existingIdx] = newLine
     } else {
-      if (lines.length >= MAX_INDEX_LINES) {
+      if (
+        lines.filter((line) => line.startsWith('- ')).length === MAX_INDEX_LINES
+      )
         this.logger?.info(
-          `[memory] Index reached the ${MAX_INDEX_LINES}-line limit; removing the oldest entry`,
+          '[memory] Index exceeds 200 entries; all entries are preserved. Run /dream to consolidate.',
         )
-        const firstEntry = lines.findIndex((l) => l.startsWith('- '))
-        if (firstEntry >= 0) lines.splice(firstEntry, 1)
-      }
       lines.push(newLine)
     }
 
@@ -144,19 +153,43 @@ export class MemoryStore {
     return bm25Search(this.list(), query, topK)
   }
 
-  loadIndex(): string {
+  loadIndex(maxChars = MAX_FILE_CHARS): string {
     this.init()
     const raw = fs.readFileSync(this.indexPath, 'utf-8')
-    return raw.length > MAX_FILE_CHARS
-      ? `${raw.slice(0, MAX_FILE_CHARS)}\n...(truncated)`
-      : raw
+    if (raw.length <= maxChars) return raw
+    const lines = raw.split('\n')
+    const total = lines.filter((line) => line.startsWith('- ')).length
+    const kept: string[] = []
+    let shown = 0
+    for (const line of lines) {
+      const nextShown = shown + (line.startsWith('- ') ? 1 : 0)
+      const marker = `\n${total - nextShown} more entries not shown; use memory search`
+      if ([...kept, line].join('\n').length + marker.length > maxChars) break
+      kept.push(line)
+      shown = nextShown
+    }
+    return `${kept.join('\n')}\n${total - shown} more entries not shown; use memory search`
+  }
+
+  indexWarnings(): string[] {
+    const count = this.list().length
+    return [
+      ...(count > MAX_INDEX_LINES
+        ? [
+            `Index exceeds the ${MAX_INDEX_LINES}-entry limit (${count}); run /dream to consolidate.`,
+          ]
+        : []),
+      ...(this.loadIndex().includes('more entries not shown')
+        ? ['Injected index is truncated; use memory search to find all notes.']
+        : []),
+    ]
   }
 
   /**
    * Path of a memory file named by the model. Only a plain `*.md` file name directly in the memory directory
    * (not the index) is accepted: `../`, separators and absolute paths would reach files outside the store.
    */
-  private memoryFile(filename: string): string {
+  memoryFile(filename: string): string {
     if (
       filename !== path.basename(filename) ||
       filename.includes('\\') ||
@@ -210,15 +243,11 @@ export class MemoryStore {
   }
 
   /** The changing part: count and index; null when the store is empty (the fixed rules explain how to save). */
-  buildIndex(): string | null {
+  buildIndex(maxChars = MAX_FILE_CHARS): string | null {
     const entries = this.list()
     if (entries.length === 0) return null
-    return [
-      `[memory] ${entries.length} memories`,
-      '',
-      'Memory index:',
-      this.loadIndex(),
-    ].join('\n')
+    const prefix = `[memory] ${entries.length} memories\n\nMemory index:\n`
+    return prefix + this.loadIndex(maxChars - prefix.length)
   }
 
   private parseFrontmatter(raw: string): Omit<MemoryEntry, 'filePath'> | null {
@@ -239,7 +268,19 @@ export class MemoryStore {
     const validTypes = ['user', 'feedback', 'project', 'reference']
     if (!meta.name || !meta.type || !validTypes.includes(meta.type)) return null
 
+    let sources: string[] | undefined
+    try {
+      const parsed: unknown = JSON.parse(meta.sources ?? 'null')
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((item) => typeof item === 'string')
+      )
+        sources = parsed.slice(-5)
+    } catch {
+      /* Older hand-written metadata remains readable. */
+    }
     return {
+      ...(sources ? { sources } : {}),
       name: meta.name,
       description: meta.description || '',
       type: meta.type as MemoryEntry['type'],

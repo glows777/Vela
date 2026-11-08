@@ -9,7 +9,7 @@ import { type Attempt, emptyUsage, pricing, table } from './report.ts'
 import { baselineCommit, compactionFixture, OLD_COMMIT } from './scenarios.ts'
 
 const help =
-  'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>]'
+  'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>] [--dream on|off]'
 // Preserve network routing without copying arbitrary user environment or credentials.
 function networkEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -51,9 +51,10 @@ export async function workerEnvironment(artifactDir: string, scratch: string) {
 }
 export function options(args: string[]) {
   const result = {
-    only: [...scenarioIds] as ScenarioId[],
+    only: scenarioIds.filter((id) => id !== 'M1') as ScenarioId[],
     runs: 3,
     thinking: 'max',
+    dream: false,
     maxCost: 3,
     repo: resolve(dirname(fileURLToPath(import.meta.url)), '../..'),
   }
@@ -73,6 +74,11 @@ export function options(args: string[]) {
         result.only = [...new Set(ids)] as ScenarioId[]
         break
       }
+      case '--dream':
+        if (!['on', 'off'].includes(value))
+          throw new Error('--dream must be on or off')
+        result.dream = value === 'on'
+        break
       case '--runs':
         result.runs = Number(value)
         if (!Number.isInteger(result.runs) || result.runs < 1)
@@ -131,7 +137,7 @@ async function main() {
   const sha = await git('rev-parse', 'HEAD')
   const dirty = !!(await git('status', '--porcelain'))
   const baselineCommits = Object.fromEntries(
-    config.only.map((id) => [id, baselineCommit(id)]),
+    config.only.map((id) => [id, id === 'M1' ? sha : baselineCommit(id)]),
   )
   for (const commit of new Set([OLD_COMMIT, ...Object.values(baselineCommits)]))
     await git('cat-file', '-e', `${commit}^{commit}`)
@@ -184,6 +190,7 @@ async function main() {
   await save()
   try {
     for (const commit of new Set(Object.values(baselineCommits))) {
+      if (commit === sha && config.only.includes('M1')) continue
       const runtime = join(scratch, `old-runtime-${commit.slice(0, 8)}`)
       await git('worktree', 'add', '--detach', runtime, commit)
       oldRuntimes.set(commit, runtime)
@@ -246,7 +253,7 @@ async function main() {
             )
             const cwd = join(scratch, `${scenario}-${arm}-${run}-${attempt}`)
             const runtime =
-              arm === 'old'
+              arm === 'old' && scenario !== 'M1'
                 ? oldRuntimes.get(baselineCommit(scenario))!
                 : config.repo
             const env = await workerEnvironment(artifactDir, scratch)
@@ -266,6 +273,10 @@ async function main() {
                 run,
                 attempt,
                 thinking: config.thinking,
+                dream:
+                  config.dream &&
+                  arm === 'new' &&
+                  ['M1', 'G8'].includes(scenario),
               }
               const configPath = join(artifactDir, 'config.json')
               await Bun.write(configPath, JSON.stringify(workerConfig))

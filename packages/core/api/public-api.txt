@@ -501,7 +501,7 @@
     cost?: number | undefined
     durationMs?: number | undefined
     inputTokens: number
-    kind?: "main" | "summary" | undefined
+    kind?: "main" | "summary" | "dream" | undefined
     model: string
     outputTokens: number
     ts: number
@@ -1193,7 +1193,7 @@
     cost?: number | undefined
     durationMs?: number | undefined
     inputTokens: number
-    kind?: "main" | "summary" | undefined
+    kind?: "main" | "summary" | "dream" | undefined
     model: string
     outputTokens: number
     ts: number
