@@ -1000,6 +1000,7 @@
   interface VelaLimits
     maxInputTokens: number
     maxRetries: number
+    microcompact: boolean
     microcompactThreshold: number
     minMicroSavings: number
     retryBaseMs: number

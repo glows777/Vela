@@ -87,6 +87,53 @@ test('microcompact folds old tool results once more than five calls have complet
   expect(t.lastAssistantText()).toBe('Read them all')
 })
 
+test('turning microcompaction off keeps tool results and still summarizes at the threshold', async () => {
+  const files = Object.fromEntries(
+    Array.from({ length: 8 }, (_, i) => [`f${i}.ts`, bigFile(i)]),
+  )
+  const t = createTestVela({
+    files,
+    // Fold as soon as possible if microcompaction were on; summaries still have their own threshold
+    limits: {
+      microcompact: false,
+      microcompactThreshold: 1,
+      minMicroSavings: 1,
+      summaryThreshold: 50_000,
+    },
+    responses: [
+      ...Array.from({ length: 8 }, (_, i) =>
+        fauxToolCall('read_file', { path: `f${i}.ts` }),
+      ),
+      fauxText('Read them all'),
+      fauxText('Answer 0'),
+      fauxText('Answer 1'),
+      fauxText('Answer 2'),
+      // The provider reports a prompt size above the summary threshold; the local estimate
+      // for this history is far below it
+      fauxText('Answer 3', { usage: { input: 60_000 } }),
+      fauxText('Answer 4'),
+    ],
+    generate: [fauxSummary()],
+  })
+
+  await t.run('Read f0 through f7')
+
+  // The old tool results stay in the request instead of becoming file references
+  expect(
+    t.eventsOf('context_prepare').filter((e) => e.action === 'micro'),
+  ).toEqual([])
+  const last = JSON.stringify(t.model.calls.at(-1)!.prompt)
+  expect(last).toContain('// file 0')
+  expect(last).not.toContain('tool result preview omitted')
+
+  // Automatic summaries keep following autoCompaction
+  for (let i = 0; i < 5; i++) await t.run(`Question ${i}`)
+  expect(t.eventsOf('compaction_start')).toEqual([
+    { type: 'compaction_start', reason: 'threshold' },
+  ])
+  expect(t.lastAssistantText()).toBe('Answer 4')
+})
+
 test('summary compaction replaces old history with a structured summary and keeps recent messages', async () => {
   const filler = (i: number) => `Question ${i}: ${'Background. '.repeat(100)}`
   const t = createTestVela({

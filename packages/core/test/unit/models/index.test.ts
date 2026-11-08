@@ -78,4 +78,10 @@ test('context limits follow the model window; explicit limits win', () => {
     limitsForModel({ contextWindow: 32_768 }, { maxInputTokens: 30_000 })
       .maxInputTokens,
   ).toBe(30_000)
+  // The microcompaction switch is not derived from the window; only an explicit value changes it
+  expect(limitsForModel({ contextWindow: 200_000 }).microcompact).toBe(true)
+  expect(
+    limitsForModel({ contextWindow: 200_000 }, { microcompact: false })
+      .microcompact,
+  ).toBe(false)
 })
