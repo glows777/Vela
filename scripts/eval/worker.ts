@@ -33,6 +33,8 @@ export interface WorkerConfig {
   run: number
   attempt: number
   thinking: string
+  /** Opt-in treatment; historical G8 baseline never runs dream. */
+  dream?: boolean
 }
 async function load<T>(runtime: string, file: string): Promise<T> {
   return import(pathToFileURL(join(runtime, file)).href)
@@ -252,6 +254,21 @@ export async function runAttempt(
     >(config.runtime, paths.todo)
     extensions.push(todo.todo())
   }
+  if (config.scenario === 'M1')
+    extensions.push(function readOnlyMemory(api) {
+      api.on('tool_call', 'memory', (event) => {
+        if (
+          !['read', 'search', 'list', 'lint'].includes(
+            String(event.input.action),
+          )
+        )
+          return {
+            block: true,
+            reason:
+              'This controlled eval permits only read-only memory tools; consolidation is evaluated separately.',
+          }
+      })
+    })
   let server: ReturnType<typeof Bun.serve> | undefined
   let fake:
     | ReturnType<typeof import('../../test/support/lark.ts')['fakeLark']>
@@ -361,6 +378,7 @@ export async function runAttempt(
     model: 'eval/deepseek-flash',
     providers,
     thinkingLevel: config.thinking as 'max',
+    extensionConfig: { memory: { dream: false } },
     extensions,
     files: config.scenario === 'G6' ? {} : files,
     // Restore normal backoff: the helper otherwise defaults retryBaseMs to zero. Keep product retries.
@@ -517,6 +535,13 @@ export async function runAttempt(
           while (!channelStarted && !channelError) await Bun.sleep(1)
           await drain()
           if (channelError) throw channelError
+          if (config.scenario === 'G8' && index === 0 && config.dream) {
+            await t.vela
+              .session(
+                channelSessionId(paths.channelName, 'oc_group', topicRoots[0]),
+              )
+              .prompt('/dream')
+          }
           if (['G7', 'G8'].includes(config.scenario) && index === 0) {
             const { MemoryStore } = await load<
               typeof import('../../packages/core/src/extensions/memory/store.ts')
@@ -570,6 +595,43 @@ export async function runAttempt(
         }))
         evidence.answers = evidence.deliveries.map((item) => item.text)
       }
+    } else if (config.scenario === 'M1') {
+      const { MemoryStore } = await load<
+        typeof import('../../packages/core/src/extensions/memory/store.ts')
+      >(config.runtime, paths.memoryStore)
+      const store = new MemoryStore(join(t.dataDir, 'memory'))
+      store.save({
+        name: 'deploy-day',
+        description: 'Deploys happen on Friday.',
+        type: 'project',
+        content: 'Deploys happen on Friday.',
+      })
+      // Both sessions can read memory; the eval hook blocks writes while preserving inbox eligibility.
+      const correction = t.vela.session('dream-correction', {
+        tools: ['memory'],
+      })
+      await correction.prompt(prompts('M1')[0]!)
+      if (config.dream) await correction.prompt('/dream')
+      evidence.memoryEntries = store
+        .list()
+        .map(({ name, content }) => ({ name, content }))
+      await Bun.write(
+        join(config.artifactDir, 'memory-after-correction.json'),
+        JSON.stringify(evidence.memoryEntries, null, 2),
+      )
+      const recall = t.vela.session('dream-recall', { tools: ['memory'] })
+      await recall.prompt(prompts('M1')[1]!)
+      const last = recall.messages
+        .filter((message) => message.role === 'assistant')
+        .at(-1)
+      evidence.answers.push(
+        typeof last?.content === 'string'
+          ? last.content
+          : (last?.content ?? [])
+              .filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join(''),
+      )
     } else {
       for (const [index, prompt] of prompts(
         config.scenario,

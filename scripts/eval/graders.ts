@@ -15,6 +15,7 @@ export const scenarioIds = [
   'G6',
   'G7',
   'G8',
+  'M1',
 ] as const
 export type ScenarioId = (typeof scenarioIds)[number]
 export interface Call {
@@ -305,6 +306,18 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
     e.calls.filter((call) => call.name === name && call.success)
   const delivered = e.deliveries.map((item) => item.text).join('\n')
   switch (id) {
+    case 'M1': {
+      const corrected = (text: string) =>
+        /\bMonday\b/i.test(text) && !/\bFriday\b/i.test(text)
+      check(
+        'corrected-note',
+        !!e.memoryEntries?.some(
+          (entry) => entry.name === 'deploy-day' && corrected(entry.content),
+        ),
+      )
+      check('recall', corrected(e.answers.at(-1) ?? ''))
+      break
+    }
     case 'C1': {
       // Facts must occur in the bash portion, rather than an unrelated read_file paragraph.
       const bash = bashSection(answer)

@@ -320,8 +320,11 @@ export async function checkBoundaries(root: string): Promise<string[]> {
         const publicAPI = resolve(pkg.dir, 'src/extension-api.ts')
         const local =
           destination &&
-          (inside(destination, builtinDir) || destination === publicAPI)
-        // External declared dependencies are checked by knip; core-owned access has only this public entry.
+          (inside(destination, builtinDir) ||
+            destination === publicAPI ||
+            (file === resolve(pkg.dir, 'src/extensions/memory/dream.ts') &&
+              destination === resolve(pkg.dir, 'src/usage/tracker.ts')))
+        // External dependencies are checked by knip. Dream alone has the internal usage path; no public API is added.
         if (destination && !local)
           report(
             file,
@@ -395,6 +398,11 @@ export async function checkBoundaries(root: string): Promise<string[]> {
             )
           : undefined
         if (
+          !(
+            file ===
+              resolve(record.pkg.dir, 'src/extensions/memory/dream.ts') &&
+            member === 'tracker'
+          ) &&
           symbol?.declarations?.some((d) =>
             ts.getJSDocTags(d).some((t) => t.tagName.text === 'internal'),
           )

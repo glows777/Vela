@@ -357,7 +357,7 @@ Turns automatic compaction on or off for the active session (like pi; not saved)
 ```
 
 ```json
-{"id":"19","type":"response","command":"get_commands","success":true,"data":{"commands":[{"name":"memory","description":"List memories; /memory search <keywords> to search, /memory lint to check","extension":"memory","source":"extension"},{"name":"dream","description":"Have the model clean up the memory store (merge duplicates, delete stale entries)","extension":"memory","source":"extension"},{"name":"skill:code-review","description":"Review the current diff","source":"skill"}]}}
+{"id":"19","type":"response","command":"get_commands","success":true,"data":{"commands":[{"name":"memory","description":"List memories; /memory search <keywords> to search, /memory lint to check","extension":"memory","source":"extension"},{"name":"dream","description":"Consolidate memory against recent conversations in an isolated model call","extension":"memory","source":"extension"},{"name":"skill:code-review","description":"Review the current diff","source":"skill"}]}}
 ```
 
 Extension commands (`source: "extension"`, with the `extension` that registered them), prompt templates (`source: "prompt"`) and skills (`source: "skill"`, named `skill:<name>`), as in pi. Run any of them with `prompt` and `/name args`. The interactive CLI's built-in commands are not listed.

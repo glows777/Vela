@@ -10,7 +10,7 @@ interface ValidatableEntry {
 }
 
 interface ValidationIssue {
-  kind: 'stale_path' | 'never_used' | 'duplicate_name'
+  kind: 'stale_path' | 'duplicate_name'
   message: string
 }
 
@@ -30,14 +30,6 @@ function extractPaths(content: string): string[] {
   return Array.from(paths)
 }
 
-// Shelf life in days per memory type
-const TTL_BY_TYPE: Record<string, number> = {
-  user: 365, // user preferences barely expire
-  feedback: 90, // corrections: 3 months
-  project: 30, // project decisions change fast: 1 month
-  reference: 14, // external references need frequent refreshing
-}
-
 function validateEntry(
   entry: ValidatableEntry,
   baseDir = '.',
@@ -51,17 +43,6 @@ function validateEntry(
       issues.push({
         kind: 'stale_path',
         message: `Referenced path does not exist: ${p}`,
-      })
-    }
-  }
-
-  if (entry.lastReadAt) {
-    const staleDays = TTL_BY_TYPE[entry.type] ?? 30
-    const days = (Date.now() - entry.lastReadAt) / (1000 * 60 * 60 * 24)
-    if (days > staleDays) {
-      issues.push({
-        kind: 'never_used',
-        message: `Not read for ${Math.floor(days)} days, past the ${staleDays}-day shelf life for type ${entry.type}`,
       })
     }
   }

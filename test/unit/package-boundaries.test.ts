@@ -272,3 +272,45 @@ for (const [label, files] of [
       /source aliases|explicitly clear/,
     )
   })
+
+test('memory dream alone may import the internal usage tracker', async () => {
+  expect(
+    await errors({
+      'packages/core/src/usage/tracker.ts': 'export const usage = true',
+      'packages/core/src/extensions/memory/dream.ts':
+        "export {usage} from '../../usage/tracker.ts'",
+    }),
+  ).toEqual([])
+  for (const file of ['memory/index.ts', 'web/index.ts']) {
+    expect(
+      (
+        await errors({
+          'packages/core/src/usage/tracker.ts': 'export const usage = true',
+          [`packages/core/src/extensions/${file}`]:
+            "export {usage} from '../../usage/tracker.ts'",
+        })
+      ).join('\n'),
+    ).toMatch(/light builtin/)
+  }
+})
+
+test('only memory dream may use the internal session tracker, not other members', async () => {
+  const api =
+    'export interface Session {\n/** @internal */\ntracker: object\n/** @internal */\nregistry: object\n}'
+  const check = (file: string, member: string) =>
+    errors({
+      'packages/core/src/extension-api.ts': api,
+      'packages/core/dist/extension-api.d.ts': api,
+      [`packages/core/src/extensions/${file}`]: `import type {Session} from '@glows777/vela-core/extension-api'; export const access=(session:Session)=>session.${member}`,
+    })
+  expect(await check('memory/dream.ts', 'tracker')).toEqual([])
+  expect((await check('memory/dream.ts', 'registry')).join('\n')).toMatch(
+    /internal member/,
+  )
+  expect((await check('memory/index.ts', 'tracker')).join('\n')).toMatch(
+    /internal member/,
+  )
+  expect((await check('web/index.ts', 'tracker')).join('\n')).toMatch(
+    /internal member/,
+  )
+})
