@@ -129,7 +129,10 @@ store.
 
 After a reply settles, automatic dream starts in the background when the inbox
 contains at least 20 turns or a turn older than 24 hours. It does not delay the
-reply. Only one dream runs per store. `/dream` runs the same pass immediately.
+reply. Only one dream runs per store. After a failed or conflict-skipped pass,
+automatic retry waits for 20 new turns since that pass started or 24 hours since
+it finished, even if the retained inbox is already old or full. `/dream` retries
+immediately without waiting for that threshold.
 Set `extensionConfig.memory.dream` to `false` to disable automatic runs; manual
 `/dream` remains available. The default is enabled, including groups. Both automatic
 and manual dream require memory permission `allow`. With `ask`, use the memory
@@ -140,7 +143,9 @@ Dream makes one isolated model call with no tools. It compares recent conversati
 records with notes and deterministic lint findings, corrects contradicted notes,
 saves missing durable facts, merges duplicates and condenses the index. Large
 stores provide the index plus notes matched to the inbox within a content budget.
-Conversation text is evidence, not instructions. Validated operations go through
+Conversation text is evidence, not instructions. One surrounding JSON code fence
+is accepted; the enclosed response still passes the same strict JSON and operation
+validation. Validated operations go through
 the memory store. Before applying any operation, dream checks every full note
 supplied to the model for changes since the snapshot, plus create-target collisions. A live edit or a newly occupied create target skips
 the entire batch and retains the inbox for retry. This keeps a merge source from
@@ -149,7 +154,8 @@ conflicting notes. The inbox is consumed only after successful application,
 preserving turns arriving during the run. Dream messages and tool traces do not enter the user's conversation.
 
 Changed notes retain the last five source session IDs in `sources:` frontmatter.
-`<store>/.dream/log.md` keeps reports for the last 20 runs. Dream model usage is
+`<store>/.dream/log.md` keeps reports for the last 20 runs. `/memory` marks a failed
+or skipped last run explicitly instead of showing it as an ordinary zero-change run. Dream model usage is
 included in `/usage` and the usage ledger. `/memory` exposes the latest run and
 pending inbox size so automatic maintenance is visible.
 

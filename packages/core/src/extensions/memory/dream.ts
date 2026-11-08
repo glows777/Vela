@@ -26,7 +26,17 @@ interface InboxTurn {
 }
 interface DreamState {
   dropped: number
-  lastRun?: { time: number; changes: number; report: string }
+  collected?: number
+  lastRun?: DreamRun
+}
+interface DreamRun {
+  time: number
+  changes: number
+  report: string
+  inboxLength: number
+  collected: number
+  failed?: string
+  skipped?: string
 }
 
 const line = z
@@ -154,6 +164,7 @@ export class MemoryDream {
       },
     ]
     const state = this.state()
+    state.collected = (state.collected ?? 0) + 1
     let bytes = turns.reduce(
       (sum, turn) => sum + Buffer.byteLength(JSON.stringify(turn)) + 1,
       0,
@@ -169,6 +180,14 @@ export class MemoryDream {
   due(): boolean {
     if (this.running) return false
     const turns = this.inbox()
+    if (!turns.length) return false
+    const state = this.state()
+    const last = state.lastRun
+    if (last && (last.failed !== undefined || last.skipped !== undefined))
+      return (
+        (state.collected ?? 0) - (last.collected ?? 0) >= 20 ||
+        Date.now() - last.time > DAY
+      )
     return (
       turns.length >= 20 || turns.some((turn) => Date.now() - turn.time > DAY)
     )
@@ -176,7 +195,14 @@ export class MemoryDream {
   status(): string {
     const state = this.state()
     const turns = this.inbox()
-    return `[dream] ${state.lastRun ? `Last dream ${new Date(state.lastRun.time).toISOString()}, ${state.lastRun.changes} changes` : 'No dream yet'}; inbox ${turns.length} turns; ${state.dropped} dropped${this.running ? '; running' : ''}`
+    const last = state.lastRun
+    const outcome =
+      last?.failed !== undefined
+        ? `failed: ${last.failed}`
+        : last?.skipped !== undefined
+          ? `skipped: ${last.skipped}`
+          : `${last?.changes} changes`
+    return `[dream] ${last ? `Last dream ${new Date(last.time).toISOString()}, ${outcome}` : 'No dream yet'}; inbox ${turns.length} turns; ${state.dropped} dropped${this.running ? '; running' : ''}`
   }
   async stop(): Promise<void> {
     this.controller?.abort(new Error('Memory extension shut down'))
@@ -198,10 +224,10 @@ export class MemoryDream {
     return this.running
   }
 
-  private audit(report: string, changes: number): void {
+  private audit(run: Omit<DreamRun, 'time'>): void {
     const state = this.state()
     const time = Date.now()
-    state.lastRun = { time, changes, report }
+    state.lastRun = { ...run, time }
     const file = join(this.dir, 'log.md')
     const previous = fs.existsSync(file)
       ? fs
@@ -209,7 +235,9 @@ export class MemoryDream {
           .split(/(?=^## Dream )/m)
           .filter(Boolean)
       : []
-    previous.push(`## Dream ${new Date(time).toISOString()}\n\n${report}\n\n`)
+    previous.push(
+      `## Dream ${new Date(time).toISOString()}\n\n${run.report}\n\n`,
+    )
     this.write('log.md', previous.slice(-20).join(''))
     this.write('state.json', JSON.stringify(state))
   }
@@ -219,9 +247,11 @@ export class MemoryDream {
     signal: AbortSignal,
   ): Promise<string> {
     let changes = 0
+    const attempt = { collected: this.state().collected ?? 0, inboxLength: 0 }
     try {
       signal.throwIfAborted()
       const turns = this.inbox()
+      attempt.inboxLength = turns.length
       const entries = this.store
         .list()
         .sort((a, b) => a.filePath.localeCompare(b.filePath))
@@ -268,7 +298,9 @@ export class MemoryDream {
       signal.throwIfAborted()
       if (response.finishReason !== 'stop' || response.toolCalls.length)
         throw new Error('Incomplete dream response or unexpected tool calls')
-      const result = responseSchema.parse(JSON.parse(response.text))
+      const payload = response.text.trim()
+      const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(payload)
+      const result = responseSchema.parse(JSON.parse(fenced?.[1] ?? payload))
       const sources = new Set(
         turns.length ? turns.map((turn) => turn.sessionId) : [session.id],
       )
@@ -309,8 +341,9 @@ export class MemoryDream {
         )
           conflicts.push(op.filename)
       if (conflicts.length) {
-        const report = `[dream] Skipped all ${result.ops.length} operations: notes changed since dream read them (${conflicts.join(', ')}). Inbox retained; run /dream to retry.`
-        this.audit(report, 0)
+        const skipped = `Notes changed since dream read them (${conflicts.join(', ')}).`
+        const report = `[dream] Skipped all ${result.ops.length} operations: ${skipped} Inbox retained; run /dream to retry.`
+        this.audit({ ...attempt, report, changes: 0, skipped })
         return report
       }
       const details: string[] = []
@@ -336,16 +369,19 @@ export class MemoryDream {
         )
       }
       const report = `[dream] ${changes} changes. ${result.report}${details.length ? `\n${details.join('\n')}` : ''}`
-      this.audit(report, changes)
+      this.audit({ ...attempt, report, changes })
       // Only consume this snapshot; turns collected while the model was running stay queued.
       const consumed = new Set(turns.map((turn) => turn.id))
       this.writeInbox(this.inbox().filter((turn) => !consumed.has(turn.id)))
       return report
     } catch (error) {
-      this.audit(
-        `[dream] Failed: ${error instanceof Error ? error.message : String(error)}. Inbox retained.`,
+      const failed = error instanceof Error ? error.message : String(error)
+      this.audit({
+        ...attempt,
+        report: `[dream] Failed: ${failed}. Inbox retained.`,
         changes,
-      )
+        failed,
+      })
       throw error
     }
   }
