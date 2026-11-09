@@ -1194,6 +1194,43 @@ test('G8 worker snapshots actual task memory then recalls in a fresh same-group 
   expect(pending).toBe(0)
 })
 
+for (const id of ['G7', 'G8'] as const) {
+  test.each([true, false])(
+    `${id} worker retains task-phase memory results, valid save=%s`,
+    async (valid) => {
+      const { result, calls, snapshot, pending } = await exitAttempt(id, [
+        fauxToolCall('memory', {
+          ...stagingMemory,
+          content: valid ? stagingMemory.content : '',
+        }),
+        fauxText('Done.'),
+        fauxToolCall('memory', { action: 'search', query: 'staging' }),
+        fauxText('I do not know.'),
+      ])
+      const output = valid
+        ? 'Saved to memory: project_staging-server.md'
+        : 'Save failed: name, type and content are required'
+      expect(calls[1]!.toolResults[0]!.output).toBe(output)
+      expect(result.evidence!.calls[0]).toMatchObject({
+        name: 'memory',
+        phase: 0,
+        success: true,
+        output,
+      })
+      expect(snapshot).toEqual(
+        valid
+          ? [expect.objectContaining({ content: stagingMemory.content })]
+          : [],
+      )
+      expect(result.checks).toEqual([
+        { name: 'store', pass: valid },
+        { name: 'recall', pass: false },
+      ])
+      expect(pending).toBe(0)
+    },
+  )
+}
+
 test('G8 worker excludes recall-time memory writes from the topic-1 snapshot', async () => {
   const { result, snapshot, pending } = await exitAttempt('G8', [
     fauxText(
