@@ -209,6 +209,8 @@ test.each([
   ['Deploys are not moving from Friday to Monday.', false],
   ['Monday was proposed, but Friday was confirmed as the deploy day.', false],
   ['Deploys do not happen on Monday.', false],
+  ['Deploys happen on Monday, not only Friday.', false],
+  ['Deploys happen on Monday, not just Friday.', false],
 ])('M1: %s', (answer, pass) => {
   const input = evidence({
     answers: [answer],
