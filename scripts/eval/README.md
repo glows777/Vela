@@ -154,6 +154,11 @@ The workspace/data layout is unchanged, and these are behavioral failures, not
 runtime errors. A memory written during recall cannot earn store credit. The two
 checks are reported separately, including their own repetition totals.
 
+Attempt evidence retains task-topic `memory` tool results as well as recall-topic
+results. Execution success alone does not prove persistence: a save can return
+`Save failed: ...` without throwing. Use the returned text to diagnose that call
+and the pre-recall snapshot to determine whether the fact was actually stored.
+
 G8 uses the same snapshot, store/recall predicates and isolated same-group topics
 (`g8_store`, `g8_recall`). Topic 1 asks for a two-line on-call note about a deploy
 delayed to 22:00 and mentions the staging server's rename to kestrel in passing.

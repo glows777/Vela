@@ -467,7 +467,8 @@ export async function runAttempt(
       if (call) {
         call.success = !event.isError
         if (
-          (recallScenario && sessionId === recallSessionId) ||
+          (recallScenario &&
+            (sessionId === recallSessionId || call.name === 'memory')) ||
           (config.scenario === 'G6' && sessionId.endsWith('-g6_b')) ||
           (call.name === 'bash' &&
             call.success &&
