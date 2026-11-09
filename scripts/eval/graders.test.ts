@@ -196,6 +196,23 @@ test.each([
       ?.pass,
   ).toBe(false)
 })
+test.each([
+  ['Deploys now happen on Monday, not Friday.', true],
+  ['Deploys moved from Friday to Monday.', true],
+  ['Deploys are on Monday instead of Friday.', true],
+  ['Deploys are on Monday; previously they were on Friday.', true],
+  ['Monday is the deploy day; Friday was the old day.', true],
+  ['Monday it is. Friday is no longer the deploy day.', true],
+  ['Deploys happen on Monday.', true],
+  ['Deploys happen on Friday and Monday.', false],
+  ['Deploys happen on Monday and are still on Friday.', false],
+])('M1: %s', (answer, pass) => {
+  const input = evidence({
+    answers: [answer],
+    memoryEntries: [{ name: 'deploy-day', content: answer }],
+  })
+  expect(grade('M1', input).map((check) => check.pass)).toEqual([pass, pass])
+})
 fails('C1', 'bash limits', (e) => {
   e.answers = ['bash: 3000 lines / 50KB']
 })

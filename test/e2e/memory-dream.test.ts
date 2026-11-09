@@ -102,6 +102,43 @@ test('a real memory save and later correction consolidate offline with provenanc
   expect(notices(t)).toMatch(/inbox/i)
 })
 
+test('dream instructs the model that only user messages are evidence', async () => {
+  const invented = 'Changes must be reviewed and ready by end of day Friday.'
+  const t = createTestVela({
+    responses: [fauxText(invented)],
+    generate: [
+      (req) => {
+        const input = JSON.parse(req.lastUserText) as {
+          inbox: { sessionId: string }[]
+        }
+        return result([
+          {
+            action: 'create',
+            filename: 'project_review-deadline.md',
+            name: 'review-deadline',
+            description: 'Review deadline',
+            type: 'project',
+            content: invented,
+            reason: 'The assistant stated the deadline',
+            source: input.inbox[0]!.sessionId,
+          },
+        ])
+      },
+    ],
+  })
+  await t.run('Prepare the release notes')
+  await t.run('/dream')
+  const call = t.model.calls.find((item) => item.kind === 'generate')!
+  expect(call.system).toContain('User messages are the evidence')
+  expect(call.system).toContain(
+    'a claim that appears only in assistant text is never saved as a fact',
+  )
+  const input = JSON.parse(call.lastUserText) as {
+    inbox: { assistant: string }[]
+  }
+  expect(input.inbox[0]?.assistant).toBe(invented)
+})
+
 test('shared groups consolidate only their own inbox and never modify global or another group', async () => {
   const t = createTestVela({
     responses: [

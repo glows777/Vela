@@ -284,6 +284,18 @@ function bashSection(answer: string): string {
   return section.join('\n')
 }
 
+// Friday passes only as the old deploy day; a mention that leaves it current fails.
+const OLD_FRIDAY =
+  /\b(?:not(?!\s+(?:only|just)\b)|no longer|never|from|instead of|rather than|previously|formerly|was|were|used to)\b(?:(?!\b(?:Monday|Friday)\b)[^.!?\n]){0,30}?\bFriday\b|\bFriday(?:\s+(?:used to|was|were|previously|formerly|had been)\b|\s+(?:is|was)\s+(?:not|no longer)\b|\s*(?:→|->|\bto\b)\s*Monday\b)/gi
+
+function deployDayIsMonday(text: string): boolean {
+  return (
+    /\bMonday\b/i.test(text) &&
+    (text.match(/\bFriday\b/gi)?.length ?? 0) ===
+      (text.match(OLD_FRIDAY)?.length ?? 0)
+  )
+}
+
 export function grade(id: ScenarioId, e: Evidence): Check[] {
   // Normalize routing/tool identifiers only. Paths, arguments, results and saved evidence stay raw.
   e = {
@@ -307,15 +319,14 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
   const delivered = e.deliveries.map((item) => item.text).join('\n')
   switch (id) {
     case 'M1': {
-      const corrected = (text: string) =>
-        /\bMonday\b/i.test(text) && !/\bFriday\b/i.test(text)
       check(
         'corrected-note',
         !!e.memoryEntries?.some(
-          (entry) => entry.name === 'deploy-day' && corrected(entry.content),
+          (entry) =>
+            entry.name === 'deploy-day' && deployDayIsMonday(entry.content),
         ),
       )
-      check('recall', corrected(e.answers.at(-1) ?? ''))
+      check('recall', deployDayIsMonday(e.answers.at(-1) ?? ''))
       break
     }
     case 'C1': {
