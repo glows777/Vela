@@ -58,6 +58,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- G7/G8 evaluations isolate disk tools from evaluation artifacts and raw conversations, retain both phases' tool evidence, and no longer mistake an absolute reference to the legitimate workspace for artifact access. New results identify the changed evaluation profile; product memory behavior is unchanged.
+
 - G7/G8 evaluation evidence retains task-topic memory tool results, so failed save responses are not lost while diagnosing an empty pre-recall snapshot. Scoring and memory behavior are unchanged.
 
 - **The first-run setup wizard no longer shows the model guidance it replaces.** The header's `/model` hint and the `[model] No model available…` diagnostic used to appear before and during the wizard; both now wait until a cancelled setup leaves Vela without a model ([#279](https://github.com/glows777/Vela/issues/279)).

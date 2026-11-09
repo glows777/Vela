@@ -5,6 +5,54 @@ This opt-in Bun runner measures real Vela sessions against DeepSeek. It is outsi
 The issue and approved plan are [#203](https://github.com/glows777/Vela/issues/203)
 and [Claude's corrections](https://github.com/glows777/Vela/issues/203#issuecomment-6413801436).
 
+G7/G8 now default to the versioned `workspace-v1` isolation profile. It requires
+Linux, `bwrap` (Bubblewrap), and permitted user namespaces. The worker checks that
+workspace files are readable and a private artifact canary is not readable **before
+any model request**. An unavailable boundary is an error, never an unconfined retry.
+`--isolation legacy` explicitly selects the earlier execution environment for
+historical investigation; it must not be described as isolated.
+
+In `workspace-v1`, disk tools retain their revision-local names, schemas and native
+implementations, but execute without network access in a filesystem containing the
+workspace, read-only memory `.md` files, system binaries and tool dependencies.
+Evaluation source, artifacts, raw sessions and `.dream` inboxes are not mounted.
+File read/overwrite state is kept per session across isolated tool processes.
+Only the invoking session's native tool-result directory is mounted, so long
+outputs remain pageable without exposing task-topic tool output to recall.
+Neutral state paths and topic IDs replace benchmark-labelled model-facing paths;
+the real session/state files are copied to the artifact directory after cleanup.
+Both phases retain disk-tool results and an `isolation` audit, and `requests.jsonl`
+retains the actual prompts/tools/reasoning setting without headers or credentials.
+
+This is a changed evaluation environment, **not a memory product fix**. Version-2
+batches record `memoryProfile` and `graderVersion`; do not pool their pass rates
+with older unconfined runs. Store/recall checks and the two-of-three exit bar remain
+the same. The grader now treats absolute and relative paths within the legitimate
+workspace consistently; raw session/evaluation paths inside it are still rejected.
+Historical artifacts are never rewritten.
+
+For isolated paid G7/G8, the budget is also enforced before each provider request:
+reserve the selected model's full 1M input at uncached peak prices plus an enforced
+8192-token output limit ([provider parameter contract](https://api-docs.deepseek.com/api/create-response/)). Known usage releases unused reserve; missing usage keeps
+the full reserve. Concurrent requests wait up to 30 seconds for an existing
+reservation to settle before admitting another; unknown usage is never released
+to make room. The reservation is checkpointed before calling the provider.
+`costUpperBound` is separate from the normal usage estimate. A refused reservation
+stops the batch without a fresh paid retry. This bound assumes the provider honors
+the documented model context/output limits and the recorded peak prices. Other
+scenarios and explicit legacy runs retain their older admission-cap behavior.
+The output limit is part of this profile and is recorded in request evidence.
+
+Offline kernel-boundary regressions (no provider calls):
+
+```sh
+VELA_EVAL_SANDBOX_TESTS=1 bun --no-env-file test --timeout 30000 scripts/eval/isolation.test.ts scripts/eval/budget.test.ts
+```
+
+The kernel tests are opt-in for developer environments that do not permit user
+namespaces. CI installs Bubblewrap and enables them. A real isolated evaluation
+always runs its preflight.
+
 ```sh
 bun install --frozen-lockfile
 bun test scripts/eval/graders.test.ts
@@ -27,9 +75,10 @@ Options:
 | `--only C1,G2` | original fourteen | Comma-separated scenario IDs; M1 is explicit-only |
 | `--runs 3` | 3 | Repetitions per arm |
 | `--thinking max` | max | Vela thinking level; `high` is used for the additional CLI round |
-| `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
+| `--max-cost-usd 3` | 3 | Invocation allowance; isolated G7/G8 also enforce per-request peak reservations |
 | `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm (both M1 arms) |
 | `--dream on` | off | Run manual dream in the new M1/G8 arm before recall |
+| `--isolation workspace-v1` | workspace-v1 | G7/G8 filesystem boundary; `legacy` explicitly selects the historical environment |
 
 `VELA_EVAL_TODO=1` in the invoking environment loads the `todo` extension in the
 new arm when that revision provides it. Revisions without the extension (the old

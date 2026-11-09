@@ -15,6 +15,8 @@ export interface Usage {
   requests: number
   unknown: number
   cost: number
+  /** Known usage plus full peak reservations for requests whose usage is unknown. */
+  costUpperBound?: number
 }
 export const emptyUsage = (): Usage => ({
   input: 0,

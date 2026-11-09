@@ -9,7 +9,7 @@ import { type Attempt, emptyUsage, pricing, table } from './report.ts'
 import { baselineCommit, compactionFixture, OLD_COMMIT } from './scenarios.ts'
 
 const help =
-  'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>] [--dream on|off]'
+  'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>] [--dream on|off] [--isolation workspace-v1|legacy]'
 // Preserve network routing without copying arbitrary user environment or credentials.
 function networkEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -55,6 +55,7 @@ export function options(args: string[]) {
     runs: 3,
     thinking: 'max',
     dream: false,
+    isolation: 'workspace-v1' as 'workspace-v1' | 'legacy',
     maxCost: 3,
     repo: resolve(dirname(fileURLToPath(import.meta.url)), '../..'),
   }
@@ -64,6 +65,11 @@ export function options(args: string[]) {
     if (!value || value.startsWith('--'))
       throw new Error(`Missing value for ${flag}`)
     switch (flag) {
+      case '--isolation':
+        if (value !== 'workspace-v1' && value !== 'legacy')
+          throw new Error('Invalid --isolation profile')
+        result.isolation = value
+        break
       case '--only': {
         const ids = value.split(',')
         if (
@@ -163,12 +169,20 @@ async function main() {
   let capped = false
   const cost = () =>
     attempts.reduce((sum, attempt) => sum + attempt.usage.cost, 0)
+  const charged = () =>
+    attempts.reduce(
+      (sum, attempt) =>
+        sum + (attempt.usage.costUpperBound ?? attempt.usage.cost),
+      0,
+    )
   const save = async () => {
     await Bun.write(
       join(root, 'results.json'),
       JSON.stringify(
         {
-          version: 1,
+          version: 2,
+          graderVersion: 'g7g8-path-v2',
+          memoryProfile: config.isolation,
           oldCommit: OLD_COMMIT,
           baselineCommits,
           newCommit: sha,
@@ -179,6 +193,7 @@ async function main() {
           remaining,
           capped,
           estimatedCost: cost(),
+          costUpperBound: charged(),
           attempts,
         },
         null,
@@ -243,7 +258,7 @@ async function main() {
             continue
           }
           for (let attempt = 1; attempt <= 2; attempt++) {
-            if (cost() >= config.maxCost) {
+            if (charged() >= config.maxCost) {
               capped = true
               break schedule
             }
@@ -273,6 +288,13 @@ async function main() {
                 run,
                 attempt,
                 thinking: config.thinking,
+                ...(['G7', 'G8'].includes(scenario) &&
+                config.isolation === 'workspace-v1'
+                  ? {
+                      isolation: 'workspace-v1',
+                      budgetUsd: config.maxCost - charged(),
+                    }
+                  : {}),
                 dream:
                   config.dream &&
                   arm === 'new' &&
@@ -315,7 +337,13 @@ async function main() {
                   checks: [],
                   usage: await Bun.file(join(artifactDir, 'usage.json'))
                     .json()
-                    .catch(() => ({ ...emptyUsage(), unknown: 1 })),
+                    .catch(() => ({
+                      ...emptyUsage(),
+                      unknown: 1,
+                      ...(workerConfig.budgetUsd !== undefined
+                        ? { costUpperBound: workerConfig.budgetUsd }
+                        : {}),
+                    })),
                   durationMs: 0,
                   sessionFiles: [],
                   finalChars: 0,
@@ -325,6 +353,14 @@ async function main() {
               attempts.push(result)
               if (result.status !== 'error' || attempt === 2) remaining--
               await save()
+              if (
+                result.reason === 'Evaluation budget exhausted' ||
+                result.reason ===
+                  'Provider usage exceeded the evaluation reservation contract'
+              ) {
+                capped = true
+                break schedule
+              }
               console.error(
                 `${scenario}/${arm}/${run}/attempt-${attempt}: ${result.status}`,
               )

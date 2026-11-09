@@ -36,10 +36,12 @@ jobs:
         with:
           node-version: 22.18.0
       # grep / find run ripgrep / fd (Ubuntu names fd `fdfind`; Vela looks for both)
-      - run: sudo apt-get install -y ripgrep fd-find
+      - run: sudo apt-get install -y ripgrep fd-find bubblewrap
       - run: bun install --frozen-lockfile
       # test/live needs a real model and doesn't run in CI (bun run test covers unit + e2e only)
       - name: Test
+        env:
+          VELA_EVAL_SANDBOX_TESTS: '1'
         run: bun run test
       - name: Typecheck
         run: bun run typecheck
