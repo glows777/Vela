@@ -5,12 +5,13 @@ This opt-in Bun runner measures real Vela sessions against DeepSeek. It is outsi
 The issue and approved plan are [#203](https://github.com/glows777/Vela/issues/203)
 and [Claude's corrections](https://github.com/glows777/Vela/issues/203#issuecomment-6413801436).
 
-G7/G8 now default to the versioned `workspace-v1` isolation profile. It requires
-Linux, `bwrap` (Bubblewrap), and permitted user namespaces. The worker checks that
+G7/G8 retain the portable `legacy` execution environment by default, including on
+macOS. This default is not a filesystem sandbox. `--isolation workspace-v1`
+explicitly selects the versioned isolation profile; it requires Linux, `bwrap`
+(Bubblewrap), and permitted user namespaces. The worker checks that
 workspace files are readable and a private artifact canary is not readable **before
 any model request**. An unavailable boundary is an error, never an unconfined retry.
-`--isolation legacy` explicitly selects the earlier execution environment for
-historical investigation; it must not be described as isolated.
+An explicitly requested boundary never silently falls back to `legacy`.
 
 In `workspace-v1`, disk tools retain their revision-local names, schemas and native
 implementations, but execute without network access in a filesystem containing the
@@ -78,7 +79,7 @@ Options:
 | `--max-cost-usd 3` | 3 | Invocation allowance; isolated G7/G8 also enforce per-request peak reservations |
 | `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm (both M1 arms) |
 | `--dream on` | off | Run manual dream in the new M1/G8 arm before recall |
-| `--isolation workspace-v1` | workspace-v1 | G7/G8 filesystem boundary; `legacy` explicitly selects the historical environment |
+| `--isolation workspace-v1` | legacy | Opt in to the Linux G7/G8 filesystem boundary; omitted or `legacy` retains the portable historical environment |
 
 `VELA_EVAL_TODO=1` in the invoking environment loads the `todo` extension in the
 new arm when that revision provides it. Revisions without the extension (the old

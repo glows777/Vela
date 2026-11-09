@@ -21,12 +21,22 @@ import type { ToolContext } from '../../packages/core/src/tools/registry.ts'
 import { requestReservation } from './budget.ts'
 import { type Evidence, grade } from './graders.ts'
 import { MemoryIsolation } from './isolation.ts'
+import { options } from './run.ts'
 import { command, runAttempt, type WorkerConfig } from './worker.ts'
 
 const workspace =
   '/tmp/.vela-eval/run/attempt/data/channels/lark-oc_group/workspace'
 const runtime =
   process.env.VELA_EVAL_TEST_RUNTIME ?? resolve(import.meta.dir, '../..')
+
+test('G7/G8 keep the portable default and require an explicit isolation profile', () => {
+  expect(options(['--only', 'G7,G8']).isolation).toBe('legacy')
+  expect(options(['--isolation', 'workspace-v1']).isolation).toBe(
+    'workspace-v1',
+  )
+  expect(options(['--isolation', 'legacy']).isolation).toBe('legacy')
+})
+
 const evidence = (command: string): Evidence => ({
   answers: ['kestrel'],
   calls: [

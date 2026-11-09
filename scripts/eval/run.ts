@@ -55,7 +55,7 @@ export function options(args: string[]) {
     runs: 3,
     thinking: 'max',
     dream: false,
-    isolation: 'workspace-v1' as 'workspace-v1' | 'legacy',
+    isolation: 'legacy' as 'workspace-v1' | 'legacy',
     maxCost: 3,
     repo: resolve(dirname(fileURLToPath(import.meta.url)), '../..'),
   }
