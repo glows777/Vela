@@ -1,5 +1,4 @@
 import { dirname, relative, resolve } from 'node:path'
-import type { IsolationEvidence } from './isolation.ts'
 
 export const scenarioIds = [
   'C1',
@@ -36,13 +35,7 @@ export interface Evidence {
   memoryEntries?: { name: string; content: string }[]
   /** Memory custom messages actually injected into the recall topic. */
   recallMemory?: string[]
-  recallPaths?: {
-    workspace: string
-    artifactDir: string
-    globalMemory?: string
-  }
-  recallIdentity?: { sessionId: string; topicRootId: string }
-  isolation?: IsolationEvidence
+  recallPaths?: { workspace: string; artifactDir: string }
   topics: string[]
   compactions: number[]
   files: Record<string, string>
@@ -157,8 +150,7 @@ const memoryPaths = (e: Evidence) =>
   e.recallPaths
     ? [
         resolve(e.recallPaths.workspace, '../memory'),
-        e.recallPaths.globalMemory ??
-          resolve(e.recallPaths.artifactDir, 'data/memory'),
+        resolve(e.recallPaths.artifactDir, 'data/memory'),
       ]
     : []
 
@@ -181,34 +173,13 @@ function contaminated(call: Call, e: Evidence): boolean {
   return diskPaths(call).some((path) => {
     const absolute = resolve(e.recallPaths?.workspace ?? '.', path)
     if (memoryPaths(e).some((root) => within(root, absolute))) return false
-    // Paging this topic's tool output is legitimate, but it is not a memory source.
-    const currentSession =
-      e.recallIdentity?.sessionId.replace(/^feishu-/, 'lark-') ??
-      call.sessionId?.replace(/^feishu-/, 'lark-')
-    const ownResults =
-      e.isolation?.phases.recall.filter(
-        (row) => row.sessionId?.replace(/^feishu-/, 'lark-') === currentSession,
-      ) ?? []
-    if (
-      ownResults.some(
-        (row) =>
-          typeof row.resultsDir === 'string' &&
-          within(row.resultsDir, absolute),
-      )
-    )
-      return false
-    if (e.recallPaths && within(e.recallPaths.workspace, absolute)) {
-      const tail = relative(e.recallPaths.workspace, absolute)
-      if (
-        !/(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|(?:feishu|lark)-[^/]*\.jsonl/u.test(
-          tail,
-        )
-      )
-        return false
-    }
+    const reference =
+      e.recallPaths && within(e.recallPaths.workspace, absolute)
+        ? relative(e.recallPaths.workspace, absolute)
+        : path
     if (
       /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|(?:feishu|lark)-[^/]*\.jsonl/u.test(
-        path,
+        reference,
       )
     )
       return true
@@ -545,16 +516,13 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
           .filter(
             (item) =>
               item.scope === 'topic' &&
-              item.topicRootId ===
-                (e.recallIdentity?.topicRootId ?? `${id.toLowerCase()}_recall`),
+              item.topicRootId === `${id.toLowerCase()}_recall`,
           )
           .at(-1)?.text ?? ''
       const recallCalls = e.calls.filter(
         (call) =>
           call.phase === 1 &&
-          call.sessionId ===
-            (e.recallIdentity?.sessionId.replace(/^feishu-/, 'lark-') ??
-              `lark-oc_group-${id.toLowerCase()}_recall`),
+          call.sessionId === `lark-oc_group-${id.toLowerCase()}_recall`,
       )
       check(
         'recall',

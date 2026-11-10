@@ -1,20 +1,10 @@
 import { existsSync } from 'node:fs'
-import {
-  appendFile,
-  cp,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-} from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readdir, readFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
 import type { VelaEvent } from '@glows777/vela-core'
 import { type LanguageModel, wrapLanguageModel } from 'ai'
-import { isolatedOutputLimit, RequestBudget } from './budget.ts'
 import {
   type Call,
   chars,
@@ -24,7 +14,6 @@ import {
   repetition,
   type ScenarioId,
 } from './graders.ts'
-import { MemoryIsolation } from './isolation.ts'
 import { runtimePaths } from './layout.ts'
 import { type Attempt, emptyUsage, pricing } from './report.ts'
 import {
@@ -46,9 +35,6 @@ export interface WorkerConfig {
   thinking: string
   /** Opt-in treatment; historical G8 baseline never runs dream. */
   dream?: boolean
-  /** Versioned evaluator filesystem boundary; never changes product memory policy. */
-  isolation?: 'workspace-v1'
-  budgetUsd?: number
 }
 async function load<T>(runtime: string, file: string): Promise<T> {
   return import(pathToFileURL(join(runtime, file)).href)
@@ -72,10 +58,6 @@ export const errorReason = (error: unknown): string => {
       return 'Summary quotation validation failed'
     if (error.message.startsWith('faux:'))
       return 'Offline model script exhausted'
-    if (error.message.startsWith('Evaluation budget exhausted'))
-      return 'Evaluation budget exhausted'
-    if (error.message.startsWith('Provider usage exceeded'))
-      return 'Provider usage exceeded the evaluation reservation contract'
   }
   // Provider errors may contain request bodies/headers. Never serialize their message, stack or object.
   return `${item?.name ?? 'Error'}${item?.statusCode ? ` HTTP ${item.statusCode}` : ''}`
@@ -121,10 +103,6 @@ export async function runAttempt(
     validation: {},
   }
   const usage = emptyUsage()
-  const budget =
-    config.isolation && config.budgetUsd !== undefined
-      ? new RequestBudget(config.budgetUsd)
-      : undefined
   const result: Attempt = {
     ...config,
     status: 'error',
@@ -137,12 +115,6 @@ export async function runAttempt(
     toolCalls: 0,
   }
   await mkdir(config.artifactDir, { recursive: true })
-  if (config.isolation && !['G7', 'G8'].includes(config.scenario))
-    throw new Error('Workspace isolation is supported only for G7/G8')
-  const isolatedState = config.isolation
-    ? await mkdtemp(join(tmpdir(), 'session-'))
-    : undefined
-  let phase = 0
   let writing = Promise.resolve()
   const checkpoint = () => {
     const snapshot = JSON.stringify(usage)
@@ -151,14 +123,7 @@ export async function runAttempt(
     })
     return writing
   }
-  const collect = (
-    value: LanguageModelV4Usage | undefined,
-    ticket?: symbol,
-  ) => {
-    if (budget && ticket) {
-      budget.settle(ticket, value)
-      usage.costUpperBound = budget.upperBound
-    }
+  const collect = (value: LanguageModelV4Usage | undefined) => {
     if (value?.inputTokens.total != null && value.outputTokens.total != null) {
       usage.unknown--
       const input = value.inputTokens.total
@@ -175,59 +140,33 @@ export async function runAttempt(
     }
     void checkpoint()
   }
-  const begin = async (kind: 'main' | 'summary') => {
-    const ticket = await budget?.admit()
-    if (budget) usage.costUpperBound = budget.upperBound
+  const begin = (kind: 'main' | 'summary') => {
     usage.requests++
     usage[kind]++
     // Remains unknown if the call errors, is cancelled, or never reports usage.
     usage.unknown++
-    // Persist the reservation before a request can reach the provider. A killed
-    // worker must not leave the parent with an older, cheaper usage checkpoint.
-    await checkpoint()
-    return ticket
+    void checkpoint()
   }
   const wrap = (model: LanguageModel) =>
     wrapLanguageModel({
       model: model as LanguageModelV4,
       middleware: {
         specificationVersion: 'v4',
-        async transformParams({ params }) {
-          return budget
-            ? { ...params, maxOutputTokens: isolatedOutputLimit }
-            : params
-        },
-        async wrapGenerate({ doGenerate, params }) {
-          const ticket = await begin('summary')
-          if (config.isolation)
-            await appendFile(
-              join(config.artifactDir, 'requests.jsonl'),
-              `${JSON.stringify({ phase, kind: 'summary', prompt: params.prompt, tools: params.tools, reasoning: params.reasoning, maxOutputTokens: params.maxOutputTokens })}\n`,
-            )
+        async wrapGenerate({ doGenerate }) {
+          begin('summary')
           const response = await doGenerate()
-          if (budget && response.finishReason.unified === 'length')
-            evidence.validation.outputLimited = true
-          collect(response.usage, ticket)
+          collect(response.usage)
           return response
         },
-        async wrapStream({ doStream, params }) {
-          const ticket = await begin('main')
-          if (config.isolation)
-            await appendFile(
-              join(config.artifactDir, 'requests.jsonl'),
-              `${JSON.stringify({ phase, kind: 'main', prompt: params.prompt, tools: params.tools, reasoning: params.reasoning, maxOutputTokens: params.maxOutputTokens })}\n`,
-            )
+        async wrapStream({ doStream }) {
+          begin('main')
           const response = await doStream()
           return {
             ...response,
             stream: response.stream.pipeThrough(
               new TransformStream({
                 transform(part, controller) {
-                  if (part.type === 'finish') {
-                    if (budget && part.finishReason.unified === 'length')
-                      evidence.validation.outputLimited = true
-                    collect(part.usage, ticket)
-                  }
+                  if (part.type === 'finish') collect(part.usage)
                   controller.enqueue(part)
                 },
               }),
@@ -412,9 +351,8 @@ export async function runAttempt(
   }
   const files = fixtures(config.scenario)
   const exitScenario = ['G6', 'G7', 'G8'].includes(config.scenario)
-  const topicRoots = config.isolation
-    ? ['topic_1', 'topic_2']
-    : config.scenario === 'G6'
+  const topicRoots =
+    config.scenario === 'G6'
       ? ['g6_b', 'g6_a']
       : config.scenario === 'G8'
         ? ['g8_store', 'g8_recall']
@@ -436,9 +374,7 @@ export async function runAttempt(
       .catch(() => '')
   const t = createTestVela({
     cwd: config.cwd,
-    dataDir: isolatedState
-      ? join(isolatedState, 'data')
-      : join(config.artifactDir, 'data'),
+    dataDir: join(config.artifactDir, 'data'),
     model: 'eval/deepseek-flash',
     providers,
     thinkingLevel: config.thinking as 'max',
@@ -452,6 +388,7 @@ export async function runAttempt(
         ? { tools: ['read_file', 'write_file', 'list_directory'] }
         : undefined,
   })
+  let phase = 0
   const recallScenario = config.scenario === 'G7' || config.scenario === 'G8'
   const workspace = scope
     ? scope.groupWorkspace(t.dataDir, paths.channelName, 'oc_group')
@@ -465,13 +402,7 @@ export async function runAttempt(
     evidence.recallPaths = {
       workspace,
       artifactDir: resolve(config.artifactDir),
-      ...(config.isolation ? { globalMemory: join(t.dataDir, 'memory') } : {}),
     }
-    if (config.isolation)
-      evidence.recallIdentity = {
-        sessionId: recallSessionId,
-        topicRootId: topicRoots[1]!,
-      }
     evidence.recallMemory = []
   }
   let channelStarted = false
@@ -536,7 +467,6 @@ export async function runAttempt(
       if (call) {
         call.success = !event.isError
         if (
-          config.isolation ||
           (recallScenario &&
             (sessionId === recallSessionId || call.name === 'memory')) ||
           (config.scenario === 'G6' && sessionId.endsWith('-g6_b')) ||
@@ -579,16 +509,6 @@ export async function runAttempt(
       if (!committed.ok) throw new Error('Fixture preparation failed')
     }
     await t.vela.ready()
-    if (config.isolation) {
-      const isolation = new MemoryIsolation(
-        config.runtime,
-        workspace,
-        t.dataDir,
-        config.artifactDir,
-      )
-      evidence.isolation = isolation.evidence
-      await isolation.install(t.session.registry, () => phase)
-    }
     if (fake && eventFactory) {
       await t.vela.startChannels()
       if (exitScenario) {
@@ -827,17 +747,6 @@ mock.module(${JSON.stringify(modulePath)}, () => ({ ...actual, sumPositive(numbe
       result.reason = `Cleanup: ${errorReason(error)}`
     })
     server?.stop(true)
-    if (isolatedState) {
-      try {
-        await cp(t.dataDir, join(config.artifactDir, 'data'), {
-          recursive: true,
-        })
-        await rm(isolatedState, { recursive: true, force: true })
-      } catch {
-        result.status = 'error'
-        result.reason = 'Could not retain isolated evaluation state'
-      }
-    }
     const sessions = join(config.artifactDir, 'data', 'sessions')
     const entries = await readdir(sessions, { withFileTypes: true }).catch(
       () => [],

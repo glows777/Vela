@@ -7,7 +7,6 @@
         "scripts/*.ts",
         "scripts/eval/run.ts",
         "scripts/eval/worker.ts",
-        "scripts/eval/sandbox-tool.ts",
         "examples/**/*.ts",
         ".skills/**/scripts/*.ts",
         "test/**/*.test.ts",
