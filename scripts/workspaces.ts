@@ -44,6 +44,13 @@ export async function readWorkspaces(
     throw new Error('workspace versions must remain lockstep')
   return packages
 }
+/** npm shows the packed README, so its repository links name the released tag, not main. */
+export function releaseReadme(text: string, version: string) {
+  return text.replaceAll(
+    'github.com/glows777/Vela/tree/main/',
+    `github.com/glows777/Vela/tree/v${version}/`,
+  )
+}
 export async function packWorkspaces(root: string, work: string) {
   const packages = await readWorkspaces(root)
   const known = new Map(packages.map((p) => [p.name, p.version]))
@@ -84,6 +91,11 @@ export async function packWorkspaces(root: string, work: string) {
           throw error
       }
     }
+    const readme = join(dir, 'README.md')
+    await writeFile(
+      readme,
+      releaseReadme(await readFile(readme, 'utf8'), pkg.version),
+    )
     await writeFile(
       join(dir, 'package.json'),
       JSON.stringify(manifest, null, 2) + '\n',
