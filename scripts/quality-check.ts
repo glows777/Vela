@@ -2,9 +2,10 @@
  * Quality ratchet: three checks that stop the codebase from getting more tangled than it is today.
  *
  * - knip reports no unused files, exports or dependencies;
- * - madge finds no circular dependencies;
+ * - madge finds no circular dependencies, including type-only imports;
  * - no file under src/ passes 800 lines, except the files that were already over it when the limit
- *   landed: each is pinned at its size that day and may only shrink.
+ *   landed: each is pinned at its size that day and may only shrink, so a ceiling that is above its
+ *   file must be lowered in the same change.
  *
  * The ceilings are numbers in this file. Lowering one is a normal edit; raising one should be
  * visible in review. `bun run quality` runs this locally, CI runs it after lint.
@@ -28,9 +29,9 @@ const MAX_CYCLES = 0
 
 /** Files that were already over the limit when the ratchet landed, pinned at their size that day. */
 const LINE_CEILINGS = new Map<string, number>([
-  ['packages/core/src/vela-session.ts', 1562],
+  ['packages/core/src/vela-session.ts', 1560],
   ['packages/vela/src/cli/interactive.ts', 1401],
-  ['packages/core/src/tools/registry.ts', 808],
+  ['packages/core/src/tools/registry.ts', 803],
 ])
 
 const failures: string[] = []
@@ -99,7 +100,7 @@ async function checkCycles() {
     baseDir: ROOT,
     fileExtensions: ['ts'],
     tsConfig: { compilerOptions: { baseUrl: ROOT, paths } },
-    detectiveOptions: { ts: { skipTypeImports: true } },
+    detectiveOptions: { ts: { skipTypeImports: false } },
   })
   const cycles: string[][] = graph.circular()
   if (cycles.length <= MAX_CYCLES) {
@@ -127,6 +128,7 @@ async function checkCycles() {
 
 async function checkFileSizes() {
   const grown: string[] = []
+  const shrunk: string[] = []
   const untracked: string[] = []
   let largest: { path: string; lines: number; ceiling: number } | undefined
   let files = 0
@@ -148,11 +150,15 @@ async function checkFileSizes() {
         grown.push(
           `${path}: ${lines} lines, ${lines - ceiling} over its ceiling of ${ceiling}`,
         )
+      else if (lines < ceiling)
+        shrunk.push(
+          `${path}: ${lines} lines, ${ceiling - lines} under its ceiling of ${ceiling}; lower the ceiling to ${lines}`,
+        )
       if (!largest || lines > largest.lines) largest = { path, lines, ceiling }
     }
 
-  const oversized = [...grown, ...untracked].sort()
-  if (oversized.length === 0) {
+  const outside = [...grown, ...shrunk, ...untracked].sort()
+  if (outside.length === 0) {
     const closest = largest
       ? `, largest ${largest.path} at ${largest.lines}/${largest.ceiling}`
       : ''
@@ -160,10 +166,15 @@ async function checkFileSizes() {
     return
   }
 
-  const details = [...oversized, '']
+  const details = [...outside, '']
   if (grown.length > 0) {
     details.push(
       'Split the file and lower its ceiling in scripts/quality-check.ts; ceilings only come down.',
+    )
+  }
+  if (shrunk.length > 0) {
+    details.push(
+      'Lower each ceiling in scripts/quality-check.ts to the size shown; ceilings only come down.',
     )
   }
   if (untracked.length > 0) {
@@ -173,7 +184,7 @@ async function checkFileSizes() {
   }
   report(
     false,
-    `file size: ${oversized.length} file(s) over their limit`,
+    `file size: ${outside.length} file(s) outside their limits`,
     details,
   )
 }

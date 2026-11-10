@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   ExtensionAPI,
@@ -7,6 +6,7 @@ import type {
 import { z } from 'zod'
 import { writeAtomicJson } from './atomic-json.ts'
 import type { ChannelDirectory, ChannelRecord } from './directory.ts'
+import { readJsonIfExists } from './json-file.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
   ChannelDefinition,
@@ -98,24 +98,18 @@ export class ChannelEvents {
 
   private async read(): Promise<void> {
     if (!this.path) return
-    let text: string
-    try {
-      text = await readFile(this.path, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-      throw error
-    }
-    try {
-      const data = subscriptionsSchema.parse(JSON.parse(text))
-      if (
-        new Set(data.subscriptions.map((r) => r.id)).size !==
-        data.subscriptions.length
-      )
-        throw new Error('Duplicate subscription id')
-      this.records = data.subscriptions
-    } catch (cause) {
-      throw new Error(`Invalid channel subscriptions ${this.path}`, { cause })
-    }
+    const invalid = (cause: unknown) =>
+      new Error(`Invalid channel subscriptions ${this.path}`, { cause })
+    const data = await readJsonIfExists(this.path, subscriptionsSchema, {
+      parse: invalid,
+    })
+    if (!data) return
+    if (
+      new Set(data.subscriptions.map((r) => r.id)).size !==
+      data.subscriptions.length
+    )
+      throw invalid(new Error('Duplicate subscription id'))
+    this.records = data.subscriptions
   }
 
   private track(task: Promise<void>): Promise<void> {

@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { LanguageModel } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
 import { memory } from '../extensions/memory/index.ts'
@@ -18,6 +18,7 @@ import type { VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { ProviderDefinition, ThinkingLevel } from '../models/index.ts'
 import type { SessionStorage } from '../session/storage.ts'
+import { resolveShellPath } from '../shell-path.ts'
 import { createVela, type Vela } from '../vela.ts'
 import type {
   PromptOptions,
@@ -203,23 +204,10 @@ export function createTestVela(
 /** Core tests are also run directly, without the CLI's shell-path setup. */
 function resolveTestShellPath(): string | undefined {
   if (process.platform !== 'win32') return
-  const env = process.env
-  const candidates = [
-    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
-    env['ProgramFiles(x86)'] &&
-      join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
-    env.ProgramW6432 && join(env.ProgramW6432, 'Git', 'bin', 'bash.exe'),
-    env.LOCALAPPDATA &&
-      join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
-  ].filter((candidate): candidate is string => Boolean(candidate))
-
-  for (const directory of (env.PATH ?? '').split(delimiter)) {
-    if (!directory) continue
-    candidates.push(join(directory, 'bash.exe'))
-    if (/(?:^|[\\/])cmd[\\/]?$/i.test(directory))
-      candidates.push(join(dirname(directory), 'bin', 'bash.exe'))
-  }
-  return candidates.find((candidate) => existsSync(candidate)) ?? 'bash.exe'
+  return resolveShellPath(undefined, {
+    platform: process.platform,
+    env: process.env,
+  })
 }
 
 export type TestVela = ReturnType<typeof createTestVela>

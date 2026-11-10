@@ -3,6 +3,7 @@ import type { ModelInfo, VelaSession } from '@glows777/vela-core'
 import type { Vela } from '../../vela.ts'
 import { nextModel, scopedModels } from '../model-cycle.ts'
 import { dialogBox, errorMessage } from './components.ts'
+import { settleOnce } from './input-dialogs.ts'
 import { SearchSelect } from './search-select.ts'
 import { selectListTheme } from './theme.ts'
 
@@ -66,16 +67,7 @@ export async function pickModel(
       selectListTheme,
       current,
     )
-    let closed = false
-    const close = (value: string | undefined) => {
-      if (closed) return
-      closed = true
-      signal?.removeEventListener('abort', abort)
-      done(value)
-    }
-    const abort = () => close(undefined)
-    if (signal?.aborted) queueMicrotask(abort)
-    else signal?.addEventListener('abort', abort, { once: true })
+    const close = settleOnce(signal, done)
     list.onSelect = (item) => close(item.value)
     list.onCancel = () => close(undefined)
     return {
