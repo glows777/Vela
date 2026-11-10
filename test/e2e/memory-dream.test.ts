@@ -102,41 +102,81 @@ test('a real memory save and later correction consolidate offline with provenanc
   expect(notices(t)).toMatch(/inbox/i)
 })
 
-test('dream instructs the model that only user messages are evidence', async () => {
-  const invented = 'Changes must be reviewed and ready by end of day Friday.'
+for (const inboxKind of ['collected', 'legacy'] as const) {
+  test(`dream excludes assistant-only requirements from ${inboxKind} evidence`, async () => {
+    const user =
+      'Deploys have moved to Monday permanently. Draft a short announcement of the new schedule.'
+    const invented =
+      "Merge and release prep must be ready before Monday's deploy window."
+    const assistant = `Deploys now happen on Monday permanently. ${invented}`
+    const t = createTestVela({
+      responses: inboxKind === 'collected' ? [fauxText(assistant)] : [],
+      generate: [
+        (req) => {
+          // Replay the observed copying failure only when its source is exposed.
+          const copied = req.lastUserText.includes(invented)
+            ? ` ${invented}`
+            : ''
+          return result([
+            {
+              ...update('default'),
+              content: `Deploys happen on Monday permanently.${copied}`,
+            },
+          ])
+        },
+      ],
+    })
+    new MemoryStore(t.dataPath('memory')).save(deploy)
+    if (inboxKind === 'collected') await t.run(user)
+    else {
+      const dir = t.dataPath('memory/.dream')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, 'inbox.jsonl'),
+        `${JSON.stringify({ id: 'legacy', sessionId: 'default', time: Date.now(), user, assistant, tools: ['memory'] })}\n`,
+      )
+    }
+    expect(await t.readData('memory/.dream/inbox.jsonl')).toContain(invented)
+    const before = JSON.stringify(t.session.messages)
+    await t.run('/dream')
+    const note = await t.readData('memory/project_deploy-day.md')
+    expect(note).toContain('Deploys happen on Monday permanently.')
+    expect(note).not.toContain(invented)
+    const call = t.model.calls.find((item) => item.kind === 'generate')!
+    expect(call.system).toContain('User messages are the evidence')
+    const input = JSON.parse(call.lastUserText)
+    expect(input.inbox[0].user).toBe(user)
+    expect(input.inbox[0].sessionId).toBe('default')
+    expect(input.inbox[0]).not.toHaveProperty('assistant')
+    expect(call.lastUserText).not.toContain(invented)
+    expect(JSON.stringify(t.session.messages)).toBe(before)
+    expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+  })
+}
+
+test('assistant-only keywords cannot select dream notes over the budget', async () => {
+  let sentNotes: { filename: string }[] = []
   const t = createTestVela({
-    responses: [fauxText(invented)],
+    responses: [fauxText('Nebularium')],
     generate: [
       (req) => {
-        const input = JSON.parse(req.lastUserText) as {
-          inbox: { sessionId: string }[]
-        }
-        return result([
-          {
-            action: 'create',
-            filename: 'project_review-deadline.md',
-            name: 'review-deadline',
-            description: 'Review deadline',
-            type: 'project',
-            content: invented,
-            reason: 'The assistant stated the deadline',
-            source: input.inbox[0]!.sessionId,
-          },
-        ])
+        sentNotes = JSON.parse(req.lastUserText).notes
+        return result()
       },
     ],
   })
-  await t.run('Prepare the release notes')
+  const store = new MemoryStore(t.dataPath('memory'))
+  for (let i = 0; i < 40; i++)
+    store.save({
+      name: `legacy-${String(i).padStart(3, '0')}`,
+      description: i === 39 ? 'Nebularium' : 'Deployment checklist',
+      type: 'project',
+      content: 'Keep the verified release checklist. '.repeat(60).trim(),
+    })
+  expect(JSON.stringify(store.list()).length).toBeGreaterThan(60_000)
+  await t.run('Qwertyuiopasdfghjkl')
   await t.run('/dream')
-  const call = t.model.calls.find((item) => item.kind === 'generate')!
-  expect(call.system).toContain('User messages are the evidence')
-  expect(call.system).toContain(
-    'a claim that appears only in assistant text is never saved as a fact',
-  )
-  const input = JSON.parse(call.lastUserText) as {
-    inbox: { assistant: string }[]
-  }
-  expect(input.inbox[0]?.assistant).toBe(invented)
+  expect(sentNotes[0]?.filename).toBe('project_legacy-000.md')
 })
 
 test('shared groups consolidate only their own inbox and never modify global or another group', async () => {

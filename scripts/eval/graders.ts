@@ -286,11 +286,11 @@ function bashSection(answer: string): string {
 
 // Friday passes only as the old deploy day; a mention that leaves it current fails.
 const OLD_FRIDAY =
-  /\b(?:not(?!\s+(?:only|just)\b)\s+(?:(?!\bfrom\b)\w+\s+){0,2}|no longer\s+(?:\w+\s+){0,2}|never\s+(?:\w+\s+){0,2}|from\s+(?:on\s+)?|was\s+(?:on\s+)?|were\s+(?:on\s+)?|instead of\s+(?:on\s+)?|rather than\s+(?:on\s+)?|previously\s+(?:,\s*)?|formerly\s+(?:,\s*)?|used to\s+(?:\w+\s+){0,2})Friday\b|\bFriday\s+(?:used to|had been)\b|\bFriday\s+was\s+(?:the\s+)?(?:old|previous|prior|former)\b|\bFriday\s+(?:is|was)\s+(?:not|no longer)\b|\bFriday\b\s*(?:→|->|\bto\b)\s*Monday\b/gi
+  /\b(?:not(?!\s+(?:only|just)\b)\s+(?:(?!\bfrom\b)\w+\s+){0,2}|no longer\s+(?:\w+\s+){0,2}|never\s+(?:\w+\s+){0,2}|from\s+(?:on\s+)?(?:(?:the\s+)?(?:old|previous|prior|former)\s+)?|was\s+(?:on\s+)?|were\s+(?:on\s+)?|instead of\s+(?:on\s+)?|rather than\s+(?:on\s+)?|previously\s+(?:,\s*)?|formerly\s+(?:,\s*)?|used to\s+(?:\w+\s+){0,2})Friday\b|\bFriday\s+(?:deploy\s+)?schedule\s+(?:is|was|has been)\s+(?:discontinued|retired)\b|\bFriday\s+(?:used to|had been)\b|\bFriday\s+was\s+(?:the\s+)?(?:old|previous|prior|former)\b|\bFriday\s+(?:is|was)\s+(?:not|no longer)\b|\bFriday\b\s*(?:→|->|\bto\b)\s*Monday\b/gi
 
 // The correction needs an affirmative Monday schedule; a negated Monday or a negated move fails.
 const NEGATED_MONDAY =
-  /\b(?:\w+[’']t|not|never|except)\b(?:(?!\b(?:Friday|Monday)\b)[^.!?,;\n]){0,20}\bMonday\b|\b(?:\w+[’']t|not|never|no longer)\b[^.!?,;\n]{0,30}\b(?:mov(?:e|es|ed|ing)|chang(?:e|es|ed|ing)|shift(?:s|ed|ing)?|switch(?:es|ed|ing)?|go(?:es|ing)?)\b[^.!?,;\n]{0,30}Monday\b/i
+  /\b(?:\w+[’']t|not|never|except)\b(?:(?!\b(?:Friday|Monday)\b)[^.!?,;\n]){0,20}\bMonday\b|\b(?:\w+[’']t|not|never|no longer)\b[^.!?,;\n]{0,30}\b(?:mov(?:e|es|ed|ing)|chang(?:e|es|ed|ing)|shift(?:s|ed|ing)?|switch(?:es|ed|ing)?|go(?:es|ing)?)\b[^.!?,;\n]{0,60}Monday\b/i
 
 function deployDayIsMonday(text: string): boolean {
   return (

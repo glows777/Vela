@@ -204,6 +204,30 @@ test.each([
   ['Monday is the deploy day; Friday was the old day.', true],
   ['Monday it is. Friday is no longer the deploy day.', true],
   ['Deploys happen on Monday.', true],
+  [
+    'Deploys happen on Monday. This is a permanent change; the previous Friday deploy schedule is discontinued.',
+    true,
+  ],
+  [
+    "According to stored project memory, deploys happen on **Monday** — a permanent change from the previous Friday schedule. Note: file/search tools aren't available in this session, so I couldn't verify this against the repo.",
+    true,
+  ],
+  [
+    'Deploys happen on Monday. The previous Friday deploy schedule is not discontinued.',
+    false,
+  ],
+  [
+    'Monday was proposed; the previous Friday deploy schedule is still current.',
+    false,
+  ],
+  [
+    'Deploys are not moving from the previous Friday schedule to Monday.',
+    false,
+  ],
+  [
+    'Deploys happen on Monday, a permanent change from the previous Friday schedule. Deploys still happen on Friday.',
+    false,
+  ],
   ['Deploys happen on Friday and Monday.', false],
   ['Deploys happen on Monday and are still on Friday.', false],
   ['Deploys are not moving from Friday to Monday.', false],

@@ -58,7 +58,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
-- **Dream no longer saves claims that appear only in assistant text.** The inbox still records the final assistant reply as context, but user messages are the evidence for memory changes ([#309](https://github.com/glows777/Vela/issues/309)).
+- **Dream evidence excludes assistant suggestions.** Consolidation now sends only user text and turn metadata from its inbox and selects relevant notes using user text alone, including for older inbox records. This prevents an assistant-only release-preparation suggestion from being passed back as evidence ([#309](https://github.com/glows777/Vela/issues/309)).
 
 - G7/G8 evaluation evidence retains task-topic memory tool results, so failed save responses are not lost while diagnosing an empty pre-recall snapshot. Scoring and memory behavior are unchanged.
 
