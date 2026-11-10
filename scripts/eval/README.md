@@ -281,7 +281,9 @@ write actions, so they cannot silently repair the fixture. Memory remains enable
 for inbox collection. The new arm calls SDK `session.prompt('/dream')`; the old control does
 not. A fresh memory-only session asks the deployment day, with neither weekday
 in its question. The two checks require a persisted Monday correction and a
-Monday recall answer, excluding Friday in each. Snapshot evidence is saved as
+Monday recall answer. Friday may be mentioned as the old schedule, but not as a
+current deploy day. Negated or explicitly rejected/cancelled moves to Monday do
+not establish the correction. Snapshot evidence is saved as
 `memory-after-correction.json`. A useful comparison passes with dream and fails
 without it; report actual results rather than assuming that outcome.
 

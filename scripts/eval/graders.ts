@@ -295,10 +295,10 @@ const NEGATED_MONDAY =
 // A failed move cannot establish Monday. Bind the outcome to the transition,
 // not an unrelated rejected request elsewhere in the same answer.
 const TRANSITION_FRIDAY = String.raw`(?:the\s+)?(?:(?:old|previous|prior|former)\s+)?Friday(?:\s+(?:deploy\s+)?schedule)?`
-const MONDAY_TRANSITION = String.raw`\b(?:move|change|shift|switch)\s+(?:from\s+${TRANSITION_FRIDAY}\s+to\s+Monday|to\s+Monday\s+from\s+${TRANSITION_FRIDAY})\b`
-const FAILED_OUTCOME = '(?:rejected|cancelled|canceled|abandoned)'
+const MONDAY_TRANSITION = String.raw`\b(?:mov(?:e|ed)|chang(?:e|ed)|shift(?:ed)?|switch(?:ed)?)\s+(?:from\s+${TRANSITION_FRIDAY}\s+to\s+Monday|to\s+Monday\s+from\s+${TRANSITION_FRIDAY})\b`
+const FAILED_OUTCOME = '(?:rejected|cancelled|canceled|abandoned|declined)'
 const FAILED_MONDAY_TRANSITION = new RegExp(
-  String.raw`\b${FAILED_OUTCOME}\s+${MONDAY_TRANSITION}|${MONDAY_TRANSITION}\s+(?:was|is|has been)\s+${FAILED_OUTCOME}\b`,
+  String.raw`\b${FAILED_OUTCOME}\s+(?:the\s+)?${MONDAY_TRANSITION}|${MONDAY_TRANSITION}(?:,\s*but\s+that\s+(?:move|change|shift|switch))?\s+(?:was|is|has been)\s+${FAILED_OUTCOME}\b`,
   'i',
 )
 

@@ -236,6 +236,13 @@ test.each([
   ['The proposed move to Monday from Friday was rejected.', false],
   ['The proposed switch from Friday to Monday was abandoned.', false],
   ['The rejected move from Friday to Monday.', false],
+  ['We declined the move from Friday to Monday.', false],
+  ['Deploys moved from Friday to Monday, but that change was rejected.', false],
+  [
+    'Deploys moved from Friday to Monday, but the unrelated request was rejected.',
+    true,
+  ],
+  ['We declined the Tuesday move; deploys happen on Monday, not Friday.', true],
   ['The move from the previous Friday schedule to Monday was rejected.', false],
   [
     'Deploys moved from Friday to Monday, and the unrelated request was rejected.',
