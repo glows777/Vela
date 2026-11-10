@@ -225,50 +225,6 @@ pre/post-rename dispatch/topic runs with identical scenarios, models and setting
 offline injected-model runs establish routing/tool execution, not live-model
 choice or prompt-quality equivalence.
 
-### #281 reproducible offline rename comparison
-
-Use the checked-in verification script against both checkouts (Bun, Git, ripgrep
-and fd on PATH; install each checkout's frozen dependencies first):
-
-```sh
-CANDIDATE=$PWD
-SCRATCH=$(mktemp -d)
-BASELINE=$SCRATCH/before-runtime
-OUT=$SCRATCH/evidence
-mkdir -p "$OUT" "$SCRATCH/home"
-git worktree add --detach "$BASELINE" 538fd2b1bd153299ca1d639a7559bd46d4383213
-(cd "$BASELINE" && bun install --frozen-lockfile)
-bun install --frozen-lockfile
-SCRIPT=$CANDIDATE/.skills/verify-vela/scripts/dispatch-rename-eval.ts
-env -i PATH="$PATH" HOME="$SCRATCH/home" VELA_DIR="$SCRATCH/home/.vela" VELA_OFFLINE=1 \
-  bun --no-env-file "$SCRIPT" --runtime "$BASELINE" --output "$OUT/before" --prefix lark
-env -i PATH="$PATH" HOME="$SCRATCH/home" VELA_DIR="$SCRATCH/home/.vela" VELA_OFFLINE=1 \
-  bun --no-env-file "$SCRIPT" --runtime "$CANDIDATE" --output "$OUT/after" --prefix channel
-# Preserve $OUT, then remove the baseline worktree when finished.
-git worktree remove "$BASELINE"
-```
-
-The output directory must not already exist. Each run saves `results.json`,
-model-visible `G*/requests.json`, and real worker artifacts/session transcripts.
-Both use unchanged G1–G5 prompts/fixtures, the same scripted faux responses except
-renamed tool identifiers, thinking `off`, one repetition, and fake Lark transport
-through the real extension/gateway/tools. No new grader or threshold is introduced.
-Worker token/cost estimates are synthetic here, not provider usage or billing.
-
-Recorded offline comparison: **G1–G5 passed all 12 checks in both arms**. Model
-request counts were **1/3/2/2/1** in each arm; tool-call counts were **0/1/1/1/0**.
-Checks, deliveries and topic titles matched. Model-visible tool sets matched after
-the exact topic rename, with no old topic aliases and `lark_search_history`
-preserved. Baseline offline eval suite: **188 passed, 0 failed**; candidate suite
-and candidate graders against the baseline runtime: **200 passed, 0 failed**
-(the additional 12 tests cover identifier parity and routine-substitution rejection).
-
-**LIVE BLOCKED:** the required invoking-process `OPENAI_KEY` was unavailable.
-No provider requests were made. These results establish scripted dispatch/tool
-execution only, not live-model tool selection, prompt-quality equivalence or a
-live-model pass rate. The paid before/after comparison remains unverified.
-
-
 ### #306 offline memory consolidation comparison
 
 Run only after approval for the model and total budget (the command makes paid
