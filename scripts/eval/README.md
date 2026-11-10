@@ -169,6 +169,8 @@ It never asks to remember or save the fact. After that run ends and
 name. G7's explicit remember request is unchanged. Claude owns the paid G8
 `v0.4.0` baseline and posts it on [#218](https://github.com/glows777/Vela/issues/218).
 
+Foreground capture of incidental durable facts is best-effort; background [Dream consolidation](#306-offline-memory-consolidation-comparison) is the designed backstop when enabled and due, not a per-reply persistence guarantee.
+
 The G6 exit bar and each G7/G8 component require two passes in three valid runs per
 arm. Notes say `incomplete` when three valid runs are unavailable (including
 one-run pilots or errors); errors are never behavioral failures. The main G7
