@@ -1,13 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 type ObjectValue = Record<string, unknown>
@@ -149,27 +141,4 @@ export function prepareGithubSettings(
     },
   }
   return { path, secret, settings: updated }
-}
-
-/** Rename a private sibling file so failed writes cannot truncate the saved settings. */
-export function saveGithubSettings(
-  agentDir: string,
-  path: string,
-  settings: unknown,
-): void {
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 })
-  chmodSync(agentDir, 0o700)
-  const temporary = join(
-    agentDir,
-    `.settings-${randomBytes(12).toString('hex')}.tmp`,
-  )
-  try {
-    writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
-      mode: 0o600,
-      flag: 'wx',
-    })
-    renameSync(temporary, path)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
 }
