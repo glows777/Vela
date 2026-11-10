@@ -40,3 +40,14 @@ test('real source boundaries satisfy the permanent checker', async () => {
   const { checkBoundaries } = await import('../../scripts/check-boundaries.ts')
   expect(await checkBoundaries(root)).toEqual([])
 })
+
+test('packed READMEs link the released tag, not main', async () => {
+  const { releaseReadme } = await import('../../scripts/workspaces.ts')
+  for (const name of names) {
+    const text = await readFile(`${root}/packages/${name}/README.md`, 'utf8')
+    const packed = releaseReadme(text, '0.6.0-rc.1')
+    expect(packed).not.toContain('/tree/main/')
+    if (text.includes('/tree/main/'))
+      expect(packed).toContain('github.com/glows777/Vela/tree/v0.6.0-rc.1/docs')
+  }
+})
