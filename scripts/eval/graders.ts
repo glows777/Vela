@@ -288,6 +288,34 @@ function bashSection(answer: string): string {
   return section.join('\n')
 }
 
+// Friday passes only as the old deploy day; a mention that leaves it current fails.
+const OLD_FRIDAY =
+  /\b(?:not(?!\s+(?:only|just)\b)\s+(?:(?!\bfrom\b)\w+\s+){0,2}|no longer\s+(?:\w+\s+){0,2}|never\s+(?:\w+\s+){0,2}|from\s+(?:on\s+)?(?:(?:the\s+)?(?:old|previous|prior|former)\s+)?|was\s+(?:on\s+)?|were\s+(?:on\s+)?|instead of\s+(?:on\s+)?|rather than\s+(?:on\s+)?|previously\s+(?:,\s*)?|formerly\s+(?:,\s*)?|used to\s+(?:\w+\s+){0,2})Friday\b|\bFriday\s+(?:deploy\s+)?schedule\s+(?:is|was|has been)\s+(?:discontinued|retired)\b|\bFriday\s+(?:used to|had been)\b|\bFriday\s+was\s+(?:the\s+)?(?:old|previous|prior|former)\b|\bFriday\s+(?:is|was)\s+(?:not|no longer)\b|\bFriday\b\s*(?:→|->|\bto\b)\s*Monday\b/gi
+
+// The correction needs an affirmative Monday schedule; a negated Monday or a negated move fails.
+const NEGATED_MONDAY =
+  /\b(?:\w+[’']t|not|never|except)\b(?:(?!\b(?:Friday|Monday)\b)[^.!?,;\n]){0,20}\bMonday\b|\b(?:\w+[’']t|not|never|no longer)\b[^.!?,;\n]{0,30}\b(?:mov(?:e|es|ed|ing)|chang(?:e|es|ed|ing)|shift(?:s|ed|ing)?|switch(?:es|ed|ing)?|go(?:es|ing)?)\b[^.!?,;\n]{0,60}Monday\b/i
+
+// A failed move cannot establish Monday. Bind the outcome to the transition,
+// not an unrelated rejected request elsewhere in the same answer.
+const TRANSITION_FRIDAY = String.raw`(?:the\s+)?(?:(?:old|previous|prior|former)\s+)?Friday(?:\s+(?:deploy\s+)?schedule)?`
+const MONDAY_TRANSITION = String.raw`\b(?:mov(?:e|ed)|chang(?:e|ed)|shift(?:ed)?|switch(?:ed)?)\s+(?:from\s+${TRANSITION_FRIDAY}\s+to\s+Monday|to\s+Monday\s+from\s+${TRANSITION_FRIDAY})\b`
+const FAILED_OUTCOME = '(?:rejected|cancelled|canceled|abandoned|declined)'
+const FAILED_MONDAY_TRANSITION = new RegExp(
+  String.raw`\b${FAILED_OUTCOME}\s+(?:the\s+)?${MONDAY_TRANSITION}|${MONDAY_TRANSITION}(?:,\s*but\s+that\s+(?:move|change|shift|switch))?\s+(?:was|is|has been)\s+${FAILED_OUTCOME}\b`,
+  'i',
+)
+
+function deployDayIsMonday(text: string): boolean {
+  return (
+    /\bMonday\b/i.test(text) &&
+    !NEGATED_MONDAY.test(text) &&
+    !FAILED_MONDAY_TRANSITION.test(text) &&
+    (text.match(/\bFriday\b/gi)?.length ?? 0) ===
+      (text.match(OLD_FRIDAY)?.length ?? 0)
+  )
+}
+
 export function grade(id: ScenarioId, e: Evidence): Check[] {
   // Normalize routing/tool identifiers only. Paths, arguments, results and saved evidence stay raw.
   e = {
@@ -311,15 +339,14 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
   const delivered = e.deliveries.map((item) => item.text).join('\n')
   switch (id) {
     case 'M1': {
-      const corrected = (text: string) =>
-        /\bMonday\b/i.test(text) && !/\bFriday\b/i.test(text)
       check(
         'corrected-note',
         !!e.memoryEntries?.some(
-          (entry) => entry.name === 'deploy-day' && corrected(entry.content),
+          (entry) =>
+            entry.name === 'deploy-day' && deployDayIsMonday(entry.content),
         ),
       )
-      check('recall', corrected(e.answers.at(-1) ?? ''))
+      check('recall', deployDayIsMonday(e.answers.at(-1) ?? ''))
       break
     }
     case 'C1': {

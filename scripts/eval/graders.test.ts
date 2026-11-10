@@ -196,6 +196,80 @@ test.each([
       ?.pass,
   ).toBe(false)
 })
+test.each([
+  ['Deploys now happen on Monday, not Friday.', true],
+  ['Deploys moved from Friday to Monday.', true],
+  ['Deploys are on Monday instead of Friday.', true],
+  ['Deploys are on Monday; previously they were on Friday.', true],
+  ['Monday is the deploy day; Friday was the old day.', true],
+  ['Monday it is. Friday is no longer the deploy day.', true],
+  ['Deploys happen on Monday.', true],
+  [
+    'Deploys happen on Monday. This is a permanent change; the previous Friday deploy schedule is discontinued.',
+    true,
+  ],
+  [
+    "According to stored project memory, deploys happen on **Monday** — a permanent change from the previous Friday schedule. Note: file/search tools aren't available in this session, so I couldn't verify this against the repo.",
+    true,
+  ],
+  [
+    'Deploys happen on Monday. The previous Friday deploy schedule is not discontinued.',
+    false,
+  ],
+  [
+    'Monday was proposed; the previous Friday deploy schedule is still current.',
+    false,
+  ],
+  [
+    'Deploys are not moving from the previous Friday schedule to Monday.',
+    false,
+  ],
+  [
+    'Deploys happen on Monday, a permanent change from the previous Friday schedule. Deploys still happen on Friday.',
+    false,
+  ],
+  ['Deploys happen on Friday and Monday.', false],
+  ['Deploys happen on Monday and are still on Friday.', false],
+  ['The proposed move from Friday to Monday was rejected.', false],
+  ['The move from Friday to Monday was cancelled.', false],
+  ['The move from Friday to Monday has been canceled.', false],
+  ['The proposed move to Monday from Friday was rejected.', false],
+  ['The proposed switch from Friday to Monday was abandoned.', false],
+  ['The rejected move from Friday to Monday.', false],
+  ['We declined the move from Friday to Monday.', false],
+  ['Deploys moved from Friday to Monday, but that change was rejected.', false],
+  [
+    'Deploys moved from Friday to Monday, but the unrelated request was rejected.',
+    true,
+  ],
+  ['We declined the Tuesday move; deploys happen on Monday, not Friday.', true],
+  ['The move from the previous Friday schedule to Monday was rejected.', false],
+  [
+    'Deploys moved from Friday to Monday, and the unrelated request was rejected.',
+    true,
+  ],
+  ['The request was rejected; deploys moved from Friday to Monday.', true],
+  ['Deploys moved from Friday to Monday. The move was not rejected.', true],
+  [
+    'Deploys moved from Friday to Monday. An unrelated proposal was rejected.',
+    true,
+  ],
+  [
+    'Deploys happen on Monday, not Friday; the proposed move to Tuesday was cancelled.',
+    true,
+  ],
+  ['Deploys are not moving from Friday to Monday.', false],
+  ['Monday was proposed, but Friday was confirmed as the deploy day.', false],
+  ['Deploys do not happen on Monday.', false],
+  ['Deploys happen on Monday, not only Friday.', false],
+  ['Deploys happen on Monday, not just Friday.', false],
+])('M1: %s', (answer, pass) => {
+  const input = evidence({
+    answers: [answer],
+    memoryEntries: [{ name: 'deploy-day', content: answer }],
+  })
+  expect(grade('M1', input).map((check) => check.pass)).toEqual([pass, pass])
+})
 fails('C1', 'bash limits', (e) => {
   e.answers = ['bash: 3000 lines / 50KB']
 })

@@ -120,8 +120,13 @@ Extension commands run in every session; an input naming a registered command ru
 
 **Dream.** After an eligible conversation turn, memory appends a bounded record to
 `<store>/.dream/inbox.jsonl`: session ID, time, user input and final assistant text
-(about 2,000 characters per side), plus tool names, never tool output. The inbox
-is capped at about 100 KB, dropping oldest records and counting dropped records.
+(about 2,000 characters per side), plus tool names, never tool output. Only user
+input is evidence for new facts. Assistant text remains in the private inbox for
+compatibility, but is excluded from both the dream model input and the
+query that selects notes. Ambiguous acknowledgements without an explicit user fact
+do not justify a new fact. This removes assistant-only suggestions from the input;
+it does not validate the factual accuracy of arbitrary model output. The inbox is
+capped at about 100 KB, dropping oldest records and counting dropped records.
 It uses the same private file permissions as memory. Only sessions with memory
 permission `allow` contribute; `ask`, `deny` and omitted-memory sessions do not. Local sessions and owner DMs use global memory; a group's
 sessions write only that group's inbox and notes, never another group's or global
