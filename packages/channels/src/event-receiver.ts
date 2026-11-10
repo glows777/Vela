@@ -1,14 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import {
-  createServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
 import { genericEvent, genericOptions } from './generic-events.ts'
 import { githubEvents, githubOptions } from './github-events.ts'
-import { HttpError, readBody } from './http.ts'
+import { HttpError, HttpListener, readBody } from './http.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelEvent } from './types.ts'
 
@@ -35,11 +31,8 @@ const MAX_SEEN = 1000
 /** Optional ingress owned by the channel assembly; no daemon, persisted cache or provider access. */
 export class EventReceiver {
   private readonly options: z.infer<typeof optionsSchema>
-  private server?: ReturnType<typeof createServer>
-  private starting?: Promise<void>
-  private readonly active = new Set<Promise<void>>()
+  private readonly listener = new HttpListener()
   private readonly seen = new Set<string>()
-  private accepting = false
 
   constructor(
     config: unknown,
@@ -55,47 +48,21 @@ export class EventReceiver {
   }
 
   start(): Promise<void> {
-    this.starting ??= this.listen()
-    return this.starting
-  }
-
-  private async listen(): Promise<void> {
-    const server = createServer((req, res) => {
-      const task = this.handle(req, res)
-      this.active.add(task)
-      void task.finally(() => this.active.delete(task))
-    })
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.options.port, '127.0.0.1', () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-    this.server = server
-    this.accepting = true
-    const address = server.address()
-    if (address && typeof address !== 'string')
-      for (const name of ['github', 'generic'] as const)
-        if (this.options[name])
-          this.logger.info(
-            `[events] Listening on http://127.0.0.1:${address.port}/events/${name}`,
-          )
+    return this.listener.start(
+      this.options.port,
+      (req, res) => this.handle(req, res),
+      (port) => {
+        for (const name of ['github', 'generic'] as const)
+          if (this.options[name])
+            this.logger.info(
+              `[events] Listening on http://127.0.0.1:${port}/events/${name}`,
+            )
+      },
+    )
   }
 
   async stop(): Promise<void> {
-    this.accepting = false
-    await this.starting?.catch(() => {})
-    this.accepting = false
-    const server = this.server
-    this.server = undefined
-    if (!server) return
-    const closed = new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    )
-    // Disconnect unfinished senders too; admitted publications settle before the gateway drains.
-    server.closeAllConnections()
-    await Promise.all([closed, ...this.active])
+    await this.listener.stop()
   }
 
   private async handle(
@@ -114,7 +81,8 @@ export class EventReceiver {
       })
     }
     try {
-      if (!this.accepting) throw new HttpError(503, 'Receiver stopping')
+      if (!this.listener.isAccepting)
+        throw new HttpError(503, 'Receiver stopping')
       const github =
         req.url === '/events/github' ? this.options.github : undefined
       const generic =

@@ -1,26 +1,14 @@
 import type {
   ExtensionAPI,
-  ImageContent,
   ToolContext,
 } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
 import { routineToolSchema } from './routines.ts'
-import type { ChannelRuntime, ChannelTopic, IncomingMessage } from './types.ts'
-
-export interface ChannelTopicCapabilities {
-  startTopic(
-    message: IncomingMessage,
-    title: string,
-  ): Promise<{ messageId: string; rootId: string; threadId: string }>
-  forwardToTopic(
-    message: IncomingMessage,
-    target: ChannelTopic,
-  ): Promise<IncomingMessage>
-  readTopic(chatId: string, threadId: string): Promise<string>
-  originalText?(message: IncomingMessage): string | undefined
-  triggerImages?(message: IncomingMessage): ImageContent[] | undefined
-  handled?(message: IncomingMessage): void
-}
+import type {
+  ChannelRuntime,
+  ChannelTopicCapabilities,
+  IncomingMessage,
+} from './types.ts'
 
 export const topicToolNames = [
   'channel_start_topic',

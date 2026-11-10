@@ -13,7 +13,6 @@ export type { ChannelScope } from './scope.ts'
 export { chatDirectory, groupWorkspace } from './scope.ts'
 export { channelSessionId } from './session-id.ts'
 export {
-  type ChannelTopicCapabilities,
   handoffToolNames,
   topicSessionOptions,
   topicToolNames,

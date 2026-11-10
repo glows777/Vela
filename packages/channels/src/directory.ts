@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { writeAtomicJson } from './atomic-json.ts'
+import { readJsonIfExists } from './json-file.ts'
 import type { ChannelTopic, IncomingMessage } from './types.ts'
 
 const recordSchema = z
@@ -94,17 +94,20 @@ export class ChannelDirectory {
 
   private async read(): Promise<void> {
     if (!this.path) return
-    let text: string
-    try {
-      text = await readFile(this.path, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-      throw new Error(`Cannot read channel directory ${this.path}`, {
+    const path = this.path
+    const invalid = (error: unknown) =>
+      new Error(`Invalid channel directory ${path}: ${String(error)}`, {
         cause: error,
       })
-    }
+    const data = await readJsonIfExists(path, channelIndexSchema, {
+      read: (error) =>
+        new Error(`Cannot read channel directory ${path}`, {
+          cause: error,
+        }),
+      parse: invalid,
+    })
+    if (!data) return
     try {
-      const data = channelIndexSchema.parse(JSON.parse(text))
       if (new Set(data.records.map((r) => r.key)).size !== data.records.length)
         throw new Error('Duplicate channel key')
       const keys = new Set(data.records.map((record) => record.key))
@@ -123,15 +126,12 @@ export class ChannelDirectory {
           throw new Error('Conflicting channel storage keys')
         stores.set(chat, record.storageKey)
       }
-      this.createdAt = data.createdAt
-      this.records = new Map(data.records.map((record) => [record.key, record]))
-      this.notes = new Map(Object.entries(data.notes ?? {}))
     } catch (error) {
-      throw new Error(
-        `Invalid channel directory ${this.path}: ${String(error)}`,
-        { cause: error },
-      )
+      throw invalid(error)
     }
+    this.createdAt = data.createdAt
+    this.records = new Map(data.records.map((record) => [record.key, record]))
+    this.notes = new Map(Object.entries(data.notes ?? {}))
   }
 
   get(key: string): ChannelRecord | undefined {

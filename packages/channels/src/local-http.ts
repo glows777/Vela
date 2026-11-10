@@ -1,12 +1,8 @@
 import { timingSafeEqual } from 'node:crypto'
-import {
-  createServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
-import { HttpError, readBody } from './http.ts'
+import { HttpError, HttpListener, readBody } from './http.ts'
 import type { LocalEvents } from './local-events.ts'
 import type {
   LocalOptions,
@@ -44,10 +40,7 @@ interface LocalService {
 
 /** The Local listener is never shared with the tunnel-facing webhook receiver. */
 export class LocalHttp {
-  private server?: ReturnType<typeof createServer>
-  private starting?: Promise<void>
-  private accepting = false
-  private readonly active = new Set<Promise<void>>()
+  private readonly listener = new HttpListener()
 
   constructor(
     private options: LocalOptions,
@@ -56,43 +49,16 @@ export class LocalHttp {
   ) {}
 
   start(): Promise<void> {
-    this.starting ??= this.listen()
-    return this.starting
-  }
-
-  private async listen(): Promise<void> {
-    const server = createServer((req, res) => {
-      const task = this.handle(req, res)
-      this.active.add(task)
-      void task.finally(() => this.active.delete(task))
-    })
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.options.port ?? 8788, '127.0.0.1', () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-    this.server = server
-    this.accepting = true
-    const address = server.address()
-    if (address && typeof address !== 'string')
-      this.logger.info(`[local] Listening on http://127.0.0.1:${address.port}`)
+    return this.listener.start(
+      this.options.port ?? 8788,
+      (req, res) => this.handle(req, res),
+      (port) =>
+        this.logger.info(`[local] Listening on http://127.0.0.1:${port}`),
+    )
   }
 
   async stop(): Promise<void> {
-    this.accepting = false
-    await this.starting?.catch(() => {})
-    this.accepting = false
-    this.service.events.stop()
-    const server = this.server
-    this.server = undefined
-    if (!server) return
-    const closed = new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    )
-    server.closeAllConnections()
-    await Promise.all([closed, ...this.active])
+    await this.listener.stop(() => this.service.events.stop())
   }
 
   private async handle(
@@ -111,7 +77,8 @@ export class LocalHttp {
       })
     }
     try {
-      if (!this.accepting) throw new HttpError(503, 'Local service is stopping')
+      if (!this.listener.isAccepting)
+        throw new HttpError(503, 'Local service is stopping')
       const authorization = req.headers.authorization
       const expected = Buffer.from(`Bearer ${this.options.token}`)
       const supplied = Buffer.from(authorization ?? '')

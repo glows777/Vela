@@ -168,6 +168,7 @@ export {
   type SessionStorage,
 } from './session/storage.ts'
 export type { ExecutionMetadata } from './session/tool-history.ts'
+export { resolveShellPath, type ShellPathOptions } from './shell-path.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'

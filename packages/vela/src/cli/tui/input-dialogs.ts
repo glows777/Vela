@@ -2,16 +2,11 @@ import { Input, type SelectItem, SelectList } from '@earendil-works/pi-tui'
 import { dialogBox, SecretInput } from './components.ts'
 import { selectListTheme } from './theme.ts'
 
-export function selectDialog(
-  title: string,
-  items: SelectItem[],
-  selected: string | undefined,
+/** Close a dialog once: the first selection or abort wins, and the abort listener is removed. */
+export function settleOnce(
   signal: AbortSignal | undefined,
   done: (value: string | undefined) => void,
-) {
-  const list = new SelectList(items, 10, selectListTheme)
-  const index = items.findIndex((item) => item.value === selected)
-  if (index > 0) list.setSelectedIndex(index)
+): (value: string | undefined) => void {
   let closed = false
   const close = (value: string | undefined) => {
     if (closed) return
@@ -22,6 +17,20 @@ export function selectDialog(
   const abort = () => close(undefined)
   if (signal?.aborted) queueMicrotask(abort)
   else signal?.addEventListener('abort', abort, { once: true })
+  return close
+}
+
+export function selectDialog(
+  title: string,
+  items: SelectItem[],
+  selected: string | undefined,
+  signal: AbortSignal | undefined,
+  done: (value: string | undefined) => void,
+) {
+  const list = new SelectList(items, 10, selectListTheme)
+  const index = items.findIndex((item) => item.value === selected)
+  if (index > 0) list.setSelectedIndex(index)
+  const close = settleOnce(signal, done)
   list.onSelect = (item) => close(item.value)
   list.onCancel = () => close(undefined)
   return {
@@ -42,14 +51,7 @@ export function inputDialog(
   secret = false,
   allowEmpty = false,
 ) {
-  let closed = false
-  const done = (value: string | undefined) => {
-    if (closed) return
-    closed = true
-    close(value)
-  }
-  if (signal?.aborted) queueMicrotask(() => done(undefined))
-  else signal?.addEventListener('abort', () => done(undefined), { once: true })
+  const done = settleOnce(signal, close)
   const input = secret ? new SecretInput() : new Input()
   input.onSubmit = (value) =>
     done(allowEmpty ? value.trim() : value.trim() || undefined)

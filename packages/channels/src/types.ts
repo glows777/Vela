@@ -98,6 +98,22 @@ export interface ChannelTopic {
   waitingReason?: string
 }
 
+/** Platform operations behind the shared channel topic tools. */
+export interface ChannelTopicCapabilities {
+  startTopic(
+    message: IncomingMessage,
+    title: string,
+  ): Promise<{ messageId: string; rootId: string; threadId: string }>
+  forwardToTopic(
+    message: IncomingMessage,
+    target: ChannelTopic,
+  ): Promise<IncomingMessage>
+  readTopic(chatId: string, threadId: string): Promise<string>
+  originalText?(message: IncomingMessage): string | undefined
+  triggerImages?(message: IncomingMessage): ImageContent[] | undefined
+  handled?(message: IncomingMessage): void
+}
+
 /** Logical address within the channel that received the runtime. */
 export interface ChannelTarget {
   chatId: string
@@ -202,7 +218,7 @@ export interface ChannelDefinition {
   name: string
   description: string
   /** Platform operations behind the shared channel topic tools. */
-  topicCapabilities?: import('./topics.ts').ChannelTopicCapabilities
+  topicCapabilities?: ChannelTopicCapabilities
   /** Deployment-local schedule zone, validated before transport startup. */
   timezone?: unknown
   /** Adapt scheduled input routing; undefined skips a wake-up with operator diagnostics. */

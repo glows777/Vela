@@ -383,6 +383,7 @@
   function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
   type QueueMode = 'one-at-a-time' | 'all'
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
+  function resolveShellPath: (shellPath: string | undefined, { platform, env }: ShellPathOptions) => string
   interface SendMessageOptions
     deliverAs?: "steer" | "followUp" | "nextTurn" | undefined
     triggerTurn?: boolean | undefined
@@ -502,6 +503,9 @@
     tokens: number
     totals: UsageTotals
   function setDefaultToolModifiers: (session: VelaSession, entries: readonly string[]) => void
+  interface ShellPathOptions
+    env: Record<string, string | undefined>
+    platform: NodeJS.Platform
   const silentLogger: VelaLogger
   interface StepRecord
     cacheReadTokens: number
