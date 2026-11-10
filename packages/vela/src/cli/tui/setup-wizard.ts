@@ -18,6 +18,7 @@ import { THINKING_LEVELS } from '@glows777/vela-core/diagnostics'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
+import { saveUserSettings } from '../user-settings.ts'
 import { larkSetup } from './lark-setup.ts'
 
 interface Host {
@@ -402,7 +403,7 @@ export async function setupWizard(host: Host): Promise<boolean> {
       }
       settings.defaultModel = ref
       settings.defaultThinkingLevel = thinking
-      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
+      saveUserSettings(agentDir, settings)
       written.push(settingsPath)
       host.vela.configureProvider(provider, finalProviders[provider]!)
       host.vela.setDefaults(ref, thinking as ThinkingLevel)
