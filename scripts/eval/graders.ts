@@ -292,10 +292,21 @@ const OLD_FRIDAY =
 const NEGATED_MONDAY =
   /\b(?:\w+[’']t|not|never|except)\b(?:(?!\b(?:Friday|Monday)\b)[^.!?,;\n]){0,20}\bMonday\b|\b(?:\w+[’']t|not|never|no longer)\b[^.!?,;\n]{0,30}\b(?:mov(?:e|es|ed|ing)|chang(?:e|es|ed|ing)|shift(?:s|ed|ing)?|switch(?:es|ed|ing)?|go(?:es|ing)?)\b[^.!?,;\n]{0,60}Monday\b/i
 
+// A failed move cannot establish Monday. Bind the outcome to the transition,
+// not an unrelated rejected request elsewhere in the same answer.
+const TRANSITION_FRIDAY = String.raw`(?:the\s+)?(?:(?:old|previous|prior|former)\s+)?Friday(?:\s+(?:deploy\s+)?schedule)?`
+const MONDAY_TRANSITION = String.raw`\b(?:move|change|shift|switch)\s+(?:from\s+${TRANSITION_FRIDAY}\s+to\s+Monday|to\s+Monday\s+from\s+${TRANSITION_FRIDAY})\b`
+const FAILED_OUTCOME = '(?:rejected|cancelled|canceled|abandoned)'
+const FAILED_MONDAY_TRANSITION = new RegExp(
+  String.raw`\b${FAILED_OUTCOME}\s+${MONDAY_TRANSITION}|${MONDAY_TRANSITION}\s+(?:was|is|has been)\s+${FAILED_OUTCOME}\b`,
+  'i',
+)
+
 function deployDayIsMonday(text: string): boolean {
   return (
     /\bMonday\b/i.test(text) &&
     !NEGATED_MONDAY.test(text) &&
+    !FAILED_MONDAY_TRANSITION.test(text) &&
     (text.match(/\bFriday\b/gi)?.length ?? 0) ===
       (text.match(OLD_FRIDAY)?.length ?? 0)
   )
