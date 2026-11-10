@@ -149,7 +149,9 @@ empty search, Bash output alone or guessed answer is not a source. Recall-topic
 disk-tool references to raw sessions, the eval artifact tree or another attempt
 fail recall, even if a valid memory/history result was also retrieved. The grader resolves ordinary
 relative and absolute paths against the actual group workspace, including Bash
-parent traversal; it does not sandbox tools or interpret arbitrary shell code.
+parent traversal. An artifact-like ancestor name does not contaminate access
+inside the legitimate workspace; raw-session/evaluation descendants inside it
+still fail. The grader does not sandbox tools or interpret arbitrary shell code.
 The workspace/data layout is unchanged, and these are behavioral failures, not
 runtime errors. A memory written during recall cannot earn store credit. The two
 checks are reported separately, including their own repetition totals.

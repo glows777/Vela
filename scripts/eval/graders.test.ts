@@ -764,6 +764,7 @@ async function exitAttempt(
   scenario: 'G6' | 'G7' | 'G8',
   responses: FauxStep[],
   history = false,
+  artifactName = 'artifacts',
 ) {
   const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
   const model = createFauxModel({ responses })
@@ -804,7 +805,7 @@ async function exitAttempt(
       {
         runtime: exitRuntime,
         cwd,
-        artifactDir: join(root, 'artifacts'),
+        artifactDir: join(root, artifactName),
         scenario,
         arm: 'new',
         run: 1,
@@ -815,7 +816,7 @@ async function exitAttempt(
       model,
     )
     const snapshot = await Bun.file(
-      join(root, 'artifacts', 'memory-after-topic-1.json'),
+      join(root, artifactName, 'memory-after-topic-1.json'),
     )
       .json()
       .catch(() => undefined)
@@ -1679,3 +1680,90 @@ for (const prefix of ['feishu', 'lark', 'channel']) {
     )
   })
 }
+
+for (const id of ['G7', 'G8'] as const) {
+  const topic = `${id.toLowerCase()}_recall`
+  const workspace =
+    '/tmp/.vela-eval/batch/attempt/data/channels/lark-oc_group/workspace'
+  const input = (tool: string, path: string) =>
+    evidence({
+      ...structuredClone(good.G7),
+      calls: [
+        { ...memoryRead(), sessionId: `lark-oc_group-${topic}` },
+        {
+          name: tool,
+          args: tool === 'bash' ? { command: `ls -la '${path}'` } : { path },
+          phase: 1,
+          sessionId: `lark-oc_group-${topic}`,
+          success: true,
+        },
+      ],
+      deliveries: [{ scope: 'topic', topicRootId: topic, text: 'kestrel' }],
+      recallPaths: { workspace, artifactDir: '/tmp/.vela-eval/batch/attempt' },
+    })
+  const tools = ['bash', 'read_file', 'grep', 'find', 'list_directory']
+  test(`${id}: legitimate workspace paths have absolute/relative parity for every inspected tool`, () => {
+    for (const tool of tools) {
+      const relative = grade(id, input(tool, '.'))
+      expect(relative.every((check) => check.pass)).toBe(true)
+      expect(grade(id, input(tool, workspace))).toEqual(relative)
+    }
+  })
+  test(`${id}: nested forbidden references remain rejected for every inspected tool`, () => {
+    for (const tool of tools)
+      for (const path of [
+        'sessions/store.jsonl',
+        '.vela-eval/other/result.json',
+        './lark-store.jsonl',
+        './feishu-store.jsonl',
+      ])
+        for (const reference of [path, `${workspace}/${path}`])
+          expect(
+            grade(id, input(tool, reference)).find(
+              (check) => check.name === 'recall',
+            )?.pass,
+          ).toBe(false)
+  })
+}
+
+test('G8 worker can inspect its absolute workspace under an eval ancestor before valid recall', async () => {
+  let workspace = ''
+  const { result, pending, snapshot } = await exitAttempt(
+    'G8',
+    [
+      fauxToolCall('memory', stagingMemory),
+      fauxText('The kestrel deploy is delayed to 22:00.'),
+      fauxToolCall('bash', { command: 'pwd' }),
+      (request) => {
+        workspace = request.toolResults[0]!.output.trim()
+        expect(workspace.startsWith('/')).toBe(true)
+        expect(workspace).toContain('/.vela-eval/')
+        return fauxToolCall('bash', {
+          command: `ls -la '${workspace.replaceAll("'", "'\\''")}'`,
+        })
+      },
+      fauxToolCall('memory', {
+        action: 'read',
+        filename: 'project_staging-server.md',
+      }),
+      fauxText('The staging server is called kestrel.'),
+    ],
+    false,
+    '.vela-eval',
+  )
+  const diskCalls = result.evidence!.calls.filter(
+    (call) => call.phase === 1 && call.name === 'bash',
+  )
+  expect(diskCalls).toHaveLength(2)
+  expect(diskCalls.every((call) => call.success)).toBe(true)
+  expect(diskCalls[1]!.args.command).toContain(workspace)
+  expect(snapshot).toEqual([
+    expect.objectContaining({ content: stagingMemory.content }),
+  ])
+  expect(result.checks).toEqual([
+    { name: 'store', pass: true },
+    { name: 'recall', pass: true },
+  ])
+  expect(result.status).toBe('pass')
+  expect(pending).toBe(0)
+})
