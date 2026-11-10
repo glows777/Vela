@@ -173,9 +173,13 @@ function contaminated(call: Call, e: Evidence): boolean {
   return diskPaths(call).some((path) => {
     const absolute = resolve(e.recallPaths?.workspace ?? '.', path)
     if (memoryPaths(e).some((root) => within(root, absolute))) return false
+    const reference =
+      e.recallPaths && within(e.recallPaths.workspace, absolute)
+        ? relative(e.recallPaths.workspace, absolute)
+        : path
     if (
       /(?:^|\/)(?:\.vela-eval|sessions)(?:\/|$)|(?:feishu|lark)-[^/]*\.jsonl/u.test(
-        path,
+        reference,
       )
     )
       return true

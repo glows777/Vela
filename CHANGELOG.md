@@ -60,6 +60,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Dream evidence excludes assistant suggestions.** Consolidation now sends only user text and turn metadata from its inbox and selects relevant notes using user text alone, including for older inbox records. This prevents an assistant-only release-preparation suggestion from being passed back as evidence ([#309](https://github.com/glows777/Vela/issues/309)).
 
+- G7/G8 evaluation grading treats absolute and relative references to the legitimate workspace consistently when an ancestor is named `.vela-eval`; raw-session/evaluation descendants remain forbidden. Product memory behavior is unchanged.
+
 - G7/G8 evaluation evidence retains task-topic memory tool results, so failed save responses are not lost while diagnosing an empty pre-recall snapshot. Scoring and memory behavior are unchanged.
 
 - **The first-run setup wizard no longer shows the model guidance it replaces.** The header's `/model` hint and the `[model] No model available…` diagnostic used to appear before and during the wizard; both now wait until a cancelled setup leaves Vela without a model ([#279](https://github.com/glows777/Vela/issues/279)).
