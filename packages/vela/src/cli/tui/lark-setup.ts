@@ -1,12 +1,7 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectLarkSetup } from '@glows777/vela-lark'
+import { saveUserSettings } from '../user-settings.ts'
 
 interface Connection {
   waitForMention(): Promise<{ chatId: string; chatName?: string }>
@@ -139,12 +134,7 @@ export async function larkSetup(host: Host): Promise<boolean> {
       chats,
     }
     settings.extensionConfig = extensionConfig
-    mkdirSync(host.agentDir, { recursive: true, mode: 0o700 })
-    chmodSync(host.agentDir, 0o700)
-    writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`, {
-      mode: 0o600,
-    })
-    chmodSync(path, 0o600)
+    saveUserSettings(host.agentDir, settings)
     try {
       await connection.send(
         group.chatId,

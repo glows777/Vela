@@ -3,8 +3,8 @@ import {
   githubOrigin,
   githubRepositories,
   prepareGithubSettings,
-  saveGithubSettings,
 } from './github-setup-config.ts'
+import { saveUserSettings } from './user-settings.ts'
 
 const EVENTS = [
   'check_suite',
@@ -114,7 +114,7 @@ export async function githubSetup(
     const payloadUrl = `${githubOrigin(url)}/events/github`
     const prepared = prepareGithubSettings(options.agentDir, repositories, env)
     secret = prepared.secret
-    saveGithubSettings(options.agentDir, prepared.path, prepared.settings)
+    saveUserSettings(options.agentDir, prepared.settings)
     write(
       `Saved GitHub receiver settings to ${prepared.path}. Project settings may override user settings; check the effective configuration before serving.`,
     )

@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -233,6 +234,8 @@ test('empty-home DeepSeek setup uses the built-in Responses provider for its fir
       defaultModel: 'deepseek/deepseek-flash',
       defaultThinkingLevel: 'high',
     })
+    expect(statSync(join(dir, 'settings.json')).mode & 0o777).toBe(0o600)
+    expect(statSync(dir).mode & 0o777).toBe(0o700)
     expect(session.modelInfo.ref).toBe('deepseek/deepseek-flash')
     const next = vela.session('new')
     expect(next.modelInfo.ref).toBe('deepseek/deepseek-flash')
