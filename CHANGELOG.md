@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-12
+
 ### Breaking Changes
 
 - **Topic tools are channel-neutral.** Replace `lark_start_topic`, `lark_forward_to_topic`, `lark_list_topics`, `lark_read_topic`, `lark_wait_for_input`, `lark_skip_reply` and `lark_routines` with their `channel_*` names in explicit tool selections, permission rules and prompts. There are no legacy aliases. Lark still automatically supplies its mandatory topic tools; `lark_search_history` remains platform-specific. Prompt sections `larkChannel` / `larkTopic` become `channelGroup` / `channelTopic`. Existing session data and routing IDs do not migrate ([#281](https://github.com/glows777/Vela/issues/281)).
