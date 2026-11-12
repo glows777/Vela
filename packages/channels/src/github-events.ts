@@ -27,6 +27,7 @@ const envelope = z.object({
 const number = z.number().int().positive()
 const actor = z.object({ login: z.string() })
 const label = z.object({ name: z.string() })
+const labelList = z.array(label).default([])
 const content = z.object({
   body: z.string().nullable(),
   user: actor,
@@ -47,7 +48,7 @@ const issue = z.object({
   html_url: z.string(),
   user: actor,
   body: z.string().nullable(),
-  labels: z.array(label).default([]),
+  labels: labelList,
 })
 const suite = z.object({
   app: z.object({ slug: z.string().optional() }),
@@ -71,7 +72,7 @@ function ownBody(body: string): boolean {
 }
 
 /** A nonempty allowlist gates the feed; an empty one keeps every Issue event. */
-function wakeLabel(
+function allowedByLabels(
   item: { labels: readonly { name: string }[] },
   allowlist: readonly string[],
 ): boolean {
@@ -149,7 +150,7 @@ export function githubEvents(
     const item = issue.parse(raw.issue)
     const details = `Issue: #${item.number} ${item.title}\nAuthor: ${item.user.login}\n${item.html_url}`
     if (raw.action === 'labeled') {
-      const { name } = z.object({ name: z.string() }).parse(raw.label)
+      const { name } = label.parse(raw.label)
       if (!options.issueLabels.includes(name)) return []
       return [
         feedEvent(
@@ -158,7 +159,7 @@ export function githubEvents(
         ),
       ]
     }
-    if (!wakeLabel(item, options.issueLabels)) return []
+    if (!allowedByLabels(item, options.issueLabels)) return []
     if (raw.action === 'closed')
       return [
         feedEvent(
@@ -179,13 +180,13 @@ export function githubEvents(
         number,
         title: z.string(),
         pull_request: record.optional(),
-        labels: z.array(label).default([]),
+        labels: labelList,
       })
       .parse(raw.issue)
     const comment = content.parse(raw.comment)
     if (ownBody(comment.body ?? '')) return []
     if (!target.pull_request) {
-      if (!wakeLabel(target, options.issueLabels)) return []
+      if (!allowedByLabels(target, options.issueLabels)) return []
       return [
         feedEvent(
           `GitHub issue #${target.number}: comment by ${comment.user.login}`,
