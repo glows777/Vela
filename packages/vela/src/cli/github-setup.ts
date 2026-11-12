@@ -11,6 +11,7 @@ const EVENTS = [
   'pull_request_review',
   'issue_comment',
   'pull_request',
+  'issues',
 ]
 interface GithubSetupOptions {
   agentDir: string

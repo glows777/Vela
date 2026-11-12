@@ -21,6 +21,7 @@ import { z } from 'zod'
 const secret = 'fixture-only-webhook-secret'
 const repo = 'glows777/Vela'
 const key = (pr: number) => `github:${repo}#pr/${pr}`
+const feedKey = `github:${repo}#issues`
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
@@ -43,9 +44,43 @@ function suite(prs = [171], app = 'github-actions') {
   }
 }
 
+function issuePayload(action: string, extra: Record<string, unknown> = {}) {
+  return {
+    action,
+    repository: { full_name: repo },
+    issue: {
+      number: 332,
+      title: 'Fixture issue',
+      html_url: 'https://github.com/glows777/Vela/issues/332',
+      user: { login: 'glows777' },
+      body: 'Fixture issue body',
+    },
+    ...extra,
+  }
+}
+
+function issueComment(body: string, pullRequest = false) {
+  const number = pullRequest ? 171 : 332
+  return {
+    action: 'created',
+    repository: { full_name: repo },
+    issue: {
+      number,
+      title: pullRequest ? 'Fixture PR' : 'Fixture issue',
+      ...(pullRequest ? { pull_request: {} } : {}),
+    },
+    comment: {
+      body,
+      user: { login: 'glows777' },
+      html_url: `https://github.com/glows777/Vela/issues/${number}#issuecomment-1`,
+    },
+  }
+}
+
 async function fixture(
   options: {
     apps?: string[]
+    issueLabels?: string[]
     receiver?: boolean
     enabled?: Set<string>
     cwd?: string
@@ -78,6 +113,7 @@ async function fixture(
                 github: {
                   secret,
                   repositories: [repo],
+                  issueLabels: options.issueLabels ?? ['to:vela'],
                   ...(options.apps ? { apps: options.apps } : {}),
                 },
               },
@@ -132,7 +168,15 @@ async function fixture(
   async function subscribe(pr: number, chat = 'one') {
     return subscribeEvent('github', key(pr), chat)
   }
-  async function subscribeEvent(source: string, key: string, chat = 'one') {
+  async function subscribeFeed(chat = 'one') {
+    return subscribeEvent('github', feedKey, chat, false)
+  }
+  async function subscribeEvent(
+    source: string,
+    key: string,
+    chat = 'one',
+    inTopic = true,
+  ) {
     model.push(
       fauxToolCall('channel_subscriptions', {
         action: 'create',
@@ -147,7 +191,9 @@ async function fixture(
       senderName: 'Alice',
       text: 'Subscribe',
       replyToId: `human-${chat}`,
-      topic: { rootId: `root-${chat}`, threadId: `thread-${chat}` },
+      ...(inTopic
+        ? { topic: { rootId: `root-${chat}`, threadId: `thread-${chat}` } }
+        : {}),
     })
   }
   return {
@@ -160,6 +206,7 @@ async function fixture(
     enabled,
     subscribe,
     subscribeEvent,
+    subscribeFeed,
     url: url!,
     stopped: () => stopped,
   }
@@ -278,6 +325,187 @@ test('dedup is once per delivery before concurrent multi-PR fanout', async () =>
   ).toEqual(['one', 'two'])
 })
 
+test('a group repository subscription receives issue opens, closes, to:vela labels and ordinary comments, and closing an issue keeps it', async () => {
+  const f = await fixture()
+  await f.subscribeFeed()
+  f.model.push(
+    fauxText('Opened'),
+    fauxText('Closed'),
+    fauxText('Labeled'),
+    fauxText('Commented'),
+  )
+  for (const [payload, event, id] of [
+    [issuePayload('opened'), 'issues', 'issue-opened'],
+    [issuePayload('closed'), 'issues', 'issue-closed'],
+    [
+      issuePayload('labeled', { label: { name: 'to:vela' } }),
+      'issues',
+      'issue-labeled',
+    ],
+    [issueComment('Please look at this'), 'issue_comment', 'issue-comment'],
+  ] as const)
+    expect((await send(f.url, payload, event, id)).status).toBe(202)
+  await drainChannels(f.vela)
+  const prompts = f.model.calls.slice(-4).map((call) => call.lastUserText)
+  expect(prompts[0]).toContain('GitHub issue #332 opened: Fixture issue')
+  expect(prompts[0]).toContain('Fixture issue body')
+  expect(prompts[1]).toContain('GitHub issue #332 closed: Fixture issue')
+  expect(prompts[2]).toContain(
+    'GitHub issue #332 labeled to:vela: Fixture issue',
+  )
+  expect(prompts[3]).toContain('GitHub issue #332: comment by glows777')
+  expect(prompts[3]).toContain('Please look at this')
+  expect(f.replies.slice(-4).every((reply) => reply.topic === undefined)).toBe(
+    true,
+  )
+  expect(
+    JSON.parse(
+      await readFile(join(f.cwd, 'data/channels/subscriptions.json'), 'utf8'),
+    ).subscriptions,
+  ).toEqual([expect.objectContaining({ key: feedKey })])
+})
+
+test.each([
+  ['a configured label', ['needs-triage', 'to:vela'], 'to:vela', 1],
+  ['an unconfigured label', ['needs-triage', 'to:vela'], 'bug', 0],
+  ['every label when none is configured', [], 'to:vela', 0],
+] as const)(
+  'labeled issues reach the repository feed for %s only',
+  async (_label, issueLabels, name, calls) => {
+    const f = await fixture({ issueLabels: [...issueLabels] })
+    await f.subscribeFeed()
+    const before = f.model.calls.length
+    const replies = f.replies.length
+    f.model.push(fauxText('Labeled'))
+    expect(
+      (
+        await send(
+          f.url,
+          issuePayload('labeled', { label: { name } }),
+          'issues',
+          'labeled',
+        )
+      ).status,
+    ).toBe(202)
+    await drainChannels(f.vela)
+    expect(f.model.calls.length).toBe(before + calls)
+    expect(f.replies.length).toBe(replies + calls)
+  },
+)
+
+test('a PR comment reaches only its PR topic and an ordinary issue comment reaches only the repository feed', async () => {
+  const f = await fixture()
+  await f.subscribeFeed('one')
+  await f.subscribe(171, 'two')
+  const before = f.replies.length
+  f.model.push(fauxText('PR comment'), fauxText('Issue comment'))
+  expect(
+    (
+      await send(
+        f.url,
+        issueComment('PR feedback', true),
+        'issue_comment',
+        'pr',
+      )
+    ).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.replies.slice(before).map((reply) => reply.text)).toEqual([
+    'PR comment',
+  ])
+  expect(f.replies[before]!.channelId).toBe('two')
+  expect(f.replies[before]!.topic?.rootId).toBe('root-two')
+  expect(
+    (
+      await send(
+        f.url,
+        issueComment('Issue feedback'),
+        'issue_comment',
+        'issue',
+      )
+    ).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.replies.slice(before).map((reply) => reply.text)).toEqual([
+    'PR comment',
+    'Issue comment',
+  ])
+  expect(f.replies[before + 1]!.channelId).toBe('one')
+  expect(f.replies[before + 1]!.topic).toBeUndefined()
+})
+
+test('closing one watched PR keeps the repository feed and other PR subscriptions', async () => {
+  const f = await fixture()
+  await f.subscribeFeed('one')
+  await f.subscribe(171, 'two')
+  await f.subscribe(172, 'one')
+  f.model.push(
+    fauxText('Closed'),
+    fauxText('Feed after close'),
+    fauxText('Suite'),
+  )
+  expect(
+    (
+      await send(
+        f.url,
+        {
+          action: 'closed',
+          repository: { full_name: repo },
+          pull_request: {
+            number: 171,
+            merged: false,
+            html_url: 'https://github.com/glows777/Vela/pull/171',
+            user: { login: 'glows777' },
+            head: { sha: 'c'.repeat(40) },
+            title: 'Fixture PR',
+          },
+        },
+        'pull_request',
+        'pr-closed',
+      )
+    ).status,
+  ).toBe(202)
+  expect(
+    JSON.parse(
+      await readFile(join(f.cwd, 'data/channels/subscriptions.json'), 'utf8'),
+    ).subscriptions.map((record: { key: string }) => record.key),
+  ).toEqual([feedKey, key(172)])
+  await drainChannels(f.vela)
+  expect(f.replies.at(-1)?.topic?.rootId).toBe('root-two')
+  expect(
+    (await send(f.url, issuePayload('opened'), 'issues', 'after-close')).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.replies.at(-1)?.channelId).toBe('one')
+  expect(f.replies.at(-1)?.topic).toBeUndefined()
+  expect(
+    (await send(f.url, suite([172]), 'check_suite', 'other-pr')).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.replies.at(-1)?.topic?.rootId).toBe('root-one')
+})
+
+test('the repository feed survives a restart and delivers an ordinary issue comment', async () => {
+  const f = await fixture()
+  await f.subscribeFeed()
+  await f.vela.dispose()
+  const resumed = await fixture({ cwd: f.cwd })
+  resumed.model.push(fauxText('After restart'))
+  expect(
+    (
+      await send(
+        resumed.url,
+        issueComment('Still here after restart'),
+        'issue_comment',
+        'after-restart',
+      )
+    ).status,
+  ).toBe(202)
+  await drainChannels(resumed.vela)
+  expect(resumed.replies.at(-1)?.text).toBe('After restart')
+  expect(resumed.replies.at(-1)?.topic).toBeUndefined()
+})
+
 test('GitHub app/repository/event filters and empty mapping drop without work or external lookup', async () => {
   const f = await fixture()
   await f.subscribe(171)
@@ -299,12 +527,7 @@ test('GitHub app/repository/event filters and empty mapping drop without work or
     [{ ...suite(), action: 'requested' }, 'check_suite'],
     [{ ...suite(), action: 'created' }, 'pull_request_review_comment'],
     [
-      {
-        action: 'created',
-        repository: { full_name: repo },
-        issue: { number: 171 },
-        comment: { body: 'ordinary issue' },
-      },
+      issueComment('ordinary issue without a feed subscription'),
       'issue_comment',
     ],
   ] as const)
@@ -340,7 +563,7 @@ test.each(['issue_comment', 'pull_request_review'])(
       return {
         action: event === 'issue_comment' ? 'created' : 'submitted',
         repository: { full_name: repo },
-        issue: { number: 171, pull_request: {} },
+        issue: { number: 171, title: 'Fixture PR', pull_request: {} },
         pull_request: { number: 171 },
         ...(event === 'issue_comment'
           ? { comment: content }
@@ -499,6 +722,8 @@ test.each([
   { github: { secret, repositories: [] } },
   { github: { secret, repositories: ['*'] } },
   { github: { secret, repositories: [repo], apps: [''] } },
+  { github: { secret, repositories: [repo], issueLabels: [''] } },
+  { github: { secret, repositories: [repo], issueLabels: 'to:vela' } },
 ])(
   'invalid receiver configuration fails before listening: %j',
   async (eventReceiver) => {
@@ -840,3 +1065,56 @@ test.each([
     )
   },
 )
+
+test('group guidance leads to the repository Issue feed while topic guidance stays PR-specific', async () => {
+  const f = await fixture()
+  f.model.push(
+    (req) => {
+      expect(req.system).toContain('github:<owner>/<repo>#issues')
+      expect(req.system).toContain('closing an Issue does not end the feed')
+      expect(req.system).toContain(repo)
+      expect(req.system).toContain('untrusted')
+      expect(req.system).toContain('no new authority')
+      expect(req.system).not.toContain('After opening or taking over a PR')
+      return fauxToolCall('channel_subscriptions', {
+        action: 'create',
+        source: 'github',
+        key: feedKey,
+      })
+    },
+    fauxText('Subscribed the group'),
+    (req) => {
+      expect(req.system).toContain('After opening or taking over a PR')
+      expect(req.system).toContain('github:<owner>/<repo>#pr/<n>')
+      expect(req.system).not.toContain('#issues')
+      return fauxText('Topic guided')
+    },
+  )
+  await f.receive({
+    channelId: 'one',
+    senderId: 'alice',
+    senderName: 'Alice',
+    text: 'Subscribe this group to the issue feed',
+    replyToId: 'human-group',
+  })
+  expect(f.model.pending()).toBe(1)
+  expect(
+    JSON.parse(
+      await readFile(join(f.cwd, 'data/channels/subscriptions.json'), 'utf8'),
+    ).subscriptions,
+  ).toEqual([
+    expect.objectContaining({
+      key: feedKey,
+      targetKey: channelSessionId('chat', 'one'),
+    }),
+  ])
+  await f.receive({
+    channelId: 'one',
+    senderId: 'alice',
+    senderName: 'Alice',
+    text: 'Hello',
+    replyToId: 'human-topic',
+    topic: { rootId: 'root-one', threadId: 'thread-one' },
+  })
+  expect(f.model.pending()).toBe(0)
+})

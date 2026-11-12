@@ -15,6 +15,7 @@ export const githubEvents = [
   'pull_request_review',
   'issue_comment',
   'pull_request',
+  'issues',
 ]
 export const setupEntry = resolve(
   import.meta.dir,
