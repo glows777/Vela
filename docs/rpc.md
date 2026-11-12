@@ -41,7 +41,7 @@ VELA_MODEL=mock VELA_DIR=$(mktemp -d) vela --mode rpc
 |---|---|---|
 | stdin | Command | Prompt, inspect state, change settings, manage sessions. |
 | stdout | `response` | Whether one command succeeded, with its data. |
-| stdout | Event | What the active session is doing: a `VelaEvent` plus `sessionId`. See [SDK events](sdk.md#events) and [JSON mode](json.md#event-lines). |
+| stdout | Event | What the active session is doing: a `VelaEvent` plus `sessionId`. See [SDK events](sdk.md#events) and [JSON mode](json.md#session-header). |
 | both | `extension_ui_request` / `extension_ui_response` | Extension dialogs and notifications. See [Extension UI](#extension-ui). |
 
 ### Commands and responses
