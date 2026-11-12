@@ -150,7 +150,7 @@ test('--help / -h and --version / -v are parsed', () => {
   expect(parseArgs([]).version).toBeUndefined()
 })
 
-test('USAGE lists every flag, the modes and examples', () => {
+test('USAGE lists every flag, the modes, examples and built-in provider keys', () => {
   for (const flag of [
     '--print',
     '-p',
@@ -176,6 +176,16 @@ test('USAGE lists every flag, the modes and examples', () => {
     expect(HELP).toContain(flag)
   expect(HELP).toContain('Examples:')
   expect(HELP).toContain('rpc')
+  for (const key of [
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    'OPENROUTER_API_KEY',
+    'DEEPSEEK_API_KEY',
+  ])
+    expect(HELP).toContain(key)
+  expect(HELP).toContain(
+    'providers: built-in anthropic / openai / openrouter / deepseek',
+  )
 })
 
 test('packageVersion() is the package.json version', () => {
@@ -512,4 +522,5 @@ test('--list-models prints the configured models sorted, with a fuzzy search (li
   expect(formatModelList([])).toContain(
     'No models available: sign in with /login',
   )
+  expect(formatModelList([])).toContain('DEEPSEEK_API_KEY')
 })
