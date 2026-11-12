@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LanguageModelV4, LanguageModelV4Usage } from '@ai-sdk/provider'
@@ -115,6 +115,7 @@ export async function runAttempt(
     toolCalls: 0,
   }
   await mkdir(config.artifactDir, { recursive: true })
+  config = { ...config, artifactDir: await realpath(config.artifactDir) }
   let writing = Promise.resolve()
   const checkpoint = () => {
     const snapshot = JSON.stringify(usage)
