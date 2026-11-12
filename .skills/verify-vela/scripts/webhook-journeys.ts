@@ -28,7 +28,6 @@ const model = createFauxModel({
     fauxText('Subscribed to fixture PR'),
     fauxText('Fixture CI handled'),
     fauxText('Fixture comment handled'),
-    fauxText('Fixture closure handled'),
   ],
 })
 const vela = createVela({
@@ -133,7 +132,7 @@ try {
   const comment = (body: string) => ({
     action: 'created',
     repository: { full_name: 'owner/repo' },
-    issue: { number: 171, pull_request: {} },
+    issue: { number: 171, title: 'Fixture', pull_request: {} },
     comment: {
       body,
       html_url: 'https://github.com/owner/repo/pull/171#comment',
@@ -164,6 +163,88 @@ try {
     'PASS full-body self-origin marker skips echo; unmarked same-author command text stays untrusted data',
   )
 
+  // One group subscription receives ordinary Issues and their comments.
+  // A PR comment stays in the topic that watches that PR.
+  const feedSubscribed = Promise.withResolvers<void>()
+  const unsubscribeFeed = vela.subscribe((e) => {
+    if (
+      e.type === 'channel_reply' &&
+      e.text === 'Subscribed to fixture issue feed'
+    )
+      feedSubscribed.resolve()
+  })
+  model.push(
+    fauxToolCall('channel_subscriptions', {
+      action: 'create',
+      source: 'github',
+      key: 'github:owner/repo#issues',
+    }),
+    fauxText('Subscribed to fixture issue feed'),
+    fauxText('Fixture issue opened handled'),
+    fauxText('Fixture issue comment handled'),
+    fauxText('Fixture PR comment handled'),
+  )
+  fake.deliver(
+    larkEvent({ content: '{"text":"Subscribe this group to the issue feed"}' }),
+  )
+  await feedSubscribed.promise
+  unsubscribeFeed()
+  await drainChannels(vela)
+  const feedCalls = model.calls.length
+  const issueEvent = (action: string, extra: Record<string, unknown> = {}) => ({
+    action,
+    repository: { full_name: 'owner/repo' },
+    issue: {
+      number: 332,
+      title: 'Fixture issue',
+      html_url: 'https://github.com/owner/repo/issues/332',
+      user: { login: 'author' },
+      body: 'Fixture issue body',
+    },
+    ...extra,
+  })
+  assert.equal(
+    (await send(issueEvent('opened'), 'issues', 'issue-opened')).status,
+    202,
+  )
+  await drainChannels(vela)
+  assert.equal(model.calls.length, feedCalls + 1)
+  assert(fake.sent.at(-1)?.text.includes('Fixture issue opened handled'))
+  assert.equal(
+    (
+      await send(
+        {
+          action: 'created',
+          repository: { full_name: 'owner/repo' },
+          issue: { number: 332, title: 'Fixture issue' },
+          comment: {
+            body: 'Ordinary issue comment',
+            html_url: 'https://github.com/owner/repo/issues/332#issuecomment-1',
+            user: { login: 'same-author' },
+          },
+        },
+        'issue_comment',
+        'issue-comment',
+      )
+    ).status,
+    202,
+  )
+  await drainChannels(vela)
+  assert.equal(model.calls.length, feedCalls + 2)
+  assert(fake.sent.at(-1)?.text.includes('Fixture issue comment handled'))
+  assert.equal(
+    (await send(comment('PR feedback'), 'issue_comment', 'pr-comment')).status,
+    202,
+  )
+  await drainChannels(vela)
+  assert.equal(model.calls.length, feedCalls + 3)
+  assert.equal(fake.sent.at(-1)?.messageId, 'root')
+  assert(fake.sent.at(-1)?.text.includes('Fixture PR comment handled'))
+  console.log(
+    'PASS one group Issue-feed subscription receives Issues and ordinary comments; a PR comment stays in its topic',
+  )
+
+  model.push(fauxText('Fixture closure handled'))
   assert.equal(
     (
       await send(
@@ -188,8 +269,8 @@ try {
   assert.deepEqual(
     JSON.parse(
       await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
-    ).subscriptions,
-    [],
+    ).subscriptions.map((record: { key: string }) => record.key),
+    ['github:owner/repo#issues'],
   )
   await drainChannels(vela)
   assert(fake.sent.at(-1)?.text.includes('Fixture closure handled'))
@@ -281,6 +362,43 @@ curl --fail-with-body --silent --show-error -o response.txt -w '%{http_code}' \
   assert.equal((await postAlert(alert, 'suite-1')).status, 202)
   await drainChannels(vela)
   assert.equal(model.calls.length, alertCalls)
+  const remaining = JSON.parse(
+    await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
+  ).subscriptions
+  assert.deepEqual(
+    remaining.map((record: { key: string }) => record.key),
+    ['github:owner/repo#issues'],
+  )
+  console.log(
+    'PASS generic openssl+curl HMAC/namespace/queue/final cleanup; same delivery ID isolated from GitHub, duplicate ignored',
+  )
+
+  const listed = Promise.withResolvers<void>()
+  const unsubscribeList = vela.subscribe((e) => {
+    if (e.type === 'channel_reply' && e.text === 'Listed fixture feed')
+      listed.resolve()
+  })
+  model.push(
+    fauxToolCall('channel_subscriptions', { action: 'list' }),
+    fauxText('Listed fixture feed'),
+    fauxToolCall('channel_subscriptions', {
+      action: 'remove',
+      id: remaining[0].id,
+    }),
+    fauxText('Removed fixture feed'),
+  )
+  fake.deliver(larkEvent({ content: '{"text":"List the issue feed"}' }))
+  await listed.promise
+  unsubscribeList()
+  await drainChannels(vela)
+  assert(
+    model.calls
+      .at(-1)!
+      .toolResults.at(-1)!
+      .output.includes('github:owner/repo#issues'),
+  )
+  fake.deliver(larkEvent({ content: '{"text":"Remove the issue feed"}' }))
+  await drainChannels(vela)
   assert.deepEqual(
     JSON.parse(
       await readFile(join(vela.dataDir, 'channels/subscriptions.json'), 'utf8'),
@@ -288,7 +406,7 @@ curl --fail-with-body --silent --show-error -o response.txt -w '%{http_code}' \
     [],
   )
   console.log(
-    'PASS generic openssl+curl HMAC/namespace/queue/final cleanup; same delivery ID isolated from GitHub, duplicate ignored',
+    'PASS the group lists and removes its own repository feed subscription',
   )
 } finally {
   await vela.dispose()
