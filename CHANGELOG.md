@@ -8,6 +8,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
 
+### Fixed
+
+- **AI SDK warnings stay in the chat log.** Interactive mode redirects `AI_SDK_LOG_WARNINGS` into notices, so a compatibility warning (for example the `propertyNames` one from MCP record tools on OpenAI-compatible models) no longer writes over the TUI and appears once per session instead of on every request. Print, JSON and RPC modes still log it on stderr ([#337](https://github.com/glows777/Vela/issues/337)).
+
 ## [0.6.0] - 2026-11-12
 
 ### Breaking Changes

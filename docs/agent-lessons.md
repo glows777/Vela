@@ -61,3 +61,9 @@ AI/bot review should have caught it. The case now finds the hop with `lastUserTe
 [Issue #279](https://github.com/glows777/Vela/issues/279). A first run without a model rendered the header's `/model` hint and the `[model] No model available…` diagnostic before the setup wizard opened, so the screen told the user to do what the wizard was already doing, and both strings stayed in the transcript afterwards.
 
 Model guidance belongs to a state the wizard is about to leave: while the startup wizard runs, it owns those messages, and a cancelled setup brings the hint back. The mechanism is the prefix assertion in `test/e2e/cli.test.ts` (no hint or diagnostic before `Choose a provider`) and the in-process TUI case that checks the hint returns after cancel; both fail without the quiet startup open.
+
+## SDK warnings in interactive mode belong in the chat log
+
+[Issue #337](https://github.com/glows777/Vela/issues/337). After [#335](https://github.com/glows777/Vela/pull/335) upgraded the AI SDK, an MCP record tool with a `propertyNames` schema made the OpenAI-compatible adapter report a compatibility warning. The SDK writes warnings through `process.emitWarning`, not `console.*`, so the TUI's console capture missed them: stderr painted over the screen on every request. The pre-PR tests covered the request payload and the returned warning, not where the warning was displayed.
+
+Interactive mode now installs `globalThis.AI_SDK_LOG_WARNINGS` for its lifetime, shows each formatted warning once, and restores the previous value on shutdown. The layer was human review: #334 named this display follow-up but closed without an issue for it. The mechanism is the TUI case in `test/e2e/tui-sdk-warnings.test.ts`, which drives the real OpenAI Responses adapter and a `propertyNames` tool, and the SDK warning journey in [verify-vela](../.skills/verify-vela/journeys.md) that repeats it through the real CLI.
