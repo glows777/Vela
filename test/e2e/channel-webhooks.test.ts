@@ -442,7 +442,7 @@ test('closing one watched PR keeps the repository feed and other PR subscription
   await f.subscribe(172, 'one')
   f.model.push(
     fauxText('Closed'),
-    fauxText('Reopened issue'),
+    fauxText('Feed after close'),
     fauxText('Suite'),
   )
   expect(
@@ -527,7 +527,10 @@ test('GitHub app/repository/event filters and empty mapping drop without work or
     [{ ...suite(), repository: { full_name: 'other/repo' } }, 'check_suite'],
     [{ ...suite(), action: 'requested' }, 'check_suite'],
     [{ ...suite(), action: 'created' }, 'pull_request_review_comment'],
-    [{ ...issuePayload('deleted') }, 'issues'],
+    [
+      issueComment('ordinary issue without a feed subscription'),
+      'issue_comment',
+    ],
   ] as const)
     expect(
       (await send(f.url, payload, event, crypto.randomUUID())).status,

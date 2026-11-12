@@ -83,7 +83,7 @@ export function githubEvents(
   }
   if (!(type in actions)) return []
   const raw = record.parse(input)
-  if (!actions[type]!.includes(String(raw.action))) return []
+  if (!actions[type]?.includes(String(raw.action))) return []
   const { repository } = envelope.parse(raw)
   const repo = repository.full_name
   if (
