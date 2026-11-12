@@ -2,9 +2,8 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
-import { Glob } from 'bun'
+import { $ } from 'bun'
 
-const SKIP = /(^|\/)(node_modules|dist)\//
 const FENCE = /^(```|~~~)/
 
 /** Prose lines only: links inside fenced code are examples, not navigation. */
@@ -63,7 +62,7 @@ export function brokenLinks(
   return broken
 }
 
-/** Every tracked-looking Markdown file under `root`; returns `file: target: reason` lines. */
+/** Every tracked Markdown file under `root`; returns `file: target: reason` lines. */
 export async function checkDocLinks(root: string): Promise<string[]> {
   const problems: string[] = []
   const cache = new Map<string, string | undefined>()
@@ -71,9 +70,9 @@ export async function checkDocLinks(root: string): Promise<string[]> {
     if (!cache.has(path)) cache.set(path, existsSync(path) ? '' : undefined)
     return cache.get(path)
   }
-  const files: string[] = []
-  for await (const file of new Glob('**/*.md').scan({ cwd: root, dot: true }))
-    if (!SKIP.test(file)) files.push(file)
+  // Tracked files only: the build copies docs/ and examples/ into packages/vela/, gitignored.
+  const tracked = await $`git ls-files -z -- '*.md'`.cwd(root).text()
+  const files = tracked.split('\0').filter(Boolean)
   for (const file of files)
     cache.set(join(root, file), await readFile(join(root, file), 'utf8'))
   for (const file of files.sort())
