@@ -194,7 +194,8 @@ The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent b
         "github": {
           "secret": "$VELA_GITHUB_WEBHOOK_SECRET",
           "repositories": ["glows777/Vela"],
-          "apps": ["github-actions"]
+          "apps": ["github-actions"],
+          "issueLabels": ["to:vela"]
         }
       }
     }
@@ -202,7 +203,7 @@ The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent b
 }
 ```
 
-The SDK passes the same section in `createChannelVela({ extensionConfig: ... })` / `createVela(...)`, with a literal secret supplied by the host; the SDK never reads environment variables. Project sections require trust and merge through the existing settings rules. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
+The SDK passes the same section in `createChannelVela({ extensionConfig: ... })` / `createVela(...)`, with a literal secret supplied by the host; the SDK never reads environment variables. Project sections require trust and merge through the existing settings rules. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. `issueLabels` lists the Issue labels that wake the repository feed; it defaults to empty, which ignores every `labeled` action. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
 
 The listener starts after channels connect, prints its local URL, and closes during dispose/SIGTERM before channel work drains. An occupied port rejects startup. A successful HTTP response does not wait for a model turn. Two subscriptions share this receiver:
 
@@ -217,7 +218,7 @@ Configure a GitHub repository webhook with JSON content type, a high-entropy sec
 - **Pull request reviews**, action `submitted`: reviewer, state, commit SHA, link and body preview. No fabricated inline-comment count or individual inline-comment events.
 - **Issue comments**, action `created`, on pull requests: author, link and body preview. Delivered only to that PR's subscription.
 - **Issue comments**, action `created`, on ordinary Issues: author, issue title, link and body preview. Delivered only to the repository subscription.
-- **Issues**, actions `opened`, `closed` and `labeled`: issue title, author and link, plus the body preview on `opened`; `labeled` is delivered only for the `to:vela` label. Issue events feed only `github:<owner>/<repo>#issues` and are never final, so closing an Issue leaves the repository subscription in place.
+- **Issues**, actions `opened`, `closed` and `labeled`: issue title, author and link, plus the body preview on `opened`; `labeled` is delivered only for a label listed in `issueLabels`. Issue events feed only `github:<owner>/<repo>#issues` and are never final, so closing an Issue leaves the repository subscription in place.
 - **Pull requests**, action `closed`: both merged and closed-unmerged are final. Enqueue the final notice, then remove matching subscriptions; reopening requires a new subscription.
 
 This set does not cover every push, PR edit or reopen, Issue edits, assignments or other labels, inline review comments, or an aggregate CI verdict; there is no polling or token/API lookup.

@@ -14,6 +14,8 @@ export const githubOptions = z
       )
       .min(1),
     apps: z.array(z.string().trim().min(1)).default(['github-actions']),
+    /** Issue labels that wake the repository feed; empty ignores every `labeled` action. */
+    issueLabels: z.array(z.string().trim().min(1)).default([]),
   })
   .strict()
 
@@ -135,7 +137,7 @@ export function githubEvents(
     const details = `Issue: #${item.number} ${item.title}\nAuthor: ${item.user.login}\n${item.html_url}`
     if (raw.action === 'labeled') {
       const { name } = z.object({ name: z.string() }).parse(raw.label)
-      if (name !== 'to:vela') return []
+      if (!options.issueLabels.includes(name)) return []
       return [
         feedEvent(
           `GitHub issue #${item.number} labeled ${name}: ${item.title}`,

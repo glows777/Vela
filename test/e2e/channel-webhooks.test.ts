@@ -80,6 +80,7 @@ function issueComment(body: string, pullRequest = false) {
 async function fixture(
   options: {
     apps?: string[]
+    issueLabels?: string[]
     receiver?: boolean
     enabled?: Set<string>
     cwd?: string
@@ -112,6 +113,7 @@ async function fixture(
                 github: {
                   secret,
                   repositories: [repo],
+                  issueLabels: options.issueLabels ?? ['to:vela'],
                   ...(options.apps ? { apps: options.apps } : {}),
                 },
               },
@@ -363,36 +365,33 @@ test('a group repository subscription receives issue opens, closes, to:vela labe
   ).toEqual([expect.objectContaining({ key: feedKey })])
 })
 
-test('labeled issues reach the repository feed only for the to:vela label', async () => {
-  const f = await fixture()
-  await f.subscribeFeed()
-  const calls = f.model.calls.length
-  expect(
-    (
-      await send(
-        f.url,
-        issuePayload('labeled', { label: { name: 'bug' } }),
-        'issues',
-        'other-label',
-      )
-    ).status,
-  ).toBe(202)
-  await drainChannels(f.vela)
-  expect(f.model.calls.length).toBe(calls)
-  f.model.push(fauxText('Labeled'))
-  expect(
-    (
-      await send(
-        f.url,
-        issuePayload('labeled', { label: { name: 'to:vela' } }),
-        'issues',
-        'to-vela-label',
-      )
-    ).status,
-  ).toBe(202)
-  await drainChannels(f.vela)
-  expect(f.model.calls.length).toBe(calls + 1)
-})
+test.each([
+  ['a configured label', ['needs-triage', 'to:vela'], 'to:vela', 1],
+  ['an unconfigured label', ['needs-triage', 'to:vela'], 'bug', 0],
+  ['every label when none is configured', [], 'to:vela', 0],
+] as const)(
+  'labeled issues reach the repository feed for %s only',
+  async (_label, issueLabels, name, calls) => {
+    const f = await fixture({ issueLabels: [...issueLabels] })
+    await f.subscribeFeed()
+    const before = f.model.calls.length
+    const replies = f.replies.length
+    f.model.push(fauxText('Labeled'))
+    expect(
+      (
+        await send(
+          f.url,
+          issuePayload('labeled', { label: { name } }),
+          'issues',
+          'labeled',
+        )
+      ).status,
+    ).toBe(202)
+    await drainChannels(f.vela)
+    expect(f.model.calls.length).toBe(before + calls)
+    expect(f.replies.length).toBe(replies + calls)
+  },
+)
 
 test('a PR comment reaches only its PR topic and an ordinary issue comment reaches only the repository feed', async () => {
   const f = await fixture()
@@ -723,6 +722,8 @@ test.each([
   { github: { secret, repositories: [] } },
   { github: { secret, repositories: ['*'] } },
   { github: { secret, repositories: [repo], apps: [''] } },
+  { github: { secret, repositories: [repo], issueLabels: [''] } },
+  { github: { secret, repositories: [repo], issueLabels: 'to:vela' } },
 ])(
   'invalid receiver configuration fails before listening: %j',
   async (eventReceiver) => {
