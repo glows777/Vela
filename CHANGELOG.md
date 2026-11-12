@@ -60,7 +60,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
-- **MCP tools with constrained record keys reach OpenAI-compatible models.** A Zod 3 MCP server publishes `propertyNames` for records (`z.record(z.string().min(1), …)`); the previously pinned `@ai-sdk/openai` rejected that schema before sending the request, failing the whole turn. The upgrade strips the keyword and reports a compatibility warning instead. Key constraints are still enforced locally before a tool runs.
+- **MCP tools with constrained record keys reach OpenAI-compatible models.** A Zod 3 MCP server publishes `propertyNames` for records (`z.record(z.string().min(1), …)`); the previously pinned `@ai-sdk/openai` rejected that schema before sending the request, failing the whole turn. The upgrade strips the keyword from the outgoing request and reports a compatibility warning instead. JSON Schema tools now also validate their input against the original schema before running, so a rejected key comes back to the model as a tool-input error and the MCP server never sees the call.
 
 - **npm READMEs link the released docs.** Each package README on npm now links to the documentation at its release tag instead of `main`, so instructions match the installed version.
 
