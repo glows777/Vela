@@ -1,11 +1,12 @@
 /**
- * Quality ratchet: three checks that stop the codebase from getting more tangled than it is today.
+ * Quality ratchet: checks that stop the codebase from getting more tangled than it is today.
  *
  * - knip reports no unused files, exports or dependencies;
  * - madge finds no circular dependencies, including type-only imports;
  * - no file under src/ passes 800 lines, except the files that were already over it when the limit
  *   landed: each is pinned at its size that day and may only shrink, so a ceiling that is above its
- *   file must be lowered in the same change.
+ *   file must be lowered in the same change;
+ * - relative links in the Markdown docs point at a file and, with a #fragment, at a heading.
  *
  * The ceilings are numbers in this file. Lowering one is a normal edit; raising one should be
  * visible in review. `bun run quality` runs this locally, CI runs it after lint.
@@ -16,6 +17,7 @@ import { $, Glob } from 'bun'
 // @ts-expect-error madge ships no type definitions
 import madge from 'madge'
 import { checkBoundaries } from './check-boundaries.ts'
+import { checkDocLinks } from './check-doc-links.ts'
 import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -199,6 +201,12 @@ report(
   boundaries.length === 0,
   `package boundaries: ${boundaries.length === 0 ? 'ok' : 'failed'}`,
   boundaries,
+)
+const links = await checkDocLinks(ROOT)
+report(
+  links.length === 0,
+  `doc links: ${links.length === 0 ? 'ok' : `${links.length} broken`}`,
+  links,
 )
 const elapsed = ((performance.now() - started) / 1000).toFixed(1)
 

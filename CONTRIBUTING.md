@@ -20,7 +20,7 @@ VELA_MODEL=mock bun run start   # no API key needed
 Run these before opening a pull request. CI runs the same ones.
 
 ```bash
-bun run test            # unit + e2e tests, offline, about 1–2 minutes
+bun run test            # unit + e2e tests, offline, a few minutes
 bun run typecheck
 bun run lint            # biome check: formatting, import order and lint; bun run lint:fix fixes what it can
 bun run quality        # Knip, strict production dependencies, Madge (incl. type imports), size ceilings and package boundaries
