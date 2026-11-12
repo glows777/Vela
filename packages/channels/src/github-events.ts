@@ -38,6 +38,13 @@ const pr = z.object({
   user: actor,
   head: z.object({ sha: z.string() }),
 })
+const issue = z.object({
+  number,
+  title: z.string(),
+  html_url: z.string(),
+  user: actor,
+  body: z.string().nullable(),
+})
 const suite = z.object({
   app: z.object({ slug: z.string().optional() }),
   head_sha: z.string(),
@@ -67,15 +74,16 @@ export function githubEvents(
   options: z.infer<typeof githubOptions>,
   logger: VelaLogger,
 ): ChannelEvent[] {
-  const actions: Record<string, string> = {
-    check_suite: 'completed',
-    pull_request_review: 'submitted',
-    issue_comment: 'created',
-    pull_request: 'closed',
+  const actions: Record<string, readonly string[]> = {
+    check_suite: ['completed'],
+    pull_request_review: ['submitted'],
+    issue_comment: ['created'],
+    pull_request: ['closed'],
+    issues: ['opened', 'closed', 'labeled'],
   }
   if (!(type in actions)) return []
   const raw = record.parse(input)
-  if (raw.action !== actions[type]) return []
+  if (!actions[type]!.includes(String(raw.action))) return []
   const { repository } = envelope.parse(raw)
   const repo = repository.full_name
   if (
@@ -87,18 +95,26 @@ export function githubEvents(
     return []
   }
   const event = (
-    pr: number,
+    key: string,
     summary: string,
     details: string,
     final?: boolean,
   ): ChannelEvent => ({
     source: 'github',
-    key: `github:${repo}#pr/${pr}`,
+    key,
     deliveryId,
     summary: bounded(summary, 500),
     details: bounded(details, 8192),
     ...(final ? { final: true } : {}),
   })
+  const prEvent = (
+    pr: number,
+    summary: string,
+    details: string,
+    final?: boolean,
+  ) => event(`github:${repo}#pr/${pr}`, summary, details, final)
+  const feedEvent = (summary: string, details: string) =>
+    event(`github:${repo}#issues`, summary, details)
   if (type === 'check_suite') {
     const check = suite.parse(raw.check_suite)
     if (!check.app.slug || !options.apps.includes(check.app.slug)) return []
@@ -107,24 +123,57 @@ export function githubEvents(
       return []
     }
     return [...new Set(check.pull_requests.map((pr) => pr.number))].map((pr) =>
-      event(
+      prEvent(
         pr,
         `GitHub check suite ${check.app.slug} completed: ${check.conclusion ?? 'unknown'} (SHA ${check.head_sha})`,
         `Repository: ${repo}\nPR: #${pr}\nSuite: ${check.app.slug}\nSHA: ${check.head_sha}\nConclusion: ${check.conclusion ?? 'unknown'}\nUpdated: ${check.updated_at}\n${check.url}`,
       ),
     )
   }
+  if (type === 'issues') {
+    const item = issue.parse(raw.issue)
+    const details = `Issue: #${item.number} ${item.title}\nAuthor: ${item.user.login}\n${item.html_url}`
+    if (raw.action === 'labeled') {
+      const { name } = z.object({ name: z.string() }).parse(raw.label)
+      if (name !== 'to:vela') return []
+      return [
+        feedEvent(
+          `GitHub issue #${item.number} labeled ${name}: ${item.title}`,
+          `${details}\nLabel: ${name}`,
+        ),
+      ]
+    }
+    if (raw.action === 'closed')
+      return [
+        feedEvent(
+          `GitHub issue #${item.number} closed: ${item.title}`,
+          details,
+        ),
+      ]
+    return [
+      feedEvent(
+        `GitHub issue #${item.number} opened: ${item.title}`,
+        `${details}\n${item.body ?? ''}`,
+      ),
+    ]
+  }
   if (type === 'issue_comment') {
-    const issue = z
-      .object({ number, pull_request: record.optional() })
+    const target = z
+      .object({ number, title: z.string(), pull_request: record.optional() })
       .parse(raw.issue)
-    if (!issue.pull_request) return []
     const comment = content.parse(raw.comment)
     if (ownBody(comment.body ?? '')) return []
+    if (!target.pull_request)
+      return [
+        feedEvent(
+          `GitHub issue #${target.number}: comment by ${comment.user.login}`,
+          `Issue: #${target.number} ${target.title}\nAuthor: ${comment.user.login}\n${comment.html_url}\n${comment.body ?? ''}`,
+        ),
+      ]
     return [
-      event(
-        issue.number,
-        `GitHub PR #${issue.number}: comment by ${comment.user.login}`,
+      prEvent(
+        target.number,
+        `GitHub PR #${target.number}: comment by ${comment.user.login}`,
         `Author: ${comment.user.login}\n${comment.html_url}\n${comment.body ?? ''}`,
       ),
     ]
@@ -134,7 +183,7 @@ export function githubEvents(
     const item = review.parse(raw.review)
     if (ownBody(item.body ?? '')) return []
     return [
-      event(
+      prEvent(
         target.number,
         `GitHub PR #${target.number}: ${item.user.login} submitted review (${item.state})`,
         `Reviewer: ${item.user.login}\nState: ${item.state}\nCommit SHA: ${item.commit_id}\n${item.html_url}\n${item.body ?? ''}`,
@@ -144,7 +193,7 @@ export function githubEvents(
   const target = pr.parse(raw.pull_request)
   const state = target.merged ? 'merged' : 'closed without merge'
   return [
-    event(
+    prEvent(
       target.number,
       `GitHub PR #${target.number} ${state}: ${target.title}`,
       `Author: ${target.user.login}\nState: ${state}\nHead SHA: ${target.head.sha}\n${target.html_url}`,

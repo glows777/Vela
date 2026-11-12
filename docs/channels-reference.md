@@ -204,16 +204,25 @@ The channel runtime owns `extensionConfig.channel.eventReceiver`. It is absent b
 
 The SDK passes the same section in `createChannelVela({ extensionConfig: ... })` / `createVela(...)`, with a literal secret supplied by the host; the SDK never reads environment variables. Project sections require trust and merge through the existing settings rules. Repository names must be explicit `owner/repo` values; no wildcard. `apps` defaults to `github-actions`; an explicit list replaces it. The port defaults to 8787 (`0` selects an ephemeral local port for fixture/embedded use). The host is fixed to **127.0.0.1** and has no override.
 
-The listener starts after channels connect, prints its local URL, and closes during dispose/SIGTERM before channel work drains. An occupied port rejects startup. A successful HTTP response does not wait for a model turn. Subscribe from the target conversation with `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#pr/171" })`; this is an exact key, including repository spelling. Enablement and tool permissions still apply; a signed webhook cannot choose a chat or grant authority.
+The listener starts after channels connect, prints its local URL, and closes during dispose/SIGTERM before channel work drains. An occupied port rejects startup. A successful HTTP response does not wait for a model turn. Two subscriptions share this receiver:
+
+- **Repository Issue feed.** Subscribe once from the group that should receive Issue work: `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#issues" })`. Ordinary Issues and their comments then arrive in that group.
+- **One pull request.** Subscribe from the topic that opened or took over the PR: `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#pr/171" })`. Review, CI, comment and close/merge feedback goes to that topic.
+
+These are exact keys, including repository spelling. Each event matches one key, so an ordinary Issue comment never reaches PR subscriptions and a PR comment is not duplicated into the repository feed. Enablement and tool permissions still apply; a signed webhook cannot choose a chat or grant authority.
 
 Configure a GitHub repository webhook with JSON content type, a high-entropy secret matching the setting, and payload URL `https://<your-tunnel-host>/events/github`. Select only:
 
 - **Check suites**, action `completed`, from an allowlisted app. Each supplied PR mapping receives that suite's conclusion, exact SHA, time and link. This is not an aggregate verdict for all PR CI. Empty PR mappings are logged and dropped; there is no token/API lookup or branch-name guessing.
 - **Pull request reviews**, action `submitted`: reviewer, state, commit SHA, link and body preview. No fabricated inline-comment count or individual inline-comment events.
-- **Issue comments**, action `created`, on PRs only: author, link and body preview.
+- **Issue comments**, action `created`, on pull requests: author, link and body preview. Delivered only to that PR's subscription.
+- **Issue comments**, action `created`, on ordinary Issues: author, issue title, link and body preview. Delivered only to the repository subscription.
+- **Issues**, actions `opened`, `closed` and `labeled`: issue title, author and link, plus the body preview on `opened`; `labeled` is delivered only for the `to:vela` label. Issue events feed only `github:<owner>/<repo>#issues` and are never final, so closing an Issue leaves the repository subscription in place.
 - **Pull requests**, action `closed`: both merged and closed-unmerged are final. Enqueue the final notice, then remove matching subscriptions; reopening requires a new subscription.
 
-Vela-authored PR conversation comments and reviews must end with an independent final line `<!-- vela:event-origin -->`. The adapter checks the complete body before truncation and ignores those events; unmarked content by the same author still wakes the conversation. This marker is a collaboration convention, not authentication. Summaries/previews are bounded (500/8192 characters with a truncation marker), queued as untrusted data, and never download logs, diffs or payload URLs.
+This set does not cover every push, PR edit or reopen, Issue edits, assignments or other labels, inline review comments, or an aggregate CI verdict; there is no polling or token/API lookup.
+
+Vela-authored Issue or PR conversation comments and reviews must end with an independent final line `<!-- vela:event-origin -->`. The adapter checks the complete body before truncation and ignores those events; unmarked content by the same author still wakes the conversation. This marker is a collaboration convention, not authentication. Summaries/previews are bounded (500/8192 characters with a truncation marker), queued as untrusted data, and never download logs, diffs or payload URLs.
 
 The GitHub adapter registers only `POST /events/github`. The receiver limits the raw request to **1 MiB**, including streamed bodies without Content-Length. It verifies [`X-Hub-Signature-256` HMAC-SHA256](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) against the original bytes with a constant-time comparison before JSON parsing. Wrong/missing signatures return 403 without consuming a delivery ID; malformed authenticated payloads return 400, oversize bodies 413, and publication failures 503. Unconfigured routes/other methods return 404/405.
 
