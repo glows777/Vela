@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -38,7 +39,7 @@ test('canonical aliases and concurrent opens reuse opaque project identity acros
     store.openProject(alias),
   ])
   expect(second).toEqual(first)
-  expect(first.cwd).toBe(cwd)
+  expect(first.cwd).toBe(await realpath(cwd))
   expect(first.id).not.toContain(cwd)
   const again = new LocalStore(data)
   await again.load()

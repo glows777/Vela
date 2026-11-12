@@ -804,7 +804,7 @@ test('exit report requires three valid runs and reports G7 components separately
   )
 })
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -839,8 +839,11 @@ async function exitAttempt(
   responses: FauxStep[],
   history = false,
   artifactName = 'artifacts',
+  aliasedRoot = false,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'vela-exit-eval-test-'))
+  const workRoot = aliasedRoot ? join(root, 'alias') : root
+  if (aliasedRoot) await symlink(root, workRoot, 'dir')
   const model = createFauxModel({ responses })
   const originalFake = exitHelpers[exitHelperName]
   const fakeSpy = history
@@ -860,7 +863,7 @@ async function exitAttempt(
       })
     : undefined
   try {
-    const cwd = join(root, 'work')
+    const cwd = join(workRoot, 'work')
     await command(root, ['git', 'init', '-q', cwd])
     await command(cwd, [
       'git',
@@ -879,7 +882,7 @@ async function exitAttempt(
       {
         runtime: exitRuntime,
         cwd,
-        artifactDir: join(root, artifactName),
+        artifactDir: join(workRoot, artifactName),
         scenario,
         arm: 'new',
         run: 1,
@@ -890,7 +893,7 @@ async function exitAttempt(
       model,
     )
     const snapshot = await Bun.file(
-      join(root, artifactName, 'memory-after-topic-1.json'),
+      join(workRoot, artifactName, 'memory-after-topic-1.json'),
     )
       .json()
       .catch(() => undefined)
@@ -1800,44 +1803,49 @@ for (const id of ['G7', 'G8'] as const) {
   })
 }
 
-test('G8 worker can inspect its absolute workspace under an eval ancestor before valid recall', async () => {
-  let workspace = ''
-  const { result, pending, snapshot } = await exitAttempt(
-    'G8',
-    [
-      fauxToolCall('memory', stagingMemory),
-      fauxText('The kestrel deploy is delayed to 22:00.'),
-      fauxToolCall('bash', { command: 'pwd' }),
-      (request) => {
-        workspace = request.toolResults[0]!.output.trim()
-        expect(workspace.startsWith('/')).toBe(true)
-        expect(workspace).toContain('/.vela-eval/')
-        return fauxToolCall('bash', {
-          command: `ls -la '${workspace.replaceAll("'", "'\\''")}'`,
-        })
-      },
-      fauxToolCall('memory', {
-        action: 'read',
-        filename: 'project_staging-server.md',
-      }),
-      fauxText('The staging server is called kestrel.'),
-    ],
-    false,
-    '.vela-eval',
-  )
-  const diskCalls = result.evidence!.calls.filter(
-    (call) => call.phase === 1 && call.name === 'bash',
-  )
-  expect(diskCalls).toHaveLength(2)
-  expect(diskCalls.every((call) => call.success)).toBe(true)
-  expect(diskCalls[1]!.args.command).toContain(workspace)
-  expect(snapshot).toEqual([
-    expect.objectContaining({ content: stagingMemory.content }),
-  ])
-  expect(result.checks).toEqual([
-    { name: 'store', pass: true },
-    { name: 'recall', pass: true },
-  ])
-  expect(result.status).toBe('pass')
-  expect(pending).toBe(0)
-})
+test.each(['direct', 'symlink'])(
+  'G8 worker can inspect its absolute workspace under an eval ancestor before valid recall (%s)',
+  async (rootKind) => {
+    let workspace = ''
+    const { result, pending, snapshot } = await exitAttempt(
+      'G8',
+      [
+        fauxToolCall('memory', stagingMemory),
+        fauxText('The kestrel deploy is delayed to 22:00.'),
+        fauxToolCall('bash', { command: 'pwd' }),
+        (request) => {
+          workspace = request.toolResults[0]!.output.trim()
+          expect(workspace.startsWith('/')).toBe(true)
+          expect(workspace).toContain('/.vela-eval/')
+          return fauxToolCall('bash', {
+            command: `ls -la '${workspace.replaceAll("'", "'\\''")}'`,
+          })
+        },
+        fauxToolCall('memory', {
+          action: 'read',
+          filename: 'project_staging-server.md',
+        }),
+        fauxText('The staging server is called kestrel.'),
+      ],
+      false,
+      '.vela-eval',
+      rootKind === 'symlink',
+    )
+    expect(result.evidence!.recallPaths!.workspace).toBe(workspace)
+    const diskCalls = result.evidence!.calls.filter(
+      (call) => call.phase === 1 && call.name === 'bash',
+    )
+    expect(diskCalls).toHaveLength(2)
+    expect(diskCalls.every((call) => call.success)).toBe(true)
+    expect(diskCalls[1]!.args.command).toContain(workspace)
+    expect(snapshot).toEqual([
+      expect.objectContaining({ content: stagingMemory.content }),
+    ])
+    expect(result.checks).toEqual([
+      { name: 'store', pass: true },
+      { name: 'recall', pass: true },
+    ])
+    expect(result.status).toBe('pass')
+    expect(pending).toBe(0)
+  },
+)
