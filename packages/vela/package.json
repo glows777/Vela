@@ -34,7 +34,7 @@
     "@glows777/vela-lark": "workspace:*",
     "@glows777/vela-mcp": "workspace:*",
     "@glows777/vela-rag": "workspace:*",
-    "ai": "^7.0.130",
+    "ai": "^7.0.170",
     "diff": "8.0.4"
   },
   "files": [

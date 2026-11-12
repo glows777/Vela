@@ -5,9 +5,9 @@
     "": {
       "name": "vela",
       "devDependencies": {
-        "@ai-sdk/anthropic": "^4.0.74",
-        "@ai-sdk/openai": "^4.0.86",
-        "@ai-sdk/provider": "^4.0.24",
+        "@ai-sdk/anthropic": "^4.0.102",
+        "@ai-sdk/openai": "^4.0.115",
+        "@ai-sdk/provider": "^4.0.37",
         "@biomejs/biome": "2.5.8",
         "@earendil-works/pi-tui": "^1.0.4",
         "@glows777/vela": "workspace:*",
@@ -22,7 +22,7 @@
         "@types/bun": "1.4.0",
         "@types/node": "^25",
         "@types/turndown": "^5.0.6",
-        "ai": "^7.0.130",
+        "ai": "^7.0.170",
         "knip": "6.42.1",
         "madge": "8.0.0",
         "typescript": "^6.0.3",
@@ -42,12 +42,12 @@
       "name": "@glows777/vela-core",
       "version": "0.6.0-rc.1",
       "dependencies": {
-        "@ai-sdk/anthropic": "^4.0.74",
-        "@ai-sdk/openai": "^4.0.86",
-        "@ai-sdk/provider": "^4.0.24",
+        "@ai-sdk/anthropic": "^4.0.102",
+        "@ai-sdk/openai": "^4.0.115",
+        "@ai-sdk/provider": "^4.0.37",
         "@cfworker/json-schema": "^4.1.1",
         "@silvia-odwyer/photon-node": "^0.3.4",
-        "ai": "^7.0.130",
+        "ai": "^7.0.170",
         "diff": "8.0.4",
         "turndown": "^7.2.4",
         "yaml": "^2.9.1",
@@ -70,16 +70,16 @@
       "dependencies": {
         "@glows777/vela-core": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.32.1",
-        "ai": "^7.0.130",
+        "ai": "^7.0.170",
       },
     },
     "packages/rag": {
       "name": "@glows777/vela-rag",
       "version": "0.6.0-rc.1",
       "dependencies": {
-        "@ai-sdk/openai": "^4.0.86",
+        "@ai-sdk/openai": "^4.0.115",
         "@glows777/vela-core": "workspace:*",
-        "ai": "^7.0.130",
+        "ai": "^7.0.170",
         "sqlite-vec": "^0.1.9",
         "zod": "^4.4.3",
       },
@@ -97,7 +97,7 @@
         "@glows777/vela-lark": "workspace:*",
         "@glows777/vela-mcp": "workspace:*",
         "@glows777/vela-rag": "workspace:*",
-        "ai": "^7.0.130",
+        "ai": "^7.0.170",
         "diff": "8.0.4",
       },
     },
@@ -106,15 +106,15 @@
     "minimatch": "11.0.1",
   },
   "packages": {
-    "@ai-sdk/anthropic": ["@ai-sdk/anthropic@4.0.74", "", { "dependencies": { "@ai-sdk/provider": "4.0.24", "@ai-sdk/provider-utils": "5.0.56" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-q/A7hCZSsCknmC1TtyNkBgNlT12hbKOWrgyb1UdPpIAO9sZcFS0nilZFIsW/ugVKG+hd6bU1r9NL1Ru33FDwZw=="],
+    "@ai-sdk/anthropic": ["@ai-sdk/anthropic@4.0.102", "", { "dependencies": { "@ai-sdk/provider": "4.0.37", "@ai-sdk/provider-utils": "5.0.79" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-uD7FjOP+f0/S5G38O1Qoi9SMKgHtcKXCLIqsQ5XIxZ8j9MCBRqUc0Rbyt6FZNqiu6r+M+whfunu4CvquE1hO2Q=="],
 
-    "@ai-sdk/gateway": ["@ai-sdk/gateway@4.0.106", "", { "dependencies": { "@ai-sdk/provider": "4.0.24", "@ai-sdk/provider-utils": "5.0.56", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-NprSdFzyVnbEp2SDWtIgsCFIUHFCehOD9S6FQkF/dLrCmnke8w4SOK3KcmUUiEbwtVzlUF8prkaELp+ohcQaQw=="],
+    "@ai-sdk/gateway": ["@ai-sdk/gateway@4.0.143", "", { "dependencies": { "@ai-sdk/provider": "4.0.37", "@ai-sdk/provider-utils": "5.0.79", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-N+n+7oHGtx4PtetjcBSe48ANVrcHTVV3rJtEfrPMUJMtak2Iw3aDhDFf7nxfpqKVEPMf7XvQ1dJ9yexdMEJiSw=="],
 
-    "@ai-sdk/openai": ["@ai-sdk/openai@4.0.86", "", { "dependencies": { "@ai-sdk/provider": "4.0.24", "@ai-sdk/provider-utils": "5.0.56" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-sbUHayMvjAYV6ELydYXFTr5UBX5qyYmRELqZR3tV0dieUhgUYd8dED9bwEgqZJNJU6V8GGLOlaEpL1ltbNXA/g=="],
+    "@ai-sdk/openai": ["@ai-sdk/openai@4.0.115", "", { "dependencies": { "@ai-sdk/provider": "4.0.37", "@ai-sdk/provider-utils": "5.0.79" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-q0tHPKxPLPwaTVY318Z/FvGWV98bnYrr2mqKz9qTtw4xwshykzkMZcxiSSv5K8y2152GSrB1ts9Up9l5J2w0qA=="],
 
-    "@ai-sdk/provider": ["@ai-sdk/provider@4.0.24", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-iztFqJTdxNN0ZzqZAAnVPMhRMaL1bfQFa3GIPAffWQ0+dP2FXIkyMD8kHeEI7EpB/C6TR45cqOkrS7YZZ1sATA=="],
+    "@ai-sdk/provider": ["@ai-sdk/provider@4.0.37", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-4uPgZ3qiX/JaQFr0dQoibUzHImZit9u05ro2BxGUnJwU4fV28BOAbKUa2OjQvqtM1tMac3bTKkaXdyzGovQXqg=="],
 
-    "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.56", "", { "dependencies": { "@ai-sdk/provider": "4.0.24", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8", "undici": "^7.29.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-F7/U1YpVXEfSxRHbxScm0PVdr9lN6GaUWHnt8ws2UjuGeuxWHqCkV25dGpHAkpDHkuIXoC+aak/OqSylKSJmHw=="],
+    "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.79", "", { "dependencies": { "@ai-sdk/provider": "4.0.37", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8", "undici": "^7.29.1" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-IYu6MT0NDE3JFWBWEJWAXjhskHTSj6NfRp9FuEAOcyS2Jrj3qBePu7OEoXVmoCWT3pYPgrF4DBKzjjjOMRyw9Q=="],
 
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.7", "", {}, "sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw=="],
 
@@ -326,7 +326,7 @@
 
     "agent-base": ["agent-base@6.0.2", "", { "dependencies": { "debug": "4" } }, "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ=="],
 
-    "ai": ["ai@7.0.130", "", { "dependencies": { "@ai-sdk/gateway": "4.0.106", "@ai-sdk/provider": "4.0.24", "@ai-sdk/provider-utils": "5.0.56" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-QkBkCogl46jXUg0SrSsdqQlOI2ZVMCjfnbBQS8t3gE21U/SO17oNMVFyjmcC9z20wOoYUA+2O2vsso0maoS7dw=="],
+    "ai": ["ai@7.0.170", "", { "dependencies": { "@ai-sdk/gateway": "4.0.143", "@ai-sdk/provider": "4.0.37", "@ai-sdk/provider-utils": "5.0.79" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-hvgFzDNuheJA+FEN0nieIvKgjriGBd5b1Z4ntvJ5fAQel9l4Og0aUVBuPH5hbk5sx1pomtbC92cy/Vj/QIU4ig=="],
 
     "ajv": ["ajv@8.20.0", "", { "dependencies": { "fast-deep-equal": "^3.1.3", "fast-uri": "^3.0.1", "json-schema-traverse": "^1.0.0", "require-from-string": "^2.0.2" } }, "sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA=="],
 

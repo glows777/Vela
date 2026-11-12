@@ -40,12 +40,12 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.74",
-    "@ai-sdk/openai": "^4.0.86",
-    "@ai-sdk/provider": "^4.0.24",
+    "@ai-sdk/anthropic": "^4.0.102",
+    "@ai-sdk/openai": "^4.0.115",
+    "@ai-sdk/provider": "^4.0.37",
     "@cfworker/json-schema": "^4.1.1",
     "@silvia-odwyer/photon-node": "^0.3.4",
-    "ai": "^7.0.130",
+    "ai": "^7.0.170",
     "diff": "8.0.4",
     "turndown": "^7.2.4",
     "yaml": "^2.9.1",
