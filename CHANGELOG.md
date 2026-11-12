@@ -54,11 +54,15 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Usage is logged to `usage/requests.jsonl`.** The ledger holds every request, not only today's, so the old `today.jsonl` name was misleading. The next run that logs usage renames an existing `usage/today.jsonl`, so recorded usage carries over unchanged.
 
+- **AI SDK upgrade.** `ai` 7.0.170 with `@ai-sdk/openai` 4.0.115 and `@ai-sdk/anthropic` 4.0.102. On OpenAI-compatible Responses endpoints, thinking level `off` now sends `reasoning: { effort: "none" }` for model IDs the SDK does not recognize, where the previous SDK omitted the field; a recognized ID whose effort list excludes `none` (for example `gpt-6`) maps it to its lowest supported effort. The public API snapshot gains the SDK's `interrupted` finish reason.
+
 ### Removed
 
 - **The Feishu → Lark migration utility is gone.** Vela 0.6 does not migrate 0.4-era Feishu settings or data. Upgrade through 0.5.x first, where the migration utility is still available; deployments already on 0.5 using `LARK_*` and `builtin:lark` need no changes ([#269](https://github.com/glows777/Vela/issues/269)).
 
 ### Fixed
+
+- **MCP tools with constrained record keys reach OpenAI-compatible models.** A Zod 3 MCP server publishes `propertyNames` for records (`z.record(z.string().min(1), …)`); the previously pinned `@ai-sdk/openai` rejected that schema before sending the request, failing the whole turn. The upgrade strips the keyword from the outgoing request and reports a compatibility warning instead. JSON Schema tools now also validate their input against the original schema before running, so a rejected key comes back to the model as a tool-input error and the MCP server never sees the call.
 
 - **npm READMEs link the released docs.** Each package README on npm now links to the documentation at its release tag instead of `main`, so instructions match the installed version.
 

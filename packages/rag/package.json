@@ -24,9 +24,9 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.86",
+    "@ai-sdk/openai": "^4.0.115",
     "@glows777/vela-core": "workspace:*",
-    "ai": "^7.0.130",
+    "ai": "^7.0.170",
     "sqlite-vec": "^0.1.9",
     "zod": "^4.4.3"
   },

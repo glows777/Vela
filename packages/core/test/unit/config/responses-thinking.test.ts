@@ -350,7 +350,15 @@ test('native OpenAI retains SDK inference, mapping and early model-specific vali
       .doGenerate(params)
     expect(requests[0]).toEqual(requests[1])
     expect(result.warnings).toEqual(direct.warnings)
-    if (id === 'gpt-6') expect(requests[0]?.reasoning).toBeUndefined()
+    // A catalogued model keeps its thinkingLevelMap (off is none); an unknown GPT-6 id cannot disable reasoning,
+    // so the SDK maps none to its lowest supported effort. Vela must not change either.
+    if (id === 'gpt-5.5')
+      expect(requests[0]?.reasoning).toEqual({ effort: 'none' })
+    if (id === 'gpt-6')
+      expect(requests[0]?.reasoning).toEqual({
+        effort: 'low',
+        summary: 'detailed',
+      })
   }
 })
 

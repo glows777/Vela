@@ -80,7 +80,8 @@ test.each([
         overrides: { openai: { compat: references ? {} : { store: false } } },
       }),
     )
-    const model = registry.resolve('openai/deepseek-flash').model
+    // A non-reasoning model keeps this about the store option; reasoning models inline pruned answers (below).
+    const model = registry.resolve('openai/gpt-4.1').model
     if (typeof model === 'string' || model.specificationVersion !== 'v4')
       throw new Error('Expected a v4 provider model')
     const priorAnswer = {
@@ -151,6 +152,48 @@ test.each([
     else expect(requests.at(-1)?.body.store).toBe(false)
   },
 )
+
+test('a reasoning model inlines an earlier answer whose reasoning was pruned', async () => {
+  const requests = captureRequests()
+  const registry = registryOf(
+    loadModels({
+      agentDir: agentDir(),
+      env: { OPENAI_API_KEY: 'test-key' },
+      overrides: { openai: { compat: {} } },
+    }),
+  )
+  const model = registry.resolve('openai/deepseek-flash').model
+  if (typeof model === 'string' || model.specificationVersion !== 'v4')
+    throw new Error('Expected a v4 provider model')
+  await Promise.resolve(
+    model.doGenerate({
+      prompt: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: 'The completed report is cobalt.',
+              providerOptions: {
+                openai: { itemId: 'msg_report', phase: 'final_answer' },
+              },
+            },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      ],
+    }),
+  ).catch(() => {})
+  // Stored reasoning-model messages need their reasoning item; without it OpenAI rejects the reference.
+  expect(requests.at(-1)?.body.input).toEqual([
+    {
+      role: 'assistant',
+      content: 'The completed report is cobalt.',
+      phase: 'final_answer',
+    },
+    { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+  ])
+})
 
 test.each([
   ['openai-responses', 'https://api.deepseek.com', true],
