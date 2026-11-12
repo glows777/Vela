@@ -974,7 +974,7 @@
     tools: string[]
   interface FauxResponse
     error?: string | Error | undefined
-    finishReason?: "error" | "stop" | "length" | "content-filter" | "tool-calls" | "other" | undefined
+    finishReason?: "error" | "stop" | "length" | "content-filter" | "tool-calls" | "interrupted" | "other" | undefined
     hang?: boolean | undefined
     reasoning?: string | undefined
     streamError?: string | undefined
