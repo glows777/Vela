@@ -124,6 +124,8 @@ A resumed session restores its history, name, thinking level and model (if the m
 
 The TUI does not start channels; run [`vela serve`](#serve) for those, in a separate process. It has no channel traffic in the chat log.
 
+AI SDK warnings (for example a provider compatibility notice) appear in the chat log as notices instead of on the terminal, once per session even when the provider repeats them. Print, JSON and RPC modes keep them on stderr.
+
 The fullscreen screen has, from top to bottom: a header with the session id and loaded extensions, the chat log, queued messages, a status line while the agent runs, extension widgets, the editor, and a footer. When context files were loaded, the chat log starts with a `[context]` line naming them. `/status` lists the same paths. The footer shows the folder and session name, tokens in and out, cost when known, context usage, the model and the thinking level, followed by any extension status texts. The editor border color follows the thinking level.
 
 The header, editor and footer stay in place while the transcript scrolls. The transcript follows streamed output while you are at the bottom. If you scroll up, output continues but the viewport stays at your reading position, and Vela shows `↓ New output · scroll to bottom`. Scroll back to the bottom or press Ctrl+End to jump to the latest output and resume following it.

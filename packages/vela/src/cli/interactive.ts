@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { format } from 'node:util'
 import {
   CombinedAutocompleteProvider,
   type Component,
@@ -65,6 +64,7 @@ import { Footer } from './tui/footer.ts'
 import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
 import { larkSetup } from './tui/lark-setup.ts'
 import { createInteractiveTui } from './tui/layout.ts'
+import { captureCliLogs } from './tui/logs.ts'
 import { isModelUsable } from './tui/model-availability.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
@@ -130,7 +130,7 @@ export class InteractiveMode {
   private shownError?: unknown
   private readonly widgetLines = new Map<string, string[]>()
   private dialogs = Promise.resolve()
-  private restoreConsole?: () => void
+  private restoreLogs?: () => void
   private readonly cleanups: (() => void)[] = []
   private shuttingDown = false
   private clipboardDir?: string
@@ -193,7 +193,7 @@ export class InteractiveMode {
     const { vela, options } = this
     this.tui.start()
     this.tui.setFocus(this.editor)
-    this.captureConsole()
+    this.captureLogs()
     this.registerSignalHandlers()
     options.attachLogger?.((level, message) => this.addNotice(message, level))
     vela.subscribe((event, sessionId) => this.onEvent(event, sessionId))
@@ -1306,23 +1306,11 @@ export class InteractiveMode {
 
   // ---------------------------------------------------------------- Exit
 
-  /** console output would garble the screen while the TUI runs: turn it into notice lines in the chat log */
-  private captureConsole(): void {
-    const original = {
-      log: console.log,
-      info: console.info,
-      warn: console.warn,
-      error: console.error,
-    }
-    const to =
-      (level: LogLevel | 'dim') =>
-      (...args: unknown[]) =>
-        this.addNotice(format(...args), level)
-    console.log = to('dim')
-    console.info = to('dim')
-    console.warn = to('warning')
-    console.error = to('error')
-    this.restoreConsole = () => Object.assign(console, original)
+  /** console output and AI SDK warnings would garble the screen: turn them into notice lines in the chat log */
+  private captureLogs(): void {
+    this.restoreLogs = captureCliLogs((text, level) =>
+      this.addNotice(text, level),
+    )
   }
 
   /**
@@ -1353,7 +1341,7 @@ export class InteractiveMode {
       try {
         this.tui.stop()
       } catch {}
-      this.restoreConsole?.()
+      this.restoreLogs?.()
       console.error('vela exited due to an uncaught exception:', error)
       process.exit(1)
     }
@@ -1376,7 +1364,7 @@ export class InteractiveMode {
       try {
         this.tui.stop()
       } catch {}
-      this.restoreConsole?.()
+      this.restoreLogs?.()
     }
     try {
       if (!options.fromSignal) restore()
