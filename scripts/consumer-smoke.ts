@@ -202,6 +202,7 @@ const CHANNELS = `
 import assert from 'node:assert/strict'
 import {createHmac} from 'node:crypto'
 import {mkdtemp,mkdir,rm} from 'node:fs/promises'
+import {request as httpRequest} from 'node:http'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent} from '@glows777/vela-channels'
@@ -224,7 +225,17 @@ try{
   const post=(signature:string,body=raw)=>fetch(hookURL,{method:'POST',headers:{'x-github-event':'pull_request','x-github-delivery':'packed-http','x-hub-signature-256':signature},body})
   assert.equal((await post('sha256=bad')).status,403);assert.equal((await post(signed)).status,202);await drainChannels(hooks)
   const calls=hookModel.calls.length;assert(replies.includes('webhook handled'));assert.equal((await post(signed)).status,202);await drainChannels(hooks);assert.equal(hookModel.calls.length,calls)
-  assert.equal((await post(signed,'x'.repeat(1048577))).status,413)
+  // Inspect the early 413 before uploading: fetch can surface EPIPE when the receiver closes an oversized request.
+  const oversizedStatus=await new Promise<number>((resolve,reject)=>{
+    const req=httpRequest(hookURL,{method:'POST',headers:{'content-length':1048577},signal:AbortSignal.timeout(10000)},res=>{
+      res.resume()
+      res.once('error',reject)
+      res.once('end',()=>{resolve(res.statusCode!);req.destroy()})
+    })
+    req.once('error',reject)
+    req.flushHeaders()
+  })
+  assert.equal(oversizedStatus,413)
   console.log('packed signed HTTP -> GitHub final event -> channel queue ok; wrong signature/duplicate/oversize blocked')
   hookModel.push(fauxToolCall('channel_subscriptions',{action:'create',source:'sentry',key:'sentry:project'}),fauxText('generic subscribed'),fauxText('generic handled'))
   receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'subscribe generic'});await drainChannels(hooks)
