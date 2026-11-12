@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Changed
+
+- **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
+
 ## [0.6.0] - 2026-11-12
 
 ### Breaking Changes

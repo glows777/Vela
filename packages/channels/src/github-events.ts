@@ -26,6 +26,7 @@ const envelope = z.object({
 })
 const number = z.number().int().positive()
 const actor = z.object({ login: z.string() })
+const label = z.object({ name: z.string() })
 const content = z.object({
   body: z.string().nullable(),
   user: actor,
@@ -46,6 +47,7 @@ const issue = z.object({
   html_url: z.string(),
   user: actor,
   body: z.string().nullable(),
+  labels: z.array(label).default([]),
 })
 const suite = z.object({
   app: z.object({ slug: z.string().optional() }),
@@ -66,6 +68,17 @@ function bounded(text: string, limit: number): string {
 /** The marker is a convention, not authentication; inspect the full body, before truncation. */
 function ownBody(body: string): boolean {
   return body.trimEnd().split(/\r?\n/).at(-1) === '<!-- vela:event-origin -->'
+}
+
+/** A nonempty allowlist gates the feed; an empty one keeps every Issue event. */
+function wakeLabel(
+  item: { labels: readonly { name: string }[] },
+  allowlist: readonly string[],
+): boolean {
+  return (
+    allowlist.length === 0 ||
+    item.labels.some((each) => allowlist.includes(each.name))
+  )
 }
 
 /** Pure mapping after authentication. Never fetches payload links or guesses missing PR mappings. */
@@ -145,6 +158,7 @@ export function githubEvents(
         ),
       ]
     }
+    if (!wakeLabel(item, options.issueLabels)) return []
     if (raw.action === 'closed')
       return [
         feedEvent(
@@ -161,17 +175,24 @@ export function githubEvents(
   }
   if (type === 'issue_comment') {
     const target = z
-      .object({ number, title: z.string(), pull_request: record.optional() })
+      .object({
+        number,
+        title: z.string(),
+        pull_request: record.optional(),
+        labels: z.array(label).default([]),
+      })
       .parse(raw.issue)
     const comment = content.parse(raw.comment)
     if (ownBody(comment.body ?? '')) return []
-    if (!target.pull_request)
+    if (!target.pull_request) {
+      if (!wakeLabel(target, options.issueLabels)) return []
       return [
         feedEvent(
           `GitHub issue #${target.number}: comment by ${comment.user.login}`,
           `Issue: #${target.number} ${target.title}\nAuthor: ${comment.user.login}\n${comment.html_url}\n${comment.body ?? ''}`,
         ),
       ]
+    }
     return [
       prEvent(
         target.number,
