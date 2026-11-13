@@ -1,8 +1,12 @@
-import type { ChannelSessionSnapshot } from './types.ts'
+import type {
+  ChannelHost,
+  ChannelSessionSnapshot,
+  IncomingMessage,
+} from './types.ts'
 
-/** Local HTTP/SSE protocol v1. The token grants the daemon's configured tool authority. */
+/** Local project channel. A token enables authenticated loopback HTTP/SSE; omitted means no listener. */
 export interface LocalOptions {
-  token: string
+  token?: string
   /** Fixed loopback listener; default 8788. Zero selects an ephemeral SDK port. */
   port?: number
   timezone?: string
@@ -53,4 +57,39 @@ export type LocalEvent = LocalEventData & {
   projectId?: string
   sessionId?: string
   runId?: string
+}
+
+/** Host validation failures use the same safe codes as the Local HTTP protocol. */
+export class LocalError extends Error {
+  constructor(
+    readonly code: 'invalid_request' | 'not_found' | 'unavailable',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'LocalError'
+  }
+}
+
+/** In-process Local project API over the same store and channel runtime as HTTP. */
+export interface LocalHost extends ChannelHost {
+  projects(): LocalProject[]
+  openProject(input: { cwd: string; name?: string }): Promise<LocalProject>
+  sessions(projectId?: string): LocalSession[]
+  messages(input: {
+    projectId: string
+    sessionId: string
+    after?: string
+    limit?: number
+  }): { messages: LocalMessage[]; nextCursor?: string }
+  submit(message: IncomingMessage): Promise<{ sessionId: string }>
+  submit(input: {
+    projectId: string
+    sessionId: string
+    text: string
+    clientMessageId?: string
+  }): Promise<{ sessionId: string; messageId: string }>
+  onEvent(
+    listener: (event: LocalEvent) => void,
+    options?: { projectId?: string },
+  ): () => void
 }

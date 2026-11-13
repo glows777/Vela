@@ -51,7 +51,37 @@ The schedule format, deployment timezone, future-time validation, 20-per-chat ca
 
 For another adapter, optional `ChannelDefinition.onConnection(listener)` reports live state and returns an unsubscribe callback; without it, the gateway uses `start()` success/failure. Error strings from an adapter must be safe for host display. Connection state is informational: `runningChannels()` still means successful startup, and disconnects do not change routine scheduling or replay submitted messages.
 
-Local in this release still starts its authenticated HTTP/SSE transport and reports connected only after startup succeeds. The host's low-level `submit` does not add Local user messages to visible history; use the existing Local HTTP API for its composer. The no-listener Local core and direct projects/messages/events API are the next part of #312, not part of this host-entry change.
+Local reports connected after its store and optional listener are ready. `local({})` (or `local({ timezone })`) starts the in-process core without opening any listener. Providing a nonempty `token` enables the existing authenticated loopback HTTP/SSE adapter; `port` alone never enables HTTP.
+
+### Local projects and visible history
+
+`vela.channel('local')` returns a typed `LocalHost`, extending `ChannelHost` without another factory, store or runtime. The literal overload is available through both `@glows777/vela-channels` and `@glows777/vela`.
+
+```ts
+const vela = createChannelVela({ extensions: [local({ timezone: 'UTC' })] })
+await vela.ready()
+const host = vela.channel('local')
+const off = host.onEvent(event => updateLocalView(event))
+await vela.startChannels()
+const project = await host.openProject({ cwd: '/absolute/project', name: 'My project' })
+const receipt = await host.submit({
+  projectId: project.id,
+  sessionId: project.sessionId,
+  text: 'Summarize this project',
+  clientMessageId: 'composer-1',
+})
+const history = host.messages({ projectId: project.id, sessionId: receipt.sessionId })
+const sessions = host.sessions(project.id)
+// off(); await vela.dispose() when the host shuts down.
+```
+
+- `projects()` lists detached `LocalProject` values. `openProject({ cwd, name? })` preserves canonical-directory identity and the original name when reopened. It neither runs a model nor loads executable configuration from that project.
+- `sessions(projectId?)` lists one project's sessions or all Local projects, including an empty project's synthetic hub. It never creates a model session. `messages({ projectId, sessionId, after?, limit? })` returns detached visible history with exclusive cursors, default 50 and maximum 100 messages. Addresses and cursors are checked against the project. Text, names and history validation match HTTP.
+- The visible `submit({ projectId, sessionId, text, clientMessageId? })` overload persists the user message before durable runtime admission and returns `{ sessionId, messageId }` without waiting for completion. Failed admission rolls that message back. `clientMessageId` is correlation only, not retry deduplication. The existing `submit(IncomingMessage)` overload remains low-level: it requires a real reply anchor for group input and does not add a visible user message.
+- `onEvent(listener, { projectId? }?)` subscribes to future version-1 `LocalEvent` envelopes. Install it before startup, optionally filtering by a known project ID, then read snapshots. Each listener receives an independent snapshot; thrown/rejected callbacks do not block others. Unsubscribe or disposal clears the subscription. SDK listeners do not receive SSE's connection-only `reset`. When HTTP is enabled, SDK and SSE observe the same event IDs and payloads; disconnecting SSE does not stop SDK events or saved replies.
+- Project/history reads and mutations require successful startup and reject after disposal. `LocalError` exposes safe `invalid_request`, `not_found` or `unavailable` codes for validation and lifecycle failures. Storage/admission failures can throw their underlying error; reconcile durable history before retrying. Stop, status/session subscriptions, idle routines and connection methods retain the common host contracts.
+
+Project cwd, opaque identities, visible-history boundaries, shared triage/task dispatch and persistence are identical to the [Local HTTP protocol](channels.md#local). This API does not add remote access, replay, a new persistence format or a second scheduler.
 
 ## Writing a channel
 

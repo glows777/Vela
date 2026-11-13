@@ -13,6 +13,8 @@ import { GatewayIdle } from './gateway-idle.ts'
 import { GatewayInput } from './gateway-input.ts'
 import { GatewayRun } from './gateway-run.ts'
 import { ChannelHandoff } from './handoff.ts'
+import { LocalChannel } from './local-channel.ts'
+import type { LocalHost } from './local-protocol.ts'
 import { errorMessage } from './log.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { ChannelRoutines } from './routines.ts'
@@ -448,10 +450,15 @@ export class ChannelGateway {
     return this.input.enqueue(channelName, msg).completed
   }
 
+  host(name: 'local'): LocalHost
+  host(name: string): ChannelHost
   host(name: string): ChannelHost {
     const runtime = this.runtimes.get(name)
     if (!runtime) throw new Error(`Unknown channel: ${name}`)
-    return runtime.host
+    const channel = this.channels.get(name)
+    return channel instanceof LocalChannel
+      ? channel.host(runtime.host)
+      : runtime.host
   }
 
   list(): Array<{ name: string; description: string }> {
