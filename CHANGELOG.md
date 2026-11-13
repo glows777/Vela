@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Changed
+
+- **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
+
 ### Fixed
 
 - **Help and the empty `--list-models` message name the built-in DeepSeek key.** `vela --help`, the empty `--list-models` message and `docs/cli.md` now list `DEEPSEEK_API_KEY`; help and docs also add `OPENROUTER_API_KEY`, and the `--model` help line names all four built-in providers ([#330](https://github.com/glows777/Vela/issues/330)).
