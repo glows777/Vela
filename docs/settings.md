@@ -150,7 +150,7 @@ When the model entry has a `contextWindow` `W` (in `models.json` or an extension
 
 ### extensions
 
-A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:web"`, `"+builtin:web"`). `+builtin:` also enables `permission-gate`, which is off by default. Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
+A list of extension files and directories to load, and `builtin:` switches that turn the built-in extensions off and on (`"-builtin:web"`, `"+builtin:web"`). Load order, entry formats and `--no-extensions` are described in [Extensions](extensions.md#where-extensions-load-from).
 
 ### extensionConfig
 

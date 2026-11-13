@@ -9,7 +9,6 @@ import {
   cleanupTestVelas,
   createTestVela,
 } from '../../../../../test/support/vela.ts'
-import { decidePermission } from '../../../src/security/permissions.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
   type ToolDefinition,
@@ -84,73 +83,6 @@ async function rejected(registry: ToolRegistry, attempt: Promise<unknown>) {
       .map((row) => row.status),
   ).toEqual(['rejected'])
 }
-
-test('session permission rules: no rule means allow; exact names beat *', () => {
-  expect(decidePermission('bash')).toBe('allow')
-  expect(decidePermission('bash', {})).toBe('allow')
-  expect(decidePermission('bash', { bash: 'deny' })).toBe('deny')
-  expect(decidePermission('rag_search', { rag_search: 'ask' })).toBe('ask')
-  expect(decidePermission('rag_search', { '*': 'deny' })).toBe('deny')
-  expect(decidePermission('bash', { '*': 'ask' })).toBe('ask')
-  expect(
-    decidePermission('read_file', { '*': 'deny', read_file: 'allow' }),
-  ).toBe('allow')
-})
-
-test('ask runs the confirm callback with the final input; no callback means deny', async () => {
-  const { registry } = fixture()
-  let calls = 0
-  registry.register(
-    fake('bash', {
-      execute: async () => {
-        calls++
-        return 'ran'
-      },
-    }),
-  )
-  registry.setPermissions({ bash: 'ask' })
-  await rejected(registry, invoke(registry, 'bash'))
-  expect(calls).toBe(0)
-
-  const asked: unknown[] = []
-  const forked = registry.fork(
-    new ToolResultStore(join(root, crypto.randomUUID(), 'outputs')),
-    {
-      confirm: async (_name, input) => {
-        asked.push(input)
-        return true
-      },
-    },
-  )
-  forked.setPermissions({ bash: 'ask' })
-  expect(await invoke(forked, 'bash')).toContain('ran')
-  expect(asked).toEqual([{ command: 'echo hello' }])
-})
-
-test('a permission change rejects an already exposed tool and records rejection', async () => {
-  const { registry } = fixture()
-  let calls = 0
-  registry.register(
-    fake('bash', {
-      execute: async () => {
-        calls++
-        return 'bad'
-      },
-    }),
-  )
-  const execute = registry.toAISDKFormat().bash!.execute!
-  registry.setPermissions({ bash: 'deny' })
-  await rejected(
-    registry,
-    Promise.resolve(
-      execute(
-        { command: 'echo hello' },
-        { toolCallId: crypto.randomUUID(), messages: [], context: undefined },
-      ),
-    ),
-  )
-  expect(calls).toBe(0)
-})
 
 test('tool_call modifications chain through handlers into execution and history', async () => {
   const seen: unknown[] = []

@@ -516,10 +516,10 @@ test('bash streams its output as tool_execution_update events while it runs', as
   expect(String(t.model.calls[1]!.toolResults[0]!.output)).toContain('second')
 })
 
-test('a tool calling another tool through ctx.executeTool goes through permissions, hooks and the bash check', async () => {
+test('a tool calling another tool through ctx.executeTool goes through tool selection, hooks and the bash check', async () => {
   const blocked: string[] = []
   const t = createTestVela({
-    session: { permissions: { write_file: 'deny' } },
+    session: { tools: ['-write_file'] },
     responses: [fauxToolCall('runner', {}), fauxText('done')],
     extensions: [
       function blockRead(vela) {

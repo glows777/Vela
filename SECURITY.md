@@ -16,6 +16,6 @@ Vela runs tools with the permissions of the user who started it and treats exten
 
 Reports we want include:
 
-- A session reaching a tool that its `permissions` deny (for example `{ bash: 'deny' }`), or a channel chat reaching a tool its configured `tools` list excludes.
+- A session or channel chat reaching a tool its configured `tools` list excludes.
 - Project settings, extensions or skills loading without the project being trusted.
 - Secrets from settings or environment variables leaking into session files, logs, events or model requests where they are not expected.

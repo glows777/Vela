@@ -26,18 +26,6 @@ export function web(options: WebOptions = {}): VelaExtension {
     if (tavilyKey) vela.registerTool(tavilySearchTool(tavilyKey))
     else if (serperKey) vela.registerTool(serperSearchTool(serperKey))
     else vela.registerTool({ ...tavilySearchTool(''), hostedOnly: true })
-    vela.on('before_provider_request', (event, ctx) => {
-      if (
-        !event.params.tools?.length ||
-        ctx.session.toolDecision('web_search') !== 'ask'
-      )
-        return
-      ctx.ui.notify(
-        tavilyKey || serperKey
-          ? 'Web search uses the configured independent provider and requires approval for each call.'
-          : 'Web search is unavailable: per-call approval requires a configured independent search provider.',
-      )
-    })
   }
 }
 

@@ -4,13 +4,7 @@ import { createInterface } from 'node:readline'
 import { fuzzyFilter } from '@earendil-works/pi-tui'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import type { ModelInfo, ThinkingLevel } from '@glows777/vela-core'
-import {
-  memory,
-  permissionGate,
-  todo,
-  web,
-  webConfig,
-} from '@glows777/vela-core'
+import { memory, todo, web, webConfig } from '@glows777/vela-core'
 import {
   assertSessionId,
   getToolListError,
@@ -33,7 +27,7 @@ import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
 type Env = Record<string, string | undefined>
 
-/** Built-in extensions shipped with the CLI (`builtin:<name>`); DEFAULT_OFF_BUILTINS stay off unless enabled. Config comes from `extensionConfig.<name>`. */
+/** Built-in extensions shipped with the CLI (`builtin:<name>`). Config comes from `extensionConfig.<name>`. */
 export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   memory: () => memory(),
   rag: () => rag(),
@@ -41,11 +35,7 @@ export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
   lark: () => lark(),
   mcp: () => mcp(),
   todo: () => todo(),
-  'permission-gate': () => permissionGate(),
 }
-
-/** Built-ins that stay off until `+builtin:<name>` in settings or `-e builtin:<name>` enables one */
-export const DEFAULT_OFF_BUILTINS: readonly string[] = ['permission-gate']
 
 export interface CliArgs {
   setup?: boolean

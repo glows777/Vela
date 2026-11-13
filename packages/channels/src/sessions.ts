@@ -42,19 +42,25 @@ export class ChannelSessions {
       this.directory.storageKey(channel.name, msg.channelId),
     )
     const options = channel.sessionOptions?.(msg)
+    const hidden = [
+      ...topicSessionOptions({ ...msg, chatKind }).tools,
+      ...(!channel.topicCapabilities
+        ? [
+            '-channel_start_topic',
+            '-channel_forward_to_topic',
+            '-channel_read_topic',
+          ]
+        : []),
+    ]
+    const tools = options?.tools
+    const selection =
+      tools &&
+      !tools.some((name) => name.startsWith('+') || name.startsWith('-'))
     const session = this.session(this.directory.sessionId(key), {
       ...options,
-      permissions: {
-        ...options?.permissions,
-        ...topicSessionOptions({ ...msg, chatKind }).permissions,
-        ...(!channel.topicCapabilities
-          ? {
-              channel_start_topic: 'deny' as const,
-              channel_forward_to_topic: 'deny' as const,
-              channel_read_topic: 'deny' as const,
-            }
-          : {}),
-      },
+      tools: selection
+        ? tools.filter((name) => !hidden.includes(`-${name}`))
+        : [...(tools ?? []), ...hidden],
       channel: channel.name,
       scope: { id: scope.id, kind: scope.kind, dataDir: scope.dataDir },
     })

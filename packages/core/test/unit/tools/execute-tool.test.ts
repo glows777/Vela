@@ -146,7 +146,7 @@ test('executeTool never throws: unknown, uncallable, invalid, denied and failing
       },
     }),
   )
-  registry.setPermissions({ denied: 'deny' })
+  registry.setDefaultToolModifiers(['-denied'])
   const outcomes = await callCaller(registry)
   expect(outcomes.every((o) => o.isError)).toBe(true)
   const results = outcomes.map((o) => String(o.result))
@@ -167,21 +167,18 @@ test('executeTool never throws: unknown, uncallable, invalid, denied and failing
   ])
 })
 
-test('executeTool goes through hooks and ask like a model call', async () => {
+test('executeTool goes through hooks like a model call', async () => {
   const seen: Array<[string, string | undefined]> = []
-  let asked = 0
   const { base, registry } = makeSession(
     caller([
       ['guarded', {}],
       ['rewritten', { value: 1 }],
-      ['asking', {}],
     ]),
     tool('guarded'),
     tool('rewritten', {
       inputSchema: z.object({ value: z.number() }),
       execute: async ({ value }: { value: number }) => `value ${value}`,
     }),
-    tool('asking'),
   )
   base.setInterception({
     before: (name, input, context) => {
@@ -193,25 +190,15 @@ test('executeTool goes through hooks and ask like a model call', async () => {
     after: (name, _input, output) =>
       name === 'rewritten' ? `${output}!` : output,
   })
-  const confirmed = base.fork(registry.results, {
-    confirm: async () => {
-      asked++
-      return false
-    },
-  })
-  confirmed.setPermissions({ asking: 'ask' })
-  const outcomes = await callCaller(confirmed)
+  const outcomes = await callCaller(base.fork(registry.results))
   expect(outcomes.map((o) => [o.isError, o.result])).toEqual([
     [true, '[Blocked by hook] not today'],
     [false, 'value 2!'],
-    [true, '[Rejected] asking was not approved'],
   ])
-  expect(asked).toBe(1)
   expect(seen).toEqual([
     ['caller', 'call-1'],
     ['guarded', 'call-1/1'],
     ['rewritten', 'call-1/2'],
-    ['asking', 'call-1/3'],
   ])
 })
 
