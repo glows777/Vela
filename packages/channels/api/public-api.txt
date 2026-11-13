@@ -1,10 +1,14 @@
 # @glows777/vela-channels
 
+  interface ChannelConnection
+    connected: boolean
+    error?: string | undefined
   interface ChannelDefinition
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string
+    onConnection?: ((listener: (connection: ChannelConnection) => void) => () => void) | undefined
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
@@ -46,6 +50,15 @@
       error: (error: unknown) => Promise<void>
       }
       | { type: 'agent'; event: VelaEvent }
+  interface ChannelHost
+    connection: () => ChannelConnection
+    onConnection: (listener: (connection: ChannelConnection) => void) => () => void
+    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
+    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    sessions: (chatId?: string) => ChannelSessionSnapshot[]
+    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
+    submit: (message: IncomingMessage) => Promise<{ sessionId: string; }>
   type ChannelOutcome = 'done' | 'failed' | 'stopped' | 'silent'
   interface ChannelRoutine
     channel: string
@@ -134,6 +147,7 @@
     startTopic: (message: IncomingMessage, title: string) => Promise<{ messageId: string; rootId: string; threadId: string; }>
     triggerImages?: ((message: IncomingMessage) => ImageContent[] | undefined) | undefined
   interface ChannelVela
+    channel: (name: string) => ChannelHost
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
@@ -277,7 +291,7 @@
       time: string
       days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
       }
-  const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ create: "create"; list: "list"; cancel: "cancel"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>], "action">>
+  const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ list: "list"; create: "create"; cancel: "cancel"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>], "action">>
   function topicSessionOptions: (msg: IncomingMessage) => { permissions: { [k: string]: "deny"; }; }
   const topicToolNames: string[]
 
