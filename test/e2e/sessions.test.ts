@@ -1,9 +1,26 @@
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import type { VelaEvent } from '@glows777/vela-core'
-import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { join } from 'node:path'
+import {
+  memorySessionStorage,
+  type SessionStorage,
+  type VelaEvent,
+} from '@glows777/vela-core'
+import {
+  createFauxModel,
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { z } from 'zod'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
+import { createVela } from '../../packages/vela/src/index.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -382,4 +399,184 @@ test('a session in the 0.5.0 flat layout lists, resumes and is converted on open
   await third.run('Ask once more')
   expect(third.lastAssistantText()).toBe('again')
   expect(readFileSync(transcript, 'utf8')).toContain('Ask once more')
+})
+
+test('session summaries carry the working directory and channel', async () => {
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
+  })
+  mkdirSync(join(t.cwd, 'first'))
+  mkdirSync(join(t.cwd, 'second'))
+  await t.vela
+    .session('first-folder', { cwd: 'first' })
+    .prompt('from the first folder')
+  await t.vela
+    .session('second-folder', { cwd: 'second' })
+    .prompt('from the second folder')
+  await t.vela
+    .session('channel-chat', { channel: 'fake' })
+    .prompt('from a chat')
+
+  const list = await t.vela.listSessions()
+  const byId = (id: string) => list.find((summary) => summary.id === id)
+  expect(byId('first-folder')).toMatchObject({ cwd: join(t.cwd, 'first') })
+  expect(byId('second-folder')).toMatchObject({ cwd: join(t.cwd, 'second') })
+  // A session a host opened for a channel records it; cwd stays the host's when none was given
+  expect(byId('channel-chat')).toMatchObject({
+    channel: 'fake',
+    cwd: t.cwd,
+  })
+  expect(byId('first-folder')!.channel).toBeUndefined()
+})
+
+test('archived sessions leave the list, survive a restart and keep their history', async () => {
+  const t = createTestVela({ responses: [fauxText('one'), fauxText('two')] })
+  await t.vela.session('keep').prompt('keep this one')
+  await t.vela.session('archived').prompt('hide this one')
+
+  await t.vela.setSessionArchived('archived', true)
+
+  expect((await t.vela.listSessions()).map((s) => s.id)).toEqual(['keep'])
+  const withArchived = await t.vela.listSessions({ includeArchived: true })
+  expect(withArchived.map((s) => s.id)).toEqual(['archived', 'keep'])
+  expect(withArchived[0]).toMatchObject({ archived: true, messageCount: 2 })
+
+  // A new Vela on the same data directory still sees the flag; the messages are all there
+  const restarted = createTestVela({ cwd: t.cwd })
+  expect((await restarted.vela.listSessions()).map((s) => s.id)).toEqual([
+    'keep',
+  ])
+  const resumed = restarted.vela.session('archived')
+  expect(await resumed.resume()).toBe(true)
+  expect(resumed.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+
+  // Unarchiving brings it back, also from a host that never opened the session
+  const third = createTestVela({ cwd: t.cwd })
+  await third.vela.setSessionArchived('archived', false)
+  expect((await third.vela.listSessions()).map((s) => s.id)).toEqual([
+    'archived',
+    'keep',
+  ])
+})
+
+test('searching saved sessions returns an id and a short user or assistant match', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxText(
+        'The release script lives in scripts/release.ts; run it after the tests pass.',
+      ),
+      fauxToolCall('bash', { command: 'echo tool-output-marker' }),
+      fauxText('done'),
+    ],
+  })
+  await t.vela.session('release').prompt('Investigate the flaky release script')
+  await t.vela.session('tools').prompt('Print the marker')
+
+  const hits = await t.vela.searchSessions('release')
+  expect(hits.map((hit) => hit.id)).toEqual(['release'])
+  expect(hits[0]!.match.toLowerCase()).toContain('release')
+  expect(hits[0]!.match.length).toBeLessThanOrEqual(120)
+  expect((await t.vela.searchSessions('RELEASE')).map((h) => h.id)).toEqual([
+    'release',
+  ])
+
+  // User and assistant text both match; a phrase only the assistant wrote finds the session
+  expect((await t.vela.searchSessions('investigate')).map((h) => h.id)).toEqual(
+    ['release'],
+  )
+  expect(
+    (await t.vela.searchSessions('scripts/release.ts')).map((h) => h.id),
+  ).toEqual(['release'])
+  // Tool output and tool calls are not session text
+  expect(await t.vela.searchSessions('tool-output-marker')).toEqual([])
+
+  // Archived sessions stay out unless asked for, like listSessions
+  await t.vela.setSessionArchived('release', true)
+  expect(await t.vela.searchSessions('release')).toEqual([])
+  expect(
+    (await t.vela.searchSessions('release', { includeArchived: true })).map(
+      (hit) => hit.id,
+    ),
+  ).toEqual(['release'])
+})
+
+test('archiving retries a write that failed before it resolves', async () => {
+  const memory = memorySessionStorage()
+  let failing = false
+  const storage: SessionStorage = {
+    ...memory,
+    append: async (id, entries) => {
+      if (failing) throw new Error('disk full')
+      await memory.append(id, entries)
+    },
+  }
+  const t = createTestVela({
+    responses: [fauxText('one')],
+    sessionStorage: storage,
+  })
+  await t.vela.session('s').prompt('one')
+
+  failing = true
+  await expect(t.vela.setSessionArchived('s', true)).rejects.toThrow(
+    'disk full',
+  )
+  failing = false
+  // The retry flushes the entry the failed write left behind instead of resolving early
+  await t.vela.setSessionArchived('s', true)
+  expect(
+    (await t.vela.listSessions({ includeArchived: true })).find(
+      (summary) => summary.id === 's',
+    )?.archived,
+  ).toBe(true)
+})
+
+test('a first channel binding after the session was written reaches the summary', async () => {
+  const t = createTestVela({ responses: [fauxText('one')] })
+  const late = t.vela.session('late')
+  await late.prompt('local history before the binding')
+
+  // The public routing API accepts a first binding on an already-open, already-saved session
+  t.vela.session('late', { channel: 'fake' })
+  expect(late.channel).toBe('fake')
+  await late.close()
+
+  const listed = async (vela: typeof t.vela) =>
+    (await vela.listSessions()).find((summary) => summary.id === 'late')
+      ?.channel
+  expect(await listed(t.vela)).toBe('fake')
+  // The header is never rewritten, so a restart reads the appended entry
+  const restarted = createTestVela({ cwd: t.cwd })
+  expect(await listed(restarted.vela)).toBe('fake')
+})
+
+test('archiving a session that is not open still reports the save to the host', async () => {
+  const dir = tempDir()
+  const saves: string[] = []
+  const open = () =>
+    createVela({
+      cwd: dir.path,
+      dataDir: '.data',
+      model: createFauxModel({ responses: [fauxText('one')] }),
+      onSessionSaved: (id) => saves.push(id),
+    })
+  const first = open()
+  try {
+    await first.session('archived').prompt('one')
+  } finally {
+    await first.dispose()
+  }
+
+  // Nothing is open in the new Vela: the entry goes straight to storage, and the host still hears about it
+  const restarted = open()
+  try {
+    saves.length = 0
+    await restarted.setSessionArchived('archived', true)
+    expect(saves).toEqual(['archived'])
+    // A repeated call writes nothing, so the observer stays quiet
+    await restarted.setSessionArchived('archived', true)
+    expect(saves).toEqual(['archived'])
+  } finally {
+    await restarted.dispose()
+    dir.cleanup()
+  }
 })

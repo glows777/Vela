@@ -29,6 +29,7 @@ interface SessionHeader {
   id: string               // session id
   timestamp: string        // when the session was created (ISO)
   cwd?: string             // working directory
+  channel?: string         // channel the session answers on, when a host opened it for one
   toolHistoryId?: string   // @internal: the tool call history directory
   parentSession?: string   // id of the session this one was forked or cloned from
 }
@@ -52,6 +53,8 @@ Every other line is an entry. All entries have pi's base fields:
 | `model_change` | `model` | The session's model, as `provider/id`. Written when a session starts with a model given by name and on `setModel()` with a name; `resume()` restores the latest |
 | `thinking_level_change` | `thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Written when a session starts and on `setThinkingLevel()`; `resume()` restores the latest |
 | `session_info` | `name?` | The display name (`session.setName()`, `/name`); no `name` clears it |
+| `session_archived` | `archived` | The session was archived (`true`) or unarchived (`false`) with `vela.setSessionArchived()`; the last one in the file wins. Archived sessions are left out of `listSessions()` unless asked. Not part of the model context |
+| `session_channel` | `channel` | The session was bound to a channel after it was written: the header records a session that a host opened for a channel, and a first binding that arrives later (`vela.session(id, { channel })` on an open session) appends this, because the header is never rewritten. The last one in the file wins. Not part of the model context |
 | `compaction` | `summary`, `firstKeptEntryId`, `tokensBefore`, `toolHistoryViewSeq?` | Earlier history was summarized. The model context becomes the summary followed by the messages from `firstKeptEntryId` on (that entry is before the compaction; when it is the compaction itself, nothing was kept) and everything after the compaction. `tokensBefore` is the context size before the summary: the provider-reported prompt size of the latest response plus the local estimate of messages since, or a local estimate when the provider reported nothing |
 | `context_edit` | `targetId`, `replacement` | pi's context edit: the model sees `replacement.content` instead of the content of message entry `targetId` (`replacement: null` leaves it out). Vela writes one when microcompaction folds old tool output into a file reference; the original output stays in the target entry |
 | `branch_summary` | `fromId`, `summary` | A summary of the branch the session left with `navigateTree(…, { summarize: true })` (`/tree` → summarize). It is a child of the entry the session moved to, and the model sees it as a user message starting with `[Summary of the conversation branch you left]`. `fromId` is the leaf that was left (`root` if none) |
@@ -74,7 +77,7 @@ The model and thinking level are the latest `model_change` and `thinking_level_c
 
 ### Forks and clones
 
-`session.fork()`, `session.clone()` and `--fork` write a new session file holding one branch of the original: the entries from the root to the fork point, re-chained without `label` entries, followed by fresh `label` entries for the labels on that path (pi's `createBranchedSession`). The header's `parentSession` is the original's id. The tool call history is copied into the new session's directory under a new `toolHistoryId`; long tool output files are not copied, and references to them keep pointing into the original session's directory.
+`session.fork()`, `session.clone()` and `--fork` write a new session file holding one branch of the original: the entries from the root to the fork point, re-chained without `label`, `session_archived` and `session_channel` entries (the copy starts active and unbound), followed by fresh `label` entries for the labels on that path (pi's `createBranchedSession`). The header's `parentSession` is the original's id. The tool call history is copied into the new session's directory under a new `toolHistoryId`; long tool output files are not copied, and references to them keep pointing into the original session's directory.
 
 `session.exportJsonl()` writes the same kind of file for the current branch (header and entries, re-chained), without `toolHistoryId`.
 

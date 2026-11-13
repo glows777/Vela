@@ -153,7 +153,7 @@
     configureProvider: (name: string, provider: ProviderDefinition) => void
     dispose: () => Promise<void>
     extensions: () => LoadedChannelExtension[]
-    listSessions: () => Promise<SessionSummary[]>
+    listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]
     logout: (provider: string) => Promise<boolean>
@@ -165,9 +165,11 @@
     readonly model: LanguageModel
     ready: () => Promise<void>
     runningChannels: () => string[]
+    searchSessions: (query: string, options?: SavedSessionOptions) => Promise<SessionSearchHit[]>
     session: (id?: string, options?: SessionOptions) => VelaSession
     sessions: () => VelaSession[]
     setDefaults: (model: string | LanguageModel, thinkingLevel: ThinkingLevel) => void
+    setSessionArchived: (id: string, archived: boolean) => Promise<void>
     startChannels: () => Promise<void>
     subscribe: (listener: VelaSessionEventListener) => () => void
   interface ChannelVelaOptions
