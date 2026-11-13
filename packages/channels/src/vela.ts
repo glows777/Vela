@@ -13,6 +13,7 @@ import { silentLogger } from '@glows777/vela-core/extension-api'
 import { EventReceiver } from './event-receiver.ts'
 import { ChannelGateway } from './gateway.ts'
 import { githubOptions } from './github-events.ts'
+import type { LocalHost } from './local-protocol.ts'
 import type { ChannelDefinition, ChannelEvent, ChannelHost } from './types.ts'
 
 export interface ChannelExtensionAPI extends CoreExtensionAPI {
@@ -35,6 +36,7 @@ export interface ChannelVela extends Omit<CoreVela, 'extensions'> {
   extensions(): LoadedChannelExtension[]
   channels(): { name: string; description: string }[]
   /** Look up a registered channel after ready(); startChannels() loads its state. */
+  channel(name: 'local'): LocalHost
   channel(name: string): ChannelHost
   startChannels(): Promise<void>
   runningChannels(): string[]
@@ -161,7 +163,7 @@ export function createChannelVela(
         channels: [...(registered[index] ?? [])],
       })),
     channels: () => runtime().list(),
-    channel: (name: string) => runtime().host(name),
+    channel: ((name: string) => runtime().host(name)) as ChannelVela['channel'],
     runningChannels: () => runtime().running(),
     publishEvent: (event: ChannelEvent) => runtime().events.publish(event),
     async startChannels() {

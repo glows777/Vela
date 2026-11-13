@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import type { ServerResponse } from 'node:http'
 import type { VelaEvent } from '@glows777/vela-core/extension-api'
 import type {
   LocalEvent,
@@ -32,78 +31,60 @@ export function localProgress(event: VelaEvent): LocalProgress | undefined {
     }
 }
 
-/** No replay promise: every connection starts with reset and clients reload durable snapshots. */
+/** Transport-neutral, future-only event delivery. Observers never block channel work. */
 export class LocalEvents {
-  private readonly clients = new Map<
-    ServerResponse,
-    { projectId?: string; heartbeat: ReturnType<typeof setInterval> }
-  >()
+  private readonly listeners = new Set<{
+    listener: (event: LocalEvent) => void
+    projectId?: string
+  }>()
 
-  connect(res: ServerResponse, projectId?: string): void {
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache, no-store',
-      'x-accel-buffering': 'no',
-    })
-    const heartbeat = setInterval(() => {
-      if (!res.write(': heartbeat\n\n')) res.destroy()
-    }, 15000)
-    heartbeat.unref?.()
-    this.clients.set(res, { projectId, heartbeat })
-    res.once('close', () => {
-      clearInterval(heartbeat)
-      this.clients.delete(res)
-    })
-    this.write(
-      res,
-      this.envelope(
-        {
-          type: 'reset',
-          data: { reason: 'connected', reload: ['sessions', 'messages'] },
-        },
-        { projectId },
-      ),
-    )
+  subscribe(
+    listener: (event: LocalEvent) => void,
+    options?: { projectId?: string },
+  ): () => void {
+    const entry = { listener, projectId: options?.projectId }
+    this.listeners.add(entry)
+    return () => {
+      this.listeners.delete(entry)
+    }
   }
 
   publish(
     event: LocalEventData,
     address: { projectId: string; sessionId?: string; runId?: string },
   ): void {
-    const envelope = this.envelope(event, address)
-    for (const [res, client] of this.clients)
-      if (!client.projectId || client.projectId === address.projectId)
-        this.write(res, envelope)
+    const envelope = localEnvelope(event, address)
+    for (const entry of this.listeners) {
+      if (
+        entry.projectId !== undefined &&
+        entry.projectId !== address.projectId
+      )
+        continue
+      try {
+        // Every observer owns its snapshot. A throwing or async observer cannot affect another.
+        void Promise.resolve(entry.listener(structuredClone(envelope))).catch(
+          () => {},
+        )
+      } catch {
+        /* Observer failures do not affect channel delivery. */
+      }
+    }
   }
 
   stop(): void {
-    for (const [res, client] of this.clients) {
-      clearInterval(client.heartbeat)
-      res.destroy()
-    }
-    this.clients.clear()
+    this.listeners.clear()
   }
+}
 
-  private envelope(
-    event: LocalEventData,
-    address: { projectId?: string; sessionId?: string; runId?: string },
-  ): LocalEvent {
-    return {
-      ...event,
-      ...address,
-      version: 1,
-      id: randomUUID(),
-      time: new Date().toISOString(),
-    }
-  }
-
-  private write(res: ServerResponse, event: LocalEvent): void {
-    // Never queue behind a slow app or block model delivery. The next connection reloads history.
-    if (
-      !res.write(
-        `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-      )
-    )
-      res.destroy()
+export function localEnvelope(
+  event: LocalEventData,
+  address: { projectId?: string; sessionId?: string; runId?: string },
+): LocalEvent {
+  return {
+    ...event,
+    ...address,
+    version: 1,
+    id: randomUUID(),
+    time: new Date().toISOString(),
   }
 }

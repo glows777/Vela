@@ -51,7 +51,7 @@ The listener binds **only `127.0.0.1`**, default port **8788**. Every route, inc
 
 ### SDK startup
 
-The SDK does not read `extensionConfig.local` to enable the transport. Pass an explicit token to `local(options)`, exported by `@glows777/vela` and `@glows777/vela-channels`, and start channels explicitly:
+The SDK does not read `extensionConfig.local` to enable the transport. For in-process projects/history/events without a listener, use `local({})` and the typed [Local host API](channels-reference.md#local-projects-and-visible-history). To enable HTTP/SSE, pass an explicit token to `local(options)`, exported by `@glows777/vela` and `@glows777/vela-channels`, and start channels explicitly:
 
 ```ts
 import { createVela, local } from '@glows777/vela'
@@ -69,7 +69,7 @@ await vela.startChannels()
 // await vela.dispose()
 ```
 
-`LocalOptions` has required `token: string` and optional `port: number` and `timezone: string`. The token must not be empty, whitespace-only or contain CR/LF. Ports are integers from 0 through 65535; omit for 8788. Port 0 selects an ephemeral listener (useful for SDK tests); the actual address appears in daemon diagnostics. Choose a fixed port for an app deployment.
+`LocalOptions` has optional `token: string`, `port: number` and `timezone: string`. Omitting the token starts the in-process core without a listener, even if a port is supplied; it never enables unauthenticated HTTP. The CLI still requires a token for an enabled Local listener. The token must not be empty, whitespace-only or contain CR/LF. Ports are integers from 0 through 65535; omit for 8788. Port 0 selects an ephemeral listener (useful for SDK tests); the actual address appears in daemon diagnostics. Choose a fixed port for an app deployment.
 
 ### Projects, sessions and persistence
 

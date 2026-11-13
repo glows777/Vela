@@ -2,12 +2,14 @@ export { local } from './local.ts'
 export type {
   LocalEvent,
   LocalEventData,
+  LocalHost,
   LocalMessage,
   LocalOptions,
   LocalProgress,
   LocalProject,
   LocalSession,
 } from './local-protocol.ts'
+export { LocalError } from './local-protocol.ts'
 export { routineToolSchema } from './routines.ts'
 export type { ChannelScope } from './scope.ts'
 export { chatDirectory, groupWorkspace } from './scope.ts'
