@@ -53,7 +53,7 @@ test.each([
   [
     'timeout',
     "printf 'partial\\n'; sleep 20",
-    'Command timed out after 0.2 seconds',
+    'Command timed out after 2 seconds',
   ],
 ])(
   'bash %s remains plain error text with its execution note',
@@ -62,7 +62,8 @@ test.each([
       responses: [
         fauxToolCall('bash', {
           command,
-          ...(kind === 'timeout' ? { timeout: 0.2 } : {}),
+          // Bash startup stays well inside 2 s; sleep 20 still outlives it.
+          ...(kind === 'timeout' ? { timeout: 2 } : {}),
         }),
         fauxText('done'),
       ],
