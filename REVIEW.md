@@ -9,6 +9,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 - `packages/*/src/` using `Bun.*` globals or `bun:` modules (the packages must run on Node ≥ 22.18), or a relative import without `.ts`.
 - A public API change without an updated `api/public-api.txt`, or a user-facing change without a CHANGELOG line.
 - A user- or model-visible change without the docs pages that describe that behavior updated in the same change as the CHANGELOG entry.
+- A new public method on `ChannelVela` or the umbrella `Vela` that is absent from the Vela member table in [docs/sdk.md](docs/sdk.md), with no decision on that page to leave the method out.
 - Behavior that departs from pi without the PR saying why.
 - Security: channel access outside the enabled-chat list, path or command injection, secrets in logs. These are never optional.
 
