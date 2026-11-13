@@ -88,6 +88,264 @@ const suite = {
     pull_requests: [{ number: 171 }],
   },
 }
+type IssueLabel = { name: string }
+
+function issueBody(
+  action: string,
+  labels: IssueLabel[],
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    action,
+    repository: { full_name: 'owner/repo' },
+    issue: {
+      number: 332,
+      title: 'Fixture issue',
+      html_url: 'https://github.com/owner/repo/issues/332',
+      user: { login: 'author' },
+      body: 'Fixture issue body',
+      labels,
+    },
+    ...extra,
+  }
+}
+
+function issueNote(body: string, labels: IssueLabel[]) {
+  return {
+    action: 'created',
+    repository: { full_name: 'owner/repo' },
+    issue: { number: 332, title: 'Fixture issue', labels },
+    comment: {
+      body,
+      html_url: 'https://github.com/owner/repo/issues/332#issuecomment-1',
+      user: { login: 'same-author' },
+    },
+  }
+}
+
+async function proveIssueLabelAllowlist(
+  issueLabels: readonly string[],
+  slug: string,
+): Promise<void> {
+  const feedLogs: string[] = []
+  const feedModel = createFauxModel({
+    responses: [
+      fauxToolCall('channel_subscriptions', {
+        action: 'create',
+        source: 'github',
+        key: 'github:owner/repo#issues',
+      }),
+      fauxText(`Subscribed ${slug} issue feed`),
+      fauxToolCall('channel_subscriptions', {
+        action: 'create',
+        source: 'github',
+        key: 'github:owner/repo#pr/171',
+      }),
+      fauxText(`Subscribed ${slug} fixture PR`),
+    ],
+  })
+  const feedFake = fakeLark()
+  const feed = createVela({
+    dataDir: `.vela-data-labels-${slug}`,
+    model: feedModel,
+    extensionConfig: {
+      channel: {
+        eventReceiver: {
+          port: 0,
+          github: {
+            secret,
+            repositories: ['owner/repo'],
+            issueLabels: [...issueLabels],
+          },
+        },
+      },
+    },
+    logger: {
+      debug: (s) => feedLogs.push(s),
+      info: (s) => feedLogs.push(s),
+      warn: (s) => feedLogs.push(s),
+      error: (s) => feedLogs.push(s),
+    },
+    extensions: [
+      lark({
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: feedFake.transport,
+      }),
+    ],
+  })
+  const allows = (labels: IssueLabel[]) =>
+    labels.some((each) => issueLabels.includes(each.name))
+  const prRoot = `${slug}-root`
+  try {
+    await feed.startChannels()
+    const feedUrl = feedLogs
+      .join('\n')
+      .match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)![0]
+    const post = (payload: unknown, event: string, id: string) => {
+      const body = JSON.stringify(payload)
+      return fetch(feedUrl, {
+        method: 'POST',
+        headers: {
+          'x-github-event': event,
+          'x-github-delivery': id,
+          'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`,
+        },
+        body,
+      })
+    }
+    const waitFor = async (text: string, deliver: () => void) => {
+      const done = Promise.withResolvers<void>()
+      const stop = feed.subscribe((e) => {
+        if (e.type === 'channel_reply' && e.text === text) done.resolve()
+      })
+      deliver()
+      await done.promise
+      stop()
+      await drainChannels(feed)
+    }
+    await waitFor(`Subscribed ${slug} issue feed`, () => {
+      feedFake.deliver(
+        larkEvent({
+          message_id: `${slug}-group`,
+          content: `{"text":"Subscribe ${slug} issue feed"}`,
+        }),
+      )
+    })
+    await waitFor(`Subscribed ${slug} fixture PR`, () => {
+      feedFake.deliver(
+        larkEvent({
+          message_id: `${slug}-topic`,
+          root_id: prRoot,
+          thread_id: `${slug}-thread`,
+          content: `{"text":"Subscribe ${slug} fixture PR"}`,
+        }),
+      )
+    })
+    let calls = feedModel.calls.length
+    const rows: {
+      id: string
+      payload: unknown
+      event: string
+      wake: boolean
+    }[] = [
+      {
+        id: `${slug}-opened-plain`,
+        payload: issueBody('opened', []),
+        event: 'issues',
+        wake: false,
+      },
+      {
+        id: `${slug}-opened-other`,
+        payload: issueBody('opened', [{ name: 'bug' }]),
+        event: 'issues',
+        wake: allows([{ name: 'bug' }]),
+      },
+      {
+        id: `${slug}-opened-labeled`,
+        payload: issueBody('opened', [{ name: 'to:vela' }]),
+        event: 'issues',
+        wake: allows([{ name: 'to:vela' }]),
+      },
+      {
+        id: `${slug}-closed-labeled`,
+        payload: issueBody('closed', [{ name: 'to:vela' }]),
+        event: 'issues',
+        wake: allows([{ name: 'to:vela' }]),
+      },
+      {
+        id: `${slug}-action-labeled`,
+        payload: issueBody('labeled', [{ name: 'to:vela' }], {
+          label: { name: 'to:vela' },
+        }),
+        event: 'issues',
+        wake: issueLabels.includes('to:vela'),
+      },
+      {
+        id: `${slug}-comment-plain`,
+        payload: issueNote('Ordinary issue comment', []),
+        event: 'issue_comment',
+        wake: false,
+      },
+      {
+        id: `${slug}-comment-labeled`,
+        payload: issueNote('Labeled issue comment', [{ name: 'to:vela' }]),
+        event: 'issue_comment',
+        wake: allows([{ name: 'to:vela' }]),
+      },
+    ]
+    for (const row of rows) {
+      if (row.wake) feedModel.push(fauxText(`${row.id} handled`))
+      assert.equal((await post(row.payload, row.event, row.id)).status, 202)
+      await drainChannels(feed)
+      if (row.wake) calls += 1
+      assert.equal(feedModel.calls.length, calls)
+      if (!row.wake) continue
+      assert(feedFake.sent.at(-1)?.text.includes(`${row.id} handled`))
+      assert.notEqual(feedFake.sent.at(-1)?.messageId, prRoot)
+      assert(
+        feedModel.calls
+          .at(-1)!
+          .lastUserText.includes('github:owner/repo#issues'),
+      )
+    }
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          join(feed.dataDir, 'channels/subscriptions.json'),
+          'utf8',
+        ),
+      ).subscriptions.map((record: { key: string }) => record.key),
+      ['github:owner/repo#issues', 'github:owner/repo#pr/171'],
+    )
+    feedModel.push(fauxText(`${slug} PR comment handled`))
+    assert.equal(
+      (
+        await post(
+          {
+            action: 'created',
+            repository: { full_name: 'owner/repo' },
+            issue: {
+              number: 171,
+              title: 'Fixture',
+              pull_request: {},
+              labels: [],
+            },
+            comment: {
+              body: 'PR feedback',
+              html_url: 'https://github.com/owner/repo/pull/171#comment',
+              user: { login: 'same-author' },
+            },
+          },
+          'issue_comment',
+          `${slug}-pr-comment`,
+        )
+      ).status,
+      202,
+    )
+    await drainChannels(feed)
+    assert.equal(feedModel.calls.length, calls + 1)
+    assert.equal(feedFake.sent.at(-1)?.messageId, prRoot)
+    assert(feedFake.sent.at(-1)?.text.includes(`${slug} PR comment handled`))
+    assert(
+      feedModel.calls.at(-1)!.lastUserText.includes('github:owner/repo#pr/171'),
+    )
+    assert(
+      !feedModel.calls
+        .at(-1)!
+        .lastUserText.includes('github:owner/repo#issues'),
+    )
+    console.log(
+      issueLabels.length
+        ? `PASS ${issueLabels.join(',')} allowlist wakes a labeled Issue and its comment, drops an unlabeled Issue, and keeps a PR comment on its topic`
+        : 'PASS empty issueLabels accepts no Issue event and keeps a PR comment on its topic',
+    )
+  } finally {
+    await feed.dispose()
+  }
+  assert(!feedLogs.join('\n').includes(secret))
+}
+
 try {
   await vela.startChannels()
   url = logs.join('\n').match(/http:\/\/127\.0\.0\.1:\d+\/events\/github/)![0]
@@ -163,8 +421,6 @@ try {
     'PASS full-body self-origin marker skips echo; unmarked same-author command text stays untrusted data',
   )
 
-  // One group subscription receives ordinary Issues and their comments.
-  // A PR comment stays in the topic that watches that PR.
   const feedSubscribed = Promise.withResolvers<void>()
   const unsubscribeFeed = vela.subscribe((e) => {
     if (
@@ -180,8 +436,6 @@ try {
       key: 'github:owner/repo#issues',
     }),
     fauxText('Subscribed to fixture issue feed'),
-    fauxText('Fixture issue opened handled'),
-    fauxText('Fixture issue comment handled'),
     fauxText('Fixture PR comment handled'),
   )
   fake.deliver(
@@ -191,58 +445,48 @@ try {
   unsubscribeFeed()
   await drainChannels(vela)
   const feedCalls = model.calls.length
-  const issueEvent = (action: string, extra: Record<string, unknown> = {}) => ({
-    action,
-    repository: { full_name: 'owner/repo' },
-    issue: {
-      number: 332,
-      title: 'Fixture issue',
-      html_url: 'https://github.com/owner/repo/issues/332',
-      user: { login: 'author' },
-      body: 'Fixture issue body',
-    },
-    ...extra,
-  })
-  assert.equal(
-    (await send(issueEvent('opened'), 'issues', 'issue-opened')).status,
-    202,
-  )
+  const feedSent = fake.sent.length
+  const silentIssues = [
+    [issueBody('opened', []), 'issues', 'issue-opened'],
+    [
+      issueBody('opened', [{ name: 'to:vela' }]),
+      'issues',
+      'issue-opened-labeled',
+    ],
+    [issueBody('closed', [{ name: 'to:vela' }]), 'issues', 'issue-closed'],
+    [
+      issueBody('labeled', [{ name: 'to:vela' }], {
+        label: { name: 'to:vela' },
+      }),
+      'issues',
+      'issue-labeled',
+    ],
+    [issueNote('Ordinary issue comment', []), 'issue_comment', 'issue-comment'],
+    [
+      issueNote('Labeled issue comment', [{ name: 'to:vela' }]),
+      'issue_comment',
+      'issue-comment-labeled',
+    ],
+  ] as const
+  for (const [payload, event, id] of silentIssues)
+    assert.equal((await send(payload, event, id)).status, 202)
   await drainChannels(vela)
-  assert.equal(model.calls.length, feedCalls + 1)
-  assert(fake.sent.at(-1)?.text.includes('Fixture issue opened handled'))
-  assert.equal(
-    (
-      await send(
-        {
-          action: 'created',
-          repository: { full_name: 'owner/repo' },
-          issue: { number: 332, title: 'Fixture issue' },
-          comment: {
-            body: 'Ordinary issue comment',
-            html_url: 'https://github.com/owner/repo/issues/332#issuecomment-1',
-            user: { login: 'same-author' },
-          },
-        },
-        'issue_comment',
-        'issue-comment',
-      )
-    ).status,
-    202,
-  )
-  await drainChannels(vela)
-  assert.equal(model.calls.length, feedCalls + 2)
-  assert(fake.sent.at(-1)?.text.includes('Fixture issue comment handled'))
+  assert.equal(model.calls.length, feedCalls)
+  assert.equal(fake.sent.length, feedSent)
   assert.equal(
     (await send(comment('PR feedback'), 'issue_comment', 'pr-comment')).status,
     202,
   )
   await drainChannels(vela)
-  assert.equal(model.calls.length, feedCalls + 3)
+  assert.equal(model.calls.length, feedCalls + 1)
   assert.equal(fake.sent.at(-1)?.messageId, 'root')
   assert(fake.sent.at(-1)?.text.includes('Fixture PR comment handled'))
+  assert(model.calls.at(-1)!.lastUserText.includes('github:owner/repo#pr/171'))
   console.log(
-    'PASS one group Issue-feed subscription receives Issues and ordinary comments; a PR comment stays in its topic',
+    'PASS omitted issueLabels accepts Issue events with 202 and no model turn; a PR comment stays in its topic',
   )
+  await proveIssueLabelAllowlist([], 'empty')
+  await proveIssueLabelAllowlist(['to:vela'], 'allow')
 
   model.push(fauxText('Fixture closure handled'))
   assert.equal(
