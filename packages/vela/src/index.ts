@@ -1,13 +1,14 @@
 export type {
   LocalEvent,
   LocalEventData,
+  LocalHost,
   LocalMessage,
   LocalOptions,
   LocalProgress,
   LocalProject,
   LocalSession,
 } from '@glows777/vela-channels'
-export { local } from '@glows777/vela-channels'
+export { LocalError, local } from '@glows777/vela-channels'
 export { agentErrorHint } from '@glows777/vela-core'
 /**
  * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).

@@ -205,7 +205,7 @@ import {mkdtemp,mkdir,rm} from 'node:fs/promises'
 import {request as httpRequest} from 'node:http'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent} from '@glows777/vela-channels'
+import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent,type LocalHost,LocalError} from '@glows777/vela-channels'
 import {drainChannels} from '@glows777/vela-channels/testing'
 import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
 let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
@@ -325,6 +325,29 @@ try{
 }
 assert.equal(await fetch(localURL+'/v1/info',{signal:AbortSignal.timeout(2000)}).catch(()=>undefined),undefined)
 console.log('packed Local listener disposal ok')
+
+const coreRoot=await mkdtemp(join(tmpdir(),'vela-packed-local-core-'))
+const coreLocal=createChannelVela({contextFiles:false,dataDir:join(coreRoot,'data'),model:createFauxModel({responses:[fauxText('core-only reply')]}),extensions:[local({})]})
+try{
+  await coreLocal.ready()
+  const host:LocalHost=coreLocal.channel('local')
+  const observed:LocalEvent[]=[]
+  host.onEvent(event=>observed.push(event))
+  assert.throws(()=>host.projects(),LocalError)
+  await coreLocal.startChannels()
+  const project=await host.openProject({cwd:coreRoot,name:'Core only'})
+  assert.equal(host.sessions(project.id)[0]?.sessionId,project.sessionId)
+  const receipt=await host.submit({projectId:project.id,sessionId:project.sessionId,text:'visible SDK input',clientMessageId:'core-only'})
+  assert(receipt.messageId)
+  await drainChannels(coreLocal)
+  const messages:LocalMessage[]=host.messages({projectId:project.id,sessionId:project.sessionId}).messages
+  assert(messages.some(message=>message.text==='core-only reply'))
+  assert(observed.some(event=>event.type==='message'&&event.data.id===receipt.messageId))
+  assert(!observed.some(event=>event.type==='reset'))
+  assert.deepEqual(host.connection(),{connected:true})
+  console.log('packed typed Local core-only host, visible submit, events and snapshots ok')
+}finally{try{await coreLocal.dispose()}finally{await rm(coreRoot,{recursive:true,force:true})}}
+
 
 `
 const LARK = `
