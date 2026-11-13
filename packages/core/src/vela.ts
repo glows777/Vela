@@ -475,12 +475,18 @@ export function createVela(options: VelaOptions = {}): Vela {
         ? list
         : list.filter((summary) => !summary.archived)
     },
-    setSessionArchived: (id, archived) => {
+    setSessionArchived: async (id, archived) => {
       assertSessionId(id)
       const open = sessions.get(id)
-      return open
-        ? open.store.setArchived(archived)
-        : setSavedSessionArchived(sessionStorage, id, archived)
+      if (open) return open.store.setArchived(archived)
+      if (!(await setSavedSessionArchived(sessionStorage, id, archived))) return
+      try {
+        options.onSessionSaved?.(id)
+      } catch (error) {
+        logger.error(
+          `[session:${id}] save observer failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
     },
     searchSessions: async (query, searchOptions) => {
       const text = query.trim()

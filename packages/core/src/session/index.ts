@@ -133,8 +133,11 @@ export class SessionStore {
    * now; a session whose history was never loaded is updated in storage instead.
    */
   async setArchived(archived: boolean): Promise<void> {
-    if (!this.started)
-      return setSavedSessionArchived(this.storage, this.sessionId, archived)
+    if (!this.started) {
+      if (await setSavedSessionArchived(this.storage, this.sessionId, archived))
+        this.saved()
+      return
+    }
     const last = this.entries.at(-1)
     // Already the last entry: only retry what an earlier failed write left pending
     if (last?.type === 'session_archived' && last.archived === archived)
@@ -366,6 +369,11 @@ export class SessionStore {
       this.lastError = error
       return
     }
+    this.saved()
+  }
+
+  /** Tells the save observer about a committed write; its failure is logged, never thrown. */
+  private saved(): void {
     try {
       this.onSaved?.()
     } catch (error) {
@@ -661,12 +669,13 @@ export async function setSavedSessionArchived(
   storage: SessionStorage,
   id: string,
   archived: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const entries = await storage.load(id)
   const last = entries?.at(-1)
   if (!entries || !last || last.type === 'session')
     throw new Error(`Session ${id} has nothing saved to archive`)
-  if (last.type === 'session_archived' && last.archived === archived) return
+  if (last.type === 'session_archived' && last.archived === archived)
+    return false
   const ids = new Set(entries.slice(1).map((entry) => entry.id))
   await storage.append(id, [
     {
@@ -677,4 +686,5 @@ export async function setSavedSessionArchived(
       timestamp: new Date().toISOString(),
     },
   ])
+  return true
 }

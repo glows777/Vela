@@ -12,9 +12,15 @@ import {
   type SessionStorage,
   type VelaEvent,
 } from '@glows777/vela-core'
-import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import {
+  createFauxModel,
+  fauxHang,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { z } from 'zod'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
+import { createVela } from '../../packages/vela/src/index.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -541,4 +547,36 @@ test('a first channel binding after the session was written reaches the summary'
   // The header is never rewritten, so a restart reads the appended entry
   const restarted = createTestVela({ cwd: t.cwd })
   expect(await listed(restarted.vela)).toBe('fake')
+})
+
+test('archiving a session that is not open still reports the save to the host', async () => {
+  const dir = tempDir()
+  const saves: string[] = []
+  const open = () =>
+    createVela({
+      cwd: dir.path,
+      dataDir: '.data',
+      model: createFauxModel({ responses: [fauxText('one')] }),
+      onSessionSaved: (id) => saves.push(id),
+    })
+  const first = open()
+  try {
+    await first.session('archived').prompt('one')
+  } finally {
+    await first.dispose()
+  }
+
+  // Nothing is open in the new Vela: the entry goes straight to storage, and the host still hears about it
+  const restarted = open()
+  try {
+    saves.length = 0
+    await restarted.setSessionArchived('archived', true)
+    expect(saves).toEqual(['archived'])
+    // A repeated call writes nothing, so the observer stays quiet
+    await restarted.setSessionArchived('archived', true)
+    expect(saves).toEqual(['archived'])
+  } finally {
+    await restarted.dispose()
+    dir.cleanup()
+  }
 })
