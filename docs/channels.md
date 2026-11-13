@@ -2,7 +2,7 @@
 
 A channel connects a chat service to Vela. The gateway keeps **one shared session per chat**, identified by the channel name and `channelId` (for example `lark-oc_456`). Different chats have separate history and can run concurrently. Within a chat, everyone sees the same conversation history. Messages queue in order by default; Lark also offers Steer and Stop during a run.
 
-This page covers running Vela in a group chat and connecting a local app or script. To write a channel, see [Channels reference](channels-reference.md); it covers writing a channel, the gateway lifecycle, custom transports and external event subscriptions.
+This page covers running Vela in a group chat and connecting a local app or script. To write a channel, see [Channels reference](channels-reference.md); it covers writing a channel, the gateway lifecycle, custom transports, external event subscriptions and SDK host access.
 
 **Enabling a chat means trusting everyone in it with this machine.** Lark gives every member of an enabled chat full access, including bash, files, memory and extension tools. There is no sandbox or per-member boundary. See [Security](security.md#channel-senders) before enabling a group.
 
