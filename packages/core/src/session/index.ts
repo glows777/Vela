@@ -27,6 +27,7 @@ import {
   type SessionHeader,
   type SessionMessageEntry,
   type SessionTreeNode,
+  summarizeSession,
 } from './entries.ts'
 import {
   fileSessionStorage,
@@ -529,7 +530,9 @@ export class SessionStore {
   }
 
   /** Loads the saved session; returns undefined if it was never saved. Replaces the entries in memory. */
-  async loadSaved(): Promise<SessionContext | undefined> {
+  async loadSaved(): Promise<
+    (SessionContext & { channel?: string }) | undefined
+  > {
     const loaded = await this.storage.load(this.sessionId)
     this.checked = true
     if (!loaded?.length) return
@@ -570,13 +573,18 @@ export class SessionStore {
       }
     }
     this.header = header
+    const channel = summarizeSession(this.sessionId, [
+      header,
+      ...entries,
+    ]).channel
+    if (channel !== undefined) this.channel = channel
     this.replaceEntries(entries)
     this.ids.clear()
     for (const [message, id] of context.ids) this.ids.set(message, id)
     this.producers = context.producers
     this.started = true
     this.pending.length = 0
-    return context
+    return { ...context, channel }
   }
 }
 

@@ -34,13 +34,24 @@ export function applySessionRouting(
         (previous.scope.id !== next.scope?.id ||
           previous.scope.kind !== next.scope?.kind ||
           previous.scope.dataDir !== next.scope?.dataDir)))
-  ) {
-    const error = new Error(
-      `SessionRoutingConflictError: session ${session.id} routing conflict: ${JSON.stringify(previous)} -> ${JSON.stringify(next)}`,
-    )
-    error.name = 'SessionRoutingConflictError'
-    throw error
-  }
+  )
+    throw routingConflict(session, previous, next)
+  writeRouting(session, next)
+}
+
+/** The channel saved in the file becomes the binding. A different channel already bound then throws. */
+export function bindSavedChannel(
+  session: RoutableSession,
+  channel: string,
+): void {
+  const previous = bindings.get(session)
+  const next: Routing = { scope: previous?.scope, channel }
+  writeRouting(session, next)
+  if (previous?.channel !== undefined && previous.channel !== channel)
+    throw routingConflict(session, previous, next)
+}
+
+function writeRouting(session: RoutableSession, next: Routing): void {
   if (next.scope) next.scope = Object.freeze({ ...next.scope })
   bindings.set(session, next)
   if (next.channel !== undefined) {
@@ -48,4 +59,16 @@ export function applySessionRouting(
     session.registry.setChannel(next.channel)
     session.store.setChannel(next.channel)
   }
+}
+
+function routingConflict(
+  session: RoutableSession,
+  previous: Routing,
+  next: Routing,
+): Error {
+  const error = new Error(
+    `SessionRoutingConflictError: session ${session.id} routing conflict: ${JSON.stringify(previous)} -> ${JSON.stringify(next)}`,
+  )
+  error.name = 'SessionRoutingConflictError'
+  return error
 }
