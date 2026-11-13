@@ -68,6 +68,12 @@ Model guidance belongs to a state the wizard is about to leave: while the startu
 
 Interactive mode now installs `globalThis.AI_SDK_LOG_WARNINGS` for its lifetime, shows each formatted warning once, and restores the previous value on shutdown. The layer was human review: #334 named this display follow-up but closed without an issue for it. The mechanism is the TUI case in `test/e2e/tui-sdk-warnings.test.ts`, which drives the real OpenAI Responses adapter and a `propertyNames` tool, and the SDK warning journey in [verify-vela](../.skills/verify-vela/journeys.md) that repeats it through the real CLI.
 
+## A persisted session channel is routing identity after resume
+
+[Issue #354](https://github.com/glows777/Vela/issues/354). After [#349](https://github.com/glows777/Vela/pull/349), `listSessions()` reads a channel from the session header or the last `session_channel` entry, but `resume()` left `session.channel` empty. A later `vela.session(id, { channel })` for a different channel was treated as the first binding. The next prompt appended `session_channel`, and the summary took that later entry. Opening with the other channel before `resume()` did not append, and `session.channel` still disagreed with the summary.
+
+AI/bot review of #349 should have caught it. The review covered the first late binding and archive writes, not a different bind after the channel was already saved. The mechanism is the resume cases in `test/e2e/sessions.test.ts` and the session-channel item in [REVIEW.md](../REVIEW.md). A change to session channel persistence must re-check that conflict after resume.
+
 ## A captured JSON event has to come from a fresh run
 
 [Issue #347](https://github.com/glows777/Vela/issues/347). [PR #344](https://github.com/glows777/Vela/pull/344) updated the JSON mode example so the mock model calls `bash` with `ls`, but the streamed `toolcall_delta` on that line stayed `{"path":"."}` from `list_directory`. The edit renamed `toolName`, `input`, and `result` in an old capture and left the nested `assistantMessageEvent.delta` alone. Pre-PR review missed it because nothing compared that delta with a new `vela --mode json` run.

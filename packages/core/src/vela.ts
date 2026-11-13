@@ -39,7 +39,10 @@ import {
   loadPromptTemplates,
   type PromptTemplate,
 } from './prompt/templates.ts'
+import { setSavedSessionArchived } from './session/index.ts'
+import { assertSessionId } from './session/options.ts'
 import { applySessionRouting } from './session/routing.ts'
+import { type SessionSearchHit, searchSessionText } from './session/search.ts'
 import {
   fileSessionStorage,
   memorySessionStorage,
@@ -128,6 +131,12 @@ export interface VelaOptions {
   extensions?: VelaExtension[]
 }
 
+/** Which saved sessions a listing or search covers. */
+export interface SavedSessionOptions {
+  /** Also cover sessions archived with `setSessionArchived()` (default false) */
+  includeArchived?: boolean
+}
+
 /** Return value of createVela(). */
 export interface Vela {
   readonly cwd: string
@@ -165,8 +174,24 @@ export interface Vela {
   session(id?: string, options?: SessionOptions): VelaSession
   /** Currently open sessions */
   sessions(): VelaSession[]
-  /** Saved sessions (newest first) from SessionStorage.list(); empty if the storage doesn't implement list */
-  listSessions(): Promise<SessionSummary[]>
+  /**
+   * Saved sessions, newest first, from SessionStorage.list(); empty if the storage doesn't implement list.
+   * Sessions archived with `setSessionArchived()` are left out unless `includeArchived` is set.
+   */
+  listSessions(options?: SavedSessionOptions): Promise<SessionSummary[]>
+  /**
+   * Archives or unarchives a saved session, without opening it; the flag is appended to the session file and
+   * survives a restart. Resolves when the entry is saved; rejects when nothing is saved under `id`.
+   */
+  setSessionArchived(id: string, archived: boolean): Promise<void>
+  /**
+   * Searches the text of saved sessions' user and assistant messages (not tool output, `!` commands, summaries
+   * or custom messages); newest first, one hit per session with a short match around the query.
+   */
+  searchSessions(
+    query: string,
+    options?: SavedSessionOptions,
+  ): Promise<SessionSearchHit[]>
   /** Subscribes to events from all sessions; returns an unsubscribe function */
   subscribe(listener: VelaSessionEventListener): () => void
   /** Waits for all extensions (including async factories) to load; rejects if loading fails */
@@ -444,7 +469,36 @@ export function createVela(options: VelaOptions = {}): Vela {
     logout: (provider) => models.logout(provider),
     session,
     sessions: () => [...sessions.values()],
-    listSessions: async () => (await sessionStorage.list?.()) ?? [],
+    listSessions: async (listOptions) => {
+      const list = (await sessionStorage.list?.()) ?? []
+      return listOptions?.includeArchived
+        ? list
+        : list.filter((summary) => !summary.archived)
+    },
+    setSessionArchived: async (id, archived) => {
+      assertSessionId(id)
+      const open = sessions.get(id)
+      if (open) return open.store.setArchived(archived)
+      if (!(await setSavedSessionArchived(sessionStorage, id, archived))) return
+      try {
+        options.onSessionSaved?.(id)
+      } catch (error) {
+        logger.error(
+          `[session:${id}] save observer failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    },
+    searchSessions: async (query, searchOptions) => {
+      const text = query.trim()
+      if (!text) return []
+      const hits: SessionSearchHit[] = []
+      for (const summary of await vela.listSessions(searchOptions)) {
+        const entries = await sessionStorage.load(summary.id)
+        const match = entries && searchSessionText(entries, text)
+        if (match) hits.push({ id: summary.id, match })
+      }
+      return hits
+    },
     subscribe(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
