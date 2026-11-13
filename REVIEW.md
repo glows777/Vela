@@ -26,6 +26,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 - A PR that grows with each review round. That usually means defenses are piling up instead of the root cause being fixed.
 - A channel end-to-end test that reads `model.calls.at(-1)` while more than one channel session shares that faux log. A later follow-up on the group session keeps the earlier note as `lastUserText` and can start last. Find the call by `lastUserText`, or wait until that call exists. Handoff changes run `bun test test/e2e/channel-handoff.test.ts` before merge, including the silent group pass-on case.
 - A change to session channel persistence that does not re-check conflict after resume. A persisted channel (the header, or the last `session_channel` entry) is the routing identity. After resume, a different channel throws `SessionRoutingConflictError`, and supplying the same channel again does not append another entry. Run `bun test test/e2e/sessions.test.ts`.
+- A GitHub Issue-feed gating change that leaves `.skills/verify-vela/scripts/webhook-journeys.ts` behind. An omitted or empty `issueLabels` list accepts no Issue event (HTTP 202, no model turn) and keeps the `#issues` subscription. A nonempty list such as `to:vela` wakes `github:<owner>/<repo>#issues` for an Issue that carries one of those labels. An Issue that carries none starts no turn. A PR comment still reaches only its PR topic. Run `bun .skills/verify-vela/scripts/webhook-journeys.ts` in the same PR. The journey fails if an empty list delivers every Issue again.
 
 ## Rounds
 
