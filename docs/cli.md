@@ -268,6 +268,8 @@ Set `VELA_DEBUG=1` to see debug logs. In interactive mode they are appended to `
 | `OPENAI_API_BASE_URL` | Base URL of the built-in `openai` provider, for proxies and OpenAI-compatible services. |
 | `OPENAI_API_MODEL_NAME` | Fallback model: used as `openai/<name>` when neither `--model` nor `defaultModel` is set. |
 | `ANTHROPIC_API_KEY` | API key of the built-in `anthropic` provider. |
+| `OPENROUTER_API_KEY` | API key of the built-in `openrouter` provider. |
+| `DEEPSEEK_API_KEY` | API key of the built-in `deepseek` provider. |
 | `TAVILY_API_KEY`, `SERPER_API_KEY` | Independent search keys for the `web` extension (`extensionConfig.web.tavilyKey`, `.serperKey`). Tavily wins if both are set; supported models may use provider-hosted search without either key. |
 | `LARK_APP_ID`, `LARK_APP_SECRET` | Credentials for the `lark` channel (`extensionConfig.lark.appId`, `.appSecret`); without them it does not connect. |
 | `LARK_OWNERS` | Comma-separated Lark open_ids whose direct chats are always enabled (`extensionConfig.lark.owners`). |

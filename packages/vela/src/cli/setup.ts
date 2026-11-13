@@ -134,7 +134,8 @@ Options:
   --no-session                  Keep the session in memory only, not on disk
   --fork <id>                   Start in a new session copied from a saved session
   --export <id|file> [output]   Write a saved session (id or .jsonl file) as HTML and exit
-  --model <provider/id>         Model to use (providers: built-in openai / anthropic, ~/.vela/models.json, extensions)
+  --model <provider/id>         Model to use (providers: built-in anthropic / openai / openrouter / deepseek,
+                                ~/.vela/models.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
   --append-system-prompt <text> Append text or a file's contents to the system prompt (repeatable;
                                 replaces ~/.vela/APPEND_SYSTEM.md and .vela/APPEND_SYSTEM.md)
@@ -201,6 +202,8 @@ Environment variables:
   OPENAI_API_BASE_URL           Base URL for the built-in openai provider
   OPENAI_API_MODEL_NAME         Default model id for openai when no --model / defaultModel is set
   ANTHROPIC_API_KEY             API key for the built-in anthropic provider
+  OPENROUTER_API_KEY            API key for the built-in openrouter provider
+  DEEPSEEK_API_KEY              API key for the built-in deepseek provider
   VELA_DIR                      User directory (default: ~/.vela)
   VELA_MODEL                    mock: offline demo model; faux:<scenario.json>: replay a recorded scenario
   VELA_RECORD                   Record this run as a faux scenario at the given path
@@ -459,7 +462,7 @@ export function formatModelList(
   search?: string,
 ): string {
   if (!models.length)
-    return 'No models available: sign in with /login, or set a provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY) or a provider in ~/.vela/models.json.\n'
+    return 'No models available: sign in with /login, or set a provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY) or a provider in ~/.vela/models.json.\n'
   const found = (
     search
       ? fuzzyFilter([...models], search, (m) => `${m.provider} ${m.id}`)
