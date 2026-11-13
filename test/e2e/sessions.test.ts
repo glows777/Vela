@@ -580,3 +580,136 @@ test('archiving a session that is not open still reports the save to the host', 
     dir.cleanup()
   }
 })
+
+const channelRecords = (text: string) =>
+  text
+    .split('\n')
+    .filter(Boolean)
+    .flatMap((line) => {
+      const entry = JSON.parse(line) as { type?: string; channel?: string }
+      if (entry.type !== 'session' && entry.type !== 'session_channel')
+        return []
+      return [`${entry.type}:${entry.channel ?? ''}`]
+    })
+
+const expectRoutingConflict = (run: () => void) => {
+  let error: unknown
+  try {
+    run()
+  } catch (caught) {
+    error = caught
+  }
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).name).toBe('SessionRoutingConflictError')
+}
+
+test('a header channel rejects a different bind after resume', async () => {
+  const first = createTestVela({ responses: [fauxText('one')] })
+  await first.vela.session('chat', { channel: 'lark' }).prompt('opened for lark')
+
+  const second = createTestVela({
+    cwd: first.cwd,
+    responses: [fauxText('two')],
+  })
+  const session = second.vela.session('chat')
+  expect(await session.resume()).toBe(true)
+  expect(session.channel).toBe('lark')
+  expectRoutingConflict(() =>
+    second.vela.session('chat', { channel: 'telegram' }),
+  )
+  expect(session.channel).toBe('lark')
+  await session.prompt('new turn')
+  expect(
+    (await second.vela.listSessions()).find((row) => row.id === 'chat')
+      ?.channel,
+  ).toBe('lark')
+  expect(
+    channelRecords(await second.readData('sessions/chat/transcript.jsonl')),
+  ).toEqual(['session:lark'])
+})
+
+test('a late channel binding rejects a different bind after resume', async () => {
+  const first = createTestVela({ responses: [fauxText('one')] })
+  const late = first.vela.session('late')
+  await late.prompt('local history before the binding')
+  first.vela.session('late', { channel: 'lark' })
+  await late.close()
+
+  const second = createTestVela({
+    cwd: first.cwd,
+    responses: [fauxText('two')],
+  })
+  const session = second.vela.session('late')
+  expect(await session.resume()).toBe(true)
+  expect(session.channel).toBe('lark')
+  expectRoutingConflict(() =>
+    second.vela.session('late', { channel: 'telegram' }),
+  )
+  expect(session.channel).toBe('lark')
+  await session.prompt('new turn')
+  expect(
+    (await second.vela.listSessions()).find((row) => row.id === 'late')
+      ?.channel,
+  ).toBe('lark')
+  expect(
+    channelRecords(await second.readData('sessions/late/transcript.jsonl')),
+  ).toEqual(['session:', 'session_channel:lark'])
+})
+
+test('resuming and supplying the saved channel again does not append another entry', async () => {
+  const first = createTestVela({
+    responses: [fauxText('header'), fauxText('late')],
+  })
+  await first.vela
+    .session('header', { channel: 'lark' })
+    .prompt('opened for lark')
+  const late = first.vela.session('late')
+  await late.prompt('local history before the binding')
+  first.vela.session('late', { channel: 'lark' })
+  await late.close()
+
+  const second = createTestVela({
+    cwd: first.cwd,
+    responses: [fauxText('again'), fauxText('again late')],
+  })
+  const header = second.vela.session('header')
+  expect(await header.resume()).toBe(true)
+  expect(second.vela.session('header', { channel: 'lark' })).toBe(header)
+  expect(header.channel).toBe('lark')
+  await header.prompt('same channel')
+  expect(
+    channelRecords(await second.readData('sessions/header/transcript.jsonl')),
+  ).toEqual(['session:lark'])
+
+  const rebound = second.vela.session('late')
+  expect(await rebound.resume()).toBe(true)
+  expect(second.vela.session('late', { channel: 'lark' })).toBe(rebound)
+  expect(rebound.channel).toBe('lark')
+  await rebound.prompt('same late channel')
+  expect(
+    channelRecords(await second.readData('sessions/late/transcript.jsonl')),
+  ).toEqual(['session:', 'session_channel:lark'])
+})
+
+test('opening with a different channel and then resuming is a routing conflict', async () => {
+  const first = createTestVela({ responses: [fauxText('one')] })
+  await first.vela.session('chat', { channel: 'lark' }).prompt('opened for lark')
+
+  const second = createTestVela({ cwd: first.cwd, responses: [] })
+  const session = second.vela.session('chat', { channel: 'telegram' })
+  let error: unknown
+  try {
+    await session.resume()
+  } catch (caught) {
+    error = caught
+  }
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).name).toBe('SessionRoutingConflictError')
+  expect(
+    (await second.vela.listSessions()).find((row) => row.id === 'chat')
+      ?.channel,
+  ).toBe('lark')
+  expect(
+    channelRecords(await second.readData('sessions/chat/transcript.jsonl')),
+  ).toEqual(['session:lark'])
+})
