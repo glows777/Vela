@@ -93,6 +93,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `extensions()` | Loaded extensions and the tools, commands, providers and channels each registered |
 | `commands()` | Slash commands registered by extensions |
 | `channels()` | Channels registered by extensions |
+| `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. See [SDK host access](channels-reference.md#sdk-host-access). |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
 | `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
 | `dispose()` | Stops channels, closes all sessions (aborting running work and saving) and deletes the temp data dir if there is one |
@@ -501,6 +502,6 @@ An existing unbound session accepts its first scope/channel binding while preser
 
 `publishChannelEvent(session, event)` accepts only `channel_message`, `channel_reply` and `channel_error`. `resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
 
-The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
+The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `channel(name)`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
 
 The experimental `@glows777/vela-core/diagnostics` entry also provides the canonical frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions. `resolveModel(ref, { providers, credentials })` resolves a supplied object, provider reference or configured default without assembling a Vela or reading project resources. With no configured default it throws the CLI’s existing no-model guidance. These helpers are experimental; the exact surface is recorded in the core API snapshot.
