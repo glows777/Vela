@@ -411,11 +411,18 @@
     focus?: string | undefined
     label?: string | undefined
     summary?: { summary: string; } | undefined
+  interface SessionChannelEntry
+    channel: string
+    id: string
+    parentId: string | null
+    timestamp: string
+    type: "session_channel"
   type SessionEntry = | SessionMessageEntry
       | ModelChangeEntry
       | ThinkingLevelChangeEntry
       | SessionInfoEntry
       | SessionArchivedEntry
+      | SessionChannelEntry
       | CompactionEntry
       | ContextEditEntry
       | BranchSummaryEntry

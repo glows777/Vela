@@ -126,6 +126,16 @@ export interface SessionArchivedEntry extends SessionEntryBase {
 }
 
 /**
+ * The channel this session belongs to. A session opened for a channel records it in its header; a first
+ * binding that arrives after the session was written (`vela.session(id, { channel })` on an open session)
+ * appends this instead, because the header is never rewritten.
+ */
+export interface SessionChannelEntry extends SessionEntryBase {
+  type: 'session_channel'
+  channel: string
+}
+
+/**
  * Earlier history was summarized (like pi). The model context becomes the summary followed by the
  * entries from `firstKeptEntryId` on; the summarized entries stay in the file.
  */
@@ -194,6 +204,7 @@ export type SessionEntry =
   | ThinkingLevelChangeEntry
   | SessionInfoEntry
   | SessionArchivedEntry
+  | SessionChannelEntry
   | CompactionEntry
   | ContextEditEntry
   | BranchSummaryEntry
@@ -486,8 +497,9 @@ export function copyBranch(path: SessionEntry[]): SessionEntry[] {
       pendingLabels.push(entry.id)
       continue
     }
-    // The archive flag belongs to the saved session; a fork or clone starts active
-    if (entry.type === 'session_archived') continue
+    // The archive flag and channel belong to the saved session; a fork or clone starts active and unbound
+    if (entry.type === 'session_archived' || entry.type === 'session_channel')
+      continue
     for (const id of pendingLabels) replacement.set(id, entry.id)
     pendingLabels.length = 0
     copied.push(
@@ -560,6 +572,7 @@ export function summarizeSession(
     }
     if (entry.type === 'session_info') name = entry.name?.trim() || undefined
     if (entry.type === 'session_archived') archived = entry.archived
+    if (entry.type === 'session_channel') channel = entry.channel
     // A `!` command counts like a message: a session with only commands can be resumed
     if (entry.type === 'bash_execution') {
       messageCount++

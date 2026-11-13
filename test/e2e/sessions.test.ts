@@ -523,3 +523,22 @@ test('archiving retries a write that failed before it resolves', async () => {
     )?.archived,
   ).toBe(true)
 })
+
+test('a first channel binding after the session was written reaches the summary', async () => {
+  const t = createTestVela({ responses: [fauxText('one')] })
+  const late = t.vela.session('late')
+  await late.prompt('local history before the binding')
+
+  // The public routing API accepts a first binding on an already-open, already-saved session
+  t.vela.session('late', { channel: 'fake' })
+  expect(late.channel).toBe('fake')
+  await late.close()
+
+  const listed = async (vela: typeof t.vela) =>
+    (await vela.listSessions()).find((summary) => summary.id === 'late')
+      ?.channel
+  expect(await listed(t.vela)).toBe('fake')
+  // The header is never rewritten, so a restart reads the appended entry
+  const restarted = createTestVela({ cwd: t.cwd })
+  expect(await listed(restarted.vela)).toBe('fake')
+})

@@ -153,6 +153,7 @@ export {
   type SavedSessionOptions,
   SESSION_FORMAT_VERSION,
   type SessionArchivedEntry,
+  type SessionChannelEntry,
   type SessionEntry,
   type SessionEntryBase,
   type SessionFileEntry,

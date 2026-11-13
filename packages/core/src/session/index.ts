@@ -117,9 +117,15 @@ export class SessionStore {
     return structuredClone(this.entries)
   }
 
-  /** The channel this session belongs to; recorded in the header of a new session (see `applySessionRouting`). */
+  /**
+   * Binds the session to a channel (`applySessionRouting`). A new session records it in its header; when the
+   * session is already written, its header is final, so the binding is appended as a `session_channel` entry.
+   */
   setChannel(name: string): void {
+    if (this.channel === name) return
     this.channel = name
+    if (this.started && this.header?.channel !== name)
+      this.append({ type: 'session_channel', channel: name })
   }
 
   /**

@@ -6,7 +6,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
-- **Session management for SDK hosts.** `vela.listSessions()` summaries now include the session's working directory and, when a host opened it for a channel, the channel name. `vela.setSessionArchived(id, archived)` archives or unarchives a saved session without opening it, and archived sessions are left out of `listSessions()` (and the interactive picker) unless `{ includeArchived: true }` is passed. `vela.searchSessions(text)` searches saved sessions' user and assistant messages and returns the session id with a short match. The flag is a new append-only `session_archived` entry, and the session header gains an optional `channel` field ([#314](https://github.com/glows777/Vela/issues/314)).
+- **Session management for SDK hosts.** `vela.listSessions()` summaries now include the session's working directory and, when a host opened it for a channel, the channel name. `vela.setSessionArchived(id, archived)` archives or unarchives a saved session without opening it, and archived sessions are left out of `listSessions()` (and the interactive picker) unless `{ includeArchived: true }` is passed. `vela.searchSessions(text)` searches saved sessions' user and assistant messages and returns the session id with a short match. The flag is a new append-only `session_archived` entry. The session header gains an optional `channel` field, and a first channel binding that arrives after the session was written appends a `session_channel` entry ([#314](https://github.com/glows777/Vela/issues/314)).
 
 ### Changed
 
