@@ -577,10 +577,18 @@
   interface RagOptions
     embedder?: EmbeddingFn | undefined
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
+  interface SavedSessionOptions
+    includeArchived?: boolean | undefined
   interface SendMessageOptions
     deliverAs?: "steer" | "followUp" | "nextTurn" | undefined
     triggerTurn?: boolean | undefined
   const SESSION_FORMAT_VERSION: 2
+  interface SessionArchivedEntry
+    archived: boolean
+    id: string
+    parentId: string | null
+    timestamp: string
+    type: "session_archived"
   interface SessionBeforeForkEvent
     entryId: string
     position: "before" | "at"
@@ -596,10 +604,18 @@
     focus?: string | undefined
     label?: string | undefined
     summary?: { summary: string; } | undefined
+  interface SessionChannelEntry
+    channel: string
+    id: string
+    parentId: string | null
+    timestamp: string
+    type: "session_channel"
   type SessionEntry = | SessionMessageEntry
       | ModelChangeEntry
       | ThinkingLevelChangeEntry
       | SessionInfoEntry
+      | SessionArchivedEntry
+      | SessionChannelEntry
       | CompactionEntry
       | ContextEditEntry
       | BranchSummaryEntry
@@ -614,6 +630,7 @@
     type: string
   type SessionFileEntry = SessionHeader | SessionEntry
   interface SessionHeader
+    channel?: string | undefined
     cwd?: string | undefined
     id: string
     parentSession?: string | undefined
@@ -661,6 +678,9 @@
     readonly dataDir: string
     readonly id: string
     readonly kind: "private" | "shared"
+  interface SessionSearchHit
+    id: string
+    match: string
   interface SessionShutdownEvent
     type: "session_shutdown"
   interface SessionStartEvent
@@ -671,6 +691,9 @@
     load: (id: string) => Promise<SessionFileEntry[] | undefined>
     persistence?: ((id: string) => SessionPersistence) | undefined
   interface SessionSummary
+    archived?: boolean | undefined
+    channel?: string | undefined
+    cwd?: string | undefined
     firstMessage: string
     id: string
     messageCount: number
@@ -837,7 +860,7 @@
     configureProvider: (name: string, provider: ProviderDefinition) => void
     dispose: () => Promise<void>
     extensions: () => LoadedChannelExtension[]
-    listSessions: () => Promise<SessionSummary[]>
+    listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]
     logout: (provider: string) => Promise<boolean>
@@ -849,9 +872,11 @@
     readonly model: LanguageModel
     ready: () => Promise<void>
     runningChannels: () => string[]
+    searchSessions: (query: string, options?: SavedSessionOptions) => Promise<SessionSearchHit[]>
     session: (id?: string, options?: SessionOptions) => VelaSession
     sessions: () => VelaSession[]
     setDefaults: (model: string | LanguageModel, thinkingLevel: ThinkingLevel) => void
+    setSessionArchived: (id: string, archived: boolean) => Promise<void>
     startChannels: () => Promise<void>
     subscribe: (listener: VelaSessionEventListener) => () => void
   interface VelaConfig
