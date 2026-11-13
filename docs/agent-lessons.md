@@ -74,6 +74,12 @@ Interactive mode now installs `globalThis.AI_SDK_LOG_WARNINGS` for its lifetime,
 
 AI/bot review of #349 should have caught it. The review covered the first late binding and archive writes, not a different bind after the channel was already saved. The mechanism is the resume cases in `test/e2e/sessions.test.ts` and the session-channel item in [REVIEW.md](../REVIEW.md). A change to session channel persistence must re-check that conflict after resume.
 
+## A new public Vela method belongs in the SDK member table
+
+[Issue #359](https://github.com/glows777/Vela/issues/359). [#352](https://github.com/glows777/Vela/pull/352) added `channel(name)` on `ChannelVela` and the umbrella `Vela`. The channels reference, the changelog and the public API snapshot included the method. The Vela member table in `docs/sdk.md` omitted `channel(name)`. The host-lifecycle note on that page omitted it too. The Channels reference lines in `docs/index.md` and `docs/channels.md` described writing a channel, the gateway, transports and events.
+
+AI/bot review of #352 checked the channels reference and missed the SDK inventory of the same object. A new public method on `ChannelVela` or the umbrella `Vela` must have a row in that table, or the page must record the decision to leave the method out. The mechanism is the SDK member-table item in [REVIEW.md](../REVIEW.md).
+
 ## An Issue-feed allowlist change updates the webhook journey
 
 [Issue #358](https://github.com/glows777/Vela/issues/358). [#357](https://github.com/glows777/Vela/pull/357) made `issueLabels` a strict allowlist. An empty list, including an omitted option, accepts no Issue event. The product tests and the channel docs moved with that change. `.skills/verify-vela/scripts/webhook-journeys.ts` still posted an unlabeled `issues` `opened` against an omitted list and expected a model turn. The signed delivery returned HTTP 202, and the journey then failed because the call count stayed at 6 instead of 7.
