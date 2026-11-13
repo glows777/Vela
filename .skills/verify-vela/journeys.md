@@ -1,6 +1,6 @@
 # Journeys
 
-One row per user-facing feature: how a user reaches it, how to drive it here, and what to check. Expected behavior lives in `docs/` (linked per section). Rows were driven when they were added (the first set on 2026-10-15; the Lark topic, group and routine rows on 2026-10-19). Add a row when you add a feature.
+One row per user-facing feature: how a user reaches it, how to drive it here, and what to check. Expected behavior lives in `docs/` (linked per section). Add a row when you add a feature; a row is only evidence for a change once you have driven it again.
 
 `REPO`, `H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`.
 
@@ -19,12 +19,6 @@ $H cleanup $RUN
 The script adds these settings only to `bun install`, not the CLI. It serves the six unmodified release tarballs using the consumer-smoke scoped registry pattern and installs only the umbrella package as a direct dependency. `--prepare-only` checks build, pack and installation without running setup. Preserve failed run evidence before cleanup too.
 
 ## Tools and the TUI ([tools](../../docs/tools.md), [cli](../../docs/cli.md))
-
-External event SDK: run `exec $RUN events bun $REPO/.skills/verify-vela/scripts/event-journeys.ts` in an isolated fixture. The real SDK/gateway and fake Lark transport create a subscription, reject an announcement and a directory admission write while old-human replies remain available (diagnostic only; no reply or model call), then publish command-looking untrusted data, check the real reply anchor, clean up final subscriptions, normalize CLI/SDK default targets and reject publication outside the channel lifecycle. There is no HTTP or live webhook in this journey.
-
-GitHub topic setup: run `exec $RUN github-topic bun $REPO/.skills/verify-vela/scripts/github-topic-journey.ts`. A simulated PR creation tool returns repository metadata; the real SDK persists the exact subscription for that topic, receives a signed loopback closure, replies to the original topic and removes its final subscription. Save `work/topic-*.json` and `work/topic-data/` before cleanup. The model, PR creation tool and channel transport are simulated; no live GitHub, tunnel or Lark verification is implied.
-
-GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/scripts/webhook-journeys.ts`. Real local HTTP and HMAC feed the real GitHub adapter/queue/storage; a faux model and fake Lark transport verify topic wake, wrong signature, concurrent duplicate, full-body echo filtering, untrusted command text, a group subscribing once to `#issues` and receiving an Issue and an ordinary Issue comment while a PR comment stays in its topic, final PR cleanup that keeps the feed, list/remove of the group feed, and closed port after dispose. The same journey uses openssl + curl for generic HMAC input, verifies its fixed namespace and independent delivery IDs, and keeps the original Lark topic. Live tunnels/webhooks and replacing a real polling routine require deployment authorization and credentials, and remain unverified offline.
 
 | Feature | Drive | Check |
 |---|---|---|
@@ -131,6 +125,14 @@ GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/sc
 | SDK / RPC image input | SDK `prompt(text, { images })`; RPC `prompt`, `steer`, `follow_up` with the same `images` array; use `test/fixtures/images/wide.png` for resize | Provider gets image content; normalized inline history persists; malformed RPC images reject clearly; non-vision fallback changes only the request |
 | Tool images / provider transport | SDK `06-tool-images.ts` with wide.png; CLI `--mode json` with faux read_file scenario; offline real-provider request captures | read_file and MCP reach model as images; native Anthropic/Responses tool blocks, Chat images after all tool results; history survives resume and keeps native details |
 | Packaging | `bun run build && bun run smoke:consumer` | Passes in empty Node and Bun projects (needs `fd`) |
+
+## External events ([channels](../../docs/channels.md))
+
+External event SDK: run `exec $RUN events bun $REPO/.skills/verify-vela/scripts/event-journeys.ts` in an isolated fixture. The real SDK/gateway and fake Lark transport create a subscription, reject an announcement and a directory admission write while old-human replies remain available (diagnostic only; no reply or model call), then publish command-looking untrusted data, check the real reply anchor, clean up final subscriptions, normalize CLI/SDK default targets and reject publication outside the channel lifecycle. There is no HTTP or live webhook in this journey.
+
+GitHub topic setup: run `exec $RUN github-topic bun $REPO/.skills/verify-vela/scripts/github-topic-journey.ts`. A simulated PR creation tool returns repository metadata; the real SDK persists the exact subscription for that topic, receives a signed loopback closure, replies to the original topic and removes its final subscription. Save `work/topic-*.json` and `work/topic-data/` before cleanup. The model, PR creation tool and channel transport are simulated; no live GitHub, tunnel or Lark verification is implied.
+
+GitHub/generic ingress: run `exec $RUN webhooks bun $REPO/.skills/verify-vela/scripts/webhook-journeys.ts`. Real local HTTP and HMAC feed the real GitHub adapter/queue/storage; a faux model and fake Lark transport verify topic wake, wrong signature, concurrent duplicate, full-body echo filtering, untrusted command text, a group subscribing once to `#issues` and receiving an Issue and an ordinary Issue comment while a PR comment stays in its topic, final PR cleanup that keeps the feed, list/remove of the group feed, and closed port after dispose. The same journey uses openssl + curl for generic HMAC input, verifies its fixed namespace and independent delivery IDs, and keeps the original Lark topic. Live tunnels/webhooks and replacing a real polling routine require deployment authorization and credentials, and remain unverified offline.
 
 ## Not reachable offline
 

@@ -1,8 +1,14 @@
 # Vela documentation
 
-Vela is an AI agent that works from your terminal and a TypeScript SDK for embedding the same agent in your own app. Give it a task and a working folder, and it reads files, runs commands, edits code and searches until the task is done.
+Vela is an AI coworker for your team's group chats, built on a terminal agent and TypeScript SDK. In a group chat it answers short questions, opens a topic for each larger task and keeps that topic's progress up to date. On its own, the same agent takes a task and a working folder, and reads files, runs commands, edits code and searches until the task is done.
 
-## Start using Vela
+## Run Vela in group chats
+
+- [Channels](channels.md): enabling chats, topics, schedules, costs and permissions.
+- [Deploy](deploy.md): run `vela serve` under a dedicated user.
+- [Security](security.md): what a chat member can make Vela do, and how to limit it.
+
+## Use Vela in your terminal
 
 New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a model and run your first task.
 
@@ -23,7 +29,6 @@ New to Vela? Follow the [Quickstart](quickstart.md) to install it, connect a mod
 - [Extensions](extensions.md): add tools, slash commands, model providers and channels, and hook into the agent loop.
 - [Built-in extensions](built-in-extensions.md): memory, the RAG knowledge base, web, Lark and MCP.
 - [MCP servers](mcp.md): connect Model Context Protocol servers and use their tools.
-- [Channels](channels.md): run Vela in group chats: enabling chats, topics, schedules, costs and permissions.
 - [Channels reference](channels-reference.md): writing a channel, the gateway lifecycle, custom transports and external events.
 - [Testing](testing.md): test extensions and SDK code offline with the faux model.
 - [Session format](session-format.md): the on-disk session file.

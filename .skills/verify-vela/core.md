@@ -76,6 +76,6 @@ Write a script in the run's `work/` that imports `$REPO/packages/vela/src/index.
 | Many sessions | `Promise.all([a.prompt('A'), b.prompt('B')])` | Separate histories | e2e/sessions |
 | User bash, dispose | `session.executeBash('echo X')`, then `run` | `exitCode` 0; `vela.session()` throws after `dispose()` | e2e/user-bash, e2e/disposal |
 
-Beyond this table: channels and guests are in [journeys.md](journeys.md#sdk); RAG, memory and MCP in their e2e files.
+Beyond this table: channels and guests are in [journeys.md](journeys.md#sdk-sdk-channels); RAG, memory and MCP in their e2e files.
 
 When a recipe shows a bug, the fix starts with a faux scenario in the matching e2e file (see [test/README.md](../../test/README.md)).
