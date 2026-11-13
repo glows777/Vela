@@ -73,3 +73,9 @@ Interactive mode now installs `globalThis.AI_SDK_LOG_WARNINGS` for its lifetime,
 [Issue #354](https://github.com/glows777/Vela/issues/354). After [#349](https://github.com/glows777/Vela/pull/349), `listSessions()` reads a channel from the session header or the last `session_channel` entry, but `resume()` left `session.channel` empty. A later `vela.session(id, { channel })` for a different channel was treated as the first binding. The next prompt appended `session_channel`, and the summary took that later entry. Opening with the other channel before `resume()` did not append, and `session.channel` still disagreed with the summary.
 
 AI/bot review of #349 should have caught it. The review covered the first late binding and archive writes, not a different bind after the channel was already saved. The mechanism is the resume cases in `test/e2e/sessions.test.ts` and the session-channel item in [REVIEW.md](../REVIEW.md). A change to session channel persistence must re-check that conflict after resume.
+
+## A new public Vela method belongs in the SDK member table
+
+[Issue #359](https://github.com/glows777/Vela/issues/359). [#352](https://github.com/glows777/Vela/pull/352) added `channel(name)` on `ChannelVela` and the umbrella `Vela`. The channels reference, the changelog and the public API snapshot included the method. The Vela member table in `docs/sdk.md` omitted `channel(name)`. The host-lifecycle note on that page omitted it too. The Channels reference lines in `docs/index.md` and `docs/channels.md` described writing a channel, the gateway, transports and events.
+
+AI/bot review of #352 checked the channels reference and missed the SDK inventory of the same object. A new public method on `ChannelVela` or the umbrella `Vela` must have a row in that table, or the page must record the decision to leave the method out. The mechanism is the SDK member-table item in [REVIEW.md](../REVIEW.md).
