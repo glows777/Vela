@@ -29,7 +29,7 @@ try {
 
   const alice = vela.session('alice')
   // Per-session options apply when the session is first opened.
-  const bob = vela.session('bob', { permissions: { bash: 'ask' } })
+  const bob = vela.session('bob', { tools: ['-bash'] })
 
   await Promise.all([alice.prompt('Hi from Alice'), bob.prompt('Hi from Bob')])
   await alice.prompt('Alice again')

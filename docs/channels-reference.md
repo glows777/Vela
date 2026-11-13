@@ -100,7 +100,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `onConnection(listener)` | No | Report safe live connection state and return an unsubscribe callback; otherwise startup success/failure is used. |
 | `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
 | `topicCapabilities` | No | Implement `ChannelTopicCapabilities` to use the common topic tools and prompts. Platform creation, forwarding and visible-history retrieval stay in the adapter. |
-| `sessionOptions(message)` | No | Select `{ cwd?, tools?, permissions?, model?, thinkingLevel? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. A `model` that cannot be resolved throws with the chat id before the session runs. |
+| `sessionOptions(message)` | No | Select `{ cwd?, tools?, model?, thinkingLevel? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. A `model` that cannot be resolved throws with the chat id before the session runs. |
 | `validateTools(names)` | No | Check configured names against all registered tools after extension loading. A thrown error rejects startup before transport or recovery. |
 | `prepareMessage(message, activeMessage?)` | No | Asynchronously resolve names/history/attachments when the input is ready. Return the prepared message, or `undefined` when handled without a prompt. A steer receives its active run's original trigger as the second argument; queued inputs do not. Exclude context already present in that trigger. |
 | `startRun(message, { acknowledge })` | No | Begin feedback after admission and before preparation; return a lifecycle with `event(update)` and `finish(outcome)`, or no handle. `acknowledge: false` creates presentation for a handed-off task whose original input already owns feedback. See below. |
@@ -218,7 +218,7 @@ Session save failures are logged at error level with the session id. After three
 
 Before automatically closing an idle session, the gateway saves it. If that save fails, the same live session stays open with its pending history; the gateway does not start a periodic retry loop. While blocked, a new message first retries the pending save, and runs a prompt only after a real write succeeds. SDK callers reopening that id get the same session, so recovery does not create a competing history or another header. Channel activity after recovery restores normal idle cleanup. SDK-only recovery clears the count but leaves the session open until the next channel activity or an explicit close/dispose, so a save cannot schedule a close during SDK work. Failed sessions retain memory until recovery or disposal. Explicit SDK `close()`/`dispose()` and writes made by shutdown hooks keep their existing semantics; they can still discard unsaved data. In-session retries are unchanged.
 
-Channel sessions have no UI: permissions set to `ask` are rejected, and extension UI calls fall back to events. Sessions close after 10 idle minutes and resume on the next message; `createVela({ channelIdleMs })` changes that wait (`0` closes after each completed queue). Running sessions or queued chats are not closed prematurely.
+Channel sessions have no UI: confirmation extensions should block when `!ctx.hasUI`; notification UI calls fall back to events. Sessions close after 10 idle minutes and resume on the next message; `createVela({ channelIdleMs })` changes that wait (`0` closes after each completed queue). Running sessions or queued chats are not closed prematurely.
 
 **SDK:** `await vela.startChannels()` starts registered channels. `vela.channels()` lists them. `vela.dispose()` aborts running sessions, waits for pending work and stops channels. Tool-policy validation errors reject startup before transport/recovery; a failed channel `start()` is logged without stopping other channels.
 
@@ -238,7 +238,7 @@ For run controls, implement `sendCard(chatId, card, replyToId?)` returning the s
 
 ## External event subscriptions
 
-The channel-aware SDK (`@glows777/vela-channels` or `@glows777/vela`) can wake an existing conversation from the same process. In a channel conversation, `channel_subscriptions` creates, lists or removes subscriptions. Create takes an exact `source` and `key` and targets the current group, topic or DM; list/remove are limited to the current chat. Curated tool lists must include `channel_subscriptions` explicitly; permissions still apply. Ordinary SDK sessions cannot use this tool.
+The channel-aware SDK (`@glows777/vela-channels` or `@glows777/vela`) can wake an existing conversation from the same process. In a channel conversation, `channel_subscriptions` creates, lists or removes subscriptions. Create takes an exact `source` and `key` and targets the current group, topic or DM; list/remove are limited to the current chat. Curated tool lists must include `channel_subscriptions` explicitly; tool selection still applies. Ordinary SDK sessions cannot use this tool.
 
 ```ts
 await vela.startChannels()
@@ -292,7 +292,7 @@ The listener starts after channels connect, prints its local URL, and closes dur
 - **Repository Issue feed.** Subscribe once from the group that should receive Issue work: `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#issues" })`. Ordinary Issues and their comments then arrive in that group.
 - **One pull request.** Subscribe from the topic that opened or took over the PR: `channel_subscriptions({ action: "create", source: "github", key: "github:glows777/Vela#pr/171" })`. Review, CI, comment and close/merge feedback goes to that topic.
 
-These are exact keys, including repository spelling. Each event matches one key, so an ordinary Issue comment never reaches PR subscriptions and a PR comment is not duplicated into the repository feed. Enablement and tool permissions still apply; a signed webhook cannot choose a chat or grant authority.
+These are exact keys, including repository spelling. Each event matches one key, so an ordinary Issue comment never reaches PR subscriptions and a PR comment is not duplicated into the repository feed. Enablement and tool selection still apply; a signed webhook cannot choose a chat or grant authority.
 
 Configure a GitHub repository webhook with JSON content type, a high-entropy secret matching the setting, and payload URL `https://<your-tunnel-host>/events/github`. Select only:
 
@@ -345,7 +345,7 @@ curl --fail-with-body --silent --show-error \
   --data-binary @event.json http://127.0.0.1:8787/events/generic
 ```
 
-Use a new delivery ID for a new event; resending the same ID is intentionally ignored while cached. `--data-binary` preserves the signed file bytes. Set `"final": true` only when the final notification should remove matching subscriptions. A tunneled producer uses the HTTPS tunnel URL with the same path and signature. Signing does not authorize tool execution beyond the receiving chat's existing permissions.
+Use a new delivery ID for a new event; resending the same ID is intentionally ignored while cached. `--data-binary` preserves the signed file bytes. Set `"final": true` only when the final notification should remove matching subscriptions. A tunneled producer uses the HTTPS tunnel URL with the same path and signature. Signing does not authorize tool execution beyond the receiving chat's existing tool selection.
 
 ### Tunnel deployment examples
 

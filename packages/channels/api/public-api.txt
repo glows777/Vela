@@ -13,7 +13,7 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
-    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
+    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
     start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
@@ -311,7 +311,7 @@
       days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
       }
   const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ list: "list"; create: "create"; cancel: "cancel"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>], "action">>
-  function topicSessionOptions: (msg: IncomingMessage) => { permissions: { [k: string]: "deny"; }; }
+  function topicSessionOptions: (msg: IncomingMessage) => { tools: string[]; }
   const topicToolNames: string[]
 
 # @glows777/vela-channels/testing
