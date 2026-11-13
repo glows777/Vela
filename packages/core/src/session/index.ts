@@ -130,7 +130,9 @@ export class SessionStore {
     if (!this.started)
       return setSavedSessionArchived(this.storage, this.sessionId, archived)
     const last = this.entries.at(-1)
-    if (last?.type === 'session_archived' && last.archived === archived) return
+    // Already the last entry: only retry what an earlier failed write left pending
+    if (last?.type === 'session_archived' && last.archived === archived)
+      return this.flush()
     this.append({ type: 'session_archived', archived })
     await this.flush()
   }

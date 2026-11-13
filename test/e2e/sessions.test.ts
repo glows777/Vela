@@ -7,7 +7,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import type { VelaEvent } from '@glows777/vela-core'
+import {
+  memorySessionStorage,
+  type SessionStorage,
+  type VelaEvent,
+} from '@glows777/vela-core'
 import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { z } from 'zod'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -488,4 +492,34 @@ test('searching saved sessions returns an id and a short user or assistant match
       (hit) => hit.id,
     ),
   ).toEqual(['release'])
+})
+
+test('archiving retries a write that failed before it resolves', async () => {
+  const memory = memorySessionStorage()
+  let failing = false
+  const storage: SessionStorage = {
+    ...memory,
+    append: async (id, entries) => {
+      if (failing) throw new Error('disk full')
+      await memory.append(id, entries)
+    },
+  }
+  const t = createTestVela({
+    responses: [fauxText('one')],
+    sessionStorage: storage,
+  })
+  await t.vela.session('s').prompt('one')
+
+  failing = true
+  await expect(t.vela.setSessionArchived('s', true)).rejects.toThrow(
+    'disk full',
+  )
+  failing = false
+  // The retry flushes the entry the failed write left behind instead of resolving early
+  await t.vela.setSessionArchived('s', true)
+  expect(
+    (await t.vela.listSessions({ includeArchived: true })).find(
+      (summary) => summary.id === 's',
+    )?.archived,
+  ).toBe(true)
 })
