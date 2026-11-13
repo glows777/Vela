@@ -16,10 +16,6 @@ export type * from './extensions/types.ts'
 export type { VelaLogger } from './logger.ts'
 export { silentLogger } from './logger.ts'
 export type { ImageContent, ModelMessage, ToolContent } from './messages.ts'
-export type {
-  PermissionDecision,
-  PermissionRules,
-} from './security/permissions.ts'
 export { publishChannelEvent } from './session/channel-events.ts'
 export { messageText } from './session/message-queue.ts'
 export type { SessionScope } from './session/scope.ts'

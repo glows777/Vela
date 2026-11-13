@@ -55,10 +55,6 @@ export {
   lastCustomMessage,
 } from './extensions/custom-message.ts'
 export { memory, memoryConfig } from './extensions/memory/index.ts'
-export {
-  permissionGate,
-  permissionGateConfig,
-} from './extensions/permission-gate/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
 export { todo } from './extensions/todo/index.ts'
 export type {
@@ -124,10 +120,6 @@ export {
   type ContextFile,
   loadContextFiles,
 } from './prompt/context-files.ts'
-export type {
-  PermissionDecision,
-  PermissionRules,
-} from './security/permissions.ts'
 export { publishChannelEvent } from './session/channel-events.ts'
 export {
   type BashExecutionEntry,

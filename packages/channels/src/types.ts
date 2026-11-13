@@ -1,7 +1,6 @@
 import type { ThinkingLevel } from '@glows777/vela-core'
 import type {
   ImageContent,
-  PermissionRules,
   VelaEvent,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
@@ -232,7 +231,6 @@ export interface ChannelDefinition {
   sessionOptions?: (msg: IncomingMessage) => {
     cwd?: string
     tools?: string[]
-    permissions?: PermissionRules
     /** Model for the opened session, as `provider/id`; unknown names fail opening with the chat id. */
     model?: string
     thinkingLevel?: ThinkingLevel

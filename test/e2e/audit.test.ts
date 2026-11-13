@@ -56,12 +56,12 @@ test.each(['write_file', 'edit_file'] as const)(
   },
 )
 
-test.each(['deny', 'block', 'throw', 'ask'] as const)(
+test.each(['excluded', 'block', 'throw'] as const)(
   '%s preserves audit timing and prevents write side effects',
   async (decision) => {
     const t = createTestVela({
       session: {
-        permissions: { write_file: decision === 'deny' ? 'deny' : 'ask' },
+        tools: decision === 'excluded' ? ['-write_file'] : undefined,
       },
       extensions: [
         (api) => {
@@ -79,11 +79,7 @@ test.each(['deny', 'block', 'throw', 'ask'] as const)(
     await t.run('Try to write')
     expect(existsSync(join(t.cwd, 'rejected.txt'))).toBe(false)
     expect(t.eventsOf('tool_execution_end')[0]!.isError).toBe(true)
-    expect(t.eventsOf('audit')).toEqual(
-      decision === 'ask'
-        ? [{ type: 'audit', toolName: 'write_file', path: 'rejected.txt' }]
-        : [],
-    )
+    expect(t.eventsOf('audit')).toEqual([])
   },
 )
 

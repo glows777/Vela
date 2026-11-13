@@ -29,25 +29,28 @@ function tool(
   }
 }
 
-test('generic channel tools require a channel binding and keep exact strings, selections and denies', () => {
+test('generic channel tools require a channel binding and keep exact strings, selections', () => {
   const registry = makeRegistry()
   registry.register(
     tool('generic', { channel: true }),
     tool('larkOnly', { channel: 'lark' }),
   )
-  expect(registry.decide('generic')).toBe('deny')
+  expect(registry.getActiveTools().map((tool) => tool.name)).not.toContain(
+    'generic',
+  )
   for (const channel of ['lark', 'another']) {
     registry.setChannel(channel)
-    expect(registry.decide('generic')).toBe('allow')
-    expect(registry.decide('larkOnly')).toBe(
-      channel === 'lark' ? 'allow' : 'deny',
+    expect(registry.getActiveTools().map((tool) => tool.name)).toContain(
+      'generic',
     )
+    expect(
+      registry.getActiveTools().some((tool) => tool.name === 'larkOnly'),
+    ).toBe(channel === 'lark')
   }
-  registry.setPermissions({ generic: 'deny' })
-  expect(registry.decide('generic')).toBe('deny')
-  registry.setPermissions(undefined)
   registry.setSelection([])
-  expect(registry.decide('generic')).toBe('deny')
+  expect(registry.getActiveTools().map((tool) => tool.name)).not.toContain(
+    'generic',
+  )
 })
 
 test('registering a tool name twice throws', () => {
@@ -110,7 +113,7 @@ test('exposure decides what the model sees, what tool_search finds and what exec
     (await registry.searchTools('codemode,hidden,deferred')).map((t) => t.name),
   ).toEqual(['deferred'])
   expect(active()).toEqual(['direct', 'model-only', 'deferred'])
-  registry.setPermissions({ direct: 'deny' })
+  registry.setDefaultToolModifiers(['-direct'])
   expect(registry.isCallable('direct')).toBe(false)
 })
 
@@ -222,7 +225,7 @@ test('searchTools ranks deferred tools by keywords (BM25, like pi) and loads at 
   // Loaded tools are not found again by keywords; unrelated words find nothing
   expect((await registry.searchTools('issue')).map((t) => t.name)).toEqual([])
   expect(await registry.searchTools('weather forecast')).toHaveLength(0)
-  registry.setPermissions({ mcp__slack__post: 'deny' })
+  registry.setDefaultToolModifiers(['-mcp__slack__post'])
   expect(await registry.searchTools('post message channel')).toHaveLength(0)
 })
 

@@ -85,7 +85,7 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
-    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
+    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
     start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
@@ -535,10 +535,6 @@
     routine?: { id: string; scheduledAt: string; } | undefined
     text: string
     topic?: { rootId: string; threadId: string; } | undefined
-  type PermissionDecision = 'allow' | 'deny' | 'ask'
-  function permissionGate: () => VelaExtension
-  const permissionGateConfig: ExtensionConfigDefinition
-  type PermissionRules = Record<string, PermissionDecision>
   interface PromptOptions
     images?: ImageContent[] | undefined
     signal?: AbortSignal | undefined
@@ -649,7 +645,6 @@
     channel?: string | undefined
     cwd?: string | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
-    permissions?: PermissionRules | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
@@ -1098,7 +1093,6 @@
     steer: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
     steeringMode: QueueMode
     subscribe: (listener: VelaEventListener) => () => void
-    toolDecision: (name: string) => PermissionDecision
     waitForIdle: () => Promise<void>
   type VelaSessionEventListener = (
       event: VelaEvent,

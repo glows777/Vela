@@ -1,4 +1,4 @@
-/** Storage sharing identity supplied by a host; it grants no tool permissions. */
+/** Storage sharing identity supplied by a host; it does not enable tools. */
 export interface SessionScope {
   readonly id: string
   readonly kind: 'private' | 'shared'

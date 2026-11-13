@@ -96,7 +96,6 @@ async function fixture(
     cwd?: string
     receiverConfig?: Record<string, unknown>
     tools?: string[]
-    permissions?: { [name: string]: 'deny' }
   } = {},
 ) {
   const cwd = options.cwd ?? (await mkdtemp(join(tmpdir(), 'vela-webhooks-')))
@@ -161,7 +160,6 @@ async function fixture(
           canRecover: (msg) => enabled.has(msg.channelId),
           sessionOptions: () => ({
             tools: options.tools,
-            permissions: options.permissions,
           }),
           async send(msg) {
             replies.push(msg as IncomingMessage)
@@ -1099,8 +1097,8 @@ test.each([
     true,
   ],
   [
-    'subscriptions denied',
-    { permissions: { channel_subscriptions: 'deny' as const } },
+    'subscriptions excluded',
+    { tools: ['-channel_subscriptions'] as string[] },
     true,
   ],
 ] as const)(

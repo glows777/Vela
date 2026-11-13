@@ -119,6 +119,4 @@ export interface ToolRegistryForkOptions {
   onEvent?: VelaEventListener
   /** Session id passed to hooks */
   sessionId?: string
-  /** Asks the user when the decision is ask; without it, ask means deny */
-  confirm?: (toolName: string, input: unknown) => Promise<boolean>
 }

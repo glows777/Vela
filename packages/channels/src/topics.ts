@@ -267,7 +267,7 @@ export class ChannelTopics {
 }
 
 export function topicSessionOptions(msg: IncomingMessage) {
-  const denied = isChannel(msg)
+  const hidden = isChannel(msg)
     ? ['channel_wait_for_input']
     : msg.topic && msg.chatKind !== 'direct'
       ? groupOnlyToolNames
@@ -277,8 +277,6 @@ export function topicSessionOptions(msg: IncomingMessage) {
           'channel_wait_for_input',
         ]
   return {
-    permissions: Object.fromEntries(
-      denied.map((name) => [name, 'deny' as const]),
-    ),
+    tools: hidden.map((name) => `-${name}`),
   }
 }

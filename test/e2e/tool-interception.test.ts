@@ -57,7 +57,7 @@ test.each(['allow', 'block', 'throw', 'cancel'] as const)(
   },
 )
 
-test('ordered async input rewrites reach later handlers, approval, execution and original history', async () => {
+test('ordered async input rewrites reach later handlers, execution and original history', async () => {
   const seen: string[] = []
   const t = createTestVela({
     extensions: [
@@ -74,18 +74,6 @@ test('ordered async input rewrites reach later handlers, approval, execution and
         })
       },
     ],
-    session: {
-      permissions: { write_file: 'ask' },
-      ui: {
-        notify: () => {},
-        select: async () => undefined,
-        input: async () => undefined,
-        confirm: async (_title, message) => {
-          seen.push(message)
-          return true
-        },
-      },
-    },
     responses: [
       fauxToolCall('write_file', { path: 'initial.txt', content: 'written' }),
       fauxText('done'),
@@ -93,7 +81,6 @@ test('ordered async input rewrites reach later handlers, approval, execution and
   })
   await t.run('Write')
   expect(seen[0]).toBe('second.txt')
-  expect(seen[1]).toContain('final.txt')
   expect(await Bun.file(join(t.cwd, 'final.txt')).text()).toBe('written')
   expect(existsSync(join(t.cwd, 'initial.txt'))).toBe(false)
   const history = await Bun.file(t.session.registry.results.history.path).text()

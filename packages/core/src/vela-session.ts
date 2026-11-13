@@ -190,7 +190,7 @@ export interface SessionDeps {
   /** Vela-level tool registry; each session forks its own from it */
   registry: ToolRegistry
   builder: PromptPipeline
-  /** Expands `/skill:<name>` and prompt templates in owner input (src/prompt/templates.ts) */
+  /** Expands `/skill:<name>` and prompt templates in session input (src/prompt/templates.ts) */
   expandInput: (text: string) => string
   extensions: SessionExtensionHooks
   /** Session events also go to Vela's subscribers */
@@ -219,7 +219,7 @@ export class VelaSession {
   readonly tracker: TokenTracker
   /** @internal */
   readonly contextManager: ContextManager
-  /** @internal This session's registry: shared tool definitions, separate tool results, permissions and discovered deferred tools */
+  /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
   readonly registry: ToolRegistry
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */
   readonly busy: { locked: boolean; controller?: AbortController } = {
@@ -279,14 +279,8 @@ export class VelaSession {
       onEvent: this.emit,
       sessionId: id,
       scope: () => this.scope,
-      confirm: (toolName, input) =>
-        this.ui.confirm(
-          `Allow ${toolName} to run?`,
-          JSON.stringify(input, null, 2) ?? '',
-        ),
     })
     applySessionRouting(this, options)
-    this.registry.setPermissions(options.permissions)
     const toolListError = options.tools
       ? getToolListError(options.tools)
       : undefined
@@ -465,14 +459,9 @@ export class VelaSession {
    */
   channel?: string
 
-  /** Transient host-supplied sharing identity; it never grants permissions. */
+  /** Transient host-supplied sharing identity; it never enables tools. */
   get scope(): Readonly<SessionScope> | undefined {
     return sessionScope(this)
-  }
-
-  /** Effective tool selection, channel eligibility and permission decision. */
-  toolDecision(name: string) {
-    return this.registry.decide(name)
   }
 
   /** Tool names the model can currently see (after tool selection and deferred loading). */
@@ -991,7 +980,7 @@ export class VelaSession {
 
   /**
    * Runs a shell command for the user (pi's `executeBash`, the TUI's `!cmd`) in the working directory,
-   * without tool permissions or hooks; owner sessions only, one command at a time. The result is recorded
+   * without tool selection or hooks; one command at a time. The result is recorded
    * in the session and reaches the model as a user message with the next prompt; `excludeFromContext`
    * (`!!cmd`) records it without sending it. While the agent runs, recording waits until it stops.
    * `onUpdate` gets the output's tail while the command runs; `bash_execution_update` events carry each new
@@ -1020,7 +1009,7 @@ export class VelaSession {
    * steer / followUp messages queued during the run also finish before it resolves (`agent_settled` is emitted last).
    * If the loop fails, queued messages still run, then it rejects.
    * While running, pass `streamingBehavior` (or use steer() / followUp()); it then resolves right after enqueueing.
-   * In owner sessions, `/name args` matching an extension command runs the command instead of going to the model (immediately, even while running).
+   * `/name args` matching an extension command runs the command instead of going to the model (immediately, even while running).
    * Other input goes through the extensions' `input` handlers first (like pi); a handled input resolves without running.
    */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
