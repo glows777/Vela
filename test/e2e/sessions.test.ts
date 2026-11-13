@@ -605,7 +605,9 @@ const expectRoutingConflict = (run: () => void) => {
 
 test('a header channel rejects a different bind after resume', async () => {
   const first = createTestVela({ responses: [fauxText('one')] })
-  await first.vela.session('chat', { channel: 'lark' }).prompt('opened for lark')
+  await first.vela
+    .session('chat', { channel: 'lark' })
+    .prompt('opened for lark')
 
   const second = createTestVela({
     cwd: first.cwd,
@@ -695,7 +697,9 @@ test('opening with a different channel and then resuming is a routing conflict',
   const first = createTestVela({
     responses: [fauxText('one'), fauxText('late')],
   })
-  await first.vela.session('chat', { channel: 'lark' }).prompt('opened for lark')
+  await first.vela
+    .session('chat', { channel: 'lark' })
+    .prompt('opened for lark')
   const late = first.vela.session('late')
   await late.prompt('opened unbound')
   first.vela.session('late', { channel: 'lark' })
