@@ -85,3 +85,9 @@ AI/bot review of #352 checked the channels reference and missed the SDK inventor
 [Issue #358](https://github.com/glows777/Vela/issues/358). [#357](https://github.com/glows777/Vela/pull/357) made `issueLabels` a strict allowlist. An empty list, including an omitted option, accepts no Issue event. The product tests and the channel docs moved with that change. `.skills/verify-vela/scripts/webhook-journeys.ts` still posted an unlabeled `issues` `opened` against an omitted list and expected a model turn. The signed delivery returned HTTP 202, and the journey then failed because the call count stayed at 6 instead of 7.
 
 Pre-PR review should have caught it. CI does not run the verify-vela journeys, so the stale script reached main. A breaking change to GitHub Issue-feed gating has to update that webhook journey in the same pull request, including the empty default. The mechanism is the journey. It fails if an empty list delivers every Issue again. The Issue-feed item in [REVIEW.md](../REVIEW.md) is the review check.
+
+## A captured JSON event has to come from a fresh run
+
+[Issue #347](https://github.com/glows777/Vela/issues/347). [PR #344](https://github.com/glows777/Vela/pull/344) updated the JSON mode example so the mock model calls `bash` with `ls`, but the streamed `toolcall_delta` on that line stayed `{"path":"."}` from `list_directory`. The edit renamed `toolName`, `input`, and `result` in an old capture and left the nested `assistantMessageEvent.delta` alone. Pre-PR review missed it because nothing compared that delta with a new `vela --mode json` run.
+
+When refreshing a captured CLI/JSON fixture, the whole event (including nested `assistantMessageEvent.delta`) has to come from a fresh run, not from renaming fields in an old capture. The mechanism is `test/unit/json-example.test.ts`. It fails when a `toolcall_delta` in the `docs/json.md` session example is not part of the tool input on the same line.
