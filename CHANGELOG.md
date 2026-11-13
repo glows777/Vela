@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **SDK host access to channels.** `vela.channel(name)` exposes enabled session snapshots, session/status subscriptions, durable submission, run-bound Stop, idle routine management and `{ connected, error? }` connection observation. Lark reports real SDK readiness and reconnect changes; owned topic follow-ups require matching logical IDs and a real reply anchor. Local still uses its existing HTTP/SSE transport in this stage ([#312](https://github.com/glows777/Vela/issues/312)).
+
 - **Session management for SDK hosts.** `vela.listSessions()` summaries now include the session's working directory and, when a host opened it for a channel, the channel name. `vela.setSessionArchived(id, archived)` archives or unarchives a saved session without opening it, and archived sessions are left out of `listSessions()` (and the interactive picker) unless `{ includeArchived: true }` is passed. `vela.searchSessions(text)` searches saved sessions' user and assistant messages and returns the session id with a short match. The flag is a new append-only `session_archived` entry. The session header gains an optional `channel` field, and a first channel binding that arrives after the session was written appends a `session_channel` entry ([#314](https://github.com/glows777/Vela/issues/314)).
 
 ### Changed
@@ -13,6 +15,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 - **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
 
 ### Fixed
+
+- **Local startup cannot outlive disposal.** Stopping while Local storage is loading prevents the later HTTP listener and observers from being created, so `dispose()` cannot leave a hidden loopback server running ([#312](https://github.com/glows777/Vela/issues/312)).
 
 - **A saved channel stays bound after resume.** `resume()` restores the channel from the session header or the last `session_channel` entry. Binding a different channel afterwards throws `SessionRoutingConflictError`, and supplying the saved channel again does not append another entry ([#354](https://github.com/glows777/Vela/issues/354)).
 

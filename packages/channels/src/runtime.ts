@@ -1,11 +1,14 @@
 import type { VelaLogger, VelaSession } from '@glows777/vela-core/extension-api'
+import { ChannelConnectionState } from './connection.ts'
 import type { ChannelDirectory, ChannelRecord } from './directory.ts'
+import { isGroupInput } from './directory.ts'
 import { errorMessage } from './log.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
   ChannelDefinition,
+  ChannelHost,
   ChannelRuntime,
   ChannelSessionSnapshot,
   ChannelSessionUpdate,
@@ -22,6 +25,8 @@ interface RuntimeOptions {
   run: (key: string) => { runId: string; stopped: boolean } | undefined
   submit: ChannelRuntime['submit']
   stop: ChannelRuntime['stop']
+  running: () => boolean
+  hostRoutines: ChannelHost['routines']
   operations: Pick<
     ChannelRuntime,
     | 'routines'
@@ -36,6 +41,8 @@ interface RuntimeOptions {
 /** Public operations share the directory and gateway; this adapter owns no session state. */
 export class ScopedChannelRuntime {
   readonly api: ChannelRuntime
+  readonly host: ChannelHost
+  readonly connection: ChannelConnectionState
   private readonly listeners = new Set<(line: ChannelStatusLine) => void>()
 
   private readonly sessionListeners = new Set<
@@ -57,33 +64,7 @@ export class ScopedChannelRuntime {
     this.api = {
       ...o.operations,
       submit: o.submit,
-      sessions: (chatId) =>
-        o.directory.entries(o.channel.name).flatMap((record) => {
-          if (
-            record.chatId !== chatId ||
-            o.channel.canRecover?.(storedMessage(record), record.chatKind) ===
-              false
-          )
-            return []
-          const run = o.run(record.key)
-          return [
-            {
-              sessionId: record.key,
-              chatId: record.chatId,
-              chatKind: record.chatKind,
-              topic:
-                record.rootId && record.threadId
-                  ? { rootId: record.rootId, threadId: record.threadId }
-                  : undefined,
-              task: record.task,
-              state: run?.stopped ? 'stopped' : o.state(record.key),
-              requester: { ...record.requester },
-              updatedAt: record.updatedAt,
-              waitingReason: record.waitingReason,
-              runId: run && !run.stopped ? run.runId : undefined,
-            },
-          ]
-        }),
+      sessions: (chatId) => this.snapshots(chatId),
       stop: o.stop,
       onSession: (listener) => {
         this.sessionListeners.add(listener)
@@ -139,6 +120,62 @@ export class ScopedChannelRuntime {
         o.operations.dispatch(id, message, label)
       },
     }
+    this.connection = new ChannelConnectionState(o.channel, o.logger)
+    this.host = {
+      sessions: (chatId) => this.snapshots(chatId),
+      onSession: this.api.onSession,
+      onStatus: this.api.onStatus,
+      stop: this.api.stop,
+      routines: o.hostRoutines,
+      connection: this.connection.get,
+      onConnection: this.connection.subscribe,
+      submit: async (message) => {
+        if (!o.running()) throw new Error('Channel is not running')
+        // Host topic input cannot create or redirect an owned logical conversation.
+        const msg = { ...message, topic: message.topic && { ...message.topic } }
+        if (msg.topic) {
+          const record = o.directory.get(
+            channelSessionId(o.channel.name, msg.channelId, msg.topic.rootId),
+          )
+          if (!record?.rootId || record.threadId !== msg.topic.threadId)
+            throw new Error('Unknown or mismatched channel topic')
+          msg.requireExistingSession = true
+          msg.chatKind = record.chatKind
+        }
+        if (isGroupInput(msg) && !msg.replyToId?.trim())
+          throw new Error('Host group input requires a service reply anchor')
+        return this.api.submit(msg)
+      },
+    }
+  }
+
+  private snapshots(chatId?: string): ChannelSessionSnapshot[] {
+    const o = this.options
+    return o.directory.entries(o.channel.name).flatMap((record) => {
+      if (
+        (chatId !== undefined && record.chatId !== chatId) ||
+        o.channel.canRecover?.(storedMessage(record), record.chatKind) === false
+      )
+        return []
+      const run = o.run(record.key)
+      return [
+        {
+          sessionId: record.key,
+          chatId: record.chatId,
+          chatKind: record.chatKind,
+          topic:
+            record.rootId && record.threadId
+              ? { rootId: record.rootId, threadId: record.threadId }
+              : undefined,
+          task: record.task,
+          state: run?.stopped ? 'stopped' : o.state(record.key),
+          requester: { ...record.requester },
+          updatedAt: record.updatedAt,
+          waitingReason: record.waitingReason,
+          runId: run && !run.stopped ? run.runId : undefined,
+        },
+      ]
+    })
   }
 
   status(line: ChannelStatusLine): void {
@@ -170,6 +207,7 @@ export class ScopedChannelRuntime {
   }
 
   clear(): void {
+    this.connection.clear()
     this.sessionListeners.clear()
     this.listeners.clear()
   }

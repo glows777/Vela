@@ -2,6 +2,57 @@
 
 This page is for building on the channel interface: writing a channel, the gateway lifecycle, custom Lark transports and external event subscriptions. To run Vela in a group chat, see [Channels](channels.md).
 
+## SDK host access
+
+An in-process SDK host uses `createChannelVela()` and one accessor, `vela.channel(name)`. Call `await vela.ready()` before looking up channels registered by async extensions, then `await vela.startChannels()` before authoritative snapshot reads or mutations. `ready()` alone does not load the channel directory or Local store. An unknown channel name throws.
+
+```ts
+const vela = createChannelVela({ extensions: [lark(options), local(localOptions)] })
+await vela.ready()
+const channel = vela.channel('lark')
+const offSession = channel.onSession(({ session, run }) => updateSession(session, run))
+const offConnection = channel.onConnection(connection => showConnection(connection))
+await vela.startChannels()
+const sessions = channel.sessions()                 // all enabled chats in Lark
+const chatSessions = channel.sessions('oc_group')   // optional chat filter
+const connection = channel.connection()            // { connected: boolean, error?: string }
+```
+
+`ChannelHost` reuses `ChannelRuntime`'s `submit`, `stop`, `onSession` and `onStatus` types. It widens `sessions` to an optional chat ID and adds connection observation and idle-capable routines. Core `vela.sessions()` still lists open core sessions; `vela.channels()`, `runningChannels()` and `publishEvent()` are unchanged. For a cross-channel UI, enumerate `vela.channels()` and ask each view; there is no merged cross-channel runtime.
+
+- `sessions(chatId?)` returns detached `ChannelSessionSnapshot` values, including `waitingReason` and the current `runId`, with the same enabled-scope checks as the adapter. Listing never opens a model session.
+- `onSession` and `onStatus` preserve their existing event shapes. Subscriptions can be installed before startup, observe only future events, isolate listener exceptions and are cleared on disposal. Subscribe and then read snapshots to initialize a UI.
+- `submit(message)` resolves after durable admission, before preparation, model work or delivery. It rechecks channel access. A topic follow-up must match an owned root and thread in that chat; the host view forces `requireExistingSession: true`. Unknown or mismatched topics are rejected without creating a new one. Group/topic input needs a real service `replyToId` anchor, especially on Lark, whose reply operation uses that ID. Do not fabricate service IDs. Owner DMs keep the existing direct-message form without `replyToId`. Creating an anchorless new Lark topic is not supported.
+- `stop({ chatId, rootId? }, runId)` targets the exact current preparation/run. Expired, repeated or unavailable stops return false; stopping does not discard later queued input.
+- Host access preserves channel enablement, project existence, topic ownership and configured tools. It does not expose model-run-only `scope`, `session`, `context`, `topics`, `topicCoverage`, `dispatch`, `skipReply` or `waitForInput` operations. After disposal, mutations fail and Stop returns false.
+
+### Routines while idle
+
+The host's `routines` member takes a logical target rather than an active model session ID. Creation requires an already admitted session and explicit creator attribution from the trusted SDK host. This identity is attribution, not an additional authorization mechanism. There is no second routine store or scheduler.
+
+```ts
+const routine = await channel.routines.create(
+  { chatId: 'oc_group', rootId: 'owned-root' },
+  {
+    message: 'Review the report',
+    schedule: { time: '09:00', days: ['mon'] },
+    creator: { id: 'ou_alice', name: 'Alice' },
+  },
+)
+const { timezone, routines } = channel.routines.list({ chatId: 'oc_group' })
+await channel.routines.cancel({ chatId: 'oc_group' }, routine.id)
+```
+
+The schedule format, deployment timezone, future-time validation, 20-per-chat cap, `nextRun` descriptions and cancellation behavior are the same as the model API. List/cancel cover that chat's group/direct session and topics, never another channel/chat. Cancelling prevents future submissions, not work already admitted. Model-facing `runtime.routines` remains limited to an active channel run.
+
+### Connection state
+
+`connection()` and `onConnection(listener)` share one `ChannelConnection` value: `{ connected: boolean, error?: string }`. Initial, deliberately stopped and unconfigured channels are not connected. Readiness clears a prior error. Lark uses actual SDK ready, error, reconnecting and reconnected callbacks; resolving transport startup alone is not proof of readiness. Errors are safe display strings. Stopped/replaced transport callbacks cannot revive a connection. Custom Lark transports keep the existing startup success/failure fallback without a new observation hook.
+
+For another adapter, optional `ChannelDefinition.onConnection(listener)` reports live state and returns an unsubscribe callback; without it, the gateway uses `start()` success/failure. Error strings from an adapter must be safe for host display. Connection state is informational: `runningChannels()` still means successful startup, and disconnects do not change routine scheduling or replay submitted messages.
+
+Local in this release still starts its authenticated HTTP/SSE transport and reports connected only after startup succeeds. The host's low-level `submit` does not add Local user messages to visible history; use the existing Local HTTP API for its composer. The no-listener Local core and direct projects/messages/events API are the next part of #312, not part of this host-entry change.
+
 ## Writing a channel
 
 The shared channel contract is exercised by both Lark and the Local HTTP/SSE transport, including admission, task dispatch, run controls and recovery. The documented public interfaces follow the [SDK API stability policy](sdk.md#api-stability); the earlier blanket experimental qualification no longer applies. For the app-facing wire protocol, see [Local](channels.md#local).
@@ -16,6 +67,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
 | `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
 | `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
+| `onConnection(listener)` | No | Report safe live connection state and return an unsubscribe callback; otherwise startup success/failure is used. |
 | `connect(runtime)` | No | Receive the scoped runtime operations below at registration, before `start()`. |
 | `topicCapabilities` | No | Implement `ChannelTopicCapabilities` to use the common topic tools and prompts. Platform creation, forwarding and visible-history retrieval stay in the adapter. |
 | `sessionOptions(message)` | No | Select `{ cwd?, tools?, permissions?, model?, thinkingLevel? }` from the logical chat and current configuration. The gateway applies them and binds channel scope before resume/hooks on every opening path, including new physical generations. A `model` that cannot be resolved throws with the chat id before the session runs. |
