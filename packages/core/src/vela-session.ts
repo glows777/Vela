@@ -65,7 +65,7 @@ import {
   type NavigateTreeOptions,
   type QueueMode,
 } from './session/options.ts'
-import { applySessionRouting, sessionScope } from './session/routing.ts'
+import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
 import { newSessionId } from './session/session-id.ts'
 import {
@@ -280,7 +280,7 @@ export class VelaSession {
       sessionId: id,
       scope: () => this.scope,
     })
-    applySessionRouting(this, options)
+    routing.applySessionRouting(this, options)
     const toolListError = options.tools
       ? getToolListError(options.tools)
       : undefined
@@ -453,15 +453,12 @@ export class VelaSession {
     if (after !== before) this.store.appendThinkingLevelChange(after)
   }
 
-  /**
-   * The channel this session answers on (e.g. `lark`), supplied by host routing on session open; undefined
-   * for local sessions. Providers see it as `ProviderContext.channel()`.
-   */
+  /** Channel this session answers on. Open supplies it, and `resume()` restores a saved one. */
   channel?: string
 
   /** Transient host-supplied sharing identity; it never enables tools. */
   get scope(): Readonly<SessionScope> | undefined {
-    return sessionScope(this)
+    return routing.sessionScope(this)
   }
 
   /** Tool names the model can currently see (after tool selection and deferred loading). */
@@ -920,7 +917,8 @@ export class VelaSession {
     )
   }
 
-  /** Restores history from session storage (replacing the in-memory history); returns whether a saved session was found. Not allowed while running. */
+  /** Restores saved history and a saved channel. Returns false when nothing was saved.
+   * Throws while running, or `SessionRoutingConflictError` when the opened channel differs. */
   async resume(): Promise<boolean> {
     if (this.busy.locked)
       throw new Error(`Session ${this.id} is running; cannot restore history`)
@@ -930,6 +928,8 @@ export class VelaSession {
     if (!saved) return false
     this.displayName = saved.name
     await this.loadBranch(saved)
+    if (saved.channel !== undefined)
+      routing.bindSavedChannel(this, saved.channel)
     // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
     if (this.options.thinkingLevel !== undefined)
       this.thinking = this.options.thinkingLevel
