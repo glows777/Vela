@@ -189,6 +189,38 @@ export interface ChannelRuntime {
   ): void
 }
 
+/** Display-safe connection state; readiness clears a previous error. */
+export interface ChannelConnection {
+  connected: boolean
+  error?: string
+}
+
+/** The SDK host's view of one channel's existing runtime. */
+export interface ChannelHost
+  extends Pick<ChannelRuntime, 'submit' | 'stop' | 'onSession' | 'onStatus'> {
+  /** All enabled chats, or just one chat, without opening a core session. */
+  sessions(chatId?: string): ChannelSessionSnapshot[]
+  routines: {
+    /** Target an admitted logical session. Creator is trusted host attribution. */
+    create(
+      target: ChannelTarget,
+      input: {
+        message: string
+        schedule: RoutineSchedule
+        creator: ChannelRoutine['creator']
+      },
+    ): Promise<ChannelRoutineInfo>
+    /** List/cancel stay chat-scoped, including routines on its topics. */
+    list(
+      target: Pick<ChannelTarget, 'chatId'>,
+    ): ReturnType<ChannelRuntime['routines']['list']>
+    cancel(target: Pick<ChannelTarget, 'chatId'>, id: string): Promise<boolean>
+  }
+  connection(): ChannelConnection
+  /** Future changes only. Subscribe, then read connection() to initialize. */
+  onConnection(listener: (connection: ChannelConnection) => void): () => void
+}
+
 /** `silent` removes a deferred passive marker without adding an outcome reaction. */
 export type ChannelOutcome = 'done' | 'failed' | 'stopped' | 'silent'
 
@@ -227,6 +259,10 @@ export interface ChannelDefinition {
     reminder: { message: string; lateByMs: number },
   ) => Promise<IncomingMessage | undefined>
 
+  /** Optional live transport state. Without it, start success/failure is used. */
+  onConnection?: (
+    listener: (connection: ChannelConnection) => void,
+  ) => () => void
   connect?: (runtime: ChannelRuntime) => void
   sessionOptions?: (msg: IncomingMessage) => {
     cwd?: string

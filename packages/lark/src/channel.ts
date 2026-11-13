@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import type {
+  ChannelConnection,
   ChannelDefinition,
   ChannelFeedbackUpdate,
   ChannelOutcome,
@@ -29,6 +30,7 @@ import {
   topicRunCard,
 } from './cards.ts'
 import { type LarkChat, parseChats } from './chats.ts'
+import { LarkConnection } from './connection.ts'
 import {
   formatGroupContext,
   messageTime,
@@ -40,11 +42,10 @@ import { errorMessage } from './log.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
 import { LarkProgress } from './progress.ts'
 import { LarkTopics } from './topics.ts'
-import {
-  type LarkMessageEvent,
-  type LarkSentMessage,
-  type LarkTransport,
-  larkTransport,
+import type {
+  LarkMessageEvent,
+  LarkSentMessage,
+  LarkTransport,
 } from './transport.ts'
 
 export interface LarkChannelConfig {
@@ -183,6 +184,7 @@ export class LarkChannel implements ChannelDefinition {
   private transport?: LarkTransport
   private readonly seen = new Set<string>()
   private stopped = false
+  private readonly connection = new LarkConnection()
   private readonly pending = new Set<Promise<void>>()
   private readonly controls = new Map<
     string,
@@ -222,14 +224,16 @@ export class LarkChannel implements ChannelDefinition {
     this.messageHandler = handler
   }
 
+  onConnection(listener: (connection: ChannelConnection) => void): () => void {
+    return this.connection.subscribe(listener)
+  }
+
   async start(): Promise<boolean | undefined> {
+    const { active, report, transport } = this.connection.begin(this.config)
+    this.transport?.stop()
+    this.transport = transport
     this.stopped = false
     this.botId = undefined
-    const transport =
-      this.config.transport ??
-      (this.config.appId && this.config.appSecret
-        ? larkTransport(this.config.appId, this.config.appSecret)
-        : undefined)
     if (!transport) {
       this.config.logger.warn(
         '[lark] appId / appSecret not configured; channel will not connect to Lark',
@@ -240,23 +244,31 @@ export class LarkChannel implements ChannelDefinition {
       this.config.logger.info(
         '[lark] chats is empty; only owners’ direct chats are enabled',
       )
-    this.transport = transport
     try {
-      this.botId = await transport.getBotId()
+      const botId = await transport.getBotId()
+      if (!active()) return
+      this.botId = botId
     } catch (error) {
       this.config.logger.warn(
         `[lark] Cannot identify bot; group messages will be ignored: ${String(error)}`,
       )
     }
-    await transport.start(
-      (event) => this.receive(event),
-      (event) => this.receiveAction(event),
-    )
-    this.config.logger.info('[lark] Long connection established')
+    if (!active()) return
+    try {
+      await transport.start(
+        (event) => this.receive(event),
+        (event) => this.receiveAction(event),
+      )
+      if (this.config.transport) report({ connected: true })
+    } catch (error) {
+      report({ connected: false, error: 'Lark connection failed' })
+      throw error
+    }
   }
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.connection.stop()
     this.transport?.stop()
     for (const entry of this.controls.values()) entry.clear()
     await Promise.all(this.pending)

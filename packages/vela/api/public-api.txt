@@ -81,6 +81,7 @@
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string
+    onConnection?: ((listener: (connection: ChannelConnection) => void) => () => void) | undefined
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
@@ -850,6 +851,7 @@
   type UserContent = | string
       | (Exclude<AIUserContent, string>[number] | ImageContent)[]
   interface Vela
+    channel: (name: string) => ChannelHost
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void

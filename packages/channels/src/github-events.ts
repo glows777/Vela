@@ -71,15 +71,12 @@ function ownBody(body: string): boolean {
   return body.trimEnd().split(/\r?\n/).at(-1) === '<!-- vela:event-origin -->'
 }
 
-/** A nonempty allowlist gates the feed; an empty one keeps every Issue event. */
+/** Every Issue event needs one of the configured labels; an empty list accepts none. */
 function allowedByLabels(
   item: { labels: readonly { name: string }[] },
   allowlist: readonly string[],
 ): boolean {
-  return (
-    allowlist.length === 0 ||
-    item.labels.some((each) => allowlist.includes(each.name))
-  )
+  return item.labels.some((each) => allowlist.includes(each.name))
 }
 
 /** Pure mapping after authentication. Never fetches payload links or guesses missing PR mappings. */
