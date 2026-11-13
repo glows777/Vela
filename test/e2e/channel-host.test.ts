@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
+import { connect } from 'node:net'
 import {
   type ChannelDefinition,
   type ChannelRuntime,
@@ -11,6 +12,7 @@ import {
 import { drainChannels } from '@glows777/vela-channels/testing'
 import { fauxHang, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
+import { localStore } from '../support/compat-vela.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import {
   freeLocalPort,
@@ -404,4 +406,64 @@ test('disposal during channel startup cannot report a late connection or enable 
   expect(t.vela.runningChannels()).toEqual([])
   expect(states).not.toContain(true)
   await expect(host.submit(input)).rejects.toThrow('not running')
+})
+
+test('disposal during Local storage loading prevents a late loopback listener', async () => {
+  const port = await freeLocalPort()
+  let channel!: ChannelDefinition
+  let release!: () => void
+  let entered!: () => void
+  const loading = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const t = createTestVela({
+    extensions: [
+      (api) =>
+        local({ token: LOCAL_TOKEN, port })({
+          ...api,
+          registerChannel(value) {
+            channel = value
+            const store = localStore(value)
+            const load = store.load.bind(store)
+            store.load = async () => {
+              entered()
+              await held
+              await load()
+            }
+            api.registerChannel(value)
+          },
+        }),
+    ],
+  })
+  await t.vela.ready()
+  const host = t.vela.channel('local')
+  const states: boolean[] = []
+  host.onConnection((state) => states.push(state.connected))
+  const startup = t.vela.startChannels()
+  await loading
+  try {
+    await t.vela.dispose()
+    release()
+    await startup
+    expect(host.connection()).toEqual({ connected: false })
+    expect(t.vela.runningChannels()).toEqual([])
+    expect(states).not.toContain(true)
+    const acceptsConnection = await new Promise<boolean>((resolve) => {
+      const socket = connect(port, '127.0.0.1')
+      socket.once('connect', () => {
+        socket.destroy()
+        resolve(true)
+      })
+      socket.once('error', () => resolve(false))
+    })
+    expect(acceptsConnection).toBe(false)
+    expect(t.model.calls).toHaveLength(0)
+  } finally {
+    release()
+    await startup
+    await channel.stop()
+  }
 })

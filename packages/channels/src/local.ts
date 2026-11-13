@@ -55,6 +55,7 @@ class LocalChannel implements ChannelDefinition {
   readonly events = new LocalEvents()
   private runtime!: ChannelRuntime
   private http?: LocalHttp
+  private stopped = false
   private unsubscribe?: () => void
   private readonly observed = new WeakSet<object>()
   private unsubscribeSession?: () => void
@@ -76,8 +77,9 @@ class LocalChannel implements ChannelDefinition {
     this.runtime = runtime
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<boolean | undefined> {
     await this.store.load()
+    if (this.stopped) return false
     this.unsubscribe = this.runtime.onStatus((line) => {
       this.events.publish(
         { type: 'status', data: { text: line.text } },
@@ -123,6 +125,7 @@ class LocalChannel implements ChannelDefinition {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true
     this.unsubscribe?.()
     this.unsubscribeSession?.()
     await this.http?.stop()
