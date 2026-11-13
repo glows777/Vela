@@ -272,6 +272,57 @@ test('Stop leaves later queued human input intact', async () => {
   expect(t.model.calls).toHaveLength(2)
 })
 
+test('queued admission survives preparation Stop and resumes history after idle closing', async () => {
+  const held = latch()
+  const entered = latch()
+  const f = adapter('fixture', {
+    async prepareMessage(message) {
+      if (message.text === 'first') {
+        entered.release()
+        await held.promise
+      }
+      return message
+    },
+  })
+  const t = createTestVela({
+    responses: [fauxText('queued answer'), fauxText('continued answer')],
+    channelIdleMs: 0,
+    extensions: [(api) => api.registerChannel(f.channel)],
+  })
+  await t.vela.startChannels()
+  const outcomes: string[] = []
+  f.runtime.onSession((update) => {
+    if (update.run?.type === 'finished') outcomes.push(update.run.outcome)
+  })
+  try {
+    await f.runtime.submit(input('first', { replyToId: 'first' }))
+    await entered.promise
+    const runId = f.runtime.sessions('project')[0]!.runId!
+    await f.runtime.submit(input('queued input', { replyToId: 'second' }))
+    expect(
+      JSON.parse(await t.readData('channels/index.json')).records[0]
+        .pendingMessageIds,
+    ).toEqual(['first', 'second'])
+    expect(await f.runtime.stop({ chatId: 'project' }, runId)).toBe(true)
+  } finally {
+    held.release()
+  }
+  await drainChannels(t.vela)
+  expect(f.sent.map((message) => message.text)).toEqual([
+    'Stopped the current run.',
+    'queued answer',
+  ])
+  expect(outcomes).toEqual(['stopped', 'done'])
+  await until(() => !t.vela.sessions().some((s) => s.id === 'fixture-project'))
+  await f.runtime.submit(input('continue', { replyToId: 'third' }))
+  await drainChannels(t.vela)
+  expect(f.sent.at(-1)?.text).toBe('continued answer')
+  expect(t.model.calls).toHaveLength(2)
+  expect(JSON.stringify(t.model.calls[1]?.prompt)).toContain('queued input')
+  expect(JSON.stringify(t.model.calls[1]?.prompt)).toContain('queued answer')
+  expect(outcomes).toEqual(['stopped', 'done', 'done'])
+})
+
 test('Stop expires when model work settles even while its reply is still delivering', async () => {
   const held = latch()
   const sending = latch()

@@ -889,7 +889,7 @@ for (const persistedBaseline of [false, true]) {
     await sdk.save()
     // Saving through the SDK clears failures without scheduling a close during SDK work.
     // biome-ignore lint/complexity/useLiteralKeys: bracket access reads a private ChannelGateway field; dot access does not typecheck
-    expect(t.internals.gateway['idleTimers'].has(id)).toBe(false)
+    expect(t.internals.gateway['idle'].timers.has(id)).toBe(false)
     expect(t.vela.session(id)).toBe(original)
     await deliver('u1', 'after SDK recovery')
     expect(sent.at(-1)?.text).toBe('continued')
