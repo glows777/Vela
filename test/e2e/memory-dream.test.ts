@@ -361,7 +361,7 @@ test('automatic dream can be disabled while the manual command remains available
 
 test('memory-denied sessions neither collect inbox records nor run a dream', async () => {
   const t = createTestVela({
-    session: { permissions: { memory: 'deny' } },
+    session: { tools: ['-memory'] },
     responses: [fauxText('Private answer')],
   })
   await t.run('Do not store this')

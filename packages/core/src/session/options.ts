@@ -1,7 +1,6 @@
 import type { LanguageModel } from 'ai'
 import type { SessionUI } from '../extensions/ui.ts'
 import type { ThinkingLevel } from '../models/index.ts'
-import type { PermissionRules } from '../security/permissions.ts'
 import type { TokenStatus, UsageTotals } from '../usage/tracker.ts'
 import type { SessionScope } from './scope.ts'
 /** How queued messages are taken: one at a time (default, like pi) or all at once. */
@@ -54,8 +53,6 @@ export interface SessionOptions {
   channel?: string
   /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
   cwd?: string
-  /** Tool permissions, e.g. `{ bash: 'ask' }`; tools without a rule are allowed */
-  permissions?: PermissionRules
   /**
    * Tools for this session: plain names (or `*` patterns) enable only those; a list of only
    * `+name` / `-name` entries adjusts the default set instead (like pi).

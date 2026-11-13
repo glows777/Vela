@@ -4,7 +4,7 @@ import type { LocalOptions } from '@glows777/vela-channels'
 export function localServeOptions(
   userConfig: Record<string, Record<string, unknown>>,
   serve: boolean,
-): LocalOptions | undefined {
+): (LocalOptions & { token: string }) | undefined {
   if (!serve) return
   const config = userConfig.local
   if (config === undefined) return

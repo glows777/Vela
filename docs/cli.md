@@ -132,7 +132,7 @@ The header, editor and footer stay in place while the transcript scrolls. The tr
 
 Text you send while the agent is running is a steering message: it is inserted after the current step. Alt+Enter queues a follow-up instead, which runs after the task finishes. Slash commands run immediately even while the agent is running.
 
-`!command` runs a shell command yourself, like pi: the output streams into a green block, and the command and its output go to the model as part of your next message. `!!command` runs it without sending it to the model (the block is dim). Both are saved in the session and work while the agent runs (the result is recorded when the run ends, so it never lands between a tool call and its result). Esc cancels the command. These commands don't go through tool permissions: they are yours. The editor border turns green while the input starts with `!`. RPC clients have the same through the `bash` command.
+`!command` runs a shell command yourself, like pi: the output streams into a green block, and the command and its output go to the model as part of your next message. `!!command` runs it without sending it to the model (the block is dim). Both are saved in the session and work while the agent runs (the result is recorded when the run ends, so it never lands between a tool call and its result). Esc cancels the command. These commands don't go through tool selection checks or hooks: they are yours. The editor border turns green while the input starts with `!`. RPC clients have the same through the `bash` command.
 
 When a project has untrusted configuration, Vela asks once at startup whether to trust it. See [Project trust](settings.md#project-trust).
 

@@ -96,7 +96,6 @@ async function fixture(
     cwd?: string
     receiverConfig?: Record<string, unknown>
     tools?: string[]
-    permissions?: { [name: string]: 'deny' }
   } = {},
 ) {
   const cwd = options.cwd ?? (await mkdtemp(join(tmpdir(), 'vela-webhooks-')))
@@ -161,7 +160,6 @@ async function fixture(
           canRecover: (msg) => enabled.has(msg.channelId),
           sessionOptions: () => ({
             tools: options.tools,
-            permissions: options.permissions,
           }),
           async send(msg) {
             replies.push(msg as IncomingMessage)
@@ -434,20 +432,43 @@ test('a nonempty issueLabels list drops Issue events without one of those labels
   expect(f.replies.at(-1)?.text).toBe('Labeled comment')
 })
 
-test('an empty issueLabels list keeps every Issue event', async () => {
+test('an empty issueLabels list accepts no Issue event', async () => {
   const f = await fixture({ issueLabels: [] })
   await f.subscribeFeed()
-  f.model.push(fauxText('Opened'), fauxText('Commented'))
+  const before = f.model.calls.length
   for (const [payload, event, id] of [
-    [issuePayload('opened', {}, []), 'issues', 'any-opened'],
-    [issueComment('Any feedback', false, []), 'issue_comment', 'any-comment'],
+    [issuePayload('opened'), 'issues', 'any-opened'],
+    [issuePayload('closed'), 'issues', 'any-closed'],
+    [
+      issuePayload('labeled', { label: { name: 'to:vela' } }),
+      'issues',
+      'any-labeled',
+    ],
+    [issueComment('Any feedback'), 'issue_comment', 'any-comment'],
   ] as const)
     expect((await send(f.url, payload, event, id)).status).toBe(202)
   await drainChannels(f.vela)
-  expect(f.model.calls.slice(-2).map((call) => call.lastUserText)).toEqual([
-    expect.stringContaining('GitHub issue #332 opened'),
-    expect.stringContaining('GitHub issue #332: comment by glows777'),
-  ])
+  expect(f.model.calls.length).toBe(before)
+})
+
+test('issueLabels leaves PR events alone', async () => {
+  const f = await fixture({ issueLabels: [] })
+  await f.subscribe(171)
+  const before = f.model.calls.length
+  f.model.push(fauxText('PR comment'))
+  expect(
+    (
+      await send(
+        f.url,
+        issueComment('PR feedback', true, []),
+        'issue_comment',
+        'pr-unlabeled',
+      )
+    ).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(before + 1)
+  expect(f.replies.at(-1)?.text).toBe('PR comment')
 })
 
 test('a PR comment reaches only its PR topic and an ordinary issue comment reaches only the repository feed', async () => {
@@ -1099,8 +1120,8 @@ test.each([
     true,
   ],
   [
-    'subscriptions denied',
-    { permissions: { channel_subscriptions: 'deny' as const } },
+    'subscriptions excluded',
+    { tools: ['-channel_subscriptions'] as string[] },
     true,
   ],
 ] as const)(

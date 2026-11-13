@@ -110,7 +110,7 @@ test('a denied tool is unavailable while the other web tools still run', async (
       fauxText('done'),
     ],
     extensions: [web({ tavilyKey: 'key' })],
-    session: { permissions: { web_fetch: 'deny' } },
+    session: { tools: ['-web_fetch'] },
   })
   const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
     Response.json({ results: [{ title: 'Bun', url: 'https://bun.sh' }] }),

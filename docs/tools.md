@@ -2,7 +2,7 @@
 
 Tools are the functions the model can call. Vela ships seven core tools for files, search and shell, plus `tool_search` for loading deferred tools. Extensions add more (see [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md)).
 
-Every tool runs inside the Vela process with the operating-system permissions of the user who started it. Permission rules decide which tools a session's model can see and call; they are not a sandbox. See [Security](security.md).
+Every tool runs inside the Vela process with the operating-system permissions of the user who started it. The session's `tools` selection decides which tools its model can see and call; it is not a sandbox. See [Security](security.md).
 
 ## Core tools
 
@@ -17,7 +17,7 @@ Every tool runs inside the Vela process with the operating-system permissions of
 | `bash` | Run a shell command | destructive, open world |
 | `tool_search` | Search deferred tools (such as MCP server tools) by keyword and load the matches | read-only |
 
-The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not decide permissions from them; a permission extension can.
+The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not enforce these hints; a user extension can inspect them.
 
 The default set is `read_file`, `write_file`, `edit_file` and `bash`, plus `tool_search`. `list_directory`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+list_directory`) or the [`defaultTools`](settings.md#defaulttools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
 
@@ -134,7 +134,7 @@ Without `binDir`, only `PATH` is searched and nothing is downloaded.
 Runs `bash -lc <command>` in the working directory (set `shellPath` in [settings](settings.md) or `createVela({ shellPath })` to use another Bash-compatible shell). The CLI selects the Git for Windows `bin\\bash.exe` wrapper on Windows. Direct SDK users default to `bash.exe` on `PATH` and can set `shellPath` to the full Git Bash path. If the shell executable cannot start, the command is not run and `bash` is disabled for that session; default sessions then enable `list_directory`, `grep` and `find` unless a tool was explicitly turned off. An explicit allowlist stays in force. stdout and stderr are combined and written to a file in the session's tool results directory as the command runs. Like pi, the model gets the last 2,000 lines or 50KB of output, whichever is smaller; when that cuts the output, a line names the full output file, which can be read with `read_file`. A non-zero exit ends the preview with `Command exited with code N`, a timeout with `Command timed out after N seconds`, and an abort with `Command aborted`; like pi, these three are error results (`isError: true`), with the preview as the error text. While the command runs, the tail of its output is sent as `tool_execution_update` events (`partialResult` is `{ content: [{ type: 'text', text }] }`, at most every 100ms and only when the output grew).
 
 - Timeout: none by default, as in pi; the model passes `timeout` for commands that may hang. On timeout or abort Vela kills the shell and its child processes (the process group on POSIX, the process tree on Windows).
-- Vela does not filter commands; the built-in `permission-gate` extension (off by default) can confirm or block a few dangerous patterns. See [Security](security.md).
+- Vela does not filter commands; a user extension can confirm or block calls through a `tool_call` hook. See [Security](security.md).
 
 ## How tools run
 
@@ -146,7 +146,7 @@ The model can request several tool calls in one response. As in pi, they run in 
 - `bash` and the read-only tools take no lock.
 - A tool with `executionMode: 'sequential'` runs alone within its session: it waits for the session's calls that started before it, and calls that start after it wait for it. Other sessions are not affected. The built-in `memory` and `rag_ingest` tools are sequential.
 
-Permission checks, hooks and confirmation prompts run before a call waits for anything, so a tool waiting for approval does not hold back other tools.
+Tool availability checks, hooks and extension confirmation prompts run before a call waits for anything, so a tool waiting for approval does not hold back other tools.
 
 ### Result size and truncation
 
@@ -197,7 +197,7 @@ All core tools are direct. Deferred exposure is for extensions that register man
 
 ## Tool access
 
-Every session starts with the default tools; there are no roles (like pi). Change the set for a run with `--tools`, for the CLI's sessions with the `defaultTools` setting, or per session through the SDK; an extension can call `setActiveTools()` on its session. A tool that is off or denied is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#per-session-permissions).
+Every session starts with the default tools; there are no roles (like pi). Change the set for a run with `--tools`, for the CLI's sessions with the `defaultTools` setting, or per session through the SDK; an extension can call `setActiveTools()` on its session. A tool that is off is not sent to the model; if the model calls it anyway, the call is rejected and the rejection is recorded in the tool history. Channel chats share one session and its tools. See [Security](security.md#limit-tools).
 
 ## Choosing tools per session
 
@@ -206,17 +206,16 @@ Every session starts with the default tools; there are no roles (like pi). Chang
 - A list with plain names enables exactly those tools; every other tool, built-in or from an extension, is off. On the command line the names may be `*` patterns (`read_*`), and `--exclude-tools` then removes names or patterns from the result; the SDK option takes exact names.
 - A list of only `+name` / `-name` entries takes exact names, cannot be mixed with plain names, and changes the default set instead, so tools from extensions stay on. `--tools +grep` enables `grep`; `--tools -bash` turns `bash` off.
 
-The `defaultTools` setting takes plain names (`*` patterns work there) and `+name` / `-name` entries, and is described in [Settings](settings.md#defaulttools). With the SDK, pass `tools` and `permissions` (per-tool rules) when opening a session:
+The `defaultTools` setting takes plain names (`*` patterns work there) and `+name` / `-name` entries, and is described in [Settings](settings.md#defaulttools). With the SDK, pass `tools` when opening a session:
 
 ```ts
 const session = vela.session('review', {
   tools: ['+grep', '+find'],
-  permissions: { write_file: 'ask' },
 })
 ```
 
 - `tools` sets the session's tools. `session.setActiveTools(names)` replaces them with an allowlist later, and `session.setActiveTools(undefined)` removes the selection. `session.getActiveTools()` returns the names the model can currently see. If you select tools, include `tool_search` when the session needs deferred tools.
-- `permissions` maps a tool name, or `*` for all other tools, to `allow`, `deny` or `ask`. An exact name beats `*`; a tool without a rule is allowed. `ask` calls the session UI's `confirm` before the tool runs; a session without a UI rejects the call.
+For confirmation, load a user extension with a `tool_call` hook that checks `ctx.hasUI` and asks through `ctx.ui.confirm`. See [Confirm before a call](security.md#confirm-before-a-call).
 
 See [SDK](sdk.md) for the session API and [examples/extensions/read-only-session.ts](../examples/extensions/read-only-session.ts) for an extension that sets the selection per session.
 

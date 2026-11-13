@@ -4,15 +4,29 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Session permissions and the built-in permission gate are removed.** Remove `SessionOptions.permissions` and imports of `PermissionRules`, `PermissionDecision`, `decidePermission`, `permissionGate` and `permissionGateConfig`. `session.toolDecision(name)` is also removed; use `session.getActiveTools()` to inspect currently exposed tools. Use `tools` (an allowlist or `+name` / `-name` modifiers) to control per-session tool availability. Replace confirmation rules with a user `tool_call` extension that checks `ctx.hasUI`, asks through `ctx.ui.confirm` and blocks when no UI is attached or the user declines; see [confirm-dangerous.ts](examples/extensions/confirm-dangerous.ts). Remove `builtin:permission-gate` entries from settings and CLI arguments: they now fail as an unknown built-in. Vela ships six selectable built-ins. Tool selection and confirmation are not isolation: every enabled chat, Local token and webhook input reaches the same OS account and can access its other sessions, memory and credentials ([#348](https://github.com/glows777/Vela/issues/348)).
+
 ### Added
+
+- **Local SDK core without HTTP.** `local({})` opens no listener; supplying a token keeps the authenticated HTTP/SSE adapter. `vela.channel('local')` exposes typed project, visible-history, composer-submit and event methods over the same store and runtime. SDK events share IDs with SSE while reset and disconnect stay transport-local. Existing Local data, CLI configuration and HTTP v1 behavior remain compatible ([#312](https://github.com/glows777/Vela/issues/312)).
+
+- **SDK host access to channels.** `vela.channel(name)` exposes enabled session snapshots, session/status subscriptions, durable submission, run-bound Stop, idle routine management and `{ connected, error? }` connection observation. Lark reports real SDK readiness and reconnect changes; owned topic follow-ups require matching logical IDs and a real reply anchor. Local supports the same host controls ([#312](https://github.com/glows777/Vela/issues/312)).
 
 - **Session management for SDK hosts.** `vela.listSessions()` summaries now include the session's working directory and, when a host opened it for a channel, the channel name. `vela.setSessionArchived(id, archived)` archives or unarchives a saved session without opening it, and archived sessions are left out of `listSessions()` (and the interactive picker) unless `{ includeArchived: true }` is passed. `vela.searchSessions(text)` searches saved sessions' user and assistant messages and returns the session id with a short match. The flag is a new append-only `session_archived` entry. The session header gains an optional `channel` field, and a first channel binding that arrives after the session was written appends a `session_channel` entry ([#314](https://github.com/glows777/Vela/issues/314)).
 
+### Breaking Changes
+
+- **Issue feeds are a strict label allowlist.** `extensionConfig.channel.eventReceiver.github.issueLabels` must name at least one label for `github:<owner>/<repo>#issues` to deliver anything: an empty list, including an omitted option, now accepts no Issue event, where 0.6.0 delivered every Issue except `labeled`. Add the labels that should wake the feed, for example `"issueLabels": ["to:vela"]`. Existing subscriptions are not rewritten, and PR subscriptions stay independent of the list ([#356](https://github.com/glows777/Vela/issues/356)).
+
 ### Changed
 
-- **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
+- **Issue feeds honor their label allowlist.** An Issue without one of the `issueLabels` sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels ([#341](https://github.com/glows777/Vela/issues/341)).
 
 ### Fixed
+
+- **Local startup cannot outlive disposal.** Stopping while Local storage is loading prevents the later HTTP listener and observers from being created, so `dispose()` cannot leave a hidden loopback server running ([#312](https://github.com/glows777/Vela/issues/312)).
 
 - **A saved channel stays bound after resume.** `resume()` restores the channel from the session header or the last `session_channel` entry. Binding a different channel afterwards throws `SessionRoutingConflictError`, and supplying the saved channel again does not append another entry ([#354](https://github.com/glows777/Vela/issues/354)).
 
@@ -135,7 +149,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **`vela serve` runs the configured channels without the TUI.** The first argument `serve` selects a new run mode: no terminal UI and nothing on stdout, one line per channel event on stderr with a local timestamp (`channel_message`, `channel_reply`, `channel_error`, terminal escape sequences stripped and text cut to 80 characters), and SIGINT/SIGTERM stop the channels through the existing `dispose()` and exit 0. A second signal exits right away. `serve` takes no prompt; `-p`, `--mode`, `--export`, `--list-models`, session selection (`-c`, `-r`, `--session`, `--fork`), tool flags (`-t`, `-nt`, `-xt`) are rejected with exit code 2 instead of being ignored. When no channel started (none configured, or every `start()` failed), it exits 1 instead of idling. See [CLI](docs/cli.md#serve) and [Channels](docs/channels.md).
 
-- **Built-in `permission-gate` extension, off by default.** It confirms a few dangerous `bash` patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) through the session UI and blocks them when there is no UI, like pi's `permission-gate` example. Enable it with `+builtin:permission-gate` in settings or `-e builtin:permission-gate`; the SDK adds `permissionGate()`. `loadConfig` gains `defaultOffBuiltins` for callers that pass `builtins` themselves. See [Built-in extensions](docs/built-in-extensions.md#permission-gate).
+- **Built-in `permission-gate` extension, off by default.** It confirms a few dangerous `bash` patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) through the session UI and blocks them when there is no UI, like pi's `permission-gate` example. Enable it with `+builtin:permission-gate` in settings or `-e builtin:permission-gate`; the SDK adds `permissionGate()`. `loadConfig` gains `defaultOffBuiltins` for callers that pass `builtins` themselves. See [Built-in extensions](https://github.com/glows777/Vela/blob/v0.4.0/docs/built-in-extensions.md#permission-gate).
 
 - **Passive Feishu group messages show a reaction once Vela starts answering.** An untagged evaluation adds `OnIt` to the triggering message at the first non-empty assistant text delta, then `DONE` after delivery or `CrossMark` on failure or Stop. Silence, an empty answer or a topic handoff removes the marker with nothing left behind; passive input still gets no progress/control card. Custom channels receive the new `silent` value on `finish(outcome)`.
 
@@ -173,7 +187,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **The built-in bash gate is gone, and so is `security_warning`.** Vela no longer rejects bash commands that match its old pattern list: a command runs unless a session `permissions` rule, a hook or a `tool_call` extension blocks it. `src/security/bash-classifier.ts` and the `security_warning` event are removed; listeners should drop that branch. For a confirmation prompt on a smaller pattern list, enable the new opt-in `permission-gate` extension. Commands the old gate rejected for no good reason (a harmless recursive force-delete under a temporary directory, a `grep` whose pattern contains such a command) now run. See [Security](docs/security.md).
 
-- **Session roles are gone (like pi).** `Role`, `ChannelDefinition.roleFor`, `session.role` / `vela.session(id, { role })`, the `/role` command and the `Role` line of `/status` are removed. Every session has the same tools, prompt and commands, and an enabled chat is trusted as a whole. Restrict a session with `permissions` (`{ bash: 'ask', write_file: 'deny' }`) and `tools` instead; a tool without a rule is allowed. Guest and collaborator sessions, and their prompt differences, no longer exist. See [Security](docs/security.md#per-session-permissions).
+- **Session roles are gone (like pi).** `Role`, `ChannelDefinition.roleFor`, `session.role` / `vela.session(id, { role })`, the `/role` command and the `Role` line of `/status` are removed. Every session has the same tools, prompt and commands, and an enabled chat is trusted as a whole. Restrict a session with `permissions` (`{ bash: 'ask', write_file: 'deny' }`) and `tools` instead; a tool without a rule is allowed. Guest and collaborator sessions, and their prompt differences, no longer exist. See [Security](https://github.com/glows777/Vela/blob/v0.4.0/docs/security.md#per-session-permissions).
 
 ## [0.3.0] - 2026-10-19
 

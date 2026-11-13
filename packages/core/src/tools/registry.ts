@@ -8,11 +8,6 @@ import {
   toAIToolOutput,
   toolContentText,
 } from '../messages.ts'
-import {
-  decidePermission,
-  type PermissionDecision,
-  type PermissionRules,
-} from '../security/permissions.ts'
 import type { SessionScope } from '../session/scope.ts'
 import type { ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
@@ -30,7 +25,7 @@ import {
   type ToolRegistryForkOptions,
   ToolResultError,
 } from './types.ts'
-import { untilAborted, validateInput } from './validation.ts'
+import { validateInput } from './validation.ts'
 
 /** Context passed to a tool's execute. */
 export interface ToolContext {
@@ -45,7 +40,7 @@ export interface ToolContext {
    */
   onUpdate?: (partialResult: unknown) => void
   /**
-   * Runs another tool through the same permission checks, hooks, confirmation and tool history as
+   * Runs another tool through the same availability checks, hooks and tool history as
    * a model-issued call (like pi's `ctx.executeTool()`). The call gets the id `<calling id>/<n>`, its
    * `tool_execution_*` events carry `parentToolCallId`, and it does not enter the conversation.
    * Never rejects for tool failures: they come back as `isError: true`.
@@ -106,7 +101,7 @@ const EXPOSURES: readonly ToolExposure[] = [
   'hidden',
 ]
 
-/** A permission check, hook or the user turned the call down; the model gets `reason` as an error result. */
+/** An availability check or hook turned the call down; the model gets `reason` as an error result. */
 class ToolRejection {
   constructor(readonly reason: string) {}
 }
@@ -122,7 +117,7 @@ interface CallOptions {
 
 /**
  * State shared by all sessions of one Vela: tool definitions and hooks.
- * Permissions, tool selection, discovered deferred tools, the tool result store,
+ * Tool selection, discovered deferred tools, the tool result store,
  * persistence failure state and the execution gate are per session.
  */
 interface SharedToolState {
@@ -187,7 +182,6 @@ export class ToolRegistry {
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
     forked.scope = options.scope
-    forked.confirm = options.confirm
     return forked
   }
 
@@ -242,20 +236,12 @@ export class ToolRegistry {
     return this.shared.tools
   }
 
-  private permissions?: PermissionRules
   /** Tools selected for the session; undefined means no limit */
   private selection?: ReadonlySet<string>
   private defaultToolStates?: ReadonlyMap<string, boolean> // +name / -name overrides from --tools or defaultTools
   private readonly unavailableTools = new Set<string>()
   private readonly runtimeEnabledTools = new Set<string>()
   private channel?: string
-  private confirm?: (toolName: string, input: unknown) => Promise<boolean>
-
-  /** This session's permission rules; without them every tool is allowed */
-  setPermissions(rules: PermissionRules | undefined): void {
-    this.permissions = rules
-  }
-
   /** Only these tools are visible / callable by the model; undefined removes the limit */
   setSelection(names: Iterable<string> | undefined): void {
     this.selection = names ? new Set(names) : undefined
@@ -268,32 +254,26 @@ export class ToolRegistry {
     )
   }
 
-  /** Binds this session to a channel; tools declared for another channel are denied */
+  /** Binds this session to a channel; tools declared for another channel are unavailable */
   setChannel(name: string): void {
     this.channel = name
   }
 
-  /** This session's permission decision for a tool; tools it does not enable are always deny */
-  decide(toolName: string): PermissionDecision {
-    if (!this.isEnabled(toolName)) return 'deny'
+  /** Whether tool selection and channel eligibility make a tool available in this session. */
+  private isAvailable(toolName: string): boolean {
     const tool = this.tools.get(toolName)
+    if (!tool || this.unavailableTools.has(toolName)) return false
     if (
-      tool?.channel === true
+      tool.channel === true
         ? !this.channel
-        : tool?.channel !== undefined && tool.channel !== this.channel
+        : tool.channel !== undefined && tool.channel !== this.channel
     )
-      return 'deny'
-    return decidePermission(toolName, this.permissions)
-  }
-
-  /** Whether the session's selection or default-tool modifiers allow the tool (permissions aside) */
-  private isEnabled(toolName: string): boolean {
-    if (this.unavailableTools.has(toolName)) return false
+      return false
     if (this.selection) return this.selection.has(toolName)
     const enabled = this.defaultToolStates?.get(toolName)
     if (enabled === false) return false
     if (this.runtimeEnabledTools.has(toolName)) return true
-    return enabled ?? this.tools.get(toolName)?.activeByDefault !== false
+    return enabled ?? tool.activeByDefault !== false
   }
 
   setInterception(interception: ToolInterception): void {
@@ -377,7 +357,7 @@ export class ToolRegistry {
     const result: Record<string, Tool> = {}
     for (const tool of this.getActiveTools()) {
       const hosted = hostedTools[tool.name]
-      if (this.decide(tool.name) === 'allow' && hosted) {
+      if (hosted) {
         result[tool.name] = hosted
         continue
       }
@@ -410,7 +390,7 @@ export class ToolRegistry {
     return result
   }
 
-  /** Permission checks, hooks, confirmation, execution, tool history and post hooks for one call. */
+  /** Availability checks, hooks, execution, tool history and post hooks for one call. */
   private async runCall(
     tool: ToolDefinition,
     input: unknown,
@@ -419,7 +399,7 @@ export class ToolRegistry {
     const name = tool.name
     const mode = tool.executionMode ?? 'parallel'
     const signal = options.abortSignal
-    // Permissions, hooks and ask run before the execution gate, so waiting on the user doesn't hold back other calls
+    // Availability checks and hooks run before the execution gate, so waiting on the user doesn't hold back other calls
     this.assertHealthy()
     const reject = async (reason: string) => {
       await this.recordRejection(
@@ -430,16 +410,10 @@ export class ToolRegistry {
       )
       return new ToolRejection(reason)
     }
-    const decision = this.decide(name)
     if (tool.hostedOnly)
       return await reject(`[Rejected] ${name} is unavailable locally`)
-    if (decision === 'deny') {
-      return await reject(
-        this.isEnabled(name)
-          ? `[Rejected] ${name} is denied by this session's permissions`
-          : `[Rejected] ${name} is not enabled in this session`,
-      )
-    }
+    if (!this.isAvailable(name))
+      return await reject(`[Rejected] ${name} is not enabled in this session`)
     const interception = this.shared.interception
     const context = {
       sessionId: this.sessionId,
@@ -470,17 +444,6 @@ export class ToolRegistry {
       const command = (input as { command?: unknown } | null)?.command
       if (typeof command !== 'string')
         return await reject('[Rejected] bash command must be a string')
-    }
-    // ask runs after hooks, on the final input, so input changed by extensions still needs approval
-    if (decision === 'ask') {
-      const approved = this.confirm
-        ? await untilAborted(
-            this.confirm(name, input).catch(() => false),
-            signal,
-          )
-        : false
-      signal?.throwIfAborted()
-      if (!approved) return await reject(`[Rejected] ${name} was not approved`)
     }
     // A nested call runs inside its parent's turn at the gate (waiting there could deadlock), so
     // nested calls have their own queue
@@ -599,7 +562,7 @@ export class ToolRegistry {
    */
   isCallable(name: string): boolean {
     const tool = this.tools.get(name)
-    if (!tool || this.decide(name) === 'deny') return false
+    if (!tool || !this.isAvailable(name)) return false
     const exposure = tool.exposure ?? 'direct'
     return exposure !== 'model-only' && exposure !== 'hidden'
   }
@@ -689,7 +652,7 @@ export class ToolRegistry {
   /** Tools declared to the model: allowed, and direct / model-only, or deferred and loaded with tool_search. */
   getActiveTools() {
     return this.getAllTools().filter((tool) => {
-      if (this.decide(tool.name) === 'deny') return false
+      if (!this.isAvailable(tool.name)) return false
       const exposure = tool.exposure ?? 'direct'
       if (exposure === 'deferred') return this.discoveredTools.has(tool.name)
       return exposure === 'direct' || exposure === 'model-only'
@@ -703,7 +666,7 @@ export class ToolRegistry {
         tool.exposure === 'deferred' &&
         tool.name !== 'tool_search' &&
         (loaded || !this.discoveredTools.has(tool.name)) &&
-        this.decide(tool.name) !== 'deny',
+        this.isAvailable(tool.name),
     )
   }
 

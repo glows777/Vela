@@ -56,7 +56,7 @@ export function memory(): VelaExtension {
       return dream
     }
     vela.on('agent_end', (event, ctx) => {
-      if (ctx.session.toolDecision('memory') !== 'allow') return
+      if (!ctx.session.getActiveTools().includes('memory')) return
       dreamFor(forSession(ctx.session.scope)).collect(
         ctx.session,
         event.messages,
@@ -65,7 +65,7 @@ export function memory(): VelaExtension {
     vela.on('agent_settled', (_event, ctx) => {
       if (
         vela.config.dream === false ||
-        ctx.session.toolDecision('memory') !== 'allow'
+        !ctx.session.getActiveTools().includes('memory')
       )
         return
       const dream = dreamFor(forSession(ctx.session.scope))
@@ -109,7 +109,7 @@ export function memory(): VelaExtension {
     const indexed = new WeakSet<VelaSession>()
 
     vela.on('before_agent_start', (event, ctx) => {
-      if (ctx.session.toolDecision('memory') === 'deny') return
+      if (!ctx.session.getActiveTools().includes('memory')) return
       event.sections.memory = MEMORY_RULES
       const content = contentFor(ctx.session)
       const message = content
@@ -134,7 +134,7 @@ export function memory(): VelaExtension {
       description:
         'List memories; /memory search <keywords> to search, /memory lint to check',
       handler: (args, ctx) => {
-        if (ctx.session.toolDecision('memory') === 'deny')
+        if (!ctx.session.getActiveTools().includes('memory'))
           return ctx.ui.notify('Memory is not enabled for this session.')
         const local = forSession(ctx.session.scope)
         if (args === 'lint') return ctx.ui.notify(lintReport(local))
@@ -163,12 +163,8 @@ export function memory(): VelaExtension {
       description:
         'Consolidate memory against recent conversations in an isolated model call',
       handler: async (_args, ctx) => {
-        if (ctx.session.toolDecision('memory') === 'deny')
+        if (!ctx.session.getActiveTools().includes('memory'))
           return ctx.ui.notify('Memory is not enabled for this session.')
-        if (ctx.session.toolDecision('memory') === 'ask')
-          return ctx.ui.notify(
-            '[dream] Memory permission requires approval; dream is unavailable. Use the memory tool for individually approved operations.',
-          )
         ctx.ui.notify('[dream] Starting memory consolidation...')
         try {
           const report = await dreamFor(forSession(ctx.session.scope)).run(

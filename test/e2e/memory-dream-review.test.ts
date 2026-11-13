@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import {
   cleanupTestVelas,
@@ -73,96 +73,6 @@ function gateGeneration(t: TestVela) {
     restore: () => spy.mockRestore(),
   }
 }
-
-async function finishUnexpectedBackgroundDream(t: TestVela) {
-  // A rejected session must never start generation. If the regression starts it,
-  // wait for its observable audit so the failed assertion also captures writes.
-  await t.session.prompt('/memory')
-  if (!t.eventsOf('notify').at(-1)?.message.includes('; running')) return
-  const deadline = Date.now() + 2000
-  while (!existsSync(t.dataPath('memory/.dream/log.md'))) {
-    if (Date.now() > deadline)
-      throw new Error('Background dream did not finish')
-    await Bun.sleep(1)
-  }
-}
-
-for (const permission of ['memory', '*']) {
-  test(`${permission}:ask without a UI neither collects 20 turns nor runs automatic dream`, async () => {
-    const t = createTestVela({
-      session: { permissions: { [permission]: 'ask' } },
-      allowPendingResponses: true,
-      responses: [
-        fauxToolCall('memory', { action: 'save', ...source }),
-        fauxText('Memory save needs approval'),
-        ...Array.from({ length: 19 }, () => fauxText('Private answer')),
-      ],
-      generate: [
-        result([
-          {
-            ...mergeTarget,
-            action: 'create',
-          },
-        ]),
-      ],
-    })
-    await t.session.prompt('Remember the deployment approval requirement')
-    expect(t.model.calls[1]!.toolResults[0]!.output).toMatch(
-      /denied|approved|confirm/i,
-    )
-    expect(existsSync(t.dataPath(sourceFile))).toBe(false)
-    for (let i = 1; i < 20; i++)
-      await t.session.prompt(`Private conversation turn ${i}`)
-    await finishUnexpectedBackgroundDream(t)
-    expect({
-      inbox: inbox(t),
-      generations: t.model.calls.filter((call) => call.kind === 'generate')
-        .length,
-      wroteMemory: existsSync(t.dataPath(targetFile)),
-    }).toEqual({ inbox: [], generations: 0, wroteMemory: false })
-    expect(existsSync(t.dataPath(inboxFile))).toBe(false)
-  })
-}
-
-test('an ask session does not process an overdue inbox collected by an allowed session', async () => {
-  const t = createTestVela({
-    allowPendingResponses: true,
-    responses: [fauxText('Durable fact noted'), fauxText('Private answer')],
-    generate: [result([{ ...mergeTarget, action: 'create' }])],
-  })
-  await t.session.prompt('Remember the release approval requirement')
-  const old = inbox(t).map((turn) => ({
-    ...turn,
-    time: Date.now() - 25 * 3600_000,
-  }))
-  writeFileSync(t.dataPath(inboxFile), `${JSON.stringify(old[0])}\n`)
-  const before = read(t, inboxFile)
-  const ask = t.vela.session('ask', { permissions: { memory: 'ask' } })
-  await ask.prompt('This conversation must not activate stored-memory writes')
-  await finishUnexpectedBackgroundDream(t)
-  expect({
-    inbox: read(t, inboxFile),
-    generations: t.model.calls.filter((call) => call.kind === 'generate')
-      .length,
-    wroteMemory: existsSync(t.dataPath(targetFile)),
-  }).toEqual({ inbox: before, generations: 0, wroteMemory: false })
-})
-
-test('manual dream refuses ask permission with a clear notice and leaves existing evidence alone', async () => {
-  const t = createTestVela({
-    allowPendingResponses: true,
-    responses: [fauxText('Durable fact noted')],
-    generate: [result([{ ...mergeTarget, action: 'create' }])],
-  })
-  await t.session.prompt('Remember the release approval requirement')
-  const before = read(t, inboxFile)
-  const ask = t.vela.session('ask', { permissions: { '*': 'ask' } })
-  await ask.prompt('/dream')
-  expect(notices(t)).toMatch(/permission.*approval/i)
-  expect(t.model.calls.filter((call) => call.kind === 'generate')).toEqual([])
-  expect(read(t, inboxFile)).toBe(before)
-  expect(existsSync(t.dataPath(targetFile))).toBe(false)
-})
 
 for (const deletionOrder of ['before', 'after']) {
   test(`a stale merge target invalidates the whole batch with deletion ${deletionOrder} update, then retries from refreshed notes`, async () => {

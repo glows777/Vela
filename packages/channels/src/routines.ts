@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { writeAtomicJson } from './atomic-json.ts'
 import type { ChannelDirectory } from './directory.ts'
 import { errorMessage } from './log.ts'
+import { storedMessage } from './recovery.ts'
 import {
   latestOccurrence,
   localRoutineInstant,
@@ -12,11 +13,14 @@ import {
   routineLocalTime,
   routineTimezone,
 } from './routine-time.ts'
+import { channelSessionId } from './session-id.ts'
 import type {
   ChannelDefinition,
+  ChannelHost,
   ChannelRoutine,
   ChannelRoutineInfo,
   ChannelRuntime,
+  ChannelTarget,
   IncomingMessage,
 } from './types.ts'
 
@@ -287,16 +291,60 @@ export class ChannelRoutines {
           targetKey: key,
           creator: { id: msg.senderId, name: msg.senderName },
           message,
-          schedule:
-            'at' in schedule
-              ? { at: localRoutineInstant(schedule.at, this.zones.get(name)!) }
-              : schedule,
+          schedule: this.schedule(name, schedule),
         })
         return this.describe(record)
       },
       list: (id) => this.describeChat(name, source(id).msg.channelId),
       cancel: (id, routineId) =>
         this.cancel(name, source(id).msg.channelId, routineId),
+    }
+  }
+
+  private schedule(
+    name: string,
+    schedule: Parameters<ChannelRuntime['routines']['create']>[2],
+  ) {
+    return 'at' in schedule
+      ? { at: localRoutineInstant(schedule.at, this.zones.get(name)!) }
+      : schedule
+  }
+
+  /** Idle host access shares the model API's storage, validation and scheduler. */
+  host(name: string): ChannelHost['routines'] {
+    const source = (target: ChannelTarget, chatOnly = false) => {
+      if (this.stopped || !this.started.has(name))
+        throw new Error('Channel is not running')
+      const channel = this.channel(name)!
+      const enabled = (record: import('./directory.ts').ChannelRecord) =>
+        record.chatId === target.chatId &&
+        channel.canRecover?.(storedMessage(record), record.chatKind) !== false
+      const record = chatOnly
+        ? this.directory.entries(name).find(enabled)
+        : this.directory.get(
+            channelSessionId(name, target.chatId, target.rootId),
+          )
+      if (!record || record.channel !== name || !enabled(record))
+        throw new Error('Unknown or disabled channel target')
+      return record
+    }
+    return {
+      create: async (target, input) => {
+        const record = source(target)
+        return this.describe(
+          await this.create({
+            channel: name,
+            chatId: record.chatId,
+            targetKey: record.key,
+            creator: input.creator,
+            message: input.message,
+            schedule: this.schedule(name, input.schedule),
+          }),
+        )
+      },
+      list: (target) => this.describeChat(name, source(target, true).chatId),
+      cancel: async (target, id) =>
+        this.cancel(name, source(target, true).chatId, id),
     }
   }
 

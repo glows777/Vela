@@ -33,7 +33,7 @@ The examples on this page import from `@glows777/vela`, which bundles everything
 
 | Package | Public entries and ownership |
 |---|---|
-| `@glows777/vela-core` | Root SDK (including images, memory, web and permission gate), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
+| `@glows777/vela-core` | Root SDK (including images, memory and web), `/testing`, `/extension-api`, `/images`, experimental `/diagnostics`; no channels or optional heavy integration |
 | `@glows777/vela-channels` | Root standard interfaces and `createChannelVela`, `/testing` drain helper; depends on core |
 | `@glows777/vela-lark` | Root Lark transport/factory/config exports; depends on core and channels. Canonical `lark` factory/types/config |
 | `@glows777/vela-mcp` | Root MCP factory/config exports; depends on core |
@@ -93,6 +93,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `extensions()` | Loaded extensions and the tools, commands, providers and channels each registered |
 | `commands()` | Slash commands registered by extensions |
 | `channels()` | Channels registered by extensions |
+| `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. See [SDK host access](channels-reference.md#sdk-host-access). |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
 | `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
 | `dispose()` | Stops channels, closes all sessions (aborting running work and saving) and deletes the temp data dir if there is one |
@@ -101,7 +102,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 
 ```typescript
 const session = vela.session('support-42', {
-  permissions: { write_file: 'ask' },
+  tools: ['-write_file', '-edit_file', '-bash'],
   model: 'anthropic/<model-id>',
 })
 await session.resume() // restore saved history, if any
@@ -115,7 +116,6 @@ A session id becomes a file name: letters, digits, `.`, `_` and `-`, not startin
 | Option | Default | Description |
 |---|---|---|
 | `cwd` | Vela's cwd | Base for file/search/bash tools (also `executeBash`), the cwd prompt and automatic AGENTS/CLAUDE discovery; relative values resolve against Vela's cwd. `session.cwd` exposes the resolved path. A different cwd reloads its own instruction chain instead of a supplied `contextFiles` array; `contextFiles: false` still disables loading. Skills, templates, extensions/config, `dataDir`, storage and relative export destinations stay Vela-wide. Fork/clone preserves cwd; callers must pass it again when reopening/resuming. This is a default path, not a security sandbox. |
-| `permissions` | none | Per-tool rules: tool name (or `*`) to `allow`, `deny` or `ask`, e.g. `{ bash: 'ask' }`. An exact name beats `*`; a tool without a rule is allowed. `ask` calls `ui.confirm`; without a UI it refuses. See [Security](security.md#per-session-permissions). |
 | `tools` | default set | Exact tool names enable only those tools; a list of only `+name` / `-name` entries adjusts the default set instead, like pi. `*` patterns are a CLI option (`--tools`, `--exclude-tools`), not part of this option |
 | `ui` | none | A `SessionUI` extensions use to talk to the user (`notify`, `confirm`, `select`, `input`, optional `setStatus`, `setWidget`). Without it `confirm` answers no, `select`/`input` answer nothing, and `notify` becomes a `notify` event. |
 | `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
@@ -163,7 +163,7 @@ Images are normalized once, when they enter: `prompt`, `steer`, `followUp`, `sen
 | `abort(reason?)` | Aborts the running loop and extension commands, and waits until the loop has stopped. Queued messages stay queued. |
 | `waitForIdle()` | Waits for the running loop (including queued messages and manual compaction) without aborting it |
 | `isRunning` | Whether an agent loop or compaction holds the run lock |
-| `executeBash(command, options?)` | Runs a shell command for the user, like the TUI's `!cmd` (pi's `executeBash`): in the working directory with the `shellPath` shell, without tool permissions or hooks, one at a time. Resolves to `{ output, exitCode, cancelled, truncated, fullOutputPath? }` (`output` is the last 2,000 lines or 50 KB; `exitCode` is undefined when cancelled) and rejects if the command can't start. The result is saved as a `bash_execution` entry and reaches the model as a user message with the next prompt; `excludeFromContext: true` (`!!cmd`) saves it without sending it. While the agent runs, it is recorded when the run ends. `onUpdate(output)` gets the output's tail while it runs, and `bash_execution_update` events carry each new piece of output with the `id` option. |
+| `executeBash(command, options?)` | Runs a shell command for the user, like the TUI's `!cmd` (pi's `executeBash`): in the working directory with the `shellPath` shell, without tool selection checks or hooks, one at a time. Resolves to `{ output, exitCode, cancelled, truncated, fullOutputPath? }` (`output` is the last 2,000 lines or 50 KB; `exitCode` is undefined when cancelled) and rejects if the command can't start. The result is saved as a `bash_execution` entry and reaches the model as a user message with the next prompt; `excludeFromContext: true` (`!!cmd`) saves it without sending it. While the agent runs, it is recorded when the run ends. `onUpdate(output)` gets the output's tail while it runs, and `bash_execution_update` events carry each new piece of output with the `id` option. |
 | `isBashRunning`, `abortBash()` | Whether an `executeBash()` command is running; cancel it (it is still recorded, as cancelled) |
 | `compact(focus?)` | Summarizes earlier history now and saves. `focus` says what the summary should prefer to keep. Throws while running. |
 | `resume()` | Replaces the in-memory history with the saved one; returns `false` if nothing was saved. Restores the name, a saved channel, the thinking level and (if resolvable) the model. Throws while running. Throws `SessionRoutingConflictError` when the session was opened with a different channel than the saved one. |
@@ -269,7 +269,7 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `message_end` | `message`, `stopReason?`, `errorMessage?`, `custom?` | A message is complete. Assistant messages carry `stopReason`: `stop`, `toolUse`, `length` (cut off by the output limit), `aborted` or `error` (with `errorMessage`). The assistant `message_end` is the authoritative final text. |
 | `tool_execution_start` | `toolCallId`, `toolName`, `args`, `parentToolCallId?` | A tool call is about to run (after the assistant `message_end`). `parentToolCallId` is set on a call a tool made with `ctx.executeTool()` (see [Extensions](extensions.md#registertool)); its id is `<parentToolCallId>/<n>` |
 | `tool_execution_update` | `toolCallId`, `toolName`, `args`, `partialResult`, `parentToolCallId?` | Partial output of a running tool, for tools that stream it (`bash` sends the tail of its output as `{ content: [{ type: 'text', text }] }`) |
-| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError`, `details?`, `durationMs?`, `parentToolCallId?` | A tool call finished. `result` is the output, or the error when `isError`. A call blocked by an extension or refused by the session's tools or permissions ends here with `isError: true` and the reason as `result`. The model still receives that reason, and the loop continues. `details` is display data the model does not get (pi's `result.details`): set by built-in tools on success, for `edit_file` `{ diff, patch, firstChangedLine }`. Extension tools set it by returning a `ToolExecutionResult` ([extensions](extensions.md#registertool)). |
+| `tool_execution_end` | `toolCallId`, `toolName`, `result`, `isError`, `details?`, `durationMs?`, `parentToolCallId?` | A tool call finished. `result` is the output, or the error when `isError`. A call blocked by an extension or refused by the session's tool selection ends here with `isError: true` and the reason as `result`. The model still receives that reason, and the loop continues. `details` is display data the model does not get (pi's `result.details`): set by built-in tools on success, for `edit_file` `{ diff, patch, firstChangedLine }`. Extension tools set it by returning a `ToolExecutionResult` ([extensions](extensions.md#registertool)). |
 | `loop_detected` | `level` (`warning` or `critical`), `detector`, `message` | Repeated tool calls were detected. `warning` appends a custom notice (`customType: loop`) after that step; `critical` stops the loop with `agent_end` reason `loop`. The warning is the 10th identical call and the critical stop is the 20th. `message` names that count. |
 | `auto_retry_start` | `attempt`, `maxAttempts`, `delayMs`, `errorMessage` | A retryable model error; the request runs again after `delayMs`. The failed attempt's assistant message ended with `stopReason: 'error'` and is not in the history; the retry streams a new assistant message. See [Sessions](sessions.md#retries). |
 | `auto_retry_end` | `success`, `attempt`, `finalError?` | Retrying ended: the request succeeded, or failed for good |
@@ -313,7 +313,7 @@ The original `error` and the rejection from `session.prompt()` stay unchanged. S
 
 ```typescript
 const alice = vela.session('alice')
-const bob = vela.session('bob', { permissions: { bash: 'ask' } })
+const bob = vela.session('bob', { tools: ['-bash'] })
 await Promise.all([alice.prompt('Hi'), bob.prompt('Hello')])
 ```
 
@@ -401,7 +401,7 @@ const vela = createVela({
 | `trusted` | `false` | Also load the project's `.vela/settings.json`, `.vela/mcp.json`, `.vela/extensions/`, skills (`.vela/skills/`, `.agents/skills/`, `.skills/`, returned in `skillDirs`), `.vela/prompts/` and `.vela/APPEND_SYSTEM.md` |
 | `homeDir` | `os.homedir()` | Home directory for `~/.agents/skills` |
 | `builtins` | `[]` | Names of built-in extensions to list in `extensions`; `-builtin:<name>` in settings removes one |
-| `defaultOffBuiltins` | `[]` | Names in `builtins` that stay off until settings enable them with `+builtin:<name>` (the CLI uses this for `permission-gate`) |
+| `defaultOffBuiltins` | `[]` | Names in `builtins` that stay off until settings enable them with `+builtin:<name>` |
 
 The result (`VelaConfig`) has `cwd`, `agentDir`, `dataDir`, `settings` (merged `VelaSettings`), `files` (settings files read), `extensions` (`ExtensionEntry[]`), `skillDirs`, `promptDirs`, `contextFiles`, `appendSystemPrompt` (when an `APPEND_SYSTEM.md` exists), `providers`, `credentials` (the `~/.vela/auth.json` store), `extensionConfig` and `mcp` (`{ servers, sources, errors }`: the MCP servers from `mcp.json` with variables resolved, the file each came from, and the problems found reading them; see [MCP servers](mcp.md)). `loadModels({ agentDir, env, overrides? })` returns only the providers and can preview a preset without saving it. `verifyProviderModel(ref, providers, credentials, signal?)` sends one minimal model request and may incur a charge; an optional abort signal cancels it. `writeProviderPreset(agentDir, name, preset)` merges a provider into user-level `models.json` and returns its path. See [Settings](settings.md) and [Models](models.md).
 
@@ -493,14 +493,14 @@ See [the offline tool-image example](../examples/sdk/06-tool-images.ts) and [too
 
 `vela.session(id, { scope, channel })` supplies a host's routing identity before session hooks and tool calls. A scope is `{ id, kind: 'private' | 'shared', dataDir }`; it selects shared storage and grants no permissions. `session.scope` and each tool call's `context.scope` are read-only snapshots; `context.sessionId` identifies the invoking session. Supply routing again on resume. `resume()` restores a channel saved in the session file, and supplying that same channel again writes nothing. Fork and clone omit routing.
 
-An existing unbound session accepts its first scope/channel binding while preserving object identity and its original cwd, tools, permissions and model. The binding is synchronous, and its `session_channel` entry is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
+An existing unbound session accepts its first scope/channel binding while preserving object identity and its original cwd, tools and model. The binding is synchronous, and its `session_channel` entry is written like other session metadata: `listSessions()` shows the channel once that queued write completes (on `session.save()`, the next prompt, or `close()`). Repeating the same route is allowed. A channel already saved for the session is that binding after `resume()`, including when the new session was opened with a channel before `resume()`. A different channel throws an error named `SessionRoutingConflictError`, containing the session ID and both routes, without retry or rebinding. Other session options remain first-open-only.
 
-`session.toolDecision(name)` reports the existing tool eligibility and permission decision. `session.hasUI` distinguishes an attached frontend. `session.save()` retains its flush-and-reject behavior; `session.save({ reportFailure: true })` additionally emits one existing `session_save_failed` event if that explicit flush fails. It does not close the session.
+`session.getActiveTools()` returns the tools currently exposed to the model; use `tools` or `setActiveTools()` to control the selection. `session.hasUI` distinguishes an attached frontend. `session.save()` retains its flush-and-reject behavior; `session.save({ reportFailure: true })` additionally emits one existing `session_save_failed` event if that explicit flush fails. It does not close the session.
 
 `createVela({ onSessionSaved(id), beforeDispose() })` supports host composition. A successful nonempty storage append calls `onSessionSaved`; no-op or failed saves do not. Observer errors are logged and cannot retry committed history. Disposal waits for extension factories, runs `beforeDispose` to stop ingress, attempts every session close, then shared extension shutdown and cleanup, aggregating errors.
 
 `publishChannelEvent(session, event)` accepts only `channel_message`, `channel_reply` and `channel_error`. `resolveBinary(vela, 'rg' | 'fd')` and `setDefaultToolModifiers(session, entries)` are plain frontend utilities. `inspectVela` and `inspectSession` return diagnostic snapshots and are **experimental**. Ordinary inspection never runs extension prompt hooks; `inspectSession(vela, session, { previewExtensions: true })` explicitly requests that preview. `session.usage` includes totals, context-window size and a copy of the last usage record.
 
-The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
+The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `channel(name)`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
 
 The experimental `@glows777/vela-core/diagnostics` entry also provides the canonical frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions. `resolveModel(ref, { providers, credentials })` resolves a supplied object, provider reference or configured default without assembling a Vela or reading project resources. With no configured default it throws the CLI’s existing no-model guidance. These helpers are experimental; the exact surface is recorded in the core API snapshot.

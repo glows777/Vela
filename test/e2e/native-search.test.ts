@@ -237,28 +237,6 @@ test('a web_search-scoped blocking hook prevents hosted search', async () => {
   ).toBe(false)
 })
 
-test('bash permission gate does not suppress hosted web search', async () => {
-  const { web, permissionGate } = await import('@glows777/vela-core')
-  const { openai } = await import('@ai-sdk/openai')
-  const model = Object.assign(
-    createFauxModel({ responses: [fauxText('OK')] }),
-    {
-      hostedTools: async () => ({ web_search: openai.tools.webSearch({}) }),
-    },
-  )
-  let request: LanguageModelV4CallOptions | undefined
-  const stream = model.doStream.bind(model)
-  model.doStream = async (options) => {
-    request = options
-    return stream(options)
-  }
-  const t = createTestVela({ model, extensions: [web(), permissionGate()] })
-  await t.run('Search')
-  expect(request?.tools).toContainEqual(
-    expect.objectContaining({ type: 'provider', name: 'web_search' }),
-  )
-})
-
 test('default MCP extension does not suppress hosted search', async () => {
   const { web } = await import('@glows777/vela-core')
   const { mcp } = await import('@glows777/vela-mcp')
@@ -275,16 +253,15 @@ test('default MCP extension does not suppress hosted search', async () => {
 })
 
 test.each([
-  { mode: 'allow', permission: 'allow', native: true },
-  { mode: 'ask', permission: 'ask', native: false },
-  { mode: 'deny', permission: 'deny', native: false },
+  { mode: 'included', native: true },
+  { mode: 'excluded', native: false },
 ] as const)(
-  'search permission $mode selects only an allowed path',
-  async ({ permission, native }) => {
+  'search selection $mode selects only an available path',
+  async ({ native }) => {
     const { loadModels, web } = await import('@glows777/vela-core')
     const { responsesReply } = await import('../support/responses.ts')
     const { tempDir } = await import('../support/vela.ts')
-    const dir = tempDir('vela-native-permission-')
+    const dir = tempDir('vela-native-selection-')
     const originalFetch = globalThis.fetch
     const requests: Array<{ tools?: Array<{ type: string; name?: string }> }> =
       []
@@ -302,7 +279,7 @@ test.each([
         model: 'openai/gpt-5.5',
         providers,
         extensions: [web({ tavilyKey: 'test-tavily' })],
-        session: { permissions: { web_search: permission } },
+        session: { tools: native ? undefined : ['-web_search'] },
       })
       await t.run('Answer OK')
       const tools = requests[0]?.tools ?? []
@@ -311,7 +288,7 @@ test.each([
         tools.some(
           (tool) => tool.type === 'function' && tool.name === 'web_search',
         ),
-      ).toBe(permission === 'ask')
+      ).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
       dir.cleanup()
@@ -583,10 +560,6 @@ test.each([
 
 test.each([
   {
-    label: 'ask without independent credentials',
-    session: { permissions: { web_search: 'ask' as const } },
-  },
-  {
     label: 'search excluded from selection',
     session: { tools: ['read_file'] as string[] },
   },
@@ -628,39 +601,6 @@ test.each([
     }
   },
 )
-
-test('ask without an independent backend explains that search is unavailable', async () => {
-  const { loadModels, web } = await import('@glows777/vela-core')
-  const { responsesReply } = await import('../support/responses.ts')
-  const { tempDir } = await import('../support/vela.ts')
-  const dir = tempDir('vela-native-ask-')
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = (async (_input, init) =>
-    responsesReply(JSON.parse(String(init?.body)))) as typeof fetch
-  try {
-    const providers = loadModels({
-      agentDir: dir.path,
-      env: { OPENAI_API_KEY: 'test' },
-    })
-    const t = createTestVela({
-      model: 'openai/gpt-5.5',
-      providers,
-      extensions: [web()],
-      session: { permissions: { web_search: 'ask' } },
-    })
-    await t.run('Find current information')
-    const notices = t
-      .eventsOf('notify')
-      .map((event) => event.message)
-      .join('\n')
-      .toLowerCase()
-    expect(notices).toContain('search')
-    expect(notices).toContain('unavailable')
-  } finally {
-    globalThis.fetch = originalFetch
-    dir.cleanup()
-  }
-})
 
 test('provider search sources remain readable in the saved conversation', async () => {
   const faux = createFauxModel({ responses: [fauxText('Here is the answer.')] })

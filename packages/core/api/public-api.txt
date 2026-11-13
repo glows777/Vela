@@ -345,10 +345,6 @@
     login: (interaction: AuthInteraction, options: LoginOptions & { previous?: Credential; }) => Promise<Credential>
     name: string
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
-  type PermissionDecision = 'allow' | 'deny' | 'ask'
-  function permissionGate: () => VelaExtension
-  const permissionGateConfig: ExtensionConfigDefinition
-  type PermissionRules = Record<string, PermissionDecision>
   interface PromptOptions
     images?: ImageContent[] | undefined
     signal?: AbortSignal | undefined
@@ -473,7 +469,6 @@
     channel?: string | undefined
     cwd?: string | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
-    permissions?: PermissionRules | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
@@ -924,7 +919,6 @@
     steer: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
     steeringMode: QueueMode
     subscribe: (listener: VelaEventListener) => () => void
-    toolDecision: (name: string) => PermissionDecision
     waitForIdle: () => Promise<void>
   type VelaSessionEventListener = (
       event: VelaEvent,
@@ -1180,8 +1174,6 @@
   type ModelMessage = | Exclude<AIModelMessage, UserModelMessage | AIToolModelMessage>
       | (Omit<UserModelMessage, 'content'> & { content: UserContent })
       | ToolModelMessage
-  type PermissionDecision = 'allow' | 'deny' | 'ask'
-  type PermissionRules = Record<string, PermissionDecision>
   interface ProviderStreamEvent
     data: unknown
     model: string
@@ -1211,7 +1203,6 @@
     channel?: string | undefined
     cwd?: string | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
-    permissions?: PermissionRules | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
@@ -1520,7 +1511,6 @@
     steer: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
     steeringMode: QueueMode
     subscribe: (listener: VelaEventListener) => () => void
-    toolDecision: (name: string) => PermissionDecision
     waitForIdle: () => Promise<void>
 
 # @glows777/vela-core/images

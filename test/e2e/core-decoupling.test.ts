@@ -29,7 +29,7 @@ function setup(options: VelaOptions = {}) {
   return { vela, cwd: dir.path }
 }
 
-test('first routing binding preserves a preopened session and its cwd, tools and permissions', async () => {
+test('first routing binding preserves a preopened session and its cwd and tools', async () => {
   const observed: unknown[] = []
   const model = createFauxModel({
     responses: [fauxToolCall('probe_scope', {}), fauxText('bound')],
@@ -61,8 +61,7 @@ test('first routing binding preserves a preopened session and its cwd, tools and
   writeFileSync(join(cwd, 'original', 'a.txt'), 'original')
   const session = vela.session('fake-chat', {
     cwd: 'original',
-    tools: ['probe_scope', 'read_file'],
-    permissions: { read_file: 'deny' },
+    tools: ['probe_scope'],
   })
   const scope = {
     id: 'group-one',
@@ -74,14 +73,12 @@ test('first routing binding preserves a preopened session and its cwd, tools and
     channel: 'fake',
     cwd: 'ignored',
     tools: ['bash'],
-    permissions: { read_file: 'allow', probe_scope: 'deny' },
   })
   expect(bound).toBe(session)
   expect(session.cwd).toBe(join(cwd, 'original'))
   expect(session.scope).toEqual(scope)
   expect(session.channel).toBe('fake')
   expect(session.getActiveTools()).toEqual(['probe_scope'])
-  expect(session.toolDecision('read_file')).toBe('deny')
   expect(
     vela.session(session.id, { scope: { ...scope }, channel: 'fake' }),
   ).toBe(session)

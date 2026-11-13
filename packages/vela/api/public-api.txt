@@ -81,11 +81,12 @@
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
     name: string
+    onConnection?: ((listener: (connection: ChannelConnection) => void) => () => void) | undefined
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
-    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; permissions?: PermissionRules; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
+    sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
     start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
     stop: () => Promise<void> | void
@@ -362,6 +363,12 @@
     tools: string[]
   function loadModels: (options: { agentDir: string; env?: Env; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
   function local: (options: LocalOptions) => ChannelExtension
+  class LocalError
+    cause?: unknown
+    message: string
+    name: string
+    readonly code: "invalid_request" | "not_found" | "unavailable"
+    stack?: string | undefined
   type LocalEvent = LocalEventData & {
       version: 1
       id: string
@@ -384,6 +391,19 @@
       | { type: 'progress'; data: LocalProgress }
       | { type: 'status'; data: { text: string } }
       | { type: 'error'; data: { code: string; message: string } }
+  interface LocalHost
+    connection: () => ChannelConnection
+    messages: (input: { projectId: string; sessionId: string; after?: string; limit?: number; }) => { messages: LocalMessage[]; nextCursor?: string; }
+    onConnection: (listener: (connection: ChannelConnection) => void) => () => void
+    onEvent: (listener: (event: LocalEvent) => void, options?: { projectId?: string; }) => () => void
+    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
+    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
+    openProject: (input: { cwd: string; name?: string; }) => Promise<LocalProject>
+    projects: () => LocalProject[]
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    sessions: (projectId?: string) => LocalSession[]
+    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
+    submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: { projectId: string; sessionId: string; text: string; clientMessageId?: string; }): Promise<{ sessionId: string; messageId: string; }>; }
   interface LocalMessage
     clientMessageId?: string | undefined
     createdAt: string
@@ -394,7 +414,7 @@
   interface LocalOptions
     port?: number | undefined
     timezone?: string | undefined
-    token: string
+    token?: string | undefined
   interface LocalProgress
     stage: "compaction" | "tool" | "retry"
     state?: "started" | "finished" | "failed" | undefined
@@ -535,10 +555,6 @@
     routine?: { id: string; scheduledAt: string; } | undefined
     text: string
     topic?: { rootId: string; threadId: string; } | undefined
-  type PermissionDecision = 'allow' | 'deny' | 'ask'
-  function permissionGate: () => VelaExtension
-  const permissionGateConfig: ExtensionConfigDefinition
-  type PermissionRules = Record<string, PermissionDecision>
   interface PromptOptions
     images?: ImageContent[] | undefined
     signal?: AbortSignal | undefined
@@ -666,7 +682,6 @@
     channel?: string | undefined
     cwd?: string | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
-    permissions?: PermissionRules | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
     tools?: string[] | undefined
@@ -855,6 +870,7 @@
   type UserContent = | string
       | (Exclude<AIUserContent, string>[number] | ImageContent)[]
   interface Vela
+    channel: { (name: "local"): LocalHost; (name: string): ChannelHost; }
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
@@ -1123,7 +1139,6 @@
     steer: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
     steeringMode: QueueMode
     subscribe: (listener: VelaEventListener) => () => void
-    toolDecision: (name: string) => PermissionDecision
     waitForIdle: () => Promise<void>
   type VelaSessionEventListener = (
       event: VelaEvent,

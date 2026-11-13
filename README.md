@@ -6,7 +6,7 @@ Add Vela to a group chat and it works like a teammate: it answers short question
 
 Underneath is a general agent you can also use on its own. Give it a task and a working folder, and it reads files, runs commands, edits code and fetches web pages until the task is done. Use it in your terminal, script it with JSON or RPC mode, or embed it as an SDK that runs many sessions in one process. Extend it with plain TypeScript [extensions](docs/extensions.md) that add tools, slash commands, model providers and channels, or connect [MCP servers](docs/mcp.md).
 
-The CLI and SDK follow [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). Vela adds concurrent sessions, a standard channel interface with enabled-chat lists, per-chat `tools`, per-session `permissions`, and built-in memory and knowledge base extensions.
+The CLI and SDK follow [pi](https://github.com/earendil-works/pi): the same agent loop with no turn limit, and pi's CLI modes, keybindings and RPC command names, with some differences (see [RPC mode](docs/rpc.md#differences-from-pi)). Vela adds concurrent sessions, a standard channel interface with enabled-chat lists, per-chat and per-session `tools`, and built-in memory and knowledge base extensions.
 
 ## Getting started
 
@@ -95,7 +95,7 @@ Vela is a Bun workspace of six npm packages under [`packages/`](packages/). Most
 | Package | What it contains |
 | --- | --- |
 | [`@glows777/vela`](packages/vela) | The `vela` CLI, TUI and `vela serve`, plus SDK and testing re-exports |
-| [`@glows777/vela-core`](packages/core) | The SDK (`createVela`), the extension API, offline testing helpers and the light built-in extensions (memory, todo, web, permission-gate) |
+| [`@glows777/vela-core`](packages/core) | The SDK (`createVela`), the extension API, offline testing helpers and the light built-in extensions (memory, todo, web) |
 | [`@glows777/vela-channels`](packages/channels) | The standard channel interface and the channel runtime (group triage, topics, routines) |
 | [`@glows777/vela-lark`](packages/lark) | The Lark (Feishu) channel adapter |
 | [`@glows777/vela-mcp`](packages/mcp) | The MCP extension |

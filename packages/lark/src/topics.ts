@@ -67,7 +67,7 @@ export class LarkTopics {
   sessionOptions(msg: IncomingMessage) {
     const options = topicSessionOptions(msg)
     if (!msg.topic && !msg.replyToId && !msg.handoff)
-      options.permissions.lark_search_history = 'deny'
+      options.tools.push('-lark_search_history')
     return options
   }
 

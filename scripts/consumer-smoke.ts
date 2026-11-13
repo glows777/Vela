@@ -55,6 +55,8 @@ await session.prompt('say hi')
 const typeChecks = () => {
   // @ts-expect-error prompt only accepts strings
   void session.prompt(42)
+  // @ts-expect-error tool availability is configured only through tools
+  vela.session('legacy', { permissions: { bash: 'ask' } })
 }
 void typeChecks
 // @ts-expect-error no such event type
@@ -205,7 +207,7 @@ import {mkdtemp,mkdir,rm} from 'node:fs/promises'
 import {request as httpRequest} from 'node:http'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent} from '@glows777/vela-channels'
+import {createChannelVela,local,type ChannelExtension,type IncomingMessage,type ChannelEvent,type LocalProject,type LocalMessage,type LocalEvent,type LocalHost,LocalError} from '@glows777/vela-channels'
 import {drainChannels} from '@glows777/vela-channels/testing'
 import {createFauxModel,fauxText,fauxToolCall} from '@glows777/vela-core/testing'
 let receive:((m:IncomingMessage)=>void)|undefined;let stopped=0;const replies:string[]=[]
@@ -213,6 +215,24 @@ const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:
 const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('channel received'),fauxText('event received'),fauxText('default received')]}),eventDefaultTarget:{channel:' probe ',chatId:' room '},extensions:[probe]})
 try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private');const event:ChannelEvent={source:'consumer',key:'build',deliveryId:'packed',summary:'!stop',final:true};await vela.publishEvent(event);await drainChannels(vela);assert(replies.includes('event received'));await vela.publishEvent({...event,key:'unmatched',deliveryId:'packed-default',final:false});await drainChannels(vela);assert(replies.includes('default received'))}finally{await vela.dispose()}
 assert.equal(stopped,1);console.log('standard channel sdk ok')
+// Host entry must work and typecheck through the packed public package on Node and Bun.
+const hostVela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('host received')]}),extensions:[probe]})
+await hostVela.ready()
+const host=hostVela.channel('probe');const connections:boolean[]=[]
+const offConnection=host.onConnection(state=>connections.push(state.connected))
+const offSession=host.onSession(update=>assert.equal(typeof update.session.sessionId,'string'))
+try{
+  assert.deepEqual(host.connection(),{connected:false});await hostVela.startChannels()
+  const receipt=await host.submit({channelId:'host-room',senderId:'consumer',senderName:'Consumer',text:'host prompt'})
+  await drainChannels(hostVela);assert.equal(host.sessions()[0]!.sessionId,receipt.sessionId)
+  assert.equal(host.sessions('missing').length,0);assert.equal(await host.stop({chatId:'host-room'},'expired'),false)
+  const routine=await host.routines.create({chatId:'host-room'},{message:'Review',schedule:{time:'09:00'},creator:{id:'consumer',name:'Consumer'}})
+  assert.equal(host.routines.list({chatId:'host-room'}).routines[0]!.id,routine.id)
+  assert.equal(await host.routines.cancel({chatId:'host-room'},routine.id),true)
+}finally{await hostVela.dispose();offConnection();offSession()}
+assert.deepEqual(connections,[true,false]);assert.deepEqual(host.connection(),{connected:false})
+console.log('packed host snapshots, admission, exact Stop, idle routines and connection lifecycle ok')
+
 const hookLogs:string[]=[]
 const hookModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'github',key:'github:owner/repo#pr/1'}),fauxText('webhook subscribed'),fauxText('webhook handled')]})
 const hooks=createChannelVela({contextFiles:false,model:hookModel,extensions:[probe],extensionConfig:{channel:{eventReceiver:{port:0,github:{secret:'packed-fixture',repositories:['owner/repo']},generic:{secret:'packed-generic',source:'sentry'}}}},logger:{debug(){},info(s){hookLogs.push(s)},warn(){},error(s){hookLogs.push(s)}}})
@@ -307,6 +327,29 @@ try{
 }
 assert.equal(await fetch(localURL+'/v1/info',{signal:AbortSignal.timeout(2000)}).catch(()=>undefined),undefined)
 console.log('packed Local listener disposal ok')
+
+const coreRoot=await mkdtemp(join(tmpdir(),'vela-packed-local-core-'))
+const coreLocal=createChannelVela({contextFiles:false,dataDir:join(coreRoot,'data'),model:createFauxModel({responses:[fauxText('core-only reply')]}),extensions:[local({})]})
+try{
+  await coreLocal.ready()
+  const host:LocalHost=coreLocal.channel('local')
+  const observed:LocalEvent[]=[]
+  host.onEvent(event=>observed.push(event))
+  assert.throws(()=>host.projects(),LocalError)
+  await coreLocal.startChannels()
+  const project=await host.openProject({cwd:coreRoot,name:'Core only'})
+  assert.equal(host.sessions(project.id)[0]?.sessionId,project.sessionId)
+  const receipt=await host.submit({projectId:project.id,sessionId:project.sessionId,text:'visible SDK input',clientMessageId:'core-only'})
+  assert(receipt.messageId)
+  await drainChannels(coreLocal)
+  const messages:LocalMessage[]=host.messages({projectId:project.id,sessionId:project.sessionId}).messages
+  assert(messages.some(message=>message.text==='core-only reply'))
+  assert(observed.some(event=>event.type==='message'&&event.data.id===receipt.messageId))
+  assert(!observed.some(event=>event.type==='reset'))
+  assert.deepEqual(host.connection(),{connected:true})
+  console.log('packed typed Local core-only host, visible submit, events and snapshots ok')
+}finally{try{await coreLocal.dispose()}finally{await rm(coreRoot,{recursive:true,force:true})}}
+
 
 `
 const LARK = `

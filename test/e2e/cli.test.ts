@@ -1419,29 +1419,20 @@ test.concurrent('an invalid extension schema names the tool and leaves other ext
   expect(stdout).not.toContain('"isError":true')
 })
 
-test.concurrent('permission-gate is off by default and -e builtin:permission-gate blocks a dangerous command', async () => {
-  const files = {
-    'replies.json': JSON.stringify({
-      responses: [
-        { toolCalls: [{ name: 'bash', input: { command: 'rm -rf junk' } }] },
-        { text: 'done' },
-      ],
-    }),
-    'junk/keep.txt': 'x',
-  }
-  const off = await cli(['-p', 'Delete junk'], {
-    model: 'faux:replies.json',
-    files,
+test.concurrent('removed permission-gate settings report the normal unknown built-in error', async () => {
+  const home = tempDir('vela-home-')
+  dirs.push(home)
+  await Bun.write(
+    join(home.path, 'settings.json'),
+    JSON.stringify({ extensions: ['+builtin:permission-gate'] }),
+  )
+  const result = await cli(['-p', 'hello'], {
+    agentDir: home.path,
+    model: `faux:${scenario('hello')}`,
   })
-  expect(off.code).toBe(0)
-  expect(existsSync(join(off.cwd, 'junk'))).toBe(false)
-
-  const on = await cli(['-p', '-e', 'builtin:permission-gate', 'Delete junk'], {
-    model: 'faux:replies.json',
-    files,
-  })
-  expect(on.code).toBe(0)
-  expect(existsSync(join(on.cwd, 'junk'))).toBe(true)
+  expect(result.stderr).toContain(
+    'Unknown built-in extension builtin:permission-gate',
+  )
 })
 
 test.concurrent('loaded context files are named at startup', async () => {
