@@ -1,6 +1,6 @@
 # Vela documentation
 
-Vela is an AI coworker for your team's group chats, built on a terminal agent and TypeScript SDK. In a group chat it answers short questions, opens a topic for each larger task and keeps that topic's progress up to date. On its own, the same agent takes a task and a working folder, and reads files, runs commands, edits code and searches until the task is done.
+Vela is a self-hosted AI coworker for your team's group chats. You run it on your own machine with the model you choose; Lark ships built in. It is built on a terminal agent and TypeScript SDK. In a group chat it answers short questions, opens a topic for each larger task and keeps that topic's progress up to date. On its own, the same agent takes a task and a working folder, and reads files, runs commands, edits code and searches until the task is done.
 
 ## Run Vela in group chats
 
