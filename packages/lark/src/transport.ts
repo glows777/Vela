@@ -1,4 +1,5 @@
 import type { Readable } from 'node:stream'
+import type { ChannelConnection } from '@glows777/vela-channels'
 import * as lark from '@larksuiteoapi/node-sdk'
 import type { LarkCard, LarkCardAction, LarkCardResponse } from './cards.ts'
 
@@ -97,6 +98,7 @@ export function larkTransport(
   quiet = false,
   onSetupError?: (error: Error) => void,
   onSetupReady?: () => void,
+  onConnection?: (connection: ChannelConnection) => void,
 ): LarkTransport {
   const silent = { error() {}, warn() {}, info() {}, debug() {}, trace() {} }
   const client = new lark.Client({
@@ -105,8 +107,11 @@ export function larkTransport(
     ...(quiet ? { logger: silent } : {}),
   })
   let wsClient: lark.WSClient | undefined
+  let lifetime = 0
   return {
     async start(onMessage, onAction) {
+      const current = ++lifetime
+      wsClient?.close()
       const dispatcher = new lark.EventDispatcher({})
       dispatcher.register({
         'im.message.receive_v1': (data) => onMessage(data as LarkMessageEvent),
@@ -121,18 +126,37 @@ export function larkTransport(
               logger: silent,
               autoReconnect: true,
               handshakeTimeoutMs: 15000,
-              onError: onSetupError,
-              onReady: onSetupReady,
-              onReconnecting: () =>
-                onSetupError?.(
-                  new Error('Lark connection dropped; retry setup'),
-                ),
             }
           : {}),
+        onReady: () => {
+          if (current !== lifetime) return
+          onConnection?.({ connected: true })
+          if (quiet) onSetupReady?.()
+        },
+        onReconnected: () => {
+          if (current !== lifetime) return
+          onConnection?.({ connected: true })
+        },
+        onError: (error) => {
+          if (current !== lifetime) return
+          // Provider errors may contain credentials or request objects.
+          onConnection?.({ connected: false, error: 'Lark connection failed' })
+          if (quiet) onSetupError?.(error)
+        },
+        onReconnecting: () => {
+          if (current !== lifetime) return
+          onConnection?.({
+            connected: false,
+            error: 'Lark connection lost; reconnecting',
+          })
+          if (quiet)
+            onSetupError?.(new Error('Lark connection dropped; retry setup'))
+        },
       })
       await wsClient.start({ eventDispatcher: dispatcher })
     },
     stop() {
+      ++lifetime
       wsClient?.close()
     },
     async startTopic(messageId, title) {

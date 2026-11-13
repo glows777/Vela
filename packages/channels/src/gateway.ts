@@ -22,6 +22,7 @@ import { ChannelSessions } from './sessions.ts'
 import { ChannelTopics } from './topics.ts'
 import type {
   ChannelDefinition,
+  ChannelHost,
   ChannelSessionUpdate,
   IncomingMessage,
 } from './types.ts'
@@ -242,6 +243,8 @@ export class ChannelGateway {
       find: (id) => this.find(id),
       state: (id) => this.state(id),
       run: (id) => this.commands.controllable(id),
+      running: () => !this.stopped && this.started.has(channel.name),
+      hostRoutines: this.routines.host(channel.name),
       submit: async (msg) => {
         if (this.stopped || !this.started.has(channel.name))
           throw new Error('Channel is not running')
@@ -320,6 +323,7 @@ export class ChannelGateway {
         },
       },
     })
+    this.runtimes.get(channel.name)?.clear()
     this.runtimes.set(channel.name, runtime)
     channel.connect?.(runtime.api)
     channel.onMessage?.((msg: IncomingMessage) => {
@@ -328,15 +332,21 @@ export class ChannelGateway {
   }
 
   async startAll(toolNames: readonly string[] = []): Promise<void> {
+    this.stopped = false
     for (const channel of this.channels.values())
       channel.validateTools?.(toolNames)
     await this.directory.load()
     await this.events.load()
     await this.routines.load(this.channels.values())
     this.usage.load()
-    this.stopped = false
+    if (this.stopped) {
+      this.routines.stop()
+      return
+    }
     for (const [name, ch] of this.channels) {
+      if (this.stopped) break
       try {
+        this.runtimes.get(name)!.connection.start()
         // Reserve recovery before transport startup can deliver new events.
         let connected!: (started: boolean) => void
         const ready = new Promise<boolean>((resolve) => {
@@ -374,7 +384,9 @@ export class ChannelGateway {
         }
         let started = false
         try {
-          started = (await ch.start()) !== false
+          started = (await ch.start()) !== false && !this.stopped
+          if (!this.stopped)
+            this.runtimes.get(name)!.connection.started(started)
           connected(started)
         } catch (error) {
           connected(false)
@@ -386,6 +398,7 @@ export class ChannelGateway {
           this.routines.start(name)
         }
       } catch (err) {
+        if (!this.stopped) this.runtimes.get(name)!.connection.failed()
         this.logger.error(
           `[gateway] ✗ ${name} failed to start: ${errorMessage(err)}`,
         )
@@ -413,6 +426,7 @@ export class ChannelGateway {
     for (const result of drained)
       if (result.status === 'rejected') errors.push(result.reason)
 
+    for (const runtime of this.runtimes.values()) runtime.clear()
     for (const [, ch] of this.channels) {
       try {
         await ch.stop()
@@ -420,7 +434,6 @@ export class ChannelGateway {
         errors.push(error)
       }
     }
-    for (const runtime of this.runtimes.values()) runtime.clear()
     try {
       if (this.channels.size) await this.directory.flush()
     } catch (error) {
@@ -433,6 +446,12 @@ export class ChannelGateway {
   /** Handles one channel message; the returned Promise settles once the reply is sent (or fails). */
   handleIncoming(channelName: string, msg: IncomingMessage): Promise<void> {
     return this.input.enqueue(channelName, msg).completed
+  }
+
+  host(name: string): ChannelHost {
+    const runtime = this.runtimes.get(name)
+    if (!runtime) throw new Error(`Unknown channel: ${name}`)
+    return runtime.host
   }
 
   list(): Array<{ name: string; description: string }> {

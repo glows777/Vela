@@ -213,6 +213,24 @@ const probe:ChannelExtension=api=>api.registerChannel({name:'probe',description:
 const vela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'consumer',key:'build'}),fauxText('channel received'),fauxText('event received'),fauxText('default received')]}),eventDefaultTarget:{channel:' probe ',chatId:' room '},extensions:[probe]})
 try{await vela.startChannels();assert.deepEqual(vela.runningChannels(),['probe']);receive!({channelId:'room',senderId:'visitor',senderName:'Visitor',text:'hello'});await drainChannels(vela);assert(replies.some(text=>text.includes('channel received')));assert.equal(vela.sessions()[0]?.scope?.kind,'private');const event:ChannelEvent={source:'consumer',key:'build',deliveryId:'packed',summary:'!stop',final:true};await vela.publishEvent(event);await drainChannels(vela);assert(replies.includes('event received'));await vela.publishEvent({...event,key:'unmatched',deliveryId:'packed-default',final:false});await drainChannels(vela);assert(replies.includes('default received'))}finally{await vela.dispose()}
 assert.equal(stopped,1);console.log('standard channel sdk ok')
+// Host entry must work and typecheck through the packed public package on Node and Bun.
+const hostVela=createChannelVela({contextFiles:false,model:createFauxModel({responses:[fauxText('host received')]}),extensions:[probe]})
+await hostVela.ready()
+const host=hostVela.channel('probe');const connections:boolean[]=[]
+const offConnection=host.onConnection(state=>connections.push(state.connected))
+const offSession=host.onSession(update=>assert.equal(typeof update.session.sessionId,'string'))
+try{
+  assert.deepEqual(host.connection(),{connected:false});await hostVela.startChannels()
+  const receipt=await host.submit({channelId:'host-room',senderId:'consumer',senderName:'Consumer',text:'host prompt'})
+  await drainChannels(hostVela);assert.equal(host.sessions()[0]!.sessionId,receipt.sessionId)
+  assert.equal(host.sessions('missing').length,0);assert.equal(await host.stop({chatId:'host-room'},'expired'),false)
+  const routine=await host.routines.create({chatId:'host-room'},{message:'Review',schedule:{time:'09:00'},creator:{id:'consumer',name:'Consumer'}})
+  assert.equal(host.routines.list({chatId:'host-room'}).routines[0]!.id,routine.id)
+  assert.equal(await host.routines.cancel({chatId:'host-room'},routine.id),true)
+}finally{await hostVela.dispose();offConnection();offSession()}
+assert.deepEqual(connections,[true,false]);assert.deepEqual(host.connection(),{connected:false})
+console.log('packed host snapshots, admission, exact Stop, idle routines and connection lifecycle ok')
+
 const hookLogs:string[]=[]
 const hookModel=createFauxModel({responses:[fauxToolCall('channel_subscriptions',{action:'create',source:'github',key:'github:owner/repo#pr/1'}),fauxText('webhook subscribed'),fauxText('webhook handled')]})
 const hooks=createChannelVela({contextFiles:false,model:hookModel,extensions:[probe],extensionConfig:{channel:{eventReceiver:{port:0,github:{secret:'packed-fixture',repositories:['owner/repo']},generic:{secret:'packed-generic',source:'sentry'}}}},logger:{debug(){},info(s){hookLogs.push(s)},warn(){},error(s){hookLogs.push(s)}}})

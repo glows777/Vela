@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Added
+
+- **SDK host access to channels.** `vela.channel(name)` exposes enabled session snapshots, session/status subscriptions, durable submission, run-bound Stop, idle routine management and `{ connected, error? }` connection observation. Lark reports real SDK readiness and reconnect changes; owned topic follow-ups require matching logical IDs and a real reply anchor. Local still uses its existing HTTP/SSE transport in this stage ([#312](https://github.com/glows777/Vela/issues/312)).
+
 ### Changed
 
 - **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
