@@ -10,9 +10,13 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Session management for SDK hosts.** `vela.listSessions()` summaries now include the session's working directory and, when a host opened it for a channel, the channel name. `vela.setSessionArchived(id, archived)` archives or unarchives a saved session without opening it, and archived sessions are left out of `listSessions()` (and the interactive picker) unless `{ includeArchived: true }` is passed. `vela.searchSessions(text)` searches saved sessions' user and assistant messages and returns the session id with a short match. The flag is a new append-only `session_archived` entry. The session header gains an optional `channel` field, and a first channel binding that arrives after the session was written appends a `session_channel` entry ([#314](https://github.com/glows777/Vela/issues/314)).
 
+### Breaking Changes
+
+- **Issue feeds are a strict label allowlist.** `extensionConfig.channel.eventReceiver.github.issueLabels` must name at least one label for `github:<owner>/<repo>#issues` to deliver anything: an empty list, including an omitted option, now accepts no Issue event, where 0.6.0 delivered every Issue except `labeled`. Add the labels that should wake the feed, for example `"issueLabels": ["to:vela"]`. Existing subscriptions are not rewritten, and PR subscriptions stay independent of the list ([#356](https://github.com/glows777/Vela/issues/356)).
+
 ### Changed
 
-- **Issue feeds honor their label allowlist.** A nonempty `issueLabels` now gates the whole `github:<owner>/<repo>#issues` feed: an Issue without one of those labels sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels. An empty list keeps every Issue event. Existing subscriptions are not rewritten; set `issueLabels` to `[]` to keep receiving every Issue event ([#341](https://github.com/glows777/Vela/issues/341)).
+- **Issue feeds honor their label allowlist.** An Issue without one of the `issueLabels` sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels ([#341](https://github.com/glows777/Vela/issues/341)).
 
 ### Fixed
 
