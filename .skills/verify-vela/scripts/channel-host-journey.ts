@@ -188,6 +188,4 @@ try {
 }
 assert.deepEqual(connections, [true, false])
 assert.deepEqual(host.connection(), { connected: false })
-console.log(
-  'Disposed: host reports disconnected',
-)
+console.log('Disposed: host reports disconnected')
