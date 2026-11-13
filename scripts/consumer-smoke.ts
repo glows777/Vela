@@ -55,6 +55,8 @@ await session.prompt('say hi')
 const typeChecks = () => {
   // @ts-expect-error prompt only accepts strings
   void session.prompt(42)
+  // @ts-expect-error tool availability is configured only through tools
+  vela.session('legacy', { permissions: { bash: 'ask' } })
 }
 void typeChecks
 // @ts-expect-error no such event type

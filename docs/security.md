@@ -15,15 +15,17 @@ This page describes what Vela protects and what it does not. To report a vulnera
 | Members of an enabled Lark chat | Yes, all members | Full access: bash, files, memory and extension tools |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
 
-Lark enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with the same access as the user running Vela. This is not a sandbox, a per-member boundary, or protection against extensions or the model acting for that user.
+**The trust boundary is the whole Vela instance, not an individual chat or session.** Every enabled chat, holder of the Local token and accepted webhook input reaches the same operating-system user. Members of chat A can use tools to read chat B's sessions and memory, as well as `~/.vela/auth.json`. Separate transcripts, memory scopes and working directories organize data; they do not isolate it.
+
+Lark enforces a chat allowlist before invoking the model. Enabling a chat trusts every current and future member with this instance-wide access. Local token checks and webhook authentication control admission, not what admitted input can make the agent access. Use separate OS users, containers or virtual machines when callers must not share trust.
 
 ## Tools run as you
 
 The built-in tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `grep`, `find`, `bash`) run in the Vela process with your user's permissions. See [Tools](tools.md).
 
 - The working directory is where relative paths resolve and where `bash` starts. It is not a jail: file tools accept absolute paths and `..`, and `bash` can reach anything your user can.
-- Vela does not filter `bash` commands by default: a command the model writes runs. The built-in [`permission-gate`](built-in-extensions.md#permission-gate) extension is off by default; enable it to confirm a short list of dangerous patterns (recursive force-deletes, `sudo`, `chmod`/`chown` 777) in interactive mode, and to block them when no UI can ask. This is a heuristic to catch mistakes, not a security control; it is easy to get around.
-- Vela does not ask before each tool call unless you set a session permission to `ask` (see [Per-session permissions](#per-session-permissions)) or load an extension that asks.
+- Vela does not filter `bash` commands: a command the model writes runs unless a user extension blocks the call. A pattern-based confirmation extension can catch mistakes, but is not a security control and is easy to get around.
+- Vela does not ask before tool calls unless you load a user extension that asks (see [Confirm before a call](#confirm-before-a-call)).
 
 Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela user with Vela's environment and working folder, so it can read `~/.vela/auth.json` (provider keys and OAuth tokens) and `~/.vela/settings.json`: group members can read Vela's keys. Run Vela as a dedicated user with its own home, or inside a container or virtual machine, holding only the files, credentials and network access the bot needs; the [`vela serve` deploy recipe](deploy.md) sets up such a user.
 
@@ -31,7 +33,7 @@ Anyone in an enabled chat can make Vela run `bash`. That shell runs as the Vela 
 
 An extension is a function that runs inside the Vela process. It can read and write any file, start processes, open network connections, see every prompt, message and tool call, change tool input and output, and register tools that any session can call. Vela does not sandbox extensions and does not try to; this is by design, as in pi.
 
-Session permissions do not restrict extension code. They only decide which tools a session's model can call.
+A session's tool selection does not restrict extension code. It only decides which registered tools the session's model can call.
 
 Review an extension before you load it, and load only extensions from sources you trust. The CLI loads extensions from `~/.vela/extensions/`, from settings, from `-e`, and from the project's `.vela/extensions/` once the project is trusted. See [Extensions](extensions.md).
 
@@ -43,9 +45,9 @@ Interactive mode asks once per project and saves the answer in `~/.vela/trust.js
 
 Project trust only controls what loads at startup. It does not limit what tools can do afterwards, and it does not make a project's files safe to read: a README or source comment can still try to steer the model.
 
-## Channels and permissions
+## Channels and instance access
 
-There are no roles (like pi): every session has the same tools, prompt and commands. A channel's enabled-chat list is its trust boundary.
+There are no roles (like pi). A channel's enabled-chat list controls who can invoke the instance; it is not an isolation boundary between chats. Sessions can select different tools, but those tools still run as the same OS user.
 
 ### Channel senders
 
@@ -57,27 +59,30 @@ Channel ids now omit the sender id. Old per-sender sessions are not automaticall
 
 Every sender in a chat gets the same session and the same tools. A custom channel must enforce its own enablement boundary before delivering messages; there is no per-sender restriction, and it cannot hide earlier turns in a shared chat transcript.
 
-### Per-session permissions
+### Limit tools
 
-The SDK sets tool rules per session; a tool without a rule is allowed:
+`tools` is the only per-session tool availability control. Use an allowlist or `+name` / `-name` modifiers when opening a session:
 
 ```ts
-const session = vela.session('ci', { permissions: { bash: 'ask', write_file: 'deny' } })
+const session = vela.session('review', { tools: ['read_file', 'grep', 'find'] })
+const noShell = vela.session('no-shell', { tools: ['-bash'] })
 ```
 
-| Decision | Effect |
-|---|---|
-| `allow` | The tool runs |
-| `deny` | The tool is not offered to the model, and calls are rejected |
-| `ask` | The session's `ui.confirm` is asked first, after extension `tool_call` handlers have run (so it sees the final input). With no UI the call is rejected |
+`session.setActiveTools(names)` replaces the selection with an allowlist; `session.getActiveTools()` lists the tools currently exposed to the model. An unavailable tool is not offered to the model, and calls to it are rejected. See [Tools](tools.md#choosing-tools-per-session) and [SDK](sdk.md).
 
-Keys are tool names, or `*` for all other tools; an exact name beats `*`. `vela.session(id, { tools })` and `session.setActiveTools()` further limit the tools to a list. See [SDK](sdk.md).
+This controls tool availability, not data access. For example, a session with `read_file` can still read any file accessible to the OS user, including other sessions and credentials. Removing `bash` does not isolate a session or make untrusted callers safe.
+
+### Confirm before a call
+
+Confirmation is a user extension, not a built-in rule. In a `tool_call` handler, check `ctx.hasUI`, ask with `ctx.ui.confirm`, and return `{ block: true, reason }` when no UI is attached or the user declines. See [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts), which blocks matching commands when `!ctx.hasUI`.
+
+Load the example with `vela -e ./examples/extensions/confirm-dangerous.ts`, or import it and pass it in `createVela({ extensions: [confirmDangerous] })`. An SDK host supplies a session `ui` to answer confirmation prompts. Print and channel sessions have no UI; RPC can forward confirmation requests to its frontend. The example's simple command pattern catches mistakes, not every dangerous action. Hooks can inspect other tools too; they do not restrict arbitrary extension code or provider-hosted execution. Matching `tool_call` handlers keep tools on the local execution path rather than using a provider-hosted equivalent.
 
 ## Prompt injection
 
 The model reads text from many places: files, command output, web pages from the `web` extension, knowledge base results, memory, and messages from channel senders. Any of it can contain instructions that try to make the model do something else. Vela does not detect or block this.
 
-Enabled Lark chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider the built-in `permission-gate` (`"extensions": ["+builtin:permission-gate"]` in [settings](settings.md)) or an extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts) for writing your own).
+Enabled Lark chats have full access: if the model reads a hostile file and then calls `bash`, the command runs. Isolate the environment, review changes before you apply them elsewhere, and consider a user extension that confirms risky calls (see [confirm-dangerous.ts](../examples/extensions/confirm-dangerous.ts) for writing your own).
 
 ## Secrets on disk
 
@@ -102,8 +107,8 @@ Review sessions and recordings before you share them. Keep API keys out of confi
 - Use version control or backups before larger changes.
 - Give Vela only the credentials it needs, and prefer short-lived, narrowly scoped ones.
 - Review extensions before loading them and trust only projects you know.
-- Enable only Lark chats whose entire membership you trust with bash and files. Use separate restricted SDK sessions (`tools` / `permissions`) when serving untrusted people, and keep private data out of the knowledge base when those people can reach it.
-- Use `permissions: { bash: 'ask' }` or a confirming extension for sessions where a person should approve commands.
+- Enable only Lark chats whose entire membership you trust with bash and files. Use separate OS accounts, containers or virtual machines for people who must not access each other's data, and keep private data out of any instance they can reach.
+- Load a confirming user extension for sessions where a person should approve commands; do not treat it as a sandbox.
 
 ## Reporting a vulnerability
 
