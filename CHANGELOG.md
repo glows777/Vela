@@ -18,6 +18,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Local startup cannot outlive disposal.** Stopping while Local storage is loading prevents the later HTTP listener and observers from being created, so `dispose()` cannot leave a hidden loopback server running ([#312](https://github.com/glows777/Vela/issues/312)).
 
+- **A saved channel stays bound after resume.** `resume()` restores the channel from the session header or the last `session_channel` entry. Binding a different channel afterwards throws `SessionRoutingConflictError`, and supplying the saved channel again does not append another entry ([#354](https://github.com/glows777/Vela/issues/354)).
+
 - **Help and the empty `--list-models` message name the built-in DeepSeek key.** `vela --help`, the empty `--list-models` message and `docs/cli.md` now list `DEEPSEEK_API_KEY`; help and docs also add `OPENROUTER_API_KEY`, and the `--model` help line names all four built-in providers ([#330](https://github.com/glows777/Vela/issues/330)).
 
 - **AI SDK warnings stay in the chat log.** Interactive mode redirects `AI_SDK_LOG_WARNINGS` into notices, so a compatibility warning (for example the `propertyNames` one from MCP record tools on OpenAI-compatible models) no longer writes over the TUI and appears once per session instead of on every request. Print, JSON and RPC modes still log it on stderr ([#337](https://github.com/glows777/Vela/issues/337)).
