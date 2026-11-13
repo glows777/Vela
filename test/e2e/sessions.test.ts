@@ -692,8 +692,14 @@ test('resuming and supplying the saved channel again does not append another ent
 })
 
 test('opening with a different channel and then resuming is a routing conflict', async () => {
-  const first = createTestVela({ responses: [fauxText('one')] })
+  const first = createTestVela({
+    responses: [fauxText('one'), fauxText('late')],
+  })
   await first.vela.session('chat', { channel: 'lark' }).prompt('opened for lark')
+  const late = first.vela.session('late')
+  await late.prompt('opened unbound')
+  first.vela.session('late', { channel: 'lark' })
+  await late.close()
 
   const second = createTestVela({ cwd: first.cwd, responses: [] })
   const session = second.vela.session('chat', { channel: 'telegram' })
@@ -705,6 +711,11 @@ test('opening with a different channel and then resuming is a routing conflict',
   }
   expect(error).toBeInstanceOf(Error)
   expect((error as Error).name).toBe('SessionRoutingConflictError')
+  expect(session.channel).toBe('lark')
+  expect(session.messages.map((message) => message.role)).toEqual([
+    'user',
+    'assistant',
+  ])
   expect(
     (await second.vela.listSessions()).find((row) => row.id === 'chat')
       ?.channel,
@@ -712,4 +723,17 @@ test('opening with a different channel and then resuming is a routing conflict',
   expect(
     channelRecords(await second.readData('sessions/chat/transcript.jsonl')),
   ).toEqual(['session:lark'])
+
+  const rebound = second.vela.session('late', { channel: 'telegram' })
+  let lateError: unknown
+  try {
+    await rebound.resume()
+  } catch (caught) {
+    lateError = caught
+  }
+  expect((lateError as Error).name).toBe('SessionRoutingConflictError')
+  expect(rebound.channel).toBe('lark')
+  expect(
+    channelRecords(await second.readData('sessions/late/transcript.jsonl')),
+  ).toEqual(['session:', 'session_channel:lark'])
 })
