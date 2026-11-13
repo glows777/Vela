@@ -44,7 +44,11 @@ function suite(prs = [171], app = 'github-actions') {
   }
 }
 
-function issuePayload(action: string, extra: Record<string, unknown> = {}) {
+function issuePayload(
+  action: string,
+  extra: Record<string, unknown> = {},
+  labels = [{ name: 'to:vela' }],
+) {
   return {
     action,
     repository: { full_name: repo },
@@ -54,12 +58,17 @@ function issuePayload(action: string, extra: Record<string, unknown> = {}) {
       html_url: 'https://github.com/glows777/Vela/issues/332',
       user: { login: 'glows777' },
       body: 'Fixture issue body',
+      labels,
     },
     ...extra,
   }
 }
 
-function issueComment(body: string, pullRequest = false) {
+function issueComment(
+  body: string,
+  pullRequest = false,
+  labels = [{ name: 'to:vela' }],
+) {
   const number = pullRequest ? 171 : 332
   return {
     action: 'created',
@@ -68,6 +77,7 @@ function issueComment(body: string, pullRequest = false) {
       number,
       title: pullRequest ? 'Fixture PR' : 'Fixture issue',
       ...(pullRequest ? { pull_request: {} } : {}),
+      labels,
     },
     comment: {
       body,
@@ -392,6 +402,53 @@ test.each([
     expect(f.replies.length).toBe(replies + calls)
   },
 )
+
+test('a nonempty issueLabels list drops Issue events without one of those labels', async () => {
+  const f = await fixture()
+  await f.subscribeFeed()
+  const before = f.model.calls.length
+  for (const [payload, event, id] of [
+    [issuePayload('opened', {}, []), 'issues', 'unlabeled-opened'],
+    [issuePayload('closed', {}, []), 'issues', 'unlabeled-closed'],
+    [
+      issueComment('Unlabeled feedback', false, []),
+      'issue_comment',
+      'unlabeled',
+    ],
+  ] as const)
+    expect((await send(f.url, payload, event, id)).status).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(before)
+  f.model.push(fauxText('Labeled comment'))
+  expect(
+    (
+      await send(
+        f.url,
+        issueComment('Labeled feedback'),
+        'issue_comment',
+        'labeled',
+      )
+    ).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.replies.at(-1)?.text).toBe('Labeled comment')
+})
+
+test('an empty issueLabels list keeps every Issue event', async () => {
+  const f = await fixture({ issueLabels: [] })
+  await f.subscribeFeed()
+  f.model.push(fauxText('Opened'), fauxText('Commented'))
+  for (const [payload, event, id] of [
+    [issuePayload('opened', {}, []), 'issues', 'any-opened'],
+    [issueComment('Any feedback', false, []), 'issue_comment', 'any-comment'],
+  ] as const)
+    expect((await send(f.url, payload, event, id)).status).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.model.calls.slice(-2).map((call) => call.lastUserText)).toEqual([
+    expect.stringContaining('GitHub issue #332 opened'),
+    expect.stringContaining('GitHub issue #332: comment by glows777'),
+  ])
+})
 
 test('a PR comment reaches only its PR topic and an ordinary issue comment reaches only the repository feed', async () => {
   const f = await fixture()
