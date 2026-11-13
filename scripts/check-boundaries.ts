@@ -254,8 +254,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
     const { pkg, edges: imports } = record
     const localTargets: string[] = []
     const builtin =
-      /[\\/]extensions[\\/](memory|web|permission-gate)[\\/]/.test(file) &&
-      pkg.key === 'core'
+      /[\\/]extensions[\\/](memory|web)[\\/]/.test(file) && pkg.key === 'core'
     const builtinDir = builtin
       ? file.slice(0, file.indexOf(`${sep}extensions${sep}`)) +
         `${sep}extensions${sep}` +
@@ -375,7 +374,7 @@ export async function checkBoundaries(root: string): Promise<string[]> {
   for (const [file, record] of sourceMap) {
     if (
       record.pkg.key !== 'core' ||
-      !/[\\/]extensions[\\/](memory|web|permission-gate)[\\/]/.test(file)
+      !/[\\/]extensions[\\/](memory|web)[\\/]/.test(file)
     )
       continue
     const source = program.getSourceFile(file)

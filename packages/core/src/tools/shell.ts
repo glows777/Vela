@@ -267,7 +267,7 @@ export interface BashResult {
 }
 
 /**
- * Runs a command for the user (pi's `executeBash`), not as a tool: no permissions, hooks or tool
+ * Runs a command for the user (pi's `executeBash`), not as a tool: no tool selection, hooks or tool
  * history. The whole output goes to a file from `results`; the result holds its tail.
  */
 export async function runBash(

@@ -26,7 +26,6 @@ async function fixture(
     enabled?: Set<string>
     defaultTarget?: { channel: string; chatId: string }
     tools?: string[]
-    permissions?: { [name: string]: 'deny' }
   } = {},
 ) {
   const cwd = options.cwd ?? (await mkdtemp(join(tmpdir(), 'vela-events-')))
@@ -91,7 +90,6 @@ async function fixture(
             sessionOptions: () => ({
               cwd,
               tools: options.tools,
-              permissions: options.permissions,
             }),
             async send(message) {
               sent.push({ channel: name, message })
@@ -336,7 +334,7 @@ test('generic subscription visibility works on both channels, respects curated t
   f.model.push(fauxText('Plain SDK'))
   await f.vela.session('plain').prompt('Hello')
   expect(f.model.calls.at(-1)!.tools).not.toContain('channel_subscriptions')
-  const limited = await fixture({ tools: [], permissions: { bash: 'deny' } })
+  const limited = await fixture({ tools: [] })
   await limited.vela.startChannels()
   limited.model.push(fauxText('Curated channel'))
   await limited.human('Hello')
@@ -428,10 +426,9 @@ test('subscription write failure is reported and never commits a phantom subscri
   expect((await f.stored())[0].id).toBe(original.id)
 })
 
-test('a permission deny blocks the subscription tool even with explicit selection', async () => {
+test('tool selection excludes the subscription tool', async () => {
   const f = await fixture({
-    tools: ['channel_subscriptions'],
-    permissions: { channel_subscriptions: 'deny' },
+    tools: ['-channel_subscriptions'],
   })
   await f.vela.startChannels()
   const result = await f.subscription({

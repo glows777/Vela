@@ -13,7 +13,8 @@ import { silentLogger } from '@glows777/vela-core/extension-api'
 import { EventReceiver } from './event-receiver.ts'
 import { ChannelGateway } from './gateway.ts'
 import { githubOptions } from './github-events.ts'
-import type { ChannelDefinition, ChannelEvent } from './types.ts'
+import type { LocalHost } from './local-protocol.ts'
+import type { ChannelDefinition, ChannelEvent, ChannelHost } from './types.ts'
 
 export interface ChannelExtensionAPI extends CoreExtensionAPI {
   registerChannel(channel: ChannelDefinition): void
@@ -34,6 +35,9 @@ export interface ChannelVelaOptions extends Omit<CoreOptions, 'extensions'> {
 export interface ChannelVela extends Omit<CoreVela, 'extensions'> {
   extensions(): LoadedChannelExtension[]
   channels(): { name: string; description: string }[]
+  /** Look up a registered channel after ready(); startChannels() loads its state. */
+  channel(name: 'local'): LocalHost
+  channel(name: string): ChannelHost
   startChannels(): Promise<void>
   runningChannels(): string[]
   /** Enqueues to matching subscriptions, without waiting for model execution. Channels must be started. */
@@ -159,10 +163,12 @@ export function createChannelVela(
         channels: [...(registered[index] ?? [])],
       })),
     channels: () => runtime().list(),
+    channel: ((name: string) => runtime().host(name)) as ChannelVela['channel'],
     runningChannels: () => runtime().running(),
     publishEvent: (event: ChannelEvent) => runtime().events.publish(event),
     async startChannels() {
       await core.ready()
+      if (stopping) throw new Error('Vela is disposed')
       await runtime().startAll(inspectVela(core).tools.map((tool) => tool.name))
       if (!stopping && runtime().running().length) await receiver?.start()
     },

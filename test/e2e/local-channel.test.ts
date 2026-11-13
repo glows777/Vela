@@ -135,10 +135,7 @@ test('real Local HTTP opens canonical projects and rejects unauthenticated or ma
   ).toBe(project.id)
   expect(project.channel).toBe('local')
   expect(project.id).not.toContain(t.cwd)
-  for (const body of [
-    '{',
-    JSON.stringify({ cwd: t.cwd, permissions: { '*': 'allow' } }),
-  ]) {
+  for (const body of ['{', JSON.stringify({ cwd: t.cwd, tools: ['bash'] })]) {
     const response = await fetch(`${client.url}/v1/projects`, {
       method: 'POST',
       headers: {

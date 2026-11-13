@@ -5,48 +5,41 @@ import { z } from 'zod'
 import { HttpError, HttpListener, readBody } from './http.ts'
 import type { LocalEvents } from './local-events.ts'
 import type {
+  LocalHost,
   LocalOptions,
   LocalProject,
   LocalSession,
 } from './local-protocol.ts'
-import type { LocalStore } from './local-store.ts'
-import type { ChannelRuntime } from './types.ts'
+import { LocalError } from './local-protocol.ts'
+import { LocalSse } from './local-sse.ts'
 
-const projectSchema = z
-  .object({
-    cwd: z.string().min(1),
-    name: z.string().trim().min(1).max(200).optional(),
-  })
-  .strict()
-const messageSchema = z
-  .object({
-    text: z.string().trim().min(1).max(100000),
-    clientMessageId: z.string().min(1).max(200).optional(),
-  })
-  .strict()
 const stopSchema = z.object({ runId: z.string().min(1).max(200) }).strict()
-interface LocalService {
-  store: LocalStore
+interface LocalService extends Pick<LocalHost, 'projects' | 'messages'> {
+  openProject(input: unknown): Promise<LocalProject>
+  deploymentId: string
   events: LocalEvents
-  runtime: ChannelRuntime
-  sessions(project: LocalProject): LocalSession[]
+  sessions(projectId: string): LocalSession[]
+  session(projectId: string, sessionId: string): LocalSession
   submit(
-    project: LocalProject,
-    session: LocalSession,
-    text: string,
-    clientMessageId?: string,
+    projectId: string,
+    sessionId: string,
+    input: unknown,
   ): Promise<{ sessionId: string; messageId: string }>
+  stop(projectId: string, sessionId: string, runId: string): Promise<boolean>
 }
 
 /** The Local listener is never shared with the tunnel-facing webhook receiver. */
 export class LocalHttp {
   private readonly listener = new HttpListener()
+  private readonly sse: LocalSse
 
   constructor(
-    private options: LocalOptions,
+    private options: LocalOptions & { token: string },
     private service: LocalService,
     private logger: VelaLogger,
-  ) {}
+  ) {
+    this.sse = new LocalSse(service.events)
+  }
 
   start(): Promise<void> {
     return this.listener.start(
@@ -58,7 +51,7 @@ export class LocalHttp {
   }
 
   async stop(): Promise<void> {
-    await this.listener.stop(() => this.service.events.stop())
+    await this.listener.stop(() => this.sse.stop())
   }
 
   private async handle(
@@ -92,7 +85,7 @@ export class LocalHttp {
         .split('/')
         .filter(Boolean)
         .map((part) => decodeURIComponent(part))
-      const { store, events, runtime } = this.service
+      const service = this.service
       const method = req.method
       const query = (...allowed: string[]) => {
         if (
@@ -108,7 +101,7 @@ export class LocalHttp {
         respond(200, {
           version: 1,
           channel: 'local',
-          deploymentId: store.deploymentId,
+          deploymentId: service.deploymentId,
           capabilities: [
             'projects',
             'sessions',
@@ -122,9 +115,8 @@ export class LocalHttp {
       if (url.pathname === '/v1/events' && method === 'GET') {
         query('projectId')
         const projectId = url.searchParams.get('projectId') ?? undefined
-        if (projectId !== undefined && !store.project(projectId))
-          throw new HttpError(404, 'Project not found')
-        events.connect(res, projectId)
+        if (projectId !== undefined) service.sessions(projectId)
+        this.sse.connect(res, projectId)
         return
       }
       query(
@@ -133,21 +125,9 @@ export class LocalHttp {
           : []),
       )
       if (url.pathname === '/v1/projects') {
-        if (method === 'GET') respond(200, { projects: store.projects() })
+        if (method === 'GET') respond(200, { projects: service.projects() })
         else if (method === 'POST') {
-          const body = await this.body(req, projectSchema)
-          try {
-            respond(201, await store.openProject(body.cwd, body.name))
-          } catch (error) {
-            if (
-              ['ENOENT', 'ENOTDIR'].includes(
-                (error as NodeJS.ErrnoException).code ?? '',
-              ) ||
-              (error instanceof Error && error.message.includes('directory'))
-            )
-              throw new HttpError(400, 'Project must be an existing directory')
-            throw error
-          }
+          respond(201, await service.openProject(await this.body(req)))
         } else throw new HttpError(405, 'Use GET or POST')
         return
       }
@@ -157,45 +137,35 @@ export class LocalHttp {
         segments[3] !== 'sessions'
       )
         throw new HttpError(404, 'Route not found')
-      const project = store.project(segments[2]!)
-      if (!project) throw new HttpError(404, 'Project not found')
-      const sessions = this.service.sessions(project)
+      const projectId = segments[2]!
+      const sessions = service.sessions(projectId)
       if (segments.length === 4 && method === 'GET') {
         respond(200, { sessions })
         return
       }
-      const session = sessions.find((item) => item.sessionId === segments[4])
-      if (!session || segments.length !== 6)
-        throw new HttpError(404, 'Session not found')
+      if (segments.length !== 6) throw new HttpError(404, 'Session not found')
+      const session = service.session(projectId, segments[4]!)
       if (segments[5] === 'messages') {
         if (method === 'GET') {
           const limitText = url.searchParams.get('limit') ?? '50'
           if (!/^\d+$/.test(limitText) || +limitText < 1 || +limitText > 100)
             throw new HttpError(400, 'Limit must be 1 to 100')
-          const all = store.messages(project.id, session.sessionId)
-          const after = url.searchParams.get('after')
-          const index =
-            after === null
-              ? -1
-              : all.findIndex((message) => message.id === after)
-          if (after !== null && index === -1)
-            throw new HttpError(400, 'Unknown history cursor')
-          const messages = all.slice(index + 1, index + 1 + Number(limitText))
-          respond(200, {
-            messages,
-            ...(index + 1 + messages.length < all.length
-              ? { nextCursor: messages.at(-1)!.id }
-              : {}),
-          })
+          respond(
+            200,
+            service.messages({
+              projectId,
+              sessionId: session.sessionId,
+              after: url.searchParams.get('after') ?? undefined,
+              limit: Number(limitText),
+            }),
+          )
         } else if (method === 'POST') {
-          const body = await this.body(req, messageSchema)
           respond(
             202,
-            await this.service.submit(
-              project,
-              session,
-              body.text,
-              body.clientMessageId,
+            await service.submit(
+              projectId,
+              session.sessionId,
+              await this.body(req),
             ),
           )
         } else throw new HttpError(405, 'Use GET or POST')
@@ -203,12 +173,7 @@ export class LocalHttp {
       }
       if (segments[5] === 'stop' && method === 'POST') {
         const body = await this.body(req, stopSchema)
-        if (
-          !(await runtime.stop(
-            { chatId: project.id, rootId: session.topic?.rootId },
-            body.runId,
-          ))
-        )
+        if (!(await service.stop(projectId, session.sessionId, body.runId)))
           throw new HttpError(409, 'Run is no longer stoppable')
         respond(200, { stopped: true })
         return
@@ -219,7 +184,7 @@ export class LocalHttp {
         cause instanceof URIError
           ? new HttpError(400, 'Invalid route encoding')
           : cause
-      if (error instanceof HttpError) {
+      if (error instanceof HttpError || error instanceof LocalError) {
         const codes: Record<number, string> = {
           400: 'invalid_request',
           401: 'unauthorized',
@@ -230,9 +195,15 @@ export class LocalHttp {
           415: 'unsupported_media_type',
           503: 'unavailable',
         }
-        respond(error.status, {
+        const status =
+          error instanceof HttpError
+            ? error.status
+            : { invalid_request: 400, not_found: 404, unavailable: 503 }[
+                error.code
+              ]
+        respond(status, {
           error: {
-            code: codes[error.status] ?? 'request_failed',
+            code: codes[status] ?? 'request_failed',
             message: error.message,
           },
         })
@@ -251,9 +222,9 @@ export class LocalHttp {
     }
   }
 
-  private async body<T>(
+  private async body<T = unknown>(
     req: IncomingMessage,
-    schema: z.ZodType<T>,
+    schema?: z.ZodType<T>,
   ): Promise<T> {
     if (
       req.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !==
@@ -262,7 +233,8 @@ export class LocalHttp {
       throw new HttpError(415, 'Use application/json')
     const raw = await readBody(req)
     try {
-      return schema.parse(JSON.parse(raw.toString('utf8')))
+      const value = JSON.parse(raw.toString('utf8'))
+      return schema ? schema.parse(value) : value
     } catch {
       throw new HttpError(400, 'Invalid JSON request body')
     }

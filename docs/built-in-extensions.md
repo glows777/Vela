@@ -1,6 +1,6 @@
 # Built-in extensions
 
-Vela ships seven selectable built-in extensions: `memory`, `todo`, `rag`, `web`, `lark`, `mcp` and `permission-gate`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `todo`, `web` and `permission-gate` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
+Vela ships six selectable built-in extensions: `memory`, `todo`, `rag`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `todo` and `web` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all six (see [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|
@@ -10,7 +10,6 @@ Vela ships seven selectable built-in extensions: `memory`, `todo`, `rag`, `web`,
 | `web` | `web_fetch`, and `web_search` with a supported hosted search or a search API key |
 | `lark` | The Lark bot channel (see [Channels](channels.md)) |
 | `mcp` | Tools of MCP servers, as `mcp__<server>__<tool>`, and `/mcp` (see [MCP servers](mcp.md)) |
-| `permission-gate` | Confirms a few dangerous `bash` commands; off by default |
 
 ## Local transport
 
@@ -22,9 +21,9 @@ Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie supp
 
 ## Loading
 
-**CLI.** Six load by default, before any discovered or `-e` extensions; `permission-gate` stays off until you enable it. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** All six load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
-To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. To enable `permission-gate`, add `+builtin:permission-gate` the same way, or load it for one run with `-e builtin:permission-gate`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
+To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
@@ -73,7 +72,7 @@ In the CLI, each built-in reads `extensionConfig.<name>` from [settings](setting
 
 Extension tools are prefixed with the extension name: the `rag` extension's `search` tool is `rag_search`. A tool whose name equals the extension name is not prefixed, so the memory tool is `memory`, not `memory_memory`, and the todo tool is `todo`; nor is one that already starts with the prefix, so MCP tools are `mcp__<server>__<tool>`. See [Extensions](extensions.md).
 
-Deny any of them with session `permissions`; see [Security](security.md#per-session-permissions).
+Remove any of them from the session's `tools` selection; see [Security](security.md#limit-tools).
 
 ## Data
 
@@ -105,7 +104,7 @@ Long-term memory across sessions. Each memory is a Markdown file with front matt
 
 `lint` reports paths mentioned in a memory that no longer exist and duplicate names. Read age is not a staleness verdict; dream compares notes with recent conversations.
 
-**Prompt.** The short usage rules stay in the system prompt. The index is sent as a message after the user message whenever it changed, so saving a memory does not rewrite the cached system prompt; it is sent again after compaction removed the old one (and restored right away in the request that compaction summarized it from), and deleting the last entry sends an empty-store update. If a session's tools omit `memory`, or its permissions deny `memory`, that session gets none of the rules, the index, or the tool.
+**Prompt.** The short usage rules stay in the system prompt. The index is sent as a message after the user message whenever it changed, so saving a memory does not rewrite the cached system prompt; it is sent again after compaction removed the old one (and restored right away in the request that compaction summarized it from), and deleting the last entry sends an empty-store update. If a session's tools omit `memory`, that session gets none of the rules, the index, or the tool.
 
 **Commands.**
 
@@ -127,8 +126,8 @@ query that selects notes. Ambiguous acknowledgements without an explicit user fa
 do not justify a new fact. This removes assistant-only suggestions from the input;
 it does not validate the factual accuracy of arbitrary model output. The inbox is
 capped at about 100 KB, dropping oldest records and counting dropped records.
-It uses the same private file permissions as memory. Only sessions with memory
-permission `allow` contribute; `ask`, `deny` and omitted-memory sessions do not. Local sessions and owner DMs use global memory; a group's
+It uses the same private file permissions as memory. Only sessions with the `memory` tool available
+contribute; sessions that omit it do not. Local sessions and owner DMs use global memory; a group's
 sessions write only that group's inbox and notes, never another group's or global
 store.
 
@@ -140,9 +139,7 @@ it finished, even if the retained inbox is already old or full. `/dream` retries
 immediately without waiting for that threshold.
 Set `extensionConfig.memory.dream` to `false` to disable automatic runs; manual
 `/dream` remains available. The default is enabled, including groups. Both automatic
-and manual dream require memory permission `allow`. With `ask`, use the memory
-tool for individually approved operations; `/dream` explains this restriction
-without calling the model or changing notes.
+and manual dream require the `memory` tool to be available.
 
 Dream makes one isolated model call with no tools. It compares recent conversation
 records with notes and deterministic lint findings, corrects contradicted notes,
@@ -233,11 +230,11 @@ With the SDK, pass an embedder: `rag({ embedder: createEmbedder({ url, modelId, 
 | `web_fetch` | `url` | Fetch a page and convert it to Markdown (scripts, styles, navigation, headers, footers and iframes removed); 15-second timeout; reads at most 5 MB of the response and notes when it cut the page |
 | `web_search` | `query`, `max_results` (default 5) | Search the web |
 
-When the current model offers a supported provider-hosted search and `web_search` is allowed, Vela uses it without a separate search key. Otherwise it uses [Tavily](https://tavily.com) or [Serper](https://serper.dev); Tavily wins if both keys are set. A hosted search may incur provider search charges in addition to token charges; Vela's token cost estimate does not include those charges.
+When the current model offers a supported provider-hosted search and `web_search` is available, Vela uses it without a separate search key. Otherwise it uses [Tavily](https://tavily.com) or [Serper](https://serper.dev); Tavily wins if both keys are set. A hosted search may incur provider search charges in addition to token charges; Vela's token cost estimate does not include those charges.
 
-With `web_search: ask`, hosted search cannot be approved per query before the provider executes it. Vela uses a configured independent provider and asks for each call instead; without one, search is unavailable. A matching `tool_call` extension hook also prevents hosted substitution because the provider's internal query cannot be intercepted. Disabled, denied or unselected tools remain unavailable.
+A matching `tool_call` extension hook prevents hosted substitution because the provider's internal query cannot be intercepted. Vela uses a configured independent provider instead; without one, search is unavailable. A user extension can then confirm or block each local call. Disabled or unselected tools remain unavailable.
 
-Enabled channel chats can call both tools. Deny either one with session `permissions`.
+Enabled channel chats can call both tools. Remove either one from the session's `tools` selection.
 
 **SDK.** `web({ tavilyKey, serperKey })`; both are optional.
 
@@ -256,18 +253,6 @@ Connects a Lark (Lark) bot to Vela over Lark's long connection. Each enabled cha
 It registers no tools or commands. Setup and behavior are described in [Channels](channels.md#lark).
 
 **SDK.** `lark({ appId, appSecret, owners, chats })`.
-
-## permission-gate
-
-Asks before running a `bash` command that matches one of three patterns (the list and behavior follow pi's `permission-gate` example): `rm` with a recursive or force flag, `sudo`, and `chmod`/`chown` with `777`. In interactive mode it shows the command and runs it only when you choose `Yes`. A session without a UI (SDK, `-p`, JSON, channel sessions) blocks the call instead, and the model gets `Dangerous command blocked (no UI for confirmation)` as the tool result. RPC mode has a UI: the question is an [extension UI request](rpc.md#extension-ui) and the call waits for the client's answer.
-
-It is off by default because it is a heuristic, not a security control: it catches mistakes, not a hostile command (`find -delete`, a script, a renamed binary). Enable it per user or per project:
-
-```json
-{ "extensions": ["+builtin:permission-gate"] }
-```
-
-Or for one run: `vela -e builtin:permission-gate`. The SDK loads it explicitly: `createVela({ extensions: [permissionGate()] })`. `--no-extensions` drops it.
 
 ## mcp
 
