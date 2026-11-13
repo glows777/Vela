@@ -40,7 +40,13 @@ In interactive mode:
 
 In the SDK, `vela.session(id)` opens a session with an empty history; call `await session.resume()` to continue a saved one. Prompting a session whose id already has saved history without resuming it fails (`Session <id> already has saved history: call resume() to continue it, or use another session id`) rather than mixing two conversations in one file; messages added with `session.append()` to such a session are not written either (`session_save_failed`).
 
-The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed.
+The picker lists sessions newest first by name (or first message), id, message count and time. Sessions with no messages are not listed. Archived sessions are left out (see below).
+
+## Archive and search saved sessions
+
+`vela.setSessionArchived(id, true)` takes a saved session out of `vela.listSessions()` and the interactive picker; `false` brings it back. The flag is an appended `session_archived` entry in the session file (see [Session format](session-format.md#entries)), so it survives a restart and no message is deleted. The session keeps its id and can still be opened and resumed by id; a fork or clone of it starts active. Archiving does not need the session to be opened.
+
+`vela.searchSessions(text)` scans the user and assistant message text of saved sessions and returns `{ id, match }[]`, newest first: one hit per session, with a short excerpt around the first match. Tool output, `!` commands, summaries and extension messages are not searched. There is no index: every saved session is read once per search. Pass `{ includeArchived: true }` to search archived sessions too.
 
 ## Session tree
 

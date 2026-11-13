@@ -143,6 +143,8 @@ export {
   type NestedToolCallRecord,
   type NestedToolCalls,
   SESSION_FORMAT_VERSION,
+  type SessionArchivedEntry,
+  type SessionChannelEntry,
   type SessionEntry,
   type SessionEntryBase,
   type SessionFileEntry,
@@ -161,6 +163,7 @@ export type {
   QueueMode,
 } from './session/options.ts'
 export type { SessionScope } from './session/scope.ts'
+export type { SessionSearchHit } from './session/search.ts'
 export {
   fileSessionStorage,
   memorySessionStorage,
@@ -189,7 +192,12 @@ export type {
   TokenStatus,
   UsageTotals,
 } from './usage/tracker.ts'
-export { createVela, type Vela, type VelaOptions } from './vela.ts'
+export {
+  createVela,
+  type SavedSessionOptions,
+  type Vela,
+  type VelaOptions,
+} from './vela.ts'
 export type { SessionUsage } from './vela-session.ts'
 export {
   type ForkResult,

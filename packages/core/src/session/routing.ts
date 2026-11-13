@@ -4,6 +4,7 @@ interface RoutableSession {
   readonly id: string
   channel?: string
   readonly registry: { setChannel(channel: string): void }
+  readonly store: { setChannel(channel: string): void }
 }
 
 interface Routing {
@@ -45,5 +46,6 @@ export function applySessionRouting(
   if (next.channel !== undefined) {
     session.channel = next.channel
     session.registry.setChannel(next.channel)
+    session.store.setChannel(next.channel)
   }
 }
