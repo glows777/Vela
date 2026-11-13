@@ -57,6 +57,8 @@ export class SessionStore {
   private transientDir?: string
   private readonly storage: SessionStorage
   private header?: SessionHeader
+  /** Channel whose host opened the session; written into the header when it is created */
+  private channel?: string
   private readonly entries: SessionEntry[] = []
   private readonly entryIds = new Set<string>()
   private readonly byId = new Map<string, SessionEntry>()
@@ -113,6 +115,24 @@ export class SessionStore {
   /** A copy of the session's entries in append order (header excluded). */
   getEntries(): SessionEntry[] {
     return structuredClone(this.entries)
+  }
+
+  /** The channel this session belongs to; recorded in the header of a new session (see `applySessionRouting`). */
+  setChannel(name: string): void {
+    this.channel = name
+  }
+
+  /**
+   * Archives or unarchives the session (`Vela.setSessionArchived()`). Appends a `session_archived` entry and saves
+   * now; a session whose history was never loaded is updated in storage instead.
+   */
+  async setArchived(archived: boolean): Promise<void> {
+    if (!this.started)
+      return setSavedSessionArchived(this.storage, this.sessionId, archived)
+    const last = this.entries.at(-1)
+    if (last?.type === 'session_archived' && last.archived === archived) return
+    this.append({ type: 'session_archived', archived })
+    await this.flush()
   }
 
   /** The current leaf (like pi's getLeafId); null when the session has no entries or the leaf was reset. */
@@ -260,6 +280,7 @@ export class SessionStore {
       id: this.sessionId,
       timestamp: new Date().toISOString(),
       ...(this.cwd ? { cwd: this.cwd } : {}),
+      ...(this.channel ? { channel: this.channel } : {}),
       toolHistoryId: this.results.historyId,
       parentSession: parent.id,
     }
@@ -315,6 +336,7 @@ export class SessionStore {
         id: this.sessionId,
         timestamp: new Date().toISOString(),
         ...(this.cwd ? { cwd: this.cwd } : {}),
+        ...(this.channel ? { channel: this.channel } : {}),
         toolHistoryId: this.results.historyId,
       }
       this.pending.push(this.header, ...this.entries)
@@ -621,4 +643,30 @@ function startsConversation(entry: SessionEntry): boolean {
     (entry.type === 'message' &&
       (entry.message.role === 'user' || entry.message.role === 'assistant'))
   )
+}
+
+/**
+ * Appends an archive marker to a saved session that no `SessionStore` has loaded. Opens nothing, so an SDK
+ * host can archive a session it does not want to resume; the entry joins the file's current branch.
+ */
+export async function setSavedSessionArchived(
+  storage: SessionStorage,
+  id: string,
+  archived: boolean,
+): Promise<void> {
+  const entries = await storage.load(id)
+  const last = entries?.at(-1)
+  if (!entries || !last || last.type === 'session')
+    throw new Error(`Session ${id} has nothing saved to archive`)
+  if (last.type === 'session_archived' && last.archived === archived) return
+  const ids = new Set(entries.slice(1).map((entry) => entry.id))
+  await storage.append(id, [
+    {
+      type: 'session_archived',
+      archived,
+      id: createEntryId(ids),
+      parentId: last.id,
+      timestamp: new Date().toISOString(),
+    },
+  ])
 }

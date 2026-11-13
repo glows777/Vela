@@ -18,6 +18,8 @@ export interface SessionHeader {
   timestamp: string
   /** Working directory the session started in */
   cwd?: string
+  /** Channel the session answers on (e.g. `lark`), when a host opened it for one */
+  channel?: string
   /** @internal Tool call history the session's tool results belong to */
   toolHistoryId?: string
   /** Id of the session this one was forked or cloned from (pi stores the parent's file path) */
@@ -115,6 +117,15 @@ export interface SessionInfoEntry extends SessionEntryBase {
 }
 
 /**
+ * The session was archived or unarchived (`vela.setSessionArchived()`); the last one in the file wins.
+ * Archived sessions are hidden from `listSessions()` by default. Not part of the model context.
+ */
+export interface SessionArchivedEntry extends SessionEntryBase {
+  type: 'session_archived'
+  archived: boolean
+}
+
+/**
  * Earlier history was summarized (like pi). The model context becomes the summary followed by the
  * entries from `firstKeptEntryId` on; the summarized entries stay in the file.
  */
@@ -182,6 +193,7 @@ export type SessionEntry =
   | ModelChangeEntry
   | ThinkingLevelChangeEntry
   | SessionInfoEntry
+  | SessionArchivedEntry
   | CompactionEntry
   | ContextEditEntry
   | BranchSummaryEntry
@@ -474,6 +486,8 @@ export function copyBranch(path: SessionEntry[]): SessionEntry[] {
       pendingLabels.push(entry.id)
       continue
     }
+    // The archive flag belongs to the saved session; a fork or clone starts active
+    if (entry.type === 'session_archived') continue
     for (const id of pendingLabels) replacement.set(id, entry.id)
     pendingLabels.length = 0
     copied.push(
@@ -518,6 +532,12 @@ export interface SessionSummary {
   messageCount: number
   /** Start of the first user message (empty string if none) */
   firstMessage: string
+  /** Working directory the session started in (from its header) */
+  cwd?: string
+  /** Channel the session answers on (from its header) */
+  channel?: string
+  /** Archived with `vela.setSessionArchived()`; `listSessions()` leaves these out unless asked */
+  archived?: boolean
 }
 
 /** Builds a list entry from a session's entries (for custom storages implementing `list`). */
@@ -529,9 +549,17 @@ export function summarizeSession(
   let updatedAt = ''
   let messageCount = 0
   let firstMessage = ''
+  let cwd: string | undefined
+  let channel: string | undefined
+  let archived = false
   for (const entry of entries) {
     if (entry.timestamp > updatedAt) updatedAt = entry.timestamp
+    if (entry.type === 'session') {
+      cwd = entry.cwd
+      channel = entry.channel
+    }
     if (entry.type === 'session_info') name = entry.name?.trim() || undefined
+    if (entry.type === 'session_archived') archived = entry.archived
     // A `!` command counts like a message: a session with only commands can be resumed
     if (entry.type === 'bash_execution') {
       messageCount++
@@ -557,6 +585,9 @@ export function summarizeSession(
     updatedAt,
     messageCount,
     firstMessage,
+    ...(cwd ? { cwd } : {}),
+    ...(channel ? { channel } : {}),
+    ...(archived ? { archived: true } : {}),
   }
 }
 
