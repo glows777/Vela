@@ -129,7 +129,13 @@ test('passive inputs queued during a run join one evaluation in arrival order', 
     )
   release.resolve()
   await until(() => run.t.model.calls.length === 2)
-  await idle(run)
+  await until(() => run.fake.sent.length === 2)
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'm3' && item.emoji === 'DONE',
+    ),
+  )
+  await run.t.internals.gateway.stopAll()
   expect(run.t.model.calls).toHaveLength(2)
   expect(run.t.model.calls[1]!.lastUserText).toBe(
     [
