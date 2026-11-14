@@ -8,11 +8,36 @@ import { errorMessage } from './log.ts'
 import { channelSessionId } from './session-id.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
+/** Passive inputs waiting behind a run share one queue slot so their evaluation happens once. */
+interface PassiveBatch {
+  /** Directory admission is part of the queue's ordering and completes before evaluation. */
+  readonly members: { message: IncomingMessage; admitted: Promise<boolean> }[]
+  started: boolean
+  next: Promise<void>
+}
+
+/** Admission runs inside the queue; a stored but unadmitted message waits for recovery. */
+function member(
+  message: IncomingMessage,
+  admitted: Promise<boolean>,
+  report: (error: unknown) => Promise<void>,
+): PassiveBatch['members'][number] {
+  return {
+    message,
+    admitted: admitted.catch(async (error) => {
+      await report(error)
+      return false
+    }),
+  }
+}
+
 /** Serialized durable admission and per-logical-session input queues. */
 export class GatewayInput {
   readonly admitting = new Map<string, Promise<void>>()
   /** The next message in a chat waits for the previous reply. */
   readonly queues = new Map<string, Promise<void>>()
+  /** Group discussion queues into this run's slot instead of one slot per message. */
+  private readonly batches = new Map<string, PassiveBatch>()
 
   constructor(
     private directory: ChannelDirectory,
@@ -24,7 +49,7 @@ export class GatewayInput {
     private process: (
       id: string,
       name: string,
-      msg: IncomingMessage,
+      msgs: IncomingMessage[],
     ) => Promise<void>,
     private changed: (id: string) => void,
     private stopped: () => boolean,
@@ -53,40 +78,78 @@ export class GatewayInput {
       return { admitted: incoming.admitted, completed: incoming.command }
     }
     const available = incoming.available
-    // Keep live controls immediate. Steer waits for its admitted ID before submitting input.
-    const ready = available.then(() => {})
-    void ready.catch(() => {})
-    const receive =
+    // Only discussion queued behind a working run is merged; a barrier or an
+    // explicit message keeps its own slot, and idle input starts its own evaluation.
+    const merge =
+      msg.passive &&
+      !msg.topic &&
       !incoming.blocked &&
-      (!msg.requireExistingSession ||
-        this.directory.get(id) ||
-        this.feedback.runs.has(id))
-        ? this.feedback.receive(id, channelName, msg, ready)
-        : undefined
-    const consumed = available
-      .then((accepted) =>
-        accepted
-          ? (receive ?? this.feedback.receive(id, channelName, msg))
-          : () => Promise.resolve(true),
-      )
-      .catch(async (error) => {
-        await this.feedback.feedbackError(channelName, msg, error)
-        return () => Promise.resolve(true)
-      })
+      this.commands.controllable(id) !== undefined
+    const report = (error: unknown) =>
+      this.feedback.feedbackError(channelName, msg, error)
+    const batch = merge ? this.batches.get(id) : undefined
+    if (batch && !batch.started && this.queues.get(id) === batch.next) {
+      batch.members.push(member(msg, incoming.admitted, report))
+      return { admitted: incoming.admitted, completed: batch.next }
+    }
+    const created: PassiveBatch | undefined = merge
+      ? {
+          members: [member(msg, incoming.admitted, report)],
+          started: false,
+          next: Promise.resolve(),
+        }
+      : undefined
+    // A batch has no steer or card: each member's own admission decides whether it runs.
+    let consumed: Promise<() => Promise<boolean>> | undefined
+    if (!created) {
+      // Keep live controls immediate. Steer waits for its admitted ID before submitting input.
+      const ready = available.then(() => {})
+      void ready.catch(() => {})
+      const receive =
+        !incoming.blocked &&
+        (!msg.requireExistingSession ||
+          this.directory.get(id) ||
+          this.feedback.runs.has(id))
+          ? this.feedback.receive(id, channelName, msg, ready)
+          : undefined
+      consumed = available
+        .then((accepted) =>
+          accepted
+            ? (receive ?? this.feedback.receive(id, channelName, msg))
+            : () => Promise.resolve(true),
+        )
+        .catch(async (error) => {
+          await this.feedback.feedbackError(channelName, msg, error)
+          return () => Promise.resolve(true)
+        })
+    }
     const next = previous
       .then(async () => {
         this.logger.debug(
           `[${channelName}] input ${msg.replyToId ?? '-'} dequeued at=${new Date().toISOString()}`,
         )
-        if (!(await (await consumed)()))
-          await this.process(id, channelName, msg)
+        if (created) {
+          created.started = true
+          if (this.batches.get(id) === created) this.batches.delete(id)
+          const admitted = await Promise.all(
+            created.members.map((item) => item.admitted),
+          )
+          // Each member's own admission decides whether it is evaluated.
+          const inputs = created.members.flatMap((item, index) =>
+            admitted[index] ? [item.message] : [],
+          )
+          if (inputs.length) await this.process(id, channelName, inputs)
+        } else if (!(await (await consumed!)()))
+          await this.process(id, channelName, [msg])
       })
       .catch((error) =>
         this.logger.error(
           `[${channelName}] Failed to handle message: ${errorMessage(error)}`,
         ),
       )
+    if (created) created.next = next
     this.queues.set(id, next)
+    if (created) this.batches.set(id, created)
     this.release(id, next)
     return { admitted: incoming.admitted, completed: next }
   }

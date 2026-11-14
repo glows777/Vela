@@ -1,10 +1,16 @@
 import type { ScenarioId } from './graders.ts'
 
 export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
+// G9 isolates #336 part 2, so its old arm is the commit before the change (part 1 merged).
+const BATCH_BASELINE_COMMIT = 'c1612d3f28f22e02e2dd2b2bd8f372879c1e3e03'
 // Peeled v0.4.0 tag (the tag object itself is not the runtime commit).
 const EXIT_BASELINE_COMMIT = '5b976e26706686a2213f514895d05110f50af2a5'
 export const baselineCommit = (id: ScenarioId) =>
-  id === 'G6' || id === 'G7' || id === 'G8' ? EXIT_BASELINE_COMMIT : OLD_COMMIT
+  id === 'G9'
+    ? BATCH_BASELINE_COMMIT
+    : id === 'G6' || id === 'G7' || id === 'G8'
+      ? EXIT_BASELINE_COMMIT
+      : OLD_COMMIT
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
   version: 'user-ballast-v3',
@@ -89,10 +95,31 @@ export function prompts(id: ScenarioId, url = ''): string[] {
         "Draft a two-line note for the on-call channel saying tonight's deploy is delayed to 22:00. FYI the staging server got renamed to kestrel last week, so use that name in the note.",
         "What's our staging server called these days?",
       ]
+    case 'G9':
+      return ['Read task/release.txt and reply with its version line only.']
   }
 }
 
+/** G9: untagged group discussion delivered while the trigger run is working, oldest first. */
+export const burstDiscussion = [
+  { sender: 'ou_bob', text: 'The 0.7.0 build is green.' },
+  { sender: 'ou_alice', text: 'The docs page is updated.' },
+  { sender: 'ou_bob', text: 'The changelog entry is under Unreleased.' },
+  { sender: 'ou_alice', text: 'Two reviewers signed off.' },
+  { sender: 'ou_bob', text: 'The migration guide is checked.' },
+  { sender: 'ou_alice', text: 'Staging smoke test passed.' },
+  { sender: 'ou_bob', text: 'The release notes are ready.' },
+  { sender: 'ou_alice', text: 'There are no open blockers.' },
+  { sender: 'ou_bob', text: 'Only the tag is missing.' },
+  {
+    sender: 'ou_alice',
+    text: 'Can you confirm in one sentence what is still left before we tag 0.7.0?',
+  },
+] as const
+
 export function fixtures(id: ScenarioId): Record<string, string> {
+  if (id === 'G9')
+    return { 'task/release.txt': 'Release 0.7.0 is awaiting its tag.\n' }
   if (id === 'G6')
     return {
       'task/handoff.txt': 'The release verification code is ORBIT-73.\n',
