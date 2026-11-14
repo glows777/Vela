@@ -64,6 +64,8 @@ export interface ChannelRoutine {
   schedule: RoutineSchedule
   createdAt: string
   lastFiredAt: string | null
+  /** Set when the schedule last changed; occurrences at or before it belong to the previous schedule. */
+  scheduleUpdatedAt?: string
 }
 
 /** A persisted routine with deployment-local display metadata. */
@@ -170,6 +172,12 @@ export interface ChannelRuntime {
       timezone: string
       routines: ChannelRoutineInfo[]
     }
+    /** Rewrite a routine in place; the id and attribution stay. Undefined when the id is not in this chat. */
+    edit(
+      sessionId: string,
+      id: string,
+      input: { message?: string; schedule?: RoutineSchedule },
+    ): Promise<ChannelRoutineInfo | undefined>
     cancel(sessionId: string, id: string): Promise<boolean>
   }
   context(sessionId: string): IncomingMessage | undefined
@@ -210,10 +218,16 @@ export interface ChannelHost
         creator: ChannelRoutine['creator']
       },
     ): Promise<ChannelRoutineInfo>
-    /** List/cancel stay chat-scoped, including routines on its topics. */
+    /** List/edit/cancel stay chat-scoped, including routines on its topics. */
     list(
       target: Pick<ChannelTarget, 'chatId'>,
     ): ReturnType<ChannelRuntime['routines']['list']>
+    /** Undefined when the id is not in that chat; the creator and creation time stay. */
+    edit(
+      target: Pick<ChannelTarget, 'chatId'>,
+      id: string,
+      input: { message?: string; schedule?: RoutineSchedule },
+    ): Promise<ChannelRoutineInfo | undefined>
     cancel(target: Pick<ChannelTarget, 'chatId'>, id: string): Promise<boolean>
   }
   connection(): ChannelConnection

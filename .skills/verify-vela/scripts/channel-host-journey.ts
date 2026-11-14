@@ -142,9 +142,27 @@ try {
     host.routines.list({ chatId: target.chatId }).routines[0]!.id,
     reminder.id,
   )
+  const edited = await host.routines.edit(
+    { chatId: target.chatId },
+    reminder.id,
+    { message: 'Review the updated report', schedule: { time: '10:00' } },
+  )
+  assert.equal(edited?.id, reminder.id)
+  assert.equal(edited?.message, 'Review the updated report')
+  assert.deepEqual(edited?.schedule, { time: '10:00' })
+  assert.equal(
+    host.routines.list({ chatId: target.chatId }).routines[0]!.message,
+    'Review the updated report',
+  )
+  assert.equal(
+    await host.routines.edit({ chatId: target.chatId }, 'missing', {
+      message: 'x',
+    }),
+    undefined,
+  )
   assert(await host.routines.cancel({ chatId: target.chatId }, reminder.id))
   console.log(
-    'Idle host routine created, listed and cancelled using the shared scheduler',
+    'Idle host routine created, edited, listed and cancelled using the shared scheduler',
   )
   const groupInput = {
     channelId: 'oc_group',

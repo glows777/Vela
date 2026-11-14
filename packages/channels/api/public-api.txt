@@ -55,7 +55,7 @@
     onConnection: (listener: (connection: ChannelConnection) => void) => () => void
     onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
-    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
     sessions: (chatId?: string) => ChannelSessionSnapshot[]
     stop: (target: ChannelTarget, runId: string) => Promise<boolean>
     submit: (message: IncomingMessage) => Promise<{ sessionId: string; }>
@@ -69,6 +69,7 @@
     lastFiredAt: string | null
     message: string
     schedule: RoutineSchedule
+    scheduleUpdatedAt?: string | undefined
     targetKey: string
   interface ChannelRoutineInfo
     channel: string
@@ -81,6 +82,7 @@
     nextRun: string | null
     schedule: RoutineSchedule
     scheduleText: string
+    scheduleUpdatedAt?: string | undefined
     target: string
     targetKey: string
     timezone: string
@@ -92,7 +94,7 @@
     dispatch: (sourceSessionId: string, message: IncomingMessage, label?: string) => void
     onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
-    routines: { create(sessionId: string, message: string, schedule: RoutineSchedule): Promise<ChannelRoutineInfo>; list(sessionId: string): { timezone: string; routines: ChannelRoutineInfo[]; }; cancel(sessionId: string, id: string): Promise<boolean>; }
+    routines: { create(sessionId: string, message: string, schedule: RoutineSchedule): Promise<ChannelRoutineInfo>; list(sessionId: string): { timezone: string; routines: ChannelRoutineInfo[]; }; edit(sessionId: string, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(sessionId: string, id: string): Promise<boolean>; }
     scope: (sessionId: string) => ChannelScope | undefined
     session: (id: string) => VelaSession | undefined
     sessions: (chatId: string) => ChannelSessionSnapshot[]
@@ -260,7 +262,7 @@
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
     openProject: (input: { cwd: string; name?: string; }) => Promise<LocalProject>
     projects: () => LocalProject[]
-    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
     sessions: (projectId?: string) => LocalSession[]
     stop: (target: ChannelTarget, runId: string) => Promise<boolean>
     submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: { projectId: string; sessionId: string; text: string; clientMessageId?: string; }): Promise<{ sessionId: string; messageId: string; }>; }
@@ -310,7 +312,7 @@
       time: string
       days?: ('mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun')[]
       }
-  const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ list: "list"; create: "create"; cancel: "cancel"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>], "action">>
+  const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ list: "list"; create: "create"; cancel: "cancel"; edit: "edit"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"edit">; id: z.ZodString; message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; }, z.core.$strict>], "action">>
   function topicSessionOptions: (msg: IncomingMessage) => { tools: string[]; }
   const topicToolNames: string[]
 

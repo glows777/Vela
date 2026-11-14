@@ -22,6 +22,7 @@ import type {
   ChannelRuntime,
   ChannelTarget,
   IncomingMessage,
+  RoutineSchedule,
 } from './types.ts'
 
 const instant = z.iso
@@ -41,18 +42,34 @@ const scheduleSchema = z.union([
   recurringSchema,
 ])
 
+const toolScheduleSchema = z.union([
+  z.object({ at: z.string() }).strict(),
+  recurringSchema,
+])
 const createRoutineSchema = z
   .object({
     action: z.literal('create'),
     message: z.string().trim().min(1),
-    schedule: z.union([z.object({ at: z.string() }).strict(), recurringSchema]),
+    schedule: toolScheduleSchema,
   })
   .strict()
+const editRoutineSchema = z
+  .object({
+    action: z.literal('edit'),
+    id: z.string().min(1),
+    message: z.string().trim().min(1).optional(),
+    schedule: toolScheduleSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => value.message !== undefined || value.schedule !== undefined,
+    { message: 'Provide a new message, a new schedule, or both' },
+  )
 
 /** Provider input must have an object root; the pipe retains strict operation validation. */
 export const routineToolSchema = createRoutineSchema
   .extend({
-    action: z.enum(['create', 'list', 'cancel']),
+    action: z.enum(['create', 'list', 'cancel', 'edit']),
     id: z.string().min(1).optional(),
   })
   .partial({ message: true, schedule: true })
@@ -61,6 +78,7 @@ export const routineToolSchema = createRoutineSchema
       createRoutineSchema,
       z.object({ action: z.literal('list') }).strict(),
       z.object({ action: z.literal('cancel'), id: z.string().min(1) }).strict(),
+      editRoutineSchema,
     ]),
   )
 const routineSchema = z
@@ -74,11 +92,29 @@ const routineSchema = z
     schedule: scheduleSchema,
     createdAt: instant,
     lastFiredAt: instant.nullable(),
+    scheduleUpdatedAt: instant.optional(),
   })
   .strict()
 const channelRoutinesSchema = z
   .object({ version: z.literal(1), routines: z.array(routineSchema) })
   .strict()
+
+function sameSchedule(a: RoutineSchedule, b: RoutineSchedule): boolean {
+  if ('at' in a || 'at' in b)
+    return 'at' in a && 'at' in b && Date.parse(a.at) === Date.parse(b.at)
+  return (
+    a.time === b.time &&
+    [...(a.days ?? [])].sort().join() === [...(b.days ?? [])].sort().join()
+  )
+}
+
+/** Occurrences at or before the schedule edit belong to the previous schedule. */
+function scheduleFloor(record: ChannelRoutine): number {
+  return Math.max(
+    Date.parse(record.lastFiredAt ?? record.createdAt),
+    Date.parse(record.scheduleUpdatedAt ?? record.createdAt),
+  )
+}
 
 export interface RoutineClock {
   now(): number
@@ -230,6 +266,51 @@ export class ChannelRoutines {
     return cancelled
   }
 
+  async edit(
+    channel: string,
+    chatId: string,
+    id: string,
+    input: { message?: string; schedule?: RoutineSchedule },
+  ): Promise<ChannelRoutineInfo | undefined> {
+    const current = this.records.find(
+      (r) => r.id === id && r.channel === channel && r.chatId === chatId,
+    )
+    if (!current) return undefined
+    if (input.message === undefined && input.schedule === undefined)
+      throw new Error('Provide a new message, a new schedule, or both')
+    const schedule =
+      input.schedule === undefined
+        ? current.schedule
+        : scheduleSchema.parse(input.schedule)
+    const changed =
+      input.schedule !== undefined && !sameSchedule(current.schedule, schedule)
+    const next = routineSchema.parse({
+      ...current,
+      message: input.message ?? current.message,
+      schedule,
+      ...(changed
+        ? { scheduleUpdatedAt: new Date(this.clock.now()).toISOString() }
+        : {}),
+    })
+    if (
+      input.schedule !== undefined &&
+      !nextOccurrence(next.schedule, this.clock.now(), this.zones.get(channel)!)
+    )
+      throw new Error('A one-off routine must be in the future')
+    let edited = false
+    await this.change((records) =>
+      records.map((r) => {
+        if (r.id !== id || r.channel !== channel || r.chatId !== chatId)
+          return r
+        edited = true
+        return next
+      }),
+    )
+    if (!edited) return undefined
+    this.arm()
+    return this.describe(next)
+  }
+
   private describe(record: ChannelRoutine): ChannelRoutineInfo {
     const timezone = this.zones.get(record.channel)!
     const target = this.directory.get(record.targetKey)
@@ -298,6 +379,13 @@ export class ChannelRoutines {
       list: (id) => this.describeChat(name, source(id).msg.channelId),
       cancel: (id, routineId) =>
         this.cancel(name, source(id).msg.channelId, routineId),
+      edit: async (id, routineId, input) =>
+        this.edit(name, source(id).msg.channelId, routineId, {
+          ...input,
+          ...(input.schedule === undefined
+            ? {}
+            : { schedule: this.schedule(name, input.schedule) }),
+        }),
     }
   }
 
@@ -345,6 +433,13 @@ export class ChannelRoutines {
       list: (target) => this.describeChat(name, source(target, true).chatId),
       cancel: async (target, id) =>
         this.cancel(name, source(target, true).chatId, id),
+      edit: async (target, id, input) =>
+        this.edit(name, source(target, true).chatId, id, {
+          ...input,
+          ...(input.schedule === undefined
+            ? {}
+            : { schedule: this.schedule(name, input.schedule) }),
+        }),
     }
   }
 
@@ -358,7 +453,10 @@ export class ChannelRoutines {
           r.channel !== this.directory.get(r.targetKey)?.channel ||
           r.chatId !== msg.channelId ||
           (r.lastFiredAt &&
-            Date.parse(r.lastFiredAt) >= Date.parse(scheduledAt))
+            Date.parse(r.lastFiredAt) >= Date.parse(scheduledAt)) ||
+          // A queued occurrence from before a schedule edit must not confirm the new schedule.
+          (r.scheduleUpdatedAt &&
+            Date.parse(scheduledAt) <= Date.parse(r.scheduleUpdatedAt))
         )
           return [r]
         return 'at' in r.schedule ? [] : [{ ...r, lastFiredAt: scheduledAt }]
@@ -402,7 +500,7 @@ export class ChannelRoutines {
         continue
       const at = latestOccurrence(
         record.schedule,
-        Date.parse(record.lastFiredAt ?? record.createdAt),
+        scheduleFloor(record),
         now,
         this.zones.get(record.channel)!,
       )
