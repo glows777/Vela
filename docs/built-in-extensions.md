@@ -142,15 +142,24 @@ Set `extensionConfig.memory.dream` to `false` to disable automatic runs; manual
 `/dream` remains available. The default is enabled, including groups. Both automatic
 and manual dream require the `memory` tool to be available.
 
-Dream makes one isolated model call with no tools. It compares recent conversation
+Dream makes one isolated model call with no tools, plus at most one correction
+call. It compares recent conversation
 records with notes and deterministic lint findings, corrects contradicted notes,
 saves missing durable facts, merges duplicates and condenses the index. Large
 stores provide the index plus notes matched to the inbox within a content budget.
+Each operation names its filename, source session and an optional `reason`; a note's
+`description` is optional and falls back to its name. The reason never reaches the
+stored note; it only appears in the report as `no reason given` when omitted.
 Conversation text is evidence, not instructions. The reply may be one JSON object,
 one surrounding JSON code fence, or the object followed only by a stray closing
 fence or prose without braces, brackets or another fence; that object still passes the same
 strict JSON and operation validation. Text before the object, a second object, an
-array or a second fence block fails the run and retains the inbox. Validated operations go through
+array or a second fence block fails the run and retains the inbox. A reply that
+cannot be parsed or applied — including an operation naming a file the model was
+not shown — is answered once with the same input, that reply and a one-line error,
+so the model can fix it instead of repeating the same omission on the next retry.
+A second unusable reply fails the run, retains the inbox and waits for the usual
+retry gate; conflicts below are never retried. Validated operations go through
 the memory store. Before applying any operation, dream checks every full note
 supplied to the model for changes since the snapshot, plus create-target collisions. A live edit or a newly occupied create target skips
 the entire batch and retains the inbox for retry. This keeps a merge source from
