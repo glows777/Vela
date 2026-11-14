@@ -30,7 +30,13 @@ export interface Call {
 export interface Evidence {
   answers: string[]
   calls: Call[]
-  deliveries: { scope: 'group' | 'topic'; text: string; topicRootId?: string }[]
+  deliveries: {
+    scope: 'group' | 'topic'
+    text: string
+    topicRootId?: string
+    /** Service message this reply answers; the trigger or one burst message. */
+    messageId?: string
+  }[]
   inputs?: { topicRootId: string; text: string }[]
   /** Actual entries snapshotted after topic 1, before topic 2 can write. */
   memoryEntries?: { name: string; content: string }[]
@@ -538,10 +544,16 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
       break
     }
     case 'G9': {
-      const replies = e.deliveries.filter((item) => item.scope === 'group')
-      const last = replies.at(-1)?.text ?? ''
-      // The newest burst message asks what is left before tagging 0.7.0.
-      check('burst answered', /\btag\b/i.test(last) && chars(last) > 0)
+      // Only a reply anchored to a burst message answers the discussion; the trigger has its own reply.
+      const burst = e.deliveries.filter(
+        (item) =>
+          item.scope === 'group' && item.messageId?.startsWith('burst_'),
+      )
+      const answering = burst.filter((item) => chars(item.text) > 0)
+      check(
+        'burst answered',
+        answering.length === 1 && /\btag\b/i.test(answering[0]!.text),
+      )
       // One trigger run plus one merged evaluation; tool calls or a provider retry may add a request.
       check(
         'one merged evaluation',

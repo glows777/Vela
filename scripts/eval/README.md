@@ -133,10 +133,12 @@ G9 measures the #336 part 2 batching change. The trigger run (an explicit @ that
 reads `task/release.txt`) starts, then ten untagged messages from two people are
 delivered from inside that run's `agent_start`, so they provably queue behind it.
 Both arms run this worker; the old arm is `c1612d3`, where each queued
-message is a separate evaluation. Checks: `burst answered` requires the last
-group reply to answer the newest message (what is left before tagging 0.7.0), and
-`one merged evaluation` requires at most four provider requests, which allows the
-trigger run, the merged evaluation and a tool call or retry. The per-attempt
+message is a separate evaluation. Checks: `burst answered` requires exactly one
+reply anchored to a burst message (not the trigger's own reply) that answers what
+is left before tagging 0.7.0, and `one merged evaluation` requires at most four
+provider requests, which allows the trigger run, the merged evaluation and a tool
+call or retry. A skipped merged burst therefore fails both the anchor and the text
+check. The per-attempt
 `usage.requests` in `results.json` is the headline comparison (about eleven on the
 old arm versus two on the new one), together with estimated cost.
 

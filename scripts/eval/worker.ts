@@ -617,6 +617,7 @@ export async function runAttempt(
               !['G4', 'G5'].includes(config.scenario))
               ? 'group'
               : 'topic',
+          ...(item.messageId ? { messageId: item.messageId } : {}),
           text: item.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
         }))
         evidence.answers = evidence.deliveries.map((item) => item.text)

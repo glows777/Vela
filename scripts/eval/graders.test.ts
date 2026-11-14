@@ -133,7 +133,12 @@ const good = {
   }),
   G9: evidence({
     deliveries: [
-      { scope: 'group', text: 'Only the 0.7.0 tag is still missing.' },
+      { scope: 'group', messageId: 'trigger', text: 'Awaiting its tag.' },
+      {
+        scope: 'group',
+        messageId: 'burst_10',
+        text: 'Only the 0.7.0 tag is still missing.',
+      },
     ],
     modelRequests: 2,
   }),
@@ -419,10 +424,17 @@ fails('G5', 'no report repetition', (e) => {
   e.deliveries[0]!.text = report.slice(0, 40)
 })
 fails('G9', 'burst answered', (e) => {
-  e.deliveries = []
+  e.deliveries = e.deliveries.filter((item) => item.messageId === 'trigger')
 })
 fails('G9', 'burst answered', (e) => {
-  e.deliveries[0]!.text = 'Looking into it.'
+  e.deliveries[1]!.text = 'Looking into it.'
+})
+fails('G9', 'burst answered', (e) => {
+  e.deliveries.push({
+    scope: 'group',
+    messageId: 'burst_9',
+    text: 'Another tag reply.',
+  })
 })
 fails('G9', 'one merged evaluation', (e) => {
   e.modelRequests = 12
@@ -990,8 +1002,36 @@ test('G9 worker answers the burst with one merged evaluation', async () => {
   )
   expect(result.evidence!.modelRequests).toBe(2)
   expect(result.evidence!.deliveries).toEqual([
-    { scope: 'group', text: 'Release 0.7.0 is awaiting its tag.' },
-    { scope: 'group', text: 'Only the 0.7.0 tag is left.' },
+    {
+      scope: 'group',
+      messageId: 'trigger',
+      text: 'Release 0.7.0 is awaiting its tag.',
+    },
+    {
+      scope: 'group',
+      messageId: 'burst_10',
+      text: 'Only the 0.7.0 tag is left.',
+    },
+  ])
+})
+
+test('G9 rejects a skipped burst that leaves only the trigger reply', async () => {
+  const { result } = await groupAttempt('G9', [
+    fauxText('Release 0.7.0 is awaiting its tag.'),
+    fauxToolCall('channel_skip_reply', {}),
+    fauxText(''),
+  ])
+  expect(result.evidence!.deliveries).toEqual([
+    {
+      scope: 'group',
+      messageId: 'trigger',
+      text: 'Release 0.7.0 is awaiting its tag.',
+    },
+  ])
+  expect(result.status).toBe('fail')
+  expect(result.checks).toEqual([
+    { name: 'burst answered', pass: false },
+    { name: 'one merged evaluation', pass: true },
   ])
 })
 
