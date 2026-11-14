@@ -23,6 +23,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **Queued passive discussion is evaluated together.** Top-level group messages that arrive while an evaluation is running no longer run one by one: every passive input already waiting when the next evaluation starts is read in that one evaluation, in arrival order with its own sender and send time, and a reply goes to the newest input. Explicit @ messages, topics and DMs still run separately, and each merged input keeps its own `channel.input` marker for restart deduplication ([#336](https://github.com/glows777/Vela/issues/336)).
+
 - **Issue feeds honor their label allowlist.** An Issue without one of the `issueLabels` sends no `opened`, `closed` or comment event, and `labeled` stays limited to the listed labels ([#341](https://github.com/glows777/Vela/issues/341)).
 
 ### Fixed

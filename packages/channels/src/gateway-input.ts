@@ -8,11 +8,21 @@ import { errorMessage } from './log.ts'
 import { channelSessionId } from './session-id.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
+/** Passive inputs waiting behind a run share one queue slot so their evaluation happens once. */
+interface PassiveBatch {
+  /** Directory admission is part of the queue's ordering and completes before evaluation. */
+  readonly messages: { message: IncomingMessage; ready: Promise<boolean> }[]
+  started: boolean
+  next: Promise<void>
+}
+
 /** Serialized durable admission and per-logical-session input queues. */
 export class GatewayInput {
   readonly admitting = new Map<string, Promise<void>>()
   /** The next message in a chat waits for the previous reply. */
   readonly queues = new Map<string, Promise<void>>()
+  /** Group discussion queues into this run's slot instead of one slot per message. */
+  private readonly batches = new Map<string, PassiveBatch>()
 
   constructor(
     private directory: ChannelDirectory,
@@ -24,7 +34,7 @@ export class GatewayInput {
     private process: (
       id: string,
       name: string,
-      msg: IncomingMessage,
+      msgs: IncomingMessage[],
     ) => Promise<void>,
     private changed: (id: string) => void,
     private stopped: () => boolean,
@@ -53,6 +63,33 @@ export class GatewayInput {
       return { admitted: incoming.admitted, completed: incoming.command }
     }
     const available = incoming.available
+    // Only discussion queued behind a working run is merged; a barrier or an
+    // explicit message keeps its own slot, and idle input starts its own evaluation.
+    const merge =
+      msg.passive &&
+      !msg.topic &&
+      !incoming.blocked &&
+      this.commands.controllable(id) !== undefined
+    const batch = merge ? this.batches.get(id) : undefined
+    if (batch && !batch.started && this.queues.get(id) === batch.next) {
+      batch.messages.push({
+        message: msg,
+        ready: incoming.admitted.catch(async (error) => {
+          await this.feedback.feedbackError(channelName, msg, error)
+          return false
+        }),
+      })
+      return { admitted: incoming.admitted, completed: batch.next }
+    }
+    const created: PassiveBatch | undefined = merge
+      ? {
+          messages: [
+            { message: msg, ready: incoming.admitted.catch(() => false) },
+          ],
+          started: false,
+          next: Promise.resolve(),
+        }
+      : undefined
     // Keep live controls immediate. Steer waits for its admitted ID before submitting input.
     const ready = available.then(() => {})
     void ready.catch(() => {})
@@ -78,15 +115,28 @@ export class GatewayInput {
         this.logger.debug(
           `[${channelName}] input ${msg.replyToId ?? '-'} dequeued at=${new Date().toISOString()}`,
         )
-        if (!(await (await consumed)()))
-          await this.process(id, channelName, msg)
+        if (created) {
+          created.started = true
+          if (this.batches.get(id) === created) this.batches.delete(id)
+        }
+        const inputs = created
+          ? (
+              await Promise.all(created.messages.map((item) => item.ready))
+            ).flatMap((accepted, index) =>
+              accepted ? [created.messages[index]!.message] : [],
+            )
+          : [msg]
+        if (inputs.length && !(await (await consumed)()))
+          await this.process(id, channelName, inputs)
       })
       .catch((error) =>
         this.logger.error(
           `[${channelName}] Failed to handle message: ${errorMessage(error)}`,
         ),
       )
+    if (created) created.next = next
     this.queues.set(id, next)
+    if (created) this.batches.set(id, created)
     this.release(id, next)
     return { admitted: incoming.admitted, completed: next }
   }
