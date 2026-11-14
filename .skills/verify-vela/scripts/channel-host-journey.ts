@@ -155,11 +155,9 @@ try {
     'Review the updated report',
   )
   assert.equal(
-    await host.routines.edit(
-      { chatId: target.chatId },
-      'missing',
-      { message: 'x' },
-    ),
+    await host.routines.edit({ chatId: target.chatId }, 'missing', {
+      message: 'x',
+    }),
     undefined,
   )
   assert(await host.routines.cancel({ chatId: target.chatId }, reminder.id))
