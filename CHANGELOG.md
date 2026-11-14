@@ -29,6 +29,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **TUI hints name the key the platform actually has.** The queue hint, the header line and `/hotkeys` now derive their labels from the bound keys, so macOS reads `Option+Enter` and `Option+Up` (the Alt key does not exist there) while Windows and Linux keep `Alt`. The paste-image shortcut keeps its `Ctrl+V` / Windows `Alt+V` split from the same table, so the text cannot drift from the binding ([#369](https://github.com/glows777/Vela/issues/369)).
+
 - **Local startup cannot outlive disposal.** Stopping while Local storage is loading prevents the later HTTP listener and observers from being created, so `dispose()` cannot leave a hidden loopback server running ([#312](https://github.com/glows777/Vela/issues/312)).
 
 - **A saved channel stays bound after resume.** `resume()` restores the channel from the session header or the last `session_channel` entry. Binding a different channel afterwards throws `SessionRoutingConflictError`, and supplying the saved channel again does not append another entry ([#354](https://github.com/glows777/Vela/issues/354)).

@@ -89,11 +89,11 @@ A session runs one agent loop at a time. Input that arrives while it runs is que
 | Mode | When it is sent | Interactive | SDK |
 |---|---|---|---|
 | steer | After the current step's tools finish, before the next model request | Enter | `session.steer(text)` |
-| follow-up | When the model would otherwise stop (no tool calls and no steer) | Alt+Enter | `session.followUp(text)` |
+| follow-up | When the model would otherwise stop (no tool calls and no steer) | Alt+Enter (macOS: Option+Enter) | `session.followUp(text)` |
 
 By default one queued message is taken at a time (`steeringMode` and `followUpMode` can be set to `all`). Steer messages go first. If the loop ends early (an error or loop detection), the remaining messages run in a new loop. After an abort the loop stops and the queue is kept.
 
-In interactive mode the queue is shown above the editor. Alt+Up moves queued messages back into the editor; Esc aborts the run and moves them back too.
+In interactive mode the queue is shown above the editor. Alt+Up (macOS: Option+Up) moves queued messages back into the editor; Esc aborts the run and moves them back too.
 
 `prompt()` in the SDK resolves only after the queue is drained and emits `agent_settled` last.
 

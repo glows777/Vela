@@ -48,6 +48,8 @@ for (const secret of [false, true]) {
 }
 
 const pasteImageKey = process.platform === 'win32' ? '\x1bv' : '\x16'
+/** Vela shows Option instead of Alt on macOS */
+const altLabel = process.platform === 'darwin' ? 'Option' : 'Alt'
 const blueImage = () =>
   readFileSync(new URL('../fixtures/images/blue.png', import.meta.url))
 
@@ -631,7 +633,31 @@ test('slash commands: CLI command output, extension commands and /hotkeys go to 
   tui.submit('/todo buy milk')
   await tui.until('buy milk')
   tui.submit('/hotkeys')
-  await tui.until('Alt+Up move queued messages back to the editor')
+  await tui.until(`${altLabel}+Up move queued messages back to the editor`)
+})
+
+test('the queue shortcut moves queued messages back into the editor, and the hint names the platform key', async () => {
+  const t = createTestVela({ responses: [fauxHang('Working on it')] })
+  const tui = await startTui(t.vela)
+  await tui.started
+  tui.submit('take your time')
+  await tui.until('Working on it')
+
+  tui.submit('steer this')
+  tui.terminal.type('do this later')
+  tui.terminal.press(KEYS.altEnter)
+  await tui.until('Follow-up: do this later')
+  await tui.until(`${altLabel}+Up to edit queued messages`)
+
+  tui.terminal.press(KEYS.altUp)
+  await tui.until(() => t.vela.session('tui').queue.followUp.length === 0)
+  const editor = Reflect.get(tui.mode, 'editor') as { getText(): string }
+  expect(editor.getText()).toContain('steer this')
+  expect(editor.getText()).toContain('do this later')
+  expect(tui.screen()).not.toContain('Follow-up:')
+
+  tui.terminal.press(KEYS.escape)
+  await tui.until('Interrupted')
 })
 
 test('terminal control sequences in tool output are not written to the terminal', async () => {
