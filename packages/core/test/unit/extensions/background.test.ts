@@ -132,6 +132,33 @@ test('stopping a job ends its process group and returns the tail without another
   expect(reports).toEqual([])
 })
 
+test('a descendant that needs part of the grace finishes before the escalation', async () => {
+  const root = directory()
+  await Bun.write(
+    join(root, 'graceful.cjs'),
+    `process.on('SIGTERM', () => {
+  setTimeout(() => {
+    require('node:fs').writeFileSync('shutdown-complete', 'yes')
+    process.exit(0)
+  }, 100)
+})
+setInterval(() => {}, 1000)
+`,
+  )
+  const session = sessionStub(root, [])
+  bind(session, () => {})
+  const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+  // The shell waits on the child, so SIGTERM ends the shell while the child keeps cleaning up.
+  jobs.start('node graceful.cjs & wait')
+  await Bun.sleep(300)
+  const t0 = Date.now()
+  const stopped = await jobs.stop('bg-1')
+  expect(stopped.stopped).toBe(true)
+  // The child had 100 ms of the promised two seconds; the shell exiting first must not cut it off.
+  expect(await Bun.file(join(root, 'shutdown-complete')).text()).toBe('yes')
+  expect(Date.now() - t0).toBeLessThan(1000)
+})
+
 test('a descendant that ignores SIGTERM is killed after the shell exits', async () => {
   const root = directory()
   const reports: BackgroundResult[] = []

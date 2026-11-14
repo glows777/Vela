@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { constants } from 'node:os'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
 import type { VelaSession } from '../../vela-session.ts'
@@ -101,6 +102,23 @@ const commandHead = (command: string) => {
 
 const exitCodeOf = (code: number | null, signal: NodeJS.Signals | null) =>
   code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0)
+
+/** Whether the process group still has members; POSIX only, and ESRCH means it is gone. */
+function groupAlive(job: Job): boolean {
+  const pid = job.child.pid
+  if (pid === undefined) return false
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return (
+      !!error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'EPERM'
+    )
+  }
+}
 
 /** The jobs of one session; they die with it, and nothing is persisted. */
 export class BackgroundJobs {
@@ -233,16 +251,28 @@ export class BackgroundJobs {
         }
       }
     }
+    const startedAt = Date.now()
     kill('SIGTERM')
-    const timer = setTimeout(() => kill('SIGKILL'), STOP_GRACE_MS)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const grace = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, STOP_GRACE_MS)
+    })
     try {
-      await exited
+      await Promise.race([exited, grace])
     } finally {
       clearTimeout(timer)
-      // The shell can exit on SIGTERM while descendants ignore it; the process group is what was
-      // promised, so the escalation runs after the leader is gone too.
-      kill('SIGKILL')
     }
+    // The shell can exit on SIGTERM while descendants are still shutting down (or ignoring it), and
+    // its exit is neither the group finishing nor a reason to shorten the grace. Wait for the rest
+    // of the group until the deadline, then escalate.
+    while (
+      process.platform !== 'win32' &&
+      groupAlive(job) &&
+      Date.now() - startedAt < STOP_GRACE_MS
+    )
+      await delay(20)
+    if (process.platform !== 'win32' && groupAlive(job)) kill('SIGKILL')
+    await exited
   }
 
   private deliver(status: string, job: Job): void {

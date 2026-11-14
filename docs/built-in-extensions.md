@@ -176,7 +176,7 @@ Long-running commands whose result arrives on its own, for work that must not ho
 |---|---|---|
 | `background_start` | `command` | Starts `/<shell> -lc <command>` in the session's working directory, with the same environment and authority as `bash` (not a sandbox). Returns `{ id, pid }` at once; ids are `bg-1`, `bg-2`, … per session |
 | `background_output` | `id` | The command's state (`running` or `exited`) and its output tail: the last 2,000 lines or 50KB, whichever is hit first |
-| `background_stop` | `id` | SIGTERM to the process group, SIGKILL two seconds later, then the final tail |
+| `background_stop` | `id` | SIGTERM to the process group; at the two-second deadline SIGKILL reaches whatever is left, including descendants whose shell already exited. Returns the final tail |
 
 **Delivery.** When a command exits on its own, the session gets one message with the exit state, the command head and the output tail. A stop never delivers: `background_stop` returns the tail in its tool result, and Stop, session close and shutdown have no run left to answer. In the CLI and SDK it is a hidden custom message (`customType: background`) that starts a turn, or joins the current run as a follow-up, so the model never polls. In a channel topic the result enters the gateway queue like any other input: it is answered as a new reply in that topic, with the usual anchor, card, reaction and Stop. A silent topic evaluation needs no special case, and an explicit answer never merges into a passive one.
 
