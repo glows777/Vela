@@ -59,7 +59,7 @@ import {
   ToolBlock,
   UserMessage,
 } from './tui/components.ts'
-import { VelaEditor } from './tui/editor.ts'
+import { keyLabel, VelaEditor } from './tui/editor.ts'
 import { Footer } from './tui/footer.ts'
 import { inputDialog, selectDialog } from './tui/input-dialogs.ts'
 import { larkSetup } from './tui/lark-setup.ts'
@@ -408,7 +408,7 @@ export class InteractiveMode {
       `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', `session ${this.session.id}`)}`,
       theme.fg(
         'dim',
-        `Esc interrupt · Ctrl+C clear · Ctrl+D exit · / commands · Alt+Enter follow-up · /hotkeys for more`,
+        `${keyLabel('interrupt')} interrupt · ${keyLabel('clear')} clear · ${keyLabel('exit')} exit · / commands · ${keyLabel('followUp')} follow-up · /hotkeys for more`,
       ),
     ]
     if (extensions.length)
@@ -793,7 +793,7 @@ export class InteractiveMode {
       )
     this.pending.addChild(
       new TruncatedText(
-        theme.fg('dim', '↳ Alt+Up to edit queued messages'),
+        theme.fg('dim', `↳ ${keyLabel('dequeue')} to edit queued messages`),
         1,
         0,
       ),
