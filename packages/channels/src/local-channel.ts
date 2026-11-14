@@ -403,7 +403,12 @@ export class LocalChannel implements ChannelDefinition {
         // Steering inputs can share an event. Project it once, without tracking run lifetimes here.
         if (this.observed.has(update.event)) return
         this.observed.add(update.event)
-        if (update.event.type === 'channel_error' && !update.event.aborted)
+        if (
+          update.event.type === 'channel_error' &&
+          !update.event.aborted &&
+          // A failed progress update is not a failed task.
+          update.event.source !== 'feedback'
+        )
           this.events.publish(
             {
               type: 'error',
