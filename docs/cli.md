@@ -155,7 +155,7 @@ Vela's own keys:
 | Ctrl+C | Clear the editor; press twice within half a second to exit. |
 | Ctrl+D | Exit when the editor is empty; otherwise delete the character after the cursor. |
 
-`/hotkeys` shows the same list. The editor itself comes from `@earendil-works/pi-tui` and uses its default keys. In fullscreen mode, PageUp and PageDown scroll the transcript, and Ctrl+End jumps to the latest output:
+`/hotkeys` shows the same list. On macOS, Alt is the Option key (⌥), so Vela's hints read Option+Enter and Option+Up there. The editor itself comes from `@earendil-works/pi-tui` and uses its default keys. In fullscreen mode, PageUp and PageDown scroll the transcript, and Ctrl+End jumps to the latest output:
 
 | Key | Action |
 |---|---|
