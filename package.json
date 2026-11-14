@@ -13,7 +13,8 @@
   "name": "vela-workspace",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "overrides": {
     "minimatch": "11.0.1"
@@ -34,7 +35,12 @@
     "quality": "bun scripts/quality-check.ts",
     "api:update": "bun scripts/api-report.ts",
     "smoke:consumer": "bun scripts/consumer-smoke.ts",
-    "release": "bun scripts/release.ts"
+    "release": "bun scripts/release.ts",
+    "desktop:dev": "bun run --cwd apps/desktop dev",
+    "desktop:preview": "bun run --cwd apps/desktop preview",
+    "desktop:check": "bun run --cwd apps/desktop check",
+    "desktop:package": "bun run --cwd apps/desktop package",
+    "desktop:verify": "bun run --cwd apps/desktop verify"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.8",

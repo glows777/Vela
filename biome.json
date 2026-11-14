@@ -7,7 +7,11 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!packages/core/src/models/catalog.generated.ts"]
+    "includes": [
+      "**",
+      "!packages/core/src/models/catalog.generated.ts",
+      "!apps/desktop/src/styles/tokens.generated.css"
+    ]
   },
   "assist": {
     "actions": {
@@ -39,5 +43,13 @@
         "noExplicitAny": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/desktop/src/renderer/components/arc/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false },
+      "assist": { "enabled": false }
+    }
+  ]
 }

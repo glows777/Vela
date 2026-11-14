@@ -8,7 +8,14 @@ const names = ['core', 'channels', 'mcp', 'rag', 'lark', 'vela']
 test('six lockstep packages use workspace dependencies and explicit built entry contracts', async () => {
   const manifest = JSON.parse(await readFile(`${root}/package.json`, 'utf8'))
   expect(manifest.private).toBe(true)
-  expect(manifest.workspaces).toEqual(['packages/*'])
+  expect(manifest.workspaces).toEqual(['packages/*', 'apps/*'])
+  const desktop = JSON.parse(
+    await readFile(`${root}/apps/desktop/package.json`, 'utf8'),
+  )
+  expect(desktop.private).toBe(true)
+  expect(Object.keys(desktop.dependencies)).not.toContain('@glows777/vela')
+  const { readWorkspaces } = await import('../../scripts/workspaces.ts')
+  expect((await readWorkspaces(root)).map((pkg) => pkg.key)).toEqual(names)
   const versions = new Set<string>()
   for (const name of names) {
     const pkg = JSON.parse(

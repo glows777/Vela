@@ -1,0 +1,181 @@
+{
+  "tokens": {
+    "source": "User-supplied Vela design export, tokens.json",
+    "sourceSha256": "a6cc558ab30fb7aaa52af07a46119b6fddc71e492c14302ced02f8fa620f40d2",
+    "exportVersion": 2,
+    "transformation": "Pruned unused website scales and motion. Kept Vela brand colors and local font families in a small canonical manifest, with vela- names. Arc owns control size, radius, spacing, and motion."
+  },
+  "assets": [
+    {
+      "path": "src/assets/fonts/Barlow-LICENSE.txt",
+      "source": "https://github.com/glows777/vela-website/blob/1996214dd255652ebec5a97b24071e0c3fdad55a/public/assets/Barlow-LICENSE.txt",
+      "sha256": "186d750eb496a4c17a76385f82be6aea2ac1cf2de074a811d63786cf374ea73f"
+    },
+    {
+      "path": "src/assets/fonts/JapaneseFonts-LICENSE.txt",
+      "source": "https://github.com/glows777/vela-website/blob/1996214dd255652ebec5a97b24071e0c3fdad55a/public/assets/JapaneseFonts-LICENSE.txt",
+      "sha256": "25bda85c822c4abb1071416ae14bf147224235d758d5e7ee2ac81174773df7d2"
+    },
+    {
+      "path": "src/assets/fonts/barlow-condensed-800-latin.woff2",
+      "source": "https://github.com/glows777/vela-website/blob/1996214dd255652ebec5a97b24071e0c3fdad55a/public/assets/barlow-condensed-800-latin.woff2",
+      "sha256": "550d7c21ae34908be48a4021231fdac2eed243bbfb7c90bab8cb45d9e8c431e8"
+    },
+    {
+      "path": "src/assets/fonts/shippori-mincho-b1-subset.woff2",
+      "source": "https://github.com/glows777/vela-website/blob/1996214dd255652ebec5a97b24071e0c3fdad55a/public/assets/shippori-mincho-b1-subset.woff2",
+      "sha256": "48b28d86e3689963151d9944d2e86ca6695e7d78350d96b93f41a0ef8861fbfe"
+    },
+    {
+      "path": "src/assets/vela-icon-180.png",
+      "source": "https://github.com/glows777/vela-website/blob/1996214dd255652ebec5a97b24071e0c3fdad55a/public/assets/vela-icon-180.png",
+      "sha256": "9b20a3cf7991b017569d5811b314fb7a5197580fa3630615fb43aa77a8276e6a"
+    }
+  ],
+  "arc": {
+    "license": "MIT",
+    "licensePath": "src/renderer/components/arc/LICENSE.txt",
+    "licenseSha256": "1b73a3fbab233cb995e6e9b6a63d302f91975c74c1629919c8e9820902820dde",
+    "licenseSource": "https://github.com/kuratlielia/arc-library/blob/8302b52ed9dc79ae7ca699b158a98dfdf09656f7/LICENSE",
+    "installer": "shadcn@4.23.0",
+    "command": "bunx shadcn@4.23.0 add @uiarc/arc-foundation @uiarc/button @uiarc/dialog @uiarc/tabs @uiarc/switch --yes",
+    "retrievedAt": "2026-11-14T15:35:03.626Z",
+    "revision": "Deployed registry payloads identified by SHA-256 below. The registry does not expose a Git revision.",
+    "referenceRevision": "8302b52ed9dc79ae7ca699b158a98dfdf09656f7",
+    "referenceNote": "Reference-only GitHub revision. Its published payloads differ from the deployed registry. No claim of code equivalence.",
+    "localAdaptations": "Stock shadcn removes the leading comment from four files, identified per file below. Unused default exports in Button/Switch and unused exported ButtonVariant/ButtonSize modifiers were removed for workspace quality. Runtime code, CSS declarations, shared motion presets, and import paths are unchanged. Vendor formatting is retained and excluded from Biome; desktop checks pin adopted file hashes. Vela colors and fonts live in the separate arc-theme.css bridge.",
+    "items": [
+      {
+        "name": "arc-foundation",
+        "url": "https://uiarc.dev/r/arc-foundation.json",
+        "payloadSha256": "6daa7119cf2bded8539bcade3ca79f680377c55a16f28e124cbce2929d0004e1",
+        "dependencies": [],
+        "registryDependencies": ["https://uiarc.dev/r/arc-motion-tokens.json"],
+        "files": [
+          {
+            "path": "src/renderer/components/arc/foundation.css",
+            "registryPath": "registry/foundation.css",
+            "sourceSha256": "1e0a36d8caa0e3b91d07226ec1b3838d50ea64286e42ed7d0ea6188252074efa",
+            "adoptedSha256": "1e0a36d8caa0e3b91d07226ec1b3838d50ea64286e42ed7d0ea6188252074efa",
+            "adaptation": "None. Exact registry file content."
+          }
+        ]
+      },
+      {
+        "name": "arc-motion-tokens",
+        "url": "https://uiarc.dev/r/arc-motion-tokens.json",
+        "payloadSha256": "17f6e7011d19d69f2b00518e873797be9bfb5747c9260b95ab49aafbda6aa72b",
+        "dependencies": [],
+        "registryDependencies": [],
+        "files": [
+          {
+            "path": "src/renderer/components/arc/motion-tokens.ts",
+            "registryPath": "registry/motion-tokens.ts",
+            "sourceSha256": "882069888146c8f52435777dd5f147c465df14f24ae5b2226c127fa54808aec3",
+            "adoptedSha256": "7bbf523e6cef9e670b54ce331883e97e7fb3e69cc32549c33177d7ad28dfe292",
+            "adaptation": "Stock CLI removed the leading source comment. All executable code or CSS declarations are unchanged."
+          },
+          {
+            "path": "src/renderer/components/arc/lib/motion-tokens.ts",
+            "registryPath": "lib/motion-tokens.ts",
+            "sourceSha256": "bec65d2e1b180dd3c574edc60cf84e0fa336e7ff8640eba0c70bcf0ae765fb8a",
+            "adoptedSha256": "c0c2c9797d157845873b96233e88f66c75065e253180e533f79fb352dca664fe",
+            "adaptation": "Stock CLI removed the leading source comment. All executable code or CSS declarations are unchanged."
+          }
+        ]
+      },
+      {
+        "name": "button",
+        "url": "https://uiarc.dev/r/button.json",
+        "payloadSha256": "71ff0c80c643821b9ef193011448ffefca475a5c034f7f2d5d659856da1038ec",
+        "dependencies": ["motion"],
+        "registryDependencies": ["https://uiarc.dev/r/arc-motion-tokens.json"],
+        "files": [
+          {
+            "path": "src/renderer/components/arc/button/button.tsx",
+            "registryPath": "registry/components/button/button.tsx",
+            "sourceSha256": "c531a0d3d7b7bd8c3df44b50ecf5e3c10d65c528ae529fa4e63ed968fdfe44f5",
+            "adoptedSha256": "e2dff58ebfac8c53eeb7a86925d6182ed2fa326e924a632784d3141e5dc2e7e9",
+            "adaptation": "Removed unused default export and export modifiers on internally used ButtonVariant/ButtonSize types. Runtime code is unchanged."
+          },
+          {
+            "path": "src/renderer/components/arc/button/button.module.css",
+            "registryPath": "registry/components/button/button.module.css",
+            "sourceSha256": "3577295f022f3ddd4de6039ad370cf3ff5d6eff5eb54e066efc9a16e15d35e8d",
+            "adoptedSha256": "ff57ca45fa510d0d2048b34a749e006df1f38f3e614e48aa60d84d6ee1e363dc",
+            "adaptation": "Stock CLI removed the leading source comment. All executable code or CSS declarations are unchanged."
+          }
+        ]
+      },
+      {
+        "name": "dialog",
+        "url": "https://uiarc.dev/r/dialog.json",
+        "payloadSha256": "46fd0e14247ec0b9f3b21d6e04e0aefd3eed77cfd9dfef02414e3b69d38ba0e9",
+        "dependencies": ["@radix-ui/react-dialog", "lucide-react", "motion"],
+        "registryDependencies": ["https://uiarc.dev/r/arc-motion-tokens.json"],
+        "files": [
+          {
+            "path": "src/renderer/components/arc/dialog/dialog.tsx",
+            "registryPath": "registry/components/dialog/dialog.tsx",
+            "sourceSha256": "eb84a7eb2ac864dc07f2825eab252eac78e9c6b889d0e9f00bf6b2b799975ade",
+            "adoptedSha256": "eb84a7eb2ac864dc07f2825eab252eac78e9c6b889d0e9f00bf6b2b799975ade",
+            "adaptation": "None. Exact registry file content."
+          },
+          {
+            "path": "src/renderer/components/arc/dialog/dialog.module.css",
+            "registryPath": "registry/components/dialog/dialog.module.css",
+            "sourceSha256": "cb60c25d2d4f7bed5d1dc555ca81d07a84da7d69399b4bad0ed04b9e4b588e2d",
+            "adoptedSha256": "cb60c25d2d4f7bed5d1dc555ca81d07a84da7d69399b4bad0ed04b9e4b588e2d",
+            "adaptation": "None. Exact registry file content."
+          }
+        ]
+      },
+      {
+        "name": "tabs",
+        "url": "https://uiarc.dev/r/tabs.json",
+        "payloadSha256": "e2e8fa7fc587df1582072bf51d38fc38768d3766dcb61219aa4b2c88089d88d4",
+        "dependencies": ["@radix-ui/react-tabs", "lucide-react", "motion"],
+        "registryDependencies": ["https://uiarc.dev/r/arc-motion-tokens.json"],
+        "files": [
+          {
+            "path": "src/renderer/components/arc/tabs/tabs.tsx",
+            "registryPath": "registry/components/tabs/tabs.tsx",
+            "sourceSha256": "c37859cd1549cd44ca59d4e33e31fe18248919cc870d578439035c687716c7f9",
+            "adoptedSha256": "c37859cd1549cd44ca59d4e33e31fe18248919cc870d578439035c687716c7f9",
+            "adaptation": "None. Exact registry file content."
+          },
+          {
+            "path": "src/renderer/components/arc/tabs/tabs.module.css",
+            "registryPath": "registry/components/tabs/tabs.module.css",
+            "sourceSha256": "573e4a572e884b5f184efe731f2955341bb56f7ff640d2d01e3a409456ce4469",
+            "adoptedSha256": "89c6cb2ae4fa5be61cc3dbe7f196cc495da06d0f61c538a562ecffd7b05cf6f5",
+            "adaptation": "Stock CLI removed the leading source comment. All executable code or CSS declarations are unchanged."
+          }
+        ]
+      },
+      {
+        "name": "switch",
+        "url": "https://uiarc.dev/r/switch.json",
+        "payloadSha256": "960f492284d73274c42b012a5ea40119be2f1d5ff51cbc66dd1778ddcc289be3",
+        "dependencies": ["@radix-ui/react-switch", "motion"],
+        "registryDependencies": ["https://uiarc.dev/r/arc-motion-tokens.json"],
+        "files": [
+          {
+            "path": "src/renderer/components/arc/switch/switch.tsx",
+            "registryPath": "registry/components/switch/switch.tsx",
+            "sourceSha256": "e8a4fa5782ceb350fbd84289b1fb1c4609e7b54e28a4e397ecb75f16d6d830f4",
+            "adoptedSha256": "f767f91e45d77d0b7f780ee5838c68c27eeef0bed91463aa1785f72576fa100b",
+            "adaptation": "Removed unused default export. Runtime code is unchanged."
+          },
+          {
+            "path": "src/renderer/components/arc/switch/switch.module.css",
+            "registryPath": "registry/components/switch/switch.module.css",
+            "sourceSha256": "3793e7ee1a4c2db46fce615c3fd76212c3c78ea005e23ae07c24b53453c1b6f7",
+            "adoptedSha256": "3793e7ee1a4c2db46fce615c3fd76212c3c78ea005e23ae07c24b53453c1b6f7",
+            "adaptation": "None. Exact registry file content."
+          }
+        ]
+      }
+    ]
+  }
+}
