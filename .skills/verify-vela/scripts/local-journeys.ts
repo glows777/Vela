@@ -9,6 +9,9 @@ import { resolve } from 'node:path'
 import { createVela, local } from '@glows777/vela'
 import { createFauxModel, type FauxRequest } from '@glows777/vela/testing'
 import { LocalClient, type LocalEvent } from '../../../examples/local-client.ts'
+import { prepareWorkspace } from './workspace.ts'
+
+prepareWorkspace()
 
 const token = 'offline-verification-only'
 const reservation = createServer()

@@ -9,6 +9,9 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import confirmDangerous from '../../../examples/extensions/confirm-dangerous.ts'
+import { prepareWorkspace } from './workspace.ts'
+
+prepareWorkspace()
 
 for (const mode of ['headless', 'accept', 'decline'] as const) {
   const cwd = join(process.cwd(), mode)

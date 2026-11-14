@@ -16,6 +16,9 @@ import {
 } from '@glows777/vela/testing'
 import { lark } from '@glows777/vela-lark'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
+import { prepareWorkspace } from './workspace.ts'
+
+prepareWorkspace()
 
 type Fake = ReturnType<typeof fakeLark>
 const zone = 'Asia/Shanghai'

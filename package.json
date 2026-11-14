@@ -26,6 +26,7 @@
     "test:unit": "bun test packages/*/test test/unit",
     "test:e2e": "bun test test/e2e",
     "test:live": "VELA_LIVE=1 bun test test/live",
+    "verify:journeys": "bun .skills/verify-vela/scripts/verify-journeys.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write",
