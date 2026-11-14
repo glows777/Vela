@@ -8,6 +8,9 @@ export interface BackgroundResult {
   text: string
 }
 
+/** Whether a session still has running commands; idle cleanup must not close it. */
+export const BACKGROUND_BUSY = Symbol.for('vela.background.busy')
+
 /** A channel's queue, so a job's exit becomes an ordinary queued input for its topic. */
 export type BackgroundDelivery = (
   session: VelaSession,

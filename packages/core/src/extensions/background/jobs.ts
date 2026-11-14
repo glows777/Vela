@@ -54,7 +54,8 @@ export class OutputTail {
         .replace(/^\uFFFD+/, '')
       // Drop the partial first line; one huge line keeps its cut end (like bash).
       const newline = text.indexOf('\n')
-      if (newline >= 0) text = text.slice(newline + 1)
+      if (newline >= 0 && newline !== text.length - 1)
+        text = text.slice(newline + 1)
       truncated = true
     }
     // Count lines like bash: a final newline does not start another line.
@@ -111,6 +112,12 @@ export class BackgroundJobs {
     private readonly shellPath: () => string,
     private readonly logger: VelaLogger,
   ) {}
+
+  /** Commands still running: the session stays open while this is above zero. */
+  get running(): number {
+    return [...this.jobs.values()].filter((job) => job.state === 'running')
+      .length
+  }
 
   start(command: string): { id: string; pid?: number } {
     const id = `bg-${++this.sequence}`
@@ -230,6 +237,9 @@ export class BackgroundJobs {
       await exited
     } finally {
       clearTimeout(timer)
+      // The shell can exit on SIGTERM while descendants ignore it; the process group is what was
+      // promised, so the escalation runs after the leader is gone too.
+      kill('SIGKILL')
     }
   }
 

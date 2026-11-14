@@ -2,17 +2,12 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
+import { bindBackgroundDelivery } from './background-seam.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import { topicSessionOptions } from './topics.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
-
-/**
- * The key the background extension reads (`packages/core/src/extensions/background/host.ts`);
- * a global symbol keeps this one seam out of the public API.
- */
-const BACKGROUND_DELIVERY = Symbol.for('vela.background.delivery')
 
 /** Every opening path resolves current options from the logical chat, before resume or hooks. */
 export class ChannelSessions {
@@ -89,18 +84,19 @@ export class ChannelSessions {
       record?.rootId && record.threadId
         ? { rootId: record.rootId, threadId: record.threadId }
         : undefined
-    type Delivery = (session: VelaSession, result: { text: string }) => void
-    const bound = session as unknown as Record<symbol, Delivery | undefined>
-    if (topic)
-      bound[BACKGROUND_DELIVERY] = (_session, result) =>
-        this.deliverBackground(
-          key,
-          channel.name,
-          topic.rootId,
-          topic.threadId,
-          result.text,
-        )
-    else delete bound[BACKGROUND_DELIVERY]
+    bindBackgroundDelivery(
+      session,
+      topic
+        ? (_session, result) =>
+            this.deliverBackground(
+              key,
+              channel.name,
+              topic.rootId,
+              topic.threadId,
+              result.text,
+            )
+        : undefined,
+    )
     return session
   }
 

@@ -80,6 +80,16 @@ test('the output tail keeps the last 2000 lines and 50KB, and says when it cut',
   expect(Buffer.byteLength(cut.text)).toBeLessThanOrEqual(MAX_BYTES)
 })
 
+test('a single huge line keeps the tail of its cut end instead of reporting no output', () => {
+  const tail = new OutputTail()
+  const huge = 'x'.repeat(MAX_BYTES + 100)
+  tail.append(`${huge}\n`)
+  const read = tail.read()
+  expect(read.truncated).toBe(true)
+  expect(read.text).toContain('x')
+  expect(Buffer.byteLength(read.text)).toBeLessThanOrEqual(MAX_BYTES)
+})
+
 test('a background command runs to completion and its delivery carries the exit code and tail', async () => {
   const delivered: string[] = []
   const reports: BackgroundResult[] = []
@@ -119,6 +129,30 @@ test('stopping a job ends its process group and delivers that it was stopped', a
   expect(stopped.output).not.toContain('NEVER')
   expect(reports).toHaveLength(1)
   expect(reports[0]!.text).toContain('Background command bg-1 was stopped.')
+})
+
+test('a descendant that ignores SIGTERM is killed after the shell exits', async () => {
+  const root = directory()
+  const reports: BackgroundResult[] = []
+  const session = sessionStub(root, [])
+  bind(session, (_session, result) => {
+    reports.push(result)
+  })
+  const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+  // The shell exits on SIGTERM; its child ignores SIGTERM and would outlive the stop.
+  jobs.start(
+    `bash -c 'trap "" TERM; echo $$ > child.pid; echo READY; sleep 30' & wait`,
+  )
+  await until(
+    () => jobs.snapshot('bg-1').output.includes('READY'),
+    'the first output',
+  )
+  const child = Number((await Bun.file(join(root, 'child.pid')).text()).trim())
+  expect(() => process.kill(child, 0)).not.toThrow()
+  await jobs.stop('bg-1')
+  await Bun.sleep(200)
+  expect(() => process.kill(child, 0)).toThrow()
+  expect(reports).toHaveLength(1)
 })
 
 test('an unknown id says it may have ended with a restart or session close', () => {

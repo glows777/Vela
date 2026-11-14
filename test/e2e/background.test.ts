@@ -122,6 +122,42 @@ test('background_stop ends a topic job and background_output reports an id lost 
   )
 })
 
+test('a topic session stays open while a background command runs, past its idle deadline', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    channelIdleMs: 50,
+    responses: [
+      fauxToolCall('background_start', { command: 'sleep 0.5; echo READY' }),
+      fauxText('Started the check.'),
+      fauxText('The check finished.'),
+    ],
+    extensions: [
+      background(),
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(topicEvent('trigger', 'start the slow check'))
+  await until(() => fake.sent.length === 1, 'the first reply')
+  const topic = 'lark-oc_group-root'
+  // Past the idle deadline the command is still running, so the session must stay open.
+  await Bun.sleep(300)
+  expect(t.vela.sessions().map((session) => session.id)).toContain(topic)
+  await until(() => fake.sent.length === 2, 'the exit reply')
+  expect(fake.sent[1]!.text).toContain('The check finished.')
+  // With no command left, the same deadline closes it as usual.
+  await until(
+    () => !t.vela.sessions().some((session) => session.id === topic),
+    'the idle close',
+  )
+})
+
 test('background tools are topic tools: absent from the group session and a DM, present in the topic', async () => {
   const fake = fakeLark()
   const t = createTestVela({
