@@ -1,4 +1,4 @@
-import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import {
   chmodSync,
   existsSync,
@@ -27,13 +27,13 @@ const beforeSetup = (stdout: string): string => {
   return at === -1 ? stdout : stdout.slice(0, at)
 }
 
-test('no configured model points print-mode users to setup', async () => {
+test.concurrent('no configured model points print-mode users to setup', async () => {
   const result = await cli(['-p', 'hello'], { model: '' })
   expect(result.code).toBe(1)
   expect(result.stderr).toContain('vela setup')
 })
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'setup cancellation leaves user configuration untouched',
   async () => {
     const result = await cli(['setup'], {
@@ -76,7 +76,7 @@ for (const cancelAt of [
   'Custom headers (JSON, optional)',
   'Context window (optional)',
 ]) {
-  test.skipIf(!hasScript)(
+  test.concurrent.if(hasScript)(
     `custom setup Escape at ${cancelAt} writes nothing`,
     async () => {
       const steps: [string, string][] = [
@@ -104,7 +104,7 @@ for (const cancelAt of [
   )
 }
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'Lark setup completes through the CLI with a fake connection',
   async () => {
     const preload = `
@@ -148,7 +148,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'existing offline model does not start setup',
   async () => {
     const result = await cli([], {
@@ -160,7 +160,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'setup verifies a compatible provider and preserves unrelated settings on rerun',
   async () => {
     const server = Bun.serve({
@@ -279,7 +279,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'failed verification displays provider error and writes no configuration',
   async () => {
     const server = Bun.serve({
@@ -317,7 +317,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'exiting while verification hangs stops the CLI and leaves no config',
   async () => {
     let exit: (() => void) | undefined
@@ -357,7 +357,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'first run configures DeepSeek and answers through the real CLI',
   async () => {
     const preload = `
@@ -420,6 +420,29 @@ afterAll(() => {
   for (const dir of dirs.splice(0)) dir.cleanup()
 })
 
+// Every test that does not need a mocked module or a pseudo-terminal runs this one-file build:
+// parsing the 40K-line source tree again for each spawn costs more than the test itself.
+let bundledEntry = ENTRY
+beforeAll(async () => {
+  const dir = tempDir('vela-cli-build-')
+  const out = join(dir.path, 'build', 'cli')
+  mkdirSync(out, { recursive: true })
+  const build = await Bun.build({
+    entrypoints: [ENTRY],
+    target: 'bun',
+    outdir: out,
+  })
+  if (!build.success)
+    throw new AggregateError(build.logs, 'CLI test bundle failed')
+  // packageVersion() reads ../../package.json relative to the entry
+  await Bun.write(
+    join(dir.path, 'package.json'),
+    readFileSync(join(ROOT, 'packages/vela/package.json')),
+  )
+  dirs.push(dir)
+  bundledEntry = join(out, 'main.js')
+})
+
 /**
  * Starts a real CLI process in a temp dir. The user dir (VELA_DIR, also HOME) is another temp dir,
  * so the real ~/.vela is never touched; the data dir is `<VELA_DIR>/projects/<encoded cwd>`.
@@ -463,7 +486,8 @@ async function cli(
   const command = [
     'bun',
     ...(options.preload ? ['--preload', join(cwd, options.preload)] : []),
-    ENTRY,
+    // A preload mocks source modules by path, and the PTY tests check the real entry
+    options.preload || options.terminal ? ENTRY : bundledEntry,
     ...args,
   ]
   if (options.terminal) {
@@ -542,76 +566,95 @@ function sessionFiles(dataDir: string): string[] {
   }
 }
 
-for (const [fixture, mimeType] of [
-  ['blue.png', 'image/png'],
-  ['quadrants.jpg', 'image/jpeg'],
-  ['quadrants.gif', 'image/gif'],
-  ['quadrants.webp', 'image/webp'],
-  ['quadrants.bmp', 'image/bmp'],
-]) {
-  test.concurrent(`@file attaches ${mimeType} by header, only to the first prompt`, async () => {
-    const result = await cli(
-      ['--mode', 'json', '@picture.txt', 'Describe this', 'Continue'],
-      {
-        model: 'faux:replies.json',
-        files: {
-          'picture.txt': readFileSync(
-            join(ROOT, 'test/fixtures/images', fixture!),
-          ),
-          'replies.json': JSON.stringify({
-            responses: [{ text: 'First' }, { text: 'Second' }],
-          }),
-        },
+// One prompt carries one attachment of each format; they do not interact, so one CLI run checks all
+// headers. The .txt names are deliberate: an image must be recognized from its bytes, not its suffix.
+const pictures = [
+  ['blue.png', 'image/png', 'picture-png.txt'],
+  ['quadrants.jpg', 'image/jpeg', 'picture-jpeg.txt'],
+  ['quadrants.gif', 'image/gif', 'picture-gif.txt'],
+  ['quadrants.webp', 'image/webp', 'picture-webp.txt'],
+  ['quadrants.bmp', 'image/bmp', 'picture-bmp.txt'],
+] as const
+
+function pictureFiles() {
+  return Object.fromEntries(
+    pictures.map(([fixture, , name]) => [
+      name,
+      readFileSync(join(ROOT, 'test/fixtures/images', fixture)),
+    ]),
+  )
+}
+
+test.concurrent('@file attaches every image format by header, only to the first prompt', async () => {
+  const result = await cli(
+    [
+      '--mode',
+      'json',
+      ...pictures.map(([, , name]) => `@${name}`),
+      'Describe this',
+      'Continue',
+    ],
+    {
+      model: 'faux:replies.json',
+      files: {
+        ...pictureFiles(),
+        'replies.json': JSON.stringify({
+          responses: [{ text: 'First' }, { text: 'Second' }],
+        }),
       },
+    },
+  )
+  expect(result.code).toBe(0)
+  const users = result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter(
+      (event) => event.type === 'message_end' && event.message.role === 'user',
     )
-    expect(result.code).toBe(0)
-    const users = result.stdout
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter(
-        (event) =>
-          event.type === 'message_end' && event.message.role === 'user',
-      )
-      .map((event) => event.message.content)
-    expect(users).toHaveLength(2)
-    expect(users[0]).toEqual([
-      {
-        type: 'text',
-        text: `<file name="${join(result.cwd, 'picture.txt')}"></file>\n\nDescribe this`,
-      },
+    .map((event) => event.message.content)
+  expect(users).toHaveLength(2)
+  expect(users[0]).toEqual([
+    {
+      type: 'text',
+      text: `${pictures
+        .map(([, , name]) => `<file name="${join(result.cwd, name)}"></file>`)
+        .join('\n\n')}\n\nDescribe this`,
+    },
+    ...pictures.map(([, mimeType]) =>
       expect.objectContaining({
         type: 'image',
         mimeType: mimeType === 'image/bmp' ? 'image/jpeg' : mimeType,
         data: expect.any(String),
       }),
-    ])
-    expect(users[1]).toBe('Continue')
-  })
-}
+    ),
+  ])
+  expect(users[1]).toBe('Continue')
+})
 
-for (const kind of ['image', 'text'] as const) {
-  test.concurrent(`@file expands home paths for ${kind} attachments`, async () => {
-    const home = tempDir('vela-attachment-home-')
-    dirs.push(home)
-    const path = join(home.path, 'attachment')
-    await Bun.write(
-      path,
-      kind === 'image'
-        ? readFileSync(join(ROOT, 'test/fixtures/images/blue.png'))
-        : 'Home attachment',
-    )
-    const result = await cli(['--mode', 'json', '@~/attachment', 'Describe'], {
+test.concurrent('@file expands home paths for image and text attachments', async () => {
+  const home = tempDir('vela-attachment-home-')
+  dirs.push(home)
+  const image = join(home.path, 'attachment-image')
+  const text = join(home.path, 'attachment-text')
+  await Bun.write(
+    image,
+    readFileSync(join(ROOT, 'test/fixtures/images/blue.png')),
+  )
+  await Bun.write(text, 'Home attachment')
+  const result = await cli(
+    ['--mode', 'json', '@~/attachment-image', '@~/attachment-text', 'Describe'],
+    {
       agentDir: home.path,
       model: `faux:${scenario('hello')}`,
-    })
-    expect(result.code).toBe(0)
-    expect(result.stdout).toContain(`<file name=\\"${path}\\">`)
-    expect(result.stdout).toContain(
-      kind === 'image' ? 'image/png' : 'Home attachment',
-    )
-  })
-}
+    },
+  )
+  expect(result.code).toBe(0)
+  expect(result.stdout).toContain(`<file name=\\"${image}\\">`)
+  expect(result.stdout).toContain('image/png')
+  expect(result.stdout).toContain(`<file name=\\"${text}\\">`)
+  expect(result.stdout).toContain('Home attachment')
+})
 
 test.concurrent('@file resolves screenshot narrow-space names and keeps image reference order', async () => {
   const first = 'Screenshot 2026-10-16 at 12.00.00\u202fPM.png'
@@ -1056,10 +1099,23 @@ test.concurrent('--tools / --exclude-tools limit the tools; an unknown name stop
 })
 
 test.concurrent('+name / -name change the default tools, from --tools or defaultTools', async () => {
+  // The demo model streams a character every 30 ms; a scenario makes the same grep call without that wait
   const run = (args: string[], agentDir?: string) =>
-    cli(['--mode', 'json', ...args, 'test grep'], {
-      model: 'mock',
-      files: { 'src/a.ts': 'export const a = 1\n' },
+    cli(['--mode', 'json', ...args, 'find the export'], {
+      model: 'faux:grep.json',
+      files: {
+        'src/a.ts': 'export const a = 1\n',
+        'grep.json': JSON.stringify({
+          responses: [
+            {
+              toolCalls: [
+                { name: 'grep', input: { pattern: 'export', path: 'src' } },
+              ],
+            },
+            { text: 'found it' },
+          ],
+        }),
+      },
       agentDir,
     })
   const grepEnd = (stdout: string) =>
@@ -1508,16 +1564,17 @@ test.concurrent('a broken trust.json stops the CLI instead of being ignored', as
   )
 })
 
-// The demo model streams one character every 30 ms (about 2 s); with other concurrent tests on slow CI machines that exceeds the default 5 s
+// The demo model streams one character every 30 ms; a tool keyword makes the visible answer the short
+// tool result instead of the 140-character greeting, so this end-to-end check stays fast.
 test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', async () => {
-  const { code, stdout } = await cli(['-p', 'hello'], { model: 'mock' })
+  const { code, stdout } = await cli(['-p', 'test bash'], { model: 'mock' })
   expect(code).toBe(0)
-  expect(stdout.trim()).not.toBe('')
+  expect(stdout).toContain('Hello from bash!')
 }, 20_000)
 
 // Interactive mode (TUI) only appears in a terminal (piped input uses print mode, like pi): util-linux `script` gives the child a pseudo-terminal.
 // TUI behavior itself is tested with a fake terminal in e2e/tui; here we only check that it starts, chats and exits in a real terminal
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   'interactive mode shows loaded context files at startup and in /status',
   async () => {
     const root = tempDir('vela-proj-')
@@ -1551,7 +1608,7 @@ test.if(hasScript)(
   },
 )
 
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   'interactive mode in a real terminal: a turn, then Ctrl+D exits and the session is saved',
   async () => {
     const { stdout, stderr, code, dataDir } = await cli([], {
@@ -1571,7 +1628,7 @@ test.if(hasScript)(
   },
 )
 
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   '-r lists saved sessions and resumes the chosen one',
   async () => {
     const first = await cli(['-p', 'hello'], {
@@ -1594,7 +1651,7 @@ test.if(hasScript)(
   },
 )
 
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   'interactive mode exits when its terminal goes away instead of spinning a CPU',
   async () => {
     const dir = tempDir('vela-cli-')
@@ -1806,7 +1863,7 @@ test.concurrent('a reader that closes stdout early makes the CLI exit quietly', 
   expect(print.stderr).not.toContain('EPIPE')
 })
 
-test('-p: SIGTERM stops a running bash command with its process group, then exits with 143', async () => {
+test.concurrent('-p: SIGTERM stops a running bash command with its process group, then exits with 143', async () => {
   const dir = tempDir('vela-cli-')
   const home = tempDir('vela-home-')
   dirs.push(dir, home)
