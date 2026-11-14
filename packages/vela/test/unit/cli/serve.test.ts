@@ -74,6 +74,24 @@ test('long channel text is cut to one screen line, errors included', () => {
   ).toBe('2026-10-26 08:05:03 channel_error lark ou_1: Turn aborted')
 })
 
+test('a failed progress update is logged as feedback, not as a stopped turn', () => {
+  expect(
+    formatChannelEvent(
+      {
+        type: 'channel_error',
+        channel: 'lark',
+        senderId: 'ou_1',
+        error: new Error('read ECONNRESET'),
+        aborted: false,
+        source: 'feedback',
+      },
+      at,
+    ),
+  ).toBe(
+    '2026-10-26 08:05:03 channel_error lark ou_1: Feedback failed: read ECONNRESET',
+  )
+})
+
 test('terminal control sequences from chat text and names never reach the log', () => {
   // OSC 52 would write the operator's clipboard, and a CSI can repaint the terminal it logs to
   const clipboard = '\x1b]52;c;ZXZpbA==\x07'

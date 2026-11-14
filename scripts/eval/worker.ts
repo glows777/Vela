@@ -455,7 +455,9 @@ export async function runAttempt(
           )
       }
     }
-    if (event.type === 'channel_error') channelError = event.error
+    // A failed progress update is not a failed scenario
+    if (event.type === 'channel_error' && event.source !== 'feedback')
+      channelError = event.error
     if (exitScenario && event.type === 'channel_reply') {
       const topicRootId = topicRoots.find(
         (root) =>

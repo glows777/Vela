@@ -250,13 +250,18 @@ export type VelaEvent =
       recipientId: string
       text: string
     }
-  /** A channel turn failed (including aborts) */
+  /** A channel turn failed (including aborts); `feedback` marks a failed progress update instead */
   | {
       type: 'channel_error'
       channel: string
       senderId: string
       error: unknown
       aborted: boolean
+      /**
+       * `feedback`: updating the user-visible progress (card, acknowledgement) failed. The turn may
+       * still be running and delivering its answer, so this is not a turn failure.
+       */
+      source?: 'feedback'
     }
 
 export type VelaEventListener = (event: VelaEvent) => void
