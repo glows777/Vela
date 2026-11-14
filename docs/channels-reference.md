@@ -128,7 +128,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 
 ### Shared topic capabilities
 
-The channel assembly registers one set of tools: `channel_start_topic`, `channel_forward_to_topic`, `channel_list_topics`, `channel_read_topic`, `channel_wait_for_input`, `channel_skip_reply` and `channel_routines`. They are visible only in channel-bound sessions. Group sessions dispatch; task sessions cannot start/forward another task; direct sessions keep routines but not group/topic tools. The gateway applies these scope restrictions before session hooks. A channel without topic capabilities does not receive the dispatch prompt or the platform-dependent start/forward/read tools.
+The channel assembly registers one set of tools: `channel_start_topic`, `channel_forward_to_topic`, `channel_list_topics`, `channel_read_topic`, `channel_wait_for_input`, `channel_skip_reply` and `channel_routines`. They are visible only in channel-bound sessions. Group sessions dispatch; task sessions cannot start/forward another task; direct sessions keep routines but not group/topic tools. The gateway applies these scope restrictions before session hooks, and it hides `bash`, `write_file` and `edit_file` from group sessions even when a chat's configured tool list names them. A channel without topic capabilities does not receive the dispatch prompt or the platform-dependent start/forward/read tools.
 
 `ChannelTopicCapabilities` supplies:
 

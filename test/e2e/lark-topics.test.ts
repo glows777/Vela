@@ -590,3 +590,42 @@ test('first topic entry excludes later history replies which arrive through thei
     JSON.stringify(t.model.calls[1]?.prompt).match(/later instruction/g),
   ).toHaveLength(1)
 })
+
+test('the group session hides execution tools that its topics keep, even when the chat selects them', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    responses: [fauxText('hello'), fauxText('topic answer')],
+    extensions: [
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: [{ id: 'oc_group', tools: ['bash', 'write_file', 'edit_file'] }],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(
+    larkEvent({
+      message_id: 'group',
+      content: '{"text":"@_user_1 hi"}',
+    }),
+  )
+  await until(() => t.model.calls.length === 1)
+  const groupTools = t.model.calls[0]!.tools
+  expect(groupTools).not.toContain('bash')
+  expect(groupTools).not.toContain('write_file')
+  expect(groupTools).not.toContain('edit_file')
+
+  const topic = larkEvent({
+    message_id: 'topic',
+    content: '{"text":"do the work"}',
+  })
+  Object.assign(topic.message, { root_id: 'root', thread_id: 'thread' })
+  fake.deliver(topic)
+  await until(() => t.model.calls.length === 2)
+  expect(t.model.calls[1]!.tools).toEqual(
+    expect.arrayContaining(['bash', 'write_file', 'edit_file']),
+  )
+})
