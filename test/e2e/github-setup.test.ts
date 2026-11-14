@@ -33,7 +33,7 @@ const receiver = (secret: unknown = 'saved-secret', port: unknown = 8787) => ({
   },
 })
 
-test('fresh model-free CLI saves privately, creates once and updates once with the same secret', async () => {
+test.concurrent('fresh model-free CLI saves privately, creates once and updates once with the same secret', async () => {
   const f = githubFixture()
   mkdirSync(join(f.cwd, '.vela', 'extensions'), { recursive: true })
   const project = '{ malformed project must not load'
@@ -104,7 +104,7 @@ test('fresh model-free CLI saves privately, creates once and updates once with t
 })
 
 for (const operation of ['created', 'updated'])
-  test(`valid active account with expired inactive account ${operation} a webhook without exposing the secret`, async () => {
+  test.concurrent(`valid active account with expired inactive account ${operation} a webhook without exposing the secret`, async () => {
     const f = githubFixture()
     f.seed(receiver())
     f.setState({
@@ -156,7 +156,7 @@ for (const missing of [
   ['setup', 'github', 'acme/widgets'],
   ['setup', 'github', '--url', 'https://hooks.example.com'],
 ])
-  test(`missing non-TTY input returns usage 2: ${missing.join(' ')}`, async () => {
+  test.concurrent(`missing non-TTY input returns usage 2: ${missing.join(' ')}`, async () => {
     const f = githubFixture()
     const result = await f.cli(missing)
     expect(result.code).toBe(2)
@@ -175,7 +175,7 @@ for (const option of [
   ['--append-system-prompt', 'extra'],
   ['--url', 'https://other.example'],
 ])
-  test(`GitHub setup rejects unrelated or duplicate options: ${option.join(' ')}`, async () => {
+  test.concurrent(`GitHub setup rejects unrelated or duplicate options: ${option.join(' ')}`, async () => {
     const f = githubFixture()
     const result = await f.cli([...args, ...option])
     expect(result.code).toBe(2)
@@ -193,7 +193,7 @@ for (const url of [
   'https://hooks.example.com?',
   'https://localhost',
 ])
-  test(`invalid origin fails before config or gh: ${url}`, async () => {
+  test.concurrent(`invalid origin fails before config or gh: ${url}`, async () => {
     const f = githubFixture()
     const result = await f.cli([
       'setup',
@@ -216,7 +216,7 @@ for (const url of [
   'https://[::ffff:127.0.0.1]',
   'https://[::ffff:0.0.0.0]',
 ])
-  test(`non-localhost origin reaches webhook setup: ${url}`, async () => {
+  test.concurrent(`non-localhost origin reaches webhook setup: ${url}`, async () => {
     const f = githubFixture()
     const result = await f.cli([
       'setup',
@@ -240,7 +240,7 @@ for (const repo of [
   '-acme/widgets',
   'acme/space repo',
 ])
-  test(`invalid repository does not mutate: ${repo}`, async () => {
+  test.concurrent(`invalid repository does not mutate: ${repo}`, async () => {
     const f = githubFixture()
     const result = await f.cli([
       'setup',
@@ -254,7 +254,7 @@ for (const repo of [
     expect(f.state().calls).toEqual([])
   })
 
-test('merge preserves model, Lark, adapters, apps, existing repositories and fixed port', async () => {
+test.concurrent('merge preserves model, Lark, adapters, apps, existing repositories and fixed port', async () => {
   const f = githubFixture()
   const prior = {
     ...receiver(),
@@ -308,7 +308,7 @@ for (const [stored, expanded, env] of [
   ['${GH_SECRET}', 'other-env-secret', { GH_SECRET: 'other-env-secret' }],
   ['literal$$value', 'literal$value', {}],
 ] as const)
-  test(`reuse saved secret without changing raw setting: ${stored}`, async () => {
+  test.concurrent(`reuse saved secret without changing raw setting: ${stored}`, async () => {
     const f = githubFixture()
     f.seed(receiver(stored))
     const result = await f.cli(args, env)
@@ -336,7 +336,7 @@ for (const invalid of [
   },
   [],
 ])
-  test(`invalid saved config is unchanged and never reaches gh: ${JSON.stringify(invalid)}`, async () => {
+  test.concurrent(`invalid saved config is unchanged and never reaches gh: ${JSON.stringify(invalid)}`, async () => {
     const f = githubFixture()
     f.seed(invalid)
     const before = readFileSync(f.settingsPath, 'utf8')
@@ -345,7 +345,7 @@ for (const invalid of [
     expect(readFileSync(f.settingsPath, 'utf8')).toBe(before)
     expect(f.state().calls).toEqual([])
   })
-test('malformed settings fail without echoing the saved secret or changing bytes', async () => {
+test.concurrent('malformed settings fail without echoing the saved secret or changing bytes', async () => {
   const f = githubFixture()
   f.seed({})
   const broken = '{"secret":"DONT-LEAK-JSON", invalid}'
@@ -356,7 +356,7 @@ test('malformed settings fail without echoing the saved secret or changing bytes
   expect(readFileSync(f.settingsPath, 'utf8')).toBe(broken)
   expect(f.state().calls).toEqual([])
 })
-test('local write failure precedes all gh actions', async () => {
+test.concurrent('local write failure precedes all gh actions', async () => {
   const f = githubFixture()
   writeFileSync(f.agentDir, 'not a directory')
   const result = await f.cli(args)
@@ -365,7 +365,7 @@ test('local write failure precedes all gh actions', async () => {
   expect(readFileSync(f.agentDir, 'utf8')).toBe('not a directory')
 })
 for (const mode of ['absent', 'not-authenticated'])
-  test(`manual fallback saves configuration when gh is ${mode}`, async () => {
+  test.concurrent(`manual fallback saves configuration when gh is ${mode}`, async () => {
     const f = githubFixture()
     if (mode === 'absent') rmSync(join(f.bin, 'gh'))
     else f.setState({ auth: false, inactiveAuth: true })
@@ -386,7 +386,7 @@ for (const mode of ['absent', 'not-authenticated'])
       expect(result.output).toContain(text)
     expect(Object.values(f.state().hooks)).toEqual([])
   })
-test('partial permissions failure preserves good hooks, saves all repos and continues without retry', async () => {
+test.concurrent('partial permissions failure preserves good hooks, saves all repos and continues without retry', async () => {
   const f = githubFixture()
   f.setState({ fail: ['acme/denied'] })
   const result = await f.cli([
@@ -413,7 +413,7 @@ test('partial permissions failure preserves good hooks, saves all repos and cont
   ).toHaveLength(1)
   expect(result.output).toContain('403')
 })
-test('all pages are listed and only the normalized exact target URL is updated', async () => {
+test.concurrent('all pages are listed and only the normalized exact target URL is updated', async () => {
   const f = githubFixture()
   const old = Array.from(
     { length: 100 },
@@ -441,7 +441,7 @@ test('all pages are listed and only the normalized exact target URL is updated',
   })
   expect(f.state().calls.some((call) => call.args.includes('POST'))).toBe(false)
 })
-test('ambiguous matching hooks are not mutated but other repositories still succeed', async () => {
+test.concurrent('ambiguous matching hooks are not mutated but other repositories still succeed', async () => {
   const f = githubFixture()
   const duplicates = [1, 2].map((id) => ({
     id,
@@ -461,7 +461,7 @@ test('ambiguous matching hooks are not mutated but other repositories still succ
   expect(f.state().hooks['acme/other']).toHaveLength(1)
   expect(result.output).toMatch(/multiple|ambiguous|more than one/i)
 })
-test('a lost POST response is not retried and a rerun finds the existing hook', async () => {
+test.concurrent('a lost POST response is not retried and a rerun finds the existing hook', async () => {
   const f = githubFixture()
   f.setState({ lost: true })
   expect((await f.cli(args)).code).toBe(1)
@@ -477,7 +477,7 @@ test('a lost POST response is not retried and a rerun finds the existing hook', 
     secret,
   )
 })
-test('child errors redact both raw and JSON-escaped secrets without removing useful errors', async () => {
+test.concurrent('child errors redact both raw and JSON-escaped secrets without removing useful errors', async () => {
   const f = githubFixture()
   const secret = 'secret"\\\n$tail'
   f.seed(receiver(secret.replace(/\$/g, () => '$$')))
@@ -488,7 +488,7 @@ test('child errors redact both raw and JSON-escaped secrets without removing use
   expect(result.output).not.toContain(JSON.stringify(secret).slice(1, -1))
   expect(result.output).toContain('[redacted]')
 })
-test('help documents GitHub arguments and setup exit codes without touching config', async () => {
+test.concurrent('help documents GitHub arguments and setup exit codes without touching config', async () => {
   const f = githubFixture()
   const result = await f.cli(['setup', 'github', '--help'])
   expect(result.code).toBe(0)
@@ -498,7 +498,7 @@ test('help documents GitHub arguments and setup exit codes without touching conf
   expect(f.state().calls).toEqual([])
 })
 
-test('an explicit null receiver port is invalid rather than replaced by the default', async () => {
+test.concurrent('an explicit null receiver port is invalid rather than replaced by the default', async () => {
   const f = githubFixture()
   f.seed(receiver('saved-secret', null))
   const before = readFileSync(f.settingsPath, 'utf8')
