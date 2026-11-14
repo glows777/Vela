@@ -400,7 +400,7 @@
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
     openProject: (input: { cwd: string; name?: string; }) => Promise<LocalProject>
     projects: () => LocalProject[]
-    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
     sessions: (projectId?: string) => LocalSession[]
     stop: (target: ChannelTarget, runId: string) => Promise<boolean>
     submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: { projectId: string; sessionId: string; text: string; clientMessageId?: string; }): Promise<{ sessionId: string; messageId: string; }>; }
