@@ -1,4 +1,4 @@
-import { afterEach } from 'bun:test'
+import { afterAll } from 'bun:test'
 import {
   existsSync,
   mkdirSync,
@@ -26,7 +26,9 @@ export const setupModule = resolve(
   '../../packages/vela/src/cli/github-setup.ts',
 )
 const dirs: string[] = []
-afterEach(() => {
+// Fixtures are per test, so concurrent tests must not delete each other's directories;
+// they are cleaned up once at the end.
+afterAll(() => {
   for (const dir of dirs.splice(0))
     rmSync(dir, { recursive: true, force: true })
 })
