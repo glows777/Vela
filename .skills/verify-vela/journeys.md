@@ -91,6 +91,7 @@ The script adds these settings only to `bun install`, not the CLI. It serves the
 
 | Feature | Drive | Check |
 |---|---|---|
+| Background commands (CLI) | Faux scenario `[background_start(sleep 3; echo READY), text "Started the check.", text "The command finished."]`; `$H launch $RUN --tools +background_start,+background_output,+background_stop` with `VERIFY_MODEL=faux:<scenario>`, then `send` "start a slow check" | The `background_start` tool row shows `Started bg-1 (pid …)`, the first answer appears while the command still runs, and about three seconds later the exit delivery starts its own turn whose answer (`The command finished.`) appears without a second prompt. Screens in `background.txt` |
 | MCP | `home/mcp.json` → `{"mcpServers":{"echo":{"command":"bun","args":["$PWD/test/fixtures/mcp-echo-server.ts"]}}}`; faux `tool_search` then `mcp__echo__echo` | `Loaded 1 tool`, then the echoed text |
 | Unconfigured RAG | `run $RUN p -p "hello"`; in the TUI, `/extensions` then `/rag` | Ordinary startup is quiet; the listing includes `/rag`; `/rag` explains missing settings without a model call or database |
 | memory | faux `memory` with `{"action":"save",…}`, then a second prompt in that `--mode json` run | `Saved to memory: …` and the file under `home/projects/*/memory/`. The second prompt's `message_start` events are the user text, then `custom.customType` `memory` with `display` false. That index is now the last user message |

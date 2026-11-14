@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline'
 import { fuzzyFilter } from '@earendil-works/pi-tui'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import type { ModelInfo, ThinkingLevel } from '@glows777/vela-core'
-import { memory, todo, web, webConfig } from '@glows777/vela-core'
+import { background, memory, todo, web, webConfig } from '@glows777/vela-core'
 import {
   assertSessionId,
   getToolListError,
@@ -22,13 +22,20 @@ import {
   savedTrust,
   saveTrust,
   type VelaConfig,
+  type VelaSettings,
 } from '../config/index.ts'
+import { resolveShellPath } from './shell.ts'
 import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
 type Env = Record<string, string | undefined>
 
 /** Built-in extensions shipped with the CLI (`builtin:<name>`). Config comes from `extensionConfig.<name>`. */
-export const BUILTIN_EXTENSIONS: Record<string, () => VelaExtension> = {
+export const BUILTIN_EXTENSIONS: Record<
+  string,
+  (settings: VelaSettings) => VelaExtension
+> = {
+  background: (settings) =>
+    background({ shellPath: resolveShellPath(settings.shellPath) }),
   memory: () => memory(),
   rag: () => rag(),
   web: () => web(),
@@ -632,7 +639,7 @@ export async function loadCliExtensions(
         const factory = BUILTIN_EXTENSIONS[entry.name]
         if (!factory)
           throw new Error(`Unknown built-in extension builtin:${entry.name}`)
-        extension = factory()
+        extension = factory(config.settings)
       } else extension = await importExtension(entry.path, entry.name)
       loaded.push(reportFailures(extension, report))
     } catch (error) {

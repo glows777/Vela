@@ -1,9 +1,10 @@
 # Built-in extensions
 
-Vela ships six selectable built-in extensions: `memory`, `todo`, `rag`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `memory`, `todo` and `web` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all six (see [Packages](sdk.md#packages)).
+Vela ships seven selectable built-in extensions: `background`, `memory`, `todo`, `rag`, `web`, `lark`, and `mcp`. They use the same extension API as your own extensions (see [Extensions](extensions.md)). `background`, `memory`, `todo` and `web` are part of `@glows777/vela-core`; `rag`, `lark` and `mcp` are the packages `@glows777/vela-rag`, `@glows777/vela-lark` and `@glows777/vela-mcp`. `@glows777/vela` and the CLI include all seven (see [Packages](sdk.md#packages)).
 
 | Extension | Adds |
 |---|---|
+| `background` | Long-running commands whose result arrives on its own: `background_start`, `background_output`, `background_stop` |
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
@@ -21,7 +22,7 @@ Local binds only `127.0.0.1`, with Bearer authentication and no CORS/cookie supp
 
 ## Loading
 
-**CLI.** All six load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
+**CLI.** All seven load by default, before any discovered or `-e` extensions. Some capabilities stay off until configured: `rag` registers only `/rag` without an embedding API and stays quiet at startup (`/rag` explains the missing configuration), `web` registers only `web_fetch` without a search key, `lark` registers its channel but does not connect without an app id and secret, and `mcp` connects nothing until servers are configured.
 
 To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for example `"extensions": ["-builtin:lark"]`. `--no-extensions` skips them. The full rules are in [Extensions](extensions.md#where-extensions-load-from). `/extensions` in interactive mode lists the loaded extensions and what each registered.
 
@@ -164,6 +165,26 @@ pending inbox size so automatic maintenance is visible.
 **SDK.** `memory()` takes no options. Configure automatic runs through Vela's
 `extensionConfig: { memory: { dream: false } }`, and invoke manual consolidation
 with `await session.prompt('/dream')`.
+
+## background
+
+Long-running commands whose result arrives on its own, for work that must not hold the conversation. Core's `bash` stays synchronous; this extension is the asynchronous one.
+
+**Tools.** They are off by default (`activeByDefault: false`). A channel's topic session turns them on; a CLI or SDK session names them with `+background_start`, `+background_output` and `+background_stop` in its `tools` selection, and a chat's narrowed `tools` list can drop them again.
+
+| Tool | Parameters | Behavior |
+|---|---|---|
+| `background_start` | `command` | Starts `/<shell> -lc <command>` in the session's working directory, with the same environment and authority as `bash` (not a sandbox). Returns `{ id, pid }` at once; ids are `bg-1`, `bg-2`, … per session |
+| `background_output` | `id` | The command's state (`running` or `exited`) and its output tail: the last 2,000 lines or 50KB, whichever is hit first |
+| `background_stop` | `id` | SIGTERM to the process group, SIGKILL two seconds later, then the final tail |
+
+**Delivery.** When a command exits, the session gets one message with the exit state, the command head and the output tail. In the CLI and SDK it is a hidden custom message (`customType: background`) that starts a turn, or joins the current run as a follow-up, so the model never polls. In a channel topic the result enters the gateway queue like any other input: it is answered as a new reply in that topic, with the usual anchor, card, reaction and Stop. A silent topic evaluation needs no special case, and an explicit answer never merges into a passive one.
+
+**Lifecycle.** Commands belong to their session. Stop (an aborted run), `session.close()` and process shutdown end them without a delivery run — no conversation asked for that message — while `background_stop` reports the stop inside the current one. Nothing is persisted, so after a restart an old id answers `Unknown background command … It may have ended with a restart or session close.` Output stays in memory as a bounded tail (oldest bytes dropped first), so a command that prints forever costs at most that buffer; redirect to a file yourself if you need the full output.
+
+**Visibility.** Topic sessions in a channel get the tools. The top-level group session never does — it must stay available — even when its chat lists them, and neither do DMs or other non-topic sessions. See [Channels](channels.md#group-workspaces-memory-and-tools).
+
+**SDK.** `background()` takes an optional `shellPath` (the CLI passes the resolved `shellPath` setting). The CLI loads it by default; the SDK loads it explicitly: `createVela({ extensions: [background()] })` and a session `tools` list that names the three tools.
 
 ## todo
 
