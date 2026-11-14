@@ -30,6 +30,7 @@ export class MessageFeedback {
   private finished?: Promise<void>
   private startPresentation?: () => Promise<void>
   private failed = false
+  private reported = false
   constructor(
     channel: ChannelDefinition,
     readonly message: IncomingMessage,
@@ -42,7 +43,7 @@ export class MessageFeedback {
         this.feedback = value || undefined
       })
       .catch(async (error) => {
-        await this.report(error, 'live')
+        await this.reportPresentation(error, 'live')
         // A failed initial reaction must not remove the run's Stop control.
         // Create presentation only; never retry the acknowledgement.
         this.startPresentation = async () => {
@@ -56,6 +57,16 @@ export class MessageFeedback {
 
   fail(): void {
     this.failed = true
+  }
+
+  /**
+   * One presentation report per input. The live card and the final write can fail separately; the
+   * second failure is the same broken card, so it must not be announced again.
+   */
+  async reportPresentation(error: unknown, phase: Phase): Promise<void> {
+    if (this.reported) return
+    this.reported = true
+    await this.report(error, phase)
   }
 
   event(update: ChannelFeedbackUpdate): void | Promise<void> {
@@ -77,7 +88,7 @@ export class MessageFeedback {
     try {
       await this.feedback?.finish(this.failed ? 'failed' : outcome)
     } catch (error) {
-      await this.report(error, 'final')
+      await this.reportPresentation(error, 'final')
     }
   }
 }
@@ -92,6 +103,7 @@ class DeferredMessageFeedback {
   private feedback?: ChannelRunFeedback
   private starting?: Promise<void>
   private finished?: Promise<void>
+  private reported = false
 
   constructor(
     private channel: ChannelDefinition,
@@ -115,10 +127,17 @@ class DeferredMessageFeedback {
         .then((feedback) => {
           this.feedback = feedback || undefined
         })
-        .catch((error) => this.report(error, 'live'))
+        .catch((error) => this.reportPresentation(error, 'live'))
     }
     const starting = this.starting
     return starting.then(() => this.feedback?.event(update))
+  }
+
+  /** One presentation report per input, shared by the live card and the final write. */
+  async reportPresentation(error: unknown, phase: Phase): Promise<void> {
+    if (this.reported) return
+    this.reported = true
+    await this.report(error, phase)
   }
 
   finish(outcome: ChannelOutcome): Promise<void> {
@@ -131,7 +150,7 @@ class DeferredMessageFeedback {
     try {
       await this.feedback?.finish(outcome)
     } catch (error) {
-      await this.report(error, 'final')
+      await this.reportPresentation(error, 'final')
     }
   }
 }
@@ -498,19 +517,21 @@ export class RunFeedback {
     }
     this.runs.set(id, run)
     this.options.changed(id)
-    let feedbackErrorReported = false
-    const report = async (error: unknown, phase: Phase = 'live') => {
-      if (feedbackErrorReported) return
-      feedbackErrorReported = true
-      await this.presentationError(channelName, msg, error, phase)
-    }
+    // Preparation can hand over a new message object, so the gate lives on the input's feedback,
+    // which the acknowledgement and the run share.
+    const direct = (error: unknown, phase: Phase) =>
+      this.presentationError(channelName, msg, error, phase)
     const feedback =
       channel && msg.passive
-        ? new DeferredMessageFeedback(channel, msg, report)
+        ? new DeferredMessageFeedback(channel, msg, direct)
         : channel
           ? (inputs.find((item) => item.message === input) ??
-            new MessageFeedback(channel, msg, report, false))
+            new MessageFeedback(channel, msg, direct, false))
           : undefined
+    const report = (error: unknown, phase: Phase = 'live') =>
+      feedback
+        ? feedback.reportPresentation(error, phase)
+        : direct(error, phase)
     await feedback?.ready
     const pending: Promise<void>[] = []
     let errorKind: AgentErrorKind | undefined

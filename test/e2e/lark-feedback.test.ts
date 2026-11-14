@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import { drainChannels } from '@glows777/vela-channels/testing'
 import { todo } from '@glows777/vela-core'
 import {
   fauxError,
@@ -424,12 +425,20 @@ test('a card that keeps failing is reported once, retried a bounded number of ti
     await until(() =>
       fake.reactions.some((r) => r.emoji === 'DONE' || r.emoji === 'CrossMark'),
     )
+    // DONE is published before the final write, so it is not a completion barrier: wait for the run
+    await drainChannels(t.vela)
     expect(fake.reactions.at(-1)?.emoji).toBe('DONE')
-    expect(
-      fake.sent.filter((s) => s.text.includes('card permission denied')),
-    ).toHaveLength(1)
     expect(fake.sent.at(-1)?.text).toBe('<at user_id="ou_alice"></at> result')
-    // The live attempt plus the terminal one; the retry budget caps a dead card at five.
+    // One report for one input, even though the live and the final write both failed
+    const reports = fake.sent.filter((s) =>
+      s.text.includes('card permission denied'),
+    )
+    expect(reports).toHaveLength(1)
+    expect(reports[0]?.text).toContain('The task keeps running')
+    expect(
+      t.eventsOf('channel_error').filter((e) => e.source === 'feedback'),
+    ).toHaveLength(1)
+    // The live budget caps a dead card at five attempts; giving up skips the terminal write
     expect(patches).toBeGreaterThanOrEqual(2)
     expect(patches).toBeLessThanOrEqual(5)
   } finally {
