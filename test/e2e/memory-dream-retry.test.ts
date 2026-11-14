@@ -186,44 +186,76 @@ test('a conflict-skipped dream reports its outcome and waits 24 hours from the a
   }
 })
 
-test('manual dream accepts one surrounding JSON fence but still rejects unsafe operations and multiple fences', async () => {
+test('manual dream accepts one surrounding fence, a stray closing fence or trailing prose, and still rejects a second payload', async () => {
   const t = createTestVela({
     generate: [],
     extensionConfig: { memory: { dream: false } },
   })
-  const op = {
+  const op = (index: number) => ({
     action: 'create',
-    filename: 'project_release.md',
-    name: 'release',
+    filename: `project_release-${index}.md`,
+    name: `release-${index}`,
     description: 'Release day',
     type: 'project',
     content: 'Release on Tuesday',
     reason: 'Keep the user-provided schedule',
     source: 'default',
+  })
+  const body = (index: number) =>
+    JSON.stringify({ ops: [op(index)], report: 'Saved release schedule' })
+  const fenced = (text: string) => `\n\`\`\`json\n${text}\n\`\`\`\n`
+  const accepted = [
+    fenced(body(0)),
+    `${body(1)}\n\`\`\``,
+    `${body(2)}\nThese notes record the schedule.`,
+    `${body(3)}\nSaved \`project_release-3.md\`.`,
+  ]
+  for (const [index, reply] of accepted.entries()) {
+    t.model.push(fauxText('Noted'))
+    await t.session.prompt(`Remember that releases happen on Tuesday ${index}`)
+    t.model.pushGenerate(fauxText(reply))
+    await t.session.prompt('/dream')
+    expect(await status(t)).not.toMatch(/failed|skipped/i)
+    expect(existsSync(t.dataPath(`memory/project_release-${index}.md`))).toBe(
+      true,
+    )
+    expect(inbox(t)).toEqual([])
   }
-  const fenced = (ops: unknown[]) =>
-    `\n\`\`\`json\n${JSON.stringify({ ops, report: 'Saved release schedule' })}\n\`\`\`\n`
-  t.model.push(fauxText('Noted'))
-  await t.session.prompt('Remember that releases happen on Tuesday')
-  t.model.pushGenerate(fauxText(fenced([op])))
-  await t.session.prompt('/dream')
-  expect(existsSync(t.dataPath('memory/project_release.md'))).toBe(true)
-  expect(read(t, 'memory/project_release.md')).toContain('Release on Tuesday')
-  expect(inbox(t)).toEqual([])
 
   t.model.push(fauxText('Noted'))
   await t.session.prompt('Keep this evidence until a valid consolidation')
   const retained = read(t, inboxFile)
-  const noteBefore = read(t, 'memory/project_release.md')
+  const noteBefore = read(t, 'memory/project_release-0.md')
   for (const invalid of [
-    fenced([{ ...op, filename: '../escape.md' }]),
-    `${fenced([])}${fenced([])}`,
+    `Here is the JSON:\n${fenced(JSON.stringify({ ops: [], report: 'Leading text' }))}`,
+    `${body(0)}\n${body(0)}`,
+    `${body(0)}\n["project_release-1.md"]`,
+    fenced(
+      JSON.stringify({
+        ops: [{ ...op(0), filename: '../escape.md' }],
+        report: 'Unsafe filename',
+      }),
+    ),
+    `${fenced(JSON.stringify({ ops: [], report: 'First' }))}${fenced(
+      JSON.stringify({ ops: [], report: 'Second' }),
+    )}`,
   ]) {
     t.model.pushGenerate(fauxText(invalid))
     await t.session.prompt('/dream')
     expect(await status(t)).toMatch(/failed/i)
     expect(read(t, inboxFile)).toBe(retained)
-    expect(read(t, 'memory/project_release.md')).toBe(noteBefore)
+    expect(read(t, 'memory/project_release-0.md')).toBe(noteBefore)
     expect(existsSync(t.dataPath('escape.md'))).toBe(false)
   }
+  // The failure log keeps what the model actually sent; the status line stays short.
+  const long = `not JSON ${'p'.repeat(2000)}-TAIL-END`
+  t.model.pushGenerate(fauxText(long))
+  await t.session.prompt('/dream')
+  const entry = read(t, 'memory/.dream/log.md').split('## Dream ').at(-1)!
+  const tail = entry.slice(entry.indexOf('Response tail:'))
+  expect(tail.trimEnd()).toBe(`Response tail:\n${long.slice(-500)}`)
+  expect(entry).toContain('Inbox retained')
+  expect(
+    JSON.parse(read(t, 'memory/.dream/state.json')).lastRun.failed,
+  ).not.toContain('Response tail')
 })

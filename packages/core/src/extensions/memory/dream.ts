@@ -86,6 +86,49 @@ function noteInput({ filePath, ...entry }: MemoryEntry) {
   return { filename: basename(filePath), ...entry }
 }
 
+/** Index just past the first balanced JSON object, ignoring braces inside strings. */
+function objectEnd(text: string): number {
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') quoted = false
+    } else if (char === '"') quoted = true
+    else if (char === '{') depth++
+    else if (char === '}' && --depth === 0) return index + 1
+  }
+  return 0
+}
+
+/** Text after the object that cannot itself be another payload or instruction. */
+function trailingProse(rest: string): boolean {
+  return (
+    !rest || rest === '```' || (!/[{}[\]]/.test(rest) && !rest.includes('```'))
+  )
+}
+
+/**
+ * A model may close a fence it never opened or explain itself afterwards. That
+ * does not make the response unsafe: the object still goes through the schema
+ * and every operation check. A second object, array or fence block could carry
+ * operations the schema never sees, so those stay a parse error, as does text
+ * before the object.
+ */
+function responseJson(text: string): unknown {
+  const payload = text.trim()
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(payload)
+  if (fenced) return JSON.parse(fenced[1]!)
+  const end = payload.startsWith('{') ? objectEnd(payload) : 0
+  const rest = end ? payload.slice(end).trim() : ''
+  return JSON.parse(
+    end && trailingProse(rest) ? payload.slice(0, end) : payload,
+  )
+}
+
 /** A store-local inbox and one background call. Never reads a SessionStorage or writes conversation messages. */
 export class MemoryDream {
   private readonly dir: string
@@ -247,6 +290,7 @@ export class MemoryDream {
     signal: AbortSignal,
   ): Promise<string> {
     let changes = 0
+    let responseText = ''
     const attempt = { collected: this.state().collected ?? 0, inboxLength: 0 }
     try {
       signal.throwIfAborted()
@@ -291,6 +335,7 @@ export class MemoryDream {
         abortSignal: signal,
         maxRetries: 0,
       })
+      responseText = response.text
       session.tracker.record(
         modelId,
         normalizeUsage(response.usage),
@@ -304,9 +349,7 @@ export class MemoryDream {
       signal.throwIfAborted()
       if (response.finishReason !== 'stop' || response.toolCalls.length)
         throw new Error('Incomplete dream response or unexpected tool calls')
-      const payload = response.text.trim()
-      const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(payload)
-      const result = responseSchema.parse(JSON.parse(fenced?.[1] ?? payload))
+      const result = responseSchema.parse(responseJson(responseText))
       const sources = new Set(
         turns.length ? turns.map((turn) => turn.sessionId) : [session.id],
       )
@@ -382,9 +425,11 @@ export class MemoryDream {
       return report
     } catch (error) {
       const failed = error instanceof Error ? error.message : String(error)
+      // The parse message alone cannot tell the next unexpected shape apart.
+      const tail = responseText.trim().slice(-500)
       this.audit({
         ...attempt,
-        report: `[dream] Failed: ${failed}. Inbox retained.`,
+        report: `[dream] Failed: ${failed}. Inbox retained.${tail ? `\n\nResponse tail:\n${tail}` : ''}`,
         changes,
         failed,
       })
