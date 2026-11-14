@@ -15,6 +15,9 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import { z } from 'zod'
+import { prepareWorkspace } from './workspace.ts'
+
+prepareWorkspace()
 
 const repo = 'owner/repo'
 const secret = 'isolated-topic-fixture'
