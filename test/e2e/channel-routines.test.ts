@@ -270,6 +270,60 @@ test('recurrence survives process and logical topic restart and realigns saved m
   expect(second.t.model.calls).toHaveLength(1)
 })
 
+test('a schedule edit applies from the edit time and a restart keeps the new time', async () => {
+  const first = setup()
+  await first.seed({ time: '09:00' })
+  first.t.model.push(fauxText('First run'))
+  await first.t.vela.startChannels()
+  await first.advance('2026-01-05T09:00:00Z')
+  expect(first.t.model.calls).toHaveLength(1)
+  first.clock.advance('2026-01-05T09:30:00Z')
+  const edited = await first.t.internals.gateway.routines.edit(
+    'lark',
+    'oc_group',
+    'reminder',
+    { message: 'Updated message', schedule: { time: '10:15' } },
+  )
+  expect(edited).toMatchObject({
+    id: 'reminder',
+    message: 'Updated message',
+    schedule: { time: '10:15' },
+    nextRun: '2026-01-05 10:15',
+  })
+  first.t.model.push(fauxText('Second run'))
+  await first.advance('2026-01-05T10:15:00Z')
+  expect(first.t.model.calls).toHaveLength(2)
+  expect(first.t.model.calls[1]!.lastUserText).toContain('Updated message')
+  expect((await first.stored())[0].lastFiredAt).toBe('2026-01-05T10:15:00.000Z')
+  first.clock.advance('2026-01-05T10:30:00Z')
+  const moved = await first.t.internals.gateway.routines.edit(
+    'lark',
+    'oc_group',
+    'reminder',
+    { schedule: { time: '10:20' } },
+  )
+  expect(moved).toMatchObject({ nextRun: '2026-01-06 10:20' })
+  expect((await first.stored())[0].scheduleUpdatedAt).toBe(
+    '2026-01-05T10:30:00.000Z',
+  )
+  await first.t.cleanup({ keepDir: true })
+  const second = setup(first.t.cwd)
+  second.clock.advance('2026-01-05T10:45:00Z')
+  await second.t.vela.startChannels()
+  await second.t.internals.gateway.routines.drain()
+  expect(second.t.model.calls).toHaveLength(0)
+  expect((await second.stored())[0]).toMatchObject({
+    id: 'reminder',
+    message: 'Updated message',
+    schedule: { time: '10:20' },
+    lastFiredAt: '2026-01-05T10:15:00.000Z',
+  })
+  second.t.model.push(fauxText('Third run'))
+  await second.advance('2026-01-06T10:20:00Z')
+  expect(second.t.model.calls).toHaveLength(1)
+  expect(second.t.model.calls[0]!.lastUserText).toContain('Updated message')
+})
+
 test('a cancelled routine does not fire', async () => {
   const r = setup()
   await r.seed({ time: '09:00' })

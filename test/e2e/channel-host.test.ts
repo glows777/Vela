@@ -303,6 +303,142 @@ test('idle host routines retain existing schedules, attribution, per-chat isolat
   )
 })
 
+test('idle host routines edit in place, keep identity and stay inside their chat', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    responses: [
+      fauxText('first'),
+      fauxText('second'),
+      fauxText('other channel'),
+    ],
+    extensionConfig: { lark: { timezone: 'UTC' } },
+    extensions: [
+      lark({
+        owners: ['ou_alice'],
+        chats: ['oc_group', 'oc_other'],
+        transport: fake.transport,
+      }),
+      (api) =>
+        api.registerChannel({
+          name: 'second',
+          description: 'Second channel',
+          start() {},
+          stop() {},
+          async send() {},
+        }),
+    ],
+  })
+  const clock = new RoutineClock('2026-01-05T10:30:00Z')
+  t.internals.gateway.routines.clock = clock
+  await t.vela.startChannels()
+  const host = t.vela.channel('lark')
+  await host.submit(input)
+  await drainChannels(t.vela)
+  await host.submit({ ...input, channelId: 'oc_other' })
+  await drainChannels(t.vela)
+  const other = t.vela.channel('second')
+  await other.submit(input)
+  await drainChannels(t.vela)
+  const target = { chatId: 'oc_group' }
+  const routine = await host.routines.create(target, {
+    message: 'Review report',
+    schedule: { time: '09:00' },
+    creator: { id: 'sdk-owner', name: 'SDK Owner' },
+  })
+  expect(routine.nextRun).toBe('2026-01-06 09:00')
+  const edited = await host.routines.edit(target, routine.id, {
+    message: 'Review the updated report',
+  })
+  expect(edited).toMatchObject({
+    id: routine.id,
+    channel: routine.channel,
+    chatId: routine.chatId,
+    targetKey: routine.targetKey,
+    creator: routine.creator,
+    createdAt: routine.createdAt,
+    message: 'Review the updated report',
+    schedule: { time: '09:00' },
+    nextRun: '2026-01-06 09:00',
+  })
+  expect(edited?.scheduleUpdatedAt).toBeUndefined()
+  expect(await host.routines.edit(target, 'missing', { message: 'x' })).toBe(
+    undefined,
+  )
+  expect(
+    await host.routines.edit({ chatId: 'oc_other' }, routine.id, {
+      message: 'x',
+    }),
+  ).toBe(undefined)
+  expect(await other.routines.edit(target, routine.id, { message: 'x' })).toBe(
+    undefined,
+  )
+  await expect(host.routines.edit(target, routine.id, {})).rejects.toThrow(
+    'Provide',
+  )
+  await expect(
+    host.routines.edit(target, routine.id, { message: '   ' }),
+  ).rejects.toThrow('Too small')
+  await expect(
+    host.routines.edit(target, routine.id, {
+      schedule: { at: '2026-01-05T10:00' },
+    }),
+  ).rejects.toThrow('future')
+  const rescheduled = await host.routines.edit(target, routine.id, {
+    schedule: { time: '10:15' },
+  })
+  expect(rescheduled).toMatchObject({
+    id: routine.id,
+    message: 'Review the updated report',
+    schedule: { time: '10:15' },
+    scheduleUpdatedAt: '2026-01-05T10:30:00.000Z',
+    nextRun: '2026-01-06 10:15',
+  })
+  const stored = JSON.parse(
+    await readFile(t.dataPath('channels/routines.json'), 'utf8'),
+  ).routines
+  expect(stored).toHaveLength(1)
+  expect(stored[0]).toMatchObject({
+    id: routine.id,
+    creator: { id: 'sdk-owner' },
+    createdAt: routine.createdAt,
+    message: 'Review the updated report',
+    schedule: { time: '10:15' },
+  })
+  await t.cleanup({ keepDir: true })
+  const restarted = createTestVela({
+    cwd: t.cwd,
+    extensionConfig: { lark: { timezone: 'UTC' } },
+    extensions: [
+      lark({
+        owners: ['ou_alice'],
+        chats: ['oc_group', 'oc_other'],
+        transport: fakeLark().transport,
+      }),
+    ],
+  })
+  const restartedClock = new RoutineClock('2026-01-05T10:45:00Z')
+  restarted.internals.gateway.routines.clock = restartedClock
+  await restarted.vela.startChannels()
+  await restarted.internals.gateway.routines.drain()
+  expect(restarted.model.calls).toHaveLength(0)
+  const listed = restarted.vela.channel('lark').routines.list(target).routines
+  expect(listed).toHaveLength(1)
+  expect(listed[0]).toMatchObject({
+    id: routine.id,
+    message: 'Review the updated report',
+    schedule: { time: '10:15' },
+    scheduleUpdatedAt: '2026-01-05T10:30:00.000Z',
+    nextRun: '2026-01-06 10:15',
+  })
+  restarted.model.push(fauxText('Edited reminder'))
+  restartedClock.advance('2026-01-06T10:15:00Z')
+  await restarted.internals.gateway.routines.drain()
+  expect(restarted.model.calls).toHaveLength(1)
+  expect(restarted.model.calls[0]!.lastUserText).toContain(
+    'Review the updated report',
+  )
+})
+
 test('connection fallback, exception isolation and disposal keep host state detached and prevent late updates', async () => {
   let stopped = 0
   const channels: ChannelDefinition[] = [

@@ -328,6 +328,66 @@ test.each([
   },
 )
 
+test('a routine is edited in place through the tool and fires with its new message at the new schedule', async () => {
+  const r = setup()
+  await r.t.vela.startChannels()
+  const created = JSON.parse(
+    await r.ask({
+      action: 'create',
+      message: 'Old message',
+      schedule: { time: '09:00' },
+    }),
+  )
+  const edited = JSON.parse(
+    await r.ask({ action: 'edit', id: created.id, message: 'New message' }),
+  )
+  expect(edited).toMatchObject({
+    edited: true,
+    id: created.id,
+    message: 'New message',
+    schedule: { time: '09:00' },
+    nextRun: created.nextRun,
+  })
+  expect(edited.scheduleUpdatedAt).toBeUndefined()
+  expect(
+    JSON.parse(
+      await r.ask(
+        { action: 'edit', id: created.id, message: 'other chat' },
+        { chat_id: 'oc_other' },
+      ),
+    ),
+  ).toEqual({ id: created.id, edited: false })
+  expect(
+    JSON.parse(await r.ask({ action: 'edit', id: 'missing', message: 'x' })),
+  ).toEqual({ id: 'missing', edited: false })
+  const rescheduled = JSON.parse(
+    await r.ask({
+      action: 'edit',
+      id: created.id,
+      schedule: { at: '2026-01-05T10:15' },
+    }),
+  )
+  expect(rescheduled).toMatchObject({
+    edited: true,
+    id: created.id,
+    message: 'New message',
+    schedule: { at: '2026-01-05T15:15:00.000Z' },
+    nextRun: '2026-01-05 10:15',
+  })
+  const count = r.fake.sent.length
+  r.fake.deliver(larkEvent({ content: '{"text":"!routines"}' }))
+  await until(() => r.fake.sent.length > count)
+  expect(r.fake.sent.at(-1)!.text).toContain(created.id)
+  expect(r.fake.sent.at(-1)!.text).toContain('2026-01-05 10:15')
+  r.t.model.push(fauxText('Edited reminder'))
+  r.clock.advance('2026-01-05T15:15:00Z')
+  await r.t.internals.gateway.routines.drain()
+  expect(r.t.model.calls.at(-1)!.lastUserText).toContain('New message')
+  expect(r.t.model.calls.at(-1)!.lastUserText).not.toContain('Old message')
+  expect(r.fake.sent.at(-1)!.text).toContain('Edited reminder')
+  expect(await r.stored()).toEqual([])
+})
+
 test('routine management keeps operation-specific fields required and rejects fields from other operations', async () => {
   const r = setup()
   await r.t.vela.startChannels()
@@ -336,6 +396,18 @@ test('routine management keeps operation-specific fields required and rejects fi
     { action: 'create', schedule: { time: '09:00' } },
     { action: 'create', message: '', schedule: { time: '09:00' } },
     { action: 'cancel' },
+    { action: 'edit' },
+    { action: 'edit', id: 'unknown' },
+    { action: 'edit', id: 'unknown', message: '' },
+    { action: 'edit', id: 'unknown', schedule: { time: '25:00' } },
+    { action: 'edit', id: 'unknown', schedule: { time: '09:00', days: [] } },
+    { action: 'edit', id: 'unknown', schedule: { at: 'not-a-date' } },
+    {
+      action: 'edit',
+      id: 'unknown',
+      message: 'ok',
+      creator: { id: 'ou_bob' },
+    },
     { action: 'list', id: 'unexpected' },
     { action: 'cancel', id: 'unknown', message: 'unexpected' },
     {
@@ -346,7 +418,7 @@ test('routine management keeps operation-specific fields required and rejects fi
     },
   ]) {
     expect(await r.ask(input)).toMatch(
-      /Invalid|invalid|Unrecognized|unrecognized|small/,
+      /Invalid|invalid|Unrecognized|unrecognized|Provide|small/,
     )
   }
   expect(r.t.internals.gateway.routines.list('lark', 'oc_group')).toEqual([])
