@@ -2,6 +2,7 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
+import { bindBackgroundDelivery } from './background-seam.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
@@ -15,6 +16,8 @@ export class ChannelSessions {
     private channel: (name: string) => ChannelDefinition | undefined,
     private session: (id: string, options?: SessionOptions) => VelaSession,
     private dataDir: string,
+    /** Queues an input on the channel's existing path; a background result arrives this way. */
+    private deliver: (name: string, msg: IncomingMessage) => void,
   ) {}
 
   open(id: string, name?: string, message?: IncomingMessage): VelaSession {
@@ -75,6 +78,47 @@ export class ChannelSessions {
         )
       }
     }
+    // A background command's exit is an ordinary queued input for this topic, not a run started
+    // from an extension: the gateway supplies the anchor, card, reaction, Stop and ordering.
+    const topic =
+      record?.rootId && record.threadId
+        ? { rootId: record.rootId, threadId: record.threadId }
+        : undefined
+    bindBackgroundDelivery(
+      session,
+      topic
+        ? (_session, result) =>
+            this.deliverBackground(
+              key,
+              channel.name,
+              topic.rootId,
+              topic.threadId,
+              result.text,
+            )
+        : undefined,
+    )
     return session
+  }
+
+  private deliverBackground(
+    key: string,
+    channelName: string,
+    rootId: string,
+    threadId: string,
+    text: string,
+  ): void {
+    const record = this.directory.get(key)
+    if (!record || record.rootId !== rootId) return
+    // A topic result is attributed to the topic's requester, like a routine: the reply then
+    // mentions a person who exists, and the text says it came from a background command.
+    this.deliver(channelName, {
+      channelId: record.chatId,
+      chatKind: 'group',
+      senderId: record.requester.id,
+      senderName: record.requester.name,
+      text,
+      topic: { rootId, threadId },
+      replyToId: rootId,
+    })
   }
 }

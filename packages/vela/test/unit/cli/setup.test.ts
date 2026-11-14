@@ -327,6 +327,7 @@ test('an extension that throws or rejects while loading is reported and skipped,
 
 test('the removed supabase built-in is unknown, so an old -builtin:supabase fails loudly', () => {
   expect(Object.keys(BUILTIN_EXTENSIONS)).toEqual([
+    'background',
     'memory',
     'rag',
     'web',
