@@ -1,6 +1,5 @@
 import { join } from 'node:path'
 import type {
-  ExtensionConfigDefinition,
   SessionScope,
   VelaExtension,
   VelaSession,
@@ -214,11 +213,4 @@ function searchReport(store: MemoryStore, query: string): string {
         `  [score=${h.score.toFixed(2)}] [${h.entry.type}] ${h.entry.name} — ${h.entry.description}`,
     ),
   ].join('\n')
-}
-
-export const memoryConfig: ExtensionConfigDefinition = {
-  name: 'memory',
-  resolve(section) {
-    return { ...section }
-  },
 }

@@ -42,6 +42,10 @@ If you change any package export, run `bun run api:update` and commit its `packa
 
 [test/README.md](test/README.md) explains how the tests are organized. In short: unit tests live in `packages/*/test/unit/` mirroring each package’s `src/`; workspace architecture tests live in `test/unit/`, end-to-end flows live in `test/e2e/` and drive Vela with the scripted faux model. To fix a bug, first add a faux scenario that reproduces it.
 
+## Review and agent notes
+
+[agent-lessons.md](agent-lessons.md) records confirmed misses and the mechanism that should catch them now; read it when diagnosing a review finding. [wake-routing.md](wake-routing.md) documents how GitHub labels and comments route wake-ups. Both are contributor material, so they live next to this file rather than in the user docs.
+
 ## Pull requests
 
 - One change per pull request, with a description of what changes for users and how you tested it.
