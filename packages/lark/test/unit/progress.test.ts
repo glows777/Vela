@@ -34,7 +34,7 @@ async function until(check: () => boolean) {
   }
 }
 
-test('a transient card write failure is reported once and the card keeps updating', async () => {
+test('a transient live write failure is reported once and the card keeps updating', async () => {
   const reports: unknown[] = []
   const cards: LarkCard[] = []
   let attempts = 0
@@ -60,7 +60,7 @@ test('a transient card write failure is reported once and the card keeps updatin
   expect(cards.at(-1)?.header.title.content).toBe('Finished')
 })
 
-test('a card that keeps failing stops after its retry budget and still reports once', async () => {
+test('a card that keeps failing live stops after its retry budget and reports once', async () => {
   const reports: unknown[] = []
   let attempts = 0
   const progress = new LarkProgress(
@@ -83,4 +83,49 @@ test('a card that keeps failing stops after its retry budget and still reports o
     'card permission denied',
   )
   expect(attempts).toBe(5)
+})
+
+test('the first failed write may be the final card: it retries instead of giving up', async () => {
+  const reports: unknown[] = []
+  const cards: LarkCard[] = []
+  let attempts = 0
+  const progress = new LarkProgress(
+    transport(async (_messageId, next) => {
+      attempts++
+      if (attempts === 1) throw new Error('read ECONNRESET')
+      cards.push(next)
+    }),
+    'card_3',
+    card,
+    async (error) => {
+      reports.push(error)
+    },
+    { finalRetryDelays: [1] },
+  )
+  // A text-only run settles before its first live write, so the terminal write fails first
+  await progress.finish('done')
+  expect(attempts).toBe(2)
+  expect(cards.at(-1)?.header.title.content).toBe('Finished')
+  // The caller reports a final failure; nothing was reported as if the run were still live
+  expect(reports).toEqual([])
+})
+
+test('a final card that keeps failing exhausts its own budget and rejects once', async () => {
+  let attempts = 0
+  const progress = new LarkProgress(
+    transport(async () => {
+      attempts++
+      throw new Error('card permission denied')
+    }),
+    'card_4',
+    card,
+    async () => {
+      throw new Error('unexpected report')
+    },
+    { finalRetryDelays: [1, 1] },
+  )
+  await expect(progress.finish('done')).rejects.toThrow(
+    'card permission denied',
+  )
+  expect(attempts).toBe(3)
 })

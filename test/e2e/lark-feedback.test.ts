@@ -14,8 +14,8 @@ import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
-async function until(check: () => boolean) {
-  const deadline = Date.now() + 2000
+async function until(check: () => boolean, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
   while (!check()) {
     if (Date.now() > deadline) throw new Error('Feedback did not arrive')
     await new Promise((resolve) => setTimeout(resolve, 1))
@@ -438,29 +438,12 @@ test('a card that keeps failing is reported once, retried a bounded number of ti
   }
 })
 
-test('a transient card patch failure is reported once and the card keeps updating', async () => {
-  let release!: () => void
+test('a terminal card patch that fails once is retried instead of claiming the run is still alive', async () => {
   let failed = false
-  const { fake, t, start } = setup(
-    [fauxToolCall('hold_pause', {}), fauxText('result')],
-    [
-      function hold(api) {
-        api.registerTool({
-          name: 'pause',
-          description: 'Wait',
-          inputSchema: z.object({}),
-          execute: async () => {
-            await new Promise<void>((resolve) => {
-              release = resolve
-            })
-            return 'ok'
-          },
-        })
-      },
-    ],
-  )
+  const { fake, t, start } = setup([fauxText('answer')])
   const patch = fake.transport.patchCard
   fake.transport.patchCard = async (messageId, card) => {
+    // A text-only run settles before its first coalesced live write, so attempt 1 is the terminal one
     if (!failed) {
       failed = true
       throw new Error('read ECONNRESET')
@@ -470,24 +453,54 @@ test('a transient card patch failure is reported once and the card keeps updatin
   await start()
   try {
     fake.deliver(topic())
-    await until(() => fake.sent.some((s) => s.text.includes('read ECONNRESET')))
-    const report = fake.sent.filter((s) => s.text.includes('read ECONNRESET'))
-    expect(report).toHaveLength(1)
-    expect(report[0]?.text).toContain('still running')
-    // The card recovers on the next scheduled attempt instead of staying frozen
-    const deadline = Date.now() + 5000
-    while (fake.patches.length === 0) {
-      if (Date.now() > deadline) throw new Error('Card never recovered')
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
-    release()
     await until(() =>
       fake.reactions.some((r) => r.emoji === 'DONE' || r.emoji === 'CrossMark'),
     )
+    expect(fake.sent.at(-1)?.text).toBe('<at user_id="ou_alice"></at> answer')
     expect(fake.reactions.at(-1)?.emoji).toBe('DONE')
-    expect(fake.patches.at(-1)?.card.header.title.content).toBe('Finished')
+    await until(
+      () => fake.patches.at(-1)?.card.header.title.content === 'Finished',
+    )
+    // The retry recovered the card, so there is nothing to report and no false liveness claim
+    expect(fake.sent.some((s) => s.text.includes('ECONNRESET'))).toBe(false)
+    expect(t.eventsOf('channel_error')).toEqual([])
   } finally {
-    release?.()
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('a terminal card that stays unwritten is reported as finished, never as still running', async () => {
+  const { fake, t, start } = setup([fauxText('answer')])
+  let attempts = 0
+  fake.transport.patchCard = async () => {
+    attempts++
+    throw new Error('card permission denied')
+  }
+  await start()
+  try {
+    fake.deliver(topic())
+    await until(() =>
+      fake.reactions.some((r) => r.emoji === 'DONE' || r.emoji === 'CrossMark'),
+    )
+    expect(fake.sent.at(-1)?.text).toBe('<at user_id="ou_alice"></at> answer')
+    expect(fake.reactions.at(-1)?.emoji).toBe('DONE')
+    // The final write spends its two retries (1 s + 2 s) before it is reported
+    await until(
+      () => fake.sent.some((s) => s.text.includes('card permission denied')),
+      10_000,
+    )
+    const report = fake.sent.filter((s) =>
+      s.text.includes('card permission denied'),
+    )
+    expect(report).toHaveLength(1)
+    expect(report[0]?.text).toContain('The task has ended')
+    expect(report[0]?.text).not.toContain('still running')
+    // The first write plus the final budget, not an unbounded retry loop
+    expect(attempts).toBe(3)
+    const errors = t.eventsOf('channel_error')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.source).toBe('feedback')
+  } finally {
     await t.internals.gateway.stopAll()
   }
 })
