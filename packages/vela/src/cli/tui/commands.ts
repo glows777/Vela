@@ -1,3 +1,5 @@
+import { keyLabel } from './editor.ts'
+
 /** Commands the TUI handles itself (besides extension and CLI slash commands), for autocomplete */
 export const TUI_COMMANDS = [
   { name: 'new', description: 'Start a new session' },
@@ -40,12 +42,12 @@ export const CLI_COMMANDS = [
 
 export const HOTKEYS = [
   'Enter send; while running, Enter = steer (inserted after the current step)',
-  'Alt+Enter while running, queue a follow-up (after the task finishes)',
-  'Alt+Up move queued messages back to the editor',
-  'Esc interrupt (queued messages go back to the editor), or cancel a ! command',
+  `${keyLabel('followUp')} while running, queue a follow-up (after the task finishes)`,
+  `${keyLabel('dequeue')} move queued messages back to the editor`,
+  `${keyLabel('interrupt')} interrupt (queued messages go back to the editor), or cancel a ! command`,
   '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',
-  'Shift+Tab cycle thinking level · Ctrl+L select model · Ctrl+P / Shift+Ctrl+P cycle models',
-  'Ctrl+O expand / collapse tool output · Ctrl+T show / hide thinking',
-  `${process.platform === 'win32' ? 'Alt+V' : 'Ctrl+V'} paste a clipboard image as a file path for read_file`,
-  'Ctrl+C clear editor, twice to exit · Ctrl+D exit when editor is empty',
+  `${keyLabel('cycleThinking')} cycle thinking level · ${keyLabel('selectModel')} select model · ${keyLabel('cycleModelForward')} / ${keyLabel('cycleModelBackward')} cycle models`,
+  `${keyLabel('expandTools')} expand / collapse tool output · ${keyLabel('toggleThinking')} show / hide thinking`,
+  `${keyLabel('pasteImage')} paste a clipboard image as a file path for read_file`,
+  `${keyLabel('clear')} clear editor, twice to exit · ${keyLabel('exit')} exit when editor is empty`,
 ]
