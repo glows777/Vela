@@ -6,7 +6,6 @@ import type {
   ChannelConnection,
   ChannelDefinition,
   ChannelFeedbackUpdate,
-  ChannelOutcome,
   ChannelRunFeedback,
   IncomingMessage,
   OutgoingMessage,
@@ -40,7 +39,7 @@ import {
 } from './history.ts'
 import { errorMessage } from './log.ts'
 import { imageKeys, messageText, safeName } from './messages.ts'
-import { LarkProgress } from './progress.ts'
+import { finishProgress, LarkProgress } from './progress.ts'
 import { LarkTopics } from './topics.ts'
 import type {
   LarkMessageEvent,
@@ -308,8 +307,9 @@ export class LarkChannel implements ChannelDefinition {
         const session = this.topics.runtime?.session(
           channelSessionId(this.name, msg.channelId, msg.topic?.rootId),
         )
-        const items = session && latestTodoList(session.getBranch())?.items
-        return new LarkProgress(this.transport, messageId, card, report, items)
+        return new LarkProgress(this.transport, messageId, card, report, {
+          initialTodos: session && latestTodoList(session.getBranch())?.items,
+        })
       }
     } catch (error) {
       clear()
@@ -329,11 +329,9 @@ export class LarkChannel implements ChannelDefinition {
         ? await transport.addReaction(messageId, 'OnIt')
         : undefined
     let progress: LarkProgress | undefined
-    let report: ((error: unknown) => Promise<void>) | undefined
     return {
       event: (update) => {
         if (update.type === 'agent') return progress?.event(update.event)
-        report = update.error
         return this.createControls(
           update.message,
           update,
@@ -342,23 +340,8 @@ export class LarkChannel implements ChannelDefinition {
           progress = value || undefined
         })
       },
-      finish: async (outcome: ChannelOutcome) => {
-        if (outcome !== 'silent') {
-          try {
-            await progress?.finish(outcome)
-          } catch (error) {
-            await report?.(error)
-          }
-        }
-        if (transport && messageId && reactionId) {
-          await transport.removeReaction(messageId, reactionId)
-          if (outcome !== 'silent')
-            await transport.addReaction(
-              messageId,
-              outcome === 'done' ? 'DONE' : 'CrossMark',
-            )
-        }
-      },
+      finish: (outcome) =>
+        finishProgress({ transport, messageId, reactionId, progress, outcome }),
     }
   }
 

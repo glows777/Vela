@@ -20,6 +20,9 @@ import type {
   IncomingMessage,
 } from './types.ts'
 
+/** Whether the run that owns a presentation can still retry it. */
+type Phase = 'live' | 'final'
+
 /** An admitted input keeps its acknowledgement across asynchronous task handoff. */
 export class MessageFeedback {
   readonly ready: Promise<void>
@@ -30,7 +33,7 @@ export class MessageFeedback {
   constructor(
     channel: ChannelDefinition,
     readonly message: IncomingMessage,
-    private report: (error: unknown) => Promise<void>,
+    private report: (error: unknown, phase: Phase) => Promise<void>,
     acknowledge = true,
   ) {
     this.ready = Promise.resolve()
@@ -39,7 +42,7 @@ export class MessageFeedback {
         this.feedback = value || undefined
       })
       .catch(async (error) => {
-        await this.report(error)
+        await this.report(error, 'live')
         // A failed initial reaction must not remove the run's Stop control.
         // Create presentation only; never retry the acknowledgement.
         this.startPresentation = async () => {
@@ -74,7 +77,7 @@ export class MessageFeedback {
     try {
       await this.feedback?.finish(this.failed ? 'failed' : outcome)
     } catch (error) {
-      await this.report(error)
+      await this.report(error, 'final')
     }
   }
 }
@@ -93,7 +96,7 @@ class DeferredMessageFeedback {
   constructor(
     private channel: ChannelDefinition,
     private message: IncomingMessage,
-    private report: (error: unknown) => Promise<void>,
+    private report: (error: unknown, phase: Phase) => Promise<void>,
   ) {}
 
   event(update: ChannelFeedbackUpdate): void | Promise<void> {
@@ -112,7 +115,7 @@ class DeferredMessageFeedback {
         .then((feedback) => {
           this.feedback = feedback || undefined
         })
-        .catch(this.report)
+        .catch((error) => this.report(error, 'live'))
     }
     const starting = this.starting
     return starting.then(() => this.feedback?.event(update))
@@ -128,7 +131,7 @@ class DeferredMessageFeedback {
     try {
       await this.feedback?.finish(outcome)
     } catch (error) {
-      await this.report(error)
+      await this.report(error, 'final')
     }
   }
 }
@@ -257,7 +260,8 @@ export class RunFeedback {
                 if (action !== 'queue') decision = apply(action)
                 return true
               },
-              error: (error) => this.feedbackError(channelName, msg, error),
+              error: (error) =>
+                this.presentationError(channelName, msg, error, 'live'),
             }),
           )
           .catch((error) =>
@@ -383,7 +387,8 @@ export class RunFeedback {
         new MessageFeedback(
           channel,
           msg,
-          (error) => this.feedbackError(channel.name, msg, error),
+          (error, phase) =>
+            this.presentationError(channel.name, msg, error, phase),
           acknowledge && !msg.externalEvent && !msg.handoff,
         ),
       ]
@@ -392,11 +397,55 @@ export class RunFeedback {
     return inputs
   }
 
+  /** Admission, preparation, a command or a steer could not be applied: the task itself failed. */
   async feedbackError(
     channelName: string,
     msg: IncomingMessage,
     error: unknown,
   ): Promise<void> {
+    this.publishError(channelName, msg, error)
+    this.options.logger.error(
+      `[${channelName}] Feedback failed: ${errorMessage(error)}`,
+    )
+    if (msg.passive || msg.externalEvent) return
+    await this.sendErrorText(
+      channelName,
+      msg,
+      `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
+    )
+  }
+
+  /**
+   * The acknowledgement or progress card could not be updated. The run is unaffected, so this is not a
+   * task failure; a live run keeps going and retries the update, and a final one has already delivered.
+   */
+  async presentationError(
+    channelName: string,
+    msg: IncomingMessage,
+    error: unknown,
+    phase: Phase,
+  ): Promise<void> {
+    this.publishError(channelName, msg, error, 'feedback')
+    this.options.logger.error(
+      `[${channelName}] Feedback failed: ${errorMessage(error)}`,
+    )
+    if (msg.passive || msg.externalEvent) return
+    const cause = errorMessage(error)
+    await this.sendErrorText(
+      channelName,
+      msg,
+      phase === 'final'
+        ? `Couldn't finalize the progress card: ${cause}. The task has ended; this only affects the card.`
+        : `Couldn't update the progress card: ${cause}. The task keeps running and its answer is still delivered; the card update is retried. Check the bot's permissions and connection if this keeps happening.`,
+    )
+  }
+
+  private publishError(
+    channelName: string,
+    msg: IncomingMessage,
+    error: unknown,
+    source?: 'feedback',
+  ): void {
     const session = this.options.find(
       channelSessionId(channelName, msg.channelId, msg.topic?.rootId),
     )
@@ -407,16 +456,20 @@ export class RunFeedback {
         senderId: msg.senderId,
         error,
         aborted: false,
+        ...(source ? { source } : {}),
       })
-    this.options.logger.error(
-      `[${channelName}] Feedback failed: ${errorMessage(error)}`,
-    )
-    if (msg.passive || msg.externalEvent) return
+  }
+
+  private async sendErrorText(
+    channelName: string,
+    msg: IncomingMessage,
+    text: string,
+  ): Promise<void> {
     try {
       await this.options.channel(channelName)?.send({
         ...msg,
         recipientId: msg.senderId,
-        text: `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
+        text,
       })
     } catch (sendError) {
       this.options.logger.error(
@@ -446,10 +499,10 @@ export class RunFeedback {
     this.runs.set(id, run)
     this.options.changed(id)
     let feedbackErrorReported = false
-    const report = async (error: unknown) => {
+    const report = async (error: unknown, phase: Phase = 'live') => {
       if (feedbackErrorReported) return
       feedbackErrorReported = true
-      await this.feedbackError(channelName, msg, error)
+      await this.presentationError(channelName, msg, error, phase)
     }
     const feedback =
       channel && msg.passive

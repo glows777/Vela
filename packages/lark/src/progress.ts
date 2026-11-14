@@ -66,6 +66,18 @@ function inputSummary(args: unknown): string {
   return plain(value, 60)
 }
 
+/**
+ * Retry delays after a failed live card write. A transient network error must not freeze the card for
+ * the rest of the run; four retries bound a permanently dead card to five attempts.
+ */
+const RETRY_DELAYS = [1_000, 2_000, 4_000, 8_000] as const
+
+/**
+ * The answer is already delivered when the final card is written, and the outcome reaction waits for
+ * it: the final write gets two retries rather than the live schedule, so `DONE` is not held for long.
+ */
+const FINAL_RETRY_DELAYS = [1_000, 2_000] as const
+
 /** One ordered writer for one shared card. Event listeners never await network I/O. */
 export class LarkProgress {
   private rows = new Map<string, { state: string; label: string }>()
@@ -74,7 +86,12 @@ export class LarkProgress {
   private stage = 'Working'
   private pending = false
   private closed = false
+  /** Set only after the retry budget is spent; a later write cannot revive a dead card. */
   private failure?: unknown
+  private failures = 0
+  private retryAt = 0
+  private readonly retryDelays: readonly number[]
+  private readonly finalRetryDelays: readonly number[]
   private writing: Promise<void> = Promise.resolve()
   private timer?: ReturnType<typeof setTimeout>
   private lastWrite = Date.now()
@@ -84,9 +101,17 @@ export class LarkProgress {
     private messageId: string,
     private card: LarkCard,
     private report: (error: unknown) => Promise<void>,
-    initialTodos?: readonly TodoItem[],
+    options: {
+      initialTodos?: readonly TodoItem[]
+      /** Delay before each live retry; the production schedule bounds a dead card to five attempts. */
+      retryDelays?: readonly number[]
+      /** Delay before each final retry; the answer is already delivered by then. */
+      finalRetryDelays?: readonly number[]
+    } = {},
   ) {
-    if (initialTodos?.length) this.todos = [...initialTodos]
+    if (options.initialTodos?.length) this.todos = [...options.initialTodos]
+    this.retryDelays = options.retryDelays ?? RETRY_DELAYS
+    this.finalRetryDelays = options.finalRetryDelays ?? FINAL_RETRY_DELAYS
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
   }
 
@@ -170,10 +195,21 @@ export class LarkProgress {
             this.lastWrite = Date.now()
             try {
               await this.transport.patchCard(this.messageId, this.snapshot())
+              this.failures = 0
+              this.retryAt = 0
             } catch (error) {
-              this.failure = error
-              clearInterval(this.heartbeat)
-              await this.report(error)
+              this.failures++
+              // One report per run: a retry that fails again must not repeat the message.
+              if (this.failures === 1) await this.report(error)
+              const delay = this.retryDelays[this.failures - 1]
+              if (delay === undefined) {
+                this.failure = error
+                clearInterval(this.heartbeat)
+              } else {
+                this.retryAt = Date.now() + delay
+                // Re-arm even without a new event, so a quiet run still retries on schedule.
+                this.pending = true
+              }
             }
           })
           .finally(() => {
@@ -181,7 +217,11 @@ export class LarkProgress {
             if (this.pending) this.schedule()
           })
       },
-      Math.max(0, 250 - (Date.now() - this.lastWrite)),
+      Math.max(
+        0,
+        250 - (Date.now() - this.lastWrite),
+        this.retryAt - Date.now(),
+      ),
     )
   }
 
@@ -196,6 +236,12 @@ export class LarkProgress {
       await new Promise((resolve) => setTimeout(resolve, delay))
   }
 
+  /**
+   * Writes the terminal card with its own retry budget and throws when it stays unwritten. The caller
+   * reports that failure as final, because the answer has already been delivered: it must not claim the
+   * task is still running. A live failure reported earlier already covered this card, so nothing is
+   * reported here.
+   */
   async finish(outcome: Exclude<ChannelOutcome, 'silent'>): Promise<void> {
     await this.drain()
     if (this.failure) throw this.failure
@@ -203,11 +249,55 @@ export class LarkProgress {
       outcome
     ]
     this.lastWrite = Date.now()
-    try {
-      await this.transport.patchCard(this.messageId, this.snapshot(true))
-    } catch (error) {
-      this.failure = error
-      throw error
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.transport.patchCard(this.messageId, this.snapshot(true))
+        return
+      } catch (error) {
+        const delay = this.finalRetryDelays[attempt]
+        if (delay === undefined) {
+          this.failure = error
+          throw error
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
     }
   }
+}
+
+/**
+ * Publishes the outcome reaction and then the final card. The reaction comes first: it does not depend
+ * on the card, so a dead card cannot hold `DONE` / `CrossMark` back while its final write is retried.
+ * A failure is thrown for the gateway, which reports it as a final presentation failure.
+ */
+export async function finishProgress(options: {
+  transport: LarkTransport | undefined
+  messageId: string | undefined
+  reactionId: string | undefined
+  progress: LarkProgress | undefined
+  outcome: ChannelOutcome
+}): Promise<void> {
+  const { transport, messageId, reactionId, progress, outcome } = options
+  let failure: unknown
+  if (transport && messageId && reactionId) {
+    try {
+      await transport.removeReaction(messageId, reactionId)
+      if (outcome !== 'silent')
+        await transport.addReaction(
+          messageId,
+          outcome === 'done' ? 'DONE' : 'CrossMark',
+        )
+    } catch (error) {
+      failure = error
+    }
+  }
+  if (outcome !== 'silent') {
+    try {
+      await progress?.finish(outcome)
+    } catch (error) {
+      // The answer is already delivered: this must never read as a still-running task.
+      failure ??= error
+    }
+  }
+  if (failure) throw failure
 }

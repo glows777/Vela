@@ -624,6 +624,10 @@ test.each(['rejected', 'missing receipt', 'index write failure'] as const)(
 test('a human input still receives its own admission-write error reply', async () => {
   const f = await fixture()
   await f.vela.startChannels()
+  const errors: { source?: 'feedback' }[] = []
+  f.vela.subscribe((event) => {
+    if (event.type === 'channel_error') errors.push(event)
+  })
   f.model.push(fauxText('Original human result'))
   await f.human('First human task')
   const path = join(f.cwd, 'data/channels/index.json')
@@ -639,6 +643,9 @@ test('a human input still receives its own admission-write error reply', async (
         text: expect.stringContaining("Couldn't update task feedback:"),
       }),
     ])
+    // Admission failed, so the task never ran: this is not a presentation-only failure
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.source).toBeUndefined()
     expect(f.model.calls).toHaveLength(1)
   } finally {
     await rm(path, { recursive: true })
