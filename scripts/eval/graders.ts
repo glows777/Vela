@@ -15,6 +15,7 @@ export const scenarioIds = [
   'G6',
   'G7',
   'G8',
+  'G9',
   'M1',
 ] as const
 export type ScenarioId = (typeof scenarioIds)[number]
@@ -29,7 +30,13 @@ export interface Call {
 export interface Evidence {
   answers: string[]
   calls: Call[]
-  deliveries: { scope: 'group' | 'topic'; text: string; topicRootId?: string }[]
+  deliveries: {
+    scope: 'group' | 'topic'
+    text: string
+    topicRootId?: string
+    /** Service message this reply answers; the trigger or one burst message. */
+    messageId?: string
+  }[]
   inputs?: { topicRootId: string; text: string }[]
   /** Actual entries snapshotted after topic 1, before topic 2 can write. */
   memoryEntries?: { name: string; content: string }[]
@@ -38,6 +45,8 @@ export interface Evidence {
   recallPaths?: { workspace: string; artifactDir: string }
   topics: string[]
   compactions: number[]
+  /** Provider invocations recorded for this attempt, including failed and summary calls. */
+  modelRequests?: number
   files: Record<string, string>
   changed: string[]
   validation: Record<string, boolean>
@@ -531,6 +540,24 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
               (/handoff/i.test(JSON.stringify(call.args)) ||
                 fact(JSON.stringify(call.output ?? ''))),
           ),
+      )
+      break
+    }
+    case 'G9': {
+      // Only a reply anchored to a burst message answers the discussion; the trigger has its own reply.
+      const burst = e.deliveries.filter(
+        (item) =>
+          item.scope === 'group' && item.messageId?.startsWith('burst_'),
+      )
+      const answering = burst.filter((item) => chars(item.text) > 0)
+      check(
+        'burst answered',
+        answering.length === 1 && /\btag\b/i.test(answering[0]!.text),
+      )
+      // One trigger run plus one merged evaluation; tool calls or a provider retry may add a request.
+      check(
+        'one merged evaluation',
+        e.modelRequests !== undefined && e.modelRequests <= 4,
       )
       break
     }

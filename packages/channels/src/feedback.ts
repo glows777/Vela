@@ -23,6 +23,23 @@ import type {
 /** Whether the run that owns a presentation can still retry it. */
 type Phase = 'live' | 'final'
 
+/**
+ * One presentation report per input (or per merged passive batch). The live card and the final
+ * write can fail separately; the second failure is the same broken presentation, so it is silent.
+ */
+class PresentationGate {
+  private reported = false
+  private readonly report: (error: unknown, phase: Phase) => Promise<void>
+  constructor(report: (error: unknown, phase: Phase) => Promise<void>) {
+    this.report = report
+  }
+  run(error: unknown, phase: Phase = 'live'): Promise<void> {
+    if (this.reported) return Promise.resolve()
+    this.reported = true
+    return this.report(error, phase)
+  }
+}
+
 /** An admitted input keeps its acknowledgement across asynchronous task handoff. */
 export class MessageFeedback {
   readonly ready: Promise<void>
@@ -30,13 +47,16 @@ export class MessageFeedback {
   private finished?: Promise<void>
   private startPresentation?: () => Promise<void>
   private failed = false
-  private reported = false
+  private readonly gate: PresentationGate
   constructor(
     channel: ChannelDefinition,
     readonly message: IncomingMessage,
     private report: (error: unknown, phase: Phase) => Promise<void>,
     acknowledge = true,
   ) {
+    this.gate = new PresentationGate((error, phase) =>
+      this.report(error, phase),
+    )
     this.ready = Promise.resolve()
       .then(() => channel.startRun?.(message, { acknowledge }))
       .then((value) => {
@@ -59,14 +79,9 @@ export class MessageFeedback {
     this.failed = true
   }
 
-  /**
-   * One presentation report per input. The live card and the final write can fail separately; the
-   * second failure is the same broken card, so it must not be announced again.
-   */
-  async reportPresentation(error: unknown, phase: Phase): Promise<void> {
-    if (this.reported) return
-    this.reported = true
-    await this.report(error, phase)
+  /** The live card and the final write share one report for this input. */
+  reportPresentation(error: unknown, phase: Phase): Promise<void> {
+    return this.gate.run(error, phase)
   }
 
   event(update: ChannelFeedbackUpdate): void | Promise<void> {
@@ -103,13 +118,16 @@ class DeferredMessageFeedback {
   private feedback?: ChannelRunFeedback
   private starting?: Promise<void>
   private finished?: Promise<void>
-  private reported = false
+  private readonly gate: PresentationGate
 
   constructor(
     private channel: ChannelDefinition,
     private message: IncomingMessage,
-    private report: (error: unknown, phase: Phase) => Promise<void>,
-  ) {}
+    report: (error: unknown, phase: Phase) => Promise<void>,
+    gate = new PresentationGate(report),
+  ) {
+    this.gate = gate
+  }
 
   event(update: ChannelFeedbackUpdate): void | Promise<void> {
     if (!this.starting) {
@@ -133,11 +151,9 @@ class DeferredMessageFeedback {
     return starting.then(() => this.feedback?.event(update))
   }
 
-  /** One presentation report per input, shared by the live card and the final write. */
-  async reportPresentation(error: unknown, phase: Phase): Promise<void> {
-    if (this.reported) return
-    this.reported = true
-    await this.report(error, phase)
+  /** The live card and the final write share one report for this input. */
+  reportPresentation(error: unknown, phase: Phase): Promise<void> {
+    return this.gate.run(error, phase)
   }
 
   finish(outcome: ChannelOutcome): Promise<void> {
@@ -152,6 +168,52 @@ class DeferredMessageFeedback {
     } catch (error) {
       await this.reportPresentation(error, 'final')
     }
+  }
+}
+
+/**
+ * A merged passive evaluation reacts to every input it read, but only the
+ * answered message finishes with DONE; the others just lose their reaction.
+ */
+class MergedMessageFeedback {
+  readonly ready = Promise.resolve()
+  private readonly inputs: {
+    answered: boolean
+    feedback: DeferredMessageFeedback
+  }[]
+
+  private readonly gate: PresentationGate
+
+  constructor(
+    channel: ChannelDefinition,
+    messages: IncomingMessage[],
+    report: (error: unknown, phase: Phase) => Promise<void>,
+  ) {
+    // One burst is one evaluation: its inputs share a report instead of one each.
+    this.gate = new PresentationGate(report)
+    this.inputs = messages.map((message, index) => ({
+      answered: index === messages.length - 1,
+      feedback: new DeferredMessageFeedback(
+        channel,
+        message,
+        report,
+        this.gate,
+      ),
+    }))
+  }
+
+  /** The live card and the final write share one report for the batch. */
+  reportPresentation(error: unknown, phase: Phase): Promise<void> {
+    return this.gate.run(error, phase)
+  }
+
+  async event(update: ChannelFeedbackUpdate): Promise<void> {
+    for (const input of this.inputs) await input.feedback.event(update)
+  }
+
+  async finish(outcome: ChannelOutcome): Promise<void> {
+    for (const input of this.inputs)
+      await input.feedback.finish(input.answered ? outcome : 'silent')
   }
 }
 
@@ -505,6 +567,8 @@ export class RunFeedback {
     session: VelaSession,
     inputs: MessageFeedback[],
     input: IncomingMessage,
+    /** Every passive input one prompt covers, oldest first; the last one is answered. */
+    batch?: IncomingMessage[],
   ): Promise<ChannelOutcome | undefined> {
     this.active.add(session)
     const run: ChannelRun = {
@@ -523,7 +587,9 @@ export class RunFeedback {
       this.presentationError(channelName, msg, error, phase)
     const feedback =
       channel && msg.passive
-        ? new DeferredMessageFeedback(channel, msg, direct)
+        ? batch
+          ? new MergedMessageFeedback(channel, batch, direct)
+          : new DeferredMessageFeedback(channel, msg, direct)
         : channel
           ? (inputs.find((item) => item.message === input) ??
             new MessageFeedback(channel, msg, direct, false))
@@ -600,7 +666,7 @@ export class RunFeedback {
       await this.options.directory.begin(id, msg)
       if (run.stopped)
         throw new DOMException('Stopped before prompting', 'AbortError')
-      this.options.recovery.track(id, session, msg)
+      this.options.recovery.track(id, session, batch ?? msg)
       promptStarted = true
       this.options.logger.debug(
         `[${channelName}] input ${msg.replyToId ?? '-'} prompt at=${new Date().toISOString()}`,
@@ -665,8 +731,8 @@ export class RunFeedback {
     ) {
       await this.options.directory.forget(
         id,
-        [msg, ...run.inputs.map((item) => item.message)].flatMap((item) =>
-          item.replyToId ? [item.replyToId] : [],
+        (batch ?? [msg, ...run.inputs.map((item) => item.message)]).flatMap(
+          (item) => (item.replyToId ? [item.replyToId] : []),
         ),
       )
       await this.options.directory.finish(

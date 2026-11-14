@@ -90,13 +90,151 @@ test('a passive group input carries the message send time', async () => {
   )
 })
 
-test('default-on intake queues each unique message, skips silently, treats commands as discussion and deduplicates after restart', async () => {
-  const cwd = await root()
-  let entered = false
-  let release!: () => void
-  const held = new Promise<void>((resolve) => {
-    release = resolve
+test('passive inputs queued during a run join one evaluation in arrival order', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let held = false
+  const run = setup({
+    responses: [fauxText('first answer'), fauxText('merged answer')],
+    extensions: [
+      (api) => {
+        api.on('before_agent_start', async () => {
+          if (held) return
+          held = true
+          entered.resolve()
+          await release.promise
+        })
+      },
+    ],
   })
+  await run.start()
+  run.fake.deliver(passive('first', 'first question'))
+  await entered.promise
+  const queued = [
+    ['m1', 'ou_bob', 'the build is green', '1792340000000'],
+    ['m2', 'ou_alice', 'the tests pass', '1792340060000'],
+    ['m3', 'ou_bob', 'ship it', '1792340120000'],
+  ] as const
+  for (const [message_id, sender, text, create_time] of queued)
+    run.fake.deliver(
+      larkEvent(
+        {
+          message_id,
+          create_time,
+          mentions: [],
+          content: JSON.stringify({ text }),
+        },
+        sender,
+      ),
+    )
+  release.resolve()
+  await until(() => run.t.model.calls.length === 2)
+  await until(() => run.fake.sent.length === 2)
+  await until(() =>
+    run.fake.reactions.some(
+      (item) => item.messageId === 'm3' && item.emoji === 'DONE',
+    ),
+  )
+  await run.t.internals.gateway.stopAll()
+  expect(run.t.model.calls).toHaveLength(2)
+  expect(run.t.model.calls[1]!.lastUserText).toBe(
+    [
+      `${at('1792340000000')}Bob: the build is green`,
+      `${at('1792340060000')}Alice: the tests pass`,
+      `${at('1792340120000')}Bob: ship it`,
+    ].join('\n\n'),
+  )
+  expect(run.fake.sent).toEqual([
+    { messageId: 'first', text: 'first answer' },
+    { messageId: 'm3', text: 'merged answer' },
+  ])
+  const markers = run.t.vela
+    .session('lark-oc_group')
+    .getEntries()
+    .flatMap((entry) =>
+      entry.type === 'custom' && entry.customType === 'channel.input'
+        ? [(entry.data as { messageId?: string }).messageId]
+        : [],
+    )
+  expect(markers).toEqual(['first', 'm1', 'm2', 'm3'])
+  // Every evaluated input shows the run, and only the answered one finishes with DONE.
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'first', emoji: 'OnIt', removed: true },
+    { messageId: 'first', emoji: 'DONE', removed: false },
+    { messageId: 'm1', emoji: 'OnIt', removed: true },
+    { messageId: 'm2', emoji: 'OnIt', removed: true },
+    { messageId: 'm3', emoji: 'OnIt', removed: true },
+    { messageId: 'm3', emoji: 'DONE', removed: false },
+  ])
+})
+
+test('channel_skip_reply silences a merged passive evaluation', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let held = false
+  const run = setup({
+    responses: [
+      fauxToolCall('channel_skip_reply', {}),
+      fauxText(''),
+      (req) => {
+        expect(req.lastUserText).toContain('Alice: first thought')
+        expect(req.lastUserText).toContain('Bob: second thought')
+        return fauxToolCall(
+          'channel_skip_reply',
+          {},
+          { text: 'I considered answering' },
+        )
+      },
+      fauxText(''),
+    ],
+    extensions: [
+      (api) => {
+        api.on('before_agent_start', async () => {
+          if (held) return
+          held = true
+          entered.resolve()
+          await release.promise
+        })
+      },
+    ],
+  })
+  await run.start()
+  run.fake.deliver(passive('first', 'a passing observation'))
+  await entered.promise
+  run.fake.deliver(passive('m1', 'first thought'))
+  run.fake.deliver(
+    larkEvent(
+      { message_id: 'm2', mentions: [], content: '{"text":"second thought"}' },
+      'ou_bob',
+    ),
+  )
+  release.resolve()
+  await until(() => run.t.model.calls.length === 4)
+  await until(() =>
+    run.fake.reactions.some((item) => item.messageId === 'm2' && item.removed),
+  )
+  await run.t.internals.gateway.stopAll()
+  expect(run.fake.sent).toEqual([])
+  expect(reactionLog(run)).toEqual([
+    { messageId: 'm1', emoji: 'OnIt', removed: true },
+    { messageId: 'm2', emoji: 'OnIt', removed: true },
+  ])
+  const markers = run.t.vela
+    .session('lark-oc_group')
+    .getEntries()
+    .flatMap((entry) =>
+      entry.type === 'custom' && entry.customType === 'channel.input'
+        ? [(entry.data as { messageId?: string }).messageId]
+        : [],
+    )
+  expect(markers).toEqual(['first', 'm1', 'm2'])
+})
+
+test('default-on intake merges queued discussion, treats commands as discussion and deduplicates after restart', async () => {
+  const cwd = await root()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let held = false
   let commands = 0
   const first = setup(
     {
@@ -107,12 +245,13 @@ test('default-on intake queues each unique message, skips silently, treats comma
           return fauxToolCall('channel_skip_reply', {})
         },
         fauxText('this text must stay silent'),
-        fauxText('A useful short answer'),
         (req) => {
+          expect(req.lastUserText).toContain('Alice: a useful short question')
           expect(req.lastUserText).toContain('Alice: /danger')
-          return fauxToolCall('channel_skip_reply', {})
+          // The explicit @ keeps its own run instead of joining this evaluation.
+          expect(req.lastUserText).not.toContain('hello')
+          return fauxText('A useful short answer')
         },
-        fauxText('also silent'),
         fauxText('explicit while busy'),
       ],
       extensions: [
@@ -124,10 +263,10 @@ test('default-on intake queues each unique message, skips silently, treats comma
             },
           })
           api.on('before_agent_start', async () => {
-            if (!entered) {
-              entered = true
-              await held
-            }
+            if (held) return
+            held = true
+            entered.resolve()
+            await release.promise
           })
         },
       ],
@@ -135,25 +274,28 @@ test('default-on intake queues each unique message, skips silently, treats comma
     [{ id: 'oc_group', tools: [] }],
   )
   await first.start()
-  try {
-    first.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
-    await until(() => entered)
-    first.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
-    first.fake.deliver(passive('answer', 'a useful short question'))
-    first.fake.deliver(passive('command', '/danger'))
-    first.fake.deliver(larkEvent({ message_id: 'explicit-busy' }))
-  } finally {
-    release()
-  }
-  await until(() => first.t.model.calls.length === 6)
+  first.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
+  await entered.promise
+  first.fake.deliver(passive('quiet', 'colleagues discussing lunch'))
+  first.fake.deliver(passive('answer', 'a useful short question'))
+  first.fake.deliver(passive('command', '/danger'))
+  first.fake.deliver(larkEvent({ message_id: 'explicit-busy' }))
+  release.resolve()
+  await until(() => first.t.model.calls.length === 4)
   await until(() =>
     first.fake.reactions.some(
       (item) => item.messageId === 'explicit-busy' && item.emoji === 'DONE',
     ),
   )
   await first.t.internals.gateway.stopAll()
+  // The duplicate message id is already recorded, so the merged evaluation covers
+  // the answer and the command-looking discussion, and replies to the newest input.
+  const merged = first.t.model.calls[2]!.lastUserText
+  expect(merged.indexOf('a useful short question')).toBeLessThan(
+    merged.indexOf('/danger'),
+  )
   expect(first.fake.sent).toEqual([
-    { messageId: 'answer', text: 'A useful short answer' },
+    { messageId: 'command', text: 'A useful short answer' },
     { messageId: 'explicit-busy', text: 'explicit while busy' },
   ])
   expect(first.fake.cards).toEqual([])
@@ -163,7 +305,7 @@ test('default-on intake queues each unique message, skips silently, treats comma
     first.fake.reactions
       .filter((item) => item.emoji !== 'OnIt')
       .map((item) => item.messageId),
-  ).toEqual(['answer', 'explicit-busy'])
+  ).toEqual(['command', 'explicit-busy'])
   expect(
     first.fake.reactions
       .filter((item) => item.emoji === 'OnIt')
@@ -178,6 +320,7 @@ test('default-on intake queues each unique message, skips silently, treats comma
     'sessions/lark-oc_group/transcript.jsonl',
   )
   expect(stored).toContain('Alice: colleagues discussing lunch')
+  expect(stored).toContain('Alice: /danger')
   expect(stored).toContain('channel_skip_reply')
   expect(stored).toContain('"passive":true')
   await first.t.cleanup({ keepDir: true })
@@ -410,6 +553,7 @@ test('a passive session blocked by repeated storage failures stays operator-only
   })
   await run.start()
   try {
+    // Delivered while no run is working, so each message gets its own evaluation.
     for (const id of ['first', 'second', 'third', 'blocked'])
       run.fake.deliver(passive(id, id))
     await until(
