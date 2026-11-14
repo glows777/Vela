@@ -146,9 +146,11 @@ Dream makes one isolated model call with no tools. It compares recent conversati
 records with notes and deterministic lint findings, corrects contradicted notes,
 saves missing durable facts, merges duplicates and condenses the index. Large
 stores provide the index plus notes matched to the inbox within a content budget.
-Conversation text is evidence, not instructions. One surrounding JSON code fence
-is accepted; the enclosed response still passes the same strict JSON and operation
-validation. Validated operations go through
+Conversation text is evidence, not instructions. The reply may be one JSON object,
+one surrounding JSON code fence, or the object followed only by a stray closing
+fence or prose without braces, brackets or another fence; that object still passes the same
+strict JSON and operation validation. Text before the object, a second object, an
+array or a second fence block fails the run and retains the inbox. Validated operations go through
 the memory store. Before applying any operation, dream checks every full note
 supplied to the model for changes since the snapshot, plus create-target collisions. A live edit or a newly occupied create target skips
 the entire batch and retains the inbox for retry. This keeps a merge source from
@@ -157,7 +159,8 @@ conflicting notes. The inbox is consumed only after successful application,
 preserving turns arriving during the run. Dream messages and tool traces do not enter the user's conversation.
 
 Changed notes retain the last five source session IDs in `sources:` frontmatter.
-`<store>/.dream/log.md` keeps reports for the last 20 runs. `/memory` marks a failed
+`<store>/.dream/log.md` keeps reports for the last 20 runs; a failed run's report also
+keeps the last 500 characters of the model reply. `/memory` marks a failed
 or skipped last run explicitly instead of showing it as an ordinary zero-change run. Dream model usage is
 included in `/usage` and the usage ledger. `/memory` exposes the latest run and
 pending inbox size so automatic maintenance is visible.
