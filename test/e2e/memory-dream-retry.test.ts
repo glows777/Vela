@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import {
   cleanupTestVelas,
   createTestVela,
@@ -58,7 +58,7 @@ function holdNextDream(t: TestVela) {
 
 test('failed automatic dreams wait for 20 new turns despite inbox eviction, while manual retry and successful resets still work', async () => {
   const t = createTestVela({ generate: [], faux: { chunkSize: 4096 } })
-  t.model.pushGenerate(fauxText('not JSON'))
+  t.model.pushGenerate(fauxError('429 Too Many Requests'))
   const first = holdNextDream(t)
   for (let i = 0; i < 20; i++) await turn(t, `initial-${i}`, true)
   await first.entered
@@ -70,13 +70,11 @@ test('failed automatic dreams wait for 20 new turns despite inbox eviction, whil
   if (unexpectedRetry) await t.session.prompt('/dream')
   expect({
     generations: generations(t),
-    failedStatus: /Last dream .*failed:.*(?:JSON|parse|unexpected)/i.test(
-      failedStatus,
-    ),
+    failedStatus: /Last dream .*failed:.*429/i.test(failedStatus),
     running: unexpectedRetry,
   }).toEqual({ generations: 1, failedStatus: true, running: false })
 
-  t.model.pushGenerate(fauxText('still not JSON'))
+  t.model.pushGenerate(fauxError('429 Too Many Requests'))
   const manual = holdNextDream(t)
   const manuallyRetrying = t.session.prompt('/dream')
   await manual.entered
@@ -240,15 +238,20 @@ test('manual dream accepts one surrounding fence, a stray closing fence or trail
       JSON.stringify({ ops: [], report: 'Second' }),
     )}`,
   ]) {
+    const before = generations(t)
+    t.model.pushGenerate(fauxText(invalid))
+    // The correction round repeats the same rejected reply; no third call follows.
     t.model.pushGenerate(fauxText(invalid))
     await t.session.prompt('/dream')
     expect(await status(t)).toMatch(/failed/i)
+    expect(generations(t) - before).toBe(2)
     expect(read(t, inboxFile)).toBe(retained)
     expect(read(t, 'memory/project_release-0.md')).toBe(noteBefore)
     expect(existsSync(t.dataPath('escape.md'))).toBe(false)
   }
   // The failure log keeps what the model actually sent; the status line stays short.
   const long = `not JSON ${'p'.repeat(2000)}-TAIL-END`
+  t.model.pushGenerate(fauxText(long))
   t.model.pushGenerate(fauxText(long))
   await t.session.prompt('/dream')
   const entry = read(t, 'memory/.dream/log.md').split('## Dream ').at(-1)!
