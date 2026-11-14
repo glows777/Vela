@@ -385,7 +385,7 @@ for (const invalid of [
   test(`invalid dream response retains inbox and notes: ${invalid.slice(0, 32)}`, async () => {
     const t = createTestVela({
       responses: [fauxText('Noted')],
-      generate: [fauxText(invalid)],
+      generate: [fauxText(invalid), fauxText(invalid)],
     })
     new MemoryStore(t.dataPath('memory')).save(deploy)
     await t.run('Deploys moved to Monday')
@@ -395,6 +395,13 @@ for (const invalid of [
     expect(await t.readData('memory/.dream/inbox.jsonl')).toBe(inbox)
     expect(await t.readData('memory/project_deploy-day.md')).toBe(note)
     expect(notices(t)).toMatch(/fail|invalid|error/i)
+    // One correction round, then the run fails: no third call and no loop.
+    expect(
+      t.model.calls.filter((call) => call.kind === 'generate'),
+    ).toHaveLength(2)
+    expect(
+      JSON.parse(await t.readData('memory/.dream/state.json')).lastRun.failed,
+    ).not.toContain('\n')
   })
 }
 
@@ -458,6 +465,88 @@ test('a failed isolated model call keeps inbox evidence for a later successful r
   await t.run('/dream')
   expect(await t.readData('memory/project_deploy-day.md')).toContain('Monday')
   expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+})
+
+test('ops apply without a reason or description, and the report names the fallbacks', async () => {
+  const t = createTestVela({
+    responses: [fauxText('Noted')],
+    generate: [
+      result([
+        {
+          action: 'update',
+          filename: 'project_deploy-day.md',
+          name: 'deploy-day',
+          type: 'project',
+          content: 'Deploys happen on Monday',
+          source: 'default',
+        },
+        {
+          action: 'create',
+          filename: 'project_release-day.md',
+          name: 'release-day',
+          type: 'project',
+          content: 'Releases happen on Thursday',
+          source: 'default',
+        },
+      ]),
+    ],
+  })
+  new MemoryStore(t.dataPath('memory')).save(deploy)
+  await t.run('Deploys moved to Monday and releases moved to Thursday')
+  await t.run('/dream')
+  expect(text(t.dataPath('memory/project_deploy-day.md'))).toContain('Monday')
+  expect(text(t.dataPath('memory/project_release-day.md'))).toContain(
+    'description: release-day',
+  )
+  expect(notices(t)).toContain('no reason given')
+  expect(t.model.calls.filter((call) => call.kind === 'generate')).toHaveLength(
+    1,
+  )
+})
+
+test('a rejected reply is corrected once with its own text and a one-line error', async () => {
+  const unsafe = JSON.stringify({
+    ops: [{ ...update('default'), filename: '../escape.md' }],
+    report: 'Unsafe filename',
+  })
+  const t = createTestVela({
+    responses: [fauxText('Noted')],
+    generate: [fauxText(unsafe), result([update('default')])],
+  })
+  new MemoryStore(t.dataPath('memory')).save(deploy)
+  await t.run('Deploys moved to Monday')
+  await t.run('/dream')
+  const calls = t.model.calls.filter((call) => call.kind === 'generate')
+  expect(calls).toHaveLength(2)
+  const correction = calls[1]!.lastUserText
+  expect(correction).toContain('could not be applied')
+  expect(correction).toContain('Invalid memory filename')
+  // The rejected reply and the evidence are both in the correction prompt.
+  expect(correction).toContain(unsafe)
+  expect(correction).toContain('"triggeringSessionId":"default"')
+  expect(correction).toContain('Deploys moved to Monday')
+  expect(existsSync(t.dataPath('escape.md'))).toBe(false)
+  expect(text(t.dataPath('memory/project_deploy-day.md'))).toContain('Monday')
+  expect(records(t.dataPath('memory/.dream/inbox.jsonl'))).toEqual([])
+  expect(
+    records(t.dataPath('usage/requests.jsonl')).filter(
+      (record) => record.kind === 'dream',
+    ),
+  ).toHaveLength(2)
+})
+
+test('an empty reply is corrected once instead of failing the run', async () => {
+  const t = createTestVela({
+    responses: [fauxText('Noted')],
+    generate: [fauxText(''), result([update('default')])],
+  })
+  new MemoryStore(t.dataPath('memory')).save(deploy)
+  await t.run('Deploys moved to Monday')
+  await t.run('/dream')
+  const calls = t.model.calls.filter((call) => call.kind === 'generate')
+  expect(calls).toHaveLength(2)
+  expect(calls[1]!.lastUserText).toContain('(empty reply)')
+  expect(text(t.dataPath('memory/project_deploy-day.md'))).toContain('Monday')
 })
 
 test('inbox captures tool names but never tool output, even before any record is dropped', async () => {
