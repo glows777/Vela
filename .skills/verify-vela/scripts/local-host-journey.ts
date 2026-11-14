@@ -18,6 +18,9 @@ import {
 } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
+import { prepareWorkspace } from './workspace.ts'
+
+prepareWorkspace()
 
 const pass = (name: string) => console.log(`PASS ${name}`)
 async function until(check: () => boolean | Promise<boolean>) {

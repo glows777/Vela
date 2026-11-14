@@ -2,7 +2,7 @@
 
 One row per user-facing feature: how a user reaches it, how to drive it here, and what to check. Expected behavior lives in `docs/` (linked per section). Add a row when you add a feature; a row is only evidence for a change once you have driven it again.
 
-`REPO`, `H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`.
+`REPO`, `H`, `RUN` and `VERIFY_MODEL` are as in [SKILL.md](SKILL.md). `faux` means a scenario file passed as `VERIFY_MODEL=faux:/abs/file.json`. `bun run verify:journeys` drives every offline script below through one helper run, reports each failing script and exits non-zero; `github-setup-journey.ts` needs a registry and stays out.
 
 For the packed GitHub setup journey, the normal registry must be reachable for external dependencies. In a proxy-only environment, pass only the installation proxy settings explicitly through the isolated helper:
 

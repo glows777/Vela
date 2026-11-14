@@ -12,6 +12,9 @@ import {
 } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { fakeLark, larkEvent } from '../../../test/support/lark.ts'
+import { prepareWorkspace } from './workspace.ts'
+
+prepareWorkspace()
 
 async function until(check: () => boolean) {
   const deadline = Date.now() + 5000

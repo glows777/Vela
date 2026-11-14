@@ -31,6 +31,8 @@ REPO=$PWD; H=$REPO/.skills/verify-vela/scripts/vela-verify.sh; RUN=verify-$(date
 
 `run` / `exec` close stdin unless you pass `--stdin` (Vela waits for an open stdin forever). Calls with the same run id share the fixture, so sessions and edits carry over. Evidence lives in `/tmp/vela-evidence/$RUN/` (root: `VELA_EVIDENCE_ROOT`) and survives `cleanup`.
 
+`bun run verify:journeys` runs every offline script in `scripts/` through `exec` and exits non-zero if one fails; `github-setup-journey.ts` needs a registry and stays out. A script started directly with `bun` creates its fixtures in a temporary directory instead of the current directory.
+
 ## Choose the model
 
 `VERIFY_MODEL=mock` (default) is the keyword demo model in `packages/core/src/testing/demo-model.ts`:

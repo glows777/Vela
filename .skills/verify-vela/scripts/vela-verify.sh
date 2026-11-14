@@ -19,7 +19,7 @@ MODEL="${VERIFY_MODEL:-mock}"
 
 # Everything runs under env -i with this allowlist only: no API keys, LARK_* or the user's ~/.vela.
 ENV=(env -i "PATH=$PATH" "TERM=${TERM:-xterm-256color}" "LANG=${LANG:-C.UTF-8}"
-  "HOME=$STATE/userhome" "VELA_DIR=$STATE/home" "VELA_OFFLINE=1" "VELA_MODEL=$MODEL")
+  "HOME=$STATE/userhome" "VELA_DIR=$STATE/home" "VELA_OFFLINE=1" "VELA_MODEL=$MODEL" "VELA_VERIFY=1")
 VELA=(bun "$REPO/packages/vela/src/cli/main.ts")
 
 # Fixture, created once per run (later run/launch calls keep edits and sessions)
