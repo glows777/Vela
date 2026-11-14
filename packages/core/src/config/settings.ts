@@ -64,7 +64,7 @@ export interface LoadConfigOptions {
   agentDir?: string
   /** Environment for `$VAR` interpolation and `VELA_DIR`; empty by default (core never reads process.env) */
   env?: Record<string, string | undefined>
-  /** Whether to load the project's `.vela/` settings, extensions, skills, prompts and `APPEND_SYSTEM.md`, `.skills/` and `.agents/skills/` (see projectTrustRequired) */
+  /** Whether to load the project's `.vela/` settings, extensions, skills, prompts, `APPEND_SYSTEM.md` and `SYSTEM.md`, `.skills/` and `.agents/skills/` (see projectTrustRequired) */
   trusted?: boolean
   /** Home directory for `~/.agents/skills`, default os.homedir() */
   homeDir?: string
@@ -95,6 +95,8 @@ export interface VelaConfig {
   contextFiles: ContextFile[]
   /** Contents of `.vela/APPEND_SYSTEM.md` (trusted) or `<agentDir>/APPEND_SYSTEM.md`, like pi */
   appendSystemPrompt?: string
+  /** Contents of `.vela/SYSTEM.md` (trusted) or `<agentDir>/SYSTEM.md`: replaces the default system prompt, like pi */
+  systemPrompt?: string
   /** Built-in providers (anthropic / openai / openrouter / deepseek) plus those in `<agentDir>/models.json`, for createVela's `providers` */
   providers: Record<string, ProviderDefinition>
   /** Credentials stored by `/login` in `<agentDir>/auth.json` (mode 0600), for createVela's `credentials` */
@@ -109,11 +111,13 @@ const TRUSTED_PROJECT_RESOURCES = [
   'skills',
   'prompts',
   'APPEND_SYSTEM.md',
+  'SYSTEM.md',
 ]
 
 /**
  * The project has executable or behavior-changing config (`.vela/settings.json`, `.vela/extensions/`,
- * skills in `.vela/skills/`, `.skills/` or `.agents/skills/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md`) that
+ * skills in `.vela/skills/`, `.skills/` or `.agents/skills/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md`,
+ * `.vela/SYSTEM.md`) that
  * needs the user's trust before loading (like pi's trust-requiring project resources). Not counted when the
  * project dir is the user-level dir (running from the home directory). AGENTS.md / CLAUDE.md don't count (like pi).
  */
@@ -216,6 +220,11 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       join(agentDir, 'prompts'),
     ]),
   ]
+  // The project file wins over the user file (like APPEND_SYSTEM.md)
+  const systemFile = [
+    ...(trusted ? [join(projectDir, 'SYSTEM.md')] : []),
+    join(agentDir, 'SYSTEM.md'),
+  ].find((file) => existsSync(file))
   const appendFile = [
     ...(trusted ? [join(projectDir, 'APPEND_SYSTEM.md')] : []),
     join(agentDir, 'APPEND_SYSTEM.md'),
@@ -241,6 +250,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     skillDirs,
     promptDirs,
     contextFiles: loadContextFiles({ cwd, agentDir }),
+    ...(systemFile ? { systemPrompt: readFileSync(systemFile, 'utf-8') } : {}),
     ...(appendFile
       ? { appendSystemPrompt: readFileSync(appendFile, 'utf-8') }
       : {}),

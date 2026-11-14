@@ -22,6 +22,8 @@ export interface VelaInspection {
 /** @experimental A prompt preview, never mutable assembly objects. */
 export interface SessionInspection {
   windowTokens: number
+  /** The system prompt this session's next request carries, exactly as the model sees it */
+  systemPrompt: string
   systemPromptChars: number
   toolDescriptionChars: number
   skillsChars: number
@@ -63,16 +65,21 @@ export async function inspectSession(
   options: { previewExtensions?: boolean } = {},
 ): Promise<SessionInspection> {
   const internal = velaInternals(vela)
-  const sections = options.previewExtensions
-    ? await session.previewSections()
-    : { ...session.promptContext().extensionSections }
+  const preview = options.previewExtensions
+    ? await session.previewPrompt()
+    : { sections: { ...session.promptContext().extensionSections } }
+  const sections = preview.sections
+  // A handler that replaces the prompt decides what the request carries
+  const systemPrompt =
+    preview.systemPrompt ?? session.buildSystem(sections, null)
   const active = session.registry.getActiveTools()
   const skills =
     internal.skillLoader.buildPromptSection(active.map((tool) => tool.name)) ??
     ''
   return {
     windowTokens: session.usage.contextWindow,
-    systemPromptChars: session.buildSystem(sections).length,
+    systemPrompt,
+    systemPromptChars: systemPrompt.length,
     toolDescriptionChars: active.reduce(
       (size, tool) =>
         size +

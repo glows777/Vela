@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { platform } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import type { PipeFn } from './pipeline.ts'
+import type { SectionRender } from './system-prompt.ts'
 
 export interface EnvironmentInfo {
   /** Session working directory; the git branch is read from here */
@@ -22,7 +22,7 @@ export interface EnvironmentInfo {
  * `<env>`: stable facts about where the session runs. The date, never the time of day, so the cached prompt
  * prefix only changes when the date does.
  */
-export function environment(info: EnvironmentInfo): PipeFn {
+export function environment(info: EnvironmentInfo): SectionRender {
   return () => {
     const lines = [
       `date: ${info.date ?? localDate()}`,
@@ -32,7 +32,7 @@ export function environment(info: EnvironmentInfo): PipeFn {
     ]
     const branch = info.branch === undefined ? gitBranch(info.cwd) : info.branch
     if (branch) lines.push(`git branch: ${branch}`)
-    return `<env>\n${lines.join('\n')}\n</env>`
+    return lines.join('\n')
   }
 }
 

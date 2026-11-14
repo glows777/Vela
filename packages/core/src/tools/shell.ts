@@ -38,6 +38,7 @@ export const createBashTool = (
   description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${BASH_MAX_LINES} lines or ${BASH_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
+  promptSnippet: 'Run a shell command',
   execute: async (
     { command, timeout }: { command: string; timeout?: number },
     context,

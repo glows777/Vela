@@ -151,6 +151,7 @@ export const createGrepTool = (
   description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is limited to ${GREP_DEFAULT_LIMIT} matches by default. Long lines are truncated to ${MAX_LINE_LENGTH} chars.`,
   inputSchema: grepToolParamSchema,
   annotations: { readOnlyHint: true },
+  promptSnippet: 'Search file contents for a pattern (respects .gitignore)',
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof grepToolParamSchema>, context) => {
     const { pattern, path = '.', glob, ignoreCase, literal } = input
@@ -310,6 +311,7 @@ export const createFindTool = (
   description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is limited to ${FIND_DEFAULT_LIMIT} results by default.`,
   inputSchema: findToolParamSchema,
   annotations: { readOnlyHint: true },
+  promptSnippet: 'Find files by glob pattern (respects .gitignore)',
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof findToolParamSchema>, context) => {
     const { pattern, path = '.' } = input

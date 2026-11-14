@@ -34,13 +34,14 @@ An unknown option or a bad value prints the usage line and exits with code 2. Th
 | `--thinking <level>` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. |
 | `-e`, `--extension <path>` | Load an extension file or directory, or `builtin:<name>`. Repeatable. Relative paths resolve from the current folder. |
 | `--no-extensions`, `-ne` | Skip the built-in extensions and every discovered or configured extension. Extensions given with `-e` still load. |
-| `--append-system-prompt <text>` | Append text, or the contents of the file at that path, to the system prompt. Repeatable. Replaces `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` for this run. See [Settings](settings.md#appending-to-the-system-prompt). |
+| `--system-prompt <text>` | Replace the default system prompt with this text, or the contents of the file at that path. Repeatable. Replaces `~/.vela/SYSTEM.md` and `.vela/SYSTEM.md` for this run. See [The system prompt](settings.md#the-system-prompt). |
+| `--append-system-prompt <text>` | Append text, or the contents of the file at that path, to the system prompt. Repeatable. Replaces `~/.vela/APPEND_SYSTEM.md` and `.vela/APPEND_SYSTEM.md` for this run. See [The system prompt](settings.md#the-system-prompt). |
 | `--no-context-files`, `-nc` | Don't put `AGENTS.md` / `CLAUDE.md` into the system prompt. See [Settings](settings.md#context-files). |
 | `--tools`, `-t <tools>` | Tools for this run: a comma-separated list of names or `*` patterns (`read_*`), repeatable, which enables only those; or a list of only `+name` / `-name` entries (exact names), which turns default tools on or off and leaves the other tools alone. |
 | `--no-tools`, `-nt` | Start with no tools; `--tools` still enables the ones it names. |
 | `--exclude-tools`, `-xt <tools>` | Turn these tools off (names or `*` patterns), after `--tools`. |
 | `--list-models [search]` | Print the models listed in `models.json` and by extension providers (provider, model, context window, thinking support), optionally fuzzy-filtered, then exit. If an extension failed to load, the models that did load are still listed, but the exit code is 1. |
-| `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
+| `--approve` | Trust this project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and project skills (`.vela/skills/`, `.agents/skills/`, `.skills/`) for this run, without saving the decision. |
 | `--no-approve` | Do not trust them for this run, without saving the decision. |
 | `-h`, `--help` | Print the usage, every option, the run modes, examples and environment variables to stdout, then exit with code 0. |
 | `-v`, `--version` | Print the package version to stdout, then exit with code 0. |

@@ -19,6 +19,8 @@ Every tool runs inside the Vela process with the operating-system permissions of
 
 The annotations are the tool's `annotations` hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, the same as pi and MCP). Vela does not enforce these hints; a user extension can inspect them.
 
+Each core tool also contributes its own line and rules to the system prompt: `promptSnippet` supplies the `- name: what it does` line in `<tools>`, and `promptGuidelines` supplies rules in `<rules>` (for example "Read a file before you change it." from `edit_file`). The builder reads the session's active tools, so a tool the session does not have — `grep` until `+grep` enables it, or `bash` in a top-level group chat — contributes neither. Extensions set the same two fields. See [The system prompt](settings.md#the-system-prompt).
+
 The default set is `read_file`, `write_file`, `edit_file` and `bash`, plus `tool_search`. `list_directory`, `grep` and `find` stay registered but off: the model neither sees them nor can call them until a session enables one with `--tools +grep` (or `+grep,+find,+list_directory`) or the [`defaultTools`](settings.md#defaulttools) setting. pi keeps `ls`, `grep` and `find` off in the same way.
 
 Relative paths resolve against the working directory: the directory the CLI was started in, or `cwd` in `createVela()` (default `process.cwd()`). Paths outside it are not blocked.
@@ -182,7 +184,7 @@ A tool definition's `exposure` decides where the tool shows up. The values and t
 
 Vela has no codemode tool yet, so a `codemode` tool can only be run by other tools through `ctx.executeTool()`. A `hidden` tool stays registered but unused, for example while it is turned off.
 
-A deferred tool is not sent to the model as a tool. Instead, the system prompt names it, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` to load it. Like pi, tools with a `namespace` (`{ name, description?, instructions? }`, for example the tools of one MCP server) are not listed one by one: the namespace gets one line with its tool count and description.
+A deferred tool is not sent to the model as a tool. Instead, its `<deferred_tools>` section names it, with the tool's `searchHint` if it has one, and tells the model to call `tool_search` to load it. The section is left out when nothing is deferred or when `tool_search` itself is off, since the model could not load them anyway. Like pi, tools with a `namespace` (`{ name, description?, instructions? }`, for example the tools of one MCP server) are not listed one by one: the namespace gets one line with its tool count and description.
 
 `tool_search` takes these parameters (same as pi):
 

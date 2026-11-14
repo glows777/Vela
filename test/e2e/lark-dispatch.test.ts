@@ -103,6 +103,17 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   expect(t.model.calls[1]?.system).toContain(
     'This topic contains a conversation about one task.',
   )
+  // The top-level group session hides bash, write_file and edit_file: its prompt lists the tools it can
+  // call, and no rules point at the ones it cannot (#379). A topic keeps them when the chat selects them.
+  const groupPrompt = t.model.calls[0]?.system ?? ''
+  expect(groupPrompt).toContain('<tools>')
+  expect(groupPrompt).toContain('- read_file:')
+  for (const absent of ['bash', 'write_file', 'edit_file']) {
+    expect(groupPrompt).not.toContain(`- ${absent}:`)
+    expect(groupPrompt).not.toContain(`Use ${absent}`)
+  }
+  expect(groupPrompt).not.toContain('Read a file before you change it.')
+  expect(t.model.calls[1]?.system).toContain('- bash:')
   const latestMessageInstruction = 'Respond to the latest user message.'
   expect(t.model.calls[1]?.system).toContain(latestMessageInstruction)
   expect(t.model.calls[0]?.system).not.toContain(latestMessageInstruction)

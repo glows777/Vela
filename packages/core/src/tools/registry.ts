@@ -85,6 +85,16 @@ export interface ToolDefinition {
   /** Group the tool belongs to, for example its MCP server (like pi) */
   namespace?: ToolNamespace
   searchHint?: string // Hint shown next to the name in the deferred tool list
+  /**
+   * One line for the system prompt's `<tools>` section while this tool is active (like pi's `promptSnippet`).
+   * A tool without one is not listed there; its definition still reaches the model.
+   */
+  promptSnippet?: string
+  /**
+   * Rules for the `<rules>` section while this tool is active (like pi's `promptGuidelines`). Write each item as
+   * the bullet text without the leading `-`; a rule is left out whenever the tool cannot be called.
+   */
+  promptGuidelines?: readonly string[]
   /** An exact channel name, or true for any channel-bound session; undefined means every session. */
   channel?: string | true
   /** Whether the tool is on without being named (like pi's `defaultActive`); default true. `false` keeps it registered but off until a session names it */
@@ -671,8 +681,9 @@ export class ToolRegistry {
   }
 
   /**
-   * The deferred tools for the system prompt. Like pi, tools of a namespace (an MCP server) are not
-   * listed one by one: the namespace gets one line, and tool_search finds its tools.
+   * The deferred tool lines for the system prompt's `<deferred_tools>` section. Like pi, tools of a
+   * namespace (an MCP server) are not listed one by one: the namespace gets one line, and tool_search
+   * finds its tools.
    */
   getDeferredToolSummary(): string {
     const deferred = this.searchableTools()
@@ -696,10 +707,7 @@ export class ToolRegistry {
       const count = `${tools.length} tool${tools.length === 1 ? '' : 's'}`
       lines.push(`- ${key} (${count})${description ? ` — ${description}` : ''}`)
     }
-    return [
-      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
-      ...lines,
-    ].join('\n')
+    return lines.join('\n')
   }
 
   /**

@@ -40,7 +40,10 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from './models/index.ts'
-import type { PromptContext, PromptPipeline } from './prompt/pipeline.ts'
+import type {
+  PromptContext,
+  SystemPromptBuilder,
+} from './prompt/system-prompt.ts'
 import {
   type BranchSummaryEntry,
   messageText as contentText,
@@ -118,7 +121,11 @@ interface SessionExtensionHooks {
   beforeAgentStart(
     session: VelaSession,
     prompt: string,
-  ): Promise<{ sections: Record<string, string>; messages: CustomMessage[] }>
+  ): Promise<{
+    sections: Record<string, string>
+    messages: CustomMessage[]
+    systemPrompt?: string
+  }>
   runCommand(
     session: VelaSession,
     text: string,
@@ -189,7 +196,7 @@ export interface SessionDeps {
   temporaryDataDir?: boolean
   /** Vela-level tool registry; each session forks its own from it */
   registry: ToolRegistry
-  builder: PromptPipeline
+  builder: SystemPromptBuilder
   /** Expands `/skill:<name>` and prompt templates in session input (src/prompt/templates.ts) */
   expandInput: (text: string) => string
   extensions: SessionExtensionHooks
@@ -236,7 +243,7 @@ export class VelaSession {
   /** Tools' display data from `tool_execution_end`, recorded on their tool message like nestedCalls */
   private readonly toolDetails = new Map<string, unknown>()
   private readonly userBash: UserBash
-  private readonly builder: PromptPipeline
+  private readonly builder: SystemPromptBuilder
   private readonly deps: SessionDeps
   /** Options the session was opened with (a fork opens with the same) */
   private readonly options: SessionOptions
@@ -247,6 +254,8 @@ export class VelaSession {
   private running?: Promise<void>
   /** Extension sections collected by this turn's before_agent_start */
   private sections: Record<string, string> = {}
+  /** A system prompt this turn's before_agent_start handlers returned (replaces the built one) */
+  private systemPromptOverride: string | undefined
   private readonly messageQueue = new MessageQueue((event) => this.emit(event))
   /** How steer messages are taken (default one-at-a-time, like pi) */
   steeringMode: QueueMode = 'one-at-a-time'
@@ -511,31 +520,61 @@ export class VelaSession {
     if (event.type === 'turn_end') this.flushPendingCustom()
   }
 
-  /** @internal `sections` defaults to the sections collected by this turn's before_agent_start */
-  promptContext(sections = this.sections): PromptContext {
+  /**
+   * @internal `sections` defaults to the sections collected by this turn's before_agent_start, and
+   * `systemPromptOverride` to the one its handlers returned.
+   */
+  promptContext(
+    sections = this.sections,
+    /** `null` for a prompt without a handler's replacement; undefined keeps this turn's */
+    systemPromptOverride: string | null | undefined = this.systemPromptOverride,
+  ): PromptContext {
+    const active = this.registry.getActiveTools()
     return {
       extensionSections: sections,
-      toolCount: this.registry.getActiveTools().length,
+      toolCount: active.length,
       deferredToolSummary: this.registry.getDeferredToolSummary(),
       sessionMessageCount: this.messages.length,
       sessionId: this.id,
       toolResults: this.store.results,
-      activeTools: this.registry.getActiveTools().map((tool) => tool.name),
+      activeTools: active.map(({ name, promptSnippet, promptGuidelines }) => ({
+        name,
+        ...(promptSnippet ? { snippet: promptSnippet } : {}),
+        ...(promptGuidelines ? { guidelines: promptGuidelines } : {}),
+      })),
+      ...(typeof systemPromptOverride === 'string'
+        ? { systemPromptOverride }
+        : {}),
     }
   }
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
-  buildSystem(sections?: Record<string, string>): string {
-    return this.builder.build(this.promptContext(sections))
+  buildSystem(
+    sections?: Record<string, string>,
+    systemPromptOverride?: string | null,
+  ): string {
+    return this.builder.build(
+      this.promptContext(sections, systemPromptOverride),
+    )
   }
 
   /**
-   * @internal Extension sections the next prompt would get: runs before_agent_start without replacing this
-   * turn's sections (for the /context preview; sections are computed per prompt, so they are empty before the first prompt).
+   * @internal The sections and prompt the next turn would get: runs before_agent_start without replacing this
+   * turn's state (for the /context preview; sections are computed per prompt, so they are empty before the
+   * first prompt).
    */
-  async previewSections(): Promise<Record<string, string>> {
+  async previewPrompt(): Promise<{
+    sections: Record<string, string>
+    systemPrompt?: string
+  }> {
     await this.start()
-    return (await this.deps.extensions.beforeAgentStart(this, '')).sections
+    const preview = await this.deps.extensions.beforeAgentStart(this, '')
+    return {
+      sections: preview.sections,
+      ...(preview.systemPrompt !== undefined
+        ? { systemPrompt: preview.systemPrompt }
+        : {}),
+    }
   }
 
   /** @internal Prepares the context before a request (microcompaction / summary). */
@@ -1377,6 +1416,7 @@ export class VelaSession {
     const input = inputs.map(messageText).join('\n\n')
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.sections = started.sections
+    this.systemPromptOverride = started.systemPrompt
     // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
     const added = started.messages.map((message) => this.customMessage(message))
     // Appending to a saved session that was not resumed would mix two conversations in one log

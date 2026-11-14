@@ -8,7 +8,7 @@ import z from 'zod'
 import { summarize } from '../../../src/context/compressor.ts'
 import { createRequestSnapshot } from '../../../src/context/request.ts'
 import { toModelMessages } from '../../../src/messages.ts'
-import { coreRules, PromptPipeline } from '../../../src/prompt/index.ts'
+import { preamble, SystemPromptBuilder } from '../../../src/prompt/index.ts'
 import { SessionStore } from '../../../src/session/index.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
@@ -72,7 +72,9 @@ test('summary sends only the dropped messages as text, without tool definitions'
       exposure: 'deferred',
     },
   )
-  const builder = new PromptPipeline().pipe('core', coreRules())
+  const builder = new SystemPromptBuilder({
+    sections: [{ name: 'preamble', render: preamble() }],
+  })
   const system = (n: number) =>
     builder.build({
       toolCount: 1,

@@ -129,6 +129,8 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   description: `Reads a text file, a saved tool result file, or a JPEG, PNG, GIF, WebP or BMP image detected by its contents. Images are returned whole as image content; offset, limit and column are ignored for images and only paginate text. A text page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. When more content remains, appends a footer with the range shown and the offset/column for the next page. At EOF, returns only the file content with no added footer.`,
   inputSchema: readFileParamSchema,
   annotations: { readOnlyHint: true },
+  promptSnippet: 'Read file contents (text, or an image by path)',
+  promptGuidelines: ['Use read_file instead of `cat` or `sed` to read a file.'],
   // A full page plus the footer must fit, so pages are never saved to a file again
   maxResultChars: READ_MAX_BYTES + 1024,
   execute: async (input: z.infer<typeof readFileParamSchema>, context) => {
@@ -218,7 +220,10 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
   description:
     'Writes content to a file, replacing the whole file. Creates the file and missing parent directories.',
   inputSchema: writeFileToolParamSchema,
-
+  promptSnippet: 'Create or overwrite a file',
+  promptGuidelines: [
+    'Use write_file only for new files or complete rewrites; read a file before you replace it.',
+  ],
   annotations: { destructiveHint: true, idempotentHint: true },
   execute: async (
     { path, content }: { path: string; content: string },
@@ -251,6 +256,7 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   description: 'Lists the files and subdirectories in a directory.',
   inputSchema: listDirectoryToolParamSchema,
   annotations: { readOnlyHint: true },
+  promptSnippet: 'List directory contents',
   activeByDefault: false,
   execute: async ({ path = '.' }: { path?: string }) => {
     const resolved = resolveIn(cwd, path)
@@ -344,6 +350,11 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
     'Edits a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.',
   inputSchema: editFileToolParamSchema,
   annotations: { destructiveHint: true },
+  promptSnippet: 'Make precise file edits by replacing exact text',
+  promptGuidelines: [
+    'Read a file before you change it.',
+    'Use edit_file for targeted changes, and batch the changes to one file in a single call.',
+  ],
   execute: async (input: EditInput, context) => {
     const { path, edits } = input
     const resolved = resolveIn(cwd, path)

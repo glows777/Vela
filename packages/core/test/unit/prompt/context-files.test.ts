@@ -81,11 +81,11 @@ test("a nested linked worktree's own file shadows the main repository's", () => 
   ).toContain('main')
 })
 
-test('rendered like pi as <project_context>', () => {
+test("the project context content is pi's, untagged (the builder adds <project_context>)", () => {
   expect(renderContextFiles([])).toBeNull()
   expect(
     renderContextFiles([{ path: '/r/AGENTS.md', content: 'Use bun' }]),
   ).toBe(
-    '<project_context>\nProject-specific instructions and guidelines:\n\n<project_instructions path="/r/AGENTS.md">\nUse bun\n</project_instructions>\n</project_context>',
+    'Project-specific instructions and guidelines:\n\n<project_instructions path="/r/AGENTS.md">\nUse bun\n</project_instructions>',
   )
 })

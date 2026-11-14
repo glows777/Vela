@@ -22,7 +22,7 @@ test('the env block renders the injected date, timezone, OS, shell and git branc
       branch: 'main',
     })(context),
   ).toBe(
-    '<env>\ndate: 2026-01-02\ntimezone: Asia/Shanghai\nos: linux\nshell: /usr/local/bin/bash\ngit branch: main\n</env>',
+    'date: 2026-01-02\ntimezone: Asia/Shanghai\nos: linux\nshell: /usr/local/bin/bash\ngit branch: main',
   )
 })
 

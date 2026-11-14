@@ -65,19 +65,18 @@ export function loadContextFiles(options: {
   return files
 }
 
-/** The `<project_context>` system prompt section (same text as pi). Null when there are no files. */
+/** The `<project_context>` section's content (same text as pi, untagged). Null when there are no files. */
 export function renderContextFiles(
   files: readonly ContextFile[],
 ): string | null {
   if (files.length === 0) return null
-  const body = [
+  return [
     'Project-specific instructions and guidelines:',
     ...files.map(
       ({ path, content }) =>
         `<project_instructions path="${path.replace(/\\/g, '/')}">\n${content}\n</project_instructions>`,
     ),
   ].join('\n\n')
-  return `<project_context>\n${body}\n</project_context>`
 }
 
 function canonical(path: string): string {
