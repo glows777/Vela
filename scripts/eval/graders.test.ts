@@ -1010,9 +1010,13 @@ test('exit scenarios use the peeled v0.4.0 baseline while legacy scenarios retai
     '5b976e26706686a2213f514895d05110f50af2a5',
   )
   for (const id of graders.scenarioIds.filter(
-    (id) => id !== 'G6' && id !== 'G7' && id !== 'G8',
+    (id) => id !== 'G6' && id !== 'G7' && id !== 'G8' && id !== 'G9',
   ))
     expect(scenarios.baselineCommit(id)).toBe(scenarios.OLD_COMMIT)
+  // G9's old arm is the commit before batching landed, so the arms differ only by it.
+  expect(scenarios.baselineCommit('G9')).toBe(
+    'c1612d3f28f22e02e2dd2b2bd8f372879c1e3e03',
+  )
   expect(options([]).runs).toBe(3)
   expect(options(['--only', 'G6,G7']).only).toEqual(['G6', 'G7'])
 })

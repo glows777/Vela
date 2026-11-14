@@ -38,8 +38,9 @@ the extension against a clean checkout without turning it on by default.
 
 Install the selected checkout's dependencies first. Git, Bun, ripgrep and fd must
 be on PATH. The runner installs each selected baseline's frozen dependencies in
-an owned temporary worktree. C1–C6, G1–G5 and G9 retain `OLD_COMMIT`;
-G6/G7/G8 use the exact peeled `v0.4.0` commit
+an owned temporary worktree. C1–C6 and G1–G5 retain `OLD_COMMIT`;
+G9 uses `c1612d3` (part 1 merged, before batching) so its arms differ only by the
+batching change; G6/G7/G8 use the exact peeled `v0.4.0` commit
 `5b976e26706686a2213f514895d05110f50af2a5`. `results.json` records the per-scenario
 `baselineCommits` map as well as the legacy `oldCommit`. Both arms get fresh task worktrees at
 `7fac1dfd6b06e003a990d17867c10090b6f8efc2`; production modules and helpers come
@@ -131,7 +132,7 @@ acknowledgement is allowed. G5 seeds a completed report through topic history.
 G9 measures the #336 part 2 batching change. The trigger run (an explicit @ that
 reads `task/release.txt`) starts, then ten untagged messages from two people are
 delivered from inside that run's `agent_start`, so they provably queue behind it.
-Both arms run this worker; the old arm keeps `OLD_COMMIT`, where each queued
+Both arms run this worker; the old arm is `c1612d3`, where each queued
 message is a separate evaluation. Checks: `burst answered` requires the last
 group reply to answer the newest message (what is left before tagging 0.7.0), and
 `one merged evaluation` requires at most four provider requests, which allows the
