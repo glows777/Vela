@@ -2,7 +2,7 @@
 
 GitHub is the source of truth. `.github/workflows/wake-route.yml` is a thin filter. It POSTs to a webhook when a route label is present, or when a comment contains a route token. A closed local Vela process is not a wake target. A closed local Claude session is not a wake target. The local REPL remains an accelerator for a person who is already looking. This cut does not call it.
 
-The product Lark channel is a WebSocket bot, described in [Channels](channels.md#lark). This workflow does not use that connection. Liam supplies a custom-bot incoming webhook.
+The product Lark channel is a WebSocket bot, described in [Channels](docs/channels.md#lark). This workflow does not use that connection. Liam supplies a custom-bot incoming webhook.
 
 ## Routing table
 

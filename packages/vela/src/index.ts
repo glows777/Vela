@@ -137,7 +137,6 @@ export {
   loadContextFiles,
   type ModelChangeEntry,
   memory,
-  memoryConfig,
   memoryCredentialStore,
   memorySessionStorage,
   messageText,

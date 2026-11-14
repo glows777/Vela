@@ -1,14 +1,14 @@
 # Agent lessons
 
-After a miss is confirmed, write a lesson. Record the trigger path, the layer that should have caught it, and the mechanism patch. The layer is pre-PR, AI/bot review, CI, human, or post-merge. The patch is a line in [REVIEW.md](../REVIEW.md), a lint, or a verify-vela journey. A lesson with no mechanism change is not closed.
+After a miss is confirmed, write a lesson. Record the trigger path, the layer that should have caught it, and the mechanism patch. The layer is pre-PR, AI/bot review, CI, human, or post-merge. The patch is a line in [REVIEW.md](REVIEW.md), a lint, or a verify-vela journey. A lesson with no mechanism change is not closed.
 
 ## Background memory work must respect tool availability and atomic merges
 
 [PR #307's review](https://github.com/glows777/Vela/pull/307#discussion_r4504727382) found that a deny-only background gate let `memory: ask` sessions consolidate without approval. The pre-PR tests covered `deny`, but not the approval-required path or an already-due shared inbox. That fix required `allow` for collection and both automatic and manual runs. Since [#348](https://github.com/glows777/Vela/issues/348) removed the permission API, dream follows the memory tool's availability: a session with `tools: ['-memory']` neither collects nor consolidates. User extensions handle confirmation for ordinary tool calls.
 
-The [same review](https://github.com/glows777/Vela/pull/307#discussion_r4504727383) found that independently skipping a changed merge destination still deleted its source. The pre-PR single-note race did not cover dependent operations. Dream now checks every full note supplied to the model plus create targets before applying any operation and retains the whole inbox on conflict. This includes a duplicate destination that the model reads but does not update; a live edit to that note must still prevent deletion of its source. Faux cases reproduce both operation orders and a create collision; the memory SDK journey in [verify-vela](../.skills/verify-vela/journeys.md) covers tool exclusion, a description-only live edit, retained evidence and a successful refreshed retry. AI/bot review caught both misses; these entry-path scenarios are the verification mechanism.
+The [same review](https://github.com/glows777/Vela/pull/307#discussion_r4504727383) found that independently skipping a changed merge destination still deleted its source. The pre-PR single-note race did not cover dependent operations. Dream now checks every full note supplied to the model plus create targets before applying any operation and retains the whole inbox on conflict. This includes a duplicate destination that the model reads but does not update; a live edit to that note must still prevent deletion of its source. Faux cases reproduce both operation orders and a create collision; the memory SDK journey in [verify-vela](.skills/verify-vela/journeys.md) covers tool exclusion, a description-only live edit, retained evidence and a successful refreshed retry. AI/bot review caught both misses; these entry-path scenarios are the verification mechanism.
 
-The next Leader review found retained failed/skipped inboxes were immediately due again, causing a full model call on every later turn. Pre-PR checks covered a single failure and manual recovery, not automatic follow-up traffic. Automatic retry now counts newly collected turns independently of inbox truncation and uses the last run time for the 24-hour threshold; `/memory` exposes failed/skipped outcomes. The retry cadence faux scenarios and [SDK journey](../.skills/verify-vela/journeys.md) are the mechanism, with one code-fence unwrap at the model response boundary and unchanged strict operation validation.
+The next Leader review found retained failed/skipped inboxes were immediately due again, causing a full model call on every later turn. Pre-PR checks covered a single failure and manual recovery, not automatic follow-up traffic. Automatic retry now counts newly collected turns independently of inbox truncation and uses the last run time for the 24-hour threshold; `/memory` exposes failed/skipped outcomes. The retry cadence faux scenarios and [SDK journey](.skills/verify-vela/journeys.md) are the mechanism, with one code-fence unwrap at the model response boundary and unchanged strict operation validation.
 
 ## Check the account that performs GitHub setup
 
@@ -50,11 +50,11 @@ The [follow-up review](https://github.com/glows777/Vela/pull/235#issuecomment-64
 
 `createFauxModel` appends a call when the request starts. `lastUserText` is the last user message, so a follow-up after `channel_message_topic` and `lark_skip_reply` still carries the topic's earlier note. That follow-up can be `at(-1)` while the hop note is already in the array.
 
-AI/bot review should have caught it. The case now finds the hop with `lastUserText`. The mechanism is the channel end-to-end item in [REVIEW.md](../REVIEW.md). Do not assert `model.calls.at(-1)` across concurrent channel sessions. Run `bun test test/e2e/channel-handoff.test.ts` before merging a handoff change.
+AI/bot review should have caught it. The case now finds the hop with `lastUserText`. The mechanism is the channel end-to-end item in [REVIEW.md](REVIEW.md). Do not assert `model.calls.at(-1)` across concurrent channel sessions. Run `bun test test/e2e/channel-handoff.test.ts` before merging a handoff change.
 
 ## A channel change updates the channels guide
 
-[Issue #244](https://github.com/glows777/Vela/issues/244). PR #242 shipped the hand-off tools, status lines and topic start context but updated only `CHANGELOG.md` and the verify-vela journeys, so `docs/channels.md` kept the pre-handoff dispatch story until a separate issue. Behavior that a person or a model can see needs the docs pages that describe it, in the same pull request as the changelog entry. The mechanism is the docs item in [REVIEW.md](../REVIEW.md) and the Docs section of the pull request template.
+[Issue #244](https://github.com/glows777/Vela/issues/244). PR #242 shipped the hand-off tools, status lines and topic start context but updated only `CHANGELOG.md` and the verify-vela journeys, so `docs/channels.md` kept the pre-handoff dispatch story until a separate issue. Behavior that a person or a model can see needs the docs pages that describe it, in the same pull request as the changelog entry. The mechanism is the docs item in [REVIEW.md](REVIEW.md) and the Docs section of the pull request template.
 
 ## A first-run wizard hides the recovery hint it replaces
 
@@ -66,25 +66,25 @@ Model guidance belongs to a state the wizard is about to leave: while the startu
 
 [Issue #337](https://github.com/glows777/Vela/issues/337). After [#335](https://github.com/glows777/Vela/pull/335) upgraded the AI SDK, an MCP record tool with a `propertyNames` schema made the OpenAI-compatible adapter report a compatibility warning. The SDK writes warnings through `process.emitWarning`, not `console.*`, so the TUI's console capture missed them: stderr painted over the screen on every request. The pre-PR tests covered the request payload and the returned warning, not where the warning was displayed.
 
-Interactive mode now installs `globalThis.AI_SDK_LOG_WARNINGS` for its lifetime, shows each formatted warning once, and restores the previous value on shutdown. The layer was human review: #334 named this display follow-up but closed without an issue for it. The mechanism is the TUI case in `test/e2e/tui-sdk-warnings.test.ts`, which drives the real OpenAI Responses adapter and a `propertyNames` tool, and the SDK warning journey in [verify-vela](../.skills/verify-vela/journeys.md) that repeats it through the real CLI.
+Interactive mode now installs `globalThis.AI_SDK_LOG_WARNINGS` for its lifetime, shows each formatted warning once, and restores the previous value on shutdown. The layer was human review: #334 named this display follow-up but closed without an issue for it. The mechanism is the TUI case in `test/e2e/tui-sdk-warnings.test.ts`, which drives the real OpenAI Responses adapter and a `propertyNames` tool, and the SDK warning journey in [verify-vela](.skills/verify-vela/journeys.md) that repeats it through the real CLI.
 
 ## A persisted session channel is routing identity after resume
 
 [Issue #354](https://github.com/glows777/Vela/issues/354). After [#349](https://github.com/glows777/Vela/pull/349), `listSessions()` reads a channel from the session header or the last `session_channel` entry, but `resume()` left `session.channel` empty. A later `vela.session(id, { channel })` for a different channel was treated as the first binding. The next prompt appended `session_channel`, and the summary took that later entry. Opening with the other channel before `resume()` did not append, and `session.channel` still disagreed with the summary.
 
-AI/bot review of #349 should have caught it. The review covered the first late binding and archive writes, not a different bind after the channel was already saved. The mechanism is the resume cases in `test/e2e/sessions.test.ts` and the session-channel item in [REVIEW.md](../REVIEW.md). A change to session channel persistence must re-check that conflict after resume.
+AI/bot review of #349 should have caught it. The review covered the first late binding and archive writes, not a different bind after the channel was already saved. The mechanism is the resume cases in `test/e2e/sessions.test.ts` and the session-channel item in [REVIEW.md](REVIEW.md). A change to session channel persistence must re-check that conflict after resume.
 
 ## A new public Vela method belongs in the SDK member table
 
 [Issue #359](https://github.com/glows777/Vela/issues/359). [#352](https://github.com/glows777/Vela/pull/352) added `channel(name)` on `ChannelVela` and the umbrella `Vela`. The channels reference, the changelog and the public API snapshot included the method. The Vela member table in `docs/sdk.md` omitted `channel(name)`. The host-lifecycle note on that page omitted it too. The Channels reference lines in `docs/index.md` and `docs/channels.md` described writing a channel, the gateway, transports and events.
 
-AI/bot review of #352 checked the channels reference and missed the SDK inventory of the same object. A new public method on `ChannelVela` or the umbrella `Vela` must have a row in that table, or the page must record the decision to leave the method out. The mechanism is the SDK member-table item in [REVIEW.md](../REVIEW.md).
+AI/bot review of #352 checked the channels reference and missed the SDK inventory of the same object. A new public method on `ChannelVela` or the umbrella `Vela` must have a row in that table, or the page must record the decision to leave the method out. The mechanism is the SDK member-table item in [REVIEW.md](REVIEW.md).
 
 ## An Issue-feed allowlist change updates the webhook journey
 
 [Issue #358](https://github.com/glows777/Vela/issues/358). [#357](https://github.com/glows777/Vela/pull/357) made `issueLabels` a strict allowlist. An empty list, including an omitted option, accepts no Issue event. The product tests and the channel docs moved with that change. `.skills/verify-vela/scripts/webhook-journeys.ts` still posted an unlabeled `issues` `opened` against an omitted list and expected a model turn. The signed delivery returned HTTP 202, and the journey then failed because the call count stayed at 6 instead of 7.
 
-Pre-PR review should have caught it. CI does not run the verify-vela journeys, so the stale script reached main. A breaking change to GitHub Issue-feed gating has to update that webhook journey in the same pull request, including the empty default. The mechanism is the journey. It fails if an empty list delivers every Issue again. The Issue-feed item in [REVIEW.md](../REVIEW.md) is the review check.
+Pre-PR review should have caught it. CI does not run the verify-vela journeys, so the stale script reached main. A breaking change to GitHub Issue-feed gating has to update that webhook journey in the same pull request, including the empty default. The mechanism is the journey. It fails if an empty list delivers every Issue again. The Issue-feed item in [REVIEW.md](REVIEW.md) is the review check.
 
 ## A captured JSON event has to come from a fresh run
 
