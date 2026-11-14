@@ -278,14 +278,17 @@ test('Bash storage failure prevents command execution', async () => {
 })
 
 test('Bash timeout preserves output already written to disk', async () => {
+  // Not sub-second: the tool runs `bash -lc`, so a slow login profile can outlast a short timeout
+  // and the command is killed before printf runs (#372)
+  const timeout = 2
   const result = await createTestBashTool().execute(
-    { command: "printf 'BEFORE_TIMEOUT\\n'; sleep 20", timeout: 0.2 },
+    { command: "printf 'BEFORE_TIMEOUT\\n'; sleep 20", timeout },
     { results: new ToolResultStore(join(dir, 'timeout-results')) },
   )
   const stored = getStoredResult({ type: 'json', value: result as never })!
   expect(await Bun.file(stored.path).text()).toContain('BEFORE_TIMEOUT')
   expect(stored.preview).toContain('BEFORE_TIMEOUT')
-  expect(stored.preview).toContain('Command timed out after 0.2 seconds')
+  expect(stored.preview).toContain(`Command timed out after ${timeout} seconds`)
   expect(stored.execution).toMatchObject({ timedOut: true, isError: true })
 })
 

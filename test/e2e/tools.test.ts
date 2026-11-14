@@ -462,11 +462,14 @@ test('a deferred tool only reaches the model after tool_search discovers it', as
 })
 
 test('bash has no default timeout; the model can pass one and sees that the command timed out', async () => {
+  // Not sub-second: `bash -lc` pays login-shell startup first, so a short timeout can kill the
+  // command before it prints (#372)
+  const timeout = 2
   const t = createTestVela({
     responses: [
       fauxToolCall('bash', {
         command: 'echo started; sleep 20',
-        timeout: 0.3,
+        timeout,
       }),
       fauxText('ok'),
     ],
@@ -478,7 +481,7 @@ test('bash has no default timeout; the model can pass one and sees that the comm
   expect(performance.now() - started).toBeLessThan(10_000)
   const output = String(t.model.calls[1]!.toolResults[0]!.output)
   expect(output).toContain('started')
-  expect(output).toContain('Command timed out after 0.3 seconds')
+  expect(output).toContain(`Command timed out after ${timeout} seconds`)
   // Like pi, a timed-out (or failed, or aborted) command is an error result
   expect(t.model.calls[1]!.toolResults[0]!.raw).toMatchObject({
     type: 'error-text',
