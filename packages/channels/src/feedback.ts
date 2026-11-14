@@ -407,6 +407,7 @@ export class RunFeedback {
         senderId: msg.senderId,
         error,
         aborted: false,
+        source: 'feedback',
       })
     this.options.logger.error(
       `[${channelName}] Feedback failed: ${errorMessage(error)}`,
@@ -416,7 +417,7 @@ export class RunFeedback {
       await this.options.channel(channelName)?.send({
         ...msg,
         recipientId: msg.senderId,
-        text: `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
+        text: `Couldn't update the progress card: ${errorMessage(error)}. The task is still running; the update will be retried. Check the bot's permissions and connection if this keeps happening.`,
       })
     } catch (sendError) {
       this.options.logger.error(

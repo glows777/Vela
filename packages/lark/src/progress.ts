@@ -66,6 +66,12 @@ function inputSummary(args: unknown): string {
   return plain(value, 60)
 }
 
+/**
+ * Retry delays after a failed card write. A transient network error must not freeze the card for the
+ * rest of the run; four retries bound a permanently dead card to five attempts.
+ */
+const RETRY_DELAYS = [1_000, 2_000, 4_000, 8_000] as const
+
 /** One ordered writer for one shared card. Event listeners never await network I/O. */
 export class LarkProgress {
   private rows = new Map<string, { state: string; label: string }>()
@@ -74,7 +80,11 @@ export class LarkProgress {
   private stage = 'Working'
   private pending = false
   private closed = false
+  /** Set only after the retry budget is spent; a later write cannot revive a dead card. */
   private failure?: unknown
+  private failures = 0
+  private retryAt = 0
+  private readonly retryDelays: readonly number[]
   private writing: Promise<void> = Promise.resolve()
   private timer?: ReturnType<typeof setTimeout>
   private lastWrite = Date.now()
@@ -84,9 +94,14 @@ export class LarkProgress {
     private messageId: string,
     private card: LarkCard,
     private report: (error: unknown) => Promise<void>,
-    initialTodos?: readonly TodoItem[],
+    options: {
+      initialTodos?: readonly TodoItem[]
+      /** Delay before each retry; the production schedule bounds a dead card to five attempts. */
+      retryDelays?: readonly number[]
+    } = {},
   ) {
-    if (initialTodos?.length) this.todos = [...initialTodos]
+    if (options.initialTodos?.length) this.todos = [...options.initialTodos]
+    this.retryDelays = options.retryDelays ?? RETRY_DELAYS
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
   }
 
@@ -170,10 +185,21 @@ export class LarkProgress {
             this.lastWrite = Date.now()
             try {
               await this.transport.patchCard(this.messageId, this.snapshot())
+              this.failures = 0
+              this.retryAt = 0
             } catch (error) {
-              this.failure = error
-              clearInterval(this.heartbeat)
-              await this.report(error)
+              this.failures++
+              // One report per run: a retry that fails again must not repeat the message.
+              if (this.failures === 1) await this.report(error)
+              const delay = this.retryDelays[this.failures - 1]
+              if (delay === undefined) {
+                this.failure = error
+                clearInterval(this.heartbeat)
+              } else {
+                this.retryAt = Date.now() + delay
+                // Re-arm even without a new event, so a quiet run still retries on schedule.
+                this.pending = true
+              }
             }
           })
           .finally(() => {
@@ -181,7 +207,11 @@ export class LarkProgress {
             if (this.pending) this.schedule()
           })
       },
-      Math.max(0, 250 - (Date.now() - this.lastWrite)),
+      Math.max(
+        0,
+        250 - (Date.now() - this.lastWrite),
+        this.retryAt - Date.now(),
+      ),
     )
   }
 
@@ -199,6 +229,7 @@ export class LarkProgress {
   async finish(outcome: Exclude<ChannelOutcome, 'silent'>): Promise<void> {
     await this.drain()
     if (this.failure) throw this.failure
+    // The terminal card is one last attempt; a failure after delivery still leaves DONE in place.
     this.stage = { done: 'Finished', failed: 'Failed', stopped: 'Stopped' }[
       outcome
     ]

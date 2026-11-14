@@ -308,8 +308,9 @@ export class LarkChannel implements ChannelDefinition {
         const session = this.topics.runtime?.session(
           channelSessionId(this.name, msg.channelId, msg.topic?.rootId),
         )
-        const items = session && latestTodoList(session.getBranch())?.items
-        return new LarkProgress(this.transport, messageId, card, report, items)
+        return new LarkProgress(this.transport, messageId, card, report, {
+          initialTodos: session && latestTodoList(session.getBranch())?.items,
+        })
       }
     } catch (error) {
       clear()

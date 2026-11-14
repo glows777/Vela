@@ -389,7 +389,7 @@ test('handoff keeps the original acknowledgement pending until the topic task fi
   }
 })
 
-test('a failed card patch is visible once while delivered task success receives DONE', async () => {
+test('a card that keeps failing is reported once, retried a bounded number of times, and still receives DONE', async () => {
   let release!: () => void
   const { fake, t, start } = setup(
     [fauxToolCall('hold_pause', {}), fauxText('result')],
@@ -429,7 +429,63 @@ test('a failed card patch is visible once while delivered task success receives 
       fake.sent.filter((s) => s.text.includes('card permission denied')),
     ).toHaveLength(1)
     expect(fake.sent.at(-1)?.text).toBe('<at user_id="ou_alice"></at> result')
-    expect(patches).toBe(1)
+    // The live attempt plus the terminal one; the retry budget caps a dead card at five.
+    expect(patches).toBeGreaterThanOrEqual(2)
+    expect(patches).toBeLessThanOrEqual(5)
+  } finally {
+    release?.()
+    await t.internals.gateway.stopAll()
+  }
+})
+
+test('a transient card patch failure is reported once and the card keeps updating', async () => {
+  let release!: () => void
+  let failed = false
+  const { fake, t, start } = setup(
+    [fauxToolCall('hold_pause', {}), fauxText('result')],
+    [
+      function hold(api) {
+        api.registerTool({
+          name: 'pause',
+          description: 'Wait',
+          inputSchema: z.object({}),
+          execute: async () => {
+            await new Promise<void>((resolve) => {
+              release = resolve
+            })
+            return 'ok'
+          },
+        })
+      },
+    ],
+  )
+  const patch = fake.transport.patchCard
+  fake.transport.patchCard = async (messageId, card) => {
+    if (!failed) {
+      failed = true
+      throw new Error('read ECONNRESET')
+    }
+    await patch(messageId, card)
+  }
+  await start()
+  try {
+    fake.deliver(topic())
+    await until(() => fake.sent.some((s) => s.text.includes('read ECONNRESET')))
+    const report = fake.sent.filter((s) => s.text.includes('read ECONNRESET'))
+    expect(report).toHaveLength(1)
+    expect(report[0]?.text).toContain('still running')
+    // The card recovers on the next scheduled attempt instead of staying frozen
+    const deadline = Date.now() + 5000
+    while (fake.patches.length === 0) {
+      if (Date.now() > deadline) throw new Error('Card never recovered')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    release()
+    await until(() =>
+      fake.reactions.some((r) => r.emoji === 'DONE' || r.emoji === 'CrossMark'),
+    )
+    expect(fake.reactions.at(-1)?.emoji).toBe('DONE')
+    expect(fake.patches.at(-1)?.card.header.title.content).toBe('Finished')
   } finally {
     release?.()
     await t.internals.gateway.stopAll()

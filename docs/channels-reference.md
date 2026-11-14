@@ -203,7 +203,7 @@ Here `openFeedback` is your adapter's implementation: control creation may be as
 
 Replace `acknowledge`, `showTopicControls` and `showRunControls` with `startRun`. Move reaction creation to the factory, honor `{ acknowledge: false }`, move both control presentations into `event({ type: 'controls', ... })`, and forward agent events from the `agent` variant. Replace the old topic `stop()` callback with `choose('stop')`. Combine acknowledgement/card completion in `finish(outcome)`; `ChannelAcknowledgement` is removed. Update custom channel types along with the public API snapshot. Basic channels that never supplied these hooks need no change.
 
-Channel session events keep their shape: `channel_message` carries `channel`, `senderId`, `senderName`, `text`; `channel_reply` carries `channel`, `recipientId`, `text`; `channel_error` carries `channel`, `senderId`, `error`, `aborted`. Subscribers also receive the session ID. Channel-local feedback updates do not add core event types.
+Channel session events keep their shape: `channel_message` carries `channel`, `senderId`, `senderName`, `text`; `channel_reply` carries `channel`, `recipientId`, `text`; `channel_error` carries `channel`, `senderId`, `error`, `aborted`, plus `source: 'feedback'` when the failure is a progress update rather than the turn. Subscribers also receive the session ID. Channel-local feedback updates do not add core event types.
 
 ## Gateway lifecycle
 

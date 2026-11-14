@@ -287,7 +287,7 @@ Steered messages arrive as another `message_start` / `message_end` followed by a
 | `notify` | `message`, `level` (`info`, `warning`, `error`) | An extension called `ui.notify()` in a session without a UI. In RPC mode this is an [extension UI request](rpc.md#extension-ui) instead. |
 | `channel_message` | `channel`, `senderId`, `senderName`, `text` | A channel received a message for this session |
 | `channel_reply` | `channel`, `recipientId`, `text` | A channel sent a reply |
-| `channel_error` | `channel`, `senderId`, `error`, `aborted` | A channel turn failed or was aborted |
+| `channel_error` | `channel`, `senderId`, `error`, `aborted`, `source?` | A channel turn failed or was aborted. `source: 'feedback'` means updating the progress presentation failed and the turn may still be running |
 
 The types are `VelaEvent`, `AssistantMessageEvent`, `StopReason`, `VelaEventListener` and `VelaSessionEventListener`. Extension lifecycle events (`session_start`, `before_agent_start`, `tool_call` interception, ...) are a separate API, see [Extensions](extensions.md). The CLI's `--mode json` and `--mode rpc` write these same events as JSON lines, see [JSON mode](json.md).
 

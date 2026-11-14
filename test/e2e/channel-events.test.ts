@@ -636,7 +636,7 @@ test('a human input still receives its own admission-write error reply', async (
     expect(f.sent.slice(before).map((s) => s.message)).toEqual([
       expect.objectContaining({
         replyToId: 'human-2',
-        text: expect.stringContaining("Couldn't update task feedback:"),
+        text: expect.stringContaining("Couldn't update the progress card:"),
       }),
     ])
     expect(f.model.calls).toHaveLength(1)

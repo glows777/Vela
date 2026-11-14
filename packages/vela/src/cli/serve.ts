@@ -39,7 +39,9 @@ export function formatChannelEvent(
       return `${time} channel_error ${oneLine(event.channel)} ${oneLine(event.senderId)}: ${
         event.aborted
           ? 'Turn aborted'
-          : `Turn stopped: ${oneLine(errorMessage(event.error))}`
+          : event.source === 'feedback'
+            ? `Feedback failed: ${oneLine(errorMessage(event.error))}`
+            : `Turn stopped: ${oneLine(errorMessage(event.error))}`
       }`
     default:
       return undefined
