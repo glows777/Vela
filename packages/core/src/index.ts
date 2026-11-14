@@ -48,6 +48,10 @@ export {
   type SessionInspection,
   type VelaInspection,
 } from './diagnostics.ts'
+export {
+  type BackgroundOptions,
+  background,
+} from './extensions/background/index.ts'
 export { configString, configStrings } from './extensions/config.ts'
 export {
   customMessageIfChanged,
