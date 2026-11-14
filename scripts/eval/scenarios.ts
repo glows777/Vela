@@ -89,10 +89,31 @@ export function prompts(id: ScenarioId, url = ''): string[] {
         "Draft a two-line note for the on-call channel saying tonight's deploy is delayed to 22:00. FYI the staging server got renamed to kestrel last week, so use that name in the note.",
         "What's our staging server called these days?",
       ]
+    case 'G9':
+      return ['Read task/release.txt and reply with its version line only.']
   }
 }
 
+/** G9: untagged group discussion delivered while the trigger run is working, oldest first. */
+export const burstDiscussion = [
+  { sender: 'ou_bob', text: 'The 0.7.0 build is green.' },
+  { sender: 'ou_alice', text: 'The docs page is updated.' },
+  { sender: 'ou_bob', text: 'The changelog entry is under Unreleased.' },
+  { sender: 'ou_alice', text: 'Two reviewers signed off.' },
+  { sender: 'ou_bob', text: 'The migration guide is checked.' },
+  { sender: 'ou_alice', text: 'Staging smoke test passed.' },
+  { sender: 'ou_bob', text: 'The release notes are ready.' },
+  { sender: 'ou_alice', text: 'There are no open blockers.' },
+  { sender: 'ou_bob', text: 'Only the tag is missing.' },
+  {
+    sender: 'ou_alice',
+    text: 'Can you confirm in one sentence what is still left before we tag 0.7.0?',
+  },
+] as const
+
 export function fixtures(id: ScenarioId): Record<string, string> {
+  if (id === 'G9')
+    return { 'task/release.txt': 'Release 0.7.0 is awaiting its tag.\n' }
   if (id === 'G6')
     return {
       'task/handoff.txt': 'The release verification code is ORBIT-73.\n',

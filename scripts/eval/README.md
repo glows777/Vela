@@ -24,7 +24,7 @@ Options:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--only C1,G2` | original fourteen | Comma-separated scenario IDs; M1 is explicit-only |
+| `--only C1,G2` | original fifteen | Comma-separated scenario IDs; M1 is explicit-only |
 | `--runs 3` | 3 | Repetitions per arm |
 | `--thinking max` | max | Vela thinking level; `high` is used for the additional CLI round |
 | `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
@@ -38,13 +38,13 @@ the extension against a clean checkout without turning it on by default.
 
 Install the selected checkout's dependencies first. Git, Bun, ripgrep and fd must
 be on PATH. The runner installs each selected baseline's frozen dependencies in
-an owned temporary worktree. C1–C6 and G1–G5 retain `OLD_COMMIT`;
+an owned temporary worktree. C1–C6, G1–G5 and G9 retain `OLD_COMMIT`;
 G6/G7/G8 use the exact peeled `v0.4.0` commit
 `5b976e26706686a2213f514895d05110f50af2a5`. `results.json` records the per-scenario
 `baselineCommits` map as well as the legacy `oldCommit`. Both arms get fresh task worktrees at
 `7fac1dfd6b06e003a990d17867c10090b6f8efc2`; production modules and helpers come
 from each arm's revision. Baseline G2 is skipped because its `task` API cannot
-represent the current `title`/`brief` checks. A default round has 81 executable
+represent the current `title`/`brief` checks. A default round has 87 executable
 slots and three skips. Worktrees provide context isolation, not a security sandbox.
 
 ## Results and cost
@@ -127,6 +127,17 @@ diagnostic-helper source. This investigation does not change any grade threshold
 
 G1–G5 fake only Lark transport. Cards/reactions are not answers; empty G2 group
 acknowledgement is allowed. G5 seeds a completed report through topic history.
+
+G9 measures the #336 part 2 batching change. The trigger run (an explicit @ that
+reads `task/release.txt`) starts, then ten untagged messages from two people are
+delivered from inside that run's `agent_start`, so they provably queue behind it.
+Both arms run this worker; the old arm keeps `OLD_COMMIT`, where each queued
+message is a separate evaluation. Checks: `burst answered` requires the last
+group reply to answer the newest message (what is left before tagging 0.7.0), and
+`one merged evaluation` requires at most four provider requests, which allows the
+trigger run, the merged evaluation and a tool call or retry. The per-attempt
+`usage.requests` in `results.json` is the headline comparison (about eleven on the
+old arm versus two on the new one), together with estimated cost.
 
 G6/G7/G8 also use the revision-local fake transport (`fakeLark()` today) with the real extension, gateway, tools and separate
 topic sessions in one group. G6 starts B (`g6_b`) needing a code, then asks A

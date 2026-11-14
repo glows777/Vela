@@ -5,7 +5,12 @@ import { savedTestRuns } from './fixtures/saved-test-runs.ts'
 import * as graders from './graders.ts'
 import { type Call, type Evidence, grade, type ScenarioId } from './graders.ts'
 import { type Attempt, emptyUsage, table } from './report.ts'
-import { compactionFixture, fixtures, prompts } from './scenarios.ts'
+import {
+  burstDiscussion,
+  compactionFixture,
+  fixtures,
+  prompts,
+} from './scenarios.ts'
 
 function evidence(overrides: Partial<Evidence> = {}): Evidence {
   return {
@@ -125,6 +130,12 @@ const good = {
   G5: evidence({
     previousReport: report,
     deliveries: [{ scope: 'topic', text: 'You’re welcome.' }],
+  }),
+  G9: evidence({
+    deliveries: [
+      { scope: 'group', text: 'Only the 0.7.0 tag is still missing.' },
+    ],
+    modelRequests: 2,
   }),
   G6: evidence({
     calls: [handoff()],
@@ -406,6 +417,18 @@ fails('G5', 'short acknowledgement', (e) => {
 })
 fails('G5', 'no report repetition', (e) => {
   e.deliveries[0]!.text = report.slice(0, 40)
+})
+fails('G9', 'burst answered', (e) => {
+  e.deliveries = []
+})
+fails('G9', 'burst answered', (e) => {
+  e.deliveries[0]!.text = 'Looking into it.'
+})
+fails('G9', 'one merged evaluation', (e) => {
+  e.modelRequests = 12
+})
+fails('G9', 'one merged evaluation', (e) => {
+  e.modelRequests = undefined
 })
 
 test('exact length boundaries count Unicode code points', () => {
@@ -903,6 +926,75 @@ async function exitAttempt(
     await rm(root, { recursive: true, force: true })
   }
 }
+async function groupAttempt(scenario: 'G9', responses: FauxStep[]) {
+  const root = await mkdtemp(join(tmpdir(), 'vela-group-eval-test-'))
+  try {
+    const cwd = join(root, 'work')
+    await command(root, ['git', 'init', '-q', cwd])
+    await command(cwd, [
+      'git',
+      '-c',
+      'user.name=Eval test',
+      '-c',
+      'user.email=eval@localhost',
+      '-c',
+      'commit.gpgSign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'fixture',
+    ])
+    const model = createFauxModel({ responses })
+    const result = await runAttempt(
+      {
+        runtime: exitRuntime,
+        cwd,
+        artifactDir: join(root, 'artifacts'),
+        scenario,
+        arm: 'new',
+        run: 1,
+        attempt: 1,
+        thinking: 'off',
+      },
+      undefined,
+      model,
+    )
+    return { result, calls: model.calls }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+test('G9 worker answers the burst with one merged evaluation', async () => {
+  const { result, calls } = await groupAttempt('G9', [
+    fauxText('Release 0.7.0 is awaiting its tag.'),
+    fauxText('Only the 0.7.0 tag is left.'),
+  ])
+  expect(result.status).toBe('pass')
+  expect(result.checks).toEqual([
+    { name: 'burst answered', pass: true },
+    { name: 'one merged evaluation', pass: true },
+  ])
+  expect(calls).toHaveLength(2)
+  // The ten inputs arrive as one attributed block, oldest first.
+  const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  expect(calls[1]!.lastUserText).toMatch(
+    new RegExp(
+      burstDiscussion
+        .map(
+          ({ sender, text }) =>
+            `\\[\\d{2}:\\d{2}\\] ${sender === 'ou_bob' ? 'Bob' : 'Alice'}: ${escaped(text)}`,
+        )
+        .join('\\n\\n'),
+    ),
+  )
+  expect(result.evidence!.modelRequests).toBe(2)
+  expect(result.evidence!.deliveries).toEqual([
+    { scope: 'group', text: 'Release 0.7.0 is awaiting its tag.' },
+    { scope: 'group', text: 'Only the 0.7.0 tag is left.' },
+  ])
+})
+
 const stagingMemory = {
   action: 'save',
   name: 'staging-server',

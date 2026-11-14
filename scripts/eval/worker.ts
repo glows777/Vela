@@ -17,6 +17,7 @@ import {
 import { runtimePaths } from './layout.ts'
 import { type Attempt, emptyUsage, pricing } from './report.ts'
 import {
+  burstDiscussion,
   compactionFixture,
   fixtures,
   page,
@@ -408,6 +409,7 @@ export async function runAttempt(
   }
   let channelStarted = false
   let channelError: unknown
+  let burstDelivered = false
   const drain = async () => {
     if (channelError) return
     if (channelTesting) return channelTesting.drainChannels(t.vela)
@@ -430,8 +432,29 @@ export async function runAttempt(
     if (
       event.type === 'agent_start' &&
       sessionId.startsWith(`${paths.channelName}-`)
-    )
+    ) {
       channelStarted = true
+      // G9 delivers the burst inside the trigger run so it provably queues behind it.
+      if (
+        config.scenario === 'G9' &&
+        !burstDelivered &&
+        sessionId === channelSessionId(paths.channelName, 'oc_group')
+      ) {
+        burstDelivered = true
+        for (const [index, discussion] of burstDiscussion.entries())
+          fake?.deliver(
+            eventFactory!(
+              {
+                message_id: `burst_${index + 1}`,
+                create_time: String(3100 + index),
+                mentions: [],
+                content: JSON.stringify({ text: discussion.text }),
+              },
+              discussion.sender,
+            ),
+          )
+      }
+    }
     if (event.type === 'channel_error') channelError = event.error
     if (exitScenario && event.type === 'channel_reply') {
       const topicRootId = topicRoots.find(
@@ -589,8 +612,9 @@ export async function runAttempt(
         evidence.topics = fake.topics.map((topic) => topic.title)
         evidence.deliveries = fake.sent.map((item) => ({
           scope:
-            item.messageId === 'trigger' &&
-            !['G4', 'G5'].includes(config.scenario)
+            config.scenario === 'G9' ||
+            (item.messageId === 'trigger' &&
+              !['G4', 'G5'].includes(config.scenario))
               ? 'group'
               : 'topic',
           text: item.text.replace(/<at\b[^>]*>.*?<\/at>\s*/g, ''),
@@ -737,6 +761,7 @@ mock.module(${JSON.stringify(modulePath)}, () => ({ ...actual, sumPositive(numbe
         evidence.files[`task/step-${i}.txt`] = await readTask(
           `task/step-${i}.txt`,
         )
+    evidence.modelRequests = usage.requests
     result.checks = grade(config.scenario, evidence)
     result.status = result.checks.every((check) => check.pass) ? 'pass' : 'fail'
   } catch (error) {

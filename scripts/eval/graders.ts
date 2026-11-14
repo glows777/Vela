@@ -15,6 +15,7 @@ export const scenarioIds = [
   'G6',
   'G7',
   'G8',
+  'G9',
   'M1',
 ] as const
 export type ScenarioId = (typeof scenarioIds)[number]
@@ -38,6 +39,8 @@ export interface Evidence {
   recallPaths?: { workspace: string; artifactDir: string }
   topics: string[]
   compactions: number[]
+  /** Provider invocations recorded for this attempt, including failed and summary calls. */
+  modelRequests?: number
   files: Record<string, string>
   changed: string[]
   validation: Record<string, boolean>
@@ -531,6 +534,18 @@ export function grade(id: ScenarioId, e: Evidence): Check[] {
               (/handoff/i.test(JSON.stringify(call.args)) ||
                 fact(JSON.stringify(call.output ?? ''))),
           ),
+      )
+      break
+    }
+    case 'G9': {
+      const replies = e.deliveries.filter((item) => item.scope === 'group')
+      const last = replies.at(-1)?.text ?? ''
+      // The newest burst message asks what is left before tagging 0.7.0.
+      check('burst answered', /\btag\b/i.test(last) && chars(last) > 0)
+      // One trigger run plus one merged evaluation; tool calls or a provider retry may add a request.
+      check(
+        'one merged evaluation',
+        e.modelRequests !== undefined && e.modelRequests <= 4,
       )
       break
     }
