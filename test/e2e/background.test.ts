@@ -84,7 +84,6 @@ test('background_stop ends a topic job and background_output reports an id lost 
       fauxText('Started.'),
       fauxToolCall('background_stop', { id: 'bg-1' }),
       fauxText('Stopped it.'),
-      fauxText('The command is stopped.'),
       fauxToolCall('background_output', { id: 'bg-1' }),
       fauxText('It is gone.'),
     ],
@@ -104,19 +103,18 @@ test('background_stop ends a topic job and background_output reports an id lost 
   await until(() => fake.sent.length === 1, 'the start reply')
   fake.deliver(topicEvent('stop', 'stop it'))
   await until(() => fake.sent.length === 2, 'the stop reply')
-  // The stop's own exit delivery is the next evaluation in this topic.
-  await until(() => fake.sent.length === 3, 'the stop delivery')
-  expect(fake.sent[2]!.text).toContain('The command is stopped.')
+  // background_stop returns the tail in its tool result; no separate delivery turn competes with it.
   const stopResult = t.model.calls
     .flatMap((call) => call.toolResults)
     .find((result) => result.toolName === 'background_stop')!.output
   expect(stopResult).toContain('bg-1 (stopped)')
+  expect(fake.sent[1]!.text).toContain('Stopped it.')
 
   fake.deliver(topicEvent('restart', '!restart'))
-  await until(() => fake.sent.length === 4, 'the restart notice')
+  await until(() => fake.sent.length === 3, 'the restart notice')
   fake.deliver(topicEvent('check', 'check bg-1'))
-  await until(() => fake.sent.length === 5, 'the reply after restart')
-  expect(fake.sent[4]!.text).toContain('It is gone.')
+  await until(() => fake.sent.length === 4, 'the reply after restart')
+  expect(fake.sent[3]!.text).toContain('It is gone.')
   expect(t.model.calls.at(-1)!.toolResults[0]!.output).toContain(
     'Unknown background command bg-1. It may have ended with a restart or session close.',
   )

@@ -80,7 +80,7 @@ interface Job {
   state: 'running' | 'exited'
   exitCode?: number
   stopped?: boolean
-  /** Ends with the session rather than the conversation: no delivery, because no run asked for it. */
+  /** No delivery: the caller has the tail (`background_stop`) or the run that would answer is ending. */
   silent?: boolean
 }
 
@@ -176,10 +176,12 @@ export class BackgroundJobs {
     }
   }
 
+  /** End one command; the caller already receives its tail from the tool result, so this never delivers. */
   async stop(id: string): Promise<JobSnapshot> {
     const job = this.job(id)
     if (job.state === 'running') {
       job.stopped = true
+      job.silent = true
       await this.terminate(job)
     }
     return this.snapshot(id)

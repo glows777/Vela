@@ -110,7 +110,7 @@ test('a background command runs to completion and its delivery carries the exit 
   expect(jobs.snapshot('bg-1')).toMatchObject({ state: 'exited', exitCode: 3 })
 })
 
-test('stopping a job ends its process group and delivers that it was stopped', async () => {
+test('stopping a job ends its process group and returns the tail without another delivery', async () => {
   const reports: BackgroundResult[] = []
   const session = sessionStub(directory(), [])
   bind(session, (_session, result) => {
@@ -127,8 +127,9 @@ test('stopping a job ends its process group and delivers that it was stopped', a
   expect(stopped.stopped).toBe(true)
   expect(stopped.output).toContain('STARTED')
   expect(stopped.output).not.toContain('NEVER')
-  expect(reports).toHaveLength(1)
-  expect(reports[0]!.text).toContain('Background command bg-1 was stopped.')
+  // The tool result carries the tail, so a stop must not also start a delivery turn.
+  await Bun.sleep(50)
+  expect(reports).toEqual([])
 })
 
 test('a descendant that ignores SIGTERM is killed after the shell exits', async () => {
@@ -152,7 +153,8 @@ test('a descendant that ignores SIGTERM is killed after the shell exits', async 
   await jobs.stop('bg-1')
   await Bun.sleep(200)
   expect(() => process.kill(child, 0)).toThrow()
-  expect(reports).toHaveLength(1)
+  // A stop never delivers: the tool result carries the tail.
+  expect(reports).toEqual([])
 })
 
 test('an unknown id says it may have ended with a restart or session close', () => {
