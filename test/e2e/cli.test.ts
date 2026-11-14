@@ -27,13 +27,13 @@ const beforeSetup = (stdout: string): string => {
   return at === -1 ? stdout : stdout.slice(0, at)
 }
 
-test('no configured model points print-mode users to setup', async () => {
+test.concurrent('no configured model points print-mode users to setup', async () => {
   const result = await cli(['-p', 'hello'], { model: '' })
   expect(result.code).toBe(1)
   expect(result.stderr).toContain('vela setup')
 })
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'setup cancellation leaves user configuration untouched',
   async () => {
     const result = await cli(['setup'], {
@@ -76,7 +76,7 @@ for (const cancelAt of [
   'Custom headers (JSON, optional)',
   'Context window (optional)',
 ]) {
-  test.skipIf(!hasScript)(
+  test.concurrent.if(hasScript)(
     `custom setup Escape at ${cancelAt} writes nothing`,
     async () => {
       const steps: [string, string][] = [
@@ -104,7 +104,7 @@ for (const cancelAt of [
   )
 }
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'Lark setup completes through the CLI with a fake connection',
   async () => {
     const preload = `
@@ -148,7 +148,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'existing offline model does not start setup',
   async () => {
     const result = await cli([], {
@@ -160,7 +160,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'setup verifies a compatible provider and preserves unrelated settings on rerun',
   async () => {
     const server = Bun.serve({
@@ -279,7 +279,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'failed verification displays provider error and writes no configuration',
   async () => {
     const server = Bun.serve({
@@ -317,7 +317,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'exiting while verification hangs stops the CLI and leaves no config',
   async () => {
     let exit: (() => void) | undefined
@@ -357,7 +357,7 @@ test.skipIf(!hasScript)(
   },
 )
 
-test.skipIf(!hasScript)(
+test.concurrent.if(hasScript)(
   'first run configures DeepSeek and answers through the real CLI',
   async () => {
     const preload = `
@@ -566,19 +566,20 @@ function sessionFiles(dataDir: string): string[] {
   }
 }
 
-// One prompt carries one attachment of each format; they do not interact, so one CLI run checks all headers
+// One prompt carries one attachment of each format; they do not interact, so one CLI run checks all
+// headers. The .txt names are deliberate: an image must be recognized from its bytes, not its suffix.
 const pictures = [
-  ['blue.png', 'image/png'],
-  ['quadrants.jpg', 'image/jpeg'],
-  ['quadrants.gif', 'image/gif'],
-  ['quadrants.webp', 'image/webp'],
-  ['quadrants.bmp', 'image/bmp'],
+  ['blue.png', 'image/png', 'picture-png.txt'],
+  ['quadrants.jpg', 'image/jpeg', 'picture-jpeg.txt'],
+  ['quadrants.gif', 'image/gif', 'picture-gif.txt'],
+  ['quadrants.webp', 'image/webp', 'picture-webp.txt'],
+  ['quadrants.bmp', 'image/bmp', 'picture-bmp.txt'],
 ] as const
 
 function pictureFiles() {
   return Object.fromEntries(
-    pictures.map(([fixture]) => [
-      fixture,
+    pictures.map(([fixture, , name]) => [
+      name,
       readFileSync(join(ROOT, 'test/fixtures/images', fixture)),
     ]),
   )
@@ -589,7 +590,7 @@ test.concurrent('@file attaches every image format by header, only to the first 
     [
       '--mode',
       'json',
-      ...pictures.map(([fixture]) => `@${fixture}`),
+      ...pictures.map(([, , name]) => `@${name}`),
       'Describe this',
       'Continue',
     ],
@@ -617,7 +618,7 @@ test.concurrent('@file attaches every image format by header, only to the first 
     {
       type: 'text',
       text: `${pictures
-        .map(([fixture]) => `<file name="${join(result.cwd, fixture)}"></file>`)
+        .map(([, , name]) => `<file name="${join(result.cwd, name)}"></file>`)
         .join('\n\n')}\n\nDescribe this`,
     },
     ...pictures.map(([, mimeType]) =>
@@ -1573,7 +1574,7 @@ test.concurrent('VELA_MODEL=mock still runs the keyword demo model offline', asy
 
 // Interactive mode (TUI) only appears in a terminal (piped input uses print mode, like pi): util-linux `script` gives the child a pseudo-terminal.
 // TUI behavior itself is tested with a fake terminal in e2e/tui; here we only check that it starts, chats and exits in a real terminal
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   'interactive mode shows loaded context files at startup and in /status',
   async () => {
     const root = tempDir('vela-proj-')
@@ -1607,7 +1608,7 @@ test.if(hasScript)(
   },
 )
 
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   'interactive mode in a real terminal: a turn, then Ctrl+D exits and the session is saved',
   async () => {
     const { stdout, stderr, code, dataDir } = await cli([], {
@@ -1627,7 +1628,7 @@ test.if(hasScript)(
   },
 )
 
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   '-r lists saved sessions and resumes the chosen one',
   async () => {
     const first = await cli(['-p', 'hello'], {
@@ -1650,7 +1651,7 @@ test.if(hasScript)(
   },
 )
 
-test.if(hasScript)(
+test.concurrent.if(hasScript)(
   'interactive mode exits when its terminal goes away instead of spinning a CPU',
   async () => {
     const dir = tempDir('vela-cli-')
@@ -1862,7 +1863,7 @@ test.concurrent('a reader that closes stdout early makes the CLI exit quietly', 
   expect(print.stderr).not.toContain('EPIPE')
 })
 
-test('-p: SIGTERM stops a running bash command with its process group, then exits with 143', async () => {
+test.concurrent('-p: SIGTERM stops a running bash command with its process group, then exits with 143', async () => {
   const dir = tempDir('vela-cli-')
   const home = tempDir('vela-home-')
   dirs.push(dir, home)
