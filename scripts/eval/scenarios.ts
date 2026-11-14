@@ -2,7 +2,7 @@ import type { ScenarioId } from './graders.ts'
 
 export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
 // G9 isolates #336 part 2, so its old arm is the commit before the change (part 1 merged).
-export const BATCH_BASELINE_COMMIT = 'c1612d3f28f22e02e2dd2b2bd8f372879c1e3e03'
+const BATCH_BASELINE_COMMIT = 'c1612d3f28f22e02e2dd2b2bd8f372879c1e3e03'
 // Peeled v0.4.0 tag (the tag object itself is not the runtime commit).
 const EXIT_BASELINE_COMMIT = '5b976e26706686a2213f514895d05110f50af2a5'
 export const baselineCommit = (id: ScenarioId) =>
