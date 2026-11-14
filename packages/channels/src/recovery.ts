@@ -37,7 +37,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
 
 /** Only the session stores input content; markers associate saved entries with admitted message IDs. */
 export class ChannelRecovery {
-  private inputs = new WeakMap<VelaSession, IncomingMessage[]>()
+  private inputs = new WeakMap<VelaSession, IncomingMessage[][]>()
   private subscribed = new WeakSet<VelaSession>()
   private saves = new WeakMap<VelaSession, Promise<void>[]>()
   constructor(
@@ -63,37 +63,45 @@ export class ChannelRecovery {
       )
   }
 
-  track(key: string, session: VelaSession, msg: IncomingMessage): void {
+  /** One prompt may cover several passive inputs; each still gets its own input marker. */
+  track(
+    key: string,
+    session: VelaSession,
+    msg: IncomingMessage | IncomingMessage[],
+  ): void {
     const inputs = this.inputs.get(session) ?? []
-    inputs.push(msg)
+    inputs.push(Array.isArray(msg) ? msg : [msg])
     this.inputs.set(session, inputs)
     if (this.subscribed.has(session)) return
     this.subscribed.add(session)
     session.subscribe((event) => {
       if (event.type !== 'message_start' || event.message.role !== 'user')
         return
-      const input = this.inputs.get(session)?.shift()
-      if (!input || (!input.replyToId && !input.routine && !input.handoff))
-        return
-      // A note's reply target is a topic root, not a message of its own.
-      const messageId =
-        input.routine || input.handoff ? undefined : input.replyToId
-      session.appendEntry(INPUT_MARKER, {
-        messageId,
-        handoffId: input.handoff?.id,
-        passive: input.passive,
-        routine: input.routine,
-        timestamp: Date.now(),
+      const batch = this.inputs.get(session)?.shift()
+      const recorded = batch?.filter(
+        (input) => input.replyToId || input.routine || input.handoff,
+      )
+      if (!recorded?.length) return
+      for (const input of recorded)
+        session.appendEntry(INPUT_MARKER, {
+          // A note's reply target is a topic root, not a message of its own.
+          messageId:
+            input.routine || input.handoff ? undefined : input.replyToId,
+          handoffId: input.handoff?.id,
+          passive: input.passive,
+          routine: input.routine,
+          timestamp: Date.now(),
+        })
+      const ids = recorded.flatMap((input) =>
+        !input.routine && !input.handoff && input.replyToId
+          ? [input.replyToId]
+          : [],
+      )
+      const save = session.save().then(async () => {
+        for (const input of recorded)
+          if (input.routine) await this.routineSaved(input)
+        if (ids.length) await this.directory.forget(key, ids)
       })
-      const save = session
-        .save()
-        .then(() =>
-          input.routine
-            ? this.routineSaved(input)
-            : messageId
-              ? this.directory.forget(key, [messageId])
-              : undefined,
-        )
       // Keep the failure for the run's awaited drain; do not create an unhandled rejection.
       void save.catch(() => {})
       const saves = this.saves.get(session) ?? []
