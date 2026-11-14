@@ -107,9 +107,9 @@ test('systemPrompt replaces the intro, tools, rules and docs and keeps the other
     expect(system).toContain('<cwd>')
     expect(system).toContain('<env>')
     // A per-turn replacement from a handler is the whole prompt for that turn
-    expect(session.buildSystem(undefined, 'Handler prompt')).toBe(
-      'Handler prompt',
-    )
+    expect(
+      session.promptContext(undefined).systemPromptOverride,
+    ).toBeUndefined()
   } finally {
     await vela.dispose()
   }

@@ -1,21 +1,19 @@
 import type { ToolResultStore } from '../session/tool-results.ts'
 
 /**
- * A tool the model can call this turn, as the system prompt needs it (pi's promptSnippet / promptGuidelines).
- * The builder reads the session's active tools, so a tool that is off, not selected or still deferred
+ * A tool the model can call this turn, as the system prompt reads it: a `ToolDefinition` fits as is. The
+ * builder reads the session's active tools, so a tool that is off, not selected or still deferred
  * contributes neither a line in `<tools>` nor a rule.
  */
-export interface ToolPrompt {
+interface ToolPrompt {
   name: string
-  /** One line for `<tools>`; a tool without one is not listed */
-  snippet?: string
-  /** Rules for `<rules>` while the tool is active */
-  guidelines?: readonly string[]
+  /** One line for `<tools>`; a tool without one is not listed (pi's `promptSnippet`) */
+  promptSnippet?: string
+  /** Rules for `<rules>` while the tool is active (pi's `promptGuidelines`) */
+  promptGuidelines?: readonly string[]
 }
 
 export interface PromptContext {
-  /** Number of tools the model can call this turn */
-  toolCount: number
   /** Tools the model can call this turn, in registry order */
   activeTools?: readonly ToolPrompt[]
   /** The registry's deferred tool lines (tools `tool_search` can load); empty when nothing is deferred */
@@ -26,8 +24,8 @@ export interface PromptContext {
   toolResults?: ToolResultStore
   /** Sections written by extensions in before_agent_start (name → content); fixed within a turn */
   extensionSections?: Readonly<Record<string, string>>
-  /** Replaces the default prompt for this turn (a before_agent_start handler's `systemPrompt`) */
-  systemPromptOverride?: string
+  /** Replaces the default prompt for this turn (a before_agent_start handler's `systemPrompt`); null for none */
+  systemPromptOverride?: string | null
 }
 
 /**
@@ -81,9 +79,7 @@ export class SystemPromptBuilder {
 
   /** Whether the configured `systemPrompt` is in effect (a handler's prompt replaces everything instead). */
   private replaced(ctx: PromptContext): boolean {
-    return (
-      ctx.systemPromptOverride === undefined && this.replacement !== undefined
-    )
+    return ctx.systemPromptOverride == null && this.replacement !== undefined
   }
 
   private *rendered(
@@ -120,13 +116,13 @@ export class SystemPromptBuilder {
   /** What a request carries as its system prompt. */
   build(ctx: PromptContext): string {
     // A handler who returns a prompt decides what the model sees, sections and all
-    if (ctx.systemPromptOverride !== undefined) return ctx.systemPromptOverride
+    if (ctx.systemPromptOverride != null) return ctx.systemPromptOverride
     return Object.values(this.sections(ctx)).join('\n\n')
   }
 
   /** Whether each section is on and its rendered length in characters (null means it is off). */
   status(ctx: PromptContext): Array<{ name: string; chars: number | null }> {
-    if (ctx.systemPromptOverride !== undefined)
+    if (ctx.systemPromptOverride != null)
       return [
         { name: 'systemPrompt', chars: ctx.systemPromptOverride.length },
         ...this.definitions.map((section) => ({

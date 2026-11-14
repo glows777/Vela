@@ -5,7 +5,6 @@ import { tempDir } from '../../../../../test/support/vela.ts'
 import { environment, type PromptContext } from '../../../src/prompt/index.ts'
 
 const context: PromptContext = {
-  toolCount: 1,
   deferredToolSummary: '',
   sessionMessageCount: 0,
   sessionId: 's',

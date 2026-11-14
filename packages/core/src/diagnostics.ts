@@ -67,11 +67,12 @@ export async function inspectSession(
   const internal = velaInternals(vela)
   const preview = options.previewExtensions
     ? await session.previewPrompt()
-    : { sections: { ...session.promptContext().extensionSections } }
-  const sections = preview.sections
+    : undefined
+  const sections = {
+    ...(preview?.sections ?? session.promptContext().extensionSections),
+  }
   // A handler that replaces the prompt decides what the request carries
-  const systemPrompt =
-    preview.systemPrompt ?? session.buildSystem(sections, null)
+  const systemPrompt = preview?.prompt ?? session.buildSystem(sections)
   const active = session.registry.getActiveTools()
   const skills =
     internal.skillLoader.buildPromptSection(active.map((tool) => tool.name)) ??
@@ -92,7 +93,6 @@ export async function inspectSession(
     extensionSections: { ...sections },
     stages: internal.builder.status({
       ...session.promptContext(sections),
-      toolCount: internal.registry.getAllTools().length,
     }),
   }
 }

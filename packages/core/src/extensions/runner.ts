@@ -401,9 +401,7 @@ export class ExtensionRunner {
     const messages: CustomMessage[] = []
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('before_agent_start')) {
-      // `null`: no replacement yet, so this is the built prompt (not the previous turn's)
-      event.systemPrompt =
-        systemPrompt ?? session.buildSystem(event.sections, null)
+      event.systemPrompt = systemPrompt ?? session.buildSystem(event.sections)
       try {
         const result = (await fn(event, ctx)) as
           | BeforeAgentStartEventResult

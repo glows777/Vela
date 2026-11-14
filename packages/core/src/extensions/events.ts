@@ -136,6 +136,13 @@ export interface BeforeAgentStartEventResult {
   systemPrompt?: string
 }
 
+/** What the handlers produced for this turn: their sections, messages and any replacement prompt. */
+export interface BeforeAgentStartResult {
+  sections: Record<string, string>
+  messages: CustomMessage[]
+  systemPrompt?: string
+}
+
 /** Before the session's first prompt() (after history is restored). */
 export interface SessionStartEvent {
   type: 'session_start'

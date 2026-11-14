@@ -6,7 +6,7 @@ export * from './environment.ts'
 export * from './system-prompt.ts'
 
 /** The default intro paragraph (pi's preamble). */
-export const PREAMBLE =
+const PREAMBLE =
   'You are Vela, an AI agent that helps users by calling the tools this session provides: reading, searching and editing files, running commands, and any extra tools from extensions.'
 
 /**
@@ -21,8 +21,8 @@ export function preamble(systemPrompt?: string): SectionRender {
 export function toolList(): SectionRender {
   return (ctx) => {
     const lines = (ctx.activeTools ?? [])
-      .filter((tool) => tool.snippet)
-      .map((tool) => `- ${tool.name}: ${tool.snippet}`)
+      .filter((tool) => tool.promptSnippet)
+      .map((tool) => `- ${tool.name}: ${tool.promptSnippet}`)
     return lines.length ? lines.join('\n') : '(none)'
   }
 }
@@ -71,7 +71,7 @@ export function rules(): SectionRender {
     }
     add(FACTS_RULE)
     for (const tool of ctx.activeTools ?? [])
-      for (const guideline of tool.guidelines ?? []) add(guideline)
+      for (const guideline of tool.promptGuidelines ?? []) add(guideline)
     for (const rule of STANDING_RULES) add(rule)
     return lines.join('\n')
   }

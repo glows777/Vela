@@ -33,7 +33,7 @@ const MAX_CYCLES = 0
 const LINE_CEILINGS = new Map<string, number>([
   ['packages/core/src/vela-session.ts', 1549],
   ['packages/vela/src/cli/interactive.ts', 1389],
-  ['packages/core/src/tools/registry.ts', 766],
+  ['packages/core/src/tools/registry.ts', 764],
 ])
 
 const failures: string[] = []

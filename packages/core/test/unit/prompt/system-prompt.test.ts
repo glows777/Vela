@@ -16,7 +16,6 @@ import {
 } from '../../../src/prompt/index.ts'
 
 const context: PromptContext = {
-  toolCount: 1,
   deferredToolSummary: '',
   sessionMessageCount: 0,
   sessionId: 'test',
@@ -42,11 +41,11 @@ function builder(
 const tools: PromptContext['activeTools'] = [
   {
     name: 'read_file',
-    snippet: 'Read file contents',
-    guidelines: ['Use read_file instead of cat.'],
+    promptSnippet: 'Read file contents',
+    promptGuidelines: ['Use read_file instead of cat.'],
   },
-  { name: 'bash', snippet: 'Run a shell command' },
-  { name: 'tool_search', snippet: 'Load tools on demand' },
+  { name: 'bash', promptSnippet: 'Run a shell command' },
+  { name: 'tool_search', promptSnippet: 'Load tools on demand' },
 ]
 const withTools: PromptContext = { ...context, activeTools: tools }
 
@@ -94,8 +93,11 @@ test('a tool that is off contributes neither a line nor a rule', () => {
   const prompt = builder().build({
     ...context,
     activeTools: [
-      { name: 'bash', snippet: 'Run a shell command' },
-      { name: 'edit_file', guidelines: ['Read a file before you change it.'] },
+      { name: 'bash', promptSnippet: 'Run a shell command' },
+      {
+        name: 'edit_file',
+        promptGuidelines: ['Read a file before you change it.'],
+      },
     ],
   })
   // A guideline without a snippet still adds its rule, but the tool is not listed
@@ -119,7 +121,7 @@ test('<deferred_tools> needs deferred tools and an active tool_search', () => {
   expect(
     builder().build({
       ...context,
-      activeTools: [{ name: 'bash', snippet: 'Run a shell command' }],
+      activeTools: [{ name: 'bash', promptSnippet: 'Run a shell command' }],
       deferredToolSummary: '- mcp__docs (2 tools) — Docs',
     }),
   ).not.toContain('<deferred_tools>')
@@ -131,11 +133,11 @@ test('rules deduplicate what tools and the standing list both say', () => {
     activeTools: [
       {
         name: 'a',
-        guidelines: ['Show file paths clearly when working with files.'],
+        promptGuidelines: ['Show file paths clearly when working with files.'],
       },
       {
         name: 'b',
-        guidelines: ['Show file paths clearly when working with files.'],
+        promptGuidelines: ['Show file paths clearly when working with files.'],
       },
     ],
   })

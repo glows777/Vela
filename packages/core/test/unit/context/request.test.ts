@@ -77,7 +77,6 @@ test('summary sends only the dropped messages as text, without tool definitions'
   })
   const system = (n: number) =>
     builder.build({
-      toolCount: 1,
       deferredToolSummary: '',
       sessionMessageCount: n,
       sessionId: 'prefix',
