@@ -453,7 +453,10 @@ export class ChannelRoutines {
           r.channel !== this.directory.get(r.targetKey)?.channel ||
           r.chatId !== msg.channelId ||
           (r.lastFiredAt &&
-            Date.parse(r.lastFiredAt) >= Date.parse(scheduledAt))
+            Date.parse(r.lastFiredAt) >= Date.parse(scheduledAt)) ||
+          // A queued occurrence from before a schedule edit must not confirm the new schedule.
+          (r.scheduleUpdatedAt &&
+            Date.parse(scheduledAt) <= Date.parse(r.scheduleUpdatedAt))
         )
           return [r]
         return 'at' in r.schedule ? [] : [{ ...r, lastFiredAt: scheduledAt }]

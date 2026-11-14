@@ -422,6 +422,67 @@ test('a routine queues behind a running topic without steering and mentions its 
   expect(r.t.model.calls).toHaveLength(3)
 })
 
+test('editing a queued routine to a one-off keeps the new reminder when the old occurrence confirms', async () => {
+  const r = setup()
+  await r.seed({ time: '09:00' })
+  const entered = Promise.withResolvers<void>()
+  const held = Promise.withResolvers<void>()
+  r.t.internals.registry.register({
+    name: 'held',
+    description: 'Hold work',
+    inputSchema: z.object({}),
+    execute: async () => {
+      entered.resolve()
+      await held.promise
+      return 'finished'
+    },
+  })
+  r.t.model.push(
+    fauxToolCall('held', {}),
+    fauxText('Original answer'),
+    fauxText('Old routine answer'),
+    fauxText('Edited routine answer'),
+  )
+  await r.t.vela.startChannels()
+  const running = r.t.internals.gateway.handleIncoming('lark', {
+    channelId: 'oc_group',
+    senderId: 'ou_alice',
+    senderName: 'Alice',
+    text: 'Original work',
+    replyToId: 'original',
+    topic: { rootId: 'root', threadId: 'thread' },
+  })
+  await entered.promise
+  r.clock.advance('2026-01-05T09:00:00Z')
+  await Promise.resolve()
+  const edited = await r.t.vela
+    .channel('lark')
+    .routines.edit({ chatId: 'oc_group' }, 'reminder', {
+      message: 'Edited message',
+      schedule: { at: '2026-01-05T10:00' },
+    })
+  expect(edited).toMatchObject({
+    id: 'reminder',
+    message: 'Edited message',
+    nextRun: '2026-01-05 10:00',
+  })
+  held.resolve()
+  await running
+  await r.t.internals.gateway.routines.drain()
+  expect(r.t.internals.gateway.routines.list('lark', 'oc_group')).toMatchObject(
+    [
+      {
+        id: 'reminder',
+        message: 'Edited message',
+        schedule: { at: '2026-01-05T10:00:00.000Z' },
+      },
+    ],
+  )
+  await r.advance('2026-01-05T10:00:00Z')
+  expect(r.t.model.calls.at(-1)!.lastUserText).toContain('Edited message')
+  expect(await r.stored()).toEqual([])
+})
+
 test('a malformed routine file rejects startup with its path', async () => {
   const r = setup()
   await mkdir(join(r.t.vela.dataDir, 'channels'), { recursive: true })
