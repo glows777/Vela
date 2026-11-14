@@ -75,7 +75,7 @@ test('short channel answers and topic/DM requests have the right prompts and vis
   fake.deliver(larkEvent({ message_id: 'short' }))
   await until(() => fake.sent.length === 1)
   expect(t.model.calls[0]?.tools).toEqual(expect.arrayContaining(dispatchTools))
-  expect(t.model.calls[0]?.system).toContain('in one reply, without tools')
+  expect(t.model.calls[0]?.system).toContain('in one reply.')
   expect(fake.topics).toEqual([])
   expect(fake.sent[0]).toMatchObject({
     messageId: 'short',

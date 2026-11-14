@@ -54,8 +54,8 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
     export default () => {}
   `,
   )
-  // After the handoff, both task and hub can ask for a model response. An identical
-  // write request is harmless in either slot; the hub has been silenced by handoff.
+  // The hub has no write_file: after the handoff its next response is a silenced reply,
+  // and the task writes the file in the opened project.
   await Bun.write(
     join(cwd.path, 'scenario.json'),
     JSON.stringify({
@@ -71,6 +71,7 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
             },
           ],
         },
+        { text: 'Dispatched' },
         ...Array.from({ length: 2 }, () => ({
           reasoning: 'HIDDEN_LOCAL_REASONING',
           toolCalls: [
