@@ -277,7 +277,6 @@
     provider: string
     source?: string | undefined
   function memory: () => VelaExtension
-  const memoryConfig: ExtensionConfigDefinition
   function memoryCredentialStore: (initial?: Record<string, Credential>) => CredentialStore
   function memorySessionStorage: () => SessionStorage
   function messageText: (message: ModelMessage) => string

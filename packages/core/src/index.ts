@@ -58,7 +58,7 @@ export {
   customMessageMissing,
   lastCustomMessage,
 } from './extensions/custom-message.ts'
-export { memory, memoryConfig } from './extensions/memory/index.ts'
+export { memory } from './extensions/memory/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
 export { todo } from './extensions/todo/index.ts'
 export type {
