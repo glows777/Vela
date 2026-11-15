@@ -231,6 +231,35 @@ test('a passive flood is trimmed to a safe evaluation and the next explicit inpu
   expect(transcript).not.toContain('0000 ')
 })
 
+test('a passive input rejected by the context guard leaves the session usable', async () => {
+  const run = setup({
+    responses: [fauxText('first answer'), fauxText('owner answer')],
+  })
+  await run.start()
+  // Each input is inside the merge budget, but together with the answered one it exceeds the
+  // request limit; the rejected input must not stay at the leaf.
+  run.fake.deliver(passive('big-1', 'x'.repeat(390_000)))
+  await until(() => run.fake.sent.length === 1)
+  expect(run.t.model.calls).toHaveLength(1)
+  run.fake.deliver(passive('big-2', 'y'.repeat(390_000)))
+  // Queue the owner's mention behind the rejected evaluation.
+  run.fake.deliver(larkEvent({ message_id: 'owner' }))
+  await until(
+    () => run.fake.sent.some((item) => item.messageId === 'owner'),
+    10_000,
+  )
+  await run.t.internals.gateway.stopAll()
+  expect(run.fake.sent).toEqual([
+    { messageId: 'big-1', text: 'first answer' },
+    { messageId: 'owner', text: 'owner answer' },
+  ])
+  expect(run.t.model.calls).toHaveLength(2)
+  // The rejected input left the branch instead of staying at the leaf.
+  expect(
+    JSON.stringify(run.t.vela.session('lark-oc_group').messages),
+  ).not.toContain('yyyy')
+})
+
 test('an oversized passive input is skipped once and the session keeps working', async () => {
   const run = setup({ responses: [fauxText('owner answer')] })
   await run.start()
