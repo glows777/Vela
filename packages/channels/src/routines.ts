@@ -343,7 +343,7 @@ export class ChannelRoutines {
   formatList(channel: string, chatId: string): string {
     const { timezone, routines } = this.describeChat(channel, chatId)
     return [
-      `Routines (${timezone})`,
+      `Routines [${timezone}]`,
       ...routines.map(
         (r) =>
           `${r.id} | ${r.scheduleText} | ${r.target} | set by ${r.creator.name} | next: ${r.nextRun ?? 'no future occurrence'}`,
