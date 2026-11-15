@@ -71,8 +71,9 @@ export async function inspectSession(
   const sections = {
     ...(preview?.sections ?? session.promptContext().extensionSections),
   }
-  // A handler that replaces the prompt decides what the request carries
-  const systemPrompt = preview?.prompt ?? session.buildSystem(sections)
+  // A handler that replaces the prompt decides what the request carries; a preview starts from none
+  const override = preview ? (preview.systemPrompt ?? null) : undefined
+  const systemPrompt = session.buildSystem(sections, override)
   const active = session.registry.getActiveTools()
   const skills =
     internal.skillLoader.buildPromptSection(active.map((tool) => tool.name)) ??

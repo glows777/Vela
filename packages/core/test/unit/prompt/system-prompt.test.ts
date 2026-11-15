@@ -17,7 +17,6 @@ import {
 
 const context: PromptContext = {
   deferredToolSummary: '',
-  sessionMessageCount: 0,
   sessionId: 'test',
 }
 
@@ -50,13 +49,11 @@ const tools: PromptContext['activeTools'] = [
 const withTools: PromptContext = { ...context, activeTools: tools }
 
 test('sections render in order, tagged with their name and the preamble plain', () => {
-  expect(Object.keys(builder().sections(context))).toEqual([
-    'preamble',
-    'tools',
-    'rules',
-    'addendum',
-    'cwd',
-  ])
+  expect(
+    builder()
+      .sections(context)
+      .map(({ name }) => name),
+  ).toEqual(['preamble', 'tools', 'rules', 'addendum', 'cwd'])
   const prompt = builder().build(context)
   expect(prompt.startsWith('You are Vela')).toBe(true)
   expect(prompt).toContain('<tools>\n(none)\n</tools>')
@@ -179,6 +176,33 @@ test('a system prompt replaces the preamble and drops tools, rules and docs', ()
       systemPromptOverride: 'ABCD',
     })[0],
   ).toEqual({ name: 'systemPrompt', chars: 4 })
+})
+
+test('an extension section that uses a built-in name adds to it instead of replacing it', () => {
+  const sections: PromptSection[] = [
+    { name: 'preamble', render: preamble() },
+    { name: 'tools', core: true, render: toolList() },
+    { name: 'rules', core: true, render: rules() },
+    { name: 'extensions', render: extensionSections() },
+  ]
+  const prompt = new SystemPromptBuilder({ sections }).build({
+    ...context,
+    activeTools: [{ name: 'edit_file', promptGuidelines: ['Read first.'] }],
+    extensionSections: { rules: 'Use the project conventions.' },
+  })
+  // Both contributions are in the prompt: the built-in rules, then the extension's own section
+  expect(prompt).toContain('- Use tools to check facts')
+  expect(prompt).toContain('- Read first.')
+  expect(prompt).toContain('<rules>\nUse the project conventions.\n</rules>')
+  expect(prompt.match(/<rules>/g)).toHaveLength(2)
+  expect(
+    new SystemPromptBuilder({ sections })
+      .sections({
+        ...context,
+        extensionSections: { rules: 'Use the project conventions.' },
+      })
+      .map(({ name }) => name),
+  ).toEqual(['preamble', 'tools', 'rules', 'rules'])
 })
 
 test('extension sections are rendered under their own tags, in write order', () => {

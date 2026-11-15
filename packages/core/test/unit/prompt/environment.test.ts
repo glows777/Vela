@@ -6,7 +6,6 @@ import { environment, type PromptContext } from '../../../src/prompt/index.ts'
 
 const context: PromptContext = {
   deferredToolSummary: '',
-  sessionMessageCount: 0,
   sessionId: 's',
 }
 

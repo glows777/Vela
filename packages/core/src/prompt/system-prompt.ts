@@ -1,5 +1,3 @@
-import type { ToolResultStore } from '../session/tool-results.ts'
-
 /**
  * A tool the model can call this turn, as the system prompt reads it: a `ToolDefinition` fits as is. The
  * builder reads the session's active tools, so a tool that is off, not selected or still deferred
@@ -18,10 +16,8 @@ export interface PromptContext {
   activeTools?: readonly ToolPrompt[]
   /** The registry's deferred tool lines (tools `tool_search` can load); empty when nothing is deferred */
   deferredToolSummary: string
-  sessionMessageCount: number
+  /** The session whose prompt this is (per-session context files and cwd) */
   sessionId: string
-  /** Current session's tool result store */
-  toolResults?: ToolResultStore
   /** Sections written by extensions in before_agent_start (name → content); fixed within a turn */
   extensionSections?: Readonly<Record<string, string>>
   /** Replaces the default prompt for this turn (a before_agent_start handler's `systemPrompt`); null for none */
@@ -35,6 +31,12 @@ export interface PromptContext {
 export type SectionRender = (
   ctx: PromptContext,
 ) => string | Readonly<Record<string, string>> | null
+
+/** One rendered section: its tag name (the preamble keeps its own name) and the text it contributes. */
+export interface RenderedSection {
+  name: string
+  content: string
+}
 
 export interface PromptSection {
   /** The tag: `<name>`; `preamble` is untagged */
@@ -106,18 +108,22 @@ export class SystemPromptBuilder {
     }
   }
 
-  /** The prompt's sections in order, rendered and tagged (the preamble plain); a feed for displays and tests. */
-  sections(ctx: PromptContext): Record<string, string> {
-    const sections: Record<string, string> = {}
-    for (const { name, content } of this.rendered(ctx)) sections[name] = content
-    return sections
+  /**
+   * The prompt's sections in order, tagged (the preamble plain). Each definition can render several sections
+   * (an extension's) and names need not be unique: an extension that uses a built-in name adds its section
+   * after the built-in one instead of replacing it.
+   */
+  sections(ctx: PromptContext): RenderedSection[] {
+    return [...this.rendered(ctx)]
   }
 
   /** What a request carries as its system prompt. */
   build(ctx: PromptContext): string {
     // A handler who returns a prompt decides what the model sees, sections and all
     if (ctx.systemPromptOverride != null) return ctx.systemPromptOverride
-    return Object.values(this.sections(ctx)).join('\n\n')
+    return this.sections(ctx)
+      .map((section) => section.content)
+      .join('\n\n')
   }
 
   /** Whether each section is on and its rendered length in characters (null means it is off). */

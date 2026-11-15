@@ -33,7 +33,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
-- **The prompt only describes tools the session has, and extension sections are tagged.** `<tools>` lists the active tools that have a `promptSnippet`, and the `tool_search` and "read before you edit" rules come from the tools themselves instead of always being present. Every extension section is wrapped in `<name>`, so prompts differ textually from 0.6.0; a section name that is not a valid tag is made safe ([#379](https://github.com/glows777/Vela/issues/379)).
+- **The prompt only describes tools the session has, and extension sections are tagged.** `<tools>` lists the active tools that have a `promptSnippet`, and the `tool_search` and "read before you edit" rules come from the tools themselves instead of always being present. Every extension section is wrapped in `<name>`, so prompts differ textually from 0.6.0; a section name that is not a valid tag is made safe, and a name that matches a built-in section adds a second section with that tag instead of replacing the built-in one ([#379](https://github.com/glows777/Vela/issues/379)).
 
 - **Queued passive discussion is evaluated together.** Top-level group messages that arrive while an evaluation is running no longer run one by one: every passive input already waiting when the next evaluation starts is read in that one evaluation, in arrival order with its own sender and send time, and a reply goes to the newest input. Explicit @ messages, topics and DMs still run separately, and each merged input keeps its own `channel.input` marker for restart deduplication ([#336](https://github.com/glows777/Vela/issues/336)).
 

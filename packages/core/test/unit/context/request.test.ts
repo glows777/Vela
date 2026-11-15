@@ -75,19 +75,15 @@ test('summary sends only the dropped messages as text, without tool definitions'
   const builder = new SystemPromptBuilder({
     sections: [{ name: 'preamble', render: preamble() }],
   })
-  const system = (n: number) =>
-    builder.build({
-      deferredToolSummary: '',
-      sessionMessageCount: n,
-      sessionId: 'prefix',
-    })
+  const system = () =>
+    builder.build({ deferredToolSummary: '', sessionId: 'prefix' })
   const first: ModelMessage[] = [
     { role: 'user', content: 'old' },
     { role: 'assistant', content: 'response' },
   ]
   await generateText({
     model,
-    instructions: system(2),
+    instructions: system(),
     tools: registry.toAISDKFormat(),
     messages: first,
   })
@@ -106,13 +102,13 @@ test('summary sends only the dropped messages as text, without tool definitions'
   const restored = (await store.loadSaved())?.messages ?? []
   await generateText({
     model,
-    instructions: system(8),
+    instructions: system(),
     tools: registry.toAISDKFormat(),
     messages: toModelMessages(restored),
   })
   const snapshot = await createRequestSnapshot(
     model,
-    system(8),
+    system(),
     registry.toAISDKFormat(),
     restored,
   )
@@ -133,7 +129,7 @@ test('summary sends only the dropped messages as text, without tool definitions'
   registry.searchTools('later')
   const discovered = await createRequestSnapshot(
     model,
-    system(8),
+    system(),
     registry.toAISDKFormat(),
     restored,
   )

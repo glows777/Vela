@@ -512,34 +512,29 @@ export class VelaSession {
     if (event.type === 'turn_end') this.flushPendingCustom()
   }
 
-  /** @internal `sections` and any replacement prompt default to this turn's before_agent_start */
-  promptContext(sections = this.turn.sections): PromptContext {
+  /** @internal `override` (`null`: none) keeps a preview or a new turn from inheriting a replacement */
+  promptContext(
+    sections = this.turn.sections,
+    override: string | null | undefined = this.turn.systemPrompt,
+  ): PromptContext {
     return {
       extensionSections: sections,
       deferredToolSummary: this.registry.getDeferredToolSummary(),
-      sessionMessageCount: this.messages.length,
       sessionId: this.id,
-      toolResults: this.store.results,
       activeTools: this.registry.getActiveTools(),
-      systemPromptOverride: this.turn.systemPrompt,
+      systemPromptOverride: override,
     }
   }
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
-  buildSystem(sections?: Record<string, string>): string {
-    return this.builder.build(this.promptContext(sections))
+  buildSystem(sections?: Record<string, string>, override?: string | null) {
+    return this.builder.build(this.promptContext(sections, override))
   }
 
-  /** @internal The sections and prompt the next turn would get (runs before_agent_start for /context) */
-  async previewPrompt(): Promise<{
-    sections: Record<string, string>
-    prompt: string
-  }> {
+  /** @internal Runs this turn's handlers on a fresh prompt for /context, keeping nothing */
+  async previewPrompt(): Promise<BeforeAgentStartResult> {
     await this.start()
-    const preview = await this.deps.extensions.beforeAgentStart(this, '')
-    const context = this.promptContext(preview.sections)
-    context.systemPromptOverride = preview.systemPrompt
-    return { sections: preview.sections, prompt: this.builder.build(context) }
+    return this.deps.extensions.beforeAgentStart(this, '')
   }
 
   /** @internal Prepares the context before a request (microcompaction / summary). */

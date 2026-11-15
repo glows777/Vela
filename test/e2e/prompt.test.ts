@@ -153,6 +153,48 @@ test('a before_agent_start handler reads the current prompt and can replace it f
   expect(second).toBe(built)
 })
 
+test('an extension section named like a built-in one does not replace it', async () => {
+  const collide: VelaExtension = (api) => {
+    api.on('before_agent_start', (event) => {
+      event.sections.rules = 'Use the project conventions.'
+    })
+  }
+  const t = createTestVela({
+    extensions: [collide],
+    responses: [fauxText('ok')],
+  })
+  await t.run('go')
+  const system = t.model.calls[0]!.system
+  // The built-in rules stay: the tool guideline and the standing rules
+  expect(system).toContain('- Read a file before you change it.')
+  expect(system).toContain('- Use tools to check facts')
+  // The extension's section is added after them, under its own tag
+  expect(system).toContain('<rules>\nUse the project conventions.\n</rules>')
+  expect(system.match(/<rules>/g)).toHaveLength(2)
+})
+
+test('a preview rebuilds the prompt instead of inheriting the last forced one', async () => {
+  const marker = 'APPEND_MARKER'
+  const append: VelaExtension = (api) => {
+    api.on('before_agent_start', (event) => ({
+      systemPrompt: `${event.systemPrompt}\n${marker}`,
+    }))
+  }
+  const t = createTestVela({
+    extensions: [append],
+    responses: [fauxText('one'), fauxText('two')],
+  })
+  await t.run('first')
+  const preview = await inspectSession(t.vela, t.session, {
+    previewExtensions: true,
+  })
+  await t.run('second')
+  const second = t.model.calls[1]!.system
+  // The preview is what the next request carries: the marker once, not once per turn
+  expect(second.split(marker)).toHaveLength(2)
+  expect(preview.systemPrompt).toBe(second)
+})
+
 test('inspectSession returns the exact prompt the next request carries', async () => {
   const t = createTestVela({
     files: { 'AGENTS.md': 'Always use bun.' },
