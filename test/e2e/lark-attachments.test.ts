@@ -7,11 +7,12 @@ import {
   symlinkSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
 import type {
   LanguageModelV4FilePart,
   LanguageModelV4Prompt,
 } from '@ai-sdk/provider'
-import type { VelaExtension } from '@glows777/vela'
+import type { VelaExtension, VelaLogger } from '@glows777/vela'
 import { fauxError, fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
@@ -46,11 +47,13 @@ async function setup(
   responses = [fauxText('answer')],
   extensions: VelaExtension[] = [],
   readUntagged = true,
+  logger?: VelaLogger,
 ) {
   const fake = fakeLark()
   const t = createTestVela({
     responses,
     allowPendingResponses: true,
+    logger,
     extensions: [
       lark({
         appId: 'cli_bot',
@@ -170,6 +173,95 @@ test('Lark stops a streamed file above 20MB, removes its partial file and replie
   expect(f.sent[0]?.text).toMatch(/too large.*20\s*MB/i)
   expect(f.t.model.calls).toHaveLength(0)
   expect(readdirSync(f.t.dataPath('channels/lark-oc_dm/files'))).toEqual([])
+})
+
+/** A byte stream that produces one 1 MiB chunk per pull, so a consumer that stops early pulls a bounded number. */
+function meteredImage(pulled: () => void) {
+  const chunks = Array.from({ length: 22 }, () => Buffer.alloc(1024 * 1024))
+  let index = 0
+  return new Readable({
+    highWaterMark: 1,
+    read() {
+      pulled()
+      this.push(chunks[index++] ?? null)
+    },
+  })
+}
+
+test('Lark stops an image stream above 20MB, replies too large and never sends it to the model', async () => {
+  const f = await setup()
+  let pulled = 0
+  f.transport.getResource = async () => meteredImage(() => pulled++)
+  f.deliver(dm('image', { image_key: 'large' }))
+  await until(() => f.sent.length === 1 || f.t.model.calls.length === 1)
+  expect(f.t.model.calls).toHaveLength(0)
+  expect(f.sent[0]?.text).toMatch(/too large.*20\s*MB/i)
+  expect(pulled).toBe(21)
+})
+
+test('Lark stops a passive group image above 20MB, logs it and never calls the model', async () => {
+  const warnings: string[] = []
+  const logger: VelaLogger = {
+    debug() {},
+    info() {},
+    warn: (message) => warnings.push(message),
+    error: (message) => warnings.push(message),
+  }
+  const f = await setup(undefined, [], true, logger)
+  let pulled = 0
+  f.transport.getResource = async () => meteredImage(() => pulled++)
+  f.deliver(
+    larkEvent({
+      message_type: 'image',
+      content: '{"image_key":"large"}',
+      mentions: [],
+    }),
+  )
+  await until(() => warnings.length > 0 || f.t.model.calls.length > 0)
+  expect(f.t.model.calls).toHaveLength(0)
+  expect(warnings[0]).toContain('Passive attachment preparation failed')
+  expect(f.sent).toHaveLength(0)
+  expect(pulled).toBe(21)
+})
+
+test('Lark topic history skips an image above 20MB and keeps the rest', async () => {
+  const f = await setup()
+  f.resources.set('small', [png])
+  f.resources.set(
+    'large',
+    Array.from({ length: 22 }, () => Buffer.alloc(1024 * 1024)),
+  )
+  f.topicHistory.push([
+    {
+      ...historyMessage('small', 'ou_bob', '', '1000'),
+      msg_type: 'image',
+      body: { content: '{"image_key":"small"}' },
+    },
+    {
+      ...historyMessage('large', 'ou_bob', '', '2000'),
+      msg_type: 'image',
+      body: { content: '{"image_key":"large"}' },
+    },
+    historyMessage('earlier', 'ou_bob', 'earlier fact', '3000'),
+    historyMessage('trigger', 'ou_bob', 'current question', '4000'),
+  ])
+  f.deliver(
+    larkEvent(
+      {
+        message_id: 'trigger',
+        create_time: '4000',
+        root_id: 'root',
+        thread_id: 'thread',
+        content: '{"text":"current question"}',
+      },
+      'ou_bob',
+    ),
+  )
+  await until(() => f.sent.length === 1 || f.t.model.calls.length === 1)
+  expect(f.t.model.calls).toHaveLength(1)
+  expect(f.t.model.calls[0]?.lastUserText).toContain('earlier fact')
+  expect(f.t.model.calls[0]?.lastUserText).toContain('[image]')
+  expect(imageParts(f.t.model.calls[0]!.prompt)).toHaveLength(1)
 })
 
 test('Lark refuses an existing symlink file without writing outside the session directory', async () => {

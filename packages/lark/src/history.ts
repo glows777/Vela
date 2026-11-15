@@ -1,4 +1,5 @@
 import type { ImageContent } from '@glows777/vela-core/extension-api'
+import { FileTooLarge } from './attachments.ts'
 import { messageText } from './messages.ts'
 import type {
   LarkHistoryMessage,
@@ -76,7 +77,11 @@ export async function readGroupContext(
     }
     const body = messageText(historyMessage)
     if (!body) continue
-    const attachments = await downloadImages(historyMessage, 4 - imageCount)
+    const attachments = await downloadHistoryImages(
+      downloadImages,
+      historyMessage,
+      4 - imageCount,
+    )
     imageCount += attachments.length
     historyImages.push(attachments)
     earlier.push({
@@ -112,6 +117,20 @@ export function formatGroupContext(
   return history.length
     ? `[Chat since last reply]\n${history.slice(-50).map(named).join('\n')}\n\n[Question]\n${named(question)}`
     : named(question)
+}
+
+/** An oversized historical image keeps its `[image]` line; it must not discard the rest of the history. */
+async function downloadHistoryImages(
+  downloadImages: GroupContextOptions['downloadImages'],
+  message: LarkMessageEvent['message'],
+  limit: number,
+): Promise<ImageContent[]> {
+  try {
+    return await downloadImages(message, limit)
+  } catch (error) {
+    if (error instanceof FileTooLarge) return []
+    throw error
+  }
 }
 
 /** Full topic history, already fetched in ascending creation order. */
@@ -163,7 +182,13 @@ export async function topicLines(
         ? 'Vela'
         : await options.senderName(item.sender?.id ?? 'unknown')
     lines.push(`${name}: ${text}`)
-    images.push(...(await options.downloadImages(message, 4 - images.length)))
+    images.push(
+      ...(await downloadHistoryImages(
+        options.downloadImages,
+        message,
+        4 - images.length,
+      )),
+    )
   }
   return { lines, images }
 }
