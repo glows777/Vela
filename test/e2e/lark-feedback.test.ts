@@ -752,7 +752,8 @@ test('a held bash call shows a bounded single-line command head', async () => {
 })
 
 test('nested tools do not evict the parent summary and credential-bearing input is omitted', async () => {
-  let release!: () => void
+  const held = Promise.withResolvers<void>()
+  const nestedFinished = Promise.withResolvers<void>()
   const { fake, t, start } = setup(
     [
       fauxToolCall('hold_inspect', {
@@ -772,9 +773,8 @@ test('nested tools do not evict the parent summary and credential-bearing input 
               await context?.executeTool?.('bash', {
                 command: 'printf nested-detail',
               })
-            await new Promise<void>((resolve) => {
-              release = resolve
-            })
+            nestedFinished.resolve()
+            await held.promise
             return 'ok'
           },
         })
@@ -784,16 +784,22 @@ test('nested tools do not evict the parent summary and credential-bearing input 
   await start()
   try {
     fake.deliver(topic())
-    await until(() => !!release && fake.patches.length > 0)
+    await nestedFinished.promise
+    await until(() => fake.patches.length > 0)
+    expect(
+      t
+        .eventsOf('tool_execution_end')
+        .filter((event) => event.parentToolCallId && event.toolName === 'bash'),
+    ).toHaveLength(9)
     const content = JSON.stringify(fake.patches.at(-1)?.card)
     expect(content).toContain('Running: holdinspect')
     expect(content).not.toContain('bash')
     expect(content).not.toContain('private-value')
     expect(content).not.toContain('another-secret')
-    release()
+    held.resolve()
     await until(() => fake.reactions.some((r) => r.emoji === 'DONE'))
   } finally {
-    release?.()
+    held.resolve()
     await t.internals.gateway.stopAll()
   }
 })
