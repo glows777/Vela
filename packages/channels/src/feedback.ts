@@ -8,7 +8,7 @@ import {
   agentErrorHint,
   publishChannelEvent,
 } from '@glows777/vela-core/extension-api'
-import type { ChannelDirectory } from './directory.ts'
+import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
@@ -627,6 +627,7 @@ export class RunFeedback {
     let interrupted = false
     // An input handler can handle the message without a run: then there is no new answer to send
     const previous = session.messages.at(-1)
+    const boundary = session.getLeafId()
     try {
       if (msg.topic && channel && !msg.passive && feedback) {
         try {
@@ -691,6 +692,16 @@ export class RunFeedback {
           answer = `Task failed: ${errorMessage(error)}${hint ? `\n${hint}` : ''}`
         }
       }
+      // A rejected turn never reached the model: keep the history it promised and drop the input,
+      // or every later prompt in the top-level group fails with the same error and cannot be reset.
+      if (outcome === 'failed' && !msg.topic && isGroupInput(msg))
+        await this.options.recovery.dropRejectedInput(
+          session,
+          channelName,
+          msg.replyToId,
+          boundary,
+          error,
+        )
       publishChannelEvent(session, {
         type: 'channel_error',
         channel: channelName,

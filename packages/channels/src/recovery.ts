@@ -9,6 +9,7 @@ import {
   type ChannelRecord,
   pendingMessageId,
 } from './directory.ts'
+import { errorMessage } from './log.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
 const INTERRUPTION_NOTICE =
@@ -16,6 +17,8 @@ const INTERRUPTION_NOTICE =
 const RESEND_NOTICE =
   'This message arrived just before the restart and was not saved. Please send it again.'
 const INPUT_MARKER = 'channel.input'
+/** A rejected turn's input left the branch; this entry keeps the rollback and its reason on disk. */
+const REJECTED_MARKER = 'channel.input_rejected'
 
 export function storedMessage(record: ChannelRecord): IncomingMessage {
   const sender = record.routine?.creator ?? record.requester
@@ -115,6 +118,53 @@ export class ChannelRecovery {
     const saves = this.saves.get(session) ?? []
     this.saves.delete(session)
     await Promise.all(saves)
+  }
+
+  /**
+   * The context guard stopped a turn before it reached the model. Drop that turn's input and record
+   * the branch: the input never became context, so keeping it would fail every later prompt, and a
+   * channel chat has no way to compact or reset its own session.
+   */
+  async dropRejectedInput(
+    session: VelaSession,
+    channelName: string,
+    messageId: string | undefined,
+    boundary: string | null,
+    error: unknown,
+  ): Promise<void> {
+    if (!(error instanceof Error) || !error.message.includes('safe input size'))
+      return
+    try {
+      const branch = session.getBranch()
+      const turn = branch.slice(
+        branch.findIndex((entry) => entry.id === boundary) + 1,
+      )
+      // A turn that already ran the model is not an input-size rejection: keep its work.
+      if (
+        turn.some(
+          (entry) =>
+            entry.type === 'message' && entry.message.role === 'assistant',
+        )
+      )
+        return
+      const input = turn.find(
+        (entry) => entry.type === 'message' && entry.message.role === 'user',
+      )
+      if (!input) return
+      const navigation = await session.navigateTree(input.id, {
+        summarize: false,
+      })
+      if (navigation.cancelled)
+        throw new Error('the session tree hook cancelled the rollback')
+      session.appendEntry(REJECTED_MARKER, {
+        messageId,
+        reason: 'context over the safe input size',
+      })
+    } catch (rollbackError) {
+      this.logger.warn(
+        `[${channelName}] Could not drop the rejected input: ${errorMessage(rollbackError)}`,
+      )
+    }
   }
 
   async recover(
