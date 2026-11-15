@@ -8,7 +8,7 @@ import {
   agentErrorHint,
   publishChannelEvent,
 } from '@glows777/vela-core/extension-api'
-import type { ChannelDirectory } from './directory.ts'
+import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
@@ -693,8 +693,8 @@ export class RunFeedback {
         }
       }
       // A rejected turn never reached the model: keep the history it promised and drop the input,
-      // or every later prompt in the channel fails with the same error and cannot be reset.
-      if (outcome === 'failed')
+      // or every later prompt in the top-level group fails with the same error and cannot be reset.
+      if (outcome === 'failed' && !msg.topic && isGroupInput(msg))
         await this.options.recovery.dropRejectedInput(
           session,
           channelName,

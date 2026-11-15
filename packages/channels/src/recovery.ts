@@ -136,12 +136,20 @@ export class ChannelRecovery {
       return
     try {
       const branch = session.getBranch()
-      const start = branch.findIndex((entry) => entry.id === boundary)
-      const input = branch
-        .slice(start + 1)
-        .find(
-          (entry) => entry.type === 'message' && entry.message.role === 'user',
+      const turn = branch.slice(
+        branch.findIndex((entry) => entry.id === boundary) + 1,
+      )
+      // A turn that already ran the model is not an input-size rejection: keep its work.
+      if (
+        turn.some(
+          (entry) =>
+            entry.type === 'message' && entry.message.role === 'assistant',
         )
+      )
+        return
+      const input = turn.find(
+        (entry) => entry.type === 'message' && entry.message.role === 'user',
+      )
       if (!input) return
       const navigation = await session.navigateTree(input.id, {
         summarize: false,
