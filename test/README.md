@@ -41,7 +41,7 @@ The umbrella `packages/vela/src/testing/` composes the channel-aware compatibili
 
 The suite never touches the network and needs no environment variables, but it needs ripgrep and fd installed: the `grep` / `find` tools run the real `rg` / `fd` (macOS `brew install ripgrep fd`, Ubuntu `apt install ripgrep fd-find`). The test Vela passes no `binDir`, so it only looks on PATH and never downloads. Every test runs in its own temp directory, isolated from the others and removed afterwards.
 
-CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint` and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. The Release workflow runs the same job on a release tag before publishing. `test/live/` does not run in CI.
+CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun run lint`, `bun run quality`, `bun run verify:journeys` (the offline verify-vela journeys; `github-setup-journey.ts` needs a registry and the runner leaves it out) and `bun run smoke:consumer` on every PR and every push to main; any failing step blocks the PR. The Release workflow runs the same job on a release tag before publishing. `test/live/` does not run in CI.
 
 ## Layers
 
