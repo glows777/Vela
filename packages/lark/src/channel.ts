@@ -22,6 +22,7 @@ import type {
   VelaLogger,
 } from '@glows777/vela-core/extension-api'
 import { imageMimeType } from '@glows777/vela-core/images'
+import { FileTooLarge, MAX_ATTACHMENT_BYTES } from './attachments.ts'
 import {
   type LarkCardAction,
   type LarkCardResponse,
@@ -621,7 +622,13 @@ export class LarkChannel implements ChannelDefinition {
     if (!this.transport) throw new Error('Image has no transport')
     const stream = await this.transport.getResource(messageId, key, 'image')
     const chunks: Buffer[] = []
-    for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+    let size = 0
+    for await (const chunk of stream) {
+      const bytes = Buffer.from(chunk)
+      size += bytes.length
+      if (size > MAX_ATTACHMENT_BYTES) throw new FileTooLarge()
+      chunks.push(bytes)
+    }
     const bytes = Buffer.concat(chunks)
     return {
       type: 'image',
@@ -681,7 +688,7 @@ export class LarkChannel implements ChannelDefinition {
       for await (const chunk of stream) {
         const bytes = Buffer.from(chunk)
         size += bytes.length
-        if (size > 20 * 1024 * 1024) throw new FileTooLarge()
+        if (size > MAX_ATTACHMENT_BYTES) throw new FileTooLarge()
         await file.writeFile(bytes)
       }
       await file.close()
@@ -778,5 +785,3 @@ export class LarkChannel implements ChannelDefinition {
     void next.then(() => this.pending.delete(next))
   }
 }
-
-class FileTooLarge extends Error {}
