@@ -22,8 +22,8 @@ afterEach(async () => {
     roots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   )
 })
-async function until(check: () => boolean) {
-  const deadline = Date.now() + 3000
+async function until(check: () => boolean, timeout = 3000) {
+  const deadline = Date.now() + timeout
   while (!check()) {
     if (Date.now() > deadline) throw new Error('Passive message did not settle')
     await Bun.sleep(1)
@@ -66,6 +66,11 @@ function setup(
 }
 const passive = (message_id: string, text: string) =>
   larkEvent({ message_id, mentions: [], content: JSON.stringify({ text }) })
+
+/** What the group hears when a passive evaluation has to drop discussion. */
+const SKIPPED =
+  'Skipped some untagged discussion: it was too large to evaluate at once.'
+const SKIP_LOG = 'over the size budget'
 
 /** `[HH:MM] ` for a Lark create_time in the machine's local time */
 const at = (ms: string) => `[${messageTime(ms)}] `
@@ -166,6 +171,152 @@ test('passive inputs queued during a run join one evaluation in arrival order', 
     { messageId: 'm3', emoji: 'OnIt', removed: true },
     { messageId: 'm3', emoji: 'DONE', removed: false },
   ])
+})
+
+test('a passive flood is trimmed to a safe evaluation and the next explicit input runs', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let held = false
+  const run = setup({
+    responses: [
+      fauxText('first answer'),
+      fauxText('flood answer'),
+      fauxText('owner answer'),
+    ],
+    extensions: [
+      (api) => {
+        api.on('before_agent_start', async () => {
+          if (held) return
+          held = true
+          entered.resolve()
+          await release.promise
+        })
+      },
+    ],
+  })
+  await run.start()
+  run.fake.deliver(passive('first', 'first question'))
+  await entered.promise
+  for (let i = 0; i < 1000; i++)
+    run.fake.deliver(
+      passive(
+        `flood-${i}`,
+        `${String(i).padStart(4, '0')} ${'x'.repeat(1024)}`,
+      ),
+    )
+  release.resolve()
+  // Queue the owner's mention behind the flood: on the bug it inherits the oversized turn.
+  run.fake.deliver(larkEvent({ message_id: 'owner' }))
+  await until(
+    () => run.fake.sent.some((item) => item.messageId === 'owner'),
+    10_000,
+  )
+  await run.t.internals.gateway.stopAll()
+  expect(run.fake.sent).toEqual([
+    { messageId: 'first', text: 'first answer' },
+    { chatId: 'oc_group', text: SKIPPED },
+    { messageId: 'flood-999', text: 'flood answer' },
+    { messageId: 'owner', text: 'owner answer' },
+  ])
+  expect(run.t.model.calls).toHaveLength(3)
+  // The newest discussion is evaluated and the oldest is left out, so the prompt stays small.
+  const merged = run.t.model.calls[1]!.lastUserText
+  expect(merged).toContain('0999 ')
+  expect(merged).not.toContain('0000 ')
+  expect(merged.length).toBeLessThan(500_000)
+  // Dropped discussion never reaches the transcript either.
+  const transcript = JSON.stringify(
+    run.t.vela.session('lark-oc_group').getEntries(),
+  )
+  expect(transcript).not.toContain('0000 ')
+})
+
+test('a passive input rejected by the context guard leaves the session usable', async () => {
+  const run = setup({
+    responses: [fauxText('first answer'), fauxText('owner answer')],
+  })
+  await run.start()
+  // Each input is inside the merge budget, but together with the answered one it exceeds the
+  // request limit; the rejected input must not stay at the leaf.
+  run.fake.deliver(passive('big-1', 'x'.repeat(390_000)))
+  await until(() => run.fake.sent.length === 1)
+  expect(run.t.model.calls).toHaveLength(1)
+  run.fake.deliver(passive('big-2', 'y'.repeat(390_000)))
+  // Queue the owner's mention behind the rejected evaluation.
+  run.fake.deliver(larkEvent({ message_id: 'owner' }))
+  await until(
+    () => run.fake.sent.some((item) => item.messageId === 'owner'),
+    10_000,
+  )
+  await run.t.internals.gateway.stopAll()
+  expect(run.fake.sent).toEqual([
+    { messageId: 'big-1', text: 'first answer' },
+    { messageId: 'owner', text: 'owner answer' },
+  ])
+  expect(run.t.model.calls).toHaveLength(2)
+  // The rejected input left the branch instead of staying at the leaf.
+  expect(
+    JSON.stringify(run.t.vela.session('lark-oc_group').messages),
+  ).not.toContain('yyyy')
+})
+
+test('an oversized passive input is skipped once and the session keeps working', async () => {
+  const run = setup({ responses: [fauxText('owner answer')] })
+  await run.start()
+  run.fake.deliver(passive('huge', 'x'.repeat(5_000_000)))
+  await until(() => run.fake.sent.length === 1)
+  expect(run.t.model.calls).toHaveLength(0)
+  expect(run.fake.sent).toEqual([{ chatId: 'oc_group', text: SKIPPED }])
+  run.fake.deliver(larkEvent({ message_id: 'owner' }))
+  await until(() => run.fake.sent.length === 2)
+  expect(run.t.model.calls).toHaveLength(1)
+  expect(run.fake.sent[1]).toEqual({
+    messageId: 'owner',
+    text: 'owner answer',
+  })
+  // The group is told once per session, so a later flood is dropped quietly.
+  run.fake.deliver(passive('huge-2', 'y'.repeat(5_000_000)))
+  await until(
+    () => run.logs.filter((line) => line.includes(SKIP_LOG)).length === 2,
+  )
+  await run.t.internals.gateway.stopAll()
+  expect(run.fake.sent).toHaveLength(2)
+  expect(run.t.model.calls).toHaveLength(1)
+})
+
+test('three hundred passive messages still merge into one evaluation', async () => {
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let held = false
+  const run = setup({
+    responses: [fauxText('first answer'), fauxText('merged answer')],
+    extensions: [
+      (api) => {
+        api.on('before_agent_start', async () => {
+          if (held) return
+          held = true
+          entered.resolve()
+          await release.promise
+        })
+      },
+    ],
+  })
+  await run.start()
+  run.fake.deliver(passive('first', 'first question'))
+  await entered.promise
+  for (let i = 0; i < 300; i++)
+    run.fake.deliver(passive(`m${i}`, `m${i} ${'x'.repeat(1024)}`))
+  release.resolve()
+  await until(() => run.t.model.calls.length === 2)
+  await until(() => run.fake.sent.length === 2)
+  await run.t.internals.gateway.stopAll()
+  expect(run.fake.sent).toEqual([
+    { messageId: 'first', text: 'first answer' },
+    { messageId: 'm299', text: 'merged answer' },
+  ])
+  const merged = run.t.model.calls[1]!.lastUserText
+  expect(merged).toContain('m0 ')
+  expect(merged).toContain('m299 ')
 })
 
 test('channel_skip_reply silences a merged passive evaluation', async () => {

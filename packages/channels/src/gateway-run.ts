@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import type { VelaLogger, VelaSession } from '@glows777/vela-core/extension-api'
 import { publishChannelEvent } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
@@ -20,11 +21,37 @@ import type {
 import type { ChannelUsage } from './usage.ts'
 
 const MAX_SAVE_FAILURES = 3
+/** One group notice per session when a flood leaves discussion out of an evaluation. */
+const SKIPPED_NOTICE =
+  'Skipped some untagged discussion: it was too large to evaluate at once.'
+/**
+ * The most prepared text one passive evaluation submits. The context estimate counts about 0.3
+ * tokens per character against a 183,616-token safe input (roughly 612k characters), so 400KB
+ * stays clear of it and leaves room for the system prompt, tools and earlier history; 300
+ * one-kilobyte messages still merge as before.
+ */
+const MAX_PASSIVE_BYTES = 400_000
+
+/** The newest passive inputs whose joined text fits the budget; a flood loses its oldest. */
+function trimPassiveBatch(messages: IncomingMessage[]): IncomingMessage[] {
+  let bytes = 0
+  let start = messages.length
+  while (start > 0) {
+    const message = messages[start - 1]!
+    const next = bytes + Buffer.byteLength(message.text) + (bytes ? 2 : 0)
+    if (next > MAX_PASSIVE_BYTES) break
+    bytes = next
+    start--
+  }
+  return messages.slice(start)
+}
 
 /** One admitted run, including preparation, persisted recovery and reply delivery. */
 export class GatewayRun {
   private subscribed = new WeakSet<VelaSession>()
   private saveFailures = new Map<string, number>()
+  /** Sessions already told that a flood skipped discussion. */
+  private readonly skippedNotices = new Set<string>()
 
   constructor(
     private directory: ChannelDirectory,
@@ -149,7 +176,7 @@ export class GatewayRun {
           ? await channel.prepareMessage(message)
           : message,
       )
-    const evaluated = prepared.filter(
+    let evaluated = prepared.filter(
       (message): message is IncomingMessage => !!message,
     )
     this.logger.debug(
@@ -174,6 +201,21 @@ export class GatewayRun {
         id,
         ids(batch.filter((_, index) => !prepared[index])),
       )
+    // Untagged discussion can arrive faster than runs finish. Keep only what fits, or the prompt
+    // the context guard rejects stays in the history and every later turn fails with it.
+    if (trigger.passive) {
+      const kept = trimPassiveBatch(evaluated)
+      if (kept.length < evaluated.length) {
+        await this.dropOverBudget(
+          id,
+          channelName,
+          topicSession ?? this.sessions.open(id, channelName, trigger),
+          evaluated.slice(0, evaluated.length - kept.length),
+        )
+        evaluated = kept
+        if (!evaluated.length) return 'done'
+      }
+    }
     if (!evaluated.length) {
       // Undefined means the adapter handled the input without a model prompt.
       return 'failed'
@@ -264,6 +306,33 @@ export class GatewayRun {
       input,
       evaluated.length > 1 ? evaluated : undefined,
     )
+  }
+
+  /**
+   * Inputs past the passive budget never prompt: forget them so a restart does not replay them,
+   * and tell the group once instead of posting a notice for every later flood.
+   */
+  private async dropOverBudget(
+    id: string,
+    channelName: string,
+    session: VelaSession,
+    dropped: IncomingMessage[],
+  ): Promise<void> {
+    await this.directory.forget(
+      id,
+      dropped.flatMap((message) =>
+        message.replyToId ? [message.replyToId] : [],
+      ),
+    )
+    this.logger.warn(
+      `[${channelName}] Passive evaluation skipped ${dropped.length} inputs over the size budget`,
+    )
+    if (this.skippedNotices.has(id)) return
+    // A standalone notice, not a reply that looks like an answer to one message in the flood.
+    const anchor = { ...dropped[dropped.length - 1]! }
+    delete anchor.replyToId
+    if (await this.sendReply(session, channelName, anchor, SKIPPED_NOTICE))
+      this.skippedNotices.add(id)
   }
 
   async sendReply(
