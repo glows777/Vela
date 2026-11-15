@@ -1,58 +1,148 @@
+import { existsSync } from 'node:fs'
 import { type ContextFile, renderContextFiles } from './context-files.ts'
-import type { PipeFn } from './pipeline.ts'
+import type { PromptContext, SectionRender } from './system-prompt.ts'
 
 export * from './environment.ts'
-export * from './pipeline.ts'
+export * from './system-prompt.ts'
+
+/** The default intro paragraph (pi's preamble). */
+const PREAMBLE =
+  'You are Vela, an AI agent that helps users by calling the tools this session provides: reading, searching and editing files, running commands, and any extra tools from extensions.'
 
 /**
- * Core system prompt (same structure as pi: an intro paragraph + <rules>; `<cwd>` is its own section near the end).
+ * The untagged first section: the default intro, or the prompt that replaces it (SYSTEM.md,
+ * `--system-prompt`, the SDK's `systemPrompt`, or a before_agent_start handler).
  */
-export function coreRules(): PipeFn {
-  return () => {
-    const rules = [
-      'Use tools to check facts about files, code, data and the environment instead of guessing.',
-      'When a tool you need is not in your tool list, call tool_search to find and load it.',
-      'Read a file before you change it. Use edit_file for targeted changes and write_file for new files or full rewrites.',
-      'Show file paths clearly when working with files.',
-      'Lead with the answer or result; no preamble, and no closing summary unless asked.',
-      "Match the response length to the question: a short paragraph plus at most three bullets. Give the main path and the facts asked for; skip adjacent branches, options, tests and per-step file:line, and don't close by restating the answer.",
-      "Don't restate the request or repeat what was already said; point back to it in one line if needed.",
-      "Don't add unrequested suggestions or next steps unless they matter.",
-      "Don't state unchecked things as fact. Say plainly when something failed, can't be done or is uncertain, and say something was saved, sent or done only after the tool call for it succeeded.",
-    ]
-    const sections = [
-      'You are Vela, an AI agent that helps users by calling the tools this session provides: reading, searching and editing files, running commands, and any extra tools from extensions.',
-      `<rules>\n${rules.map((rule) => `- ${rule}`).join('\n')}\n</rules>`,
-    ]
-    return sections.join('\n\n')
+export function preamble(systemPrompt?: string): SectionRender {
+  return (ctx) => ctx.systemPromptOverride ?? systemPrompt ?? PREAMBLE
+}
+
+/** `<tools>`: one line per active tool that has a `promptSnippet`, like pi. */
+export function toolList(): SectionRender {
+  return (ctx) => {
+    const lines = (ctx.activeTools ?? [])
+      .filter((tool) => tool.promptSnippet)
+      .map((tool) => `- ${tool.name}: ${tool.promptSnippet}`)
+    return lines.length ? lines.join('\n') : '(none)'
   }
 }
 
-/** `<cwd>` (like pi). */
-export function workingDirectory(cwd: string): PipeFn {
-  return () => `<cwd>\n${cwd.replace(/\\/g, '/')}\n</cwd>`
+/** `<deferred_tools>`: what `tool_search` can load (the deferred tool lines from the registry). */
+export function deferredTools(): SectionRender {
+  return (ctx) => {
+    if (!ctx.deferredToolSummary) return null
+    // Without tool_search the model cannot load them, so the list would only describe an unreachable tool
+    if (!(ctx.activeTools ?? []).some((tool) => tool.name === 'tool_search'))
+      return null
+    return [
+      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
+      ctx.deferredToolSummary,
+    ].join('\n')
+  }
+}
+
+/** The first rule; the tool guidelines follow it, then the rest of the standing rules. */
+const FACTS_RULE =
+  'Use tools to check facts about files, code, data and the environment instead of guessing.'
+
+/** Rules that hold in every session; tool-specific ones come from the active tools. */
+const STANDING_RULES: readonly string[] = [
+  'Show file paths clearly when working with files.',
+  'Lead with the answer or result; no preamble, and no closing summary unless asked.',
+  "Match the response length to the question: a short paragraph plus at most three bullets. Give the main path and the facts asked for; skip adjacent branches, options, tests and per-step file:line, and don't close by restating the answer.",
+  "Don't restate the request or repeat what was already said; point back to it in one line if needed.",
+  "Don't add unrequested suggestions or next steps unless they matter.",
+  "Don't state unchecked things as fact. Say plainly when something failed, can't be done or is uncertain, and say something was saved, sent or done only after the tool call for it succeeded.",
+]
+
+/**
+ * `<rules>`: what the active tools say about themselves (pi's `promptGuidelines`), then the standing
+ * rules. A rule is only written for a tool the model can actually call.
+ */
+export function rules(): SectionRender {
+  return (ctx) => {
+    const lines: string[] = []
+    const seen = new Set<string>()
+    const add = (rule: string) => {
+      const text = rule.trim()
+      if (!text || seen.has(text)) return
+      seen.add(text)
+      lines.push(`- ${text}`)
+    }
+    add(FACTS_RULE)
+    for (const tool of ctx.activeTools ?? [])
+      for (const guideline of tool.promptGuidelines ?? []) add(guideline)
+    for (const rule of STANDING_RULES) add(rule)
+    return lines.join('\n')
+  }
+}
+
+/** Where Vela's own documentation and examples are, resolved once when Vela is created. */
+export interface DocsPaths {
+  /** `<package>/README.md` */
+  readme?: string
+  /** `<package>/docs` */
+  docs?: string
+  /** `<package>/examples` */
+  examples?: string
+}
+
+/**
+ * The folders to point `<docs>` at, keeping only those that exist. Without a `docs` folder there is
+ * nothing to read, so the section stays off (a source checkout that was never built has no docs).
+ */
+export function resolveDocs(
+  paths: DocsPaths | false | undefined,
+): DocsPaths | undefined {
+  if (typeof paths !== 'object' || !paths.docs) return undefined
+  if (!existsSync(paths.docs)) return undefined
+  return {
+    ...(paths.readme && existsSync(paths.readme)
+      ? { readme: paths.readme }
+      : {}),
+    docs: paths.docs,
+    ...(paths.examples && existsSync(paths.examples)
+      ? { examples: paths.examples }
+      : {}),
+  }
+}
+
+/**
+ * `<docs>` (pi's docs section): where Vela's own documentation lives. It is read only when the user asks
+ * about Vela itself, so naming the paths costs a few lines and no tool calls.
+ */
+export function docs(paths: DocsPaths | undefined): SectionRender {
+  return paths
+    ? () =>
+        [
+          "Vela's own documentation (read only when the user asks about the harness itself, its SDK, extensions, tools, settings or CLI):",
+          ...(paths.readme ? [`- Main documentation: ${paths.readme}`] : []),
+          `- Additional docs: ${paths.docs}`,
+          ...(paths.examples
+            ? [`- Examples: ${paths.examples} (extensions, SDK usage)`]
+            : []),
+          '- Resolve docs/... under Additional docs and examples/... under Examples, not the current working directory',
+          '- Before changing Vela itself, read the relevant docs in full and follow their cross-references',
+        ].join('\n')
+    : () => null
 }
 
 /** Text appended from `--append-system-prompt` / `APPEND_SYSTEM.md` / the SDK's appendSystemPrompt (pi's `<addendum>`). */
-export function addendum(text: string | undefined): PipeFn {
-  return () => (text ? `<addendum>\n${text}\n</addendum>` : null)
+export function addendum(text: string | undefined): SectionRender {
+  return () => text || null
 }
 
 /** AGENTS.md / CLAUDE.md files (pi's `<project_context>`). */
-export function projectContext(files: readonly ContextFile[]): PipeFn {
+export function projectContext(files: readonly ContextFile[]): SectionRender {
   return () => renderContextFiles(files)
 }
 
-export function deferredTools(): PipeFn {
-  return (ctx) => {
-    return ctx.deferredToolSummary
-  }
+/** `<cwd>` (like pi). */
+export function workingDirectory(cwd: string): SectionRender {
+  return () => cwd.replace(/\\/g, '/')
 }
 
-/** Sections written by extensions in before_agent_start, joined in write order */
-export function extensionSections(): PipeFn {
-  return (ctx) => {
-    const sections = Object.values(ctx.extensionSections ?? {}).filter(Boolean)
-    return sections.length ? sections.join('\n\n') : null
-  }
+/** Sections written by extensions in before_agent_start, each under its own tag (memory → `<memory>`). */
+export function extensionSections(): SectionRender {
+  return (ctx: PromptContext) => ctx.extensionSections ?? null
 }

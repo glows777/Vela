@@ -184,6 +184,7 @@
     credentials?: CredentialStore | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
+    docs?: false | DocsPaths | undefined
     eventDefaultTarget?: { channel: string; chatId: string; } | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: ChannelExtension[] | undefined
@@ -197,6 +198,7 @@
     sessionStorage?: SessionStorage | undefined
     shellPath?: string | undefined
     skillDirs?: string[] | undefined
+    systemPrompt?: string | undefined
     thinkingLevel?: ThinkingLevel | undefined
   function chatDirectory: (dataDir: string, channel: string, chatId: string) => string
   function createChannelVela: (options?: ChannelVelaOptions) => ChannelVela

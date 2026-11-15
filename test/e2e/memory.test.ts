@@ -318,7 +318,7 @@ test('/context shows the fixed memory rules while the index stays a message', as
   const t = withMemory()
   // Sections are computed per prompt; before the first prompt this round is empty
   expect(t.session.promptContext().extensionSections?.memory).toBeUndefined()
-  const sections = await t.session.previewSections()
+  const { sections } = await t.session.previewPrompt()
   expect(sections.memory).toContain('How to use memory:')
   expect(t.session.buildSystem(sections)).not.toContain('openai-null-chars')
   // The preview does not replace this round's sections

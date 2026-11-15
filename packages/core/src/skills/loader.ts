@@ -82,8 +82,8 @@ export class SkillLoader {
   }
 
   /**
-   * The `<skills>` section of the system prompt (same text as pi's formatSkillsForPrompt): name, description and
-   * file location of each skill the model may use, which it loads with `readTool` when a task matches.
+   * The `<skills>` section's content of the system prompt (same text as pi's formatSkillsForPrompt, untagged): name,
+   * description and file location of each skill the model may use, which it loads with `readTool` when a task matches.
    * Null when no skill is listed or the session has no tool that can read the file.
    */
   buildPromptSection(activeTools: readonly string[]): string | null {
@@ -111,7 +111,7 @@ export class SkillLoader {
       )
     }
     lines.push('</available_skills>')
-    return `<skills>\n${lines.join('\n')}\n</skills>`
+    return lines.join('\n')
   }
 
   /**

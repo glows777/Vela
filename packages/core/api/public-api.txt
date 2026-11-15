@@ -66,9 +66,11 @@
   interface BeforeAgentStartEvent
     prompt: string
     sections: Record<string, string>
+    systemPrompt: string
     type: "before_agent_start"
   interface BeforeAgentStartEventResult
     message?: CustomMessage | undefined
+    systemPrompt?: string | undefined
   interface BeforeProviderRequestEvent
     params: LanguageModelV4CallOptions
     type: "before_provider_request"
@@ -146,6 +148,10 @@
     display: boolean
   function customMessageMissing: (messages: readonly ModelMessage[], markers: readonly string[]) => boolean
   function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: Schema<unknown>; }) => ToolDefinition
+  interface DocsPaths
+    docs?: string | undefined
+    examples?: string | undefined
+    readme?: string | undefined
   interface ExecuteToolOptions
     onUpdate?: ((partialResult: unknown) => void) | undefined
     signal?: AbortSignal | undefined
@@ -453,6 +459,7 @@
     extensionSections: Readonly<Record<string, string>>
     skillsChars: number
     stages: readonly { name: string; chars: number | null; }[]
+    systemPrompt: string
     systemPromptChars: number
     toolDescriptionChars: number
     windowTokens: number
@@ -605,6 +612,8 @@
     maxResultChars?: number | undefined
     name: string
     namespace?: ToolNamespace | undefined
+    promptGuidelines?: readonly string[] | undefined
+    promptSnippet?: string | undefined
     searchHint?: string | undefined
   type ToolExecutionMode = 'sequential' | 'parallel'
   class ToolExecutionResult
@@ -696,6 +705,7 @@
     providers: Record<string, ProviderDefinition>
     settings: VelaSettings
     skillDirs: string[]
+    systemPrompt?: string | undefined
     userExtensionConfig: Record<string, Record<string, unknown>>
   type VelaEvent = | { type: 'agent_start'; input: string }
       | { type: 'turn_start'; turn: number }
@@ -855,6 +865,7 @@
     credentials?: CredentialStore | undefined
     cwd?: string | undefined
     dataDir?: string | undefined
+    docs?: false | DocsPaths | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: VelaExtension[] | undefined
     limits?: Partial<VelaLimits> | undefined
@@ -867,6 +878,7 @@
     sessionStorage?: SessionStorage | undefined
     shellPath?: string | undefined
     skillDirs?: string[] | undefined
+    systemPrompt?: string | undefined
     thinkingLevel?: ThinkingLevel | undefined
   class VelaSession
     abort: (reason?: unknown) => Promise<void>
@@ -1084,9 +1096,11 @@
   interface BeforeAgentStartEvent
     prompt: string
     sections: Record<string, string>
+    systemPrompt: string
     type: "before_agent_start"
   interface BeforeAgentStartEventResult
     message?: CustomMessage | undefined
+    systemPrompt?: string | undefined
   interface BeforeProviderRequestEvent
     params: LanguageModelV4CallOptions
     type: "before_provider_request"
@@ -1284,6 +1298,8 @@
     maxResultChars?: number | undefined
     name: string
     namespace?: ToolNamespace | undefined
+    promptGuidelines?: readonly string[] | undefined
+    promptSnippet?: string | undefined
     searchHint?: string | undefined
   type ToolExecutionMode = 'sequential' | 'parallel'
   class ToolExecutionResult
@@ -1565,6 +1581,7 @@
     extensionSections: Readonly<Record<string, string>>
     skillsChars: number
     stages: readonly { name: string; chars: number | null; }[]
+    systemPrompt: string
     systemPromptChars: number
     toolDescriptionChars: number
     windowTokens: number

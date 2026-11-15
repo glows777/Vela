@@ -81,6 +81,8 @@ export interface CliArgs {
   thinking?: ThinkingLevel
   /** `--append-system-prompt <text or file>` (repeatable, like pi); replaces APPEND_SYSTEM.md */
   appendSystemPrompt: string[]
+  /** `--system-prompt <text or file>` (repeatable, like pi); replaces SYSTEM.md and the default prompt */
+  systemPrompt: string[]
   /** `--no-context-files` (`-nc`): don't load AGENTS.md / CLAUDE.md */
   noContextFiles: boolean
   /** `-t, --tools <a,b,c*>`: enable only these tools (names or `*` patterns, like pi) */
@@ -98,7 +100,7 @@ export interface CliArgs {
 }
 
 export const USAGE =
-  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
+  'Usage: vela [prompt...] [-p | --mode text|json|rpc] [-c | -r | --session <id> | --fork <id>] [--export <id|file> [output]] [-e <extension>]... [--no-extensions] [--no-session] [--approve | --no-approve] [--model provider/id] [--thinking <level>] [--system-prompt <text|file>]... [--append-system-prompt <text|file>]... [--no-context-files] [-t <tools>] [-nt] [-xt <tools>] [--list-models [search]] [-h | --help] [-v | --version]\n       vela serve [options]\n       vela setup [lark]\n       vela setup github owner/repo [owner/repo...] --url https://origin'
 
 /** `vela --help` (like pi's: usage, every flag, modes, examples, environment). */
 export const HELP = `vela - terminal agent with pi-style extensions
@@ -134,6 +136,8 @@ Options:
   --model <provider/id>         Model to use (providers: built-in anthropic / openai / openrouter / deepseek,
                                 ~/.vela/models.json, extensions)
   --thinking <level>            Thinking level: ${THINKING_LEVELS.join(', ')}
+  --system-prompt <text>        Replace the default system prompt with text or a file's contents
+                                (repeatable; replaces ~/.vela/SYSTEM.md and .vela/SYSTEM.md)
   --append-system-prompt <text> Append text or a file's contents to the system prompt (repeatable;
                                 replaces ~/.vela/APPEND_SYSTEM.md and .vela/APPEND_SYSTEM.md)
   -nc, --no-context-files       Don't load AGENTS.md / CLAUDE.md
@@ -225,6 +229,7 @@ export function parseArgs(argv: string[]): CliArgs {
     noExtensions: false,
     noSession: false,
     appendSystemPrompt: [],
+    systemPrompt: [],
     noContextFiles: false,
     noTools: false,
     excludeTools: [],
@@ -290,6 +295,7 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--model') args.model = value()
     else if (arg === '--append-system-prompt')
       args.appendSystemPrompt.push(value())
+    else if (arg === '--system-prompt') args.systemPrompt.push(value())
     else if (arg === '--no-context-files' || arg === '-nc')
       args.noContextFiles = true
     else if (arg === '--tools' || arg === '-t')
@@ -538,7 +544,7 @@ export async function resolveTrust(options: {
       ),
     }
   const answer = await question(
-    `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/, .vela/prompts/, .vela/APPEND_SYSTEM.md, or skills in .vela/skills/, .skills/ or .agents/skills/).\nExtensions are code that runs on this machine; skills, prompts and APPEND_SYSTEM.md are instructions for the model. Trust this project and load it? (y/N) `,
+    `${resolve(cwd)} has project config (.vela/settings.json, .vela/extensions/, .vela/prompts/, .vela/SYSTEM.md, .vela/APPEND_SYSTEM.md, or skills in .vela/skills/, .skills/ or .agents/skills/).\nExtensions are code that runs on this machine; skills, prompts, SYSTEM.md and APPEND_SYSTEM.md are instructions for the model. Trust this project and load it? (y/N) `,
   )
   const trusted = answer === 'y' || answer === 'yes'
   saveTrust(agentDir, cwd, trusted)

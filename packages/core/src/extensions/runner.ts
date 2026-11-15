@@ -379,27 +379,47 @@ export class ExtensionRunner {
   }
 
   /**
-   * before_agent_start: collect this turn's system prompt sections and the custom messages handlers return
-   * (added after the user message, like pi).
+   * before_agent_start: collect this turn's system prompt sections, the system prompt a handler replaces and
+   * the custom messages handlers return (added after the user message, like pi). Each handler sees the prompt
+   * as the handlers before it left it.
    */
   async beforeAgentStart(
     session: VelaSession,
     prompt: string,
-  ): Promise<{ sections: Record<string, string>; messages: CustomMessage[] }> {
-    const event = { type: 'before_agent_start' as const, prompt, sections: {} }
+  ): Promise<{
+    sections: Record<string, string>
+    messages: CustomMessage[]
+    systemPrompt?: string
+  }> {
+    let systemPrompt: string | undefined
+    const event = {
+      type: 'before_agent_start' as const,
+      prompt,
+      sections: {} as Record<string, string>,
+      systemPrompt: '',
+    }
     const messages: CustomMessage[] = []
     const ctx = this.context(session)
     for (const { extension, fn } of this.list('before_agent_start')) {
+      // No replacement yet: handlers read the built prompt, never the previous turn's
+      event.systemPrompt =
+        systemPrompt ?? session.buildSystem(event.sections, null)
       try {
         const result = (await fn(event, ctx)) as
           | BeforeAgentStartEventResult
           | undefined
+        if (result?.systemPrompt !== undefined)
+          systemPrompt = result.systemPrompt
         if (result?.message) messages.push(result.message)
       } catch (error) {
         this.report(extension, event.type, error)
       }
     }
-    return { sections: event.sections, messages }
+    return {
+      sections: event.sections,
+      messages,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    }
   }
 
   /**
