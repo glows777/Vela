@@ -10,7 +10,7 @@ This page describes what Vela protects and what it does not. To report a vulnera
 |---|---|---|
 | The user running `vela` | Yes | Everything the operating-system user can do, through the model's tool calls |
 | Extensions | Yes, fully | Run arbitrary code in the Vela process |
-| Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
+| Project config (`.vela/settings.json`, `.vela/extensions/`, project skills and prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md`) | Only after you trust the project | Same as extensions once loaded |
 | `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Always (`--no-context-files` turns them off), like pi | Instructions in the system prompt |
 | Members of an enabled Lark chat | Yes, all members | Full access: bash, files, memory and extension tools |
 | Model output, tool results, file contents, web pages | No | Can steer the model (prompt injection) |
@@ -39,7 +39,7 @@ Review an extension before you load it, and load only extensions from sources yo
 
 ## Project trust
 
-A project directory can contain `.vela/settings.json`, `.vela/mcp.json` (MCP servers, which Vela starts as processes or connects to), `.vela/extensions/`, prompt templates, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills and prompts put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
+A project directory can contain `.vela/settings.json`, `.vela/mcp.json` (MCP servers, which Vela starts as processes or connects to), `.vela/extensions/`, prompt templates, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.agents/skills/`, `.skills/`). Project settings can add extensions and change behavior, project extensions are code, and project skills, prompts and prompt files put instructions in front of the model, so Vela does not load them until you trust the project. `AGENTS.md` and `CLAUDE.md` are loaded either way, as in pi: they are text the model would read anyway when it reads the project, so treat a folder's instructions as untrusted input even when you decline trust, or run with `--no-context-files`.
 
 Interactive mode asks once per project and saves the answer in `~/.vela/trust.json`; `--approve` and `--no-approve` decide for one run; print, JSON and RPC modes never ask and leave an untrusted project's config unloaded. The full rules are in [Settings](settings.md#project-trust).
 

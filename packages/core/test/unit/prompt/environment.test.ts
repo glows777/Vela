@@ -5,9 +5,7 @@ import { tempDir } from '../../../../../test/support/vela.ts'
 import { environment, type PromptContext } from '../../../src/prompt/index.ts'
 
 const context: PromptContext = {
-  toolCount: 1,
   deferredToolSummary: '',
-  sessionMessageCount: 0,
   sessionId: 's',
 }
 
@@ -22,7 +20,7 @@ test('the env block renders the injected date, timezone, OS, shell and git branc
       branch: 'main',
     })(context),
   ).toBe(
-    '<env>\ndate: 2026-01-02\ntimezone: Asia/Shanghai\nos: linux\nshell: /usr/local/bin/bash\ngit branch: main\n</env>',
+    'date: 2026-01-02\ntimezone: Asia/Shanghai\nos: linux\nshell: /usr/local/bin/bash\ngit branch: main',
   )
 })
 

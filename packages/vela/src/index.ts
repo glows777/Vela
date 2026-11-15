@@ -45,6 +45,7 @@ export type {
   CredentialStore,
   CustomMessage,
   CustomMessageInfo,
+  DocsPaths,
   ExecuteToolOptions,
   ExecutionMetadata,
   ExtensionCommand,

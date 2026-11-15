@@ -139,7 +139,6 @@ test('the deferred tool summary lists each namespace once, not its tools (like p
   )
   expect(registry.getDeferredToolSummary()).toBe(
     [
-      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
       '- plain',
       '- mcp__docs (2 tools) — Project documentation',
       '- mcp__git (1 tool)',
@@ -164,11 +163,7 @@ test('the deferred tool summary is a heading plus one evenly indented line per t
   registry.register(tool('a', { exposure: 'deferred', searchHint: 'hint a' }))
   registry.register(tool('b', { exposure: 'deferred' }))
   expect(registry.getDeferredToolSummary()).toBe(
-    [
-      'These tools are available but not loaded. Call tool_search with keywords or tool names to load the ones you need:',
-      '- a — hint a',
-      '- b',
-    ].join('\n'),
+    ['- a — hint a', '- b'].join('\n'),
   )
 })
 

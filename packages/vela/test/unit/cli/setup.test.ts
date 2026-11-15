@@ -48,6 +48,7 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     noSession: true,
     approve: true,
     appendSystemPrompt: [],
+    systemPrompt: [],
     noContextFiles: false,
     noTools: false,
     excludeTools: [],
@@ -64,6 +65,9 @@ test('parseArgs reads pi-style flags and rejects unknown ones', () => {
     appendSystemPrompt: ['a', 'b.md'],
     noContextFiles: true,
   })
+  expect(
+    parseArgs(['--system-prompt', 'a', '--system-prompt', 'system.md']),
+  ).toMatchObject({ systemPrompt: ['a', 'system.md'] })
   expect(parseArgs(['--no-approve']).approve).toBe(false)
   expect(parseArgs(['--mode', 'json', 'one', 'two'])).toMatchObject({
     mode: 'json',

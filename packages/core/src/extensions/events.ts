@@ -113,17 +113,34 @@ export interface ToolResultEventResult {
 
 /**
  * At the start of each prompt(), before the first model request. Handlers write system prompt sections
- * into `sections` (keyed by section name); they stay fixed for the rest of the turn.
+ * into `sections` (keyed by section name, each rendered under its own tag); they stay fixed for the rest
+ * of the turn. A section name that is not a valid tag is made safe before it is written.
  */
 export interface BeforeAgentStartEvent {
   type: 'before_agent_start'
   prompt: string
   sections: Record<string, string>
+  /**
+   * The system prompt the model would get now, rendered from the sections written so far (and a
+   * `systemPrompt` an earlier handler returned). Read it to describe or extend the current prompt.
+   */
+  systemPrompt: string
 }
 
-/** Return `{ message }` to add a custom message after the user message (like pi); each handler can add one. */
+/**
+ * Return `{ systemPrompt }` to replace the whole system prompt for this turn (like pi); otherwise the
+ * built prompt is used. Return `{ message }` to add a custom message after the user message.
+ */
 export interface BeforeAgentStartEventResult {
   message?: CustomMessage
+  systemPrompt?: string
+}
+
+/** What the handlers produced for this turn: their sections, messages and any replacement prompt. */
+export interface BeforeAgentStartResult {
+  sections: Record<string, string>
+  messages: CustomMessage[]
+  systemPrompt?: string
 }
 
 /** Before the session's first prompt() (after history is restored). */

@@ -16,7 +16,8 @@ Vela reads its configuration from JSON files in the user directory (`~/.vela`, o
 | `~/.vela/skills/`, `~/.agents/skills/`, `<project>/.vela/skills/`, `<project>/.agents/skills/`, `<project>/.skills/` | Skills. Project skills load only when the project is trusted. See [Skills](#skills). |
 | `~/.vela/prompts/`, `<project>/.vela/prompts/` | Prompt templates. Project templates load only when the project is trusted. See [Prompt templates](#prompt-templates). |
 | `~/.vela/AGENTS.md`, `AGENTS.md` / `CLAUDE.md` in the working folder and its parents | Instructions put into the system prompt. Not gated by trust. See [Context files](#context-files). |
-| `~/.vela/APPEND_SYSTEM.md`, `<project>/.vela/APPEND_SYSTEM.md` | Text appended to the system prompt. The project file needs trust. See [Appending to the system prompt](#appending-to-the-system-prompt). |
+| `~/.vela/SYSTEM.md`, `<project>/.vela/SYSTEM.md` | Replaces the default system prompt. The project file needs trust. See [The system prompt](#the-system-prompt). |
+| `~/.vela/APPEND_SYSTEM.md`, `<project>/.vela/APPEND_SYSTEM.md` | Text appended to the system prompt. The project file needs trust. See [The system prompt](#the-system-prompt). |
 
 All files are optional. A file that is not valid JSON, or a recognized key below with the wrong type, stops the CLI with a `[config]` error and exit code 2. Other top-level keys are ignored; unknown keys under `limits` are an error.
 
@@ -190,6 +191,7 @@ Vela keeps per-project data outside the project, in `~/.vela/projects/`. The dir
 ├── skills/
 ├── prompts/
 ├── AGENTS.md                         user-wide instructions (optional)
+├── SYSTEM.md                         replaces the system prompt (optional)
 ├── APPEND_SYSTEM.md                  appended to the system prompt (optional)
 └── projects/
     └── --home-me-code-app--1a2b3c4d/
@@ -290,9 +292,17 @@ Review $1. Focus on ${2:-correctness}.
 
 Templates load from `<project>/.vela/prompts/` (trusted projects only), the `prompts` setting and `~/.vela/prompts/`, one level deep; the first template with a name wins. Extension commands with the same name run instead of a template. The SDK takes template paths through `createVela({ promptTemplateDirs })`.
 
-## Appending to the system prompt
+## The system prompt
+
+The system prompt is built from named, tagged sections: the intro paragraph (untagged), `<tools>`, `<deferred_tools>`, `<rules>`, `<docs>`, `<addendum>`, `<project_context>`, `<skills>`, `<cwd>`, `<env>`, then one section per extension (for example `<memory>`). `/context` counts it as one part of the window, and `VELA_DEBUG=1` lists which sections are on.
+
+`<tools>` names every tool this session can call that has a `promptSnippet`, and `<rules>` carries the rules those tools bring with them, so a session without `bash`, `write_file` or `edit_file` (a top-level group chat, for example) is never told to use them.
+
+Text in `~/.vela/SYSTEM.md`, or in `<project>/.vela/SYSTEM.md` when the project is trusted (the project file wins), replaces the default prompt: it becomes the intro paragraph and `<tools>`, `<rules>` and `<docs>` are left out. `--system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `systemPrompt` to `createVela()`. Addendum, project context, skills, cwd, environment and extension sections stay.
 
 Text in `~/.vela/APPEND_SYSTEM.md`, or in `<project>/.vela/APPEND_SYSTEM.md` when the project is trusted (the project file wins), is added to the system prompt in an `<addendum>` section. `--append-system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `appendSystemPrompt` to `createVela()`.
+
+`<docs>` points at Vela's own README, `docs/` and `examples/` folders, so the model reads the installed documentation when it is asked about the harness, its SDK or its extensions. A source checkout that was never built has no `docs/` folder and gets no such section; the SDK can name its own folders with `createVela({ docs })`, or turn the section off with `docs: false`.
 
 ## Legacy data
 

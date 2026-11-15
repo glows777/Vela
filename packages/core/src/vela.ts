@@ -26,14 +26,19 @@ import {
 import { type ContextFile, loadContextFiles } from './prompt/context-files.ts'
 import {
   addendum,
-  coreRules,
+  type DocsPaths,
   deferredTools,
+  docs,
   environment,
   extensionSections,
+  preamble,
   projectContext,
+  resolveDocs,
+  rules,
+  SystemPromptBuilder,
+  toolList,
   workingDirectory,
 } from './prompt/index.ts'
-import { PromptPipeline } from './prompt/pipeline.ts'
 import {
   expandPromptTemplate,
   loadPromptTemplates,
@@ -108,6 +113,17 @@ export interface VelaOptions {
   contextFiles?: false | ContextFile[]
   /** Text appended to the system prompt (pi's `--append-system-prompt`) */
   appendSystemPrompt?: string
+  /**
+   * Replaces the default system prompt (pi's `--system-prompt` / `SYSTEM.md`): this text becomes the intro and
+   * the tool list, rules and docs sections are left out. Addendum, project context, skills, cwd, env and
+   * extension sections stay. `--append-system-prompt` still applies on top.
+   */
+  systemPrompt?: string
+  /**
+   * Where Vela's own README, docs and examples live, for the `<docs>` section: the CLI and the SDK umbrella point
+   * at their package. Only folders that exist are used; without a docs folder the section stays off. `false` for none.
+   */
+  docs?: DocsPaths | false
   /** Config section per extension; each extension reads its own section from `vela.config` (by extension name) */
   extensionConfig?: Record<string, Record<string, unknown>>
   /** Retry, compaction threshold and other limits; missing fields use defaults (see src/limits.ts). */
@@ -212,7 +228,7 @@ export interface VelaInternals {
   logger: VelaLogger
   registry: ToolRegistry
   runner: ExtensionRunner
-  builder: PromptPipeline
+  builder: SystemPromptBuilder
   skillLoader: SkillLoader
   promptTemplates: PromptTemplate[]
   loadedContextFiles: readonly ContextFile[]
@@ -310,29 +326,46 @@ export function createVela(options: VelaOptions = {}): Vela {
   const sessions = new Map<string, VelaSession>()
   const sessionContextFiles = new Map<string, readonly ContextFile[]>()
 
-  // Same order as pi: intro + rules, addendum, project context, skills, cwd, then extension sections
-  const builder = new PromptPipeline()
-    .pipe('coreRules', coreRules())
-    .pipe('deferredTools', deferredTools())
-    .pipe('appendSystemPrompt', addendum(options.appendSystemPrompt))
-    .pipe('projectContext', (ctx) =>
-      projectContext(sessionContextFiles.get(ctx.sessionId) ?? contextFiles)(
-        ctx,
-      ),
-    )
-    .pipe('skills', (ctx) =>
-      skillLoader.buildPromptSection(ctx.activeTools ?? []),
-    )
-    .pipe('cwd', (ctx) =>
-      workingDirectory(sessions.get(ctx.sessionId)?.cwd ?? cwd)(ctx),
-    )
-    .pipe('env', (ctx) =>
-      environment({
-        cwd: sessions.get(ctx.sessionId)?.cwd ?? cwd,
-        shell: options.shellPath,
-      })(ctx),
-    )
-    .pipe('extensions', extensionSections())
+  // Named sections in pi's order; preamble, tools, rules and docs give way to a replacement prompt
+  const builder = new SystemPromptBuilder({
+    systemPrompt: options.systemPrompt,
+    sections: [
+      { name: 'preamble', render: preamble(options.systemPrompt) },
+      { name: 'tools', core: true, render: toolList() },
+      { name: 'deferred_tools', render: deferredTools() },
+      { name: 'rules', core: true, render: rules() },
+      { name: 'docs', core: true, render: docs(resolveDocs(options.docs)) },
+      { name: 'addendum', render: addendum(options.appendSystemPrompt) },
+      {
+        name: 'project_context',
+        render: (ctx) =>
+          projectContext(
+            sessionContextFiles.get(ctx.sessionId) ?? contextFiles,
+          )(ctx),
+      },
+      {
+        name: 'skills',
+        render: (ctx) =>
+          skillLoader.buildPromptSection(
+            (ctx.activeTools ?? []).map((tool) => tool.name),
+          ),
+      },
+      {
+        name: 'cwd',
+        render: (ctx) =>
+          workingDirectory(sessions.get(ctx.sessionId)?.cwd ?? cwd)(ctx),
+      },
+      {
+        name: 'env',
+        render: (ctx) =>
+          environment({
+            cwd: sessions.get(ctx.sessionId)?.cwd ?? cwd,
+            shell: options.shellPath,
+          })(ctx),
+      },
+      { name: 'extensions', render: extensionSections() },
+    ],
+  })
 
   const listeners = new Set<VelaSessionEventListener>()
   let disposed = false

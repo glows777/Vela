@@ -47,6 +47,8 @@ export const registerToolSearchTool = (registry: ToolRegistry) => {
       'Searches tools that are not loaded yet (such as MCP server tools) by keyword and loads the best matches; they are available from your next call. Exact tool names separated by commas load exactly those tools.',
     inputSchema: toolSearchToolSchema,
     annotations: { readOnlyHint: true },
+    promptSnippet:
+      'Load tools that are not loaded yet (such as MCP server tools) by keyword or exact name',
     // Searching changes what the model sees; other tools have no use for it (same as pi)
     exposure: 'model-only',
     // Use the calling session's registry: loaded tools apply only to that session

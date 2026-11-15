@@ -283,6 +283,9 @@ const vela = createVela({
   skillDirs: config.skillDirs,
   promptTemplateDirs: config.promptDirs,
   contextFiles: args.noContextFiles ? false : config.contextFiles,
+  systemPrompt: args.systemPrompt.length
+    ? args.systemPrompt.map(readPromptInput).join('\n\n')
+    : config.systemPrompt,
   appendSystemPrompt: args.appendSystemPrompt.length
     ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
     : config.appendSystemPrompt,
@@ -464,7 +467,7 @@ function reportContextFiles(): void {
   if (line) logger.info(`[context] ${line}`)
 }
 
-/** `--append-system-prompt` takes text or a file path (like pi: an existing file is read). */
+/** `--system-prompt` and `--append-system-prompt` take text or a file path (like pi: an existing file is read). */
 function readPromptInput(input: string): string {
   return existsSync(input) && statSync(input).isFile()
     ? readFileSync(input, 'utf-8')

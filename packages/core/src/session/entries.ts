@@ -725,3 +725,9 @@ export function migrateSessionV1(
     push({ type: 'session_info', timestamp: time, name: checkpoint.name })
   return [header, ...entries]
 }
+
+/** A custom message's or entry's type must be a non-empty string (used by the session's custom APIs). */
+export function assertCustomType(customType: unknown): void {
+  if (typeof customType !== 'string' || !customType.trim())
+    throw new Error('customType must be a non-empty string')
+}

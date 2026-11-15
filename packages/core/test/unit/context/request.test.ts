@@ -8,7 +8,7 @@ import z from 'zod'
 import { summarize } from '../../../src/context/compressor.ts'
 import { createRequestSnapshot } from '../../../src/context/request.ts'
 import { toModelMessages } from '../../../src/messages.ts'
-import { coreRules, PromptPipeline } from '../../../src/prompt/index.ts'
+import { preamble, SystemPromptBuilder } from '../../../src/prompt/index.ts'
 import { SessionStore } from '../../../src/session/index.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
@@ -72,21 +72,18 @@ test('summary sends only the dropped messages as text, without tool definitions'
       exposure: 'deferred',
     },
   )
-  const builder = new PromptPipeline().pipe('core', coreRules())
-  const system = (n: number) =>
-    builder.build({
-      toolCount: 1,
-      deferredToolSummary: '',
-      sessionMessageCount: n,
-      sessionId: 'prefix',
-    })
+  const builder = new SystemPromptBuilder({
+    sections: [{ name: 'preamble', render: preamble() }],
+  })
+  const system = () =>
+    builder.build({ deferredToolSummary: '', sessionId: 'prefix' })
   const first: ModelMessage[] = [
     { role: 'user', content: 'old' },
     { role: 'assistant', content: 'response' },
   ]
   await generateText({
     model,
-    instructions: system(2),
+    instructions: system(),
     tools: registry.toAISDKFormat(),
     messages: first,
   })
@@ -105,13 +102,13 @@ test('summary sends only the dropped messages as text, without tool definitions'
   const restored = (await store.loadSaved())?.messages ?? []
   await generateText({
     model,
-    instructions: system(8),
+    instructions: system(),
     tools: registry.toAISDKFormat(),
     messages: toModelMessages(restored),
   })
   const snapshot = await createRequestSnapshot(
     model,
-    system(8),
+    system(),
     registry.toAISDKFormat(),
     restored,
   )
@@ -132,7 +129,7 @@ test('summary sends only the dropped messages as text, without tool definitions'
   registry.searchTools('later')
   const discovered = await createRequestSnapshot(
     model,
-    system(8),
+    system(),
     registry.toAISDKFormat(),
     restored,
   )
