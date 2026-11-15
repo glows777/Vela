@@ -49,6 +49,10 @@ jobs:
       # quality ratchet: no new dead code, no new circular dependencies, no file over its line ceiling
       - name: Quality
         run: bun run quality
+      # offline verify-vela journeys: drive the real CLI, SDK and channels end to end;
+      # github-setup-journey.ts needs a package registry and the runner leaves it out
+      - name: Journeys
+        run: bun run verify:journeys
       # Build, pack and install into empty Node and Bun projects; import, type-check and run the CLI like a consumer (needs network)
       - name: Consumer smoke test
         run: bun run smoke:consumer
