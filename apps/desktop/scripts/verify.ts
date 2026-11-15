@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { _electron, chromium, type Page } from 'playwright'
+import tokens from '../design/tokens.json'
 import { verifyControls } from './verify-controls.ts'
 
 const root = resolve(import.meta.dir, '..')
@@ -178,16 +179,17 @@ async function packaged(appPath: string) {
           getComputedStyle(document.documentElement)
             .getPropertyValue('--vela-ink')
             .trim() === expected,
-        theme === 'dark' ? '#f2eedf' : '#143c3e',
+        tokens.tokens['vela-ink'][theme],
       )
       await snapshot(page, `packaged-system-${theme}`)
     }
     await page.emulateMedia({ contrast: 'more' })
     await page.waitForFunction(
-      () =>
+      (expected) =>
         getComputedStyle(document.documentElement)
           .getPropertyValue('--vela-ink')
-          .trim() === '#0a2224',
+          .trim() === expected,
+      tokens.tokens['vela-ink']['high-contrast'],
     )
     await snapshot(page, 'packaged-system-high-contrast')
     assert.equal(await page.getByRole('button').count(), 0)
