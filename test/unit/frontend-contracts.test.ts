@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import * as diagnostics from '@glows777/vela-core/diagnostics'
 import { createFauxModel, fauxText } from '@glows777/vela-core/testing'
+import { BUILTIN_PROVIDERS } from '../../packages/core/src/config/models.ts'
 import * as paths from '../../packages/core/src/config/paths.ts'
 import * as settings from '../../packages/core/src/config/settings.ts'
 import * as messages from '../../packages/core/src/messages.ts'
@@ -75,7 +76,14 @@ test('lightweight model resolution preserves objects, configured defaults and no
   expect(resolve!(undefined, { providers })).toBe(model)
   expect(created).toBe('chat')
   expect(resolve!('probe/chat', { providers })).toBe(model)
-  expect(() => resolve!(undefined)).toThrow(
-    'No model available. Sign in with /login',
-  )
+  let guidance = ''
+  try {
+    resolve!(undefined)
+  } catch (error) {
+    guidance = error instanceof Error ? error.message : String(error)
+  }
+  expect(guidance).toStartWith('No model available. Sign in with /login')
+  // Fails while a provider in BUILTIN_PROVIDERS is missing its key from the message (#390).
+  for (const { envKey } of Object.values(BUILTIN_PROVIDERS))
+    expect(guidance).toContain(envKey)
 })

@@ -41,6 +41,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **The no-model message names the built-in DeepSeek key.** `No model available…` offered `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` although `DEEPSEEK_API_KEY` also picks a default model, so the guidance hid a provider that works ([#390](https://github.com/glows777/Vela/issues/390)).
+
 - **A Lark image is no longer downloaded without a size limit.** Image downloads stop at the same **20MB** limit as file attachments, from one shared constant: an explicit request receives the too-large reply, a passive image leaves an operator diagnostic, and the image does not reach the model. An oversized image in history keeps its `[image]` line instead of failing the context read ([#389](https://github.com/glows777/Vela/issues/389)).
 
 - **A passive flood no longer wedges the group session.** Queued untagged top-level discussion is merged only up to 400 KB of prepared text: the newest inputs that fit are evaluated, the older ones leave the queue, and the group gets one short notice per session that discussion was skipped. Before, a 1,000-message flood (or one 5 MB message) became a prompt above `maxInputTokens`; the rejected turn stayed in the history and every later personal @ failed with `Context exceeds the safe input size`. A top-level group prompt the context guard rejects before the model call now drops that turn's input and records the branch, so even a session whose stored history is already too large recovers on the next message instead of failing every later one ([#386](https://github.com/glows777/Vela/issues/386)).
