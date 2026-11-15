@@ -83,7 +83,7 @@ function openRouterBody(body: Record<string, unknown>): void {
  * Built-in providers (pi's ids, defaults and environment variables). Their models come from the built-in
  * catalog; a models.json provider with the same name overrides fields (e.g. `api`, `baseUrl`) and adds models.
  */
-const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
+export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   anthropic: {
     config: { api: 'anthropic-messages' },
     envKey: 'ANTHROPIC_API_KEY',
