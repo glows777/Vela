@@ -8,6 +8,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '@glows777/vela-core/testing'
+import { background } from '../../packages/core/src/extensions/background/index.ts'
 import {
   createVela,
   type Vela,
@@ -168,12 +169,25 @@ test('a real channel logs a conflicting route once without retrying or calling t
 })
 
 test('clone and fork retain history without inheriting routing authority', async () => {
-  const { vela, cwd } = setup({
-    model: createFauxModel({ responses: [fauxText('saved')] }),
+  const delivered: string[] = []
+  const model = createFauxModel({
+    responses: [
+      fauxText('saved'),
+      fauxToolCall('background_start', { command: 'echo COPY_ONLY' }),
+      fauxText('started in the copy'),
+      fauxText('the copy’s own delivery turn'),
+    ],
   })
+  const { vela, cwd } = setup({ model, extensions: [background()] })
   const source = vela.session('source', {
     scope: { id: 'group', kind: 'shared', dataDir: join(cwd, 'group') },
     channel: 'fake',
+    tools: ['background_start'],
+    host: {
+      deliver: (text) => {
+        delivered.push(text)
+      },
+    },
   })
   expect(source.scope?.id).toBe('group')
   await source.prompt('hello')
@@ -182,9 +196,23 @@ test('clone and fork retain history without inheriting routing authority', async
     .getEntries()
     .find((entry) => entry.type === 'message' && entry.message.role === 'user')!
   const fork = (await source.fork(user.id, { sessionId: 'branch' })).session!
+  // The copy has no topic of its own, so its command's exit must start a turn here rather than
+  // arriving in the source's channel queue.
+  await clone.prompt('start a check')
+  const before = model.calls.length
+  const deadline = Date.now() + 5000
+  while (
+    model.calls.length === before &&
+    delivered.length === 0 &&
+    Date.now() < deadline
+  )
+    await Bun.sleep(20)
+  expect(delivered).toEqual([])
+  expect(model.calls.length).toBeGreaterThan(before)
   for (const child of [clone, fork]) {
     expect(child.scope).toBeUndefined()
     expect(child.channel).toBeUndefined()
+    expect(child.host).toBeUndefined()
   }
 })
 

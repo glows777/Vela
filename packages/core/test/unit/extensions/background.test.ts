@@ -2,11 +2,6 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  BACKGROUND_DELIVERY,
-  type BackgroundDelivery,
-  type BackgroundResult,
-} from '../../../src/extensions/background/host.ts'
 import { background } from '../../../src/extensions/background/index.ts'
 import {
   BackgroundJobs,
@@ -38,18 +33,17 @@ async function until(check: () => boolean, what = 'condition') {
   }
 }
 
-/** Bind a delivery like the channels package does, without its session plumbing. */
-function bind(session: VelaSession, delivery: BackgroundDelivery): void {
-  ;(session as unknown as Record<symbol, BackgroundDelivery>)[
-    BACKGROUND_DELIVERY
-  ] = delivery
-}
-
-/** A session stub for the job table: cwd plus the two things a delivery uses. */
-function sessionStub(cwd: string, delivered: string[]) {
+/** A session stub for the job table: cwd, its host's queue, and the work it tracks. */
+function sessionStub(
+  cwd: string,
+  delivered: string[],
+  deliver?: (text: string) => void,
+) {
   return {
     id: 'stub',
     cwd,
+    ...(deliver ? { host: { deliver } } : {}),
+    trackWork: () => {},
     sendMessage: async (message: { content: string }) => {
       delivered.push(String(message.content))
     },
@@ -92,30 +86,25 @@ test('a single huge line keeps the tail of its cut end instead of reporting no o
 
 test('a background command runs to completion and its delivery carries the exit code and tail', async () => {
   const delivered: string[] = []
-  const reports: BackgroundResult[] = []
-  const session = sessionStub(directory(), delivered)
-  bind(session, (_session, result) => {
-    reports.push(result)
-  })
+  const reports: string[] = []
+  const session = sessionStub(directory(), delivered, (text) =>
+    reports.push(text),
+  )
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   const { id } = jobs.start('echo READY; exit 3')
   expect(id).toBe('bg-1')
   await until(() => reports.length === 1, 'the exit delivery')
-  expect(reports[0]!.id).toBe('bg-1')
-  expect(reports[0]!.text).toContain(
+  expect(reports[0]!).toContain(
     'Background command bg-1 finished with exit code 3.',
   )
-  expect(reports[0]!.text).toContain('Command: echo READY; exit 3')
-  expect(reports[0]!.text).toContain('READY')
+  expect(reports[0]!).toContain('Command: echo READY; exit 3')
+  expect(reports[0]!).toContain('READY')
   expect(jobs.snapshot('bg-1')).toMatchObject({ state: 'exited', exitCode: 3 })
 })
 
 test('stopping a job ends its process group and returns the tail without another delivery', async () => {
-  const reports: BackgroundResult[] = []
-  const session = sessionStub(directory(), [])
-  bind(session, (_session, result) => {
-    reports.push(result)
-  })
+  const reports: string[] = []
+  const session = sessionStub(directory(), [], (text) => reports.push(text))
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   jobs.start('echo STARTED; sleep 30; echo NEVER')
   await until(
@@ -146,7 +135,6 @@ setInterval(() => {}, 1000)
 `,
   )
   const session = sessionStub(root, [])
-  bind(session, () => {})
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   // The shell waits on the child, so SIGTERM ends the shell while the child keeps cleaning up.
   jobs.start('node graceful.cjs & wait')
@@ -161,11 +149,8 @@ setInterval(() => {}, 1000)
 
 test('a descendant that ignores SIGTERM is killed after the shell exits', async () => {
   const root = directory()
-  const reports: BackgroundResult[] = []
-  const session = sessionStub(root, [])
-  bind(session, (_session, result) => {
-    reports.push(result)
-  })
+  const reports: string[] = []
+  const session = sessionStub(root, [], (text) => reports.push(text))
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   // The shell exits on SIGTERM; its child ignores SIGTERM and would outlive the stop.
   jobs.start(
@@ -197,11 +182,10 @@ test('an unknown id says it may have ended with a restart or session close', () 
 
 test('stopAll ends every running job without starting a delivery run', async () => {
   const delivered: string[] = []
-  const reports: BackgroundResult[] = []
-  const session = sessionStub(directory(), delivered)
-  bind(session, (_session, result) => {
-    reports.push(result)
-  })
+  const reports: string[] = []
+  const session = sessionStub(directory(), delivered, (text) =>
+    reports.push(text),
+  )
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   jobs.start('sleep 30')
   jobs.start('sleep 30')

@@ -17,14 +17,11 @@ import type { VelaLimits } from '../limits.ts'
 import type { VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { ProviderDefinition, ThinkingLevel } from '../models/index.ts'
+import type { PromptOptions, SessionOptions } from '../session/options.ts'
 import type { SessionStorage } from '../session/storage.ts'
 import { resolveShellPath } from '../shell-path.ts'
 import { createVela, type Vela } from '../vela.ts'
-import type {
-  PromptOptions,
-  SessionOptions,
-  VelaSession,
-} from '../vela-session.ts'
+import type { VelaSession } from '../vela-session.ts'
 import {
   createFauxModel,
   type FauxModel,

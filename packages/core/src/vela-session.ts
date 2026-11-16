@@ -57,6 +57,7 @@ import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
 import { NestedCallLog } from './session/nested-calls.ts'
 import type {
+  PromptOptions,
   SendMessageOptions,
   SessionOptions,
   SessionUsage,
@@ -81,25 +82,6 @@ import type { BashResult } from './tools/shell.ts'
 import { getToolListError, isToolModifier } from './tools/tool-selection.ts'
 import { usageLedgerPath } from './usage/ledger.ts'
 import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
-
-export type { SessionUsage } from './session/options.ts'
-
-export interface PromptOptions {
-  /** Inline images attached to this input; normalized after input hooks. */
-  images?: ImageContent[]
-  signal?: AbortSignal
-  /**
-   * How to handle this input while the session is running (like pi): `steer` joins the current task
-   * (after this step's tools finish, before the next model request); `followUp` runs after the current
-   * task ends. Required while running (throws otherwise); ignored when idle.
-   */
-  streamingBehavior?: 'steer' | 'followUp'
-  /** Where the input came from, passed to `input` handlers (default `sdk`) */
-  source?: InputSource
-}
-
-/** Options for `vela.session(id, options)`; only apply when the session is first opened. */
-export type { SessionOptions } from './session/options.ts'
 
 /** What `fork()` / `clone()` returns. */
 export interface ForkResult {
@@ -461,6 +443,22 @@ export class VelaSession {
   get scope(): Readonly<SessionScope> | undefined {
     return routing.sessionScope(this)
   }
+
+  /** @internal The host's queue for results produced outside a turn (channels bind it at open). */
+  get host(): SessionOptions['host'] {
+    return routing.sessionHost(this)
+  }
+  /** @internal */
+  trackWork(work: Promise<unknown>): void {
+    this.work.add(work)
+    void work.catch(() => {}).finally(() => this.work.delete(work))
+  }
+  /** Whether work outside a turn (a background command) is still running */
+  get hasWork(): boolean {
+    return this.work.size > 0
+  }
+  /** @internal Work outside a turn; idle cleanup keeps the session open while it runs */
+  private readonly work = new Set<Promise<unknown>>()
 
   /** Tool names the model can currently see (after tool selection and deferred loading). */
   getActiveTools(): string[] {
@@ -825,15 +823,12 @@ export class VelaSession {
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
       const branch = leafId === null ? [] : this.store.getBranch(leafId)
-      const {
-        scope: _scope,
-        channel: _channel,
-        ...unroutedOptions
-      } = this.options
+      // A copy answers nowhere: routing authority stays with the session it was copied from.
+      const unrouted = routing.unroutedOptions(this.options)
       const session = this.deps.openSession(
         options.sessionId ?? newSessionId(),
         {
-          ...unroutedOptions,
+          ...unrouted,
           model: this.modelChoice,
           thinkingLevel: this.thinking,
           autoCompaction: this.autoCompaction,
