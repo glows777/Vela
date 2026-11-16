@@ -823,15 +823,12 @@ export class VelaSession {
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
       const branch = leafId === null ? [] : this.store.getBranch(leafId)
-      const {
-        scope: _scope,
-        channel: _channel,
-        ...unroutedOptions
-      } = this.options
+      // A copy answers nowhere: routing authority stays with the session it was copied from.
+      const unrouted = routing.unroutedOptions(this.options)
       const session = this.deps.openSession(
         options.sessionId ?? newSessionId(),
         {
-          ...unroutedOptions,
+          ...unrouted,
           model: this.modelChoice,
           thinkingLevel: this.thinking,
           autoCompaction: this.autoCompaction,

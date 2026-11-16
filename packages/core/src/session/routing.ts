@@ -21,6 +21,12 @@ export const sessionScope = (session: object) => bindings.get(session)?.scope
 
 export const sessionHost = (session: object) => bindings.get(session)?.host
 
+/** The options that bind a session to a route; a copy must not inherit them. */
+export function unroutedOptions(options: SessionOptions): SessionOptions {
+  const { scope: _scope, channel: _channel, host: _host, ...rest } = options
+  return rest
+}
+
 /** Initial routing may bind a preopened object; ordinary session options remain first-open-only. */
 export function applySessionRouting(
   session: RoutableSession,
