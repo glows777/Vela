@@ -3,13 +3,17 @@
 // a package registry and stays out (run it by hand: see journeys.md).
 //
 //   bun run verify:journeys
-import { readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const HERE = import.meta.dir
 const REPO = join(HERE, '../../..')
 const HELPER = join(HERE, 'vela-verify.sh')
 const RUN = `verify-journeys-${Date.now()}`
+const EVIDENCE = join(
+  process.env.VELA_EVIDENCE_ROOT ?? '/tmp/vela-evidence',
+  RUN,
+)
 const SKIP = new Set([
   'github-setup-journey.ts',
   'verify-journeys.ts',
@@ -48,7 +52,14 @@ try {
     }
     failures.push(script)
     console.error(`FAIL ${script} (exit ${code}, ${seconds}s)`)
-    const tail = [stderr.trim(), stdout.trim()]
+    // exec captures the script's own output in evidence files; a CI runner is gone afterwards, so print
+    // their tail here. stderr last: that's where a failed assertion lands.
+    const captured = ['stdout', 'stderr'].map((stream) => {
+      const file = join(EVIDENCE, `${name}.${stream}`)
+      return existsSync(file) ? readFileSync(file, 'utf8') : ''
+    })
+    const tail = [...captured, stderr, stdout]
+      .map((text) => text.trim())
       .filter(Boolean)
       .join('\n')
       .split('\n')
@@ -62,8 +73,7 @@ try {
     stdout: 'ignore',
     stderr: 'inherit',
   })
-  const evidence = process.env.VELA_EVIDENCE_ROOT ?? '/tmp/vela-evidence'
-  console.log(`Evidence: ${join(evidence, RUN)}`)
+  console.log(`Evidence: ${EVIDENCE}`)
 }
 
 if (failures.length) {
