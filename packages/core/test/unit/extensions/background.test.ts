@@ -136,6 +136,7 @@ test('a descendant that needs part of the grace finishes before the escalation',
     process.exit(0)
   }, 100)
 })
+console.log('READY')
 setInterval(() => {}, 1000)
 `,
   )
@@ -143,7 +144,10 @@ setInterval(() => {}, 1000)
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   // The shell waits on the child, so SIGTERM ends the shell while the child keeps cleaning up.
   jobs.start('node graceful.cjs & wait')
-  await Bun.sleep(300)
+  await until(
+    () => jobs.snapshot('bg-1').output.includes('READY'),
+    'the descendant to register its SIGTERM handler',
+  )
   const t0 = Date.now()
   const stopped = await jobs.stop('bg-1')
   expect(stopped.stopped).toBe(true)
