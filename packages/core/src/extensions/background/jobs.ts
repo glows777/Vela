@@ -3,11 +3,10 @@ import { constants } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
+import { fitOutputTail, OUTPUT_MAX_BYTES } from '../../tools/output-tail.ts'
+import { signalProcessTree } from '../../tools/process-tree.ts'
 import type { VelaSession } from '../../vela-session.ts'
 
-/** What the model reads per call, the same limits as `bash`: the last 2000 lines or 50KB. */
-export const MAX_LINES = 2000
-export const MAX_BYTES = 50 * 1024
 /** SIGTERM first, then SIGKILL when the process group ignores it. */
 const STOP_GRACE_MS = 2000
 /** The command head in a delivery message and in `background_stop`. */
@@ -22,16 +21,16 @@ export class OutputTail {
     if (!chunk) return
     this.chunks.push(chunk)
     this.bytes += Buffer.byteLength(chunk)
-    if (this.bytes > MAX_BYTES * 2) this.compact()
+    if (this.bytes > OUTPUT_MAX_BYTES * 2) this.compact()
   }
 
   private compact(): void {
-    // Keep enough bytes for the line limit, then let read() cut both limits.
+    // Keep enough bytes for the limit, then let read() cut both limits.
     const text = this.text()
     const buffer = Buffer.from(text)
     const kept =
-      buffer.length > MAX_BYTES * 2
-        ? buffer.subarray(buffer.length - MAX_BYTES * 2).toString()
+      buffer.length > OUTPUT_MAX_BYTES * 2
+        ? buffer.subarray(buffer.length - OUTPUT_MAX_BYTES * 2).toString()
         : text
     this.chunks = [kept]
     this.bytes = Buffer.byteLength(kept)
@@ -43,31 +42,7 @@ export class OutputTail {
 
   /** The tail within both limits; `truncated` means older output was dropped. */
   read(): { text: string; truncated: boolean } {
-    let text = this.text()
-    let truncated = false
-    const buffer = Buffer.from(text)
-    if (buffer.length > MAX_BYTES) {
-      // A cut may land inside a UTF-8 sequence; drop the replacement character it decodes to.
-      text = buffer
-        .subarray(buffer.length - MAX_BYTES)
-        .toString()
-        .replace(/^\uFFFD+/, '')
-      // Drop the partial first line; one huge line keeps its cut end (like bash).
-      const newline = text.indexOf('\n')
-      if (newline >= 0 && newline !== text.length - 1)
-        text = text.slice(newline + 1)
-      truncated = true
-    }
-    // Count lines like bash: a final newline does not start another line.
-    const endsWithNewline = text.endsWith('\n')
-    const lines = text.split('\n')
-    if (endsWithNewline) lines.pop()
-    if (lines.length > MAX_LINES) {
-      text =
-        lines.slice(lines.length - MAX_LINES).join('\n') +
-        (endsWithNewline ? '\n' : '')
-      truncated = true
-    }
+    const { text, truncated } = fitOutputTail(this.text())
     return { text, truncated }
   }
 }
@@ -138,7 +113,7 @@ export class BackgroundJobs {
       child = spawn(this.shellPath(), ['-lc', command], {
         cwd: this.session.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
-        // POSIX process groups and Windows taskkill /T stop pipelines and descendants.
+        // A POSIX process group, or taskkill /T on Windows, reaches pipelines and descendants.
         detached: process.platform !== 'win32',
       })
     } catch (error) {
@@ -201,7 +176,10 @@ export class BackgroundJobs {
       job.silent = true
       await this.terminate(job)
     }
-    return this.snapshot(id)
+    const snapshot = this.snapshot(id)
+    // The result has been handed to the caller; the tail and its memory go with the job.
+    this.jobs.delete(id)
+    return snapshot
   }
 
   /**
@@ -217,13 +195,14 @@ export class BackgroundJobs {
       job.silent = true
     }
     await Promise.all(running.map((job) => this.terminate(job)))
+    for (const job of running) this.jobs.delete(job.id)
   }
 
   private job(id: string): Job {
     const job = this.jobs.get(id)
     if (!job)
       throw new Error(
-        `Unknown background command ${id}. It may have ended with a restart or session close.`,
+        `Unknown background command ${id}. It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.`,
       )
     return job
   }
@@ -235,20 +214,11 @@ export class BackgroundJobs {
       job.child.once('exit', () => resolve())
       job.child.once('error', () => resolve())
     })
-    const kill = (signal: NodeJS.Signals) => {
-      const pid = job.child.pid
-      if (pid === undefined) return
-      try {
-        if (process.platform === 'win32') job.child.kill(signal)
-        else process.kill(-pid, signal)
-      } catch (error) {
-        if (
-          !(error && typeof error === 'object' && 'code' in error) ||
-          error.code !== 'ESRCH'
-        ) {
-          job.child.kill(signal)
-        }
-      }
+    // One implementation with the bash tool: a POSIX process group, or taskkill /T on Windows.
+    const kill = (signal: 'SIGTERM' | 'SIGKILL') => {
+      void signalProcessTree(job.child, signal).catch(() =>
+        job.child.kill(signal),
+      )
     }
     const startedAt = Date.now()
     kill('SIGTERM')
@@ -287,10 +257,13 @@ export class BackgroundJobs {
           { customType: 'background', content: message, display: false },
           { triggerTurn: true, deliverAs: 'followUp' },
         )
-    void send.catch((error) =>
-      this.logger.error(
-        `[background] Could not deliver ${job.id}: ${errorMessage(error)}`,
-      ),
-    )
+    void send
+      .catch((error) =>
+        this.logger.error(
+          `[background] Could not deliver ${job.id}: ${errorMessage(error)}`,
+        ),
+      )
+      // Delivered or not, the result has left the job: its tail no longer answers for it.
+      .finally(() => this.jobs.delete(job.id))
   }
 }

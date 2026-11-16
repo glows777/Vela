@@ -64,7 +64,7 @@ export function createBackgroundTools(
     {
       name: 'output',
       description:
-        'Read a background command’s output so far: the last 2000 lines or 50KB. An unknown id means it ended with a restart or session close.',
+        'Read a background command’s output so far: the last 2000 lines or 50KB. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
       inputSchema: outputSchema,
       activeByDefault: false,
       annotations: { readOnlyHint: true },
@@ -77,7 +77,7 @@ export function createBackgroundTools(
     {
       name: 'stop',
       description:
-        'Stop a background command: SIGTERM to its process group, SIGKILL shortly after. Returns its last output. An unknown id means it ended with a restart or session close.',
+        'Stop a background command: SIGTERM to the process tree, taskkill /T on Windows, SIGKILL shortly after. Returns its last output. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
       inputSchema: stopSchema,
       activeByDefault: false,
       executionMode: 'sequential',

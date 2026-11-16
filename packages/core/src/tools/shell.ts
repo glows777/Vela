@@ -1,14 +1,18 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { type FileHandle, open, stat } from 'node:fs/promises'
 import { constants } from 'node:os'
 import z from 'zod'
 import type { ExecutionMetadata } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
+import {
+  fitOutputTail,
+  OUTPUT_MAX_BYTES,
+  OUTPUT_MAX_LINES,
+  type OutputTailFit,
+} from './output-tail.ts'
+import { signalProcessTree } from './process-tree.ts'
 import type { ToolDefinition } from './registry.ts'
 
-/** What the model gets of the output, same as pi: the last 2000 lines or 50KB, whichever is smaller */
-const BASH_MAX_LINES = 2000
-const BASH_MAX_BYTES = 50 * 1024
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000 // setTimeout's limit
 /** How often a running command's output tail is sent to onUpdate (pi's BASH_UPDATE_THROTTLE_MS) */
 const BASH_UPDATE_INTERVAL_MS = 100
@@ -35,7 +39,7 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${BASH_MAX_LINES} lines or ${BASH_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
+  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
@@ -177,7 +181,7 @@ async function runShell(
     })
     let termination: Promise<void> | undefined
     const terminate = () => {
-      termination ??= terminateProcessTree(proc)
+      termination ??= signalProcessTree(proc, 'SIGKILL')
     }
     let timedOut = false
     const timer =
@@ -215,48 +219,9 @@ async function runShell(
   }
 }
 
-/** Windows child processes do not belong to a POSIX-style process group. */
-function terminateProcessTree(proc: ChildProcess): Promise<void> {
-  if (process.platform === 'win32') {
-    if (proc.pid === undefined) return Promise.resolve()
-    return new Promise((resolve) => {
-      const fallback = () => {
-        try {
-          proc.kill('SIGKILL')
-        } catch {}
-        resolve()
-      }
-      const killer = spawn(
-        'taskkill.exe',
-        ['/PID', String(proc.pid), '/T', '/F'],
-        { stdio: 'ignore', windowsHide: true },
-      )
-      killer.once('error', fallback)
-      killer.once('close', (code) => (code === 0 ? resolve() : fallback()))
-    })
-  }
-
-  if (proc.pid !== undefined) {
-    try {
-      process.kill(-proc.pid, 'SIGKILL')
-    } catch (error) {
-      if (
-        !(
-          error &&
-          typeof error === 'object' &&
-          'code' in error &&
-          error.code === 'ESRCH'
-        )
-      )
-        throw error
-    }
-  }
-  return Promise.resolve()
-}
-
 /** A command the user ran themselves (`!cmd`), shaped like pi's `BashResult`. */
 export interface BashResult {
-  /** The output's last BASH_MAX_LINES lines / BASH_MAX_BYTES bytes (stdout and stderr combined) */
+  /** The output's last OUTPUT_MAX_LINES lines / OUTPUT_MAX_BYTES bytes (stdout and stderr combined) */
   output: string
   /** Undefined when the command was cancelled */
   exitCode: number | undefined
@@ -349,39 +314,14 @@ function streamOutput(
   }
 }
 
-/** The last BASH_MAX_LINES lines / BASH_MAX_BYTES bytes of the output file, cut at line starts */
-async function readTail(
-  path: string,
-  size: number,
-): Promise<{
-  text: string
-  lines: number
-  truncated: boolean
-  partialLine: boolean
-}> {
-  const start = Math.max(0, size - BASH_MAX_BYTES)
+/**
+ * The last output of the file, cut at line starts. Only the bytes that can be part of the tail are
+ * read, so a huge log costs one bounded read.
+ */
+async function readTail(path: string, size: number): Promise<OutputTailFit> {
+  const start = Math.max(0, size - OUTPUT_MAX_BYTES)
   const bytes = await readRange(path, start, size - start)
-  let text = new TextDecoder().decode(bytes)
-  let truncated = start > 0
-  let partialLine = false
-  if (start > 0) {
-    // Drop the partial first line; one huge line is kept as its cut end (like pi)
-    const newline = text.indexOf('\n')
-    if (newline === -1 || newline === text.length - 1) {
-      partialLine = true
-      // A cut may land inside a UTF-8 sequence; drop the replacement character it decodes to
-      text = text.replace(/^\uFFFD+/, '')
-    } else text = text.slice(newline + 1)
-  }
-  const endsWithNewline = text.endsWith('\n')
-  const lines = text.split('\n')
-  if (endsWithNewline) lines.pop()
-  if (lines.length > BASH_MAX_LINES) {
-    lines.splice(0, lines.length - BASH_MAX_LINES)
-    truncated = true
-    text = lines.join('\n') + (endsWithNewline ? '\n' : '')
-  }
-  return { text, lines: lines.length, truncated, partialLine }
+  return fitOutputTail(new TextDecoder().decode(bytes), start > 0)
 }
 
 async function readRange(
