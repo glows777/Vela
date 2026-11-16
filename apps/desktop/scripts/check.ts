@@ -1,9 +1,7 @@
-import { createHash } from 'node:crypto'
 import { builtinModules } from 'node:module'
 import { relative, resolve } from 'node:path'
 import { Glob } from 'bun'
 import ts from 'typescript'
-import provenance from '../design/provenance.json'
 
 const root = resolve(import.meta.dir, '..')
 const foundation = await Bun.file(
@@ -55,32 +53,7 @@ for await (const path of new Glob('src/**/*.{ts,tsx}').scan(root)) {
     }
   }
 }
-for (const asset of provenance.assets) {
-  const digest = createHash('sha256')
-    .update(
-      new Uint8Array(await Bun.file(resolve(root, asset.path)).arrayBuffer()),
-    )
-    .digest('hex')
-  if (digest !== asset.sha256)
-    throw new Error(`Asset hash mismatch: ${asset.path}`)
-}
-for (const file of provenance.arc.items.flatMap((item) => item.files)) {
-  const digest = createHash('sha256')
-    .update(await Bun.file(resolve(root, file.path)).text())
-    .digest('hex')
-  if (digest !== file.adoptedSha256)
-    throw new Error(
-      `Arc source drift: ${file.path}. Review upstream changes and update provenance.`,
-    )
-}
-const arcLicense = createHash('sha256')
-  .update(await Bun.file(resolve(root, provenance.arc.licensePath)).text())
-  .digest('hex')
-if (arcLicense !== provenance.arc.licenseSha256)
-  throw new Error('Arc license hash mismatch')
-console.log(
-  `Desktop boundaries, ${provenance.assets.length} assets, and 11 adopted Arc source hashes match.`,
-)
+console.log('Desktop token and renderer boundaries pass.')
 console.log(
   `Bun ${Bun.version}; Node ${process.versions.node}; ${process.platform}/${process.arch}`,
 )

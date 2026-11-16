@@ -43,13 +43,5 @@
         "noExplicitAny": "error"
       }
     }
-  },
-  "overrides": [
-    {
-      "includes": ["apps/desktop/src/renderer/components/arc/**"],
-      "formatter": { "enabled": false },
-      "linter": { "enabled": false },
-      "assist": { "enabled": false }
-    }
-  ]
+  }
 }

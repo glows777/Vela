@@ -28,7 +28,6 @@ const SOURCES = [
   ),
   join(ROOT, 'apps/desktop/src'),
 ]
-const VENDOR_SOURCE = 'apps/desktop/src/renderer/components/arc/'
 const LINE_LIMIT = 800
 
 /** Zero since #131 removed the last cycle. */
@@ -112,7 +111,6 @@ async function checkCycles() {
   const graph = await madge(SOURCES, {
     baseDir: ROOT,
     fileExtensions: ['ts', 'tsx'],
-    excludeRegExp: [`^${VENDOR_SOURCE}`],
     tsConfig: { compilerOptions: { baseUrl: ROOT, paths } },
     detectiveOptions: {
       ts: { skipTypeImports: false },
@@ -153,7 +151,6 @@ async function checkFileSizes() {
   for (const source of SOURCES)
     for await (const file of new Glob('**/*.{ts,tsx}').scan(source)) {
       const path = relative(ROOT, join(source, file))
-      if (path.startsWith(VENDOR_SOURCE)) continue
       files++
       const lines = countLines(await Bun.file(join(source, file)).text())
       const ceiling = LINE_CEILINGS.get(path)
