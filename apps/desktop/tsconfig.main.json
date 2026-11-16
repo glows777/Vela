@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
-  "include": ["src/main.ts", "src/forge-env.d.ts"]
+  "include": ["src/main", "src/preload", "src/shared", "src/forge-env.d.ts"]
 }

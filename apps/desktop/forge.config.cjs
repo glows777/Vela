@@ -13,7 +13,7 @@ module.exports = {
   },
   plugins: [
     new VitePlugin({
-      build: [{ entry: 'src/main.ts', config: 'vite.main.config.mjs' }],
+      build: [{ entry: 'src/main/index.ts', config: 'vite.main.config.mjs' }],
       renderer: [{ name: 'main_window', config: 'vite.renderer.config.mjs' }],
     }),
   ],

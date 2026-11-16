@@ -4,10 +4,6 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
-### Added
-
-- **Desktop foundation.** A private Electron workspace adds Vela branding, free Arc controls, prefixed design tokens, and a separate development preview. Desktop checks cover token and source drift, renderer boundaries, real window interactions, and local macOS packaging. Product flows and SDK integration remain deferred.
-
 ## [0.7.0] - 2026-11-16
 
 ### Breaking Changes

@@ -58,7 +58,7 @@
     },
     "apps/desktop": {
       "entry": [
-        "src/main.ts",
+        "src/main/index.ts",
         "src/renderer/specimen.tsx",
         "scripts/*.ts",
         "forge.config.cjs",

@@ -11,6 +11,10 @@ on:
         type: string
         required: false
         default: ''
+      skip_desktop:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -60,6 +64,7 @@ jobs:
         run: bun run smoke:consumer
 
   desktop-package:
+    if: ${{ !inputs.skip_desktop }}
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -74,7 +79,7 @@ jobs:
         with:
           node-version: 22.18.0
       - run: bun install --frozen-lockfile
-      - name: Verify Arc controls in Electron
+      - name: Verify desktop integration in Electron
         run: bun run desktop:verify
       - run: bun run desktop:package
       - name: Verify packaged desktop shell

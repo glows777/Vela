@@ -11,7 +11,7 @@ Everything runs under `env -i` with its own `VELA_DIR`, `HOME` and working direc
 
 Needs `bun install`, `tmux` for the TUI only, and `rg` / `fd` on PATH for the grep / find tools and `@` completion (`VELA_OFFLINE=1` blocks their download).
 
-For Electron shell and design work, use [desktop verification](desktop.md). It uses its own local app profile and synthetic design specimen, with no model or SDK fixture.
+For Electron work, use [desktop verification](desktop.md) for scratch home and data directories, real-window checks, and the SDK-host faux-model pattern.
 
 ## Helper
 

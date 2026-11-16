@@ -26,34 +26,72 @@ const forbidden = new Set([
   ...builtinModules.map((name) => `node:${name}`),
   'electron',
 ])
+const roles = {
+  main: ['main', 'shared', 'assets', 'design'],
+  preload: ['preload', 'shared'],
+  renderer: ['renderer', 'shared', 'assets', 'styles', 'design'],
+  shared: ['shared'],
+}
+type Role = keyof typeof roles
+const roleOf = (path: string): Role | undefined =>
+  (['main', 'preload', 'renderer', 'shared'] satisfies Role[]).find((role) =>
+    path.startsWith(`src/${role}/`),
+  )
+const config = ts.readConfigFile(
+  resolve(root, 'tsconfig.json'),
+  ts.sys.readFile,
+)
+const { options } = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
 for await (const path of new Glob('src/**/*.{ts,tsx}').scan(root)) {
+  if (path === 'src/forge-env.d.ts') continue
+  const role = roleOf(path)
+  if (!role) throw new Error(`Source has no process owner: ${path}`)
   const source = await Bun.file(resolve(root, path)).text()
   for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
     const name = imported.fileName
-    if (name.startsWith('@glows777/vela') || name.startsWith('bun:'))
-      throw new Error(`${path} imports deferred runtime ${name}`)
-    if (!path.startsWith('src/renderer/')) continue
-    if (forbidden.has(name))
+    if (name === 'bun' || name.startsWith('bun:'))
+      throw new Error(`${path} imports unsupported runtime ${name}`)
+    if (name.startsWith('@glows777/vela')) {
+      if (role !== 'main')
+        throw new Error(
+          `${path} imports SDK ${name}; only main may host the SDK`,
+        )
+      continue
+    }
+    if (
+      (role === 'renderer' || role === 'shared') &&
+      (forbidden.has(name) ||
+        name.startsWith('node:') ||
+        name.startsWith('electron/'))
+    )
       throw new Error(`${path} imports privileged module ${name}`)
-    let destination: string | undefined
-    if (name.startsWith('.')) destination = resolve(root, path, '..', name)
-    else if (name.startsWith('@/'))
+    let destination = ts.resolveModuleName(
+      name,
+      resolve(root, path),
+      options,
+      ts.sys,
+    ).resolvedModule?.resolvedFileName
+    if (!destination && name.startsWith('.'))
+      destination = resolve(root, path, '..', name)
+    else if (!destination && name.startsWith('@/'))
       destination = resolve(root, 'src/renderer', name.slice(2))
-    else if (name.startsWith('/')) destination = resolve(root, `.${name}`)
+    else if (!destination && name.startsWith('/'))
+      destination = resolve(root, `.${name}`)
     if (destination) {
       const target = relative(root, destination)
+      if (target.split('/').includes('node_modules')) continue
       if (
-        !['src/renderer/', 'src/assets/', 'src/styles/', 'design/'].some(
-          (prefix) => target.startsWith(prefix),
+        !roles[role].some((owner) =>
+          target.startsWith(owner === 'design' ? 'design/' : `src/${owner}/`),
         )
       )
         throw new Error(
-          `${path} imports outside the renderer's app boundary: ${name}`,
+          `${path} imports outside ${role} ownership: ${name} resolves to ${target}`,
         )
     }
   }
 }
-console.log('Desktop token and renderer boundaries pass.')
+console.log('Desktop token and process ownership boundaries pass.')
 console.log(
   `Bun ${Bun.version}; Node ${process.versions.node}; ${process.platform}/${process.arch}`,
 )

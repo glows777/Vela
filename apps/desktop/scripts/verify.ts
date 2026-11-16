@@ -18,9 +18,16 @@ const root = resolve(import.meta.dir, '..')
 const evidence =
   process.env.VELA_DESKTOP_EVIDENCE ??
   (await mkdtemp('/tmp/vela-desktop-evidence-'))
-const profile = await realpath(
-  await mkdtemp(resolve(tmpdir(), 'vela-desktop-profile-')),
+const scratch = await realpath(
+  await mkdtemp(resolve(tmpdir(), 'vela-desktop-')),
 )
+const home = resolve(process.env.VELA_DESKTOP_HOME ?? resolve(scratch, 'home'))
+const data = resolve(process.env.VELA_DIR ?? resolve(scratch, 'data'))
+const profile = resolve(scratch, 'user-data')
+await Promise.all(
+  [home, data, profile].map((path) => mkdir(path, { recursive: true })),
+)
+const env = { ...process.env, HOME: home, VELA_DIR: data }
 await mkdir(evidence, { recursive: true })
 const errors: string[] = []
 const checks: string[] = []
@@ -54,10 +61,34 @@ const rendererSafety = async (page: Page) => {
     false,
     'Renderer has no Node globals',
   )
-  await page.evaluate(() => document.fonts.ready)
   assert.equal(
-    await page.evaluate(() => document.fonts.check('800 26px BarlowCondensed')),
+    await page.evaluate(async (fonts) => {
+      const loaded = await Promise.all(
+        fonts.map((font) =>
+          document.fonts.load(`${font.weight} 26px ${font.family}`),
+        ),
+      )
+      return loaded.every(
+        (faces) =>
+          faces.length > 0 && faces.every((face) => face.status === 'loaded'),
+      )
+    }, tokens.fonts),
     true,
+    'Bundled fonts load',
+  )
+  assert.equal(
+    await page
+      .locator('img')
+      .evaluateAll((images) =>
+        images.every(
+          (image) =>
+            image instanceof HTMLImageElement &&
+            image.complete &&
+            image.naturalWidth > 0,
+        ),
+      ),
+    true,
+    'Local images load',
   )
 }
 async function development() {
@@ -74,6 +105,7 @@ async function development() {
     ],
     {
       cwd: root,
+      env,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -109,6 +141,7 @@ async function development() {
     try {
       const page = browser.contexts()[0]!.pages()[0]!
       watch(page)
+      await page.bringToFront()
       await page.waitForLoadState('networkidle')
       await page
         .getByRole('heading', { name: 'Vela design foundation' })
@@ -124,6 +157,8 @@ async function development() {
       checks.push('Minimum preview layout passes.')
       await page.goto(new URL('index.html', page.url()).href)
       await page.getByRole('heading', { name: 'VELA', exact: true }).waitFor()
+      await rendererSafety(page)
+      await noOverflow(page)
       await snapshot(page, 'shell-development')
       assert.equal(await page.getByRole('button').count(), 0)
       checks.push('Development shell is branded and has no product controls.')
@@ -143,6 +178,7 @@ async function packaged(appPath: string) {
   const app = await _electron.launch({
     executablePath: resolve(appRoot, 'Contents/MacOS/Vela'),
     args: [`--user-data-dir=${profile}`],
+    env,
     timeout: 30_000,
   })
   try {
@@ -159,6 +195,15 @@ async function packaged(appPath: string) {
     assert.equal(
       await app.evaluate(({ app }) => app.getPath('userData')),
       profile,
+    )
+    assert.deepEqual(
+      await app.evaluate(() => ({
+        home: process.env.HOME,
+        nodeHome: process.getBuiltinModule('os').homedir(),
+        data: process.env.VELA_DIR,
+      })),
+      { home, nodeHome: home, data },
+      'Packaged Node main uses the scratch home and VELA_DIR',
     )
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]!.setSize(800, 600),
@@ -210,11 +255,9 @@ async function packaged(appPath: string) {
         .extractFile(resolve(resources, 'app.asar'), file.slice(1))
         .toString()
       assert.equal(
-        /Vela design foundation|Select sample|specimen\.html|@glows777\/vela/.test(
-          text,
-        ),
+        /Vela design foundation|Select sample|specimen\.html/.test(text),
         false,
-        `No demo or SDK code in ${file}`,
+        `No specimen code in ${file}`,
       )
     }
     const licenses = await readdir(resources)
@@ -234,7 +277,7 @@ async function packaged(appPath: string) {
       ),
     )
     checks.push(
-      'Packaged app launches with isolated renderer, minimum window, system light/dark, bundled font licenses, and no specimen or SDK code.',
+      'Packaged app launches with scratch home/data/profile, isolated renderer, minimum window, system themes, bundled licenses, and no specimen.',
     )
   } finally {
     await app.close()
@@ -250,7 +293,11 @@ try {
   assert.deepEqual(errors, [], 'No renderer console, page, or resource errors')
   await Bun.write(
     resolve(evidence, 'result.json'),
-    JSON.stringify({ passed: true, checks, errors }, null, 2),
+    JSON.stringify(
+      { passed: true, checks, errors, home, data, profile },
+      null,
+      2,
+    ),
   )
   console.log(checks.join('\n'))
   console.log(`Evidence: ${evidence}`)
@@ -265,5 +312,5 @@ try {
   )
   throw error
 } finally {
-  await rm(profile, { recursive: true, force: true })
+  await rm(scratch, { recursive: true, force: true })
 }

@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { app, BrowserWindow, nativeTheme, session } from 'electron'
-import tokens from '../design/tokens.json'
+import tokens from '../../design/tokens.json'
 
 const canvas = tokens.tokens['vela-white']
 

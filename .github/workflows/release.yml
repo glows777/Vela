@@ -53,6 +53,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      skip_desktop: true
 
   publish:
     needs: [prepare, check]

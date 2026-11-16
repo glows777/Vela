@@ -13,7 +13,6 @@ test('six lockstep packages use workspace dependencies and explicit built entry 
     await readFile(`${root}/apps/desktop/package.json`, 'utf8'),
   )
   expect(desktop.private).toBe(true)
-  expect(Object.keys(desktop.dependencies)).not.toContain('@glows777/vela')
   const { readWorkspaces } = await import('../../scripts/workspaces.ts')
   expect((await readWorkspaces(root)).map((pkg) => pkg.key)).toEqual(names)
   const versions = new Set<string>()
