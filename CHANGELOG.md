@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-16
+
 ### Breaking Changes
 
 - **The unused `memoryConfig` export is removed.** It was exported from `@glows777/vela-core` and `@glows777/vela` but had no consumer: memory reads `extensionConfig.memory` directly, so configuration and behavior are unchanged. Import nothing in its place ([#345](https://github.com/glows777/Vela/issues/345)).
