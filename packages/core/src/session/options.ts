@@ -1,10 +1,26 @@
 import type { LanguageModel } from 'ai'
+import type { InputSource } from '../extensions/events.ts'
 import type { SessionUI } from '../extensions/ui.ts'
+import type { ImageContent } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 import type { TokenStatus, UsageTotals } from '../usage/tracker.ts'
 import type { SessionScope } from './scope.ts'
 /** How queued messages are taken: one at a time (default, like pi) or all at once. */
 export type QueueMode = 'one-at-a-time' | 'all'
+
+export interface PromptOptions {
+  /** Inline images attached to this input; normalized after input hooks. */
+  images?: ImageContent[]
+  signal?: AbortSignal
+  /**
+   * How to handle this input while the session is running (like pi): `steer` joins the current task
+   * (after this step's tools finish, before the next model request); `followUp` runs after the current
+   * task ends. Required while running (throws otherwise); ignored when idle.
+   */
+  streamingBehavior?: 'steer' | 'followUp'
+  /** Where the input came from, passed to `input` handlers (default `sdk`) */
+  source?: InputSource
+}
 
 /** Options for `session.navigateTree()` (like pi's). */
 export interface NavigateTreeOptions {
@@ -46,6 +62,7 @@ export interface SendMessageOptions {
   deliverAs?: 'steer' | 'followUp' | 'nextTurn'
 }
 
+/** Options for `vela.session(id, options)`; `scope`, `channel` and `host` also bind an already-open session. */
 export interface SessionOptions {
   /** Transient storage sharing identity; first routing binding can attach to an already-open session. */
   scope?: SessionScope
@@ -66,6 +83,12 @@ export interface SessionOptions {
   thinkingLevel?: ThinkingLevel
   /** Automatic compaction, default Vela's (on unless createVela({ autoCompaction: false })) */
   autoCompaction?: boolean
+  /**
+   * Where a result this session produces outside a turn goes, when a host owns a queue for it: a
+   * channel supplies its topic's input queue, so a background command's exit arrives like any other
+   * input. Without it the result is a message that starts a turn.
+   */
+  host?: { deliver(text: string): void | Promise<void> }
 }
 
 export interface SessionUsage extends TokenStatus {

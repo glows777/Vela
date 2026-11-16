@@ -4,7 +4,6 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
 import type { VelaSession } from '../../vela-session.ts'
-import { backgroundDelivery } from './host.ts'
 
 /** What the model reads per call, the same limits as `bash`: the last 2000 lines or 50KB. */
 export const MAX_LINES = 2000
@@ -131,12 +130,6 @@ export class BackgroundJobs {
     private readonly logger: VelaLogger,
   ) {}
 
-  /** Commands still running: the session stays open while this is above zero. */
-  get running(): number {
-    return [...this.jobs.values()].filter((job) => job.state === 'running')
-      .length
-  }
-
   start(command: string): { id: string; pid?: number } {
     const id = `bg-${++this.sequence}`
     const output = new OutputTail()
@@ -155,6 +148,12 @@ export class BackgroundJobs {
     }
     const job: Job = { id, command, child, output, state: 'running' }
     this.jobs.set(id, job)
+    // A channel topic stays open while its command runs, so idle cleanup cannot kill a long build.
+    const finished = new Promise<void>((resolve) => {
+      child.once('exit', () => resolve())
+      child.once('error', () => resolve())
+    })
+    this.session.trackWork(finished)
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => output.append(chunk))
@@ -280,16 +279,12 @@ export class BackgroundJobs {
     const output = text
       ? `${text}${truncated ? '\n\n[Showing the last output only]' : ''}`
       : '(no output)'
-    const result = {
-      id: job.id,
-      command: job.command,
-      text: `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}`,
-    }
-    const delivery = backgroundDelivery(this.session)
-    const send = delivery
-      ? Promise.resolve(delivery(this.session, result))
+    const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}`
+    const host = this.session.host
+    const send = host
+      ? Promise.resolve(host.deliver(message))
       : this.session.sendMessage(
-          { customType: 'background', content: result.text, display: false },
+          { customType: 'background', content: message, display: false },
           { triggerTurn: true, deliverAs: 'followUp' },
         )
     void send.catch((error) =>

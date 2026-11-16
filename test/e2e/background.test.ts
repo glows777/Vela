@@ -156,6 +156,69 @@ test('a topic session stays open while a background command runs, past its idle 
   )
 })
 
+test('a preopened topic session, closed idle and resumed, still queues its background results', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    channelIdleMs: 50,
+    responses: [
+      fauxToolCall('background_start', { command: 'echo FIRST' }),
+      fauxText('Started the first check.'),
+      fauxText('The first check finished.'),
+      fauxToolCall('background_start', { command: 'echo SECOND' }),
+      fauxText('Started the second check.'),
+      fauxText('The second check finished.'),
+    ],
+    extensions: [
+      background(),
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  const topic = 'lark-oc_group-root'
+  // An SDK (or CLI) caller opens the topic session before any channel message exists. Its options
+  // apply at first open only, so the background tools come from this call.
+  const preopened = t.vela.session(topic, {
+    tools: ['+background_start', '+background_output', '+background_stop'],
+  })
+  await t.vela.startChannels()
+  fake.deliver(topicEvent('trigger', 'run the first check'))
+  await until(() => fake.sent.length === 1, 'the first start reply')
+  // The gateway took over that same object rather than opening another one.
+  expect(t.vela.sessions().find((session) => session.id === topic)).toBe(
+    preopened,
+  )
+  await until(() => fake.sent.length === 2, 'the first exit reply')
+  expect(fake.sent[1]).toEqual({
+    messageId: 'root',
+    text: '<at user_id="ou_alice"></at> The first check finished.',
+  })
+  // Idle cleanup saves and closes it; the next message reopens the same id and resumes that history.
+  await until(
+    () => !t.vela.sessions().some((session) => session.id === topic),
+    'the idle close',
+  )
+  fake.deliver(topicEvent('again', 'run the second check'))
+  await until(() => fake.sent.length === 3, 'the second start reply')
+  await until(() => fake.sent.length === 4, 'the second exit reply')
+  expect(fake.sent[2]).toEqual({
+    messageId: 'again',
+    text: '<at user_id="ou_alice"></at> Started the second check.',
+  })
+  // Resumed history, and the result still enters the queue anchored at the topic root.
+  expect(fake.sent[3]).toEqual({
+    messageId: 'root',
+    text: '<at user_id="ou_alice"></at> The second check finished.',
+  })
+  expect(t.model.calls.at(-1)!.lastUserText).toStartWith(
+    'Background command bg-1 finished with exit code 0.',
+  )
+})
+
 test('background tools are topic tools: absent from the group session and a DM, present in the topic', async () => {
   const fake = fakeLark()
   const t = createTestVela({

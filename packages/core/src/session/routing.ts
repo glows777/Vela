@@ -1,3 +1,4 @@
+import type { SessionOptions } from './options.ts'
 import type { SessionScope } from './scope.ts'
 
 interface RoutableSession {
@@ -10,22 +11,32 @@ interface RoutableSession {
 interface Routing {
   scope?: Readonly<SessionScope>
   channel?: string
+  /** The host's queue for results produced outside a turn; transient, never written to a session */
+  host?: SessionOptions['host']
 }
 
 const bindings = new WeakMap<object, Routing>()
 
 export const sessionScope = (session: object) => bindings.get(session)?.scope
 
+export const sessionHost = (session: object) => bindings.get(session)?.host
+
 /** Initial routing may bind a preopened object; ordinary session options remain first-open-only. */
 export function applySessionRouting(
   session: RoutableSession,
   options?: Routing,
 ): void {
-  if (options?.scope === undefined && options?.channel === undefined) return
+  if (
+    options?.scope === undefined &&
+    options?.channel === undefined &&
+    options?.host === undefined
+  )
+    return
   const previous = bindings.get(session)
   const next: Routing = {
     scope: options.scope ?? previous?.scope,
     channel: options.channel ?? previous?.channel,
+    host: options.host ?? previous?.host,
   }
   if (
     previous &&
@@ -45,7 +56,11 @@ export function bindSavedChannel(
   channel: string,
 ): void {
   const previous = bindings.get(session)
-  const next: Routing = { scope: previous?.scope, channel }
+  const next: Routing = {
+    scope: previous?.scope,
+    channel,
+    host: previous?.host,
+  }
   writeRouting(session, next)
   if (previous?.channel !== undefined && previous.channel !== channel)
     throw routingConflict(session, previous, next)

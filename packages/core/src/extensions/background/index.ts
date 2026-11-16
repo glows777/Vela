@@ -1,5 +1,4 @@
 import type { VelaExtension } from '../types.ts'
-import { BACKGROUND_BUSY } from './host.ts'
 import { BackgroundJobs } from './jobs.ts'
 import { createBackgroundTools } from './tool.ts'
 
@@ -30,11 +29,7 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
     }
     for (const tool of createBackgroundTools(jobs)) vela.registerTool(tool)
     vela.on('session_start', (_event, { session }) => {
-      const current = new BackgroundJobs(session, shell, vela.logger)
-      sessions.set(session.id, current)
-      // Channel idle cleanup reads this so a long command is not killed by a quiet conversation.
-      ;(session as unknown as Record<symbol, () => boolean>)[BACKGROUND_BUSY] =
-        () => current.running > 0
+      sessions.set(session.id, new BackgroundJobs(session, shell, vela.logger))
     })
     // Stop aborts the run; every job in the session goes with it, so none can be orphaned.
     vela.on('agent_end', (event, { session }) => {

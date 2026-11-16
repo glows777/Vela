@@ -2,7 +2,6 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
-import { bindBackgroundDelivery } from './background-seam.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
@@ -59,6 +58,12 @@ export class ChannelSessions {
     const selection =
       tools &&
       !tools.some((name) => name.startsWith('+') || name.startsWith('-'))
+    // A background command's exit is an ordinary queued input for this topic, not a run started
+    // from an extension: the gateway supplies the anchor, card, reaction, Stop and ordering.
+    const topic =
+      record?.rootId && record.threadId
+        ? { rootId: record.rootId, threadId: record.threadId }
+        : undefined
     const session = this.session(this.directory.sessionId(key), {
       ...options,
       tools: selection
@@ -66,6 +71,18 @@ export class ChannelSessions {
         : [...(tools ?? []), ...hidden],
       channel: channel.name,
       scope: { id: scope.id, kind: scope.kind, dataDir: scope.dataDir },
+      host: topic
+        ? {
+            deliver: (text: string) =>
+              this.deliverBackground(
+                key,
+                channel.name,
+                topic.rootId,
+                topic.threadId,
+                text,
+              ),
+          }
+        : undefined,
     })
     if (typeof options?.model === 'string') {
       try {
@@ -78,25 +95,6 @@ export class ChannelSessions {
         )
       }
     }
-    // A background command's exit is an ordinary queued input for this topic, not a run started
-    // from an extension: the gateway supplies the anchor, card, reaction, Stop and ordering.
-    const topic =
-      record?.rootId && record.threadId
-        ? { rootId: record.rootId, threadId: record.threadId }
-        : undefined
-    bindBackgroundDelivery(
-      session,
-      topic
-        ? (_session, result) =>
-            this.deliverBackground(
-              key,
-              channel.name,
-              topic.rootId,
-              topic.threadId,
-              result.text,
-            )
-        : undefined,
-    )
     return session
   }
 
