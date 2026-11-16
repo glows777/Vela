@@ -5,8 +5,6 @@ import { join } from 'node:path'
 import { background } from '../../../src/extensions/background/index.ts'
 import {
   BackgroundJobs,
-  MAX_BYTES,
-  MAX_LINES,
   OutputTail,
 } from '../../../src/extensions/background/jobs.ts'
 import { silentLogger } from '../../../src/logger.ts'
@@ -15,6 +13,10 @@ import {
   cleanupTestVelas,
   createTestVela,
 } from '../../../src/testing/test-vela.ts'
+import {
+  OUTPUT_MAX_BYTES as MAX_BYTES,
+  OUTPUT_MAX_LINES as MAX_LINES,
+} from '../../../src/tools/output-tail.ts'
 import type { VelaSession } from '../../../src/vela-session.ts'
 
 afterEach(cleanupTestVelas)
@@ -99,7 +101,10 @@ test('a background command runs to completion and its delivery carries the exit 
   )
   expect(reports[0]!).toContain('Command: echo READY; exit 3')
   expect(reports[0]!).toContain('READY')
-  expect(jobs.snapshot('bg-1')).toMatchObject({ state: 'exited', exitCode: 3 })
+  // Delivered: the job and its tail are gone, so asking again explains it ended.
+  expect(() => jobs.snapshot('bg-1')).toThrow(
+    'Unknown background command bg-1.',
+  )
 })
 
 test('stopping a job ends its process group and returns the tail without another delivery', async () => {
@@ -176,7 +181,7 @@ test('an unknown id says it may have ended with a restart or session close', () 
     silentLogger,
   )
   expect(() => jobs.snapshot('bg-9')).toThrow(
-    'Unknown background command bg-9. It may have ended with a restart or session close.',
+    'Unknown background command bg-9. It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.',
   )
 })
 
@@ -190,14 +195,8 @@ test('stopAll ends every running job without starting a delivery run', async () 
   jobs.start('sleep 30')
   jobs.start('sleep 30')
   await jobs.stopAll()
-  expect(jobs.snapshot('bg-1')).toMatchObject({
-    state: 'exited',
-    stopped: true,
-  })
-  expect(jobs.snapshot('bg-2')).toMatchObject({
-    state: 'exited',
-    stopped: true,
-  })
+  for (const id of ['bg-1', 'bg-2'])
+    expect(() => jobs.snapshot(id)).toThrow(`Unknown background command ${id}.`)
   await Bun.sleep(50)
   expect(reports).toEqual([])
   expect(delivered).toEqual([])

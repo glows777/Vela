@@ -43,6 +43,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **A background command is stopped through the same process-tree code as `bash`, including on Windows.** `background_stop` used to signal only the shell on Windows, leaving the command's descendants running; it now uses the bash tool's `taskkill /T /F`, from one shared implementation that also keeps the POSIX process group and its SIGTERM-to-SIGKILL grace. The output limits and the tail cut (last 2,000 lines or 50 KB, cut at line starts, a single huge line kept as its cut end) are likewise one implementation for both tools ([#388](https://github.com/glows777/Vela/issues/388)).
+
+- **A background command's id is forgotten once its result is delivered or stopped.** The job and its in-memory tail no longer stay for the life of the session. Asking `background_output` or `background_stop` for that id afterwards explains that it has finished and its result was delivered (or returned by the stop), or that it ended with a restart or session close ([#388](https://github.com/glows777/Vela/issues/388)).
+
 - **The no-model message names the built-in DeepSeek key.** `No model available…` offered `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` although `DEEPSEEK_API_KEY` also picks a default model, so the guidance hid a provider that works ([#390](https://github.com/glows777/Vela/issues/390)).
 
 - **A Lark image is no longer downloaded without a size limit.** Image downloads stop at the same **20MB** limit as file attachments, from one shared constant: an explicit request receives the too-large reply, a passive image leaves an operator diagnostic, and the image does not reach the model. An oversized image in history keeps its `[image]` line instead of failing the context read ([#389](https://github.com/glows777/Vela/issues/389)).
