@@ -116,7 +116,7 @@ test('background_stop ends a topic job and background_output reports an id lost 
   await until(() => fake.sent.length === 4, 'the reply after restart')
   expect(fake.sent[3]!.text).toContain('It is gone.')
   expect(t.model.calls.at(-1)!.toolResults[0]!.output).toContain(
-    'Unknown background command bg-1. It may have ended with a restart or session close.',
+    'Unknown background command bg-1. It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.',
   )
 })
 
@@ -216,6 +216,38 @@ test('a preopened topic session, closed idle and resumed, still queues its backg
   })
   expect(t.model.calls.at(-1)!.lastUserText).toStartWith(
     'Background command bg-1 finished with exit code 0.',
+  )
+})
+
+test('a delivered job is forgotten, so background_output explains that it has ended', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('background_start', { command: 'echo DONE' }),
+      fauxText('Started the check.'),
+      fauxText('The check finished.'),
+      fauxToolCall('background_output', { id: 'bg-1' }),
+      fauxText('It has ended.'),
+    ],
+    extensions: [
+      background(),
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(topicEvent('trigger', 'run the check'))
+  await until(() => fake.sent.length === 2, 'the exit reply')
+  fake.deliver(topicEvent('check', 'check bg-1'))
+  await until(() => fake.sent.length === 3, 'the check reply')
+  expect(fake.sent[2]!.text).toContain('It has ended.')
+  expect(t.model.calls.at(-1)!.toolResults[0]!.output).toContain(
+    'Unknown background command bg-1. It may have finished and its result was delivered',
   )
 })
 
