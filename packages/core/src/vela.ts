@@ -45,6 +45,7 @@ import {
   type PromptTemplate,
 } from './prompt/templates.ts'
 import { setSavedSessionArchived } from './session/index.ts'
+import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
 import { applySessionRouting } from './session/routing.ts'
 import { type SessionSearchHit, searchSessionText } from './session/search.ts'
@@ -60,7 +61,7 @@ import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
 import { registerToolSearchTool } from './tools/tool-search.ts'
-import { type SessionOptions, VelaSession } from './vela-session.ts'
+import { VelaSession } from './vela-session.ts'
 
 export interface VelaOptions {
   /** Observes real nonempty storage writes, including writes outside prompts. */

@@ -1,5 +1,4 @@
 import type { VelaLogger, VelaSession } from '@glows777/vela-core/extension-api'
-import { backgroundRunning } from './background-seam.ts'
 import { errorMessage } from './log.ts'
 
 const DEFAULT_CHANNEL_IDLE_MS = 10 * 60_000
@@ -43,10 +42,10 @@ export class GatewayIdle {
       const session = this.find(id)
       // A queued message rearms the timer once its reply is sent
       if (!session || this.queued(id)) return
-      // Running (an extension or SDK caller is using it), a background command still working, or opened with
-      // a UI (the terminal resumed it): check again later, so it is still closed once that use ends without
-      // another channel message
-      if (session.isRunning || session.hasUI || backgroundRunning(session)) {
+      // Running (an extension or SDK caller is using it), work outside a turn still going (a background
+      // command), or opened with a UI (the terminal resumed it): check again later, so it is still closed
+      // once that use ends without another channel message
+      if (session.isRunning || session.hasUI || session.hasWork) {
         this.schedule(id, idleMs || BUSY_RECHECK_MS)
         return
       }
@@ -79,7 +78,7 @@ export class GatewayIdle {
     }
     // New work may have arrived while saving; its queue will rearm idle cleanup.
     if (this.stopped() || this.find(id) !== session || this.queued(id)) return
-    if (session.isRunning || session.hasUI || backgroundRunning(session)) {
+    if (session.isRunning || session.hasUI || session.hasWork) {
       this.schedule(id, idleMs || BUSY_RECHECK_MS)
       return
     }

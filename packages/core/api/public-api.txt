@@ -477,6 +477,7 @@
     autoCompaction?: boolean | undefined
     channel?: string | undefined
     cwd?: string | undefined
+    host?: { deliver(text: string): void | Promise<void>; } | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
@@ -899,6 +900,7 @@
     followUp: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
     followUpMode: QueueMode
     fork: (entryId: string, options?: ForkOptions) => Promise<ForkResult>
+    get hasWork: boolean
     get isBashRunning: boolean
     get isRunning: boolean
     get model: LanguageModel
@@ -1219,6 +1221,7 @@
     autoCompaction?: boolean | undefined
     channel?: string | undefined
     cwd?: string | undefined
+    host?: { deliver(text: string): void | Promise<void>; } | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
@@ -1496,6 +1499,7 @@
     followUp: (input: string, options?: { source?: InputSource; images?: ImageContent[]; }) => Promise<void>
     followUpMode: QueueMode
     fork: (entryId: string, options?: ForkOptions) => Promise<ForkResult>
+    get hasWork: boolean
     get isBashRunning: boolean
     get isRunning: boolean
     get model: LanguageModel

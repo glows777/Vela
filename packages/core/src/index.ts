@@ -157,7 +157,10 @@ export { messageText } from './session/message-queue.ts'
 export type {
   ForkOptions,
   NavigateTreeOptions,
+  PromptOptions,
   QueueMode,
+  SessionOptions,
+  SessionUsage,
 } from './session/options.ts'
 export type { SessionScope } from './session/scope.ts'
 export type { SessionSearchHit } from './session/search.ts'
@@ -195,10 +198,4 @@ export {
   type Vela,
   type VelaOptions,
 } from './vela.ts'
-export type { SessionUsage } from './vela-session.ts'
-export {
-  type ForkResult,
-  type PromptOptions,
-  type SessionOptions,
-  VelaSession,
-} from './vela-session.ts'
+export { type ForkResult, VelaSession } from './vela-session.ts'
