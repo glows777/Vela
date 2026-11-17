@@ -2,6 +2,7 @@ import type { VelaEventListener } from '../agent/events.ts'
 import { type ToolContent, toolContentText } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
 import type { ExecutionMetadata } from '../session/tool-history.ts'
+import type { BackgroundCommands } from './background.ts'
 
 /** Identity of a call passed to the assembly's awaited interception callbacks. */
 interface InterceptionContext {
@@ -113,8 +114,18 @@ export class ToolResultError extends Error {
   }
 }
 
+export const EXPOSURES: readonly ToolExposure[] = [
+  'direct',
+  'model-only',
+  'codemode',
+  'deferred',
+  'hidden',
+]
+
 export interface ToolRegistryForkOptions {
   scope?: () => Readonly<SessionScope> | undefined
+  /** This session's background commands, when its `background` extension installed them */
+  background?: () => BackgroundCommands | undefined
   /** This session's event callback */
   onEvent?: VelaEventListener
   /** Session id passed to hooks */

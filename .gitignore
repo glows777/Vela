@@ -45,6 +45,11 @@ knowledge.db
 # local real-model evaluation artifacts
 .vela-eval/
 
+# Local working notes at the repository root, not repository documentation.
+# Repository documentation lives in docs/ and is unaffected by these patterns.
+/*-research.md
+/*-spec.md
+
 # Staged package documentation copied by the build
 packages/*/LICENSE
 packages/*/CHANGELOG.md

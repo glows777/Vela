@@ -4,7 +4,7 @@ Vela ships seven selectable built-in extensions: `background`, `memory`, `todo`,
 
 | Extension | Adds |
 |---|---|
-| `background` | Long-running commands whose result arrives on its own: `background_start`, `background_output`, `background_stop` |
+| `background` | Background commands for `bash` (`run_in_background`): their result arrives on its own, plus `background_output` and `background_stop` |
 | `memory` | Cross-session memory: the `memory` tool, a memory index sent as a message, `/memory` and `/dream` |
 | `todo` | Task checklist: the `todo` tool, shown on the Lark progress card |
 | `rag` | Local knowledge base: `rag_ingest`, `rag_search`, a knowledge base summary sent as a message, `/rag` |
@@ -180,23 +180,33 @@ with `await session.prompt('/dream')`.
 
 ## background
 
-Long-running commands whose result arrives on its own, for work that must not hold the conversation. Core's `bash` stays synchronous; this extension is the asynchronous one.
+Commands whose result arrives on its own, for work that must not hold the conversation. The start is a parameter of `bash` rather than a second tool: `run_in_background: true` starts the command, returns at once with `bg-1` and the output file, and lets the turn continue.
 
-**Tools.** They are off by default (`activeByDefault: false`). A channel's group session and its topics turn them on; a CLI or SDK session names them with `+background_start`, `+background_output` and `+background_stop` in its `tools` selection, and a chat's narrowed `tools` list can drop them again.
+**Start.** `bash` with `run_in_background` runs `/<shell> -lc <command>` in the session's working directory, with the same environment and authority as a foreground command (not a sandbox). The result names the id and the file:
+
+```
+Command running in background with ID: bg-1. Output is being written to: <path>.
+You will be notified when it completes; do not poll the file or start a second copy.
+```
+
+A session without this extension has no background commands: `run_in_background` fails with `Background commands are not enabled in this session.` instead of starting a command nothing would watch.
+
+**Tools.** They are on whenever the extension is loaded, which the CLI does by default; a chat's narrowed `tools` list can drop them, and a `tools` selection can name them explicitly.
 
 | Tool | Parameters | Behavior |
 |---|---|---|
-| `background_start` | `command` | Starts `/<shell> -lc <command>` in the session's working directory, with the same environment and authority as `bash` (not a sandbox). Returns `{ id, pid }` at once; ids are `bg-1`, `bg-2`, … per session |
 | `background_output` | `id` | The command's state (`running` or `exited`) and its output tail: the last 2,000 lines or 50KB, whichever is hit first |
 | `background_stop` | `id` | SIGTERM to the process group; at the two-second deadline SIGKILL reaches whatever is left, including descendants whose shell already exited. On Windows it uses the `bash` tool's `taskkill /T /F`, which has no graceful signal to wait for. Returns the final tail |
 
-**Delivery.** When a command exits on its own, the session gets one message with the exit state, the command head and the output tail. A stop never delivers: `background_stop` returns the tail in its tool result, and Stop, session close and shutdown have no run left to answer. In the CLI and SDK it is a hidden custom message (`customType: background`) that starts a turn, or joins the current run as a follow-up, so the model never polls. In a channel the result enters that conversation's gateway queue like any other input: it is answered as a new reply in its topic, or in the group's main timeline as a reply to the person's last message, with the usual anchor, card, reaction and Stop. A silent topic evaluation needs no special case, and an explicit answer never merges into a passive one.
+**Output.** Every background command writes its combined stdout and stderr to the file the start result names, so the whole log is pageable with `read_file` even when it is longer than the tail. The id is `bg-1`, `bg-2`, … per session.
 
-**Lifecycle.** Commands belong to their session, and a channel conversation with a running command is not closed as idle, so a quiet conversation cannot kill a long build. `background_stop`, Stop (an aborted run), `session.close()` and process shutdown end them without a delivery. A job is forgotten once its result has been delivered or returned by `background_stop`, so asking again for that id, or asking after a restart, answers `Unknown background command … It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.` Output stays in memory as a bounded tail (oldest bytes dropped first), so a command that prints forever costs at most that buffer; redirect to a file yourself if you need the full output.
+**Delivery.** When a command exits on its own, the session gets one message with the exit state, the command head and the output tail (naming the output file when the tail is cut). A stop never delivers: `background_stop` returns the tail in its tool result, and Stop, session close and shutdown have no run left to answer. In the CLI and SDK it is a hidden custom message (`customType: background`) that starts a turn, or joins the current run as a follow-up, so the model never polls. In a channel the result enters that conversation's gateway queue like any other input: it is answered as a new reply in its topic, or in the group's main timeline as a reply to the person's last message, with the usual anchor, card, reaction and Stop. A silent topic evaluation needs no special case, and an explicit answer never merges into a passive one.
 
-**Visibility.** A channel's group session and its topics get the tools by default, so a long command never blocks the conversation that started it; DMs and other non-topic sessions do not. See [Channels](channels.md#group-workspaces-memory-and-tools).
+**Lifecycle.** Commands belong to their session, and a channel conversation with a running command is not closed as idle, so a quiet conversation cannot kill a long build. `background_stop`, Stop (an aborted run), `session.close()` and process shutdown end them without a delivery. A job is forgotten once its result has been delivered or returned by `background_stop`, so asking again for that id, or asking after a restart, answers `Unknown background command … It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.` Output goes to a file that lives with the session's tool results, so a command that prints forever costs disk rather than memory; the tail the model sees stays bounded.
 
-**SDK.** `background()` takes an optional `shellPath` (the CLI passes the resolved `shellPath` setting). The CLI loads it by default; the SDK loads it explicitly: `createVela({ extensions: [background()] })` and a session `tools` list that names the three tools.
+**Visibility.** Channel group sessions and their topics keep the tools, so a long command never blocks the conversation that started it; a DM drops them, and its `bash` still runs foreground commands. See [Channels](channels.md#group-workspaces-memory-and-tools).
+
+**SDK.** `background()` takes no options: a background command runs through the session's `bash` tool, so `shellPath` and the working directory come from the session. The CLI loads it by default; the SDK loads it explicitly: `createVela({ extensions: [background()] })`, after which `bash` accepts `run_in_background` and `background_output` / `background_stop` are available.
 
 ## todo
 

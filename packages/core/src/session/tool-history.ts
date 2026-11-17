@@ -10,6 +10,8 @@ export interface ExecutionMetadata {
   timedOut?: boolean
   /** The executable could not start, so this tool cannot run in the current session. */
   toolUnavailable?: boolean
+  /** The call returned at once and its command runs as a background job with this id (`bg-1`, …) */
+  backgroundTaskId?: string
 }
 
 export interface CallRecord {

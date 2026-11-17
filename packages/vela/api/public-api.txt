@@ -222,6 +222,7 @@
     cwd: string
     environment: string
   interface ExecutionMetadata
+    backgroundTaskId?: string | undefined
     error?: string | undefined
     exitCode?: number | undefined
     isError?: boolean | undefined

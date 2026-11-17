@@ -11,9 +11,12 @@ import {
 import type { SessionScope } from '../session/scope.ts'
 import type { ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
+import type { BackgroundCommands } from './background.ts'
 import { prepareCallResult } from './call-result.ts'
+import { ExecutionGate } from './execution-gate.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 import {
+  EXPOSURES,
   type ExecuteToolOptions,
   type ToolAnnotations,
   type ToolCallOutcome,
@@ -52,6 +55,8 @@ export interface ToolContext {
   ) => Promise<ToolCallOutcome>
   /** @internal The session's tool result store (bash writes large output to files) */
   results: ToolResultStore
+  /** @internal This session's background commands, when the `background` extension installed them */
+  background?: BackgroundCommands
   /** @internal This call's id in the tool history */
   callId?: string
   /** @internal The (session-level) registry running this call (used by tool_search) */
@@ -97,14 +102,6 @@ export interface ToolDefinition {
   hostedOnly?: true
 }
 
-const EXPOSURES: readonly ToolExposure[] = [
-  'direct',
-  'model-only',
-  'codemode',
-  'deferred',
-  'hidden',
-]
-
 /** An availability check or hook turned the call down; the model gets `reason` as an error result. */
 class ToolRejection {
   constructor(readonly reason: string) {}
@@ -130,45 +127,12 @@ interface SharedToolState {
   logger: VelaLogger
 }
 
-/**
- * One session's tool calls: parallel calls run together; a sequential call waits for the calls
- * started before it and holds back the calls started after it (first come, first served).
- */
-class ExecutionGate {
-  private barrier: Promise<void> = Promise.resolve()
-  private readonly running = new Set<Promise<unknown>>()
-
-  async run<T>(mode: ToolExecutionMode, fn: () => Promise<T>): Promise<T> {
-    if (mode === 'parallel') {
-      await this.barrier
-      const job = fn()
-      this.running.add(job)
-      try {
-        return await job
-      } finally {
-        this.running.delete(job)
-      }
-    }
-    const previous = this.barrier
-    let release!: () => void
-    this.barrier = new Promise((resolve) => {
-      release = resolve
-    })
-    try {
-      await previous
-      await Promise.allSettled([...this.running])
-      return await fn()
-    } finally {
-      release()
-    }
-  }
-}
-
 export class ToolRegistry {
   private readonly shared: SharedToolState
   private onEvent?: VelaEventListener
   private sessionId?: string
   private scope?: () => Readonly<SessionScope> | undefined
+  private background?: () => BackgroundCommands | undefined
 
   constructor(
     readonly results = new ToolResultStore(),
@@ -186,6 +150,7 @@ export class ToolRegistry {
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
     forked.scope = options.scope
+    forked.background = options.background
     return forked
   }
 
@@ -483,12 +448,20 @@ export class ToolRegistry {
       }
       let nested = 0
       const parentId = options.toolCallId ?? call.callId
+      // A job is only useful with the tools that read and stop it, so a session that dropped them
+      // (a channel DM, a narrowed tool list) has no background commands at all.
+      const background =
+        this.isAvailable('background_output') &&
+        this.isAvailable('background_stop')
+          ? this.background?.()
+          : undefined
       let raw: unknown
       try {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
           sessionId: this.sessionId,
           scope: this.scope?.(),
+          ...(background ? { background } : {}),
           results: this.results,
           toolCallId: options.toolCallId,
           callId: call.callId,

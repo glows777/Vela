@@ -63,10 +63,7 @@ export type {
   ShellExecOptions,
   ShellExecResult,
 } from './execution/types.ts'
-export {
-  type BackgroundOptions,
-  background,
-} from './extensions/background/index.ts'
+export { background } from './extensions/background/index.ts'
 export { configString, configStrings } from './extensions/config.ts'
 export {
   customMessageIfChanged,
@@ -187,10 +184,14 @@ export {
 } from './session/storage.ts'
 export type { ExecutionMetadata } from './session/tool-history.ts'
 export { resolveShellPath, type ShellPathOptions } from './shell-path.ts'
+export type {
+  BackgroundCommands,
+  BackgroundSnapshot,
+} from './tools/background.ts'
 export { withFileMutationQueue } from './tools/file-mutation-queue.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'
-export type { BashResult } from './tools/shell.ts'
+export type { BashResult, RunningShell, ShellRun } from './tools/shell.ts'
 export type {
   ExecuteToolOptions,
   ToolAnnotations,

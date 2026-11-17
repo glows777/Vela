@@ -6,6 +6,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
+- **`background_start` is gone; `bash` starts a background command.** `bash` takes `run_in_background: true`, runs the command as a background task and returns at once with its id and output file, so one shell tool covers both foreground and background work. Replace `background_start({ command })` with `bash({ command, run_in_background: true })`, and remove `+background_start` from `tools` lists and prompts: a list that still names it fails as an unknown tool. `background_output` and `background_stop` stay, and `background()` no longer takes `shellPath`: call it with no arguments, because a background command now runs through the session's `bash` tool and uses that session's shell and working directory ([#429](https://github.com/glows777/Vela/issues/429)).
 - **Newly saved sessions resume in their saved execution location.** Previously reopening a session without `cwd` used the host default, even when the session started elsewhere. New records restore their saved local cwd instead, including when a different cwd was passed on reopen. Existing records without a location keep the prior fallback; fork and clone inherit the active location. This is not a sandbox.
 
 ### Added
@@ -18,6 +19,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **Background commands write to a file, and their tools are on by default.** A background command's combined output now goes to a file in the session's tool results, named in the start result (`Output is being written to: <path>.`), so `read_file` pages the whole log while the model still gets the last 2,000 lines or 50KB as the tail; the exit delivery names the file when the tail is cut. `background_output` and `background_stop` are on whenever the `background` extension is loaded — the CLI loads it by default — instead of only where a channel turned them on; a chat's narrowed `tools` list and an explicit `tools` selection still drop them. The `bash` tool's system-prompt rules now tell the model to start a command that may keep running with `run_in_background` ([#429](https://github.com/glows777/Vela/issues/429)).
 - **A group session runs execution and background commands again.** The top-level session of a Lark group or a Local project chat keeps `bash`, `write_file` and `edit_file` and also gets `background_start`, `background_output` and `background_stop`, so a quick command such as `gh pr view` is answered where it was asked instead of being dispatched to a topic first. The conversation still stays available: a command that may keep running starts in the background, and its exit joins the group's own queue as a reply to the person's last message; a longer task still becomes a topic. A chat's narrowed `tools` list can drop any of these, and a DM is unchanged: it keeps its execution tools and still gets no background tools. This supersedes the 0.7 rule that hid the three execution tools from group sessions ([#421](https://github.com/glows777/Vela/issues/421)).
 
 ## [0.7.0] - 2026-11-16

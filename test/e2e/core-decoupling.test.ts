@@ -173,7 +173,10 @@ test('clone and fork retain history without inheriting routing authority', async
   const model = createFauxModel({
     responses: [
       fauxText('saved'),
-      fauxToolCall('background_start', { command: 'echo COPY_ONLY' }),
+      fauxToolCall('bash', {
+        command: 'echo COPY_ONLY',
+        run_in_background: true,
+      }),
       fauxText('started in the copy'),
       fauxText('the copy’s own delivery turn'),
     ],
@@ -182,7 +185,7 @@ test('clone and fork retain history without inheriting routing authority', async
   const source = vela.session('source', {
     scope: { id: 'group', kind: 'shared', dataDir: join(cwd, 'group') },
     channel: 'fake',
-    tools: ['background_start'],
+    tools: ['bash', 'background_output', 'background_stop'],
     host: {
       deliver: (text) => {
         delivered.push(text)

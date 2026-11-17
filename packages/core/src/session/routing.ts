@@ -1,3 +1,4 @@
+import type { BackgroundCommands } from '../tools/background.ts'
 import type { SessionOptions } from './options.ts'
 import type { SessionScope } from './scope.ts'
 
@@ -13,6 +14,8 @@ interface Routing {
   channel?: string
   /** The host's queue for results produced outside a turn; transient, never written to a session */
   host?: SessionOptions['host']
+  /** The session's background commands, installed by the `background` extension; transient too */
+  background?: BackgroundCommands
 }
 
 const bindings = new WeakMap<object, Routing>()
@@ -20,6 +23,19 @@ const bindings = new WeakMap<object, Routing>()
 export const sessionScope = (session: object) => bindings.get(session)?.scope
 
 export const sessionHost = (session: object) => bindings.get(session)?.host
+
+export const sessionBackground = (session: object) =>
+  bindings.get(session)?.background
+
+/** @internal Installs a session's background commands (the `background` extension calls this). */
+export function setSessionBackground(
+  session: object,
+  background: BackgroundCommands | undefined,
+): void {
+  const routing = bindings.get(session)
+  if (routing) routing.background = background
+  else bindings.set(session, { background })
+}
 
 /** The options that bind a session to a route; a copy must not inherit them. */
 export function unroutedOptions(options: SessionOptions): SessionOptions {
@@ -43,6 +59,7 @@ export function applySessionRouting(
     scope: options.scope ?? previous?.scope,
     channel: options.channel ?? previous?.channel,
     host: options.host ?? previous?.host,
+    background: previous?.background,
   }
   if (
     previous &&
@@ -66,6 +83,7 @@ export function bindSavedChannel(
     scope: previous?.scope,
     channel,
     host: previous?.host,
+    background: previous?.background,
   }
   writeRouting(session, next)
   if (previous?.channel !== undefined && previous.channel !== channel)

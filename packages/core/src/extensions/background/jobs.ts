@@ -1,10 +1,10 @@
-import { type ChildProcess, spawn } from 'node:child_process'
-import { constants } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { VelaLogger } from '../../logger.ts'
-import { errorMessage } from '../../logger.ts'
-import { fitOutputTail, OUTPUT_MAX_BYTES } from '../../tools/output-tail.ts'
-import { signalProcessTree } from '../../tools/process-tree.ts'
+import { errorMessage, type VelaLogger } from '../../logger.ts'
+import type {
+  BackgroundCommands,
+  BackgroundSnapshot,
+} from '../../tools/background.ts'
+import { type RunningShell, readOutputTail } from '../../tools/shell.ts'
 import type { VelaSession } from '../../vela-session.ts'
 
 /** SIGTERM first, then SIGKILL when the process group ignores it. */
@@ -12,46 +12,9 @@ const STOP_GRACE_MS = 2000
 /** The command head in a delivery message and in `background_stop`. */
 const COMMAND_HEAD = 160
 
-/** In-memory output tail; a command that prints forever only ever costs this buffer. */
-export class OutputTail {
-  private chunks: string[] = []
-  private bytes = 0
-
-  append(chunk: string): void {
-    if (!chunk) return
-    this.chunks.push(chunk)
-    this.bytes += Buffer.byteLength(chunk)
-    if (this.bytes > OUTPUT_MAX_BYTES * 2) this.compact()
-  }
-
-  private compact(): void {
-    // Keep enough bytes for the limit, then let read() cut both limits.
-    const text = this.text()
-    const buffer = Buffer.from(text)
-    const kept =
-      buffer.length > OUTPUT_MAX_BYTES * 2
-        ? buffer.subarray(buffer.length - OUTPUT_MAX_BYTES * 2).toString()
-        : text
-    this.chunks = [kept]
-    this.bytes = Buffer.byteLength(kept)
-  }
-
-  private text(): string {
-    return this.chunks.join('')
-  }
-
-  /** The tail within both limits; `truncated` means older output was dropped. */
-  read(): { text: string; truncated: boolean } {
-    const { text, truncated } = fitOutputTail(this.text())
-    return { text, truncated }
-  }
-}
-
 interface Job {
   id: string
-  command: string
-  child: ChildProcess
-  output: OutputTail
+  shell: RunningShell
   state: 'running' | 'exited'
   exitCode?: number
   stopped?: boolean
@@ -59,27 +22,14 @@ interface Job {
   silent?: boolean
 }
 
-export interface JobSnapshot {
-  id: string
-  command: string
-  state: 'running' | 'exited'
-  exitCode?: number
-  stopped?: boolean
-  output: string
-  truncated: boolean
-}
-
 const commandHead = (command: string) => {
   const head = command.trim().split('\n')[0]!.trim()
   return head.length > COMMAND_HEAD ? `${head.slice(0, COMMAND_HEAD)}…` : head
 }
 
-const exitCodeOf = (code: number | null, signal: NodeJS.Signals | null) =>
-  code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0)
-
 /** Whether the process group still has members; POSIX only, and ESRCH means it is gone. */
 function groupAlive(job: Job): boolean {
-  const pid = job.child.pid
+  const pid = job.shell.pid
   if (pid === undefined) return false
   try {
     process.kill(-pid, 0)
@@ -94,90 +44,80 @@ function groupAlive(job: Job): boolean {
   }
 }
 
-/** The jobs of one session; they die with it, and nothing is persisted. */
-export class BackgroundJobs {
+/**
+ * The jobs of one session; they die with it, and nothing is persisted. A job is a started shell
+ * whose output file is also its tail, so declared and adopted commands are the same kind of job.
+ */
+export class BackgroundJobs implements BackgroundCommands {
   private readonly jobs = new Map<string, Job>()
   private sequence = 0
 
   constructor(
     private readonly session: VelaSession,
-    private readonly shellPath: () => string,
     private readonly logger: VelaLogger,
   ) {}
 
-  start(command: string): { id: string; pid?: number } {
+  adopt(shell: RunningShell): string {
     const id = `bg-${++this.sequence}`
-    const output = new OutputTail()
-    let child: ChildProcess
-    try {
-      child = spawn(this.shellPath(), ['-lc', command], {
-        cwd: this.session.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // A POSIX process group, or taskkill /T on Windows, reaches pipelines and descendants.
-        detached: process.platform !== 'win32',
-      })
-    } catch (error) {
-      throw new Error(
-        `Could not start background command: ${errorMessage(error)}`,
-      )
-    }
-    const job: Job = { id, command, child, output, state: 'running' }
+    const job: Job = { id, shell, state: 'running' }
     this.jobs.set(id, job)
-    // A channel topic stays open while its command runs, so idle cleanup cannot kill a long build.
-    const finished = new Promise<void>((resolve) => {
-      child.once('exit', () => resolve())
-      child.once('error', () => resolve())
-    })
-    this.session.trackWork(finished)
-    child.stdout?.setEncoding('utf8')
-    child.stderr?.setEncoding('utf8')
-    child.stdout?.on('data', (chunk: string) => output.append(chunk))
-    child.stderr?.on('data', (chunk: string) => output.append(chunk))
-    child.once('error', (error) => {
-      if (job.state === 'exited') return
-      job.state = 'exited'
-      this.deliver(
-        `Background command ${id} could not start: ${errorMessage(error)}.`,
-        job,
-      )
-    })
-    child.once('exit', (code, signal) => {
-      if (job.state === 'exited') return
-      job.state = 'exited'
-      job.exitCode = exitCodeOf(code, signal)
-      if (job.silent) return
-      const state = job.stopped
-        ? 'was stopped'
-        : `finished with exit code ${job.exitCode}`
-      this.deliver(`Background command ${id} ${state}.`, job)
-    })
-    return { id, ...(child.pid === undefined ? {} : { pid: child.pid }) }
+    // A channel conversation stays open while its command runs, so idle cleanup cannot kill a long build.
+    this.session.trackWork(
+      shell.exited.then(
+        () => {},
+        () => {},
+      ),
+    )
+    void shell.exited.then(
+      (run) => {
+        if (job.state === 'exited') return
+        job.state = 'exited'
+        job.exitCode = run.exitCode
+        if (job.silent) return
+        const state = job.stopped
+          ? 'was stopped'
+          : `finished with exit code ${job.exitCode}`
+        void this.deliver(`Background command ${id} ${state}.`, job)
+      },
+      (error) => {
+        if (job.state === 'exited') return
+        job.state = 'exited'
+        if (job.silent) return
+        void this.deliver(
+          `Background command ${id} ended unexpectedly: ${errorMessage(error)}.`,
+          job,
+        )
+      },
+    )
+    return id
   }
 
-  snapshot(id: string): JobSnapshot {
+  async snapshot(id: string): Promise<BackgroundSnapshot> {
     const job = this.job(id)
-    const { text, truncated } = job.output.read()
+    const tail = await readOutputTail(job.shell.path)
     return {
       id: job.id,
-      command: job.command,
+      command: job.shell.command,
       state: job.state,
       ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }),
       ...(job.stopped ? { stopped: true } : {}),
-      output: text,
-      truncated,
+      output: tail.text,
+      truncated: tail.truncated,
     }
   }
 
   /** End one command; the caller already receives its tail from the tool result, so this never delivers. */
-  async stop(id: string): Promise<JobSnapshot> {
+  async stop(id: string): Promise<BackgroundSnapshot> {
     const job = this.job(id)
     if (job.state === 'running') {
       job.stopped = true
       job.silent = true
       await this.terminate(job)
+      job.state = 'exited'
+      job.exitCode = (await job.shell.exited).exitCode
     }
-    const snapshot = this.snapshot(id)
-    // The result has been handed to the caller; the tail and its memory go with the job.
+    const snapshot = await this.snapshot(id)
+    // The result has been handed to the caller; the job goes with it.
     this.jobs.delete(id)
     return snapshot
   }
@@ -210,18 +150,9 @@ export class BackgroundJobs {
   /** SIGTERM the process group, SIGKILL it after the grace period, and wait for exit. */
   private async terminate(job: Job): Promise<void> {
     if (job.state === 'exited') return
-    const exited = new Promise<void>((resolve) => {
-      job.child.once('exit', () => resolve())
-      job.child.once('error', () => resolve())
-    })
-    // One implementation with the bash tool: a POSIX process group, or taskkill /T on Windows.
-    const kill = (signal: 'SIGTERM' | 'SIGKILL') => {
-      void signalProcessTree(job.child, signal).catch(() =>
-        job.child.kill(signal),
-      )
-    }
+    const exited = job.shell.exited.catch(() => undefined)
     const startedAt = Date.now()
-    kill('SIGTERM')
+    job.shell.signal('SIGTERM')
     let timer: ReturnType<typeof setTimeout> | undefined
     const grace = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, STOP_GRACE_MS)
@@ -240,30 +171,33 @@ export class BackgroundJobs {
       Date.now() - startedAt < STOP_GRACE_MS
     )
       await delay(20)
-    if (process.platform !== 'win32' && groupAlive(job)) kill('SIGKILL')
+    if (process.platform !== 'win32' && groupAlive(job))
+      job.shell.signal('SIGKILL')
     await exited
   }
 
-  private deliver(status: string, job: Job): void {
-    const { text, truncated } = job.output.read()
-    const output = text
-      ? `${text}${truncated ? '\n\n[Showing the last output only]' : ''}`
-      : '(no output)'
-    const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}`
-    const host = this.session.host
-    const send = host
-      ? Promise.resolve(host.deliver(message))
-      : this.session.sendMessage(
+  private async deliver(status: string, job: Job): Promise<void> {
+    const path = job.shell.path
+    try {
+      const { text, truncated } = await readOutputTail(path)
+      const output = text
+        ? `${text}${truncated ? `\n\n[Showing the last output only. Full output: ${path}]` : ''}`
+        : '(no output)'
+      const message = `${status}\nCommand: ${commandHead(job.shell.command)}\nOutput:\n${output}`
+      const host = this.session.host
+      if (host) await host.deliver(message)
+      else
+        await this.session.sendMessage(
           { customType: 'background', content: message, display: false },
           { triggerTurn: true, deliverAs: 'followUp' },
         )
-    void send
-      .catch((error) =>
-        this.logger.error(
-          `[background] Could not deliver ${job.id}: ${errorMessage(error)}`,
-        ),
+    } catch (error) {
+      this.logger.error(
+        `[background] Could not deliver ${job.id}: ${errorMessage(error)}`,
       )
+    } finally {
       // Delivered or not, the result has left the job: its tail no longer answers for it.
-      .finally(() => this.jobs.delete(job.id))
+      this.jobs.delete(job.id)
+    }
   }
 }

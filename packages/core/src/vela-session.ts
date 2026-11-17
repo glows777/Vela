@@ -75,6 +75,7 @@ import {
   type SessionStorage,
   sessionArtifactsUseDataDir,
 } from './session/storage.ts'
+import { sessionUsage } from './session/usage.ts'
 import { UserBash } from './session/user-bash.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { BashResult } from './tools/shell.ts'
@@ -264,6 +265,7 @@ export class VelaSession {
       onEvent: this.emit,
       sessionId: id,
       scope: () => this.scope,
+      background: () => routing.sessionBackground(this),
     })
     routing.applySessionRouting(this, options)
     const toolListError = options.tools
@@ -1485,13 +1487,7 @@ export class VelaSession {
 
   /** Token estimate, context usage and this session's total usage. */
   get usage(): SessionUsage {
-    const last = this.tracker.recent(1)[0]
-    return {
-      ...this.tracker.status,
-      totals: this.tracker.totals(),
-      contextWindow: this.tracker.contextWindow,
-      ...(last ? { lastRecord: { ...last } } : {}),
-    }
+    return sessionUsage(this.tracker)
   }
 
   /** Aborts the running task, waits for it to finish and save, then removes the session from Vela. */

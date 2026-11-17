@@ -20,8 +20,13 @@ export { publishChannelEvent } from './session/channel-events.ts'
 export { messageText } from './session/message-queue.ts'
 export type { SessionOptions } from './session/options.ts'
 export type { SessionScope } from './session/scope.ts'
+export type {
+  BackgroundCommands,
+  BackgroundSnapshot,
+} from './tools/background.ts'
 export { defineJsonSchemaTool } from './tools/json-schema.ts'
 export type { ToolContext, ToolDefinition } from './tools/registry.ts'
+export type { RunningShell, ShellRun } from './tools/shell.ts'
 export type {
   ExecuteToolOptions,
   ToolAnnotations,

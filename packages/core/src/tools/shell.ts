@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import { type FileHandle, open, stat } from 'node:fs/promises'
 import { constants } from 'node:os'
 import z from 'zod'
@@ -12,6 +12,7 @@ import {
 } from './output-tail.ts'
 import { signalProcessTree } from './process-tree.ts'
 import type { ToolDefinition } from './registry.ts'
+import type { RunningShell, ShellRun } from './running-shell.ts'
 
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000 // setTimeout's limit
 /** How often a running command's output tail is sent to onUpdate (pi's BASH_UPDATE_THROTTLE_MS) */
@@ -23,6 +24,12 @@ const bashToolParamSchema = z.object({
     .number()
     .optional()
     .describe('Timeout in seconds (optional, no default timeout)'),
+  run_in_background: z
+    .boolean()
+    .optional()
+    .describe(
+      'Run the command in the background and return at once with its id and output file. Its output arrives here when it exits; read the file to see output so far. Use it for a server, a watch build or a long test run instead of blocking the turn.',
+    ),
 })
 
 export interface BashToolOptions {
@@ -39,12 +46,19 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
+  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout. With run_in_background the command starts as a background task: the call returns at once with its id and output file, its result arrives here when it exits, and the command dies with this session.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
+  promptGuidelines: [
+    'A command that may keep running (a dev server, a watch build, a long test run) starts with bash and run_in_background: true instead of blocking the turn, where the session has the background tools.',
+  ],
   execute: async (
-    { command, timeout }: { command: string; timeout?: number },
+    {
+      command,
+      timeout,
+      run_in_background: runInBackground,
+    }: { command: string; timeout?: number; run_in_background?: boolean },
     context,
   ) => {
     if (
@@ -56,29 +70,44 @@ export const createBashTool = (
       throw new Error(
         `Invalid timeout: must be a positive number of seconds, at most ${MAX_TIMEOUT_SECONDS}`,
       )
+    const commands = runInBackground ? context?.background : undefined
+    if (runInBackground && !commands)
+      throw new Error(
+        'Background commands are not enabled in this session: it has no background tools. Run the command without run_in_background, or enable the background extension and its tools for this session.',
+      )
     const results = context?.results ?? new ToolResultStore()
     // Open before executing: storage failure must not lead to rerunning a command.
     const { path, file } = await results.createFile(context?.callId)
     let status: string | undefined
     const execution: ExecutionMetadata = {}
     try {
-      const run = await runShell(command, file, path, {
+      const shell = await startShell(command, file, path, {
         cwd,
         shellPath: shellPath ?? defaultShellPath(),
         timeout,
-        signal: context?.signal,
-        onUpdate: context?.onUpdate
-          ? (text) => context.onUpdate?.({ content: [{ type: 'text', text }] })
-          : undefined,
+        // A background command belongs to the session, not to this run: the job ends it, not Stop.
+        signal: runInBackground ? undefined : context?.signal,
+        onUpdate:
+          !runInBackground && context?.onUpdate
+            ? (text) =>
+                context.onUpdate?.({ content: [{ type: 'text', text }] })
+            : undefined,
       })
-      execution.exitCode = run.exitCode
-      execution.signal = run.signal
-      execution.timedOut = run.timedOut || undefined
-      execution.isError = run.exitCode !== 0 || run.timedOut
-      if (run.timedOut) status = `Command timed out after ${timeout} seconds`
-      else if (run.cancelled) status = 'Command aborted'
-      else if (run.exitCode !== 0)
-        status = `Command exited with code ${run.exitCode}${run.signal ? ` (signal ${run.signal})` : ''}`
+      if (commands) {
+        const id = commands.adopt(shell)
+        execution.backgroundTaskId = id
+        status = `Command running in background with ID: ${id}. Output is being written to: ${path}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+      } else {
+        const run = await shell.exited
+        execution.exitCode = run.exitCode
+        execution.signal = run.signal
+        execution.timedOut = run.timedOut || undefined
+        execution.isError = run.exitCode !== 0 || run.timedOut
+        if (run.timedOut) status = `Command timed out after ${timeout} seconds`
+        else if (run.cancelled) status = 'Command aborted'
+        else if (run.exitCode !== 0)
+          status = `Command exited with code ${run.exitCode}${run.signal ? ` (signal ${run.signal})` : ''}`
+      }
     } catch (error) {
       execution.isError = true
       const code =
@@ -119,7 +148,8 @@ export const createBashTool = (
     }
     const { size } = await stat(path)
     const tail = await readTail(path, size)
-    let preview = tail.text || (size ? '' : '(no output)')
+    let preview =
+      tail.text || (size ? '' : commands ? '(no output so far)' : '(no output)')
     if (tail.truncated)
       preview += `\n\n[Showing the last ${tail.lines} lines${tail.partialLine ? ' (the last line is cut)' : ''} of ${size} bytes of output. Full output: ${path}]`
     if (status) preview += `${preview ? '\n\n' : ''}${status}`
@@ -127,74 +157,78 @@ export const createBashTool = (
   },
 })
 
-/** How a command run by `runShell` ended. */
-interface ShellRun {
-  /** The exit code, or 128 + the signal number when a signal killed it */
-  exitCode: number
-  signal: NodeJS.Signals | null
-  timedOut: boolean
-  /** `signal` aborted the command */
-  cancelled: boolean
+/** Options for a shell run; the bash tool and a background job pass the same ones. */
+export interface ShellRunOptions {
+  cwd?: string
+  shellPath?: string
+  timeout?: number
+  signal?: AbortSignal
+  /** The output tail while the command runs */
+  onUpdate?: (text: string) => void
+  /** Each new piece of output, all of it, in order */
+  onDelta?: (delta: string) => void
 }
 
 /**
- * Runs a command with stdout and stderr going to `file`, which it closes. The process group is
- * killed on timeout or abort. Throws if the command cannot start.
+ * Starts a command with stdout and stderr going to `file`, which it closes when the command exits.
+ * The process group is killed on timeout or abort. Throws if the command cannot start, after
+ * closing the file.
  */
-async function runShell(
+export async function startShell(
   command: string,
   file: FileHandle,
   path: string,
-  options: {
-    cwd?: string
-    shellPath?: string
-    timeout?: number
-    signal?: AbortSignal
-    /** The output tail while the command runs */
-    onUpdate?: (text: string) => void
-    /** Each new piece of output, all of it, in order */
-    onDelta?: (delta: string) => void
-  },
-): Promise<ShellRun> {
+  options: ShellRunOptions,
+): Promise<RunningShell> {
+  let proc: ChildProcess
+  try {
+    proc = spawn(options.shellPath ?? defaultShellPath(), ['-lc', command], {
+      cwd: options.cwd,
+      stdio: ['ignore', file.fd, file.fd],
+      // POSIX process groups and Windows taskkill /T stop pipelines and descendants.
+      detached: process.platform !== 'win32',
+    })
+  } catch (error) {
+    // spawn throws synchronously for an invalid command; the caller must not inherit an open file.
+    await file.close().catch(() => {})
+    throw error
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      proc.once('spawn', () => resolve())
+      proc.once('error', reject)
+    })
+  } catch (error) {
+    await file.close().catch(() => {})
+    throw error
+  }
   const { signal: abortSignal } = options
   const streaming =
     options.onUpdate || options.onDelta
       ? streamOutput(path, options.onUpdate, options.onDelta)
       : undefined
-  try {
-    const proc = spawn(
-      options.shellPath ?? defaultShellPath(),
-      ['-lc', command],
-      {
-        cwd: options.cwd,
-        stdio: ['ignore', file.fd, file.fd],
-        // POSIX process groups and Windows taskkill /T stop pipelines and descendants.
-        detached: process.platform !== 'win32',
-      },
-    )
-    const exited = new Promise<{
-      code: number | null
-      signal: NodeJS.Signals | null
-    }>((resolve, reject) => {
-      proc.once('error', reject)
-      proc.once('exit', (code, signal) => resolve({ code, signal }))
-    })
-    let termination: Promise<void> | undefined
-    const terminate = () => {
-      termination ??= signalProcessTree(proc, 'SIGKILL')
-    }
-    let timedOut = false
-    const timer =
-      options.timeout === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true
-            terminate()
-          }, options.timeout * 1000)
-    abortSignal?.addEventListener('abort', terminate, { once: true })
-    if (abortSignal?.aborted) terminate()
+  let termination: Promise<void> | undefined
+  const terminate = () => {
+    termination ??= signalProcessTree(proc, 'SIGKILL')
+  }
+  let timedOut = false
+  const timer =
+    options.timeout === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true
+          terminate()
+        }, options.timeout * 1000)
+  abortSignal?.addEventListener('abort', terminate, { once: true })
+  if (abortSignal?.aborted) terminate()
+  const exited = (async (): Promise<ShellRun> => {
     try {
-      const result = await exited
+      const result = await new Promise<{
+        code: number | null
+        signal: NodeJS.Signals | null
+      }>((resolve) =>
+        proc.once('exit', (code, signal) => resolve({ code, signal })),
+      )
       await termination
       return {
         // Killed by a signal: 128 + signal number, as shells report it
@@ -208,16 +242,43 @@ async function runShell(
     } finally {
       clearTimeout(timer)
       abortSignal?.removeEventListener('abort', terminate)
+      await streaming?.stop()
+      try {
+        await file.sync()
+      } finally {
+        await file.close()
+      }
     }
-  } finally {
-    await streaming?.stop()
-    try {
-      await file.sync()
-    } finally {
-      await file.close()
-    }
+  })()
+  return {
+    command,
+    path,
+    pid: proc.pid,
+    exited,
+    signal: (signal) => {
+      void signalProcessTree(proc, signal).catch(() => {
+        try {
+          proc.kill(signal)
+        } catch {}
+      })
+    },
   }
 }
+
+/**
+ * Runs a command to completion: the foreground path of the `bash` tool and of `!` commands.
+ */
+async function runShell(
+  command: string,
+  file: FileHandle,
+  path: string,
+  options: ShellRunOptions,
+): Promise<ShellRun> {
+  const shell = await startShell(command, file, path, options)
+  return shell.exited
+}
+
+export type { RunningShell, ShellRun } from './running-shell.ts'
 
 /** A command the user ran themselves (`!cmd`), shaped like pi's `BashResult`. */
 export interface BashResult {
@@ -312,6 +373,12 @@ function streamOutput(
       if (onDelta) await poll(true).catch(() => {})
     },
   }
+}
+
+/** The tail of a command's output file: the last OUTPUT_MAX_LINES lines or OUTPUT_MAX_BYTES bytes. */
+export async function readOutputTail(path: string): Promise<OutputTailFit> {
+  const { size } = await stat(path)
+  return readTail(path, size)
 }
 
 /**

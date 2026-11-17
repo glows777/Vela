@@ -41,9 +41,19 @@
       options: readonly { id: string; label: string }[]
       }
       )
-  function background: (options?: BackgroundOptions) => VelaExtension
-  interface BackgroundOptions
-    shellPath?: string | undefined
+  function background: () => VelaExtension
+  interface BackgroundCommands
+    adopt: (shell: RunningShell) => string
+    snapshot: (id: string) => Promise<BackgroundSnapshot>
+    stop: (id: string) => Promise<BackgroundSnapshot>
+  interface BackgroundSnapshot
+    command: string
+    exitCode?: number | undefined
+    id: string
+    output: string
+    state: "running" | "exited"
+    stopped?: boolean | undefined
+    truncated: boolean
   interface BashExecutionEntry
     cancelled: boolean
     command: string
@@ -196,6 +206,7 @@
     cwd: string
     environment: string
   interface ExecutionMetadata
+    backgroundTaskId?: string | undefined
     error?: string | undefined
     exitCode?: number | undefined
     isError?: boolean | undefined
@@ -459,6 +470,12 @@
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
   function resolveShellPath: (shellPath: string | undefined, { platform, env }: ShellPathOptions) => string
   type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
+  interface RunningShell
+    readonly command: string
+    readonly exited: Promise<ShellRun>
+    readonly path: string
+    readonly pid: number | undefined
+    signal: (signal: "SIGTERM" | "SIGKILL") => void
   interface SavedSessionOptions
     includeArchived?: boolean | undefined
   interface SendMessageOptions
@@ -617,6 +634,11 @@
   interface ShellPathOptions
     env: Record<string, string | undefined>
     platform: NodeJS.Platform
+  interface ShellRun
+    cancelled: boolean
+    exitCode: number
+    signal: NodeJS.Signals | null
+    timedOut: boolean
   const silentLogger: VelaLogger
   interface StepRecord
     cacheReadTokens: number
@@ -1179,6 +1201,18 @@
       | 'context_overflow'
       | 'provider'
       | 'unknown'
+  interface BackgroundCommands
+    adopt: (shell: RunningShell) => string
+    snapshot: (id: string) => Promise<BackgroundSnapshot>
+    stop: (id: string) => Promise<BackgroundSnapshot>
+  interface BackgroundSnapshot
+    command: string
+    exitCode?: number | undefined
+    id: string
+    output: string
+    state: "running" | "exited"
+    stopped?: boolean | undefined
+    truncated: boolean
   interface BeforeAgentStartEvent
     prompt: string
     sections: Record<string, string>
@@ -1283,6 +1317,12 @@
     provider: string
     type: "provider_stream_event"
   function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
+  interface RunningShell
+    readonly command: string
+    readonly exited: Promise<ShellRun>
+    readonly path: string
+    readonly pid: number | undefined
+    signal: (signal: "SIGTERM" | "SIGKILL") => void
   interface SendMessageOptions
     deliverAs?: "steer" | "followUp" | "nextTurn" | undefined
     triggerTurn?: boolean | undefined
@@ -1328,6 +1368,11 @@
     type: "session_tree"
   type SessionUI = Omit<ExtensionUI, 'setStatus' | 'setWidget'> &
       Partial<Pick<ExtensionUI, 'setStatus' | 'setWidget'>>
+  interface ShellRun
+    cancelled: boolean
+    exitCode: number
+    signal: NodeJS.Signals | null
+    timedOut: boolean
   const silentLogger: VelaLogger
   interface StepRecord
     cacheReadTokens: number
