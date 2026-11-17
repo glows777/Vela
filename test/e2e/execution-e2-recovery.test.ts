@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import {
@@ -612,6 +612,47 @@ test('workspace AGENTS instructions come from the selected session environment',
     expect(reads).toBeGreaterThan(0)
     expect(model.calls[0]!.system).toContain('ENV_CONTEXT_ONLY')
     expect(model.calls[0]!.system).not.toContain('HOST_CONTEXT_ONLY')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('workspace skill metadata comes from the selected session environment', async () => {
+  const dir = tempDir()
+  const skill = join(dir.path, '.skills', 'example')
+  mkdirSync(skill, { recursive: true })
+  writeFileSync(
+    join(skill, 'SKILL.md'),
+    '---\nname: example\ndescription: HOST_SKILL_ONLY\n---\nHost body',
+  )
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  let reads = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = async (path, signal) => {
+        if (path.endsWith('/.skills/example/SKILL.md')) {
+          reads++
+          return {
+            ok: true,
+            value:
+              '---\nname: example\ndescription: ENV_SKILL_ONLY\n---\nEnv body',
+          }
+        }
+        return read(path, signal)
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('skill-boundary').prompt('hello')
+    expect(reads).toBeGreaterThan(0)
+    expect(model.calls[0]!.system).toContain('ENV_SKILL_ONLY')
+    expect(model.calls[0]!.system).not.toContain('HOST_SKILL_ONLY')
   } finally {
     await vela.dispose()
     dir.cleanup()
