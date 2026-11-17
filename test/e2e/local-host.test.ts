@@ -9,6 +9,7 @@ import {
   local,
 } from '@glows777/vela-channels'
 import { drainChannels } from '@glows777/vela-channels/testing'
+import { inspectSession } from '@glows777/vela-core/diagnostics'
 import {
   type FauxRequest,
   fauxHang,
@@ -16,6 +17,7 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
+import { background } from '../../packages/core/src/extensions/background/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import {
   freeLocalPort,
@@ -290,6 +292,86 @@ test('core-only public Local submit triages a real task and writes in the opened
   expect(await Bun.file(join(t.cwd, 'result.txt')).exists()).toBe(false)
   expect(events.some((event) => event.type === 'run_started')).toBe(true)
   expect(events.some((event) => event.type === 'run_finished')).toBe(true)
+})
+
+test('a project hub gets the group tool split, including in a session the host opened first', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxText('hub answer'),
+      fauxText('second hub answer'),
+      fauxText('third hub answer'),
+      fauxText('fourth hub answer'),
+      fauxText('fifth hub answer'),
+    ],
+    extensions: [background(), local({ port: 0 })],
+  })
+  await t.vela.startChannels()
+  const host: LocalHost = t.vela.channel('local')
+
+  const cwd = join(t.cwd, 'project')
+  mkdirSync(cwd)
+  const opened = await host.openProject({ cwd })
+  await host.submit({
+    projectId: opened.id,
+    sessionId: opened.sessionId,
+    text: 'Hello project',
+  })
+  await drainChannels(t.vela)
+  const hub = t.vela.session(opened.sessionId)
+  // A hub runs quick work itself (#421) but never waits for a decision: that is a topic control.
+  expect(hub.getActiveTools()).toEqual(
+    expect.arrayContaining([
+      'bash',
+      'write_file',
+      'edit_file',
+      'channel_start_topic',
+    ]),
+  )
+  expect(hub.getActiveTools()).not.toContain('channel_wait_for_input')
+  const prompt = (await inspectSession(t.vela, hub)).systemPrompt
+  expect(prompt).toContain('- bash:')
+  expect(prompt).not.toContain('- channel_wait_for_input:')
+
+  // A host can open the chat's session before its first message (SDK `vela.session(id)`), which
+  // constructs it without the channel's options. The channel's next message must still apply them.
+  const other = join(t.cwd, 'second')
+  mkdirSync(other)
+  const later = await host.openProject({ cwd: other })
+  const early = t.vela.session(later.sessionId)
+  // A bare session has neither the hub's channel tools nor its background tools.
+  expect(early.getActiveTools()).not.toContain('background_start')
+  expect(early.getActiveTools()).not.toContain('channel_start_topic')
+  await host.submit({
+    projectId: later.id,
+    sessionId: later.sessionId,
+    text: 'Hello again',
+  })
+  await drainChannels(t.vela)
+  expect(t.vela.session(later.sessionId)).toBe(early)
+  expect(early.getActiveTools().sort()).toEqual(hub.getActiveTools().sort())
+
+  // The channel narrows a host's own allowlist, never widens it.
+  const allowlists: { tools: string[]; expected: string[] }[] = [
+    { tools: ['read_file'], expected: ['read_file'] },
+    {
+      tools: ['read_file', 'channel_wait_for_input'],
+      expected: ['read_file'],
+    },
+    { tools: ['read_file', 'bash'], expected: ['read_file', 'bash'] },
+  ]
+  for (const [index, { tools, expected }] of allowlists.entries()) {
+    const dir = join(t.cwd, `selected-${index}`)
+    mkdirSync(dir)
+    const selected = await host.openProject({ cwd: dir })
+    const own = t.vela.session(selected.sessionId, { tools })
+    await host.submit({
+      projectId: selected.id,
+      sessionId: selected.sessionId,
+      text: `Selected ${index}`,
+    })
+    await drainChannels(t.vela)
+    expect(own.getActiveTools()).toEqual(expected)
+  }
 })
 
 test('real Lark and core-only Local share host controls but isolate snapshots, queued runs, routines and restart data', async () => {

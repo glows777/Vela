@@ -87,6 +87,7 @@ export class ChannelGateway {
       this.directory,
       (name) => this.channels.get(name),
       options.session,
+      options.find,
       options.dataDir ?? process.cwd(),
       (name, msg) => void this.handleIncoming(name, msg),
     )
