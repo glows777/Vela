@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Changed
+
+- **A group session runs execution and background commands again.** The top-level session of a Lark group or a Local project chat keeps `bash`, `write_file` and `edit_file` and also gets `background_start`, `background_output` and `background_stop`, so a quick command such as `gh pr view` is answered where it was asked instead of being dispatched to a topic first. The conversation still stays available: a command that may keep running starts in the background, and its exit joins the group's own queue as a reply to the person's last message; a longer task still becomes a topic. A chat's narrowed `tools` list can drop any of these, and a DM is unchanged: it keeps its execution tools and still gets no background tools. This supersedes the 0.7 rule that hid the three execution tools from group sessions ([#421](https://github.com/glows777/Vela/issues/421)).
+
 ## [0.7.0] - 2026-11-16
 
 ### Breaking Changes
