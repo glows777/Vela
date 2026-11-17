@@ -1,3 +1,4 @@
+import { setDefaultToolModifiers } from '@glows777/vela-core'
 import type {
   SessionOptions,
   VelaSession,
@@ -10,10 +11,15 @@ import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
 /** Every opening path resolves current options from the logical chat, before resume or hooks. */
 export class ChannelSessions {
+  /** Sessions this class has already given the chat's tool split (once per object, like resume). */
+  private readonly toolSplitApplied = new WeakSet<VelaSession>()
+
   constructor(
     private directory: ChannelDirectory,
     private channel: (name: string) => ChannelDefinition | undefined,
     private session: (id: string, options?: SessionOptions) => VelaSession,
+    /** The open session with this id, without opening one: did something else create it first? */
+    private find: (id: string) => VelaSession | undefined,
     private dataDir: string,
     /** Queues an input on the channel's existing path; a background result arrives this way. */
     private deliver: (name: string, msg: IncomingMessage) => void,
@@ -58,15 +64,20 @@ export class ChannelSessions {
     const selection =
       tools &&
       !tools.some((name) => name.startsWith('+') || name.startsWith('-'))
+    const split = selection
+      ? tools.filter((name) => !modifiers.includes(`-${name}`))
+      : [...(tools ?? []), ...modifiers]
     const topic =
       record?.rootId && record.threadId
         ? { rootId: record.rootId, threadId: record.threadId }
         : undefined
-    const session = this.session(this.directory.sessionId(key), {
+    const sessionId = this.directory.sessionId(key)
+    // A host can open the chat's session first (SDK `vela.session(id, { tools })`, or a read after idle
+    // cleanup closed it); core then keeps that object and reads `tools` only when it constructs one.
+    const opened = this.find(sessionId) === undefined
+    const session = this.session(sessionId, {
       ...options,
-      tools: selection
-        ? tools.filter((name) => !modifiers.includes(`-${name}`))
-        : [...(tools ?? []), ...modifiers],
+      tools: split,
       channel: channel.name,
       scope: { id: scope.id, kind: scope.kind, dataDir: scope.dataDir },
       // A background command's exit is an ordinary queued input for its conversation, not a run
@@ -80,6 +91,26 @@ export class ChannelSessions {
             }
           : undefined,
     })
+    // The chat's own split applies to a session something else opened too: a tool its chat turns off is
+    // removed, and a hub's background commands are added, as when this call constructs the session.
+    // What it never does is widen an allowlist the session already had: a positive list is
+    // intersected, so a chat cannot turn back on a tool that list dropped. Applied once per object, so
+    // a session_start hook's later choice survives.
+    if (!this.toolSplitApplied.has(session)) {
+      if (!opened) {
+        if (!selection) setDefaultToolModifiers(session, split)
+        // A modifier cannot reach an explicit selection, so a tool the chat turns off that is still
+        // active means the session has one: keep that selection minus those tools.
+        const off = split.filter((name) => name.startsWith('-'))
+        const allowed = new Set(split)
+        const active = session.getActiveTools()
+        const narrowed = active.filter((name) =>
+          selection ? allowed.has(name) : !off.includes(`-${name}`),
+        )
+        if (narrowed.length !== active.length) session.setActiveTools(narrowed)
+      }
+      this.toolSplitApplied.add(session)
+    }
     if (typeof options?.model === 'string') {
       try {
         // Resolution is lazy; fail while opening rather than on the first prompt.

@@ -64,6 +64,8 @@ function taskRouter(req: FauxRequest) {
   if (req.tools.includes('channel_start_topic')) {
     // The project chat runs quick work itself but still dispatches a longer task (#421).
     expect(req.tools).toContain('write_file')
+    // Waiting for a decision stays a topic control.
+    expect(req.tools).not.toContain('channel_wait_for_input')
     if (req.lastUserText.includes('status now'))
       return fauxText('Status received')
     return req.toolResults.length
@@ -74,6 +76,7 @@ function taskRouter(req: FauxRequest) {
         })
   }
   expect(req.tools).toContain('write_file')
+  expect(req.tools).toContain('channel_wait_for_input')
   return req.toolResults.length
     ? fauxText('Task file is ready')
     : {

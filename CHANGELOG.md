@@ -4,6 +4,10 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chat session that something else opened first now gets the chat's tool split.** When a host opened the chat's session before the gateway did — the SDK's `vela.session(id)` before the first message, or a read after idle cleanup closed it — core kept the tools that session was constructed with, because it reads `tools` only when it constructs a session. The group session then missed the background tools a hub gains and kept `channel_wait_for_input`, which only a topic can use. The gateway now applies the split when it opens an existing session too: a tool its chat turns off is removed, a hub's background commands are added, and a tool allowlist that session already had stays as narrow as it was, so a chat's `tools` list cannot add a tool back and a `session_start` handler still has the last word. Every channel shares it ([#405](https://github.com/glows777/Vela/issues/405)).
+
 ### Changed
 
 - **A group session runs execution and background commands again.** The top-level session of a Lark group or a Local project chat keeps `bash`, `write_file` and `edit_file` and also gets `background_start`, `background_output` and `background_stop`, so a quick command such as `gh pr view` is answered where it was asked instead of being dispatched to a topic first. The conversation still stays available: a command that may keep running starts in the background, and its exit joins the group's own queue as a reply to the person's last message; a longer task still becomes a topic. A chat's narrowed `tools` list can drop any of these, and a DM is unchanged: it keeps its execution tools and still gets no background tools. This supersedes the 0.7 rule that hid the three execution tools from group sessions ([#421](https://github.com/glows777/Vela/issues/421)).
