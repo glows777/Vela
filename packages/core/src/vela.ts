@@ -423,11 +423,10 @@ export function createVela(options: VelaOptions = {}): Vela {
     signal?.throwIfAborted()
     if (session.cwd !== location)
       throw new Error('Session location changed during resource preparation')
-    const seen = new Set(contextFiles.map((file) => file.path))
-    sessionContextFiles.set(session.id, [
-      ...contextFiles,
-      ...workspace.filter((file) => !seen.has(file.path)),
-    ])
+    sessionContextFiles.set(
+      session.id,
+      location === cwd && options.contextFiles ? contextFiles : workspace,
+    )
   }
 
   const session = (
