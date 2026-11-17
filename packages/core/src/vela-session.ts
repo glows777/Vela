@@ -16,6 +16,7 @@ import {
   type RequestSnapshot,
 } from './context/request.ts'
 import { localCwd } from './execution/location.ts'
+import type { ExecutionEnv } from './execution/types.ts'
 import type {
   BeforeAgentStartResult,
   ExtensionEventName,
@@ -181,9 +182,7 @@ export interface SessionDeps {
   onClose: (session: VelaSession) => void
   onSaved: (sessionId: string) => void
   onCwdChange: (session: VelaSession) => void
-  ensureLocal: (
-    session: VelaSession,
-  ) => Promise<import('./execution/types.ts').ExecutionEnv>
+  ensureLocal: (session: VelaSession) => Promise<ExecutionEnv>
 }
 
 /**
@@ -206,8 +205,7 @@ export class VelaSession {
   readonly tracker: TokenTracker
   /** @internal */
   readonly contextManager: ContextManager
-  /** @internal Resolve the selected environment for channel file transfer. */
-  execEnv = () => this.deps.ensureLocal(this)
+  /** @internal */ execEnv = () => this.deps.ensureLocal(this)
   /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
   readonly registry: ToolRegistry
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */
