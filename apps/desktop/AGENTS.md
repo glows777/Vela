@@ -11,7 +11,7 @@ Vela desktop brings Local projects, Local sessions, Lark projects, and Lark sess
 - `src/preload/` owns that bridge and imports no SDK. Expose typed operations rather than generic IPC access. No other IPC channels.
 - `src/shared/` owns the bridge contract in one TypeScript file. It stays browser-safe and imports no main, preload, Node, Electron, or SDK code, so shared types cannot carry privileges into the renderer.
 
-Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The current foundation establishes these boundaries. The first follow-up connects the SDK, the consumed shared contract, preload loading, and the first real window assertion together, before product pages. The reserved preload and shared directories are not a working runtime bridge.
+Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The SDK host, shared contract, preload bridge, and real-window assertion are connected. Product pages remain separate work.
 
 While open, the app owns its Lark connection. Never use the same Lark app credentials concurrently with `vela serve`, because the two hosts would compete for one connection and persisted channel state.
 
