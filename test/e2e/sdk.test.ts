@@ -2,6 +2,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  background,
   createVela,
   type SessionFileEntry,
   type SessionStorage,
@@ -37,6 +38,25 @@ test('the SDK and the testing helpers import by package name', async () => {
   } finally {
     await vela.dispose()
     dir.cleanup()
+  }
+})
+
+test('the umbrella exports background, and a session can turn its tools on', async () => {
+  const vela = createVela({ extensions: [background()] })
+  try {
+    await vela.ready()
+    const session = vela.session('background', {
+      tools: ['+background_start', '+background_output', '+background_stop'],
+    })
+    expect(session.getActiveTools()).toEqual(
+      expect.arrayContaining([
+        'background_start',
+        'background_output',
+        'background_stop',
+      ]),
+    )
+  } finally {
+    await vela.dispose()
   }
 })
 

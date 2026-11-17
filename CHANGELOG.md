@@ -12,6 +12,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Execution environment contract and local adapter.** An SDK host can provide an `env` resolver for each session tool call and inspect `ExecutionEnv` types. E1 uses the resolver as a local-only availability check and rejects nonlocal locations and missing resolutions without falling back. Tools still execute through their existing local implementations; execution-side routing and container isolation follow in later phases ([#410](https://github.com/glows777/Vela/issues/410)).
 
+- **`@glows777/vela` exports `background`.** The umbrella re-exported every built-in factory except this one, so `import { background } from '@glows777/vela'` failed while `@glows777/vela-core` worked. It now re-exports `background` and `BackgroundOptions`, and the Background docs name the import path next to their `background()` example ([#408](https://github.com/glows777/Vela/issues/408)).
+
 ### Fixed
 
 - **The prompt's intro paragraph no longer claims tools a session may not have.** It said the agent works by "reading, searching and editing files, running commands" even when the session was narrowed to `read_file` (the SDK's `tools`, or a chat's tool list), while `<tools>` and `<rules>` were already accurate. The intro now says only that the agent works through the tools of this session, so a session without `bash`, `write_file` or `edit_file` is not told it can edit files or run commands, and a normal CLI/SDK session still describes those tools in `<tools>` ([#406](https://github.com/glows777/Vela/issues/406)).

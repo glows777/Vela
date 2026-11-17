@@ -33,6 +33,7 @@ export type {
   AuthEvent,
   AuthInteraction,
   AuthPrompt,
+  BackgroundOptions,
   BashResult,
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -131,6 +132,7 @@ export type {
 export {
   type BashExecutionEntry,
   type BranchSummaryEntry,
+  background,
   bashExecutionToText,
   type CompactionEntry,
   type ContextEditEntry,
