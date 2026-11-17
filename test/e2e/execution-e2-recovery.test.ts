@@ -513,3 +513,29 @@ test('execution environment publishes a complete file by rename and removes stag
     dir.cleanup()
   }
 })
+
+test('memory session clone retains spilled user bash output after parent closes', async () => {
+  const { memorySessionStorage } = await import('@glows777/vela-core')
+  const { readFileSync } = await import('node:fs')
+  const dir = tempDir()
+  const vela = createVela({
+    cwd: dir.path,
+    dataDir: '.data',
+    sessionStorage: memorySessionStorage(),
+    model: createFauxModel({ responses: [] }),
+  })
+  try {
+    const parent = vela.session('parent-spill')
+    const result = await parent.executeBash("printf '%060000d' 0")
+    expect(result.fullOutputPath).toBeDefined()
+    const child = (await parent.clone({ sessionId: 'child-spill' })).session!
+    const blob = JSON.stringify(child.messages)
+    const path = blob.match(/Full output: ([^\]\\]+)/)?.[1]
+    expect(path).toBeDefined()
+    await parent.close()
+    expect(readFileSync(path!, 'utf8')).toHaveLength(60000)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
