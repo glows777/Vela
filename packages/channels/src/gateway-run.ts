@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import type { VelaLogger, VelaSession } from '@glows777/vela-core/extension-api'
 import { publishChannelEvent } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
+import { materializeAttachments } from './attachments.ts'
 import type { TopicCommands } from './commands.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type { RunFeedback } from './feedback.ts'
@@ -223,13 +224,15 @@ export class GatewayRun {
     if (this.stopped()) return 'failed'
     const answered = evaluated[evaluated.length - 1]!
     const images = evaluated.flatMap((message) => message.images ?? [])
+    const files = evaluated.flatMap((message) => message.files ?? [])
     // The merged run answers the most recent input; earlier ones are its context.
-    const merged =
+    let merged =
       evaluated.length > 1
         ? {
             ...answered,
             text: evaluated.map((message) => message.text).join('\n\n'),
             ...(images.length ? { images } : {}),
+            ...(files.length ? { files } : {}),
           }
         : answered
     const session = topicSession ?? this.sessions.open(id, channelName, merged)
@@ -293,6 +296,7 @@ export class GatewayRun {
       return 'failed'
     }
 
+    merged = await materializeAttachments(session, merged)
     await this.handoff.beforeRun(id, session, merged)
     if (processing.stopped) return stopped(session)
     processing.preparing = false

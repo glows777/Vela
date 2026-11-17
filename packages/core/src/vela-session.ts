@@ -206,6 +206,8 @@ export class VelaSession {
   readonly tracker: TokenTracker
   /** @internal */
   readonly contextManager: ContextManager
+  /** @internal Resolve the selected environment for channel file transfer. */
+  execEnv = () => this.deps.ensureLocal(this)
   /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
   readonly registry: ToolRegistry
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */

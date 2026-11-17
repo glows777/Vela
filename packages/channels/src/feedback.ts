@@ -8,6 +8,7 @@ import {
   agentErrorHint,
   publishChannelEvent,
 } from '@glows777/vela-core/extension-api'
+import { materializeAttachments } from './attachments.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
@@ -421,7 +422,7 @@ export class RunFeedback {
     const inputs = this.acknowledge(channel, msg)
     await Promise.all(inputs.map((input) => input.ready))
     if (msg.topic) msg.isNewTopic = false
-    const prepared = channel.prepareMessage
+    let prepared = channel.prepareMessage
       ? await channel.prepareMessage(msg, run.trigger)
       : msg
     // History/name lookups can outlast the run. Leave the default queue intact.
@@ -438,6 +439,12 @@ export class RunFeedback {
       await Promise.all(inputs.map((input) => input.finish('stopped')))
       return true
     }
+    prepared = await materializeAttachments(
+      run.session,
+      prepared,
+      run.lifetime.signal,
+    )
+    if (!this.runIsLive(run)) return false
     run.inputs.push(...inputs)
     publishChannelEvent(run.session, {
       type: 'channel_message',

@@ -741,3 +741,48 @@ test('Lark still rejects a symlink inside the attachment storage directory', asy
   expect(f.t.model.calls).toHaveLength(0)
   expect(f.resourceCalls).toEqual([])
 })
+
+test('Lark file bytes reach the selected session execution environment before the model', async () => {
+  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createVela } = await import('@glows777/vela')
+  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const dir = tempDir()
+  const fake = fakeLark()
+  fake.resources.set('file', [Buffer.from('environment attachment')])
+  const writes: string[] = []
+  const model = createFauxModel({ responses: [fauxText('received')] })
+  const vela = createVela({
+    cwd: dir.path,
+    dataDir: '.data',
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const write = env.writeFile.bind(env)
+      env.writeFile = async (path, data, signal) => {
+        if (Buffer.from(data).toString() === 'environment attachment')
+          writes.push(path)
+        return write(path, data, signal)
+      }
+      return env
+    },
+    extensions: [
+      lark({
+        appId: 'cli_bot',
+        owners: ['ou_alice'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  try {
+    await vela.startChannels()
+    fake.deliver(dm('file', { file_key: 'file', file_name: 'test.txt' }))
+    await until(() => fake.sent.length === 1)
+    expect(writes).toHaveLength(1)
+    const path = model.calls[0]!.lastUserText.match(/saved at ([^\]\n]+)/)?.[1]
+    expect(path).toBeDefined()
+    expect(readFileSync(path!, 'utf8')).toBe('environment attachment')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})

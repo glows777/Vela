@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
-import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+} from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import type {
   ChannelConnection,
@@ -200,7 +208,10 @@ export class LarkChannel implements ChannelDefinition {
     IncomingMessage,
     Map<string, Promise<ImageContent>>
   >()
-  private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
+  private readonly files = new WeakMap<
+    IncomingMessage,
+    Promise<{ id: string; name: string; data: Uint8Array }>
+  >()
   // Custom transports without appId cannot identify own-app history items.
   private readonly lastReplies = new Map<string, LarkSentMessage>()
   private readonly handledTriggers = new Map<string, LarkSentMessage>()
@@ -469,6 +480,7 @@ export class LarkChannel implements ChannelDefinition {
       return
     }
     let images: ImageContent[]
+    let files: IncomingMessage['files']
     let imageCache = this.images.get(msg)
     if (!imageCache) {
       imageCache = new Map()
@@ -487,7 +499,9 @@ export class LarkChannel implements ChannelDefinition {
           file = this.downloadFile(event.message)
           this.files.set(msg, file)
         }
-        input = await file
+        const attachment = await file
+        input = `[file: ${attachment.name}]`
+        files = [attachment]
       }
     } catch (error) {
       if (msg.passive) {
@@ -509,7 +523,7 @@ export class LarkChannel implements ChannelDefinition {
       return
     }
     this.topics.triggerImages.set(event, [...images])
-    msg = { ...msg, text: input, images }
+    msg = { ...msg, text: input, images, ...(files ? { files } : {}) }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (!msg.passive && msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
@@ -639,7 +653,7 @@ export class LarkChannel implements ChannelDefinition {
 
   private async downloadFile(
     message: LarkMessageEvent['message'],
-  ): Promise<string> {
+  ): Promise<{ id: string; name: string; data: Uint8Array }> {
     const content = JSON.parse(message.content) as {
       file_key: string
       file_name?: string
@@ -665,12 +679,22 @@ export class LarkChannel implements ChannelDefinition {
     if ((await realpath(directory)) !== directory)
       throw new Error('File directory must not contain symlinks')
     const path = join(directory, `${messageId}-${name}`)
-    const reference = `[file: ${name}, saved at ${path}]`
+    const stage = async () => {
+      try {
+        return {
+          id: message.message_id!,
+          name,
+          data: new Uint8Array(await readFile(path)),
+        }
+      } finally {
+        await rm(path, { force: true })
+      }
+    }
     try {
       const existing = await lstat(path)
       if (!existing.isFile())
         throw new Error('Attachment destination is not a regular file')
-      return reference
+      return await stage()
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
@@ -697,7 +721,7 @@ export class LarkChannel implements ChannelDefinition {
       await file.close()
       await rm(temporary, { force: true })
     }
-    return reference
+    return await stage()
   }
 
   private senderName(id: string): Promise<string> {
