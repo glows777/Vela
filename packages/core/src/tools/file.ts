@@ -143,6 +143,7 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     const image = await readSpecialFile(env, file, path, context?.signal)
     if (image) return image
     const state = stateFor(context)
+    const guardKey = `${env.id}:${file}`
     const snapshot = unwrap(await env.fileInfo(file, context?.signal))
     const decoder = new TextDecoder('utf-8', { fatal: true })
     // Validate every chunk the pager reads, including bytes past the header.
@@ -212,10 +213,10 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     if (!reachedStart && !(line === offset && col === column))
       throw new Error('offset/column is past the end of the file')
     if (!more) {
-      state?.noteRead(file, offset, column, undefined, snapshot)
+      state?.noteRead(guardKey, offset, column, undefined, snapshot)
       return body
     }
-    state?.noteRead(file, offset, column, { line, col }, snapshot)
+    state?.noteRead(guardKey, offset, column, { line, col }, snapshot)
     const next = `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
     return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
   },
@@ -241,18 +242,38 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
     { path, content }: { path: string; content: string },
     context,
   ) => {
-    const resolved = resolveIn(cwd, path)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const signal = context?.signal
+    const resolved = unwrap(await env.absolutePath(path, signal))
+    const guardKey = `${env.id}:${resolved}`
     const state = stateFor(context)
-    // Writes to the same file queue up; different files are written in parallel (like pi)
-    await withFileMutationQueue(resolved, async () => {
-      if (state) {
-        const current = await statIfExists(resolved)
-        const refusal = state.refusal(resolved, path, current)
-        if (refusal) throw new Error(refusal)
-      }
-      await writeText(resolved, content)
-      if (state) state.noteWritten(resolved, await fileStat(resolved))
-    })
+    await withFileMutationQueue(
+      resolved,
+      async () => {
+        if (state) {
+          const info = await env.fileInfo(resolved, signal)
+          if (!info.ok && info.error.code !== 'not_found') throw info.error
+          const refusal = state.refusal(
+            guardKey,
+            path,
+            info.ok ? info.value : undefined,
+          )
+          if (refusal) throw new Error(refusal)
+        }
+        const parent = unwrap(await env.joinPath([resolved, '..'], signal))
+        unwrap(await env.createDir(parent, { recursive: true }, signal))
+        unwrap(await env.writeFile(resolved, content, signal))
+        if (state)
+          state.noteWritten(
+            guardKey,
+            unwrap(await env.fileInfo(resolved, signal)),
+          )
+      },
+      env,
+      signal,
+    )
     return `Wrote ${content.length} characters to ${path}`
   },
 })
@@ -369,54 +390,61 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
   ],
   execute: async (input: EditInput, context) => {
     const { path, edits } = input
-    const resolved = resolveIn(cwd, path)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
     const signal = context?.signal
+    const resolved = unwrap(await env.absolutePath(path, signal))
+    const guardKey = `${env.id}:${resolved}`
     const state = stateFor(context)
-    return withFileMutationQueue(resolved, async () => {
-      // Check the signal after each await instead of rejecting from an abort listener, so the
-      // queue stays locked until an in-flight filesystem operation has settled (like pi)
-      const throwIfAborted = () => {
-        if (signal?.aborted) throw new Error('Operation aborted')
-      }
-      throwIfAborted()
-      try {
-        await access(resolved, constants.R_OK | constants.W_OK)
-      } catch (error) {
+    return withFileMutationQueue(
+      resolved,
+      async () => {
+        const throwIfAborted = () => {
+          if (signal?.aborted) throw new Error('Operation aborted')
+        }
         throwIfAborted()
-        const code =
-          error instanceof Error && 'code' in error
-            ? `Error code: ${error.code}`
-            : String(error)
-        throw new Error(`Could not edit file: ${path}. ${code}.`)
-      }
-      const raw = await readFile(resolved, 'utf8')
-      throwIfAborted()
-      // The model never includes an invisible BOM in oldText; match without it and restore it on write
-      const { bom, text } = splitBom(raw)
-      const ending = detectLineEnding(text)
-      const { baseContent, newContent } = applyEditsToNormalizedContent(
-        normalizeToLF(text),
-        edits,
-        path,
-      )
-      throwIfAborted()
-      await writeFile(resolved, bom + restoreLineEndings(newContent, ending))
-      if (state) state.noteWritten(resolved, await fileStat(resolved))
-      throwIfAborted()
-      const { diff, firstChangedLine } = generateDiffString(
-        baseContent,
-        newContent,
-      )
-      const details: EditFileDetails = {
-        diff,
-        patch: generateUnifiedPatch(path, baseContent, newContent),
-        ...(firstChangedLine === undefined ? {} : { firstChangedLine }),
-      }
-      return new ToolExecutionResult(
-        details,
-        `Successfully replaced ${edits.length} block(s) in ${path}.`,
-      )
-    })
+        const raw = unwrap(await env.readTextFile(resolved, signal))
+        throwIfAborted()
+        // The model never includes an invisible BOM in oldText; match without it and restore it on write
+        const { bom, text } = splitBom(raw)
+        const ending = detectLineEnding(text)
+        const { baseContent, newContent } = applyEditsToNormalizedContent(
+          normalizeToLF(text),
+          edits,
+          path,
+        )
+        throwIfAborted()
+        unwrap(
+          await env.writeFile(
+            resolved,
+            bom + restoreLineEndings(newContent, ending),
+            signal,
+          ),
+        )
+        if (state)
+          state.noteWritten(
+            guardKey,
+            unwrap(await env.fileInfo(resolved, signal)),
+          )
+        throwIfAborted()
+        const { diff, firstChangedLine } = generateDiffString(
+          baseContent,
+          newContent,
+        )
+        const details: EditFileDetails = {
+          diff,
+          patch: generateUnifiedPatch(path, baseContent, newContent),
+          ...(firstChangedLine === undefined ? {} : { firstChangedLine }),
+        }
+        return new ToolExecutionResult(
+          details,
+          `Successfully replaced ${edits.length} block(s) in ${path}.`,
+        )
+      },
+      env,
+      signal,
+    )
   },
 })
 

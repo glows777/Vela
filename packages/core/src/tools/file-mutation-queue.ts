@@ -5,6 +5,7 @@
 
 import { realpath } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import type { ExecutionEnv } from '../execution/types.ts'
 
 // Process-wide, like pi: every session and every Vela in the process shares one queue per file
 const fileMutationQueues = new Map<string, Promise<void>>()
@@ -36,9 +37,16 @@ async function getMutationQueueKey(filePath: string): Promise<string> {
 export async function withFileMutationQueue<T>(
   filePath: string,
   fn: () => Promise<T>,
+  env?: ExecutionEnv,
+  signal?: AbortSignal,
 ): Promise<T> {
   const registration = registrationQueue.then(async () => {
-    const key = await getMutationQueueKey(filePath)
+    let key: string
+    if (env) {
+      const result = await env.canonicalPath(filePath, signal)
+      if (!result.ok && result.error.code !== 'not_found') throw result.error
+      key = `${env.id}:${result.ok ? result.value : filePath}`
+    } else key = await getMutationQueueKey(filePath)
     const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve()
 
     let releaseNext!: () => void
