@@ -17,7 +17,7 @@ export interface EnvironmentInfo {
 /**
  * `<env>`: facts that stay true for the session, so the cached prompt prefix only changes when the date does.
  * The git branch is not one of them: anything that checks out a branch in the working tree during the session
- * would rewrite the whole prefix. It travels as a message instead (see `VelaSession`'s environment message).
+ * would rewrite the whole prefix.
  */
 export function environment(info: EnvironmentInfo): SectionRender {
   return () =>
