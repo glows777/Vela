@@ -330,3 +330,51 @@ test('extension sections are tagged, so a channel session can read its own secti
   expect(system).toContain('<memory>\nHow to use memory\n</memory>')
   expect(system.indexOf('<memory>')).toBeGreaterThan(system.indexOf('<env>'))
 })
+
+test('a branch checkout keeps the system prompt and arrives as a message instead', async () => {
+  const t = createTestVela({
+    faux: { cache: true },
+    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
+  })
+  const checkout = (branch: string) => {
+    mkdirSync(join(t.cwd, '.git'), { recursive: true })
+    writeFileSync(join(t.cwd, '.git', 'HEAD'), `ref: refs/heads/${branch}\n`)
+  }
+  const promptText = (call: (typeof t.model.calls)[number]) =>
+    call.prompt
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : message.content
+              .map((part) => (part.type === 'text' ? part.text : ''))
+              .join(''),
+      )
+      .join('\n')
+
+  checkout('main')
+  await t.run('one')
+  // Something else checks out a branch in this session's working tree, as a topic session does
+  checkout('vela/442-prompt-cache')
+  await t.run('two')
+  await t.run('three')
+
+  const calls = t.model.calls
+  expect(calls[0]!.system).not.toContain('git branch')
+  // The system prompt is the request's cached prefix: a checkout must not rewrite it
+  expect(calls[1]!.system).toBe(calls[0]!.system)
+  expect(calls[2]!.system).toBe(calls[0]!.system)
+
+  // A stable branch says nothing; a checkout reaches the model as one message
+  expect(promptText(calls[0]!)).not.toContain('Git branch')
+  expect(promptText(calls[1]!)).toContain('Git branch: vela/442-prompt-cache')
+  // An unchanged branch sends nothing new
+  expect(
+    promptText(calls[2]!).match(/Git branch: vela\/442-prompt-cache/g),
+  ).toHaveLength(1)
+
+  // The second request reads the first one's prefix instead of paying for it again
+  const usage = t.eventsOf('usage').map((event) => event.usage)
+  expect(usage[1]!.cacheReadTokens).toBeGreaterThanOrEqual(
+    usage[0]!.cacheWriteTokens - 1,
+  )
+})

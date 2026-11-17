@@ -1,5 +1,10 @@
-import type { CustomMessageInfo, VelaEventListener } from '../agent/events.ts'
+import type {
+  CustomMessage,
+  CustomMessageInfo,
+  VelaEventListener,
+} from '../agent/events.ts'
 import { type ModelMessage, normalizeUserMessage } from '../messages.ts'
+import { assertCustomType } from './entries.ts'
 import type { QueueMode } from './options.ts'
 
 /** Queued inputs and custom-message metadata owned by one session. */
@@ -13,6 +18,20 @@ export class MessageQueue {
   /** Custom messages for the next prompt (`deliverAs: 'nextTurn'`) */
   readonly nextTurnMessages: ModelMessage[] = []
   constructor(private readonly emit: VelaEventListener) {}
+
+  /** Builds the user message a custom message becomes and remembers its fields. */
+  toMessage(message: CustomMessage): ModelMessage {
+    assertCustomType(message.customType)
+    if (typeof message.content !== 'string' && !Array.isArray(message.content))
+      throw new Error('A custom message needs content (a string or parts)')
+    const entry: ModelMessage = { role: 'user', content: message.content }
+    this.customMessages.set(entry, {
+      customType: message.customType,
+      display: message.display === true,
+      ...(message.details === undefined ? {} : { details: message.details }),
+    })
+    return entry
+  }
 
   enqueue(kind: 'steering' | 'followUp', message: ModelMessage): void {
     ;(kind === 'steering' ? this.steeringQueue : this.followUpQueue).push(

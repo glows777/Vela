@@ -1,10 +1,8 @@
-import { readFileSync, statSync } from 'node:fs'
 import { platform } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
 import type { SectionRender } from './system-prompt.ts'
 
 export interface EnvironmentInfo {
-  /** Session working directory; the git branch is read from here */
+  /** Session working directory */
   cwd: string
   /** `YYYY-MM-DD`; defaults to today in the local calendar */
   date?: string
@@ -14,65 +12,24 @@ export interface EnvironmentInfo {
   os?: string
   /** Shell for the bash tool; defaults to `bash` on PATH */
   shell?: string
-  /** Defaults to reading `.git/HEAD` under `cwd`; null leaves the line out */
-  branch?: string | null
 }
 
 /**
- * `<env>`: stable facts about where the session runs. The date, never the time of day, so the cached prompt
- * prefix only changes when the date does.
+ * `<env>`: facts that stay true for the session, so the cached prompt prefix only changes when the date does.
+ * The git branch is not one of them: anything that checks out a branch in the working tree during the session
+ * would rewrite the whole prefix. It travels as a message instead (see `VelaSession`'s environment message).
  */
 export function environment(info: EnvironmentInfo): SectionRender {
-  return () => {
-    const lines = [
+  return () =>
+    [
       `date: ${info.date ?? localDate()}`,
       `timezone: ${info.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}`,
       `os: ${info.os ?? platform()}`,
       `shell: ${info.shell ?? 'bash'}`,
-    ]
-    const branch = info.branch === undefined ? gitBranch(info.cwd) : info.branch
-    if (branch) lines.push(`git branch: ${branch}`)
-    return lines.join('\n')
-  }
+    ].join('\n')
 }
 
 /** `en-CA` renders YYYY-MM-DD in the local calendar; `toISOString()` is UTC and can be a day off */
 function localDate(): string {
   return new Date().toLocaleDateString('en-CA')
-}
-
-/** The branch (or short hash) of `cwd`'s checkout, read from `.git/HEAD` without a subprocess. */
-function gitBranch(cwd: string): string | null {
-  try {
-    const gitDir = findGitDir(cwd)
-    if (!gitDir) return null
-    const head = readFileSync(join(gitDir, 'HEAD'), 'utf8').trim()
-    const ref = 'ref: refs/heads/'
-    if (head.startsWith(ref)) return head.slice(ref.length)
-    return /^[0-9a-f]{7,40}$/.test(head) ? head.slice(0, 7) : null
-  } catch {
-    // Not a checkout (or unreadable): the block has no branch line
-    return null
-  }
-}
-
-/**
- * The `.git` directory of the nearest checkout at or above `cwd`, so a session opened in a repository
- * subdirectory still knows its branch. A worktree or submodule has a `.git` file pointing at the real directory.
- */
-function findGitDir(cwd: string): string | null {
-  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
-    const git = join(dir, '.git')
-    try {
-      if (statSync(git).isFile()) {
-        const pointer = /^gitdir: (.+)$/m.exec(readFileSync(git, 'utf8'))
-        const target = pointer?.[1]
-        return target ? resolve(dir, target.trim()) : null
-      }
-      return git
-    } catch {
-      // Nothing here; a checkout may still be an ancestor
-    }
-    if (dirname(dir) === dir) return null
-  }
 }

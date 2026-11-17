@@ -3,13 +3,14 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempDir } from '../../../../../test/support/vela.ts'
 import { environment, type PromptContext } from '../../../src/prompt/index.ts'
+import { gitBranch } from '../../../src/session/git-branch.ts'
 
 const context: PromptContext = {
   deferredToolSummary: '',
   sessionId: 's',
 }
 
-test('the env block renders the injected date, timezone, OS, shell and git branch', () => {
+test('the env block renders the injected date, timezone, OS and shell', () => {
   expect(
     environment({
       cwd: '/repo',
@@ -17,14 +18,24 @@ test('the env block renders the injected date, timezone, OS, shell and git branc
       timezone: 'Asia/Shanghai',
       os: 'linux',
       shell: '/usr/local/bin/bash',
-      branch: 'main',
     })(context),
   ).toBe(
-    'date: 2026-01-02\ntimezone: Asia/Shanghai\nos: linux\nshell: /usr/local/bin/bash\ngit branch: main',
+    'date: 2026-01-02\ntimezone: Asia/Shanghai\nos: linux\nshell: /usr/local/bin/bash',
   )
 })
 
-test('the env block reads the branch from .git/HEAD, follows a worktree pointer, and omits it without git', () => {
+test('the env block carries no git branch, so a checkout in the working tree cannot rewrite the prompt', () => {
+  const dir = tempDir()
+  try {
+    mkdirSync(join(dir.path, '.git'), { recursive: true })
+    writeFileSync(join(dir.path, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    expect(environment({ cwd: dir.path })(context)).not.toContain('git branch')
+  } finally {
+    dir.cleanup()
+  }
+})
+
+test('gitBranch reads .git/HEAD, follows a worktree pointer, and is null without git', () => {
   const dir = tempDir()
   try {
     const repo = join(dir.path, 'repo')
@@ -44,25 +55,19 @@ test('the env block reads the branch from .git/HEAD, follows a worktree pointer,
       join(worktree, '.git'),
       `gitdir: ${join(repo, '.git', 'worktrees', 'wt')}\n`,
     )
-    const env = (cwd: string) => environment({ cwd })(context)!
-    // The date defaults to today in the local calendar; the block never carries the time of day
-    expect(env(repo)).toContain(
-      `date: ${new Date().toLocaleDateString('en-CA')}`,
-    )
-    expect(env(repo)).toContain('timezone: ')
-    expect(env(repo)).toContain('git branch: vela/175-prompt-rules-env')
+    expect(gitBranch(repo)).toBe('vela/175-prompt-rules-env')
     // A session opened in a subdirectory still belongs to the checkout above it
     const sub = join(repo, 'src', 'nested')
     mkdirSync(sub, { recursive: true })
-    expect(env(sub)).toContain('git branch: vela/175-prompt-rules-env')
-    expect(env(worktree)).toContain('git branch: wt')
-    expect(env(plain)).not.toContain('git branch:')
+    expect(gitBranch(sub)).toBe('vela/175-prompt-rules-env')
+    expect(gitBranch(worktree)).toBe('wt')
+    expect(gitBranch(plain)).toBeNull()
     // A detached HEAD is identified by its short hash
     writeFileSync(
       join(repo, '.git', 'HEAD'),
       '0123456789abcdef0123456789abcdef01234567\n',
     )
-    expect(env(repo)).toContain('git branch: 0123456')
+    expect(gitBranch(repo)).toBe('0123456')
   } finally {
     dir.cleanup()
   }
