@@ -63,12 +63,20 @@ void app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
+  if (process.env.VELA_DESKTOP_TRACE === '1')
+    console.log('Desktop shutdown: window-all-closed')
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', (event) => {
+  if (process.env.VELA_DESKTOP_TRACE === '1')
+    console.log('Desktop shutdown: before-quit')
   if (closing || !dispose) return
   event.preventDefault()
   closing = true
-  void dispose().finally(() => app.quit())
+  void dispose().finally(() => {
+    if (process.env.VELA_DESKTOP_TRACE === '1')
+      console.log('Desktop shutdown: disposal settled')
+    app.quit()
+  })
 })

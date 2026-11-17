@@ -89,6 +89,7 @@ const env = {
   VELA_DIR: data,
   VELA_MODEL: `faux:${scenario}`,
   VELA_DESKTOP_SHELL_MARKER: shellMarker,
+  VELA_DESKTOP_TRACE: '1',
   LARK_APP_ID: '',
   LARK_APP_SECRET: '',
   LARK_OWNERS: '',
@@ -284,10 +285,35 @@ const hostJourney = async (page: Page) => {
     'Real window opened a Local project, sent a message, and rendered the faux reply.',
   )
 }
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+async function waitForForge(closed: Promise<void>, destroy: () => void) {
+  try {
+    await withTimeout(closed, 5_000, 'Forge close')
+  } catch (error) {
+    destroy()
+    throw error
+  }
+}
 async function closeElectron(browser: import('playwright').Browser) {
   const session = await browser.newBrowserCDPSession()
   try {
-    await session.send('Browser.close')
+    await withTimeout(session.send('Browser.close'), 15_000, 'Electron close')
   } catch (error) {
     // Electron can close the CDP connection before acknowledging Browser.close.
     if (!(error instanceof Error) || !error.message.includes('has been closed'))
@@ -327,6 +353,8 @@ async function development() {
     )
     const collect = (chunk: Buffer) => {
       output += chunk.toString()
+      if (chunk.toString().includes('Desktop shutdown:'))
+        process.stdout.write(chunk)
       const match = output.match(
         /DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/,
       )
@@ -404,7 +432,11 @@ async function development() {
     if (child.pid && child.exitCode === null)
       process.kill(-child.pid, 'SIGTERM')
     console.log('Desktop verification: waiting for Forge to close')
-    await closed
+    await waitForForge(closed, () => {
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      child.unref()
+    })
     console.log('Desktop verification: Forge closed')
     await Bun.write(resolve(evidence, 'forge.log'), output)
   }
