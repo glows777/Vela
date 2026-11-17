@@ -485,7 +485,21 @@ export function createVela(options: VelaOptions = {}): Vela {
         : undefined
       if (session) {
         try {
-          await ensureLocal(session)
+          const signal = session.signal
+          if (signal?.aborted) throw signal.reason
+          let onAbort: (() => void) | undefined
+          try {
+            await Promise.race([
+              ensureLocal(session),
+              new Promise<never>((_, reject) => {
+                onAbort = () => reject(signal?.reason)
+                signal?.addEventListener('abort', onAbort, { once: true })
+                if (signal?.aborted) onAbort()
+              }),
+            ])
+          } finally {
+            if (onAbort) signal?.removeEventListener('abort', onAbort)
+          }
         } catch {
           return {
             input,

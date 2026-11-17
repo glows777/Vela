@@ -850,3 +850,65 @@ test('local commands inherit and override the host environment only when request
     dir.cleanup()
   }
 })
+
+test('stopping a model tool call does not wait for an unresolved environment', async () => {
+  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { fauxToolCall } = await import('@glows777/vela/testing')
+  const dir = tempDir()
+  let release!: (env: ReturnType<typeof createLocalExecutionEnv>) => void
+  let entered!: () => void
+  const called = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const pending = new Promise<ReturnType<typeof createLocalExecutionEnv>>(
+    (resolve) => {
+      release = resolve
+    },
+  )
+  const vela = createVela({
+    cwd: dir.path,
+    model: createFauxModel({
+      responses: [fauxToolCall('read_file', { path: 'marker' })],
+    }),
+    env: () => {
+      entered()
+      return pending
+    },
+  })
+  try {
+    const session = vela.session('stop-resolver')
+    const run = session.prompt('read')
+    await called
+    const stopped = session.abort()
+    const result = await Promise.race([
+      stopped.then(() => 'stopped'),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('timeout'), 500),
+      ),
+    ])
+    expect(result).toBe('stopped')
+    release(createLocalExecutionEnv({ cwd: dir.path }))
+    await run.catch(() => {})
+  } finally {
+    release(createLocalExecutionEnv({ cwd: dir.path }))
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('cleanup stops a background descendant after its shell has exited', async () => {
+  if (process.platform === 'win32') return
+  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { existsSync } = await import('node:fs')
+  const dir = tempDir()
+  const env = createLocalExecutionEnv({ cwd: dir.path })
+  try {
+    expect((await env.exec('(sleep 0.6; touch leaked) &', {})).ok).toBe(true)
+    await env.cleanup()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    expect(existsSync(join(dir.path, 'leaked'))).toBe(false)
+  } finally {
+    await env.cleanup()
+    dir.cleanup()
+  }
+})

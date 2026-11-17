@@ -37,6 +37,13 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
   ): Promise<Result<ShellExecResult, ExecutionError>> {
     if (signal?.aborted)
       return { ok: false, error: error('aborted', 'aborted') }
+    if (process.platform !== 'win32')
+      for (const child of this.active)
+        if (
+          (child.exitCode !== null || child.signalCode !== null) &&
+          !this.groupAlive(child)
+        )
+          this.active.delete(child)
     if (
       options.timeout !== undefined &&
       (!Number.isFinite(options.timeout) ||
@@ -273,13 +280,26 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
     } finally {
       if (timer) clearTimeout(timer)
       signal?.removeEventListener('abort', abort)
-      this.active.delete(child)
+      // The shell may exit while a background descendant still owns its group.
+      // Keep that group reachable until cleanup; otherwise drop the finished child.
+      if (process.platform === 'win32' || !this.groupAlive(child))
+        this.active.delete(child)
     }
   }
   async cleanup(): Promise<void> {
     await Promise.all(
       [...this.active].map((child) => signalProcessTree(child, 'SIGKILL')),
     )
+    this.active.clear()
+  }
+  private groupAlive(child: ChildProcess): boolean {
+    if (child.pid === undefined) return false
+    try {
+      process.kill(-child.pid, 0)
+      return true
+    } catch (cause) {
+      return (cause as NodeJS.ErrnoException).code !== 'ESRCH'
+    }
   }
 }
 export function createLocalExecutionEnv(options: {
