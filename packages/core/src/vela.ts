@@ -8,6 +8,8 @@ import type {
   CredentialStore,
   LoginOptions,
 } from './auth/types.ts'
+import { createLocalExecutionEnv } from './execution/local.ts'
+import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
 import type { VelaExtension } from './extensions/types.ts'
@@ -64,6 +66,11 @@ import { registerToolSearchTool } from './tools/tool-search.ts'
 import { VelaSession } from './vela-session.ts'
 
 export interface VelaOptions {
+  /** Resolve the execution environment for a session tool call. */
+  env?: (target: {
+    sessionId: string
+    location: ExecutionLocation
+  }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>
   /** Observes real nonempty storage writes, including writes outside prompts. */
   onSessionSaved?: (sessionId: string) => void
   /** Stops external ingress after factories settle and before sessions close. */
@@ -373,6 +380,21 @@ export function createVela(options: VelaOptions = {}): Vela {
   /** The one dispose in progress: a second caller (a signal racing the CLI's exit) waits for it to finish */
   let disposing: Promise<void> | undefined
 
+  const ensureLocal = async (session: VelaSession) => {
+    const target = {
+      sessionId: session.id,
+      location: { environment: 'local', cwd: session.cwd },
+    }
+    const env = options.env
+      ? await options.env(target)
+      : createLocalExecutionEnv({
+          cwd: session.cwd,
+          shellPath: options.shellPath,
+        })
+    if (env?.id !== 'node:local' || env.cwd !== session.cwd)
+      throw new Error('Execution environment unavailable before E2')
+  }
+
   const session = (
     id = 'default',
     sessionOptions?: SessionOptions,
@@ -416,6 +438,17 @@ export function createVela(options: VelaOptions = {}): Vela {
           if (source) runner.notify(event, source)
         },
         onSaved: (id) => options.onSessionSaved?.(id),
+        ensureLocal,
+        onCwdChange: (changed) => {
+          sessionCwds.set(changed.registry, changed.cwd)
+          if (changed.cwd === cwd || options.contextFiles === false)
+            sessionContextFiles.delete(changed.id)
+          else
+            sessionContextFiles.set(
+              changed.id,
+              loadContextFiles({ cwd: changed.cwd }),
+            )
+        },
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
@@ -450,6 +483,17 @@ export function createVela(options: VelaOptions = {}): Vela {
       const session = context.sessionId
         ? sessions.get(context.sessionId)
         : undefined
+      if (session) {
+        try {
+          await ensureLocal(session)
+        } catch {
+          return {
+            input,
+            block: true,
+            reason: 'Execution environment unavailable before E2',
+          }
+        }
+      }
       return session
         ? await runner.toolCall(
             session,

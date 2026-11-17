@@ -112,10 +112,10 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
     await resumed.close()
     const defaultCwd = vela.session('a')
     expect(await defaultCwd.resume()).toBe(true)
-    expect((await defaultCwd.executeBash('cat same.txt')).output).toBe('HOST')
+    expect((await defaultCwd.executeBash('cat same.txt')).output).toBe('ALPHA')
     modelA.push(fauxText('default'))
     await defaultCwd.prompt('Which instructions apply?')
-    expect(modelA.calls.at(-1)!.system).toContain('Pinned host instructions')
+    expect(modelA.calls.at(-1)!.system).toContain('Instructions for ALPHA')
     const disabled = createVela({
       cwd: host,
       contextFiles: false,

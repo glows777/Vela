@@ -9,7 +9,7 @@ export type {
   LocalSession,
 } from '@glows777/vela-channels'
 export { LocalError, local } from '@glows777/vela-channels'
-export { agentErrorHint } from '@glows777/vela-core'
+export { agentErrorHint, createLocalExecutionEnv } from '@glows777/vela-core'
 /**
  * Public entry point of the Vela SDK (`import { createVela } from '@glows777/vela'`).
  * Export only from here; the CLI lives in cli/main.ts and test helpers in '@glows777/vela/testing'.
@@ -37,6 +37,7 @@ export type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
   BeforeProviderRequestEvent,
+  BinaryReader,
   CompactionReason,
   CompactionResult,
   ContextEvent,
@@ -47,6 +48,10 @@ export type {
   CustomMessageInfo,
   DocsPaths,
   ExecuteToolOptions,
+  ExecutionEnv,
+  ExecutionError,
+  ExecutionErrorCode,
+  ExecutionLocation,
   ExecutionMetadata,
   ExtensionCommand,
   ExtensionConfigContext,
@@ -57,12 +62,16 @@ export type {
   ExtensionHandler,
   ExtensionUI,
   FetchFunction,
+  FileError,
+  FileErrorCode,
+  FileInfo,
   ForkOptions,
   HostedToolModel,
   ImageContent,
   InputEvent,
   InputEventResult,
   InputSource,
+  LineScan,
   LoginOptions,
   LoginProvider,
   ModelCompat,
@@ -77,6 +86,7 @@ export type {
   ProviderDefinition,
   ProviderStreamEvent,
   QueueMode,
+  Result,
   SendMessageOptions,
   SessionBeforeForkEvent,
   SessionBeforeForkEventResult,
@@ -88,6 +98,8 @@ export type {
   SessionTreeEvent,
   SessionUI,
   SessionUsage,
+  ShellExecOptions,
+  ShellExecResult,
   StepRecord,
   StepUsage,
   StopReason,

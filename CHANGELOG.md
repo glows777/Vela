@@ -4,6 +4,14 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Newly saved sessions resume in their saved execution location.** Previously reopening a session without `cwd` used the host default, even when the session started elsewhere. New records restore their saved local cwd instead, including when a different cwd was passed on reopen. Existing records without a location keep the prior fallback; fork and clone inherit the active location. This is not a sandbox.
+
+### Added
+
+- **Execution environment contract and local adapter.** An SDK host can provide an `env` resolver for each session tool call and inspect `ExecutionEnv` types. E1 uses the resolver as a local-only availability check and rejects nonlocal locations and missing resolutions without falling back. Tools still execute through their existing local implementations; execution-side routing and container isolation follow in later phases ([#410](https://github.com/glows777/Vela/issues/410)).
+
 ### Fixed
 
 - **A chat session that something else opened first now gets the chat's tool split.** When a host opened the chat's session before the gateway did — the SDK's `vela.session(id)` before the first message, or a read after idle cleanup closed it — core kept the tools that session was constructed with, because it reads `tools` only when it constructs a session. The group session then missed the background tools a hub gains and kept `channel_wait_for_input`, which only a topic can use. The gateway now applies the split when it opens an existing session too: a tool its chat turns off is removed, a hub's background commands are added, and a tool allowlist that session already had stays as narrow as it was, so a chat's `tools` list cannot add a tool back and a `session_start` handler still has the last word. Every channel shares it ([#405](https://github.com/glows777/Vela/issues/405)).
