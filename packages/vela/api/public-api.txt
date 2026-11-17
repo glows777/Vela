@@ -71,6 +71,11 @@
   interface BeforeProviderRequestEvent
     params: LanguageModelV4CallOptions
     type: "before_provider_request"
+  interface BinaryReader
+    close: (signal?: AbortSignal) => Promise<void>
+    info: (signal?: AbortSignal) => Promise<Result<FileInfo, FileError>>
+    read: (offset: number, length: number, signal?: AbortSignal) => Promise<Result<Uint8Array, FileError>>
+    scanLines: (options: { startLine: number; endLine?: number; }, signal?: AbortSignal) => Promise<Result<LineScan, FileError>>
   interface BranchSummaryEntry
     fromId: string
     id: string
@@ -135,6 +140,7 @@
     content: string
     path: string
   function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
+  function createLocalExecutionEnv: (options: { cwd: string; shellPath?: string; }) => ExecutionEnv
   function createVela: (options?: ChannelVelaOptions) => ChannelVela
   type Credential = ApiKeyCredential | OAuthCredential
   interface CredentialStore
@@ -181,6 +187,40 @@
   interface ExecuteToolOptions
     onUpdate?: ((partialResult: unknown) => void) | undefined
     signal?: AbortSignal | undefined
+  interface ExecutionEnv
+    absolutePath: (path: string, signal?: AbortSignal) => Promise<Result<string, FileError>>
+    canonicalPath: (path: string, signal?: AbortSignal) => Promise<Result<string, FileError>>
+    cleanup: (signal?: AbortSignal) => Promise<void>
+    createDir: (path: string, options: { recursive?: boolean; } | undefined, signal?: AbortSignal) => Promise<Result<void, FileError>>
+    createTempFile: (options: { prefix?: string; suffix?: string; } | undefined, signal?: AbortSignal) => Promise<Result<string, FileError>>
+    cwd: string
+    exec: (command: string | readonly string[], options: ShellExecOptions | undefined, signal?: AbortSignal) => Promise<Result<ShellExecResult, ExecutionError>>
+    exists: (path: string, signal?: AbortSignal) => Promise<Result<boolean, FileError>>
+    fileInfo: (path: string, signal?: AbortSignal) => Promise<Result<FileInfo, FileError>>
+    joinPath: (parts: string[], signal?: AbortSignal) => Promise<Result<string, FileError>>
+    listDir: (path: string, signal?: AbortSignal) => Promise<Result<FileInfo[], FileError>>
+    openBinaryReader: (path: string, options: { noFollow?: boolean; } | undefined, signal?: AbortSignal) => Promise<Result<BinaryReader, FileError>>
+    readBinaryFile: (path: string, signal?: AbortSignal) => Promise<Result<Uint8Array, FileError>>
+    readTextFile: (path: string, signal?: AbortSignal) => Promise<Result<string, FileError>>
+    readonly id: string
+    writeFile: (path: string, content: string | Uint8Array, signal?: AbortSignal) => Promise<Result<void, FileError>>
+  interface ExecutionError
+    cause?: unknown
+    code: ExecutionErrorCode
+    message: string
+    name: string
+    spillPath?: string | undefined
+    stack?: string | undefined
+  type ExecutionErrorCode = | 'aborted'
+      | 'timeout'
+      | 'shell_unavailable'
+      | 'spawn_error'
+      | 'callback_error'
+      | 'unavailable'
+      | 'unknown'
+  interface ExecutionLocation
+    cwd: string
+    environment: string
   interface ExecutionMetadata
     error?: string | undefined
     exitCode?: number | undefined
@@ -242,6 +282,28 @@
       init?: RequestInit,
       ) => Promise<Response>
   function fileCredentialStore: (path: string) => CredentialStore
+  interface FileError
+    cause?: unknown
+    code: FileErrorCode
+    message: string
+    name: string
+    path?: string | undefined
+    stack?: string | undefined
+  type FileErrorCode = | 'aborted'
+      | 'not_found'
+      | 'permission_denied'
+      | 'not_directory'
+      | 'is_directory'
+      | 'invalid'
+      | 'not_supported'
+      | 'unavailable'
+      | 'unknown'
+  interface FileInfo
+    kind: "file" | "directory" | "symlink"
+    mtimeMs: number
+    name: string
+    path: string
+    size: number
   function fileSessionStorage: (dir: string, logger?: VelaLogger) => SessionStorage
   interface ForkOptions
     position?: "before" | "at" | undefined
@@ -350,6 +412,14 @@
     startTopic: (messageId: string, title: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
   function lastCustomMessage: (session: VelaSession, customType: string) => ModelMessage | undefined
+  interface LineScan
+    end: number
+    firstLineBytes: number
+    firstLineEnd: number
+    lastLineStart: number
+    newlines: number
+    selectedBytes: number
+    start: number
   function loadConfig: (options?: LoadConfigOptions) => VelaConfig
   interface LoadConfigOptions
     agentDir?: string | undefined
@@ -373,7 +443,7 @@
     cause?: unknown
     message: string
     name: string
-    readonly code: "invalid_request" | "not_found" | "unavailable"
+    readonly code: "unavailable" | "not_found" | "invalid_request"
     stack?: string | undefined
   type LocalEvent = LocalEventData & {
       version: 1
@@ -598,6 +668,7 @@
   interface RagOptions
     embedder?: EmbeddingFn | undefined
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
+  type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
   interface SavedSessionOptions
     includeArchived?: boolean | undefined
   interface SendMessageOptions
@@ -654,6 +725,7 @@
     channel?: string | undefined
     cwd?: string | undefined
     id: string
+    location?: ExecutionLocation | undefined
     parentSession?: string | undefined
     timestamp: string
     type: "session"
@@ -680,7 +752,7 @@
     nestedCalls?: Record<string, NestedToolCalls> | undefined
     parentId: string | null
     producedBy?: string | undefined
-    stopReason?: "error" | "aborted" | undefined
+    stopReason?: "aborted" | "error" | undefined
     timestamp: string
     type: "message"
   interface SessionOptions
@@ -688,6 +760,7 @@
     channel?: string | undefined
     cwd?: string | undefined
     host?: { deliver(text: string): void | Promise<void>; } | undefined
+    location?: ExecutionLocation | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     scope?: SessionScope | undefined
     thinkingLevel?: ThinkingLevel | undefined
@@ -741,6 +814,16 @@
     tokens: number
     totals: UsageTotals
   function setDefaultToolModifiers: (session: VelaSession, entries: readonly string[]) => void
+  interface ShellExecOptions
+    cwd?: string | undefined
+    env?: Record<string, string> | undefined
+    inheritEnv?: boolean | undefined
+    onOutput?: ((text: string, signal: AbortSignal | undefined, info: { stream: "stdout" | "stderr"; }) => void) | undefined
+    spill?: { afterBytes: number; afterLines: number; } | undefined
+    timeout?: number | undefined
+  interface ShellExecResult
+    exitCode: number
+    spillPath?: string | undefined
   const silentLogger: VelaLogger
   interface StepRecord
     cacheReadTokens: number
@@ -1083,6 +1166,7 @@
     cwd?: string | undefined
     dataDir?: string | undefined
     docs?: false | DocsPaths | undefined
+    env?: ((target: { sessionId: string; location: ExecutionLocation; }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>) | undefined
     eventDefaultTarget?: { channel: string; chatId: string; } | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: ChannelExtension[] | undefined
