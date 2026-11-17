@@ -183,6 +183,10 @@ export interface SessionDeps {
   onSaved: (sessionId: string) => void
   onCwdChange: (session: VelaSession) => void
   ensureLocal: (session: VelaSession) => Promise<ExecutionEnv>
+  prepareWorkspace: (
+    session: VelaSession,
+    signal?: AbortSignal,
+  ) => Promise<void>
 }
 
 /**
@@ -1351,6 +1355,7 @@ export class VelaSession {
   ): Promise<void> {
     await this.start()
     signal.throwIfAborted()
+    await this.deps.prepareWorkspace(this, signal)
     const { info } = this.resolveModel()
     // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
     // resumed session keeps it even when the credentials change later

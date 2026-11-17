@@ -65,6 +65,7 @@ export async function inspectSession(
   options: { previewExtensions?: boolean } = {},
 ): Promise<SessionInspection> {
   const internal = velaInternals(vela)
+  await internal.prepareWorkspace(session)
   const preview = options.previewExtensions
     ? await session.previewPrompt()
     : undefined

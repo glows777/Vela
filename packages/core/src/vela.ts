@@ -26,6 +26,7 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import { type ContextFile, loadContextFiles } from './prompt/context-files.ts'
+import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
 import {
   addendum,
   type DocsPaths,
@@ -240,6 +241,10 @@ export interface VelaInternals {
   skillLoader: SkillLoader
   promptTemplates: PromptTemplate[]
   loadedContextFiles: readonly ContextFile[]
+  prepareWorkspace: (
+    session: VelaSession,
+    signal?: AbortSignal,
+  ) => Promise<void>
   /** Finds (or downloads) rg / fd, shared with the grep and find tools */
   resolveBinary: BinaryResolver
 }
@@ -328,9 +333,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     logger.warn(`[resources] ${path}: ${message}`)
   const promptTemplates = templates.templates
   const contextFiles =
-    options.contextFiles === false
-      ? []
-      : (options.contextFiles ?? loadContextFiles({ cwd }))
+    options.contextFiles === false ? [] : (options.contextFiles ?? [])
   const sessions = new Map<string, VelaSession>()
   const sessionContextFiles = new Map<string, readonly ContextFile[]>()
 
@@ -393,6 +396,40 @@ export function createVela(options: VelaOptions = {}): Vela {
     return env
   }
 
+  const prepareWorkspace = async (
+    session: VelaSession,
+    signal?: AbortSignal,
+  ) => {
+    if (sessionContextFiles.has(session.id)) return
+    if (options.contextFiles === false) {
+      sessionContextFiles.set(session.id, [])
+      return
+    }
+    const location = session.cwd
+    const pending = ensureLocal(session)
+    let onAbort: (() => void) | undefined
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal?.reason)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
+    })
+    let env: ExecutionEnv
+    try {
+      env = await Promise.race([pending, cancelled])
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort)
+    }
+    const workspace = await loadEnvironmentContextFiles(env, location, signal)
+    signal?.throwIfAborted()
+    if (session.cwd !== location)
+      throw new Error('Session location changed during resource preparation')
+    const seen = new Set(contextFiles.map((file) => file.path))
+    sessionContextFiles.set(session.id, [
+      ...contextFiles,
+      ...workspace.filter((file) => !seen.has(file.path)),
+    ])
+  }
+
   const session = (
     id = 'default',
     sessionOptions?: SessionOptions,
@@ -437,15 +474,10 @@ export function createVela(options: VelaOptions = {}): Vela {
         },
         onSaved: (id) => options.onSessionSaved?.(id),
         ensureLocal,
+        prepareWorkspace,
         onCwdChange: (changed) => {
           sessionCwds.set(changed.registry, changed.cwd)
-          if (changed.cwd === cwd || options.contextFiles === false)
-            sessionContextFiles.delete(changed.id)
-          else
-            sessionContextFiles.set(
-              changed.id,
-              loadContextFiles({ cwd: changed.cwd }),
-            )
+          sessionContextFiles.delete(changed.id)
         },
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) {
@@ -456,8 +488,6 @@ export function createVela(options: VelaOptions = {}): Vela {
       },
       sessionOptions,
     )
-    if (created.cwd !== cwd && options.contextFiles !== false)
-      sessionContextFiles.set(id, loadContextFiles({ cwd: created.cwd }))
     sessions.set(id, created)
     sessionCwds.set(created.registry, created.cwd)
     return created
@@ -643,6 +673,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     skillLoader,
     promptTemplates,
     loadedContextFiles: contextFiles,
+    prepareWorkspace,
     resolveBinary,
   })
   return vela
