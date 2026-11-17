@@ -48,6 +48,21 @@ export {
   type SessionInspection,
   type VelaInspection,
 } from './diagnostics.ts'
+export { createLocalExecutionEnv } from './execution/local.ts'
+export type {
+  BinaryReader,
+  ExecutionEnv,
+  ExecutionError,
+  ExecutionErrorCode,
+  ExecutionLocation,
+  FileError,
+  FileErrorCode,
+  FileInfo,
+  LineScan,
+  Result,
+  ShellExecOptions,
+  ShellExecResult,
+} from './execution/types.ts'
 export {
   type BackgroundOptions,
   background,

@@ -185,6 +185,7 @@
     cwd?: string | undefined
     dataDir?: string | undefined
     docs?: false | DocsPaths | undefined
+    env?: ((target: { sessionId: string; location: ExecutionLocation; }) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>) | undefined
     eventDefaultTarget?: { channel: string; chatId: string; } | undefined
     extensionConfig?: Record<string, Record<string, unknown>> | undefined
     extensions?: ChannelExtension[] | undefined

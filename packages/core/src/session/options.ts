@@ -1,4 +1,5 @@
 import type { LanguageModel } from 'ai'
+import type { ExecutionLocation } from '../execution/types.ts'
 import type { InputSource } from '../extensions/events.ts'
 import type { SessionUI } from '../extensions/ui.ts'
 import type { ImageContent } from '../messages.ts'
@@ -70,6 +71,8 @@ export interface SessionOptions {
   channel?: string
   /** Working directory for this session's tools and automatic context; relative to Vela's cwd. */
   cwd?: string
+  /** Execution location for this session. */
+  location?: ExecutionLocation
   /**
    * Tools for this session: plain names (or `*` patterns) enable only those; a list of only
    * `+name` / `-name` entries adjusts the default set instead (like pi).

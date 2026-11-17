@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
 import type {
@@ -15,6 +15,7 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
+import { localCwd } from './execution/location.ts'
 import type {
   BeforeAgentStartResult,
   ExtensionEventName,
@@ -46,16 +47,14 @@ import {
   assertCustomType,
   type BranchSummaryEntry,
   messageText as contentText,
-  type NestedToolCalls,
   type SessionContext,
   type SessionEntry,
   type SessionTreeNode,
 } from './session/entries.ts'
-import { branchJsonl, writeExport } from './session/export.ts'
-import { renderSessionHtml } from './session/export-html.ts'
+import { exportBranch } from './session/export.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
-import { NestedCallLog } from './session/nested-calls.ts'
+import { NestedCallLog, takeToolDetails } from './session/nested-calls.ts'
 import type {
   PromptOptions,
   SendMessageOptions,
@@ -181,6 +180,8 @@ export interface SessionDeps {
   forward: (event: VelaEvent, sessionId: string) => void
   onClose: (session: VelaSession) => void
   onSaved: (sessionId: string) => void
+  onCwdChange: (session: VelaSession) => void
+  ensureLocal: (session: VelaSession) => Promise<void>
 }
 
 /**
@@ -240,7 +241,7 @@ export class VelaSession {
   constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
     assertSessionId(id)
     this.id = id
-    this.cwd = resolve(deps.cwd ?? process.cwd(), options.cwd ?? '.')
+    this.cwd = localCwd(options.location, deps.cwd, options.cwd)
     this.deps = deps
     this.options = options
     this.modelChoice = options.model ?? deps.model
@@ -254,6 +255,7 @@ export class VelaSession {
       deps.sessionStorage,
       deps.temporaryDataDir,
       this.cwd,
+      { environment: 'local', cwd: this.cwd },
       () => deps.onSaved(id),
     )
     this.hasUI = options.ui !== undefined
@@ -286,9 +288,12 @@ export class VelaSession {
       this.limits,
     )
     this.timestamps = this.contextManager.state.timestamps
+    const owner = this
     this.userBash = new UserBash({
       store: this.store,
-      cwd: this.cwd,
+      get cwd() {
+        return owner.cwd
+      },
       shellPath: deps.shellPath,
       emit: this.emit,
       busy: this.busy,
@@ -296,6 +301,8 @@ export class VelaSession {
       messages: this.messages,
       tracker: this.tracker,
       timestamps: this.timestamps,
+      prepare: () => this.deps.ensureLocal(this),
+      isClosed: () => this.closed,
     })
     this.contextManager.autoCompaction =
       options.autoCompaction ?? deps.autoCompaction
@@ -829,6 +836,7 @@ export class VelaSession {
         options.sessionId ?? newSessionId(),
         {
           ...unrouted,
+          location: { environment: 'local', cwd: this.cwd },
           model: this.modelChoice,
           thinkingLevel: this.thinking,
           autoCompaction: this.autoCompaction,
@@ -882,33 +890,28 @@ export class VelaSession {
    * Relative paths resolve against Vela's cwd; returns the path written.
    */
   exportJsonl(path?: string): Promise<string> {
-    return writeExport(
-      this.id,
-      this.deps.cwd,
-      path,
-      'jsonl',
-      branchJsonl(this.id, this.cwd, this.store.getBranch()),
-    )
+    return this.exportBranch('jsonl', path)
   }
 
-  /**
-   * Writes the current branch as a self-contained HTML page (messages, thinking, tool calls and results).
-   * Relative paths resolve against Vela's cwd; returns the path written. Review it before sharing: it holds
-   * everything the session saw, including tool output.
-   */
+  /** Exports the current branch as a self-contained HTML page; review it before sharing. */
   exportHtml(path?: string): Promise<string> {
-    return writeExport(
-      this.id,
-      this.deps.cwd,
+    return this.exportBranch('html', path)
+  }
+
+  private exportBranch(
+    format: 'jsonl' | 'html',
+    path?: string,
+  ): Promise<string> {
+    return exportBranch({
+      id: this.id,
+      baseCwd: this.deps.cwd,
+      sessionCwd: this.cwd,
       path,
-      'html',
-      renderSessionHtml({
-        id: this.id,
-        name: this.name,
-        model: this.modelChoice,
-        entries: this.store.getBranch(),
-      }),
-    )
+      entries: this.store.getBranch(),
+      name: this.name,
+      model: this.modelChoice,
+      format,
+    })
   }
 
   /** Restores saved history and a saved channel. Returns false when nothing was saved.
@@ -920,6 +923,11 @@ export class VelaSession {
     await this.store.flush()
     const saved = await this.store.loadSaved()
     if (!saved) return false
+    if (saved.location) {
+      // The public property stays readonly; resume restores the persisted internal value.
+      ;(this as { cwd: string }).cwd = localCwd(saved.location)
+      this.deps.onCwdChange(this)
+    }
     this.displayName = saved.name
     await this.loadBranch(saved)
     if (saved.channel !== undefined)
@@ -952,19 +960,8 @@ export class VelaSession {
       this.store.appendCustomMessage(message, custom)
       return
     }
-    const nestedCalls: Record<string, NestedToolCalls> = {}
-    const details: Record<string, unknown> = {}
-    if (message.role === 'tool')
-      for (const part of message.content) {
-        if (part.type !== 'tool-result') continue
-        const calls = this.nestedCalls.take(part.toolCallId)
-        if (calls) nestedCalls[part.toolCallId] = calls
-        if (this.toolDetails.has(part.toolCallId)) {
-          details[part.toolCallId] = this.toolDetails.get(part.toolCallId)
-          this.toolDetails.delete(part.toolCallId)
-        }
-      }
-    this.store.appendMessage(message, { nestedCalls, details, producedBy })
+    const audit = takeToolDetails(message, this.nestedCalls, this.toolDetails)
+    this.store.appendMessage(message, { ...audit, producedBy })
   }
 
   /** Whether an `executeBash()` command is running */

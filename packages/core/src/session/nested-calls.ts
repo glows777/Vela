@@ -104,3 +104,24 @@ export class NestedCallLog {
     return recorder?.snapshot()
   }
 }
+
+/** Collect the model-visible tool result's per-call audit data exactly once. */
+export function takeToolDetails(
+  message: import('../messages.ts').ModelMessage,
+  log: NestedCallLog,
+  pending: Map<string, unknown>,
+) {
+  const nestedCalls: Record<string, NestedToolCalls> = {}
+  const details: Record<string, unknown> = {}
+  if (message.role === 'tool')
+    for (const part of message.content) {
+      if (part.type !== 'tool-result') continue
+      const calls = log.take(part.toolCallId)
+      if (calls) nestedCalls[part.toolCallId] = calls
+      if (pending.has(part.toolCallId)) {
+        details[part.toolCallId] = pending.get(part.toolCallId)
+        pending.delete(part.toolCallId)
+      }
+    }
+  return { nestedCalls, details }
+}
