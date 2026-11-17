@@ -540,6 +540,7 @@ export class VelaSession {
   /** @internal Runs this turn's handlers on a fresh prompt for /context, keeping nothing */
   async previewPrompt(): Promise<BeforeAgentStartResult> {
     await this.start()
+    await this.deps.prepareWorkspace(this)
     return this.deps.extensions.beforeAgentStart(this, '')
   }
 
@@ -757,6 +758,7 @@ export class VelaSession {
     focus: string | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
+    await this.deps.prepareWorkspace(this, signal)
     let start = 0
     this.messages.forEach((message, index) => {
       const id = this.store.idOf(message)
@@ -1452,6 +1454,7 @@ export class VelaSession {
   async compact(focus?: string): Promise<void> {
     await this.exclusive('compact', async (signal) => {
       await this.start()
+      await this.deps.prepareWorkspace(this, signal)
       const request = await this.compactionRequest(signal)
       await this.contextManager.compact(request, focus)
       await this.saveOrReport()

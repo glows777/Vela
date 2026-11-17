@@ -159,7 +159,7 @@ test('systemPrompt replaces the intro, tools, rules and docs and keeps the other
   })
   try {
     const session = vela.session()
-    const system = session.buildSystem()
+    const system = (await inspectSession(vela, session)).systemPrompt
     expect(system.startsWith('You are Exact.\n\n<addendum>')).toBe(true)
     for (const tag of ['<tools>', '<rules>', '<docs>'])
       expect(system).not.toContain(tag)

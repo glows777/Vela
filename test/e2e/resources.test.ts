@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'node:path'
+import { inspectSession } from '@glows777/vela-core/diagnostics'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { createVela } from '../support/compat-vela.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -90,7 +91,7 @@ test('AGENTS.md and skills go into the system prompt in pi order', async () => {
     files: { 'AGENTS.md': 'Always use bun.' },
     skills: [REVIEW],
   })
-  const system = t.session.buildSystem()
+  const system = (await inspectSession(t.vela, t.session)).systemPrompt
   expect(system).toContain(
     `<project_instructions path="${join(t.cwd, 'AGENTS.md')}">\nAlways use bun.\n</project_instructions>`,
   )
