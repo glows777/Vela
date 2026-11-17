@@ -1,5 +1,5 @@
-import type { ExecutionEnv } from '../execution/types.ts'
 import type { VelaEventListener } from '../agent/events.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import { type ToolContent, toolContentText } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
 import type { ExecutionMetadata } from '../session/tool-history.ts'

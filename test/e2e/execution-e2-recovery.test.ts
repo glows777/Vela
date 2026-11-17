@@ -2,13 +2,13 @@ import { expect, test } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
-import { createLocalExecutionEnv } from '@glows777/vela-core'
 import {
   createFauxModel,
   fauxText,
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
+import { createLocalExecutionEnv } from '@glows777/vela-core'
 
 test('read_file uses the selected execution environment instead of reading the host', async () => {
   const dir = tempDir()
@@ -125,6 +125,45 @@ test('edit_file leaves the host untouched when its environment refuses edits', a
     expect(reads).toBe(1)
     const { readFileSync } = await import('node:fs')
     expect(readFileSync(file, 'utf8')).toBe('original')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('list_directory uses the selected environment instead of listing the host', async () => {
+  const dir = tempDir()
+  writeFileSync(join(dir.path, 'private.txt'), 'host only')
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('list_directory', { path: '.' }),
+      fauxText('done'),
+    ],
+  })
+  let listings = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.listDir = async () => {
+        listings++
+        return {
+          ok: false,
+          error: Object.assign(new Error('environment denied listing'), {
+            code: 'permission_denied' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await vela
+      .session('boundary-list', { tools: ['+list_directory'] })
+      .prompt('list files')
+    expect(listings).toBe(1)
+    expect(model.calls[1]!.toolResults[0]!.output).not.toContain('private.txt')
   } finally {
     await vela.dispose()
     dir.cleanup()

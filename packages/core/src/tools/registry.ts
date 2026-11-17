@@ -1,7 +1,7 @@
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
-import type { ExecutionEnv } from '../execution/types.ts'
 import type { VelaEventListener } from '../agent/events.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import {
   isToolContent,

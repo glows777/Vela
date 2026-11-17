@@ -1,6 +1,4 @@
-import { constants, createReadStream, readdirSync } from 'node:fs'
-import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import z from 'zod'
 import { createLocalExecutionEnv } from '../execution/local.ts'
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
@@ -15,7 +13,7 @@ import {
   splitBom,
 } from './edit-diff.ts'
 import { withFileMutationQueue } from './file-mutation-queue.ts'
-import { fileStat, stateFor, statIfExists } from './file-write-guard.ts'
+import { stateFor } from './file-write-guard.ts'
 import type { ToolDefinition } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
 
@@ -83,12 +81,6 @@ async function readSpecialFile(
 const utf8Bytes = (char: string) => {
   const code = char.codePointAt(0) ?? 0
   return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
-}
-
-/** Writes a text file, creating missing parent directories (like Bun.write). */
-async function writeText(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, content)
 }
 
 /** Resolves relative paths against cwd, or the process working directory when cwd is unset. */
@@ -291,11 +283,15 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   annotations: { readOnlyHint: true },
   promptSnippet: 'List directory contents',
   activeByDefault: false,
-  execute: async ({ path = '.' }: { path?: string }) => {
-    const resolved = resolveIn(cwd, path)
-    return readdirSync(resolved, { withFileTypes: true })
+  execute: async ({ path = '.' }: { path?: string }, context) => {
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const resolved = unwrap(await env.absolutePath(path, context?.signal))
+    return unwrap(await env.listDir(resolved, context?.signal))
       .map(
-        (entry) => `${entry.isDirectory() ? '[DIR]' : '[FILE]'} ${entry.name}`,
+        (entry) =>
+          `${entry.kind === 'directory' ? '[DIR]' : '[FILE]'} ${entry.name}`,
       )
       .join('\n')
   },
