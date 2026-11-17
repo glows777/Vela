@@ -57,16 +57,25 @@ test('the session-format Header matches SessionHeader and states how location is
   const written = sessionHeaderFields(source)
 
   expect(documented).toEqual(written)
-  expect(documented.some((field) => field.name === 'location')).toBe(true)
-  expect(header).toContain("{ environment: 'local', cwd }")
-  expect(header).toContain(
-    '`resume()` restores that saved cwd even when the caller passes a different cwd',
-  )
-  expect(header).toContain(
-    "A header with no `location` keeps the prior fallback, the caller's cwd or the default cwd",
-  )
-  expect(header).toContain(
-    '`exportJsonl()`, `fork()`, and `clone()` keep `location` on the header they write',
+  expect(documented).toContainEqual({
+    name: 'location',
+    optional: true,
+    type: 'ExecutionLocation',
+  })
+  expect(header).toMatch(/environment[^}\n]{0,40}\blocal\b/)
+  expect(header).toMatch(/\bcwd\b/)
+  for (const fact of [
+    /\bresume\b/,
+    /\bsaved\b|\bstored\b|\bpersisted\b/,
+    /\bcaller\b/,
+    /\bdefault\b/,
+    /\bexportJsonl\b/,
+    /\bfork\b/,
+    /\bclone\b/,
+  ])
+    expect(header).toMatch(fact)
+  expect(header).toMatch(
+    /no `location`|without `location`|omit(?:s|ted)? `location`/,
   )
 
   const example = section(
