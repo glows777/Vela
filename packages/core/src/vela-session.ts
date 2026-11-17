@@ -290,13 +290,8 @@ export class VelaSession {
       this.limits,
     )
     this.timestamps = this.contextManager.state.timestamps
-    const owner = this
     this.userBash = new UserBash({
       store: this.store,
-      get cwd() {
-        return owner.cwd
-      },
-      shellPath: deps.shellPath,
       emit: this.emit,
       busy: this.busy,
       save: () => this.saveOrReport(),

@@ -21,8 +21,6 @@ export class UserBash {
   constructor(
     private readonly host: {
       store: SessionStore
-      cwd: string
-      shellPath?: string
       emit: VelaEventListener
       busy: { locked: boolean }
       save: () => Promise<void>

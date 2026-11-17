@@ -1,4 +1,3 @@
-import { stat } from 'node:fs/promises'
 import type { ToolContext, ToolRegistry } from './registry.ts'
 
 /** Size and modification time of a file at one moment, used to notice changes made outside the session. */
@@ -103,30 +102,4 @@ export function stateFor(context?: ToolContext): SessionFileState | undefined {
     sessionStates.set(registry, state)
   }
   return state
-}
-
-const isMissingPathError = (error: unknown) =>
-  error instanceof Error &&
-  'code' in error &&
-  (error.code === 'ENOENT' || error.code === 'ENOTDIR')
-
-/** The file's current stat, or undefined when the path does not exist or is not a regular file. */
-export async function statIfExists(
-  path: string,
-): Promise<FileStat | undefined> {
-  try {
-    const stats = await stat(path)
-    return stats.isFile()
-      ? { mtimeMs: stats.mtimeMs, size: stats.size }
-      : undefined
-  } catch (error) {
-    if (isMissingPathError(error)) return undefined
-    throw error
-  }
-}
-
-/** The file's stat after the tool read or wrote it. */
-export async function fileStat(path: string): Promise<FileStat> {
-  const stats = await stat(path)
-  return { mtimeMs: stats.mtimeMs, size: stats.size }
 }
