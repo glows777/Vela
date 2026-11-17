@@ -500,10 +500,10 @@ export class ToolRegistry {
         raw,
         name,
         results: this.results,
+        environment: context.execution,
         call,
         started,
         signal,
-        toolCallId: options.toolCallId,
         maxResultChars: tool.maxResultChars,
         onPersistenceFailure: (error) => {
           this.persistenceFailure = error

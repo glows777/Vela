@@ -1,3 +1,5 @@
+import { createSessionLocalExecutionEnv } from '../execution/local.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import type { ToolContent } from '../messages.ts'
 import type { CallRecord, ResultRecord } from '../session/tool-history.ts'
 import {
@@ -13,20 +15,20 @@ export async function prepareCallResult({
   raw,
   name,
   results,
+  environment,
   call,
   started,
   signal,
-  toolCallId,
   maxResultChars,
   onPersistenceFailure,
 }: {
   raw: unknown
   name: string
   results: ToolResultStore
+  environment?: ExecutionEnv
   call: CallRecord
   started: number
   signal?: AbortSignal
-  toolCallId?: string
   maxResultChars?: number
   onPersistenceFailure: (error: Error) => void
 }) {
@@ -39,7 +41,10 @@ export async function prepareCallResult({
       : {}
   const maxChars = maxResultChars ?? DEFAULT_MAX_RESULT_CHARS
   let stored = raw instanceof StoredToolResult ? raw : undefined
-  let text: string
+  let spillFailed = false
+  const warning =
+    '[The tool already ran, but its full output could not be saved. Do not automatically rerun it.]'
+  let text = ''
   try {
     text =
       raw instanceof ToolExecutionResult
@@ -57,17 +62,34 @@ export async function prepareCallResult({
           !(raw instanceof ToolExecutionResult) &&
           JSON.stringify(value)?.length > maxChars))
     ) {
-      stored = await results.save(
+      const full =
         raw instanceof ToolExecutionResult && raw.content
           ? text
           : typeof value === 'string'
             ? value
-            : (JSON.stringify(value, null, 2) ?? String(value)),
-        name,
-        truncateResult(text, maxChars),
-        toolCallId,
-        call.callId,
+            : (JSON.stringify(value, null, 2) ?? String(value))
+      const env =
+        environment ??
+        createSessionLocalExecutionEnv({
+          cwd: process.cwd(),
+          tempRoot: results.dir,
+        })
+      const temp = await env.createTempFile(
+        { prefix: 'vela-result-', suffix: '.txt' },
+        signal,
       )
+      if (!temp.ok) spillFailed = true
+      else {
+        const written = await env.writeFile(temp.value, full, signal)
+        if (!written.ok) spillFailed = true
+        else
+          stored = new StoredToolResult(
+            temp.value,
+            results.indexPath,
+            Buffer.byteLength(full),
+            truncateResult(text, maxChars),
+          )
+      }
     }
     const record = await history.append<ResultRecord>({
       type: 'tool_result',
@@ -97,7 +119,11 @@ export async function prepareCallResult({
                   ? ('text' as const)
                   : ('json' as const),
             }
-          : { output: value ?? null }),
+          : {
+              output: spillFailed
+                ? `${truncateResult(text, maxChars)}\n\n${warning}`
+                : (value ?? null),
+            }),
     })
     if (stored) {
       stored.callId = call.callId
@@ -113,29 +139,41 @@ export async function prepareCallResult({
       : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
     const status =
       execution.exitCode === undefined ? '' : ` exitCode=${execution.exitCode}`
+    const recovery =
+      stored && stored.path === call.plannedOutputPath
+        ? 'The output location is also recorded in tool_call.plannedOutputPath.'
+        : stored
+          ? 'The actual output path shown above was not recorded in tool_call.plannedOutputPath.'
+          : 'The planned output path may not contain the output.'
     const failure = new Error(
-      `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. The output location is also recorded in tool_call.plannedOutputPath; verify it is complete, and do not treat the call as successful because of it. ${error}`,
+      `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. ${recovery} Verify it is complete; do not treat the call as successful because of it. ${error}`,
     )
     onPersistenceFailure(failure)
     throw failure
   }
   const output: string | ToolContent =
     raw instanceof ToolExecutionResult && raw.content
-      ? stored
-        ? previewToolContent(raw.content, maxChars, stored)
+      ? stored || spillFailed
+        ? previewToolContent(
+            raw.content,
+            maxChars,
+            stored ? truncationNote(stored) : warning,
+          )
         : raw.content
       : stored
         ? raw instanceof StoredToolResult
           ? stored.preview
           : `${stored.preview}\n\n${truncationNote(stored)}`
-        : text
+        : spillFailed
+          ? `${truncateResult(text, maxChars)}\n\n${warning}`
+          : text
   return { output, execution, stored }
 }
 
 function previewToolContent(
   content: ToolContent,
   maxChars: number,
-  stored: StoredToolResult,
+  note: string,
 ): ToolContent {
   // Share the text budget without moving captions away from their images.
   const captions = content.filter((part) => part.type === 'text').length
@@ -148,7 +186,7 @@ function previewToolContent(
     ),
     {
       type: 'text',
-      text: truncationNote(stored),
+      text: note,
     },
   ]
 }

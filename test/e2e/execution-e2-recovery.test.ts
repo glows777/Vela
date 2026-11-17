@@ -437,3 +437,50 @@ test('background commands use their session environment, not host spawn', async 
     dir.cleanup()
   }
 })
+
+test('oversized tool output is saved through the session environment', async () => {
+  const { default: z } = await import('zod')
+  const dir = tempDir()
+  const model = createFauxModel({
+    responses: [fauxToolCall('extension-1_large_report', {}), fauxText('done')],
+  })
+  let writes = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    extensions: [
+      (api) => {
+        api.registerTool({
+          name: 'large_report',
+          description: 'test',
+          inputSchema: z.object({}),
+          maxResultChars: 100,
+          execute: async () => 'report-data'.repeat(100),
+        })
+      },
+    ],
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.writeFile = async () => {
+        writes++
+        return {
+          ok: false,
+          error: Object.assign(new Error('storage denied'), {
+            code: 'permission_denied' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('report-boundary').prompt('report')
+    expect(writes).toBe(1)
+    const output = String(model.calls[1]!.toolResults[0]!.output)
+    expect(output).toContain('could not be saved')
+    expect(output).not.toContain('Full output:')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
