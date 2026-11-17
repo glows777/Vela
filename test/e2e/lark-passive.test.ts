@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LarkMessageEvent } from '@glows777/vela'
+import { UNTAGGED_INPUT } from '@glows777/vela-channels'
 import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
 import {
   fauxStreamError,
@@ -91,7 +92,7 @@ test('a passive group input carries the message send time', async () => {
   run.fake.deliver(event)
   await until(() => run.t.model.calls.length === 1)
   expect(run.t.model.calls[0]?.lastUserText).toBe(
-    `${at(event.message.create_time!)}Alice: how is the build?`,
+    `${UNTAGGED_INPUT}\n${at(event.message.create_time!)}Alice: how is the build?`,
   )
 })
 
@@ -143,11 +144,11 @@ test('passive inputs queued during a run join one evaluation in arrival order', 
   await run.t.internals.gateway.stopAll()
   expect(run.t.model.calls).toHaveLength(2)
   expect(run.t.model.calls[1]!.lastUserText).toBe(
-    [
+    `${UNTAGGED_INPUT}\n${[
       `${at('1792340000000')}Bob: the build is green`,
       `${at('1792340060000')}Alice: the tests pass`,
       `${at('1792340120000')}Bob: ship it`,
-    ].join('\n\n'),
+    ].join('\n\n')}`,
   )
   expect(run.fake.sent).toEqual([
     { messageId: 'first', text: 'first answer' },
