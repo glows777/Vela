@@ -1,8 +1,16 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, createWriteStream, existsSync, readdirSync } from 'node:fs'
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  createWriteStream,
+  existsSync,
+  readdirSync,
+  statSync,
+} from 'node:fs'
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { VelaLogger } from '../logger.ts'
@@ -132,8 +140,20 @@ async function resolveBinary(
 }
 
 function onPath(command: string): boolean {
-  const result = spawnSync(command, ['--version'], { stdio: 'ignore' })
-  return !result.error
+  const extensions =
+    platform() === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')
+      : ['']
+  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
+    for (const extension of extensions) {
+      try {
+        const candidate = join(directory || '.', command + extension)
+        accessSync(candidate, constants.X_OK)
+        if (statSync(candidate).isFile()) return true
+      } catch {}
+    }
+  }
+  return false
 }
 
 async function download(

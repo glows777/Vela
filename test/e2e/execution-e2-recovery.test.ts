@@ -350,3 +350,44 @@ test('grep returns real local matches and context through the selected environme
     dir.cleanup()
   }
 })
+
+test('find does not run the host binary when the selected environment rejects execution', async () => {
+  const { chmodSync, existsSync } = await import('node:fs')
+  const dir = tempDir()
+  const fd = join(dir.path, 'fd')
+  const marker = join(dir.path, 'fd-host-marker')
+  writeFileSync(fd, '#!/bin/sh\ntouch "' + marker + '"\n')
+  chmodSync(fd, 0o755)
+  const previous = process.env.PATH
+  process.env.PATH = `${dir.path}:${previous ?? ''}`
+  const model = createFauxModel({
+    responses: [fauxToolCall('find', { pattern: '*' }), fauxText('done')],
+  })
+  let execs = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.exec = async () => {
+        execs++
+        return {
+          ok: false,
+          error: Object.assign(new Error('environment denied find'), {
+            code: 'unavailable' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('find-boundary', { tools: ['+find'] }).prompt('find')
+    expect(execs).toBe(1)
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    process.env.PATH = previous
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
