@@ -24,11 +24,18 @@ function error(
   })
 }
 class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
-  constructor(options: { cwd: string; shellPath?: string; tempRoot?: string }) {
+  constructor(options: {
+    cwd: string
+    shellPath?: string
+    tempRoot?: string
+    loginShell?: boolean
+  }) {
     super(options.cwd, options.tempRoot)
     this.shellPath = options.shellPath
+    this.loginShell = options.loginShell ?? false
   }
   private readonly shellPath?: string
+  private readonly loginShell: boolean
   private readonly active = new Set<ChildProcess>()
   async exec(
     command: string | readonly string[],
@@ -56,7 +63,7 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         ? [
             this.shellPath ??
               (process.platform === 'win32' ? 'bash.exe' : 'bash'),
-            '-c',
+            this.loginShell ? '-lc' : '-c',
             command,
           ]
         : [...command]
@@ -315,5 +322,5 @@ export function createSessionLocalExecutionEnv(options: {
   shellPath?: string
   tempRoot: string
 }): ExecutionEnv {
-  return new LocalExecutionEnv(options)
+  return new LocalExecutionEnv({ ...options, loginShell: true })
 }

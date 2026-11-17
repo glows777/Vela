@@ -268,3 +268,24 @@ test('user bash cannot execute on host when the selected environment rejects it'
     dir.cleanup()
   }
 })
+
+test('default session environment preserves login-shell invocation for model and user bash', async () => {
+  const { chmodSync } = await import('node:fs')
+  const dir = tempDir()
+  const shell = join(dir.path, 'shell')
+  writeFileSync(shell, '#!/bin/sh\nprintf "%s" "$1"\n')
+  chmodSync(shell, 0o755)
+  const model = createFauxModel({
+    responses: [fauxToolCall('bash', { command: 'ignored' }), fauxText('done')],
+  })
+  const vela = createVela({ cwd: dir.path, shellPath: shell, model })
+  try {
+    const session = vela.session('login-shell')
+    await session.prompt('run')
+    expect(model.calls[1]!.toolResults[0]!.output).toBe('-lc')
+    expect((await session.executeBash('ignored')).output).toBe('-lc')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
