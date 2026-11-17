@@ -2,6 +2,14 @@
 
 After a miss is confirmed, write a lesson. Record the trigger path, the layer that should have caught it, and the mechanism patch. The layer is pre-PR, AI/bot review, CI, human, or post-merge. The patch is a line in [REVIEW.md](REVIEW.md), a lint, or a verify-vela journey. A lesson with no mechanism change is not closed.
 
+## Agent runtime changes must account for prompt cache
+
+[Issue #442](https://github.com/glows777/Vela/issues/442) identified two ways a shared channel session could lose its cached prefix: a checkout changed the Git branch embedded in `<env>`, and switching between direct, passive and handoff inputs changed a channel system-prompt section. On the next request, the changed prefix could force the provider to process a long conversation again. Frequent channel wakes made the cost visible; neither every wake nor every provider necessarily misses cache. This was a post-merge observation that runtime design and pre-PR review should have caught.
+
+For Agent runtime designs, assess the full request prefix and ordering, not just whether the text is correct. Stable instructions should remain stable. Per-input classification belongs with the input rather than dynamically rewriting system instructions; do not inject Git branch automatically, and query it in the selected execution environment when needed. A necessary prefix change, such as loading a tool, may still be the right trade-off when documented. Cache keys, breakpoints, minimum sizes, expiration and billing depend on the provider, so compare consecutive request shapes and cache-read/write usage rather than assuming a universal cache guarantee.
+
+The prevention mechanism is the Agent runtime prompt-cache review check in [REVIEW.md](REVIEW.md). [#444](https://github.com/glows777/Vela/pull/444) addresses branch injection, and [#445](https://github.com/glows777/Vela/issues/445) tracks wake-kind handling; their fixes and verification remain subject to review. A faux cache scenario can guard prefix stability, but it does not prove a real-provider hit or savings.
+
 ## Background memory work must respect tool availability and atomic merges
 
 [PR #307's review](https://github.com/glows777/Vela/pull/307#discussion_r4504727382) found that a deny-only background gate let `memory: ask` sessions consolidate without approval. The pre-PR tests covered `deny`, but not the approval-required path or an already-due shared inbox. That fix required `allow` for collection and both automatic and manual runs. Since [#348](https://github.com/glows777/Vela/issues/348) removed the permission API, dream follows the memory tool's availability: a session with `tools: ['-memory']` neither collects nor consolidates. User extensions handle confirmation for ordinary tool calls.
