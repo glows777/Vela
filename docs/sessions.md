@@ -188,7 +188,7 @@ The size estimate can be wrong. When the provider rejects a request because the 
 
 With Anthropic models, Vela marks the system prompt, the last tool definition and the last message as cache breakpoints (`cache_control: ephemeral`, the default 5-minute cache), like pi. Each model request in the agent loop then reads the prefix the previous one wrote. The summary request does not add these breakpoints. `/usage` shows the cache hit rate. Other providers ignore the markers (OpenAI caches automatically).
 
-The memory index and the RAG source list are sent as messages after the user message, so changing them appends to the prefix instead of rewriting the system prompt. Loading a deferred tool with `tool_search` adds a tool definition and a `<tools>` line at the top of the request, which invalidates the cached prefix once; this is accepted rather than engineered away.
+The memory index and the RAG source list are sent as messages after the user message, so changing them appends to the prefix instead of rewriting the system prompt. The system prompt names no git branch: a checkout in the session's working tree would rewrite the whole prefix, so the model reads the branch with `git branch --show-current` when it needs it, as pi does. Loading a deferred tool with `tool_search` adds a tool definition and a `<tools>` line at the top of the request, which invalidates the cached prefix once; this is accepted rather than engineered away.
 
 ## Usage
 

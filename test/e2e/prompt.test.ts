@@ -330,3 +330,45 @@ test('extension sections are tagged, so a channel session can read its own secti
   expect(system).toContain('<memory>\nHow to use memory\n</memory>')
   expect(system.indexOf('<memory>')).toBeGreaterThan(system.indexOf('<env>'))
 })
+
+test('a branch checkout in the working tree leaves the request and the history untouched', async () => {
+  const t = createTestVela({
+    faux: { cache: true },
+    responses: [fauxText('one'), fauxText('two'), fauxText('three')],
+  })
+  const checkout = (branch: string) => {
+    mkdirSync(join(t.cwd, '.git'), { recursive: true })
+    writeFileSync(join(t.cwd, '.git', 'HEAD'), `ref: refs/heads/${branch}\n`)
+  }
+  const seen = (call: (typeof t.model.calls)[number]) =>
+    call.prompt
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : message.content
+              .map((part) => (part.type === 'text' ? part.text : ''))
+              .join(''),
+      )
+      .join('\n')
+
+  checkout('main')
+  await t.run('one')
+  // Something else checks out a branch in this session's working tree, as a topic session does
+  checkout('vela/442-prompt-cache')
+  await t.run('two')
+  await t.run('three')
+
+  const calls = t.model.calls
+  // The system prompt is the request's cached prefix: a checkout must not rewrite it, and it names no branch
+  expect(calls[0]!.system).not.toContain('git branch')
+  expect(calls[1]!.system).toBe(calls[0]!.system)
+  expect(calls[2]!.system).toBe(calls[0]!.system)
+  // Nothing arrives in the history either: the model asks git for the branch when it needs it
+  for (const call of calls) expect(seen(call)).not.toContain('Git branch')
+
+  // The second request reads the first one's prefix instead of paying for it again
+  const usage = t.eventsOf('usage').map((event) => event.usage)
+  expect(usage[1]!.cacheReadTokens).toBeGreaterThanOrEqual(
+    usage[0]!.cacheWriteTokens - 1,
+  )
+})
