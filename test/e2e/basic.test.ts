@@ -78,9 +78,10 @@ test('the model receives the system prompt, the tool list and the user message',
   )
   expect(req!.system).toContain('Lead with the answer or result')
   expect(req!.system).toContain('<env>')
-  expect(req!.system).toContain(
-    `date: ${new Date().toLocaleDateString('en-CA')}`,
-  )
+  expect(req!.system).toContain(`\nos: ${process.platform}\n`)
+  expect(req!.system).toContain('\nshell: ')
+  expect(req!.system).not.toContain('\ndate:')
+  expect(req!.system).not.toContain('\ntimezone:')
 })
 
 test('multi-turn: the second request carries the first exchange', async () => {
