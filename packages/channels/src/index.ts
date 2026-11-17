@@ -1,3 +1,4 @@
+export { modelInputText, UNTAGGED_INPUT } from './input.ts'
 export { local } from './local.ts'
 export type {
   LocalEvent,

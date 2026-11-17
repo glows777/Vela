@@ -302,6 +302,7 @@
     topic?: { rootId: string; threadId: string; } | undefined
     updatedAt: string
     waitingReason?: string | undefined
+  function modelInputText: (msg: IncomingMessage) => string
   interface OutgoingMessage
     channelId: string
     handoff?: { id: string; from: string; depth: number; } | undefined
@@ -318,6 +319,7 @@
   const routineToolSchema: z.ZodPipe<z.ZodObject<{ message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; action: z.ZodEnum<{ list: "list"; create: "create"; cancel: "cancel"; edit: "edit"; }>; id: z.ZodOptional<z.ZodString>; }, z.core.$strict>, z.ZodDiscriminatedUnion<[z.ZodObject<{ action: z.ZodLiteral<"create">; message: z.ZodString; schedule: z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"list">; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"cancel">; id: z.ZodString; }, z.core.$strict>, z.ZodObject<{ action: z.ZodLiteral<"edit">; id: z.ZodString; message: z.ZodOptional<z.ZodString>; schedule: z.ZodOptional<z.ZodUnion<readonly [z.ZodObject<{ at: z.ZodString; }, z.core.$strict>, z.ZodObject<{ time: z.ZodString; days: z.ZodOptional<z.ZodArray<z.ZodEnum<{ mon: "mon"; tue: "tue"; wed: "wed"; thu: "thu"; fri: "fri"; sat: "sat"; sun: "sun"; }>>>; }, z.core.$strict>]>>; }, z.core.$strict>], "action">>
   function topicSessionOptions: (msg: IncomingMessage) => { tools: string[]; }
   const topicToolNames: string[]
+  const UNTAGGED_INPUT: "[untagged group discussion, not addressed to you]"
 
 # @glows777/vela-channels/testing
 

@@ -163,12 +163,14 @@ export class ChannelGateway {
     this.topicTools = new ChannelTopics((id) => {
       const record = this.directory.get(this.directory.keyForSession(id))
       const runtime = record && this.runtimes.get(record.channel)?.api
-      return runtime && record.activeSessionId === id
-        ? {
-            runtime,
-            capabilities: this.channels.get(record.channel)?.topicCapabilities,
-          }
-        : undefined
+      if (!runtime || !record || record.activeSessionId !== id) return undefined
+      return {
+        runtime,
+        capabilities: this.channels.get(record.channel)?.topicCapabilities,
+        ...(record.chatKind === 'group'
+          ? { kind: record.rootId ? ('topic' as const) : ('group' as const) }
+          : {}),
+      }
     })
     this.run = new GatewayRun(
       this.directory,
