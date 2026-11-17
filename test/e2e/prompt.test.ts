@@ -1,7 +1,11 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import type {
+  ChannelDefinition,
+  IncomingMessage,
+  ChannelExtension as VelaExtension,
+} from '@glows777/vela-channels'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { z } from 'zod'
@@ -34,6 +38,63 @@ test('the prompt lists exactly the tools the session can call, and no rule names
   }
   expect(system).not.toContain('<deferred_tools>')
   expect(system).not.toContain('Read a file before you change it.')
+})
+
+test('the intro claims no capability, and the tools that are present still describe theirs', async () => {
+  const intro = (prompt: string) => prompt.split('\n\n')[0]!
+  const narrow = createTestVela({ session: { tools: ['read_file'] } })
+  const narrowed = (await inspectSession(narrow.vela, narrow.session))
+    .systemPrompt
+  expect(intro(narrowed)).toBe(
+    'You are Vela, an AI agent that helps users by calling the tools this session provides.',
+  )
+  expect(toolsSection(narrowed)).toContain('- read_file:')
+
+  // A session with the execution tools keeps describing them, through `<tools>`
+  const full = createTestVela()
+  const system = (await inspectSession(full.vela, full.session)).systemPrompt
+  expect(intro(system)).toBe(intro(narrowed))
+  expect(system).toContain('- bash: Run a shell command')
+  expect(system).toContain('- edit_file: Make precise file edits')
+  expect(system).toContain('- write_file: Create or overwrite a file')
+})
+
+test('a group session narrowed to read_file is not told it can edit files or run commands', async () => {
+  let receive!: (message: IncomingMessage) => void | Promise<void>
+  const channel: ChannelDefinition = {
+    name: 'fixture',
+    description: 'Narrow group fixture',
+    start() {},
+    stop() {},
+    async send() {},
+    onMessage(handler) {
+      receive = handler
+    },
+    sessionOptions: () => ({ tools: ['read_file'] }),
+  }
+  const t = createTestVela({
+    responses: [fauxText('ok')],
+    extensions: [
+      function fixture(api) {
+        api.registerChannel(channel)
+      },
+    ],
+  })
+  await t.vela.startChannels()
+  await receive({
+    channelId: 'group',
+    chatKind: 'group',
+    senderId: 'alice',
+    senderName: 'Alice',
+    text: 'Hello group',
+    replyToId: 'trigger',
+  })
+  const system = t.model.calls[0]!.system
+  expect(system).not.toContain('editing files')
+  expect(system).not.toContain('running commands')
+  expect(toolsSection(system)).toBe(
+    '<tools>\n- read_file: Read file contents (text, or an image by path)\n',
+  )
 })
 
 test('the default tools carry their own rules, and hiding one drops its rule', async () => {
