@@ -285,6 +285,7 @@ const hostJourney = async (page: Page) => {
   )
 }
 async function development() {
+  console.log('Desktop verification: launching development Electron')
   const child = spawn(
     'bunx',
     [
@@ -330,7 +331,10 @@ async function development() {
     })
   })
   try {
-    const browser = await chromium.connectOverCDP(await endpoint)
+    const url = await endpoint
+    console.log('Desktop verification: DevTools endpoint ready')
+    const browser = await chromium.connectOverCDP(url)
+    console.log('Desktop verification: connected to Electron')
     try {
       const context = browser.contexts()[0]!
       const page =
@@ -339,6 +343,7 @@ async function development() {
       watch(page)
       await page.bringToFront()
       await page.waitForLoadState('networkidle')
+      console.log('Desktop verification: first window loaded')
       if (badConfig) {
         await page
           .getByRole('alert')
@@ -355,6 +360,7 @@ async function development() {
       )
       await rendererSafety(page)
       checks.push(...(await verifyControls(page, evidence)))
+      console.log('Desktop verification: specimen controls passed')
       await page.setViewportSize({ width: 800, height: 600 })
       await noOverflow(page)
       await snapshot(page, 'specimen-minimum')
@@ -374,14 +380,20 @@ async function development() {
         checks.push('CLI built-in switches load and disabled Lark stays off.')
         return
       }
+      console.log('Desktop verification: starting host journey')
       await hostJourney(page)
+      console.log('Desktop verification: host journey passed')
     } finally {
+      console.log('Desktop verification: disconnecting DevTools')
       await browser.close()
+      console.log('Desktop verification: DevTools disconnected')
     }
   } finally {
     if (child.pid && child.exitCode === null)
       process.kill(-child.pid, 'SIGTERM')
+    console.log('Desktop verification: waiting for Forge to close')
     await closed
+    console.log('Desktop verification: Forge closed')
     await Bun.write(resolve(evidence, 'forge.log'), output)
   }
 }
