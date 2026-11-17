@@ -311,16 +311,23 @@ async function waitForForge(closed: Promise<void>, destroy: () => void) {
   }
 }
 async function closeElectron(browser: import('playwright').Browser) {
+  const page = browser.contexts()[0]?.pages()[0]
+  if (!page || page.isClosed()) {
+    await browser.close()
+    return
+  }
   const session = await browser.newBrowserCDPSession()
+  const closed = page.waitForEvent('close')
+  const request = session.send('Browser.close').catch((error: unknown) => error)
   try {
-    await withTimeout(session.send('Browser.close'), 15_000, 'Electron close')
-  } catch (error) {
-    // Electron can close the CDP connection before acknowledging Browser.close.
-    if (!(error instanceof Error) || !error.message.includes('has been closed'))
-      throw error
+    await withTimeout(closed, 15_000, 'Electron window close')
   } finally {
     await browser.close()
   }
+  const result = await request
+  // Electron can close CDP before acknowledging Browser.close.
+  if (result instanceof Error && !result.message.includes('has been closed'))
+    throw result
 }
 async function development() {
   console.log('Desktop verification: launching development Electron')
