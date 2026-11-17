@@ -54,10 +54,12 @@ export function createBackgroundTools(
       executionMode: 'sequential',
       annotations: { destructiveHint: true, openWorldHint: true },
       execute: async ({ command }: { command: string }, context) => {
-        const { id, pid } = jobs(context).start(command)
+        if (!context?.execution)
+          throw new Error('Execution environment unavailable')
+        const { id } = jobs(context).start(command, context.execution)
         return new ToolExecutionResult(
-          { id, ...(pid === undefined ? {} : { pid }) },
-          `Started ${id}${pid === undefined ? '' : ` (pid ${pid})`}. Its output will arrive when it exits.`,
+          { id },
+          `Started ${id}. Its output will arrive when it exits.`,
         )
       },
     },
@@ -77,7 +79,7 @@ export function createBackgroundTools(
     {
       name: 'stop',
       description:
-        'Stop a background command: SIGTERM to the process tree, taskkill /T on Windows, SIGKILL shortly after. Returns its last output. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
+        'Stop a background command through its execution environment. Returns its last output. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
       inputSchema: stopSchema,
       activeByDefault: false,
       executionMode: 'sequential',

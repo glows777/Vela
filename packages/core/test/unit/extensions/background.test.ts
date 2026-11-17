@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createLocalExecutionEnv } from '../../../src/execution/local.ts'
 import { background } from '../../../src/extensions/background/index.ts'
 import {
   BackgroundJobs,
@@ -93,7 +94,10 @@ test('a background command runs to completion and its delivery carries the exit 
     reports.push(text),
   )
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  const { id } = jobs.start('echo READY; exit 3')
+  const { id } = jobs.start(
+    'echo READY; exit 3',
+    createLocalExecutionEnv({ cwd: session.cwd }),
+  )
   expect(id).toBe('bg-1')
   await until(() => reports.length === 1, 'the exit delivery')
   expect(reports[0]!).toContain(
@@ -111,7 +115,10 @@ test('stopping a job ends its process group and returns the tail without another
   const reports: string[] = []
   const session = sessionStub(directory(), [], (text) => reports.push(text))
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  jobs.start('echo STARTED; sleep 30; echo NEVER')
+  jobs.start(
+    'echo STARTED; sleep 30; echo NEVER',
+    createLocalExecutionEnv({ cwd: session.cwd }),
+  )
   await until(
     () => jobs.snapshot('bg-1').output.includes('STARTED'),
     'the first output',
@@ -126,7 +133,7 @@ test('stopping a job ends its process group and returns the tail without another
   expect(reports).toEqual([])
 })
 
-test('a descendant that needs part of the grace finishes before the escalation', async () => {
+test('stopping aborts the process tree without a graceful SIGTERM phase', async () => {
   const root = directory()
   await Bun.write(
     join(root, 'graceful.cjs'),
@@ -142,8 +149,10 @@ setInterval(() => {}, 1000)
   )
   const session = sessionStub(root, [])
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  // The shell waits on the child, so SIGTERM ends the shell while the child keeps cleaning up.
-  jobs.start('node graceful.cjs & wait')
+  jobs.start(
+    'node graceful.cjs & wait',
+    createLocalExecutionEnv({ cwd: session.cwd }),
+  )
   await until(
     () => jobs.snapshot('bg-1').output.includes('READY'),
     'the descendant to register its SIGTERM handler',
@@ -151,8 +160,7 @@ setInterval(() => {}, 1000)
   const t0 = Date.now()
   const stopped = await jobs.stop('bg-1')
   expect(stopped.stopped).toBe(true)
-  // The child had 100 ms of the promised two seconds; the shell exiting first must not cut it off.
-  expect(await Bun.file(join(root, 'shutdown-complete')).text()).toBe('yes')
+  expect(existsSync(join(root, 'shutdown-complete'))).toBe(false)
   expect(Date.now() - t0).toBeLessThan(1000)
 })
 
@@ -164,6 +172,7 @@ test('a descendant that ignores SIGTERM is killed after the shell exits', async 
   // The shell exits on SIGTERM; its child ignores SIGTERM and would outlive the stop.
   jobs.start(
     `bash -c 'trap "" TERM; echo $$ > child.pid; echo READY; sleep 30' & wait`,
+    createLocalExecutionEnv({ cwd: session.cwd }),
   )
   await until(
     () => jobs.snapshot('bg-1').output.includes('READY'),
@@ -196,8 +205,8 @@ test('stopAll ends every running job without starting a delivery run', async () 
     reports.push(text),
   )
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  jobs.start('sleep 30')
-  jobs.start('sleep 30')
+  jobs.start('sleep 30', createLocalExecutionEnv({ cwd: session.cwd }))
+  jobs.start('sleep 30', createLocalExecutionEnv({ cwd: session.cwd }))
   await jobs.stopAll()
   for (const id of ['bg-1', 'bg-2'])
     expect(() => jobs.snapshot(id)).toThrow(`Unknown background command ${id}.`)

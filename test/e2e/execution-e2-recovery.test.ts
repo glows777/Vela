@@ -391,3 +391,49 @@ test('find does not run the host binary when the selected environment rejects ex
     dir.cleanup()
   }
 })
+
+test('background commands use their session environment, not host spawn', async () => {
+  const { existsSync } = await import('node:fs')
+  const { background } = await import(
+    '../../packages/core/src/extensions/background/index.ts'
+  )
+  const dir = tempDir()
+  const marker = join(dir.path, 'bg-host-marker')
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('background_start', { command: 'touch bg-host-marker' }),
+      fauxText('done'),
+      fauxText('failure received'),
+    ],
+  })
+  let execs = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    extensions: [background()],
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.exec = async () => {
+        execs++
+        return {
+          ok: false,
+          error: Object.assign(new Error('environment denied background'), {
+            code: 'unavailable' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await vela
+      .session('bg-boundary', { tools: ['+background_start'] })
+      .prompt('start')
+    await Bun.sleep(80)
+    expect(execs).toBe(1)
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
