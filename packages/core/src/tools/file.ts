@@ -2,6 +2,8 @@ import { constants, createReadStream, readdirSync } from 'node:fs'
 import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import z from 'zod'
+import { createLocalExecutionEnv } from '../execution/local.ts'
+import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import { imageMimeType, isBinaryFile } from '../images/metadata.ts'
 import {
   applyEditsToNormalizedContent,
@@ -30,27 +32,23 @@ const binaryFileError = (path: string) =>
     `Cannot read ${path}: binary file. Use bash tools such as pdftotext or unzip -l to inspect it.`,
   )
 
-/** Check the file header and return images before entering the text pager. */
+function unwrap<T>(result: Result<T, FileError>): T {
+  if (!result.ok) throw result.error
+  return result.value
+}
+
+/** Inspect the environment's file header and return supported images whole. */
 async function readSpecialFile(
+  env: ExecutionEnv,
   file: string,
   path: string,
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult | undefined> {
-  const handle = await open(file, 'r')
+  const handle = unwrap(await env.openBinaryReader(file, undefined, signal))
   try {
-    const header = Buffer.alloc(FILE_HEADER_BYTES)
-    let headerLength = 0
-    while (headerLength < header.length) {
-      const { bytesRead } = await handle.read(
-        header,
-        headerLength,
-        header.length - headerLength,
-        headerLength,
-      )
-      if (!bytesRead) break
-      headerLength += bytesRead
-    }
-    const bytes = header.subarray(0, headerLength)
+    const bytes = Buffer.from(
+      unwrap(await handle.read(0, FILE_HEADER_BYTES, signal)),
+    )
     const mimeType = imageMimeType(bytes)
     if (!mimeType) {
       if (isBinaryFile(bytes, true)) throw binaryFileError(path)
@@ -58,16 +56,14 @@ async function readSpecialFile(
     }
     const tooLarge = () =>
       new Error('Cannot read image: image exceeds the safe decoding size limit')
-    if ((await handle.stat()).size > READ_MAX_IMAGE_BYTES) throw tooLarge()
-    const chunks: Buffer[] = []
+    if (unwrap(await handle.info(signal)).size > READ_MAX_IMAGE_BYTES)
+      throw tooLarge()
+    const chunks: Uint8Array[] = []
     let length = 0
-    for await (const chunk of handle.createReadStream({
-      start: 0,
-      autoClose: false,
-      signal,
-    })) {
+    while (true) {
+      const chunk = unwrap(await handle.read(length, 64 * 1024, signal))
+      if (!chunk.length) break
       length += chunk.length
-      // Also bound a file that grows after stat, or a stream with an unknown size.
       if (length > READ_MAX_IMAGE_BYTES) throw tooLarge()
       chunks.push(chunk)
     }
@@ -140,11 +136,14 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       limit = READ_MAX_LINES,
       column = 0,
     } = readFileParamSchema.parse(input)
-    const file = resolveIn(cwd, path)
-    const image = await readSpecialFile(file, path, context?.signal)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const file = unwrap(await env.absolutePath(path, context?.signal))
+    const image = await readSpecialFile(env, file, path, context?.signal)
     if (image) return image
     const state = stateFor(context)
-    const snapshot = await fileStat(file)
+    const snapshot = unwrap(await env.fileInfo(file, context?.signal))
     const decoder = new TextDecoder('utf-8', { fatal: true })
     // Validate every chunk the pager reads, including bytes past the header.
     // Streaming preserves UTF-8 characters split across chunks.
@@ -193,8 +192,21 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       }
       return true
     }
-    for await (const chunk of createReadStream(file)) {
-      if (!consume(decodeText(chunk))) break
+    const reader = unwrap(
+      await env.openBinaryReader(file, undefined, context?.signal),
+    )
+    try {
+      let position = 0
+      while (true) {
+        const chunk = unwrap(
+          await reader.read(position, 64 * 1024, context?.signal),
+        )
+        if (!chunk.length) break
+        position += chunk.length
+        if (!consume(decodeText(Buffer.from(chunk)))) break
+      }
+    } finally {
+      await reader.close()
     }
     if (!more) consume(decodeText())
     if (!reachedStart && !(line === offset && col === column))

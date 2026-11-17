@@ -1,5 +1,6 @@
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
+import type { ExecutionEnv } from '../execution/types.ts'
 import type { VelaEventListener } from '../agent/events.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import {
@@ -29,6 +30,7 @@ import { validateInput } from './validation.ts'
 
 /** Context passed to a tool's execute. */
 export interface ToolContext {
+  /** @internal */ execution?: ExecutionEnv
   sessionId?: string
   scope?: Readonly<SessionScope>
   toolCallId?: string
@@ -419,7 +421,12 @@ export class ToolRegistry {
     if (!this.isAvailable(name))
       return await reject(`[Rejected] ${name} is not enabled in this session`)
     const interception = this.shared.interception
-    const context = {
+    const context: {
+      sessionId?: string
+      toolCallId?: string
+      parentToolCallId?: string
+      execution?: ExecutionEnv
+    } = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
       ...(options.parentToolCallId === undefined
@@ -487,6 +494,7 @@ export class ToolRegistry {
       try {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
+          execution: context.execution,
           sessionId: this.sessionId,
           scope: this.scope?.(),
           results: this.results,

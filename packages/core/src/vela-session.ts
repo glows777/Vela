@@ -181,7 +181,9 @@ export interface SessionDeps {
   onClose: (session: VelaSession) => void
   onSaved: (sessionId: string) => void
   onCwdChange: (session: VelaSession) => void
-  ensureLocal: (session: VelaSession) => Promise<void>
+  ensureLocal: (
+    session: VelaSession,
+  ) => Promise<import('./execution/types.ts').ExecutionEnv>
 }
 
 /**
@@ -301,7 +303,9 @@ export class VelaSession {
       messages: this.messages,
       tracker: this.tracker,
       timestamps: this.timestamps,
-      prepare: () => this.deps.ensureLocal(this),
+      prepare: async () => {
+        await this.deps.ensureLocal(this)
+      },
       isClosed: () => this.closed,
     })
     this.contextManager.autoCompaction =

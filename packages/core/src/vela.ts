@@ -389,6 +389,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         })
     if (env?.id !== 'node:local' || env.cwd !== session.cwd)
       throw new Error('Execution environment unavailable before E2')
+    return env
   }
 
   const session = (
@@ -485,7 +486,7 @@ export function createVela(options: VelaOptions = {}): Vela {
           if (signal?.aborted) throw signal.reason
           let onAbort: (() => void) | undefined
           try {
-            await Promise.race([
+            context.execution = await Promise.race([
               ensureLocal(session),
               new Promise<never>((_, reject) => {
                 onAbort = () => reject(signal?.reason)
