@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { local } from '@glows777/vela-channels'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { background } from '../../packages/core/src/extensions/background/index.ts'
@@ -7,9 +8,12 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
-async function until(check: () => boolean, what = 'condition') {
+async function until(
+  check: () => boolean | Promise<boolean>,
+  what = 'condition',
+) {
   const deadline = Date.now() + 5000
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`)
     await Bun.sleep(5)
   }
@@ -251,7 +255,7 @@ test('a delivered job is forgotten, so background_output explains that it has en
   )
 })
 
-test('background tools are topic tools: absent from the group session and a DM, present in the topic', async () => {
+test('background tools run in the group session and its topics, never in a DM', async () => {
   const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxText('group answer'), fauxText('dm answer')],
@@ -271,12 +275,13 @@ test('background tools are topic tools: absent from the group session and a DM, 
     larkEvent({ message_id: 'group', content: '{"text":"@_user_1 hi"}' }),
   )
   await until(() => t.model.calls.length === 1, 'the group reply')
-  for (const name of [
-    'background_start',
-    'background_output',
-    'background_stop',
-  ])
-    expect(t.model.calls[0]!.tools).not.toContain(name)
+  expect(t.model.calls[0]!.tools).toEqual(
+    expect.arrayContaining([
+      'background_start',
+      'background_output',
+      'background_stop',
+    ]),
+  )
 
   fake.deliver(topicEvent('topic', 'do the work'))
   await until(() => t.model.calls.length === 2, 'the topic reply')
@@ -307,7 +312,7 @@ test('background tools are topic tools: absent from the group session and a DM, 
     expect(t.model.calls[2]!.tools).not.toContain(name)
 })
 
-test('a group session cannot add the background tools back with a configured list', async () => {
+test('a narrowed chat list drops the background tools the group session gets by default', async () => {
   const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxText('hello')],
@@ -316,12 +321,7 @@ test('a group session cannot add the background tools back with a configured lis
       lark({
         appId: 'bot',
         owners: ['ou_alice'],
-        chats: [
-          {
-            id: 'oc_group',
-            tools: ['background_start', 'background_output', 'read_file'],
-          },
-        ],
+        chats: [{ id: 'oc_group', tools: ['read_file'] }],
         transport: fake.transport,
       }),
     ],
@@ -332,7 +332,115 @@ test('a group session cannot add the background tools back with a configured lis
     larkEvent({ message_id: 'group', content: '{"text":"@_user_1 hi"}' }),
   )
   await until(() => t.model.calls.length === 1, 'the group reply')
-  expect(t.model.calls[0]!.tools).not.toContain('background_start')
-  expect(t.model.calls[0]!.tools).not.toContain('background_output')
+  for (const name of [
+    'background_start',
+    'background_output',
+    'background_stop',
+    'bash',
+  ])
+    expect(t.model.calls[0]!.tools).not.toContain(name)
   expect(t.model.calls[0]!.tools).toContain('read_file')
+})
+
+test('a group hub runs a background command and answers its exit in the main timeline', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('background_start', { command: 'sleep 0.5; echo READY' }),
+      fauxText('Started the check.'),
+      fauxText('Still running.'),
+      (request) => {
+        expect(request.lastUserText).toStartWith(
+          'Background command bg-1 finished with exit code 0.',
+        )
+        expect(request.lastUserText).toContain('READY')
+        return fauxText('The check finished.')
+      },
+    ],
+    extensions: [
+      background(),
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(
+    larkEvent({
+      message_id: 'trigger',
+      content: '{"text":"@_user_1 check slowly"}',
+    }),
+  )
+  await until(() => fake.sent.length === 1, 'the first reply')
+  // The command is still sleeping: the hub answers a new message instead of blocking on it.
+  fake.deliver(
+    larkEvent({ message_id: 'status', content: '{"text":"@_user_1 status?"}' }),
+  )
+  await until(() => fake.sent.length === 2, 'the status reply')
+  await until(() => fake.sent.length === 3, 'the exit reply')
+  expect(fake.sent).toEqual([
+    { messageId: 'trigger', text: 'Started the check.' },
+    { messageId: 'status', text: 'Still running.' },
+    // The exit joined the hub's own queue, so it replies in the main timeline like any input.
+    { messageId: 'status', text: 'The check finished.' },
+  ])
+  expect(t.model.calls.at(-1)!.tools).toContain('background_start')
+})
+
+test('a Local project hub runs bash and a background exit arrives as the next hub input', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'echo HUB_BASH' }),
+      fauxText('The shell printed HUB_BASH.'),
+      fauxToolCall('background_start', { command: 'sleep 0.3; echo READY' }),
+      fauxText('Started the check.'),
+      (request) => {
+        expect(request.lastUserText).toStartWith(
+          'Background command bg-1 finished with exit code 0.',
+        )
+        expect(request.lastUserText).toContain('READY')
+        return fauxText('The check finished.')
+      },
+    ],
+    extensions: [background(), local({})],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  const host = t.vela.channel('local')
+  const project = await host.openProject({ cwd: t.cwd, name: 'Hub' })
+  const visible = async (text: string) =>
+    (
+      await host.messages({
+        projectId: project.id,
+        sessionId: project.sessionId,
+      })
+    ).messages.some((message) => message.text === text)
+
+  await host.submit({
+    projectId: project.id,
+    sessionId: project.sessionId,
+    text: 'Check the shell',
+  })
+  await until(
+    async () => visible('The shell printed HUB_BASH.'),
+    'the bash reply',
+  )
+  // The hub ran the command itself: no dispatch, and the model saw its output.
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('HUB_BASH')
+  expect(t.model.calls[0]!.tools).toContain('bash')
+
+  await host.submit({
+    projectId: project.id,
+    sessionId: project.sessionId,
+    text: 'Check slowly',
+  })
+  await until(async () => visible('Started the check.'), 'the start reply')
+  await until(async () => visible('The check finished.'), 'the exit reply')
+  expect(t.model.calls.at(-1)!.lastUserText).toStartWith(
+    'Background command bg-1 finished',
+  )
 })

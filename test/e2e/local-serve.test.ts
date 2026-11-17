@@ -54,7 +54,7 @@ test('real serve admits project chat, starts a file task and delivers HTTP/SSE w
     export default () => {}
   `,
   )
-  // The hub has no write_file: after the handoff its next response is a silenced reply,
+  // The hub hands the writing to a task: after the handoff its next response is a silenced reply,
   // and the task writes the file in the opened project.
   await Bun.write(
     join(cwd.path, 'scenario.json'),

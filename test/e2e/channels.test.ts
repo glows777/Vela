@@ -410,7 +410,8 @@ test('Lark enabled group members share a persisted session and both display name
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Alice: first')
   expect(JSON.stringify(f.t.model.calls[1]?.prompt)).toContain('Bob: second')
   expect(f.t.model.calls[1]?.tools).toContain('read_file')
-  expect(f.t.model.calls[1]?.tools).not.toContain('bash')
+  // A hub runs quick work itself; a longer task is still dispatched to a topic (#421).
+  expect(f.t.model.calls[1]?.tools).toContain('bash')
   expect(
     await f.t.readData('sessions/lark-oc_group/transcript.jsonl'),
   ).toContain('Alice: first')
