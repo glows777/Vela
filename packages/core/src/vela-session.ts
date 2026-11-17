@@ -51,7 +51,6 @@ import {
   type SessionEntry,
   type SessionTreeNode,
 } from './session/entries.ts'
-import { EnvironmentChanges } from './session/environment-message.ts'
 import { exportBranch } from './session/export.ts'
 import { SessionStore } from './session/index.ts'
 import { MessageQueue, messageText } from './session/message-queue.ts'
@@ -233,7 +232,6 @@ export class VelaSession {
   private running?: Promise<void>
   private turn: BeforeAgentStartResult = { sections: {}, messages: [] }
   private readonly messageQueue = new MessageQueue((event) => this.emit(event))
-  private readonly environment = new EnvironmentChanges(this.messageQueue)
   /** How steer messages are taken (default one-at-a-time, like pi) */
   steeringMode: QueueMode = 'one-at-a-time'
   /** How followUp messages are taken (default one-at-a-time, like pi) */
@@ -516,7 +514,7 @@ export class VelaSession {
     this.deps.forward(event, this.id)
     // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
     // between a tool call and its result
-    if (event.type === 'turn_end') this.flushPending()
+    if (event.type === 'turn_end') this.flushPendingCustom()
   }
 
   /** @internal `override` (`null`: none) keeps a preview or a new turn from inheriting a replacement */
@@ -645,7 +643,7 @@ export class VelaSession {
       return await run
     } finally {
       if (this.running === running) this.running = undefined
-      this.flushPending()
+      this.flushPendingCustom()
       while (this.userBash.flush()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
@@ -1110,7 +1108,7 @@ export class VelaSession {
     options: SendMessageOptions = {},
   ): Promise<void> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    const entry = this.messageQueue.toMessage(message)
+    const entry = this.customMessage(message)
     if (options.deliverAs === 'nextTurn') {
       this.messageQueue.nextTurnMessages.push(entry)
       return
@@ -1178,10 +1176,21 @@ export class VelaSession {
     return this.messageQueue.customMessages.get(message)
   }
 
-  /** Appends what the session owes the conversation between steps: a branch checkout, then queued custom messages. */
-  private flushPending(): void {
-    const branch = this.environment.update(this.cwd, this.messages)
-    if (branch) this.append(this.messageQueue.toMessage(branch))
+  /** Builds the user message a custom message becomes and remembers its fields. */
+  private customMessage(message: CustomMessage): ModelMessage {
+    assertCustomType(message.customType)
+    if (typeof message.content !== 'string' && !Array.isArray(message.content))
+      throw new Error('A custom message needs content (a string or parts)')
+    const entry: ModelMessage = { role: 'user', content: message.content }
+    this.messageQueue.customMessages.set(entry, {
+      customType: message.customType,
+      display: message.display === true,
+      ...(message.details === undefined ? {} : { details: message.details }),
+    })
+    return entry
+  }
+
+  private flushPendingCustom(): void {
     for (const message of this.messageQueue.pendingCustom.splice(0))
       this.append(message)
   }
@@ -1307,7 +1316,7 @@ export class VelaSession {
         inputs = next()
         if (!inputs.length) {
           // Messages may be queued while saving: check again after saving; there is no await between here and unlock
-          this.flushPending()
+          this.flushPendingCustom()
           await this.saveOrReport()
           saved = true
           inputs = next()
@@ -1315,7 +1324,7 @@ export class VelaSession {
       }
     } finally {
       options.signal?.removeEventListener('abort', forward)
-      this.flushPending()
+      this.flushPendingCustom()
       this.toolDetails.clear()
       if (!saved) await this.saveOrReport()
       // Until the last flush finds nothing there is no await before unlocking: a later `!` command records itself
@@ -1324,7 +1333,7 @@ export class VelaSession {
       busy.controller = undefined
       this.prompting = false
       // Sent while saving (written with the next entry or when the session closes)
-      this.flushPending()
+      this.flushPendingCustom()
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error
@@ -1361,14 +1370,12 @@ export class VelaSession {
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.turn = started
     // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
-    const added = started.messages.map((message) =>
-      this.messageQueue.toMessage(message),
-    )
+    const added = started.messages.map((message) => this.customMessage(message))
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
     // `!` commands that finished during an earlier loop of this run come before the new input
     this.userBash.flush()
-    this.flushPending()
+    this.flushPendingCustom()
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
     for (const message of [
@@ -1414,7 +1421,7 @@ export class VelaSession {
         ),
       onMessage: (message, producer) => this.record(message, producer),
       injectNotice: (content) =>
-        this.messageQueue.toMessage({
+        this.customMessage({
           customType: 'loop',
           content,
           display: true,
