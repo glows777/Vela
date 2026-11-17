@@ -8,11 +8,60 @@ import type {
 } from '@glows777/vela-channels'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
 import { createVela } from '../support/compat-vela.ts'
-import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
+import { fakeLark } from '../support/lark.ts'
+import {
+  cleanupTestVelas,
+  createTestVela,
+  tempDir,
+  type TestVelaOptions,
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
+
+async function until(check: () => boolean) {
+  const deadline = Date.now() + 3000
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting')
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  }
+}
+
+/** A Lark group whose fake transport delivers host submissions to the real gateway. */
+function larkGroup(responses: TestVelaOptions['responses'], cache = false) {
+  const fake = fakeLark()
+  const t = createTestVela({
+    faux: cache ? { cache: true } : undefined,
+    responses,
+    allowPendingResponses: true,
+    extensions: [
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  return { fake, t }
+}
+
+const groupInput = (
+  overrides: Partial<IncomingMessage> = {},
+): IncomingMessage => ({
+  channelId: 'oc_group',
+  chatKind: 'group',
+  senderId: 'ou_alice',
+  senderName: 'Alice',
+  text: 'hello',
+  replyToId: 'm1',
+  ...overrides,
+})
+
+const NOTE =
+  'Message from Vela\'s topic "find the code" (root_id root_a) (not from a person):\nThe code is ORBIT-73'
 
 /** The `<tools>` section of a system prompt, or '' when it has none */
 function toolsSection(system: string): string {
@@ -422,4 +471,40 @@ test('a date rollover leaves the assembled system prompt byte-identical', async 
   } finally {
     globalThis.Date = real
   }
+})
+
+test('a group session sends the same system prompt for a person, untagged discussion and a note', async () => {
+  const { t } = larkGroup([
+    fauxText('hello'),
+    fauxText('noted'),
+    fauxText('Noted'),
+    fauxText('ship it'),
+  ])
+  await t.vela.startChannels()
+  const host = t.vela.channel('lark')
+  const submit = async (message: IncomingMessage) => {
+    const before = t.model.calls.length
+    await host.submit(message)
+    await until(() => t.model.calls.length > before)
+  }
+  await submit(groupInput())
+  await submit(
+    groupInput({
+      passive: true,
+      replyToId: 'm2',
+      text: 'the build is green',
+    }),
+  )
+  await submit(
+    groupInput({
+      handoff: { id: 'h1', from: 'group session', depth: 1 },
+      replyToId: 'root_a',
+      text: NOTE,
+    }),
+  )
+  await submit(groupInput({ replyToId: 'm3', text: 'ship it' }))
+
+  const calls = t.model.calls
+  expect(calls).toHaveLength(4)
+  for (const call of calls) expect(call.system).toBe(calls[0]!.system)
 })
