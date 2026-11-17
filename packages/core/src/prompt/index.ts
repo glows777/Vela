@@ -5,9 +5,12 @@ import type { PromptContext, SectionRender } from './system-prompt.ts'
 export * from './environment.ts'
 export * from './system-prompt.ts'
 
-/** The default intro paragraph (pi's preamble). */
+/**
+ * The default intro paragraph (pi's preamble). It names no capability: a session's tools vary, and
+ * `<tools>` and `<rules>` describe the ones it can actually call.
+ */
 const PREAMBLE =
-  'You are Vela, an AI agent that helps users by calling the tools this session provides: reading, searching and editing files, running commands, and any extra tools from extensions.'
+  'You are Vela, an AI agent that helps users by calling the tools this session provides.'
 
 /**
  * The untagged first section: the default intro, or the prompt that replaces it (SYSTEM.md,
