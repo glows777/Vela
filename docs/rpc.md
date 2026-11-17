@@ -88,7 +88,7 @@ A prompt can also fail after it was answered with `started`, before the agent lo
 
 ```json
 {"id":"req-2","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
-{"id":"req-2","type":"response","command":"prompt","success":false,"error":"No model selected. Use --model provider/id, set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json; built-in openai / anthropic read OPENAI_API_KEY / ANTHROPIC_API_KEY), or set OPENAI_API_KEY + OPENAI_API_MODEL_NAME. For an offline demo use VELA_MODEL=mock."}
+{"id":"req-2","type":"response","command":"prompt","success":false,"error":"No model available. Run vela setup; Sign in with /login in interactive mode, or set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY or DEEPSEEK_API_KEY) and Vela picks a default model; or use --model provider/id, or set defaultModel in ~/.vela/settings.json (providers are in ~/.vela/models.json). For an offline demo use VELA_MODEL=mock."}
 ```
 
 Failures inside the loop (provider errors, aborts) are reported in `agent_end` only.
@@ -338,7 +338,7 @@ Switches to the next supported level, like Shift+Tab. Data: `{ "level" }`, or `n
 {"id":"18","type":"compact","customInstructions":"Keep the API decisions"}
 ```
 
-Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the compaction result, like pi: `{ "summary", "firstKeptEntryId", "tokensBefore", "tokensAfter", "messages" }`. Fails while a run is in progress, with `No model selected. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary splits at a user message that is not the first message, has at least six messages from it to the end, and has every earlier tool call answered, so a new or short session has nothing to compact.
+Summarizes earlier history now, keeps recent messages and saves. `customInstructions` (optional) is what the summary should keep. Data: the compaction result, like pi: `{ "summary", "firstKeptEntryId", "tokensBefore", "tokensAfter", "messages" }`. Fails while a run is in progress, with `No model available. ...` when no model is set, and with `Nothing to compact (session too small)` when there is no earlier turn to summarize (as in pi). A summary splits at a user message that is not the first message, has at least six messages from it to the end, and has every earlier tool call answered, so a new or short session has nothing to compact.
 
 #### set_auto_compaction
 
