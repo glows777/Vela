@@ -1,4 +1,3 @@
-import { resolve } from 'node:path'
 import z from 'zod'
 import { createLocalExecutionEnv } from '../execution/local.ts'
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
@@ -82,10 +81,6 @@ const utf8Bytes = (char: string) => {
   const code = char.codePointAt(0) ?? 0
   return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
 }
-
-/** Resolves relative paths against cwd, or the process working directory when cwd is unset. */
-export const resolveIn = (cwd: string | undefined, path: string) =>
-  cwd ? resolve(cwd, path) : resolve(path)
 
 export const readFileParamSchema = z.object({
   path: z
