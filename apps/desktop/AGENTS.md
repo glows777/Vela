@@ -19,6 +19,8 @@ Keep `sandbox`, `contextIsolation`, and disabled `nodeIntegration`. Deny new win
 
 ## Design ownership
 
+Screens follow `design/app.md`; the boards in `design/vela-app.html` show them. `design/README.md` says how those files, `tokens.json` and Arc fit together.
+
 `design/tokens.json` owns Vela brand colors and fonts. Prefix Vela tokens with `vela-` and regenerate CSS with `bun run --cwd apps/desktop tokens`. Map colors and fonts to Arc variables only in the document-root `src/styles/arc-theme.css` so portals inherit the same theme. Arc supplies control geometry, spacing, and motion; avoid a second control system.
 
 Adopt consumed free Arc components as our code. Apply ordinary lint, dead-code, size, and cycle checks, and edit them when the product needs it. Record source URLs, retrieval date, license, and adaptations once in `design/provenance.json`; preserve bundled licenses. Use the specimen for design work and keep `index.html` as the sole production input so samples cannot ship.

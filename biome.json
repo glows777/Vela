@@ -10,7 +10,8 @@
     "includes": [
       "**",
       "!packages/core/src/models/catalog.generated.ts",
-      "!apps/desktop/src/styles/tokens.generated.css"
+      "!apps/desktop/src/styles/tokens.generated.css",
+      "!apps/desktop/design/vela-app.html"
     ]
   },
   "assist": {
