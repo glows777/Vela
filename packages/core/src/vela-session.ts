@@ -1109,7 +1109,7 @@ export class VelaSession {
     options: SendMessageOptions = {},
   ): Promise<void> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    const entry = this.customMessage(message)
+    const entry = this.messageQueue.customMessage(message)
     if (options.deliverAs === 'nextTurn') {
       this.messageQueue.nextTurnMessages.push(entry)
       return
@@ -1175,20 +1175,6 @@ export class VelaSession {
   /** The custom message fields of a history message an extension sent with sendMessage(); undefined for other messages. */
   customMessageOf(message: ModelMessage): CustomMessageInfo | undefined {
     return this.messageQueue.customMessages.get(message)
-  }
-
-  /** Builds the user message a custom message becomes and remembers its fields. */
-  private customMessage(message: CustomMessage): ModelMessage {
-    assertCustomType(message.customType)
-    if (typeof message.content !== 'string' && !Array.isArray(message.content))
-      throw new Error('A custom message needs content (a string or parts)')
-    const entry: ModelMessage = { role: 'user', content: message.content }
-    this.messageQueue.customMessages.set(entry, {
-      customType: message.customType,
-      display: message.display === true,
-      ...(message.details === undefined ? {} : { details: message.details }),
-    })
-    return entry
   }
 
   private flushPendingCustom(): void {
@@ -1372,7 +1358,9 @@ export class VelaSession {
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.turn = started
     // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
-    const added = started.messages.map((message) => this.customMessage(message))
+    const added = started.messages.map((message) =>
+      this.messageQueue.customMessage(message),
+    )
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
     // `!` commands that finished during an earlier loop of this run come before the new input
@@ -1423,7 +1411,7 @@ export class VelaSession {
         ),
       onMessage: (message, producer) => this.record(message, producer),
       injectNotice: (content) =>
-        this.customMessage({
+        this.messageQueue.customMessage({
           customType: 'loop',
           content,
           display: true,

@@ -25,7 +25,7 @@ import {
   type ResolvedModel,
   type ThinkingLevel,
 } from './models/index.ts'
-import { type ContextFile, loadContextFiles } from './prompt/context-files.ts'
+import type { ContextFile } from './prompt/context-files.ts'
 import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
 import {
   addendum,
