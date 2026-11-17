@@ -4,7 +4,7 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '@glows777/vela-channels'
-import { topicSessionOptions } from '@glows777/vela-channels'
+import { channelSessionId, topicSessionOptions } from '@glows777/vela-channels'
 import { drainChannels } from '@glows777/vela-channels/testing'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -130,4 +130,89 @@ test('a non-Lark channel starts, reads, waits and forwards through shared topic 
   await drainChannels(t.vela)
   expect(forwarded).toEqual(['root'])
   expect(sent.at(-1)!.text).toBe('Version accepted')
+})
+
+test('a chat tool list narrows a session that already exists, and only a new one gets it whole', async () => {
+  let receive!: (message: IncomingMessage) => void | Promise<void>
+  const channel: ChannelDefinition = {
+    name: 'fixture',
+    description: 'Positive tool list fixture',
+    start() {},
+    stop() {},
+    async send() {},
+    onMessage(handler) {
+      receive = handler
+    },
+    sessionOptions: () => ({ tools: ['read_file', 'tool_search'] }),
+  }
+  const t = createTestVela({
+    responses: [
+      fauxText('opened by the channel'),
+      fauxText('opened by a host'),
+    ],
+    extensions: [
+      function fixture(api) {
+        api.registerChannel(channel)
+      },
+    ],
+  })
+  await t.vela.startChannels()
+  const message = {
+    channelId: 'group',
+    senderId: 'alice',
+    senderName: 'Alice',
+    text: 'Hello group',
+    replyToId: 'trigger',
+  }
+  // The channel creates this session, so its list applies as written.
+  await receive(message)
+  expect(t.model.calls[0]!.tools).toEqual(['read_file', 'tool_search'])
+
+  // A host that opened the same chat first keeps its own, narrower allowlist.
+  const sessionId = channelSessionId('fixture', 'other')
+  const early = t.vela.session(sessionId, { tools: ['read_file'] })
+  expect(early.getActiveTools()).toEqual(['read_file'])
+  await receive({ ...message, channelId: 'other', text: 'Hello again' })
+  expect(t.vela.session(sessionId)).toBe(early)
+  expect(early.getActiveTools()).toEqual(['read_file'])
+  expect(t.model.calls[1]!.tools).toEqual(['read_file'])
+})
+
+test('a channel applies its tool split once, so a later message keeps what a session_start hook chose', async () => {
+  let receive!: (message: IncomingMessage) => void | Promise<void>
+  const channel: ChannelDefinition = {
+    name: 'fixture',
+    description: 'Lifecycle fixture',
+    start() {},
+    stop() {},
+    async send() {},
+    onMessage(handler) {
+      receive = handler
+    },
+    sessionOptions: () => ({ tools: ['read_file'] }),
+  }
+  const t = createTestVela({
+    responses: [fauxText('first'), fauxText('second')],
+    extensions: [
+      function fixture(api) {
+        api.registerChannel(channel)
+        // Documented order: the channel's rules apply first, then a session_start handler adjusts them.
+        api.on('session_start', (_event, ctx) => {
+          ctx.session.setActiveTools(['read_file', 'tool_search'])
+        })
+      },
+    ],
+  })
+  await t.vela.startChannels()
+  const message = {
+    channelId: 'group',
+    senderId: 'alice',
+    senderName: 'Alice',
+    text: 'Hello',
+    replyToId: 'trigger',
+  }
+  await receive(message)
+  expect(t.model.calls[0]!.tools).toEqual(['read_file', 'tool_search'])
+  await receive({ ...message, text: 'Again', replyToId: 'second' })
+  expect(t.model.calls[1]!.tools).toEqual(['read_file', 'tool_search'])
 })
