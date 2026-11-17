@@ -375,7 +375,6 @@ test('a branch checkout in the working tree leaves the request and the history u
 
 test('a date rollover leaves the assembled system prompt byte-identical', async () => {
   const real = Date
-  // The env section reads `new Date()` on each request. Pin the local calendar across midnight.
   const pin = (iso: string) => {
     const fixed = new real(iso)
     globalThis.Date = new Proxy(real, {
