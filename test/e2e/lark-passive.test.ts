@@ -229,7 +229,9 @@ test('a passive flood is trimmed to a safe evaluation and the next explicit inpu
     run.t.vela.session('lark-oc_group').getEntries(),
   )
   expect(transcript).not.toContain('0000 ')
-})
+  // 1000 flood inputs are 1000 durable admission writes: several seconds on a loaded CI disk.
+  // The 10s wait above bounds the work, so the harness limit only has to leave room for it.
+}, 30_000)
 
 test('a passive input rejected by the context guard leaves the session usable', async () => {
   const run = setup({
