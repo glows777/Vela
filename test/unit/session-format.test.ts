@@ -63,7 +63,7 @@ test('the session-format Header matches SessionHeader and states how location is
     '`resume()` restores that saved cwd even when the caller passes a different cwd',
   )
   expect(header).toContain(
-    'A header with no `location` keeps the prior fallback, the caller\'s cwd or the default cwd',
+    "A header with no `location` keeps the prior fallback, the caller's cwd or the default cwd",
   )
   expect(header).toContain(
     '`exportJsonl()`, `fork()`, and `clone()` keep `location` on the header they write',
