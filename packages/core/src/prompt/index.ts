@@ -10,7 +10,7 @@ export * from './system-prompt.ts'
  * `<tools>` and `<rules>` describe the ones it can actually call.
  */
 const PREAMBLE =
-  'You are Vela, an AI agent that helps users by calling the tools this session provides, including any extra tools from extensions.'
+  'You are Vela, an AI agent that helps users by calling the tools this session provides.'
 
 /**
  * The untagged first section: the default intro, or the prompt that replaces it (SYSTEM.md,
