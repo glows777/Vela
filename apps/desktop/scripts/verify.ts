@@ -284,6 +284,18 @@ const hostJourney = async (page: Page) => {
     'Real window opened a Local project, sent a message, and rendered the faux reply.',
   )
 }
+async function closeElectron(browser: import('playwright').Browser) {
+  const session = await browser.newBrowserCDPSession()
+  try {
+    await session.send('Browser.close')
+  } catch (error) {
+    // Electron can close the CDP connection before acknowledging Browser.close.
+    if (!(error instanceof Error) || !error.message.includes('has been closed'))
+      throw error
+  } finally {
+    await browser.close()
+  }
+}
 async function development() {
   console.log('Desktop verification: launching development Electron')
   const child = spawn(
@@ -384,9 +396,9 @@ async function development() {
       await hostJourney(page)
       console.log('Desktop verification: host journey passed')
     } finally {
-      console.log('Desktop verification: disconnecting DevTools')
-      await browser.close()
-      console.log('Desktop verification: DevTools disconnected')
+      console.log('Desktop verification: closing Electron')
+      await closeElectron(browser)
+      console.log('Desktop verification: Electron closed')
     }
   } finally {
     if (child.pid && child.exitCode === null)
