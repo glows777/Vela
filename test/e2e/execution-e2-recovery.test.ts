@@ -232,3 +232,39 @@ test('default local bash keeps spilled output under the session result root', as
     dir.cleanup()
   }
 })
+
+test('user bash cannot execute on host when the selected environment rejects it', async () => {
+  const dir = tempDir()
+  const marker = join(dir.path, 'user-bash-host-marker')
+  let execs = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model: createFauxModel({ responses: [] }),
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.exec = async () => {
+        execs++
+        return {
+          ok: false,
+          error: Object.assign(new Error('environment unavailable'), {
+            code: 'unavailable' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await expect(
+      vela
+        .session('user-bash-boundary')
+        .executeBash('touch user-bash-host-marker'),
+    ).rejects.toThrow('environment unavailable')
+    expect(execs).toBe(1)
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})

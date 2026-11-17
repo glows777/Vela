@@ -303,9 +303,7 @@ export class VelaSession {
       messages: this.messages,
       tracker: this.tracker,
       timestamps: this.timestamps,
-      prepare: async () => {
-        await this.deps.ensureLocal(this)
-      },
+      prepare: () => this.deps.ensureLocal(this),
       isClosed: () => this.closed,
     })
     this.contextManager.autoCompaction =
