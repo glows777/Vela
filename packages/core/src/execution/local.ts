@@ -85,7 +85,10 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
     try {
       child = spawn(argv[0], argv.slice(1), {
         cwd: resolvedCwd.value,
+        // Like the MCP stdio transport, command execution must preserve the inherited
+        // environment while applying per-command overrides; it does not read settings.
         env: {
+          // vela-boundary: allow
           ...(options.inheritEnv === false ? {} : process.env),
           ...options.env,
         },

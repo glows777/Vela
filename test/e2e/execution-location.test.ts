@@ -812,3 +812,41 @@ test('immediately aborting a default user command prevents its side effect', asy
     dir.cleanup()
   }
 })
+
+test('local commands inherit and override the host environment only when requested', async () => {
+  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const dir = tempDir()
+  const env = createLocalExecutionEnv({ cwd: dir.path })
+  const key = 'VELA_EXEC_INHERIT_TEST'
+  const previous = process.env[key]
+  process.env[key] = 'inherited'
+  const outputs: string[] = []
+  try {
+    const command = [
+      process.execPath,
+      '-e',
+      `process.stdout.write(process.env.${key} || 'absent')`,
+    ]
+    for (const options of [
+      {},
+      { env: { [key]: 'override' } },
+      { inheritEnv: false },
+    ]) {
+      let output = ''
+      const result = await env.exec(command, {
+        ...options,
+        onOutput: (text) => {
+          output += text
+        },
+      })
+      expect(result.ok).toBe(true)
+      outputs.push(output)
+    }
+    expect(outputs).toEqual(['inherited', 'override', 'absent'])
+  } finally {
+    if (previous === undefined) delete process.env[key]
+    else process.env[key] = previous
+    await env.cleanup()
+    dir.cleanup()
+  }
+})
