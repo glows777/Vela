@@ -11,7 +11,7 @@ import {
   restoreLineEndings,
   splitBom,
 } from './edit-diff.ts'
-import { withFileMutationQueue } from './file-mutation-queue.ts'
+import { withEnvironmentMutationQueue } from './file-mutation-queue.ts'
 import { stateFor } from './file-write-guard.ts'
 import type { ToolDefinition } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
@@ -236,7 +236,7 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
     const resolved = unwrap(await env.absolutePath(path, signal))
     const guardKey = `${env.id}:${resolved}`
     const state = stateFor(context)
-    await withFileMutationQueue(
+    await withEnvironmentMutationQueue(
       resolved,
       async () => {
         if (state) {
@@ -388,7 +388,7 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
     const resolved = unwrap(await env.absolutePath(path, signal))
     const guardKey = `${env.id}:${resolved}`
     const state = stateFor(context)
-    return withFileMutationQueue(
+    return withEnvironmentMutationQueue(
       resolved,
       async () => {
         const throwIfAborted = () => {

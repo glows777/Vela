@@ -8,6 +8,8 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
+  rm,
   writeFile,
 } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -276,6 +278,23 @@ export class LocalFiles {
       signal?.throwIfAborted()
       await writeFile(p, content, { signal })
     })
+  }
+  renameFile(
+    sourcePath: string,
+    destinationPath: string,
+    signal?: AbortSignal,
+  ) {
+    const source = this.path(sourcePath)
+    const destination = this.path(destinationPath)
+    return attempt(source, signal, () => rename(source, destination))
+  }
+  remove(
+    path: string,
+    options: { recursive?: boolean; force?: boolean } | undefined,
+    signal?: AbortSignal,
+  ) {
+    const p = this.path(path)
+    return attempt(p, signal, () => rm(p, options))
   }
   fileInfo(path: string, signal?: AbortSignal) {
     const p = this.path(path)

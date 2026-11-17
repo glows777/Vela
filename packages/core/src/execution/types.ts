@@ -130,6 +130,16 @@ export interface ExecutionEnv {
     content: string | Uint8Array,
     signal?: AbortSignal,
   ): Promise<Result<void, FileError>>
+  renameFile(
+    sourcePath: string,
+    destinationPath: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void, FileError>>
+  remove(
+    path: string,
+    options: { recursive?: boolean; force?: boolean } | undefined,
+    signal?: AbortSignal,
+  ): Promise<Result<void, FileError>>
   fileInfo(
     path: string,
     signal?: AbortSignal,

@@ -34,7 +34,24 @@ async function getMutationQueueKey(filePath: string): Promise<string> {
  * Serializes mutations of the same file (resolved through symlinks).
  * Mutations of different files still run in parallel.
  */
-export async function withFileMutationQueue<T>(
+export function withFileMutationQueue<T>(
+  filePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return enqueueMutation(filePath, fn)
+}
+
+/** @internal Queue a mutation by its environment namespace and canonical path. */
+export function withEnvironmentMutationQueue<T>(
+  filePath: string,
+  fn: () => Promise<T>,
+  env: ExecutionEnv,
+  signal?: AbortSignal,
+): Promise<T> {
+  return enqueueMutation(filePath, fn, env, signal)
+}
+
+async function enqueueMutation<T>(
   filePath: string,
   fn: () => Promise<T>,
   env?: ExecutionEnv,
@@ -46,7 +63,7 @@ export async function withFileMutationQueue<T>(
       const result = await env.canonicalPath(filePath, signal)
       if (!result.ok && result.error.code !== 'not_found') throw result.error
       key = `${env.id}:${result.ok ? result.value : filePath}`
-    } else key = await getMutationQueueKey(filePath)
+    } else key = `node:local:${await getMutationQueueKey(filePath)}`
     const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve()
 
     let releaseNext!: () => void

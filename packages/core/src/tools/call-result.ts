@@ -81,8 +81,12 @@ export async function prepareCallResult({
       if (!temp.ok) spillFailed = true
       else {
         const written = await env.writeFile(temp.value, full, signal)
-        if (!written.ok) spillFailed = true
-        else
+        if (!written.ok) {
+          spillFailed = true
+          await env
+            .remove(temp.value, { force: true }, undefined)
+            .catch(() => {})
+        } else
           stored = new StoredToolResult(
             temp.value,
             results.indexPath,

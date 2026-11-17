@@ -445,6 +445,7 @@ test('oversized tool output is saved through the session environment', async () 
     responses: [fauxToolCall('extension-1_large_report', {}), fauxText('done')],
   })
   let writes = 0
+  let removals = 0
   const vela = createVela({
     cwd: dir.path,
     model,
@@ -461,6 +462,11 @@ test('oversized tool output is saved through the session environment', async () 
     ],
     env: ({ location }) => {
       const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const remove = env.remove.bind(env)
+      env.remove = async (...args) => {
+        removals++
+        return remove(...args)
+      }
       env.writeFile = async () => {
         writes++
         return {
@@ -476,11 +482,34 @@ test('oversized tool output is saved through the session environment', async () 
   try {
     await vela.session('report-boundary').prompt('report')
     expect(writes).toBe(1)
+    expect(removals).toBe(1)
     const output = String(model.calls[1]!.toolResults[0]!.output)
     expect(output).toContain('could not be saved')
     expect(output).not.toContain('Full output:')
   } finally {
     await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('execution environment publishes a complete file by rename and removes staging on failure', async () => {
+  const dir = tempDir()
+  const env = createLocalExecutionEnv({ cwd: dir.path })
+  try {
+    expect((await env.writeFile('draft.part', 'complete')).ok).toBe(true)
+    expect((await env.renameFile('draft.part', 'published.txt')).ok).toBe(true)
+    expect(await env.readTextFile('published.txt')).toEqual({
+      ok: true,
+      value: 'complete',
+    })
+    expect((await env.remove('draft.part', { force: true })).ok).toBe(true)
+    expect((await env.remove('published.txt', { force: true })).ok).toBe(true)
+    expect(await env.exists('published.txt')).toEqual({
+      ok: true,
+      value: false,
+    })
+  } finally {
+    await env.cleanup()
     dir.cleanup()
   }
 })
