@@ -294,7 +294,7 @@ Templates load from `<project>/.vela/prompts/` (trusted projects only), the `pro
 
 ## The system prompt
 
-The system prompt is built from named, tagged sections: the intro paragraph (untagged), `<tools>`, `<deferred_tools>`, `<rules>`, `<docs>`, `<addendum>`, `<project_context>`, `<skills>`, `<cwd>`, `<env>`, then one section per extension (for example `<memory>`). `/context` counts it as one part of the window, and `VELA_DEBUG=1` lists which sections are on.
+The system prompt is built from named, tagged sections: the intro paragraph (untagged), `<tools>`, `<deferred_tools>`, `<rules>`, `<docs>`, `<addendum>`, `<project_context>`, `<skills>`, `<cwd>`, `<env>`, then one section per extension (for example `<memory>`). `/context` counts it as one part of the window, and `VELA_DEBUG=1` lists which sections are on. `<env>` names the operating system and the shell. It does not name the date, the time of day, the timezone or the git branch.
 
 `<tools>` names every tool this session can call that has a `promptSnippet`, and `<rules>` carries the rules those tools bring with them, so a session without `bash`, `write_file` or `edit_file` (a top-level group chat, for example) is never told to use them.
 

@@ -311,3 +311,54 @@ test('a branch checkout in the working tree leaves the request and the history u
     usage[0]!.cacheWriteTokens - 1,
   )
 })
+
+test('a date rollover leaves the assembled system prompt byte-identical', async () => {
+  const real = Date
+  const pin = (iso: string) => {
+    const fixed = new real(iso)
+    globalThis.Date = new Proxy(real, {
+      construct(target, args, newTarget) {
+        const used = args.length === 0 ? [fixed.getTime()] : args
+        return Reflect.construct(target, used, newTarget)
+      },
+      get(target, prop, receiver) {
+        if (prop === 'now') return () => fixed.getTime()
+        const value = Reflect.get(target, prop, receiver)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as DateConstructor
+  }
+  try {
+    pin('2026-11-17T23:30:00')
+    const t = createTestVela({
+      responses: [fauxText('one'), fauxText('two')],
+    })
+    await t.run('one')
+    pin('2026-11-18T00:30:00')
+    await t.run('two')
+
+    const [first, second] = t.model.calls
+    expect(second!.system).toBe(first!.system)
+    expect(first!.system).toContain(`\nos: ${process.platform}\n`)
+    expect(first!.system).toContain('\nshell: ')
+    expect(first!.system).not.toContain('\ndate:')
+    expect(first!.system).not.toContain('\ntimezone:')
+    expect(first!.system).not.toMatch(/\d{2}:\d{2}/)
+    for (const call of t.model.calls) {
+      const history = call.prompt
+        .filter((message) => message.role !== 'system')
+        .map((message) =>
+          typeof message.content === 'string'
+            ? message.content
+            : message.content
+                .map((part) => (part.type === 'text' ? part.text : ''))
+                .join(''),
+        )
+        .join('\n')
+      expect(history).not.toContain('\ndate:')
+      expect(history).not.toContain('\ntimezone:')
+    }
+  } finally {
+    globalThis.Date = real
+  }
+})

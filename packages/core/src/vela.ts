@@ -358,11 +358,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       },
       {
         name: 'env',
-        render: (ctx) =>
-          environment({
-            cwd: sessions.get(ctx.sessionId)?.cwd ?? cwd,
-            shell: options.shellPath,
-          })(ctx),
+        render: environment({ shell: options.shellPath }),
       },
       { name: 'extensions', render: extensionSections() },
     ],
