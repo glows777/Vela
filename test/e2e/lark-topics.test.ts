@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
 import { fauxHang, fauxText } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
+import { background } from '../../packages/core/src/extensions/background/index.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -591,15 +592,16 @@ test('first topic entry excludes later history replies which arrive through thei
   ).toHaveLength(1)
 })
 
-test('the group session hides execution tools that its topics keep, even when the chat selects them', async () => {
+test('the group session runs execution and background tools like its topics, and keeps no waiting tool', async () => {
   const fake = fakeLark()
   const t = createTestVela({
     responses: [fauxText('hello'), fauxText('topic answer')],
     extensions: [
+      background(),
       lark({
         appId: 'bot',
         owners: ['ou_alice'],
-        chats: [{ id: 'oc_group', tools: ['bash', 'write_file', 'edit_file'] }],
+        chats: ['oc_group'],
         transport: fake.transport,
       }),
     ],
@@ -614,9 +616,18 @@ test('the group session hides execution tools that its topics keep, even when th
   )
   await until(() => t.model.calls.length === 1)
   const groupTools = t.model.calls[0]!.tools
-  expect(groupTools).not.toContain('bash')
-  expect(groupTools).not.toContain('write_file')
-  expect(groupTools).not.toContain('edit_file')
+  expect(groupTools).toEqual(
+    expect.arrayContaining([
+      'bash',
+      'write_file',
+      'edit_file',
+      'background_start',
+      'background_output',
+      'background_stop',
+    ]),
+  )
+  // Waiting for a decision is a topic-only control.
+  expect(groupTools).not.toContain('channel_wait_for_input')
 
   const topic = larkEvent({
     message_id: 'topic',

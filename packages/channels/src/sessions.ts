@@ -44,7 +44,7 @@ export class ChannelSessions {
       this.directory.storageKey(channel.name, msg.channelId),
     )
     const options = channel.sessionOptions?.(msg)
-    const hidden = [
+    const modifiers = [
       ...topicSessionOptions({ ...msg, chatKind }).tools,
       ...(!channel.topicCapabilities
         ? [
@@ -58,8 +58,6 @@ export class ChannelSessions {
     const selection =
       tools &&
       !tools.some((name) => name.startsWith('+') || name.startsWith('-'))
-    // A background command's exit is an ordinary queued input for this topic, not a run started
-    // from an extension: the gateway supplies the anchor, card, reaction, Stop and ordering.
     const topic =
       record?.rootId && record.threadId
         ? { rootId: record.rootId, threadId: record.threadId }
@@ -67,22 +65,20 @@ export class ChannelSessions {
     const session = this.session(this.directory.sessionId(key), {
       ...options,
       tools: selection
-        ? tools.filter((name) => !hidden.includes(`-${name}`))
-        : [...(tools ?? []), ...hidden],
+        ? tools.filter((name) => !modifiers.includes(`-${name}`))
+        : [...(tools ?? []), ...modifiers],
       channel: channel.name,
       scope: { id: scope.id, kind: scope.kind, dataDir: scope.dataDir },
-      host: topic
-        ? {
-            deliver: (text: string) =>
-              this.deliverBackground(
-                key,
-                channel.name,
-                topic.rootId,
-                topic.threadId,
-                text,
-              ),
-          }
-        : undefined,
+      // A background command's exit is an ordinary queued input for its conversation, not a run
+      // started from an extension: the gateway supplies the anchor, card, reaction, Stop and
+      // ordering. A group hub is such a conversation, not only a topic.
+      host:
+        chatKind === 'group'
+          ? {
+              deliver: (text: string) =>
+                this.deliverResult(key, channel.name, topic, text),
+            }
+          : undefined,
     })
     if (typeof options?.model === 'string') {
       try {
@@ -98,25 +94,27 @@ export class ChannelSessions {
     return session
   }
 
-  private deliverBackground(
+  /** A result produced outside a turn joins its conversation's queue, as a note from its requester. */
+  private deliverResult(
     key: string,
     channelName: string,
-    rootId: string,
-    threadId: string,
+    topic: { rootId: string; threadId: string } | undefined,
     text: string,
   ): void {
     const record = this.directory.get(key)
-    if (!record || record.rootId !== rootId) return
-    // A topic result is attributed to the topic's requester, like a routine: the reply then
-    // mentions a person who exists, and the text says it came from a background command.
+    if (!record) return
+    // The conversation this result belongs to is gone: a closed hub, or another topic generation.
+    if (topic ? record.rootId !== topic.rootId : !!record.rootId) return
+    // Attributed to the conversation's requester, like a routine: the reply then mentions a person
+    // who exists, and the text says where the result came from.
     this.deliver(channelName, {
       channelId: record.chatId,
       chatKind: 'group',
       senderId: record.requester.id,
       senderName: record.requester.name,
       text,
-      topic: { rootId, threadId },
-      replyToId: rootId,
+      ...(topic ? { topic } : {}),
+      replyToId: topic?.rootId ?? record.replyTarget,
     })
   }
 }

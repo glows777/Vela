@@ -296,7 +296,7 @@ Templates load from `<project>/.vela/prompts/` (trusted projects only), the `pro
 
 The system prompt is built from named, tagged sections: the intro paragraph (untagged), `<tools>`, `<deferred_tools>`, `<rules>`, `<docs>`, `<addendum>`, `<project_context>`, `<skills>`, `<cwd>`, `<env>`, then one section per extension (for example `<memory>`). `/context` counts it as one part of the window, and `VELA_DEBUG=1` lists which sections are on.
 
-`<tools>` names every tool this session can call that has a `promptSnippet`, and `<rules>` carries the rules those tools bring with them, so a session without `bash`, `write_file` or `edit_file` (a top-level group chat, for example) is never told to use them.
+`<tools>` names every tool this session can call that has a `promptSnippet`, and `<rules>` carries the rules those tools bring with them, so a session narrowed to `read_file` is never told to use `bash`, `write_file` or `edit_file`.
 
 Text in `~/.vela/SYSTEM.md`, or in `<project>/.vela/SYSTEM.md` when the project is trusted (the project file wins), replaces the default prompt: it becomes the intro paragraph and `<tools>`, `<rules>` and `<docs>` are left out. `--system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `systemPrompt` to `createVela()`. Addendum, project context, skills, cwd, environment and extension sections stay.
 

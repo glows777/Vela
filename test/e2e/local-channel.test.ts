@@ -62,8 +62,8 @@ async function messages(
 
 function taskRouter(req: FauxRequest) {
   if (req.tools.includes('channel_start_topic')) {
-    // The project chat is a group session: execution tools live in its tasks.
-    expect(req.tools).not.toContain('write_file')
+    // The project chat runs quick work itself but still dispatches a longer task (#421).
+    expect(req.tools).toContain('write_file')
     if (req.lastUserText.includes('status now'))
       return fauxText('Status received')
     return req.toolResults.length
