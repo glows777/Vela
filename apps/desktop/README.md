@@ -1,6 +1,8 @@
 # Run Vela desktop
 
-The private Electron workspace currently opens a branded shell and a separate design specimen. Process ownership and the next SDK integration step are defined in [AGENTS.md](AGENTS.md). Desktop's `0.0.0` is an internal packaging identifier.
+The private Electron workspace hosts the SDK in its main process and opens a minimal Local-project exercise alongside the separate design specimen. Product pages are separate work. Process ownership is defined in [AGENTS.md](AGENTS.md). Desktop's `0.0.0` is an internal packaging identifier.
+
+Main loads the normal user settings from `VELA_DIR` (or `~/.vela`), owns the Local and Lark channels, and disposes them on quit. Do not run this app and `vela serve` against the same Lark credentials at once. A constrained preload bridge exposes channel and Local host operations; renderer code never imports the SDK. The current screen is a minimal integration exercise, not the final project UI.
 
 ## Run locally
 
@@ -16,7 +18,7 @@ bun run desktop:verify
 
 The development preview shows Button, Dialog, Tabs, and Switch with typography, palette, and theme selection. Both HTML entries are pre-optimized for a cold first launch.
 
-For runtime evidence, including the packaged pass and scratch directory options, follow [desktop verification](../../.skills/verify-vela/desktop.md).
+For runtime evidence, including the packaged pass and scratch directory options, follow [desktop verification](../../.skills/verify-vela/desktop.md). The driver creates and removes a private data subdirectory inside a supplied `VELA_DIR`, and never overwrites an existing settings file. It verifies the Local host with a faux model, configured shell, and image input; the app itself uses the normal configured model.
 
 ## Package locally
 
@@ -24,7 +26,7 @@ For runtime evidence, including the packaged pass and scratch directory options,
 bun run desktop:package
 ```
 
-Forge prints the output directory under `apps/desktop/out/`. macOS packages are unsigned and unnotarized. Signing, installers, updates, and acceptance on Windows or Linux are separate work. The package includes Arc MIT and both font licenses.
+Forge prints the output directory under `apps/desktop/out/`. macOS packages are unsigned and unnotarized. Signing, installers, updates, and acceptance on Windows or Linux are separate work. The package includes the Photon Apache 2.0 license, Arc MIT license, and both font licenses.
 
 ## Adopt or update Arc components
 

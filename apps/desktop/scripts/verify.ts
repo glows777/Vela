@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -12,7 +13,15 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { _electron, chromium, type Page } from 'playwright'
 import tokens from '../design/tokens.json'
+import type { DesktopBridge } from '../src/shared/bridge.ts'
 import { verifyControls } from './verify-controls.ts'
+
+declare global {
+  interface Window {
+    vela: DesktopBridge
+    observedDesktopEvents?: string[]
+  }
+}
 
 const root = resolve(import.meta.dir, '..')
 const evidence =
@@ -22,12 +31,54 @@ const scratch = await realpath(
   await mkdtemp(resolve(tmpdir(), 'vela-desktop-')),
 )
 const home = resolve(process.env.VELA_DESKTOP_HOME ?? resolve(scratch, 'home'))
-const data = resolve(process.env.VELA_DIR ?? resolve(scratch, 'data'))
+const dataParent = resolve(process.env.VELA_DIR ?? scratch)
+await mkdir(dataParent, { recursive: true })
+const data = await mkdtemp(resolve(dataParent, 'vela-data-'))
 const profile = resolve(scratch, 'user-data')
+const project = resolve(scratch, 'project')
+const scenario = resolve(scratch, 'faux.json')
+const shell = resolve(scratch, 'shell')
+const shellMarker = resolve(scratch, 'shell-used')
+const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
 await Promise.all(
-  [home, data, profile].map((path) => mkdir(path, { recursive: true })),
+  [home, data, profile, project].map((path) =>
+    mkdir(path, { recursive: true }),
+  ),
 )
-const env = { ...process.env, HOME: home, VELA_DIR: data }
+await Bun.write(
+  shell,
+  '#!/bin/sh\nprintf used > "$VELA_DESKTOP_SHELL_MARKER"\nexec /bin/bash "$@"\n',
+)
+await chmod(shell, 0o755)
+const settingsPath = resolve(data, 'settings.json')
+if (await Bun.file(settingsPath).exists())
+  throw new Error(`Refusing to overwrite existing settings: ${settingsPath}`)
+await Bun.write(
+  settingsPath,
+  badConfig ? '{ invalid' : JSON.stringify({ shellPath: shell }),
+)
+await Bun.write(
+  scenario,
+  JSON.stringify({
+    responses: [
+      {
+        toolCalls: [{ name: 'bash', input: { command: 'printf shell-check' } }],
+      },
+      { text: 'Desktop faux reply' },
+      { text: 'Image processed' },
+    ],
+  }),
+)
+const env = {
+  ...process.env,
+  HOME: home,
+  VELA_DIR: data,
+  VELA_MODEL: `faux:${scenario}`,
+  VELA_DESKTOP_SHELL_MARKER: shellMarker,
+  LARK_APP_ID: '',
+  LARK_APP_SECRET: '',
+  LARK_OWNERS: '',
+}
 await mkdir(evidence, { recursive: true })
 const errors: string[] = []
 const checks: string[] = []
@@ -91,6 +142,108 @@ const rendererSafety = async (page: Page) => {
     'Local images load',
   )
 }
+const hostJourney = async (page: Page) => {
+  const initial = await page.evaluate(async () => ({
+    channels: await window.vela.channels(),
+    local: await window.vela.connection('local'),
+    lark: await window.vela.connection('lark'),
+    projects: await window.vela.projects(),
+  }))
+  assert.deepEqual(initial.channels.map((channel) => channel.name).sort(), [
+    'lark',
+    'local',
+  ])
+  assert.equal(initial.local.connected, true)
+  assert.equal(initial.lark.connected, false)
+  assert.deepEqual(initial.projects, [])
+  await page.evaluate(() => {
+    const observed: string[] = []
+    Object.assign(window, { observedDesktopEvents: observed })
+    window.vela.onEvent((event) => observed.push(event.type))
+  })
+  await page.getByLabel('Project path').fill(project)
+  await page.getByRole('button', { name: 'Open project' }).click()
+  await page.getByLabel('Message').fill('Hello from desktop')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await page
+    .getByText('Desktop faux reply', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  const state = await page.evaluate(async () => {
+    const projects = await window.vela.projects()
+    const first = projects[0]!
+    return {
+      projects,
+      sessions: await window.vela.sessions('local', first.id),
+      messages: await window.vela.messages({
+        projectId: first.id,
+        sessionId: first.sessionId,
+      }),
+      stopped: await window.vela.stop(
+        'local',
+        { chatId: first.id },
+        'missing-run',
+      ),
+      observed: window.observedDesktopEvents ?? [],
+    }
+  })
+  assert.equal(state.projects.length, 1)
+  assert(
+    state.sessions.some(
+      (session) => session.sessionId === state.projects[0]!.sessionId,
+    ),
+  )
+  assert(
+    state.messages.messages.some(
+      (message) => message.text === 'Desktop faux reply',
+    ),
+  )
+  assert.equal(state.stopped, false)
+  assert(state.observed.includes('local') && state.observed.includes('session'))
+  assert.equal(
+    await readFile(shellMarker, 'utf8'),
+    'used',
+    'Configured shellPath is used by the SDK host',
+  )
+  const image = (
+    await readFile(resolve(root, '../../test/fixtures/images/blue.png'))
+  ).toString('base64')
+  await page.evaluate(
+    async ({ projectId, image, anchor }) => {
+      await window.vela.submit('local', {
+        channelId: projectId,
+        chatKind: 'group',
+        senderId: 'local-user',
+        senderName: 'You',
+        text: 'Image probe',
+        replyToId: anchor,
+        images: [{ type: 'image', data: image, mimeType: 'image/png' }],
+      })
+    },
+    {
+      projectId: state.projects[0]!.id,
+      image,
+      anchor: state.messages.messages[0]!.id,
+    },
+  )
+  await page
+    .getByText('Image processed', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  const deadline = Date.now() + 5000
+  let savedImage = false
+  while (!savedImage && Date.now() < deadline) {
+    for await (const file of new Bun.Glob('**/transcript.jsonl').scan(data))
+      if (
+        (await Bun.file(resolve(data, file)).text()).includes('"type":"image"')
+      )
+        savedImage = true
+    if (!savedImage) await Bun.sleep(50)
+  }
+  assert(savedImage, 'Image survived normalization into the session')
+  await snapshot(page, 'host-journey')
+  checks.push(
+    'Real window opened a Local project, sent a message, and rendered the faux reply.',
+  )
+}
 async function development() {
   const child = spawn(
     'bunx',
@@ -99,7 +252,7 @@ async function development() {
       'electron-forge',
       'start',
       '--',
-      '--vela-specimen',
+      ...(badConfig ? [] : ['--vela-specimen']),
       '--remote-debugging-port=0',
       `--user-data-dir=${profile}`,
     ],
@@ -139,10 +292,21 @@ async function development() {
   try {
     const browser = await chromium.connectOverCDP(await endpoint)
     try {
-      const page = browser.contexts()[0]!.pages()[0]!
+      const context = browser.contexts()[0]!
+      const page =
+        context.pages()[0] ??
+        (await context.waitForEvent('page', { timeout: 30_000 }))
       watch(page)
       await page.bringToFront()
       await page.waitForLoadState('networkidle')
+      if (badConfig) {
+        await page
+          .getByRole('alert')
+          .getByText('Vela could not start. Check your settings and restart.')
+          .waitFor()
+        checks.push('Invalid configuration produces a visible startup error.')
+        return
+      }
       await page
         .getByRole('heading', { name: 'Vela design foundation' })
         .waitFor()
@@ -160,8 +324,7 @@ async function development() {
       await rendererSafety(page)
       await noOverflow(page)
       await snapshot(page, 'shell-development')
-      assert.equal(await page.getByRole('button').count(), 0)
-      checks.push('Development shell is branded and has no product controls.')
+      await hostJourney(page)
     } finally {
       await browser.close()
     }
@@ -174,9 +337,15 @@ async function development() {
 }
 async function packaged(appPath: string) {
   const appRoot = resolve(appPath)
-  const resources = resolve(appRoot, 'Contents/Resources')
+  const resources = resolve(
+    appRoot,
+    process.platform === 'darwin' ? 'Contents/Resources' : 'resources',
+  )
   const app = await _electron.launch({
-    executablePath: resolve(appRoot, 'Contents/MacOS/Vela'),
+    executablePath: resolve(
+      appRoot,
+      process.platform === 'darwin' ? 'Contents/MacOS/Vela' : 'Vela',
+    ),
     args: [`--user-data-dir=${profile}`],
     env,
     timeout: 30_000,
@@ -237,11 +406,15 @@ async function packaged(appPath: string) {
       tokens.tokens['vela-ink']['high-contrast'],
     )
     await snapshot(page, 'packaged-system-high-contrast')
-    assert.equal(await page.getByRole('button').count(), 0)
+    await hostJourney(page)
     const asar = await import('@electron/asar')
     const files = asar.listPackage(resolve(resources, 'app.asar'), {
       isPack: false,
     })
+    assert(
+      files.some((file) => file.endsWith('/photon_rs_bg.wasm')),
+      'Packaged SDK contains its image decoder',
+    )
     assert.equal(
       files.some((file) => /specimen|preview/i.test(file)),
       false,
@@ -264,7 +437,8 @@ async function packaged(appPath: string) {
     assert(
       licenses.includes('Barlow-LICENSE.txt') &&
         licenses.includes('JapaneseFonts-LICENSE.txt') &&
-        licenses.includes('LICENSE.txt'),
+        licenses.includes('LICENSE.txt') &&
+        licenses.includes('LICENSE.md'),
     )
     assert(
       (
@@ -274,6 +448,11 @@ async function packaged(appPath: string) {
     assert(
       (await readFile(resolve(resources, 'LICENSE.txt'), 'utf8')).includes(
         'Copyright (c) 2026 Elia Kuratli',
+      ),
+    )
+    assert(
+      (await readFile(resolve(resources, 'LICENSE.md'), 'utf8')).includes(
+        'Apache License',
       ),
     )
     checks.push(
@@ -312,5 +491,6 @@ try {
   )
   throw error
 } finally {
+  await rm(data, { recursive: true, force: true })
   await rm(scratch, { recursive: true, force: true })
 }
