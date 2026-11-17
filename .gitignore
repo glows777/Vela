@@ -50,3 +50,6 @@ packages/*/LICENSE
 packages/*/CHANGELOG.md
 packages/vela/docs/
 packages/vela/examples/
+
+# Electron Forge intermediate builds
+apps/desktop/.vite/

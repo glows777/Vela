@@ -11,6 +11,10 @@ on:
         type: string
         required: false
         default: ''
+      skip_desktop:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -41,6 +45,8 @@ jobs:
       # test/live needs a real model and doesn't run in CI (bun run test covers unit + e2e only)
       - name: Test
         run: bun run test
+      - name: Desktop foundation checks
+        run: bun run desktop:check
       - name: Typecheck
         run: bun run typecheck
       # biome check: formatting, import order and lint
@@ -56,3 +62,25 @@ jobs:
       # Build, pack and install into empty Node and Bun projects; import, type-check and run the CLI like a consumer (needs network)
       - name: Consumer smoke test
         run: bun run smoke:consumer
+
+  desktop-package:
+    if: ${{ !inputs.skip_desktop }}
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.18.0
+      - run: bun install --frozen-lockfile
+      - name: Verify desktop integration in Electron
+        run: bun run desktop:verify
+      - run: bun run desktop:package
+      - name: Verify packaged desktop shell
+        run: bun run desktop:verify --packaged "apps/desktop/out/Vela-darwin-$(bun -p process.arch)/Vela.app"

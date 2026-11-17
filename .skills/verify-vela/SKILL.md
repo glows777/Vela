@@ -1,6 +1,6 @@
 ---
 name: verify-vela
-description: Use Vela as a real user would (the TUI in tmux, -p / --mode json / rpc, a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK or core behavior, for feature acceptance, and to learn the SDK.
+description: Use Vela as a real user would (the TUI in tmux, -p / --mode json / rpc, a small SDK script), offline with the mock or a scripted faux model, and keep screens and side effects as proof. Use after changing CLI/TUI/SDK, desktop, or core behavior, for feature acceptance, and to learn the SDK.
 ---
 
 # verify-vela
@@ -10,6 +10,8 @@ Tests prove the code; this proves the product. Drive the real CLI and SDK the wa
 Everything runs under `env -i` with its own `VELA_DIR`, `HOME` and working directory (`/tmp/vela-verify/<run>/work`, seeded with `a.txt` and `sample-data.txt`). No API key or `~/.vela` reaches Vela, and nothing touches other runs.
 
 Needs `bun install`, `tmux` for the TUI only, and `rg` / `fd` on PATH for the grep / find tools and `@` completion (`VELA_OFFLINE=1` blocks their download).
+
+For Electron work, use [desktop verification](desktop.md) for scratch home and data directories, real-window checks, and the SDK-host faux-model pattern.
 
 ## Helper
 
