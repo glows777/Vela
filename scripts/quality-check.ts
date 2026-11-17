@@ -19,6 +19,7 @@ import madge from 'madge'
 import desktopConfig from '../apps/desktop/tsconfig.json'
 import { checkBoundaries } from './check-boundaries.ts'
 import { checkDocLinks } from './check-doc-links.ts'
+import { checkExecutionBoundaries } from './check-execution-boundaries.ts'
 import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -214,6 +215,12 @@ report(
   boundaries.length === 0,
   `package boundaries: ${boundaries.length === 0 ? 'ok' : 'failed'}`,
   boundaries,
+)
+const execution = await checkExecutionBoundaries(ROOT)
+report(
+  execution.length === 0,
+  `execution boundaries: ${execution.length === 0 ? 'ok' : 'failed'}`,
+  execution,
 )
 const links = await checkDocLinks(ROOT)
 report(
