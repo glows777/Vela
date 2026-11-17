@@ -67,6 +67,19 @@ function inputSummary(args: unknown): string {
 }
 
 /**
+ * Minimum spacing between live writes to one card. Lark limits each message to 5 updates per second and
+ * answers a burst with `230429: This operation triggers the frequency limit.`; one write a second keeps
+ * a running card far inside that budget.
+ */
+const WRITE_INTERVAL = 1_000
+
+/**
+ * The terminal card is one extra update, not a rate, so a short guard keeps it off the last live write
+ * without holding the answer for a whole interval.
+ */
+const TERMINAL_WRITE_GUARD = 250
+
+/**
  * Retry delays after a failed live card write. A transient network error must not freeze the card for
  * the rest of the run; four retries bound a permanently dead card to five attempts.
  */
@@ -92,6 +105,7 @@ export class LarkProgress {
   private retryAt = 0
   private readonly retryDelays: readonly number[]
   private readonly finalRetryDelays: readonly number[]
+  private readonly writeInterval: number
   private writing: Promise<void> = Promise.resolve()
   private timer?: ReturnType<typeof setTimeout>
   private lastWrite = Date.now()
@@ -107,11 +121,14 @@ export class LarkProgress {
       retryDelays?: readonly number[]
       /** Delay before each final retry; the answer is already delivered by then. */
       finalRetryDelays?: readonly number[]
+      /** Minimum spacing between live writes; tests shorten it instead of waiting a second. */
+      writeInterval?: number
     } = {},
   ) {
     if (options.initialTodos?.length) this.todos = [...options.initialTodos]
     this.retryDelays = options.retryDelays ?? RETRY_DELAYS
     this.finalRetryDelays = options.finalRetryDelays ?? FINAL_RETRY_DELAYS
+    this.writeInterval = options.writeInterval ?? WRITE_INTERVAL
     this.heartbeat = setInterval(() => this.schedule(), 15_000)
   }
 
@@ -219,7 +236,7 @@ export class LarkProgress {
       },
       Math.max(
         0,
-        250 - (Date.now() - this.lastWrite),
+        this.writeInterval - (Date.now() - this.lastWrite),
         this.retryAt - Date.now(),
       ),
     )
@@ -231,7 +248,10 @@ export class LarkProgress {
     clearTimeout(this.timer)
     await this.writing
     // Reserve the terminal PATCH slot before the reply, so finish can publish immediately after delivery.
-    const delay = Math.max(0, 250 - (Date.now() - this.lastWrite))
+    const delay = Math.max(
+      0,
+      TERMINAL_WRITE_GUARD - (Date.now() - this.lastWrite),
+    )
     if (!this.failure && delay)
       await new Promise((resolve) => setTimeout(resolve, delay))
   }

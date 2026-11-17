@@ -22,6 +22,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Changed
 
+- **A running Lark progress card is written at most once per second.** Card updates were spaced 250 ms apart, close to Lark's five-updates-per-second limit for one message, so a long tool-heavy run could be answered with `230429: This operation triggers the frequency limit.` and report a failed card update that retried. Live updates are now at least one second apart per card; events inside the interval still coalesce into the next write, quiet work keeps its 15-second heartbeat, and the terminal card keeps its short reserved slot so the answer is not held back. The task, its answer and its reaction are unaffected; the only cost is a coarser elapsed-time refresh on the card.
+
 - **A group session runs execution and background commands again.** The top-level session of a Lark group or a Local project chat keeps `bash`, `write_file` and `edit_file` and also gets `background_start`, `background_output` and `background_stop`, so a quick command such as `gh pr view` is answered where it was asked instead of being dispatched to a topic first. The conversation still stays available: a command that may keep running starts in the background, and its exit joins the group's own queue as a reply to the person's last message; a longer task still becomes a topic. A chat's narrowed `tools` list can drop any of these, and a DM is unchanged: it keeps its execution tools and still gets no background tools. This supersedes the 0.7 rule that hid the three execution tools from group sessions ([#421](https://github.com/glows777/Vela/issues/421)).
 
 ## [0.7.0] - 2026-11-16

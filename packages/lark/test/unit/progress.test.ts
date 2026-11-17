@@ -49,7 +49,7 @@ test('a transient live write failure is reported once and the card keeps updatin
     async (error) => {
       reports.push(error)
     },
-    { retryDelays: [1] },
+    { retryDelays: [1], writeInterval: 1 },
   )
   progress.event(toolStart)
   await until(() => attempts === 2)
@@ -73,7 +73,7 @@ test('a card that keeps failing live stops after its retry budget and reports on
     async (error) => {
       reports.push(error)
     },
-    { retryDelays: [1, 1, 1, 1] },
+    { retryDelays: [1, 1, 1, 1], writeInterval: 1 },
   )
   progress.event(toolStart)
   await until(() => attempts === 5)
@@ -100,7 +100,7 @@ test('the first failed write may be the final card: it retries instead of giving
     async (error) => {
       reports.push(error)
     },
-    { finalRetryDelays: [1] },
+    { finalRetryDelays: [1], writeInterval: 1 },
   )
   // A text-only run settles before its first live write, so the terminal write fails first
   await progress.finish('done')
@@ -122,10 +122,58 @@ test('a final card that keeps failing exhausts its own budget and rejects once',
     async () => {
       throw new Error('unexpected report')
     },
-    { finalRetryDelays: [1, 1] },
+    { finalRetryDelays: [1, 1], writeInterval: 1 },
   )
   await expect(progress.finish('done')).rejects.toThrow(
     'card permission denied',
   )
   expect(attempts).toBe(3)
+})
+
+test('live writes wait for the write interval and a burst coalesces', async () => {
+  const writes: number[] = []
+  const progress = new LarkProgress(
+    transport(async () => {
+      writes.push(Date.now())
+    }),
+    'card_5',
+    card,
+    async () => {
+      throw new Error('unexpected report')
+    },
+    { writeInterval: 50 },
+  )
+  progress.event(toolStart)
+  await until(() => writes.length >= 1)
+  progress.event(toolStart)
+  await until(() => writes.length >= 2)
+  expect(writes[1]! - writes[0]!).toBeGreaterThanOrEqual(40)
+  // Events arriving inside the next interval coalesce instead of each patching the card.
+  for (let index = 0; index < 5; index++) progress.event(toolStart)
+  await until(() => writes.length >= 3)
+  await Bun.sleep(120)
+  expect(writes).toHaveLength(3)
+  await progress.finish('done')
+})
+
+test('the default live write interval keeps card updates a second apart', async () => {
+  const writes: number[] = []
+  const progress = new LarkProgress(
+    transport(async () => {
+      writes.push(Date.now())
+    }),
+    'card_6',
+    card,
+    async () => {
+      throw new Error('unexpected report')
+    },
+  )
+  progress.event(toolStart)
+  await until(() => writes.length >= 1)
+  progress.event(toolStart)
+  await Bun.sleep(400)
+  expect(writes).toHaveLength(1)
+  await until(() => writes.length >= 2)
+  expect(writes[1]! - writes[0]!).toBeGreaterThanOrEqual(950)
+  await progress.finish('done')
 })

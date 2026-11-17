@@ -576,7 +576,10 @@ test('a quiet running topic refreshes on the 15 second heartbeat and clears it a
     tick()
     await until(() => fake.patches.length > count)
     expect(JSON.stringify(fake.patches.at(-1)?.card)).not.toBe(previous)
-    expect(fake.patches.at(-1)?.card.body.elements[0]?.content).toContain('15s')
+    // The refresh is written at most one second after the tick, so the elapsed label reads 15s or 16s.
+    expect(fake.patches.at(-1)?.card.body.elements[0]?.content).toMatch(
+      / · 0m 1[56]s/,
+    )
     fake.click(0, 'stop')
     await until(() => fake.reactions.some((r) => r.emoji === 'CrossMark'))
     expect(clear).toHaveBeenCalledWith(heartbeat)
