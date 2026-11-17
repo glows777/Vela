@@ -233,7 +233,7 @@ export class VelaSession {
   private running?: Promise<void>
   private turn: BeforeAgentStartResult = { sections: {}, messages: [] }
   private readonly messageQueue = new MessageQueue((event) => this.emit(event))
-  private readonly environment = new EnvironmentChanges()
+  private readonly environment = new EnvironmentChanges(this.messageQueue)
   /** How steer messages are taken (default one-at-a-time, like pi) */
   steeringMode: QueueMode = 'one-at-a-time'
   /** How followUp messages are taken (default one-at-a-time, like pi) */
@@ -1180,7 +1180,7 @@ export class VelaSession {
 
   /** Appends what the session owes the conversation between steps: a branch checkout, then queued custom messages. */
   private flushPending(): void {
-    const branch = this.environment.update(this.cwd)
+    const branch = this.environment.update(this.cwd, this.messages)
     if (branch) this.append(this.messageQueue.toMessage(branch))
     for (const message of this.messageQueue.pendingCustom.splice(0))
       this.append(message)

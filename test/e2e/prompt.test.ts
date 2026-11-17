@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   ChannelDefinition,
@@ -377,4 +377,65 @@ test('a branch checkout keeps the system prompt and arrives as a message instead
   expect(usage[1]!.cacheReadTokens).toBeGreaterThanOrEqual(
     usage[0]!.cacheWriteTokens - 1,
   )
+})
+
+test('a resumed session reports a branch it was checked out to while it was closed', async () => {
+  const t = createTestVela({
+    responses: [fauxText('one'), fauxText('two')],
+  })
+  const checkout = (branch: string) => {
+    mkdirSync(join(t.cwd, '.git'), { recursive: true })
+    writeFileSync(join(t.cwd, '.git', 'HEAD'), `ref: refs/heads/${branch}\n`)
+  }
+  const branchLines = (call: (typeof t.model.calls)[number]) =>
+    call.prompt
+      .filter((message) => message.role === 'user')
+      .flatMap((message) => {
+        const text =
+          typeof message.content === 'string'
+            ? message.content
+            : message.content
+                .map((part) => (part.type === 'text' ? part.text : ''))
+                .join('')
+        return text.startsWith('Git branch:') ? [text] : []
+      })
+
+  checkout('main')
+  await t.run('one')
+  // The model is told about the new branch, then the session closes
+  checkout('vela/442-prompt-cache')
+  await t.run('two')
+  expect(branchLines(t.model.calls[1]!)).toEqual([
+    'Git branch: vela/442-prompt-cache',
+  ])
+  await t.cleanup({ keepDir: true })
+
+  const resumed = createTestVela({
+    cwd: t.cwd,
+    responses: [fauxText('three'), fauxText('four')],
+    // The assertions, not an unused script entry, are what this test reports when they fail
+    allowPendingResponses: true,
+  })
+  try {
+    // Something else checks out another branch while the session is closed
+    checkout('main')
+    expect(await resumed.session.resume()).toBe(true)
+    // The history still says vela/442-prompt-cache; without a new announcement a model that never hears
+    // about the checkout keeps working on the wrong branch
+    await resumed.run('three')
+    expect(branchLines(resumed.model.calls[0]!)).toEqual([
+      'Git branch: vela/442-prompt-cache',
+      'Git branch: main',
+    ])
+
+    // A branch that still matches the last announcement sends nothing
+    await resumed.run('four')
+    expect(branchLines(resumed.model.calls[1]!)).toEqual([
+      'Git branch: vela/442-prompt-cache',
+      'Git branch: main',
+    ])
+  } finally {
+    await resumed.cleanup()
+    rmSync(t.cwd, { recursive: true, force: true })
+  }
 })
