@@ -29,11 +29,20 @@ To turn one off, add `-builtin:<name>` to `extensions` in `settings.json`, for e
 **SDK.** `createVela()` loads no extensions by default. Import the factories and pass them in `extensions`:
 
 ```ts
-import { createEmbedder, createVela, memory, todo, rag, web } from '@glows777/vela'
+import {
+  background,
+  createEmbedder,
+  createVela,
+  memory,
+  todo,
+  rag,
+  web,
+} from '@glows777/vela'
 
 const vela = createVela({
   dataDir: '.vela-data',
   extensions: [
+    background(),
     memory(),
     todo(),
     rag({
@@ -196,7 +205,7 @@ Long-running commands whose result arrives on its own, for work that must not ho
 
 **Visibility.** A channel's group session and its topics get the tools by default, so a long command never blocks the conversation that started it; DMs and other non-topic sessions do not. See [Channels](channels.md#group-workspaces-memory-and-tools).
 
-**SDK.** `background()` takes an optional `shellPath` (the CLI passes the resolved `shellPath` setting). The CLI loads it by default; the SDK loads it explicitly: `createVela({ extensions: [background()] })` and a session `tools` list that names the three tools.
+**SDK.** `background()` takes an optional `shellPath` (the CLI passes the resolved `shellPath` setting). The CLI loads it by default; the SDK loads it explicitly with `import { background } from '@glows777/vela'` (or from `@glows777/vela-core`), then `createVela({ extensions: [background()] })` and a session `tools` list that names the three tools, as in `tools: ['+background_start', '+background_output', '+background_stop']`.
 
 ## todo
 
