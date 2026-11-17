@@ -8,7 +8,12 @@ import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
 export async function startHost() {
   const cwd = process.cwd()
-  const config = loadConfig({ cwd, env: process.env, trusted: false })
+  const config = loadConfig({
+    cwd,
+    env: process.env,
+    trusted: false,
+    builtins: ['background', 'memory', 'rag', 'web', 'lark', 'mcp', 'todo'],
+  })
   const larkSettings = larkConfig.resolve(config.extensionConfig.lark ?? {}, {
     cwd,
     agentDir: config.agentDir,
@@ -40,7 +45,14 @@ export async function startHost() {
       platform: process.platform,
     }),
     extensionConfig: { ...config.extensionConfig, lark: larkSettings },
-    extensions: [lark(), local({})],
+    extensions: [
+      ...(config.extensions.some(
+        (extension) => extension.name === 'lark' && 'builtin' in extension,
+      )
+        ? [lark()]
+        : []),
+      local({}),
+    ],
   })
   const off: (() => void)[] = []
   try {

@@ -40,6 +40,8 @@ const scenario = resolve(scratch, 'faux.json')
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
+const disabledConfig = process.env.VELA_DESKTOP_VERIFY_DISABLED === '1'
+const historyMode = process.env.VELA_DESKTOP_VERIFY_HISTORY === '1'
 await Promise.all(
   [home, data, profile, project].map((path) =>
     mkdir(path, { recursive: true }),
@@ -55,7 +57,14 @@ if (await Bun.file(settingsPath).exists())
   throw new Error(`Refusing to overwrite existing settings: ${settingsPath}`)
 await Bun.write(
   settingsPath,
-  badConfig ? '{ invalid' : JSON.stringify({ shellPath: shell }),
+  badConfig
+    ? '{ invalid'
+    : JSON.stringify({
+        shellPath: shell,
+        ...(disabledConfig
+          ? { extensions: ['-builtin:web', '-builtin:lark'] }
+          : {}),
+      }),
 )
 await Bun.write(
   scenario,
@@ -66,6 +75,11 @@ await Bun.write(
       },
       { text: 'Desktop faux reply' },
       { text: 'Image processed' },
+      ...(historyMode
+        ? Array.from({ length: 26 }, (_, index) => ({
+            text: `History reply ${index}`,
+          }))
+        : []),
     ],
   }),
 )
@@ -239,6 +253,32 @@ const hostJourney = async (page: Page) => {
     if (!savedImage) await Bun.sleep(50)
   }
   assert(savedImage, 'Image survived normalization into the session')
+  if (historyMode) {
+    await page.evaluate(
+      async ({ projectId, sessionId }) => {
+        for (let index = 0; index < 26; index++)
+          await window.vela.submit('local', {
+            projectId,
+            sessionId,
+            text: `History input ${index}`,
+          })
+      },
+      {
+        projectId: state.projects[0]!.id,
+        sessionId: state.projects[0]!.sessionId,
+      },
+    )
+    await page
+      .getByText('History reply 25', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page.reload()
+    await page.getByLabel('Project path').fill(project)
+    await page.getByRole('button', { name: 'Open project' }).click()
+    await page
+      .getByText('History reply 25', { exact: true })
+      .waitFor({ timeout: 10_000 })
+    checks.push('Reopening loads messages beyond the first history page.')
+  }
   await snapshot(page, 'host-journey')
   checks.push(
     'Real window opened a Local project, sent a message, and rendered the faux reply.',
@@ -324,6 +364,16 @@ async function development() {
       await rendererSafety(page)
       await noOverflow(page)
       await snapshot(page, 'shell-development')
+      if (disabledConfig) {
+        assert.deepEqual(
+          (await page.evaluate(() => window.vela.channels())).map(
+            (channel) => channel.name,
+          ),
+          ['local'],
+        )
+        checks.push('CLI built-in switches load and disabled Lark stays off.')
+        return
+      }
       await hostJourney(page)
     } finally {
       await browser.close()

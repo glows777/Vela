@@ -39,14 +39,18 @@ function App() {
     try {
       const next = await window.vela.openProject({ cwd })
       setProject(next)
-      setMessages(
-        (
-          await window.vela.messages({
-            projectId: next.id,
-            sessionId: next.sessionId,
-          })
-        ).messages,
-      )
+      const history: Message[] = []
+      let after: string | undefined
+      do {
+        const page = await window.vela.messages({
+          projectId: next.id,
+          sessionId: next.sessionId,
+          after,
+        })
+        history.push(...page.messages)
+        after = page.nextCursor
+      } while (after)
+      setMessages(history)
       setError('')
     } catch (cause) {
       setError(String(cause))
