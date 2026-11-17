@@ -45,6 +45,11 @@ knowledge.db
 # local real-model evaluation artifacts
 .vela-eval/
 
+# Harbor job output (scripts/eval/harbor)
+/jobs/
+__pycache__/
+*.pyc
+
 # Staged package documentation copied by the build
 packages/*/LICENSE
 packages/*/CHANGELOG.md
