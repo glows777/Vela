@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { web } from '@glows777/vela-core'
 import {
   fauxSummary,
@@ -11,7 +11,7 @@ import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
-test('echo hi reaches the model as exact output while durable files and history remain', async () => {
+test('echo hi reaches the model as exact output and is recorded inline in history', async () => {
   const t = createTestVela({
     responses: [fauxToolCall('bash', { command: 'echo hi' }), fauxText('done')],
   })
@@ -26,7 +26,7 @@ test('echo hi reaches the model as exact output while durable files and history 
     .split('\n')
     .map((line) => JSON.parse(line))
   expect(rows[1]).toMatchObject({ status: 'completed', exitCode: 0 })
-  expect(readFileSync(rows[1].outputPath, 'utf8')).toBe('hi\n')
+  expect(rows[1].output).toBe('hi\n')
 })
 
 test('bash over 2000 lines keeps its tail and a single readable full-output footer', async () => {
@@ -168,13 +168,12 @@ test('a pre-change StoredToolResult session resumes with its original result tex
     ],
   })
   await first.run('Run legacy')
-  const history = readFileSync(first.session.registry.results.indexPath, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
+  const legacyPath = `${first.session.registry.results.dir}/legacy-output.txt`
+  mkdirSync(first.session.registry.results.dir, { recursive: true })
+  writeFileSync(legacyPath, 'legacy\n')
   const legacy = {
     kind: 'vela-tool-result',
-    path: history[1].outputPath,
+    path: legacyPath,
     indexPath: first.session.registry.results.indexPath,
     bytes: 7,
     preview: 'legacy\n',

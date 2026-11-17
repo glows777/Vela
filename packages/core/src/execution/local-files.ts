@@ -171,7 +171,10 @@ class Reader implements BinaryReader {
 }
 export class LocalFiles {
   readonly id = 'node:local'
-  constructor(public cwd: string) {}
+  constructor(
+    public cwd: string,
+    private readonly tempRoot?: string,
+  ) {}
   private path(path: string) {
     let value = path
     if (value === '~') value = homedir()
@@ -315,7 +318,8 @@ export class LocalFiles {
     signal?: AbortSignal,
   ) {
     return attempt(undefined, signal, async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'vela-'))
+      const dir = this.tempRoot ?? (await mkdtemp(join(tmpdir(), 'vela-')))
+      if (this.tempRoot) await mkdir(dir, { recursive: true, mode: 0o700 })
       const p = join(
         dir,
         `${options?.prefix ?? ''}${crypto.randomUUID()}${options?.suffix ?? ''}`,

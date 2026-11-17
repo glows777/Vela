@@ -169,3 +169,66 @@ test('list_directory uses the selected environment instead of listing the host',
     dir.cleanup()
   }
 })
+
+test('bash never starts a host command when its environment denies execution', async () => {
+  const dir = tempDir()
+  const marker = join(dir.path, 'bash-host-marker')
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('bash', { command: 'touch bash-host-marker' }),
+      fauxText('done'),
+    ],
+  })
+  let execs = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.exec = async () => {
+        execs++
+        return {
+          ok: false,
+          error: Object.assign(new Error('environment unavailable'), {
+            code: 'unavailable' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('boundary-bash').prompt('run bash')
+    expect(execs).toBe(1)
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('default local bash keeps spilled output under the session result root', async () => {
+  const dir = tempDir()
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('bash', { command: "printf '%060000d' 0" }),
+      fauxText('done'),
+    ],
+  })
+  const vela = createVela({ cwd: dir.path, dataDir: '.data', model })
+  try {
+    await vela.session('spill-location').prompt('generate output')
+    const output = String(model.calls[1]!.toolResults[0]!.output)
+    const path = output.match(/Full output: ([^\]\n]+)/)?.[1]
+    expect(path).toBeDefined()
+    expect(
+      path!.startsWith(
+        vela.session('spill-location').registry.results.dir + '/',
+      ),
+    ).toBe(true)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})

@@ -8,7 +8,7 @@ import type {
   CredentialStore,
   LoginOptions,
 } from './auth/types.ts'
-import { createLocalExecutionEnv } from './execution/local.ts'
+import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
@@ -383,9 +383,10 @@ export function createVela(options: VelaOptions = {}): Vela {
     }
     const env = options.env
       ? await options.env(target)
-      : createLocalExecutionEnv({
+      : createSessionLocalExecutionEnv({
           cwd: session.cwd,
           shellPath: options.shellPath,
+          tempRoot: session.registry.results.dir,
         })
     if (env?.id !== 'node:local' || env.cwd !== session.cwd)
       throw new Error('Execution environment unavailable before E2')

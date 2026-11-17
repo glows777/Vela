@@ -24,8 +24,8 @@ function error(
   })
 }
 class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
-  constructor(options: { cwd: string; shellPath?: string }) {
-    super(options.cwd)
+  constructor(options: { cwd: string; shellPath?: string; tempRoot?: string }) {
+    super(options.cwd, options.tempRoot)
     this.shellPath = options.shellPath
   }
   private readonly shellPath?: string
@@ -305,6 +305,15 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
 export function createLocalExecutionEnv(options: {
   cwd: string
   shellPath?: string
+}): ExecutionEnv {
+  return new LocalExecutionEnv(options)
+}
+
+/** @internal Use the session-owned result root for local spill files. */
+export function createSessionLocalExecutionEnv(options: {
+  cwd: string
+  shellPath?: string
+  tempRoot: string
 }): ExecutionEnv {
   return new LocalExecutionEnv(options)
 }
