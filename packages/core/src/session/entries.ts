@@ -1,4 +1,5 @@
 import type { CustomMessageInfo } from '../agent/events.ts'
+import type { ExecutionLocation } from '../execution/types.ts'
 import type { ModelMessage, UserContent } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
 
@@ -18,6 +19,7 @@ export interface SessionHeader {
   timestamp: string
   /** Working directory the session started in */
   cwd?: string
+  location?: ExecutionLocation
   /** Channel the session answers on (e.g. `lark`), when a host opened it for one */
   channel?: string
   /** @internal Tool call history the session's tool results belong to */

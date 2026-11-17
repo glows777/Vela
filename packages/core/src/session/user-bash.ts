@@ -28,6 +28,8 @@ export class UserBash {
       messages: ModelMessage[]
       tracker: TokenTracker
       timestamps: Map<ModelMessage, number>
+      prepare: () => Promise<void>
+      isClosed: () => boolean
     },
   ) {}
   get isRunning(): boolean {
@@ -65,21 +67,35 @@ export class UserBash {
     },
   ): Promise<BashResult> {
     try {
+      // Register the command before awaiting its environment so abort/close can stop it.
+      let onAbort!: () => void
+      const cancelled = new Promise<void>((resolve) => {
+        onAbort = resolve
+        controller.signal.addEventListener('abort', onAbort, { once: true })
+      })
+      try {
+        await Promise.race([this.host.prepare(), cancelled])
+      } finally {
+        controller.signal.removeEventListener('abort', onAbort)
+      }
+      if (this.host.isClosed()) throw new Error('Session is closed')
       // Appending to a saved session that was not resumed would mix two conversations in one log
       await this.host.store.assertNew()
-      const result = await runBash(command, {
-        results: this.host.store.results,
-        cwd: this.host.cwd,
-        shellPath: this.host.shellPath,
-        signal: controller.signal,
-        onUpdate: options.onUpdate,
-        onDelta: (delta) =>
-          this.host.emit({
-            type: 'bash_execution_update',
-            ...(options.id === undefined ? {} : { id: options.id }),
-            delta,
-          }),
-      })
+      const result: BashResult = controller.signal.aborted
+        ? { output: '', exitCode: undefined, cancelled: true, truncated: false }
+        : await runBash(command, {
+            results: this.host.store.results,
+            cwd: this.host.cwd,
+            shellPath: this.host.shellPath,
+            signal: controller.signal,
+            onUpdate: options.onUpdate,
+            onDelta: (delta) =>
+              this.host.emit({
+                type: 'bash_execution_update',
+                ...(options.id === undefined ? {} : { id: options.id }),
+                delta,
+              }),
+          })
       this.pendingBash.push({
         type: 'bash_execution',
         command,

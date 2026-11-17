@@ -3,6 +3,8 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { CustomMessageInfo } from '../agent/events.ts'
+import { validateStoredLocation } from '../execution/location.ts'
+import type { ExecutionLocation } from '../execution/types.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { ThinkingLevel } from '../models/index.ts'
@@ -86,6 +88,7 @@ export class SessionStore {
     /** Tool history lives in a temp dir (custom storage without dataDir): if it is gone on resume, start over instead of failing */
     private readonly temporaryResults = false,
     private readonly cwd?: string,
+    private readonly location?: ExecutionLocation,
     /** Internal notification after an actual storage write (not an empty flush). */
     private readonly onSaved?: () => void,
   ) {
@@ -292,6 +295,7 @@ export class SessionStore {
       id: this.sessionId,
       timestamp: new Date().toISOString(),
       ...(this.cwd ? { cwd: this.cwd } : {}),
+      ...(this.location ? { location: this.location } : {}),
       ...(this.channel ? { channel: this.channel } : {}),
       toolHistoryId: this.results.historyId,
       parentSession: parent.id,
@@ -348,6 +352,7 @@ export class SessionStore {
         id: this.sessionId,
         timestamp: new Date().toISOString(),
         ...(this.cwd ? { cwd: this.cwd } : {}),
+        ...(this.location ? { location: this.location } : {}),
         ...(this.channel ? { channel: this.channel } : {}),
         toolHistoryId: this.results.historyId,
       }
@@ -531,11 +536,14 @@ export class SessionStore {
 
   /** Loads the saved session; returns undefined if it was never saved. Replaces the entries in memory. */
   async loadSaved(): Promise<
-    (SessionContext & { channel?: string }) | undefined
+    | (SessionContext & { channel?: string; location?: ExecutionLocation })
+    | undefined
   > {
     const loaded = await this.storage.load(this.sessionId)
-    this.checked = true
-    if (!loaded?.length) return
+    if (!loaded?.length) {
+      this.checked = true
+      return
+    }
     const header = loaded[0] as SessionHeader
     if (header.type !== 'session')
       throw new Error(`Session ${this.sessionId} has no session header`)
@@ -548,6 +556,7 @@ export class SessionStore {
       throw new Error(
         `Session ${this.sessionId} uses file format version ${version}; its storage must convert it (see migrateSessionV1)`,
       )
+    if ('location' in header) validateStoredLocation(header.location)
     // A write retried after it failed part way can repeat entries: the first copy of each id counts
     const seen = new Set<string>()
     const entries = (loaded.slice(1) as SessionEntry[]).filter(
@@ -583,8 +592,9 @@ export class SessionStore {
     for (const [message, id] of context.ids) this.ids.set(message, id)
     this.producers = context.producers
     this.started = true
+    this.checked = true
     this.pending.length = 0
-    return { ...context, channel }
+    return { ...context, channel, location: header.location }
   }
 }
 
