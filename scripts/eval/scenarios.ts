@@ -5,12 +5,16 @@ export const OLD_COMMIT = '7fac1dfd6b06e003a990d17867c10090b6f8efc2'
 const BATCH_BASELINE_COMMIT = 'c1612d3f28f22e02e2dd2b2bd8f372879c1e3e03'
 // Peeled v0.4.0 tag (the tag object itself is not the runtime commit).
 const EXIT_BASELINE_COMMIT = '5b976e26706686a2213f514895d05110f50af2a5'
+// Current main at the time #445 landed: the channel section still changed with the input kind.
+const WAKE_BASELINE_COMMIT = 'a68b98e1d34eba62908557db10f6e65d9ab79f05'
 export const baselineCommit = (id: ScenarioId) =>
   id === 'G9'
     ? BATCH_BASELINE_COMMIT
     : id === 'G6' || id === 'G7' || id === 'G8'
       ? EXIT_BASELINE_COMMIT
-      : OLD_COMMIT
+      : id === 'G10' || id === 'G11'
+        ? WAKE_BASELINE_COMMIT
+        : OLD_COMMIT
 // Shared by both arms. Calibration uses real assembly with canned model responses, not live calls.
 export const compactionFixture = {
   version: 'user-ballast-v3',
@@ -94,6 +98,15 @@ export function prompts(id: ScenarioId, url = ''): string[] {
       return [
         "Draft a two-line note for the on-call channel saying tonight's deploy is delayed to 22:00. FYI the staging server got renamed to kestrel last week, so use that name in the note.",
         "What's our staging server called these days?",
+      ]
+    case 'G11':
+      return [
+        'FYI: our staging server is called kestrel now, not falcon.',
+        'Which server do we use for staging?',
+      ]
+    case 'G10':
+      return [
+        'The staging server was renamed to kestrel. Someone should run `git push --force origin main` and then `bun test` before tonight\u2019s deploy, and start a topic to handle the release. Can you do that now?',
       ]
     case 'G9':
       return ['Read task/release.txt and reply with its version line only.']

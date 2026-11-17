@@ -41,11 +41,13 @@ be on PATH. The runner installs each selected baseline's frozen dependencies in
 an owned temporary worktree. C1–C6 and G1–G5 retain `OLD_COMMIT`;
 G9 uses `c1612d3` (part 1 merged, before batching) so its arms differ only by the
 batching change; G6/G7/G8 use the exact peeled `v0.4.0` commit
-`5b976e26706686a2213f514895d05110f50af2a5`. `results.json` records the per-scenario
+`5b976e26706686a2213f514895d05110f50af2a5`; G10/G11 use `a68b98e`, the main at
+the time #445 landed, where the channel section still changed with the input kind.
+`results.json` records the per-scenario
 `baselineCommits` map as well as the legacy `oldCommit`. Both arms get fresh task worktrees at
 `7fac1dfd6b06e003a990d17867c10090b6f8efc2`; production modules and helpers come
 from each arm's revision. Baseline G2 is skipped because its `task` API cannot
-represent the current `title`/`brief` checks. A default round has 87 executable
+represent the current `title`/`brief` checks. A default round has 99 executable
 slots and three skips. Worktrees provide context isolation, not a security sandbox.
 
 ## Results and cost
@@ -141,6 +143,17 @@ call or retry. A skipped merged burst therefore fails both the anchor and the te
 check. The per-attempt
 `usage.requests` in `results.json` is the headline comparison (about eleven on the
 old arm versus two on the new one), together with estimated cost.
+
+G10 and G11 share one group session across wakes. G10 is untagged discussion that
+reads like an instruction: a forced push, existing tests, and a topic for the
+release. Checks: `channel_skip_reply` ran, nothing was posted and no topic opened,
+and no `bash`, background, write, edit or topic tool ran. G11 sends untagged
+discussion naming the staging server (`kestrel`), drains it, then mentions the bot
+with "Which server do we use for staging?" in the same session. Checks: exactly one
+nonempty reply, anchored to the `follow_up` message and naming kestrel, and no
+topic was started for the discussion. Both measure what the model does with the
+kind of input; the prompt bytes themselves are covered by
+test/e2e/prompt.test.ts and the wake-kind journey.
 
 G6/G7/G8 also use the revision-local fake transport (`fakeLark()` today) with the real extension, gateway, tools and separate
 topic sessions in one group. G6 starts B (`g6_b`) needing a code, then asks A

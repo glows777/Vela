@@ -592,16 +592,32 @@ export async function runAttempt(
         }
         evidence.answers = evidence.deliveries.map((item) => item.text)
       } else {
+        // G11 opens with untagged discussion so the person's follow-up shares its session and history.
+        if (config.scenario === 'G11') {
+          fake.deliver(
+            eventFactory({
+              message_id: 'discussion',
+              create_time: '3000',
+              mentions: [],
+              content: JSON.stringify({ text: prompts(config.scenario)[0] }),
+            }),
+          )
+          while (!channelStarted && !channelError) await Bun.sleep(1)
+          await drain()
+          if (channelError) throw channelError
+          channelStarted = false
+        }
+        const unmentioned =
+          config.scenario === 'G3' || config.scenario === 'G10'
         fake.deliver(
           eventFactory({
-            message_id: 'trigger',
-            create_time: '3000',
-            mentions:
-              config.scenario === 'G3'
-                ? []
-                : [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+            message_id: config.scenario === 'G11' ? 'follow_up' : 'trigger',
+            create_time: config.scenario === 'G11' ? '4000' : '3000',
+            mentions: unmentioned
+              ? []
+              : [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
             content: JSON.stringify({
-              text: `${config.scenario === 'G3' ? '' : '@_user_1 '}${prompts(config.scenario)[0]}`,
+              text: `${unmentioned ? '' : '@_user_1 '}${prompts(config.scenario)[config.scenario === 'G11' ? 1 : 0]}`,
             }),
             ...(['G4', 'G5'].includes(config.scenario)
               ? { root_id: 'root', thread_id: 'thread' }
@@ -615,6 +631,7 @@ export async function runAttempt(
         evidence.deliveries = fake.sent.map((item) => ({
           scope:
             config.scenario === 'G9' ||
+            config.scenario === 'G11' ||
             (item.messageId === 'trigger' &&
               !['G4', 'G5'].includes(config.scenario))
               ? 'group'
