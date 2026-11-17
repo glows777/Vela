@@ -289,3 +289,64 @@ test('default session environment preserves login-shell invocation for model and
     dir.cleanup()
   }
 })
+
+test('grep uses the execution environment instead of host search', async () => {
+  const dir = tempDir()
+  writeFileSync(join(dir.path, 'secret.txt'), 'host-secret-token')
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('grep', { pattern: 'host-secret-token', path: '.' }),
+      fauxText('done'),
+    ],
+  })
+  let execs = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      env.exec = async () => {
+        execs++
+        return {
+          ok: false,
+          error: Object.assign(new Error('environment denied search'), {
+            code: 'unavailable' as const,
+          }),
+        }
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('grep-boundary', { tools: ['+grep'] }).prompt('search')
+    expect(execs).toBe(1)
+    expect(model.calls[1]!.toolResults[0]!.output).not.toContain(
+      'host-secret-token',
+    )
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('grep returns real local matches and context through the selected environment', async () => {
+  const dir = tempDir()
+  writeFileSync(join(dir.path, 'notes.txt'), 'before\nneedle here\nafter\n')
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('grep', { pattern: 'needle', path: '.', context: 1 }),
+      fauxText('done'),
+    ],
+  })
+  const vela = createVela({ cwd: dir.path, model })
+  try {
+    await vela.session('grep-real', { tools: ['+grep'] }).prompt('search')
+    const output = String(model.calls[1]!.toolResults[0]!.output)
+    expect(output).toContain('notes.txt:2: needle here')
+    expect(output).toContain('notes.txt-1- before')
+    expect(output).toContain('notes.txt-3- after')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
