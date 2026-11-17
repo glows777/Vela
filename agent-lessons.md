@@ -8,7 +8,7 @@ After a miss is confirmed, write a lesson. Record the trigger path, the layer th
 
 For Agent runtime designs, assess the full request prefix and ordering, not just whether the text is correct. Stable instructions should remain stable. Per-input classification belongs with the input rather than dynamically rewriting system instructions; do not inject Git branch automatically, and query it in the selected execution environment when needed. A necessary prefix change, such as loading a tool, may still be the right trade-off when documented. Cache keys, breakpoints, minimum sizes, expiration and billing depend on the provider, so compare consecutive request shapes and cache-read/write usage rather than assuming a universal cache guarantee.
 
-The prevention mechanism is the Agent runtime prompt-cache review check in [REVIEW.md](REVIEW.md). [#444](https://github.com/glows777/Vela/pull/444) addresses branch injection, and [#445](https://github.com/glows777/Vela/issues/445) tracks wake-kind handling; their fixes and verification remain subject to review. A faux cache scenario can guard prefix stability, but it does not prove a real-provider hit or savings.
+The prevention mechanism is the Agent runtime prompt-cache review check in [REVIEW.md](REVIEW.md). [#444](https://github.com/glows777/Vela/pull/444) has merged the branch-injection fix; [#445](https://github.com/glows777/Vela/issues/445) tracks the remaining wake-kind handling. A faux cache scenario can guard prefix stability, but it does not prove a real-provider hit or savings.
 
 ## Background memory work must respect tool availability and atomic merges
 
