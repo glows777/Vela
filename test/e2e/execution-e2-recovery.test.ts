@@ -539,3 +539,49 @@ test('memory session clone retains spilled user bash output after parent closes'
     dir.cleanup()
   }
 })
+
+test('microcompaction stores recoverable tool output in the session environment', async () => {
+  const dir = tempDir()
+  for (let i = 0; i < 8; i++)
+    writeFileSync(
+      join(dir.path, `file-${i}.txt`),
+      `file ${i}\n` + 'content '.repeat(1400),
+    )
+  const model = createFauxModel({
+    responses: [
+      ...Array.from({ length: 8 }, (_, i) =>
+        fauxToolCall('read_file', { path: `file-${i}.txt` }),
+      ),
+      fauxText('done'),
+    ],
+  })
+  let allocations = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    limits: {
+      microcompactThreshold: 1,
+      minMicroSavings: 1,
+      summaryThreshold: 1e9,
+    },
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const create = env.createTempFile.bind(env)
+      env.createTempFile = async (...args) => {
+        allocations++
+        return create(...args)
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('micro-boundary').prompt('read all')
+    expect(JSON.stringify(model.calls.at(-1)!.prompt)).toContain(
+      'tool result preview omitted',
+    )
+    expect(allocations).toBeGreaterThan(0)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})

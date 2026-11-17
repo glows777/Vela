@@ -288,6 +288,7 @@ export class VelaSession {
       { messages: this.messages, timestamps: new Map(), summary: '' },
       this.emit,
       this.limits,
+      this.execEnv,
     )
     this.timestamps = this.contextManager.state.timestamps
     this.userBash = new UserBash({
@@ -298,7 +299,7 @@ export class VelaSession {
       messages: this.messages,
       tracker: this.tracker,
       timestamps: this.timestamps,
-      prepare: () => this.deps.ensureLocal(this),
+      prepare: this.execEnv,
       isClosed: () => this.closed,
     })
     this.contextManager.autoCompaction =
@@ -439,7 +440,6 @@ export class VelaSession {
     const after = this.thinkingLevel
     if (after !== before) this.store.appendThinkingLevelChange(after)
   }
-
   /** Channel this session answers on. Open supplies it, and `resume()` restores a saved one. */
   channel?: string
 
