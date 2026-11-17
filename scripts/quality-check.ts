@@ -3,8 +3,8 @@
  *
  * - knip reports no unused files, exports or dependencies;
  * - madge finds no circular dependencies, including type-only imports;
- * - no file under src/ passes 800 lines, except the files that were already over it when the limit
- *   landed: each is pinned at its size that day and may only shrink, so a ceiling that is above its
+ * - no owned package or desktop TS/TSX source file passes 800 lines, except files already over it
+ *   when the limit landed: each is pinned at its size that day and may only shrink, so a ceiling above its
  *   file must be lowered in the same change;
  * - relative links in the Markdown docs point at a file and, with a #fragment, at a heading.
  *
@@ -16,14 +16,18 @@ import { join, relative, resolve } from 'node:path'
 import { $, Glob } from 'bun'
 // @ts-expect-error madge ships no type definitions
 import madge from 'madge'
+import desktopConfig from '../apps/desktop/tsconfig.json'
 import { checkBoundaries } from './check-boundaries.ts'
 import { checkDocLinks } from './check-doc-links.ts'
 import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
-const SOURCES = ['core', 'channels', 'mcp', 'rag', 'lark', 'vela'].map((name) =>
-  join(ROOT, 'packages', name, 'src'),
-)
+const SOURCES = [
+  ...['core', 'channels', 'mcp', 'rag', 'lark', 'vela'].map((name) =>
+    join(ROOT, 'packages', name, 'src'),
+  ),
+  join(ROOT, 'apps/desktop/src'),
+]
 const LINE_LIMIT = 800
 
 /** Zero since #131 removed the last cycle. */
@@ -85,6 +89,12 @@ async function checkRuntimeDependencies() {
 
 async function checkCycles() {
   const paths: Record<string, string[]> = {}
+  for (const [alias, targets] of Object.entries(
+    desktopConfig.compilerOptions.paths,
+  ))
+    paths[alias] = targets.map((target) =>
+      relative(ROOT, resolve(ROOT, 'apps/desktop', target)),
+    )
   for (const pkg of await readWorkspaces(ROOT))
     for (const [subpath, entry] of Object.entries(
       pkg.manifest.exports as Record<string, { import: string }>,
@@ -100,9 +110,12 @@ async function checkCycles() {
       ]
   const graph = await madge(SOURCES, {
     baseDir: ROOT,
-    fileExtensions: ['ts'],
+    fileExtensions: ['ts', 'tsx'],
     tsConfig: { compilerOptions: { baseUrl: ROOT, paths } },
-    detectiveOptions: { ts: { skipTypeImports: false } },
+    detectiveOptions: {
+      ts: { skipTypeImports: false },
+      tsx: { skipTypeImports: false },
+    },
   })
   const cycles: string[][] = graph.circular()
   if (cycles.length <= MAX_CYCLES) {
@@ -136,9 +149,9 @@ async function checkFileSizes() {
   let files = 0
 
   for (const source of SOURCES)
-    for await (const file of new Glob('**/*.ts').scan(source)) {
-      files++
+    for await (const file of new Glob('**/*.{ts,tsx}').scan(source)) {
       const path = relative(ROOT, join(source, file))
+      files++
       const lines = countLines(await Bun.file(join(source, file)).text())
       const ceiling = LINE_CEILINGS.get(path)
       if (ceiling === undefined) {

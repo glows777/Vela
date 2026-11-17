@@ -1,0 +1,55 @@
+/* The document owns the bridge so Radix portals inherit the same theme. */
+:root,
+:root[data-theme] {
+  --background: var(--vela-white);
+  --surface: var(--vela-white);
+  --surface-raised: var(--vela-paper);
+  --surface-muted: var(--vela-menu-hover);
+  --foreground: var(--vela-ink);
+  --text-secondary: var(--vela-muted);
+  --text-muted: var(--vela-muted);
+  --border: var(--vela-line);
+  --border-subtle: var(--vela-line);
+  --border-strong: var(--vela-border-strong);
+  --accent: var(--vela-button);
+  --accent-strong: var(--vela-button-hover);
+  --accent-subtle: color-mix(in oklab, var(--vela-mint) 40%, transparent);
+  --accent-foreground: var(--vela-on-button);
+  --control-on: var(--vela-button);
+  --control-glyph: var(--vela-on-button);
+  --control-track: var(--vela-line);
+  --control-track-hover: var(--vela-border-strong);
+  --control-thumb: var(--vela-white);
+  --control-thumb-on: var(--vela-on-button);
+  --control-fill: var(--vela-button);
+  --danger: var(--vela-accent-ink);
+  --focus-outline: var(--vela-teal);
+  --font-display: var(--vela-family-display);
+  --font-body: var(--vela-family-sans);
+}
+:root,
+:root[data-theme="light"],
+:root[data-theme="high-contrast"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+/* Arc's dark shadows are attribute-only; system dark reuses the consumed values. */
+@media (prefers-color-scheme: dark) and (prefers-contrast: no-preference) and (
+    forced-colors: none
+  ) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --control-thumb-shadow:
+      0 0 0 0.5px oklch(0% 0 0 / 0.3), 0 1px 2px oklch(0% 0 0 / 0.35),
+      0 2px 6px oklch(0% 0 0 / 0.2);
+    --shadow-resting: 0 1px 2px oklch(0% 0 0 / 0.18);
+    --shadow-floating: 0 22px 55px oklch(0% 0 0 / 0.34);
+  }
+}
+@media (prefers-contrast: more), (forced-colors: active) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+  }
+}
