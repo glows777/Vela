@@ -45,6 +45,10 @@ knowledge.db
 # local real-model evaluation artifacts
 .vela-eval/
 
+# local working notes, not repository documentation
+/background-bash-research.md
+/background-bash-spec.md
+
 # Harbor job output (scripts/eval/harbor)
 /jobs/
 __pycache__/
