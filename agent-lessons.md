@@ -91,3 +91,9 @@ Pre-PR review should have caught it. CI does not run the verify-vela journeys, s
 [Issue #347](https://github.com/glows777/Vela/issues/347). [PR #344](https://github.com/glows777/Vela/pull/344) updated the JSON mode example so the mock model calls `bash` with `ls`, but the streamed `toolcall_delta` on that line stayed `{"path":"."}` from `list_directory`. The edit renamed `toolName`, `input`, and `result` in an old capture and left the nested `assistantMessageEvent.delta` alone. Pre-PR review missed it because nothing compared that delta with a new `vela --mode json` run.
 
 When refreshing a captured CLI/JSON fixture, the whole event (including nested `assistantMessageEvent.delta`) has to come from a fresh run, not from renaming fields in an old capture. The mechanism is `test/unit/json-example.test.ts`. It fails when a `toolcall_delta` in the `docs/json.md` session example is not part of the tool input on the same line.
+
+## A public session field updates the format contract
+
+[Issue #434](https://github.com/glows777/Vela/issues/434). [PR #425](https://github.com/glows777/Vela/pull/425) added `location` to `SessionHeader`, wrote `{ environment: 'local', cwd }` on new transcripts and `exportJsonl()`, and described resume in `docs/sdk.md` and `CHANGELOG.md`. `docs/session-format.md` still omitted `location` from the Header example. Pre-PR review checked the SDK page, the changelog, and end-to-end tests, and did not compare the format contract with the new header field.
+
+When a public session header or entry field is added, or the written transcript shape changes, update `docs/session-format.md` in the same change. The mechanism is `test/unit/session-format.test.ts`. It fails when the Header example omits `location` or its fields drift from `SessionHeader` in `packages/core/src/session/entries.ts`.

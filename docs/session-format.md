@@ -29,11 +29,14 @@ interface SessionHeader {
   id: string               // session id
   timestamp: string        // when the session was created (ISO)
   cwd?: string             // working directory
+  location?: ExecutionLocation
   channel?: string         // channel the session answers on, when a host opened it for one
   toolHistoryId?: string   // @internal: the tool call history directory
   parentSession?: string   // id of the session this one was forked or cloned from
 }
 ```
+
+New records persist `location` as `{ environment: 'local', cwd }`, the same directory as `cwd`. `resume()` restores that saved cwd even when the caller passes a different cwd. A header with no `location` keeps the prior fallback, the caller's cwd or the default cwd. `exportJsonl()`, `fork()`, and `clone()` keep `location` on the header they write.
 
 ## Entries
 
@@ -77,9 +80,9 @@ The model and thinking level are the latest `model_change` and `thinking_level_c
 
 ### Forks and clones
 
-`session.fork()`, `session.clone()` and `--fork` write a new session file holding one branch of the original: the entries from the root to the fork point, re-chained without `label`, `session_archived` and `session_channel` entries (the copy starts active and unbound), followed by fresh `label` entries for the labels on that path (pi's `createBranchedSession`). The header's `parentSession` is the original's id. The tool call history is copied into the new session's directory under a new `toolHistoryId`; long tool output files are not copied, and references to them keep pointing into the original session's directory.
+`session.fork()`, `session.clone()` and `--fork` write a new session file holding one branch of the original: the entries from the root to the fork point, re-chained without `label`, `session_archived` and `session_channel` entries (the copy starts active and unbound), followed by fresh `label` entries for the labels on that path (pi's `createBranchedSession`). The header's `parentSession` is the original's id, and `location` is kept (see [Header](#header)). The tool call history is copied into the new session's directory under a new `toolHistoryId`; long tool output files are not copied, and references to them keep pointing into the original session's directory.
 
-`session.exportJsonl()` writes the same kind of file for the current branch (header and entries, re-chained), without `toolHistoryId`.
+`session.exportJsonl()` writes the same kind of file for the current branch (header and entries, re-chained), without `toolHistoryId`, and keeps `location`.
 
 ## Versions
 
@@ -155,7 +158,7 @@ The model reads this history (through `bash` and `read_file`) to look up tool ca
 A session where the user asked one question and the model read a file:
 
 ```json
-{"type":"session","version":2,"id":"notes","timestamp":"2026-10-08T10:50:32.570Z","cwd":"/home/me/app","toolHistoryId":"2bbdf095-0fa4-4ab5-80ad-0603a6dab4c2"}
+{"type":"session","version":2,"id":"notes","timestamp":"2026-10-08T10:50:32.570Z","cwd":"/home/me/app","location":{"environment":"local","cwd":"/home/me/app"},"toolHistoryId":"2bbdf095-0fa4-4ab5-80ad-0603a6dab4c2"}
 {"type":"model_change","model":"openai/gpt-5","id":"5f1c2a90","parentId":null,"timestamp":"2026-10-08T10:50:32.570Z"}
 {"type":"thinking_level_change","thinkingLevel":"medium","id":"0b7e44d1","parentId":"5f1c2a90","timestamp":"2026-10-08T10:50:32.570Z"}
 {"type":"message","message":{"role":"user","content":"What does notes.txt say?"},"id":"a3c90e12","parentId":"0b7e44d1","timestamp":"2026-10-08T10:50:32.574Z"}
