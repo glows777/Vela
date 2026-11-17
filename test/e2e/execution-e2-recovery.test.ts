@@ -585,3 +585,35 @@ test('microcompaction stores recoverable tool output in the session environment'
     dir.cleanup()
   }
 })
+
+test('workspace AGENTS instructions come from the selected session environment', async () => {
+  const dir = tempDir()
+  writeFileSync(join(dir.path, 'AGENTS.md'), 'HOST_CONTEXT_ONLY')
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  let reads = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = async (path, signal) => {
+        if (path.endsWith('/AGENTS.md')) {
+          reads++
+          return { ok: true, value: 'ENV_CONTEXT_ONLY' }
+        }
+        return read(path, signal)
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('context-boundary').prompt('hello')
+    expect(reads).toBeGreaterThan(0)
+    expect(model.calls[0]!.system).toContain('ENV_CONTEXT_ONLY')
+    expect(model.calls[0]!.system).not.toContain('HOST_CONTEXT_ONLY')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
