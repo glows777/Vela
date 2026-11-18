@@ -428,10 +428,15 @@ export function createVela(options: VelaOptions = {}): Vela {
       options.contextFiles === false
         ? []
         : await loadEnvironmentContextFiles(env, location, signal)
-    const skills =
+    const workspaceSkills =
       options.skillDirs && location === cwd
-        ? skillLoader.list()
+        ? []
         : await loadEnvironmentSkills(env, location, signal)
+    const workspaceNames = new Set(workspaceSkills.map((skill) => skill.name))
+    const skills = [
+      ...workspaceSkills,
+      ...skillLoader.list().filter((skill) => !workspaceNames.has(skill.name)),
+    ]
     signal?.throwIfAborted()
     if (session.cwd !== location)
       throw new Error('Session location changed during resource preparation')

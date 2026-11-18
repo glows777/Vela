@@ -662,3 +662,31 @@ test('workspace skill metadata comes from the selected session environment', asy
     dir.cleanup()
   }
 })
+
+test('explicit host skills remain available alongside another session workspace', async () => {
+  const dir = tempDir()
+  const host = join(dir.path, 'host')
+  const workspace = join(dir.path, 'workspace')
+  mkdirSync(join(host, 'shared'), { recursive: true })
+  mkdirSync(join(workspace, '.skills', 'local'), { recursive: true })
+  writeFileSync(
+    join(host, 'shared', 'SKILL.md'),
+    '---\nname: shared\ndescription: Explicit host skill\n---\nShared body',
+  )
+  writeFileSync(
+    join(workspace, '.skills', 'local', 'SKILL.md'),
+    '---\nname: local\ndescription: Workspace skill\n---\nLocal body',
+  )
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({ cwd: dir.path, model, skillDirs: [host] })
+  try {
+    await vela
+      .session('explicit-and-workspace', { cwd: workspace })
+      .prompt('hello')
+    expect(model.calls[0]!.system).toContain('Explicit host skill')
+    expect(model.calls[0]!.system).toContain('Workspace skill')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
