@@ -465,7 +465,7 @@ SDK `dispose()` keeps immediate cancellation. Channel-aware SDK hosts can use `d
 
 ### Lark delivery after a restart
 
-Final model replies and `channel_start_topic` title messages save a send intent in the session before calling Lark. Final replies use the saved assistant entry identity; topic titles use the session and original tool-call identity. These private entries do not enter model context or change the system prompt. Both the live final reply and startup recovery use the same intent.
+Final model replies and `channel_start_topic` title messages save a send intent in the session before calling Lark. Final replies use the saved assistant entry identity; topic titles use the session and original tool-call identity. These private entries do not enter model context or change the system prompt. Both the live final reply and startup recovery use the same intent, including the actual recipient of that answer. A later sender in a shared topic is not replaced with the original topic creator during recovery.
 
 Lark [create](https://open.feishu.cn/document/server-docs/im-v1/message/create) / [reply](https://open.feishu.cn/document/server-docs/im-v1/message/reply) requests carry `data.uuid`. An unconfirmed intent may retry with the same UUID and payload only within one hour of its first saved attempt. An acknowledged intent is not sent again, even after that window. If the window has expired (or the clock moved backward), delivery is **unknown** and Vela refuses to resend; inspect the destination before deciding on a new message. A changed payload under the same identity also fails rather than silently reporting success.
 

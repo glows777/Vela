@@ -254,11 +254,16 @@ export class ChannelRecovery {
       !last.stopReason &&
       finalAnswer(last.message)
     ) {
-      await sendAnswer(session, channel, {
-        ...msg,
-        recipientId: msg.senderId,
-        text: finalAnswer(last.message),
-      })
+      await sendAnswer(
+        session,
+        channel,
+        {
+          ...msg,
+          recipientId: msg.senderId,
+          text: finalAnswer(last.message),
+        },
+        true,
+      )
       await this.directory.finish(record.key, 'done', true)
       return
     }

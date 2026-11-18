@@ -15,7 +15,8 @@ import { fakeLark, larkEvent } from '../../support/lark.ts'
 
 const [cwd, rawMode] = process.argv.slice(2) as [string, string]
 const direct = rawMode.startsWith('dm-')
-const mode = rawMode.replace('dm-', '')
+const multi = rawMode.startsWith('multi-')
+const mode = rawMode.replace(/^(dm-|multi-)/, '')
 const ledgerPath = join(cwd, 'remote-ledger.json')
 interface Ledger {
   attempts: { uuid?: string; text: string }[]
@@ -35,6 +36,10 @@ function durable(path: string, value: unknown) {
 }
 const fake = fakeLark()
 const send = async (method: string, text: string, uuid?: string) => {
+  if (mode === 'before-send' && text.includes('FINAL ANSWER')) {
+    durable(join(cwd, 'kill-ready'), true)
+    return new Promise<never>(() => {})
+  }
   appendFileSync(join(cwd, 'methods.txt'), `${method}\n`)
   ledger.attempts.push({ uuid, text })
   if (!uuid || !ledger.deliveries.some((item) => item.uuid === uuid))
@@ -61,7 +66,7 @@ const log = (message: string) => {
   logs.push(message)
   appendFileSync(join(cwd, 'logs.txt'), `${message}\n`)
 }
-const starting = mode === 'accepted' || mode === 'confirmed' || mode === 'tool'
+const starting = ['accepted', 'confirmed', 'tool', 'before-send'].includes(mode)
 const t = createTestVela({
   cwd,
   responses:
@@ -81,7 +86,10 @@ const t = createTestVela({
             },
           ]
         : starting
-          ? [fauxText('FINAL ANSWER', { reasoning: 'PRIVATE THOUGHT' })]
+          ? [
+              ...(multi ? [fauxText('ALICE INITIAL')] : []),
+              fauxText('FINAL ANSWER', { reasoning: 'PRIVATE THOUGHT' }),
+            ]
           : [],
   logger: { debug: () => {}, info: log, warn: log, error: log },
   extensions: [
@@ -105,16 +113,41 @@ try {
   await t.vela.ready()
   await t.vela.startChannels()
   if (starting) {
+    if (multi) {
+      fake.deliver(
+        larkEvent(
+          {
+            message_id: 'alice-trigger',
+            root_id: 'root',
+            thread_id: 'thread',
+            content: '{"text":"Alice creates this topic"}',
+          },
+          'ou_alice',
+        ),
+      )
+      const index = join(t.vela.dataDir, 'channels/index.json')
+      while (
+        !existsSync(index) ||
+        !ledger.attempts.some((attempt) =>
+          attempt.text.includes('ALICE INITIAL'),
+        ) ||
+        JSON.parse(readFileSync(index, 'utf8')).records[0].state !== 'done'
+      )
+        await Bun.sleep(10)
+    }
     fake.deliver(
-      larkEvent({
-        message_id: 'trigger',
-        ...(direct
-          ? { chat_type: 'p2p' as const }
-          : mode === 'tool'
-            ? {}
-            : { root_id: 'root', thread_id: 'thread' }),
-        content: '{"text":"Answer the request"}',
-      }),
+      larkEvent(
+        {
+          message_id: 'trigger',
+          ...(direct
+            ? { chat_type: 'p2p' as const }
+            : mode === 'tool'
+              ? {}
+              : { root_id: 'root', thread_id: 'thread' }),
+          content: '{"text":"Answer the request"}',
+        },
+        multi ? 'ou_bob' : 'ou_alice',
+      ),
     )
     await new Promise(() => {})
   } else {
@@ -130,7 +163,9 @@ try {
       )
         break
       if (Date.now() > until)
-        throw new Error('Delivery recovery did not settle')
+        throw new Error(
+          `Delivery recovery did not settle: ${JSON.stringify({ logs, attempts: ledger.attempts })}`,
+        )
       await Bun.sleep(10)
     }
     // Let the existing feedback path finish its diagnostic if expiry was refused.

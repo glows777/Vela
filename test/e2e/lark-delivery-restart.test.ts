@@ -178,3 +178,40 @@ test('a channel_start_topic title send persists the tool identity and is not rep
     ),
   ).toHaveLength(1)
 }, 35000)
+
+for (const mode of ['before-send', 'accepted', 'confirmed'])
+  test(`Lark ${mode} recovery preserves Bob as recipient in Alice's topic`, async () => {
+    const cwd = root()
+    await run(cwd, `multi-${mode}`, true)
+    expect(
+      read(cwd, '.vela-data/channels/index.json').records[0].requester.id,
+    ).toBe('ou_alice')
+    const intents = readFileSync(transcript(cwd), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter(
+        (entry) =>
+          entry.type === 'custom' &&
+          entry.customType === 'channel.lark_delivery',
+      )
+    const uuid = intents.at(-1).data.uuid
+    expect(uuid).toBeTruthy()
+    expect(finalAttempts(cwd)).toHaveLength(mode === 'before-send' ? 0 : 1)
+    await run(cwd, 'restart')
+    expect(finalAttempts(cwd)).toHaveLength(mode === 'accepted' ? 2 : 1)
+    expect(finalAttempts(cwd).every((attempt) => attempt.uuid === uuid)).toBe(
+      true,
+    )
+    expect(finalDeliveries(cwd)).toHaveLength(1)
+    expect(finalDeliveries(cwd)[0]!.text).toBe(
+      '<at user_id="ou_bob"></at> FINAL ANSWER',
+    )
+    expect(
+      read(cwd, '.vela-data/channels/index.json').records[0],
+    ).toMatchObject({ state: 'done', requester: { id: 'ou_alice' } })
+    expect(read(cwd, 'recovery.json').calls).toBe(0)
+    const count = finalAttempts(cwd).length
+    await run(cwd, 'restart')
+    expect(finalAttempts(cwd)).toHaveLength(count)
+  }, 35000)

@@ -9,6 +9,7 @@ interface Intent {
   fingerprint: string
   uuid: string
   startedAt: number
+  payload?: unknown
   confirmed?: boolean
   result?: unknown
 }
@@ -23,13 +24,7 @@ export async function larkDelivery<T>(
   send: (uuid: string) => Promise<T>,
 ): Promise<T> {
   const fingerprint = digest(JSON.stringify(payload))
-  const entries = session
-    .getEntries()
-    .filter((entry) => entry.type === 'custom')
-    .filter((entry) => entry.customType === MARKER)
-  const previous = entries.findLast(
-    (entry) => (entry.data as Intent | undefined)?.identity === identity,
-  )?.data as Intent | undefined
+  const previous = savedIntent(session, identity)
   const uuid = digest(`${session.id}\n${identity}`).slice(0, 40)
   if (
     previous &&
@@ -46,6 +41,7 @@ export async function larkDelivery<T>(
   const intent: Intent = previous ?? {
     identity,
     fingerprint,
+    payload,
     uuid,
     startedAt: Date.now(),
   }
@@ -61,6 +57,18 @@ export async function larkDelivery<T>(
   session.appendEntry(MARKER, { ...intent, confirmed: true, result })
   await session.save()
   return result
+}
+
+function savedIntent(
+  session: VelaSession,
+  identity: string,
+): Intent | undefined {
+  return session
+    .getEntries()
+    .filter((entry) => entry.type === 'custom')
+    .filter((entry) => entry.customType === MARKER)
+    .map((entry) => entry.data as Intent | undefined)
+    .findLast((intent) => intent?.identity === identity)
 }
 
 /** Only actual saved final answers participate; status/error notices have no assistant identity. */
@@ -90,12 +98,22 @@ export async function sendAnswer(
   session: VelaSession,
   channel: ChannelDefinition,
   message: OutgoingMessage,
+  recovering = false,
 ): Promise<void> {
   const identity =
     channel.name === 'lark'
       ? finalAnswerIdentity(session, message.text)
       : undefined
   if (!identity) return channel.send(message)
+  // A topic's requester is its creator, not necessarily the sender of this turn.
+  // Restore the live recipient only for recovery; other routing/payload changes still fail closed.
+  const saved = recovering ? savedIntent(session, identity) : undefined
+  if (saved?.payload && typeof saved.payload === 'object') {
+    const recipientId = (saved.payload as { recipientId?: unknown }).recipientId
+    if (recipientId !== undefined && typeof recipientId !== 'string')
+      throw new Error('Lark delivery has an invalid saved recipient; not sent')
+    message = { ...message, recipientId }
+  }
   await larkDelivery(
     session,
     identity,
