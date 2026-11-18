@@ -261,3 +261,21 @@ test('unknown notice accepted before SIGKILL reuses its final UUID without anoth
   expect(read(cwd, 'sent.json')).toHaveLength(0)
   expect(read(cwd, 'notice-ledger.json')).toEqual(ledger)
 }, 45000)
+
+test('restart of an unsaved background result preserves the topic waiting decision', async () => {
+  const { cwd, child } = await fixture('waiting-before-save')
+  await until(() => existsSync(join(cwd, 'save-gate.json')), child)
+  const pending = read(cwd, '.vela-data/channels/index.json').records[0]
+  expect(pending.state).toBe('running')
+  expect(pending.waitingReason).toBe('Choose the deployment target')
+  expect(pending.outstandingJobs).toHaveLength(1)
+  child.kill('SIGKILL')
+  await child.exited
+  await restart(cwd, 'topic', 1)
+  for (let i = 0; i < 2; i++) {
+    const record = read(cwd, '.vela-data/channels/index.json').records[0]
+    expect(record.state).toBe('waiting')
+    expect(record.waitingReason).toBe('Choose the deployment target')
+    if (!i) await restart(cwd, 'topic', 0)
+  }
+}, 45000)

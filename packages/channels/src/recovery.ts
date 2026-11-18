@@ -264,7 +264,7 @@ export class ChannelRecovery {
       !this.hasInput(session, record.backgroundJobToken, 'backgroundJobToken')
     ) {
       // No notification input reached disk. Let the outstanding job rebuild it, never resend the prior answer.
-      await this.directory.finish(record.key, 'done')
+      await this.directory.finish(record.key, 'done', true)
       return
     }
     if (missingTrigger || record.passive) {

@@ -77,6 +77,13 @@ const t = createTestVela({
         ...(mode === 'stopped'
           ? [fauxToolCall('background_stop', { id: 'bg-1' })]
           : []),
+        ...(mode === 'waiting-before-save'
+          ? [
+              fauxToolCall('channel_wait_for_input', {
+                reason: 'Choose the deployment target',
+              }),
+            ]
+          : []),
         fauxText('INITIAL ANSWER'),
         (request) => {
           report('normal-request.json', request)
@@ -92,7 +99,12 @@ const t = createTestVela({
     }),
     function boundary(api) {
       api.on('session_start', (_event, { session }) => {
-        if (mode !== 'before-save' && mode !== 'restart-after-save') return
+        if (
+          mode !== 'before-save' &&
+          mode !== 'waiting-before-save' &&
+          mode !== 'restart-after-save'
+        )
+          return
         const save = session.save.bind(session)
         session.save = async (options) => {
           const marker = session
@@ -134,14 +146,21 @@ if (!restart) {
   )
   while (
     !fake.sent.some((message) => message.text.includes('INITIAL ANSWER')) ||
-    !directory().every((record) => record.state === 'done')
+    !directory().every(
+      (record) =>
+        record.state === (mode === 'waiting-before-save' ? 'waiting' : 'done'),
+    )
   )
     await Bun.sleep(10)
   if (mode !== 'stopped')
     while (!existsSync(join(cwd, 'shell.pid'))) await Bun.sleep(10)
   if (mode === 'multiple')
     while (!existsSync(join(cwd, 'shell-second.pid'))) await Bun.sleep(10)
-  if (mode === 'normal' || mode === 'before-save') {
+  if (
+    mode === 'normal' ||
+    mode === 'before-save' ||
+    mode === 'waiting-before-save'
+  ) {
     writeFileSync(join(cwd, 'release'), '')
     if (mode === 'normal')
       while (
