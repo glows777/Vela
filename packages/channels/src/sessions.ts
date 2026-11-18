@@ -3,7 +3,11 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
-import { type ChannelDirectory, isGroupInput } from './directory.ts'
+import {
+  type ChannelDirectory,
+  type ChannelRecord,
+  isGroupInput,
+} from './directory.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import { topicSessionOptions } from './topics.ts'
@@ -23,6 +27,7 @@ export class ChannelSessions {
     private dataDir: string,
     /** Queues an input on the channel's existing path; a background result arrives this way. */
     private deliver: (name: string, msg: IncomingMessage) => void,
+    private stopped: () => boolean,
   ) {}
 
   open(id: string, name?: string, message?: IncomingMessage): VelaSession {
@@ -88,6 +93,43 @@ export class ChannelSessions {
           ? {
               deliver: (text: string) =>
                 this.deliverResult(key, channel.name, topic, text),
+              background: async (event) => {
+                if (this.stopped()) {
+                  if (event.type === 'started')
+                    throw new Error('Channel is shutting down')
+                  return
+                }
+                if (this.directory.get(key)?.activeSessionId !== sessionId) {
+                  if (event.type === 'started')
+                    throw new Error('Channel session was replaced')
+                  return
+                }
+                if (event.type === 'started')
+                  await this.directory.startBackground(key, sessionId, {
+                    token: event.token,
+                    id: event.id,
+                    commandHead: event.commandHead,
+                  })
+                else if (event.type === 'stopped')
+                  await this.directory.forgetBackground(
+                    key,
+                    event.token,
+                    sessionId,
+                  )
+                else {
+                  const job = this.directory
+                    .get(key)
+                    ?.outstandingJobs?.find((job) => job.token === event.token)
+                  if (!job || job.sessionId !== sessionId) return
+                  this.deliverResult(
+                    key,
+                    channel.name,
+                    topic,
+                    event.text,
+                    event.token,
+                  )
+                }
+              },
             }
           : undefined,
     })
@@ -131,14 +173,26 @@ export class ChannelSessions {
     channelName: string,
     topic: { rootId: string; threadId: string } | undefined,
     text: string,
+    backgroundJobToken?: string,
   ): void {
+    const message = this.resultMessage(key, topic, text, backgroundJobToken)
+    if (message) this.deliver(channelName, message)
+  }
+
+  private resultMessage(
+    key: string,
+    topic: { rootId: string; threadId: string } | undefined,
+    text: string,
+    backgroundJobToken?: string,
+  ): IncomingMessage | undefined {
     const record = this.directory.get(key)
     if (!record) return
     // The conversation this result belongs to is gone: a closed hub, or another topic generation.
     if (topic ? record.rootId !== topic.rootId : !!record.rootId) return
     // Attributed to the conversation's requester, like a routine: the reply then mentions a person
     // who exists, and the text says where the result came from.
-    this.deliver(channelName, {
+    return {
+      backgroundJobToken,
       channelId: record.chatId,
       chatKind: 'group',
       senderId: record.requester.id,
@@ -146,6 +200,45 @@ export class ChannelSessions {
       text,
       ...(topic ? { topic } : {}),
       replyToId: topic?.rootId ?? record.replyTarget,
-    })
+    }
+  }
+
+  /** Only jobs present at startup are lost; recovery itself may start new jobs. */
+  async recoverBackground(
+    record: ChannelRecord,
+    session: VelaSession,
+    hasInput: (token: string) => boolean,
+    run: (message: IncomingMessage) => Promise<void>,
+  ): Promise<void> {
+    for (const job of record.outstandingJobs ?? []) {
+      if (this.stopped()) return
+      const current = this.directory.get(record.key)
+      if (
+        current?.activeSessionId !== job.sessionId ||
+        !current.outstandingJobs?.some((item) => item.token === job.token)
+      )
+        continue
+      if (hasInput(job.token)) {
+        // A marker may have been appended during interrupted-turn recovery. Flush before trusting it.
+        await session.save()
+        await this.directory.forgetBackground(
+          record.key,
+          job.token,
+          job.sessionId,
+        )
+        continue
+      }
+      const topic =
+        record.rootId && record.threadId
+          ? { rootId: record.rootId, threadId: record.threadId }
+          : undefined
+      const message = this.resultMessage(
+        record.key,
+        topic,
+        `Background command ${job.id} ended with a restart; its result is unknown.\nCommand: ${job.commandHead}`,
+        job.token,
+      )
+      if (message) await run(message)
+    }
   }
 }

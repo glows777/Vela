@@ -91,6 +91,7 @@ export class ChannelGateway {
       options.find,
       options.dataDir ?? process.cwd(),
       (name, msg) => void this.handleIncoming(name, msg),
+      () => this.stopped,
     )
     this.admission = new TopicAdmission(this.directory, (id, name, msg) =>
       this.sessions.open(id, name, msg),
@@ -365,7 +366,9 @@ export class ChannelGateway {
           .entries(name)
           .filter(
             (record) =>
-              record.state === 'running' || record.pendingMessageIds.length,
+              record.state === 'running' ||
+              record.pendingMessageIds.length ||
+              record.outstandingJobs?.length,
           )
         for (const stored of records) {
           const record = structuredClone(stored)
@@ -383,6 +386,13 @@ export class ChannelGateway {
               this.admission.resumed.add(session)
               await this.recovery.recover(record, ch, session, (input) =>
                 this.run.process(record.key, name, input, true),
+              )
+              await this.sessions.recoverBackground(
+                record,
+                session,
+                (token) =>
+                  this.recovery.hasInput(session, token, 'backgroundJobToken'),
+                (input) => this.run.process(record.key, name, input),
               )
             })
             .catch((error) =>

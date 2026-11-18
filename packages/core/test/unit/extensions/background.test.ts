@@ -9,6 +9,7 @@ import {
   OutputTail,
 } from '../../../src/extensions/background/jobs.ts'
 import { silentLogger } from '../../../src/logger.ts'
+import type { SessionOptions } from '../../../src/session/options.ts'
 import { fauxText, fauxToolCall } from '../../../src/testing/faux.ts'
 import {
   cleanupTestVelas,
@@ -41,11 +42,14 @@ function sessionStub(
   cwd: string,
   delivered: string[],
   deliver?: (text: string) => void,
+  background?: NonNullable<SessionOptions['host']>['background'],
 ) {
   return {
     id: 'stub',
     cwd,
-    ...(deliver ? { host: { deliver } } : {}),
+    ...(deliver || background
+      ? { host: { deliver: deliver ?? (() => {}), background } }
+      : {}),
     trackWork: () => {},
     sendMessage: async (message: { content: string }) => {
       delivered.push(String(message.content))
@@ -94,7 +98,7 @@ test('a background command runs to completion and its delivery carries the exit 
     reports.push(text),
   )
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  const { id } = jobs.start(
+  const { id } = await jobs.start(
     'echo READY; exit 3',
     createLocalExecutionEnv({ cwd: session.cwd }),
   )
@@ -115,7 +119,7 @@ test('stopping a job ends its process group and returns the tail without another
   const reports: string[] = []
   const session = sessionStub(directory(), [], (text) => reports.push(text))
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  jobs.start(
+  await jobs.start(
     'echo STARTED; sleep 30; echo NEVER',
     createLocalExecutionEnv({ cwd: session.cwd }),
   )
@@ -149,7 +153,7 @@ setInterval(() => {}, 1000)
   )
   const session = sessionStub(root, [])
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  jobs.start(
+  await jobs.start(
     'node graceful.cjs & wait',
     createLocalExecutionEnv({ cwd: session.cwd }),
   )
@@ -170,7 +174,7 @@ test('a descendant that ignores SIGTERM is killed after the shell exits', async 
   const session = sessionStub(root, [], (text) => reports.push(text))
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
   // The shell exits on SIGTERM; its child ignores SIGTERM and would outlive the stop.
-  jobs.start(
+  await jobs.start(
     `bash -c 'trap "" TERM; echo $$ > child.pid; echo READY; sleep 30' & wait`,
     createLocalExecutionEnv({ cwd: session.cwd }),
   )
@@ -205,8 +209,8 @@ test('stopAll ends every running job without starting a delivery run', async () 
     reports.push(text),
   )
   const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
-  jobs.start('sleep 30', createLocalExecutionEnv({ cwd: session.cwd }))
-  jobs.start('sleep 30', createLocalExecutionEnv({ cwd: session.cwd }))
+  await jobs.start('sleep 30', createLocalExecutionEnv({ cwd: session.cwd }))
+  await jobs.start('sleep 30', createLocalExecutionEnv({ cwd: session.cwd }))
   await jobs.stopAll()
   for (const id of ['bg-1', 'bg-2'])
     expect(() => jobs.snapshot(id)).toThrow(`Unknown background command ${id}.`)
@@ -266,4 +270,192 @@ test('Stop aborts the run and kills its background command', async () => {
   await t.run('start it').catch(() => {})
   await Bun.sleep(600)
   expect(t.exists('late.txt')).toBe(false)
+})
+
+test('a host records a unique job token before execution and receives the same token with its result', async () => {
+  type Event = Parameters<
+    NonNullable<NonNullable<SessionOptions['host']>['background']>
+  >[0]
+  const events: Event[] = []
+  const gate = Promise.withResolvers<void>()
+  const root = directory()
+  const session = sessionStub(
+    root,
+    [],
+    () => {
+      throw new Error('legacy delivery should not run')
+    },
+    async (event) => {
+      events.push(event)
+      if (event.type === 'started') await gate.promise
+    },
+  )
+  const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+  const starting = jobs.start(
+    'echo started > marker',
+    createLocalExecutionEnv({ cwd: root }),
+  )
+  await until(() => events.length === 1)
+  expect(existsSync(join(root, 'marker'))).toBe(false)
+  expect(events[0]).toMatchObject({
+    type: 'started',
+    id: 'bg-1',
+    commandHead: 'echo started > marker',
+  })
+  gate.resolve()
+  await starting
+  await until(() => events.some((event) => event.type === 'result'))
+  const token = events[0]!.token
+  expect(token).toMatch(/^[0-9a-f-]{36}$/)
+  expect(events.find((event) => event.type === 'result')).toMatchObject({
+    token,
+  })
+  const next = new BackgroundJobs(session, () => 'bash', silentLogger)
+  await next.start('true', createLocalExecutionEnv({ cwd: root }))
+  await until(
+    () => events.filter((event) => event.type === 'result').length === 2,
+  )
+  const starts = events.filter((event) => event.type === 'started')
+  expect(starts[1]!.id).toBe('bg-1')
+  expect(starts[1]!.token).not.toBe(token)
+})
+
+test('failed start persistence rejects without executing or promising a background result', async () => {
+  const root = directory()
+  const kinds: string[] = []
+  const session = sessionStub(root, [], undefined, (event) => {
+    kinds.push(event.type)
+    if (event.type === 'started') throw new Error('cannot save start')
+  })
+  const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+  await expect(
+    jobs.start('touch marker', createLocalExecutionEnv({ cwd: root })),
+  ).rejects.toThrow('cannot save start')
+  expect(existsSync(join(root, 'marker'))).toBe(false)
+  expect(kinds).toEqual(['started', 'stopped'])
+})
+
+test.each(['signal', 'stopAll'] as const)(
+  '%s during start persistence never launches a command',
+  async (mode) => {
+    const root = directory()
+    const gate = Promise.withResolvers<void>()
+    let saving = false
+    const stopped: unknown[] = []
+    const session = sessionStub(root, [], undefined, async (event) => {
+      if (event.type === 'started') {
+        saving = true
+        await gate.promise
+      }
+      if (event.type === 'stopped') stopped.push(event)
+    })
+    const controller = new AbortController()
+    const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+    const starting = jobs
+      .start(
+        'touch marker',
+        createLocalExecutionEnv({ cwd: root }),
+        controller.signal,
+      )
+      .then(
+        () => 'started',
+        () => 'cancelled',
+      )
+    await until(() => saving)
+    const stopping =
+      mode === 'stopAll' ? jobs.stopAll() : Promise.resolve(controller.abort())
+    gate.resolve()
+    expect(await starting).toBe('cancelled')
+    await stopping
+    expect(existsSync(join(root, 'marker'))).toBe(false)
+    expect(stopped.length).toBeGreaterThan(0)
+  },
+)
+
+test('stopAll clears host-owned outstanding results without waiting for the queued result turn', async () => {
+  const root = directory()
+  const result = Promise.withResolvers<void>()
+  let queued = false
+  let cleared = false
+  const session = sessionStub(root, [], undefined, (event) => {
+    if (event.type === 'result') {
+      queued = true
+      return result.promise
+    }
+    if (event.type === 'stopped' && !event.token) cleared = true
+  })
+  const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+  await jobs.start('true', createLocalExecutionEnv({ cwd: root }))
+  await until(() => queued)
+  await jobs.stopAll()
+  expect(cleared).toBe(true)
+  result.resolve()
+})
+
+test('background_start does not claim Started when the host refuses the durable start record', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('background_start', { command: 'touch must-not-run' }),
+      (request) => {
+        expect(request.toolResults[0]!.output).toContain(
+          'host could not save start',
+        )
+        expect(request.toolResults[0]!.output).not.toContain('Started bg-')
+        return fauxText('start failed')
+      },
+    ],
+    extensions: [background()],
+    session: {
+      tools: ['background_start'],
+      host: {
+        deliver() {},
+        background(event) {
+          if (event.type === 'started')
+            throw new Error('host could not save start')
+        },
+      },
+    },
+  })
+  await t.run('start the command')
+  expect(t.exists('must-not-run')).toBe(false)
+})
+
+test('Stop captures host cancellation before slow termination and does not clear jobs started by a later run', async () => {
+  const root = directory()
+  const tokens = new Set<string>()
+  let writing = Promise.resolve()
+  const session = sessionStub(root, [], undefined, (event) => {
+    // Like the channel directory, host updates enter a serialized write queue
+    // synchronously and resolve their current state when that write executes.
+    writing = writing.then(() => {
+      if (event.type === 'started') tokens.add(event.token)
+      if (event.type === 'stopped') {
+        if (event.token) tokens.delete(event.token)
+        else tokens.clear()
+      }
+    })
+    return writing
+  })
+  const env = createLocalExecutionEnv({ cwd: root })
+  const old = Promise.withResolvers<Awaited<ReturnType<typeof env.exec>>>()
+  const next = Promise.withResolvers<Awaited<ReturnType<typeof env.exec>>>()
+  let executions = 0
+  env.exec = async () => (++executions === 1 ? old.promise : next.promise)
+  const jobs = new BackgroundJobs(session, () => 'bash', silentLogger)
+  try {
+    await jobs.start('old', env)
+    const stopping = jobs.stopAll()
+    await jobs.start('new', env)
+    expect(jobs.snapshot('bg-2').state).toBe('running')
+    expect(tokens.size).toBe(1)
+    const retained = [...tokens][0]!
+    old.resolve({ ok: true, value: { exitCode: 0 } })
+    await stopping
+    expect(tokens).toEqual(new Set([retained]))
+    expect(jobs.snapshot('bg-2').state).toBe('running')
+  } finally {
+    old.resolve({ ok: true, value: { exitCode: 0 } })
+    next.resolve({ ok: true, value: { exitCode: 0 } })
+    await jobs.stopAll()
+  }
 })

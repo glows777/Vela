@@ -26,6 +26,17 @@ const recordSchema = z
     state: z.enum(['running', 'waiting', 'done', 'stopped']),
     waitingReason: z.string().optional(),
     passive: z.boolean().optional(),
+    backgroundJobToken: z.string().optional(),
+    outstandingJobs: z
+      .array(
+        z.object({
+          token: z.string(),
+          id: z.string(),
+          commandHead: z.string(),
+          sessionId: z.string(),
+        }),
+      )
+      .optional(),
     handoff: z
       .object({ id: z.string(), from: z.string(), depth: z.number() })
       .optional(),
@@ -166,6 +177,8 @@ export class ChannelDirectory {
       ],
       state: 'done' as const,
       waitingReason: undefined,
+      outstandingJobs: undefined,
+      backgroundJobToken: undefined,
     }
     await this.save(next, true)
   }
@@ -217,7 +230,7 @@ export class ChannelDirectory {
   ): Promise<void> {
     const record = this.observe(key, channel, msg)
     // A note from another session never answers a person's pending decision.
-    if (!msg.handoff) {
+    if (!msg.handoff && !msg.backgroundJobToken) {
       record.waitingReason = undefined
       if (record.state === 'waiting') record.state = 'done'
     }
@@ -226,6 +239,7 @@ export class ChannelDirectory {
       msg.replyToId &&
       !msg.routine &&
       !msg.handoff &&
+      !msg.backgroundJobToken &&
       !record.pendingMessageIds.some(
         (input) => pendingMessageId(input) === msg.replyToId,
       )
@@ -242,6 +256,7 @@ export class ChannelDirectory {
     record.state = 'running'
     record.passive = msg.passive
     record.handoff = msg.handoff
+    record.backgroundJobToken = msg.backgroundJobToken
     record.routine = msg.routine
       ? { ...msg.routine, creator: { id: msg.senderId, name: msg.senderName } }
       : undefined
@@ -263,6 +278,51 @@ export class ChannelDirectory {
       (input) => !ids.includes(pendingMessageId(input)),
     )
     await this.save(record)
+  }
+
+  /** Persist the start before execution; a retired generation may not launch new jobs. */
+  startBackground(
+    key: string,
+    sessionId: string,
+    job: { token: string; id: string; commandHead: string },
+  ): Promise<void> {
+    return this.write(() => {
+      const record = this.records.get(key)
+      if (!record || record.activeSessionId !== sessionId)
+        throw new Error(
+          `Background job belongs to an inactive channel session: ${sessionId}`,
+        )
+      const jobs = record.outstandingJobs ?? []
+      if (jobs.some((item) => item.token === job.token)) return
+      return {
+        ...record,
+        outstandingJobs: [...jobs, { ...job, sessionId }],
+        updatedAt: new Date().toISOString(),
+      }
+    })
+  }
+
+  /** Clear only after the notification's input marker was saved, or the job was explicitly stopped. */
+  forgetBackground(
+    key: string,
+    token?: string,
+    sessionId?: string,
+  ): Promise<void> {
+    return this.write(() => {
+      const record = this.records.get(key)
+      if (!record?.outstandingJobs?.length) return
+      const jobs = record.outstandingJobs.filter(
+        (job) =>
+          (token !== undefined && job.token !== token) ||
+          (sessionId !== undefined && job.sessionId !== sessionId),
+      )
+      if (jobs.length === record.outstandingJobs.length) return
+      return {
+        ...record,
+        outstandingJobs: jobs.length ? jobs : undefined,
+        updatedAt: new Date().toISOString(),
+      }
+    })
   }
 
   async waitForInput(key: string, reason: string): Promise<void> {
@@ -341,25 +401,43 @@ export class ChannelDirectory {
     return this.write(replace ? record : undefined)
   }
 
-  private write(replacement?: ChannelRecord): Promise<void> {
+  private async write(
+    replacement?: ChannelRecord | (() => ChannelRecord | undefined),
+  ): Promise<void> {
+    const commit = (next: ChannelRecord | undefined) => {
+      if (!next) return
+      const current = this.records.get(next.key)
+      if (typeof replacement === 'function' && current) {
+        // Job writes must not replace state changed by Stop/begin while atomic I/O awaited.
+        // Those operations already queued their own save against this same record.
+        current.outstandingJobs = next.outstandingJobs
+        if (current.updatedAt < next.updatedAt)
+          current.updatedAt = next.updatedAt
+      } else this.records.set(next.key, next)
+    }
     const path = this.path
     if (!path) {
-      if (replacement) this.records.set(replacement.key, replacement)
+      const next =
+        typeof replacement === 'function' ? replacement() : replacement
+      commit(next)
       return Promise.resolve()
     }
     const write = this.writing
       .catch(() => {})
       .then(async () => {
+        // Resolve generation-sensitive updates after earlier index writes commit.
+        const next =
+          typeof replacement === 'function' ? replacement() : replacement
         // Later saves see only generations whose index write succeeded.
         await writeAtomicJson(path, {
           version: 1,
           createdAt: this.createdAt,
           records: [...this.records.values()].map((current) =>
-            current.key === replacement?.key ? replacement : current,
+            current.key === next?.key ? next : current,
           ),
           ...(this.notes.size ? { notes: Object.fromEntries(this.notes) } : {}),
         })
-        if (replacement) this.records.set(replacement.key, replacement)
+        commit(next)
       })
     this.writing = write
     return write

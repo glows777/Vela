@@ -91,7 +91,19 @@ export interface SessionOptions {
    * channel supplies its topic's input queue, so a background command's exit arrives like any other
    * input. Without it the result is a message that starts a turn.
    */
-  host?: { deliver(text: string): void | Promise<void> }
+  host?: {
+    deliver(text: string): void | Promise<void>
+    /**
+     * Persist started before execution; result admission must not wait for its response turn.
+     * A stopped event without a token clears all outstanding jobs for this session.
+     */
+    background?(
+      event:
+        | { type: 'started'; token: string; id: string; commandHead: string }
+        | { type: 'result'; token: string; text: string }
+        | { type: 'stopped'; token?: string },
+    ): void | Promise<void>
+  }
 }
 
 export interface SessionUsage extends TokenStatus {

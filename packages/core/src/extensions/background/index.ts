@@ -11,7 +11,8 @@ export interface BackgroundOptions {
  * Long-running commands whose result arrives on its own: `background_start` returns an id at once,
  * `background_output` reads the tail, `background_stop` ends the command. Core's `bash` stays
  * synchronous. Jobs belong to their session: Stop, close and process restart end them, and nothing
- * is persisted. In a channel session the exit enters the gateway's queue, so it arrives as an
+ * about execution is persisted. A host may persist jobs whose results are still owed. In a channel
+ * session the exit enters the gateway's queue, so it arrives as an
  * ordinary reply in the session's topic; elsewhere it is a custom message that starts a turn.
  */
 export function background(options: BackgroundOptions = {}): VelaExtension {
@@ -34,7 +35,12 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
     // Stop aborts the run; every job in the session goes with it, so none can be orphaned.
     vela.on('agent_end', (event, { session }) => {
       if (event.reason !== 'aborted') return
-      void sessions.get(session.id)?.stopAll()
+      void sessions
+        .get(session.id)
+        ?.stopAll()
+        .catch((error) =>
+          vela.logger.error(`[background] Could not stop jobs: ${error}`),
+        )
     })
     vela.on('session_shutdown', async (_event, { session }) => {
       const current = sessions.get(session.id)

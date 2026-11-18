@@ -129,6 +129,7 @@ An older failed follow-up may already have saved a user message between an unans
 | `model` | Vela's model | `provider/id` or `LanguageModel` for this session |
 | `thinkingLevel` | Vela's level | Thinking level for this session |
 | `autoCompaction` | Vela's setting | Automatic compaction for this session |
+| `host` | none | Owns delivery outside a turn through `deliver(text)`. Optional `background(event)` receives `started` (token, id, commandHead), `result` (token, text), or `stopped` (optional token; omitted means all jobs). Awaited `started` must persist before execution; result admission must not wait for the resulting model turn. Channels implement this with their directory and input queue. Without this optional member, existing delivery behavior remains unchanged. |
 
 ### Image input
 

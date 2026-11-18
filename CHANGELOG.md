@@ -34,6 +34,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **Hosted background jobs no longer disappear silently after a service restart.** The existing channel directory records jobs before execution, and startup queues one unknown-result input for each lost job without a new human message. A saved normal-result input or explicit Stop/close clears the record; SIGTERM shutdown preserves it. Durable input markers reconcile interrupted notification persistence without claiming exactly-once remote replies (part of #411).
 - **Lark final replies and topic-title sends carry a durable delivery identity.** A saved send intent reuses its UUID only within Lark's one-hour deduplication window; an acknowledged send is not repeated after restart. Expired uncertain sends fail as unknown instead of sending with a new identity. Topic tools remain unsafe to replay, and forwarding, progress cards and status notices are not covered by this bounded guarantee (part of #411).
 
 - **Normal follow-up after a mid-tool restart repairs missing results before the new message.** SDK `resume()` then `prompt()`, and CLI interactive/print/JSON/RPC follow-ups, now use the existing result reconciliation instead of failing with `AI_MissingToolResultsError`. Finished results remain intact and unsafe effects are not replayed. Histories already damaged by an older failed follow-up stop with an explicit diagnostic before another repair or execution, rather than silently dropping that message ([#455](https://github.com/glows777/Vela/issues/455)).

@@ -126,10 +126,24 @@ export class GatewayRun {
   ): Promise<ChannelOutcome | undefined> {
     if (this.stopped()) return 'stopped'
     let trigger = messages[0]!
+    // Stop/close may invalidate a completed job while its result waits in this queue.
+    // Recovered turns already own a saved input, whose job token was cleared on save.
+    const backgroundIsCurrent = (sessionId?: string) => {
+      if (!trigger.backgroundJobToken || recovered) return true
+      const record = this.directory.get(id)
+      return !!record?.outstandingJobs?.some(
+        (job) =>
+          job.token === trigger.backgroundJobToken &&
+          job.sessionId === record.activeSessionId &&
+          (sessionId === undefined || job.sessionId === sessionId),
+      )
+    }
+    if (!backgroundIsCurrent()) return 'done'
     this.logger.debug(
       `[${channelName}] input ${trigger.replyToId ?? '-'} preparing at=${new Date().toISOString()}`,
     )
     await this.idle.closing.get(id)
+    if (!backgroundIsCurrent()) return 'done'
     const channel = this.channel(channelName)
     if (trigger.externalEvent) {
       const record = this.directory.get(id)
@@ -160,7 +174,9 @@ export class GatewayRun {
       }
     }
     const ids = (items: IncomingMessage[]) =>
-      items.flatMap((item) => (item.replyToId ? [item.replyToId] : []))
+      items.flatMap((item) =>
+        item.replyToId && !item.backgroundJobToken ? [item.replyToId] : [],
+      )
     const inputs = channel
       ? this.feedback.acknowledge(channel, trigger, !recovered)
       : []
@@ -310,6 +326,7 @@ export class GatewayRun {
     // Keep its durable pending input for restart, but never start its model now.
     if (this.stopped()) return 'stopped'
     if (processing.stopped) return stopped(session)
+    if (!backgroundIsCurrent(session.id)) return 'done'
     processing.preparing = false
     return this.feedback.prompt(
       id,
