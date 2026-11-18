@@ -1,10 +1,17 @@
+import {
+  readLocalSystemFile,
+  type SystemFile,
+} from '../config/runtime-resources.ts'
 import { abortable } from '../execution/location.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import type { ContextFile } from '../prompt/context-files.ts'
 import type { PromptTemplate } from '../prompt/templates.ts'
 import type { SkillDefinition } from '../skills/loader.ts'
 
 /** Internal snapshot for Vela's own CLI. */
 export interface SessionResources {
+  systemPrompt?: string
+  appendSystemPrompt?: string
   contextFiles: readonly ContextFile[]
   skills: readonly SkillDefinition[]
   promptTemplates: readonly PromptTemplate[]
@@ -61,4 +68,22 @@ export class WorkspaceResources {
       }
     }
   }
+}
+
+/** Each file independently overrides its user-level counterpart in a trusted workspace. */
+export async function sessionSystemFile(
+  env: ExecutionEnv,
+  name: SystemFile,
+  trusted: boolean,
+  agentDir: string | undefined,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (trusted) {
+    const path = await env.joinPath([env.cwd, '.vela', name], signal)
+    if (!path.ok) throw path.error
+    const file = await env.readTextFile(path.value, signal)
+    if (file.ok) return file.value
+    if (file.error.code !== 'not_found') throw file.error
+  }
+  if (agentDir) return readLocalSystemFile([agentDir], name)
 }

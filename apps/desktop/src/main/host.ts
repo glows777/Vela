@@ -9,6 +9,7 @@ import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
 export async function startHost() {
   const cwd = process.cwd()
   const config = loadConfig({
+    deferSystemFiles: true,
     cwd,
     env: process.env,
     trusted: false,
@@ -34,8 +35,6 @@ export async function startHost() {
     credentials: config.credentials,
     thinkingLevel: config.settings.defaultThinkingLevel,
     sessionResources: config.sessionResources,
-    systemPrompt: config.systemPrompt,
-    appendSystemPrompt: config.appendSystemPrompt,
     limits: config.settings.limits,
     autoCompaction: config.settings.autoCompaction,
     shellPath: resolveShellPath(config.settings.shellPath, {

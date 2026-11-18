@@ -178,6 +178,7 @@ try {
   })
   if (trust.warning) console.error(trust.warning)
   config = loadConfig({
+    deferSystemFiles: true,
     cwd,
     agentDir,
     env,
@@ -293,10 +294,10 @@ const vela = createVela({
   contextFiles: args.noContextFiles ? false : undefined,
   systemPrompt: args.systemPrompt.length
     ? args.systemPrompt.map(readPromptInput).join('\n\n')
-    : config.systemPrompt,
+    : undefined,
   appendSystemPrompt: args.appendSystemPrompt.length
     ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
-    : config.appendSystemPrompt,
+    : undefined,
   limits: config.settings.limits,
   autoCompaction: config.settings.autoCompaction,
   shellPath: resolveShellPath(config.settings.shellPath, { env }),

@@ -925,6 +925,71 @@ test('workspace AGENTS instructions come from the selected session environment',
   }
 })
 
+test('trusted session system files follow A and B independently and stay fixed between wakes', async () => {
+  const dir = tempDir()
+  const agentDir = join(dir.path, 'user')
+  const a = join(dir.path, 'A')
+  const b = join(dir.path, 'B')
+  const denied = join(dir.path, 'denied')
+  for (const cwd of [a, b, denied])
+    mkdirSync(join(cwd, '.vela'), { recursive: true })
+  mkdirSync(agentDir)
+  writeFileSync(join(agentDir, 'APPEND_SYSTEM.md'), 'USER_APPEND')
+  writeFileSync(join(a, '.vela/SYSTEM.md'), 'A_REPLACEMENT')
+  writeFileSync(join(b, '.vela/APPEND_SYSTEM.md'), 'B_DISK_APPEND')
+  writeFileSync(join(denied, '.vela/SYSTEM.md'), 'DENIED_REPLACEMENT')
+  const model = createFauxModel({
+    responses: Array.from({ length: 4 }, () => fauxText('done')),
+  })
+  const config = loadConfig({ cwd: a, agentDir, trusted: true })
+  let bReads = 0
+  const vela = createVela({
+    cwd: a,
+    model,
+    dataDir: join(dir.path, 'data'),
+    sessionResources: {
+      ...config.sessionResources!,
+      workspaceModeAt: (cwd) => (cwd === b ? 'all' : 'none'),
+    },
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = (path, signal) => {
+        if (path === join(b, '.vela/APPEND_SYSTEM.md')) {
+          bReads++
+          return Promise.resolve({ ok: true, value: 'B_ENV_APPEND' })
+        }
+        return read(path, signal)
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('a').prompt('hello')
+    const first = model.calls[0]!.system
+    expect(first).toContain('A_REPLACEMENT')
+    expect(first).toContain('USER_APPEND')
+    expect(first).not.toContain('<rules>')
+    const session = vela.session('b', { cwd: b })
+    await session.prompt('hello')
+    const second = model.calls[1]!.system
+    expect(second).toContain('<rules>')
+    expect(second).toContain('B_ENV_APPEND')
+    expect(second).not.toContain('USER_APPEND')
+    expect(second).not.toContain('A_REPLACEMENT')
+    writeFileSync(join(b, '.vela/SYSTEM.md'), 'LATE_REPLACEMENT')
+    await session.prompt('again')
+    expect(model.calls[2]!.system).toBe(second)
+    expect(bReads).toBe(1)
+    await vela.session('denied', { cwd: denied }).prompt('hello')
+    expect(model.calls[3]!.system).toContain('USER_APPEND')
+    expect(model.calls[3]!.system).not.toContain('DENIED_REPLACEMENT')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
 test('workspace skill metadata comes from the selected session environment', async () => {
   const dir = tempDir()
   const skill = join(dir.path, '.skills', 'example')

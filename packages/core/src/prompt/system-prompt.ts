@@ -68,20 +68,22 @@ function tag(name: string, content: string): string {
  */
 export class SystemPromptBuilder {
   private readonly definitions: readonly PromptSection[]
-  private readonly replacement?: string
+  private readonly hasReplacement: (ctx: PromptContext) => boolean
 
   constructor(options: {
     /** Replaces the default prompt (pi's customPrompt) */
     systemPrompt?: string
+    hasReplacement?: (ctx: PromptContext) => boolean
     sections: readonly PromptSection[]
   }) {
     this.definitions = options.sections
-    this.replacement = options.systemPrompt
+    this.hasReplacement =
+      options.hasReplacement ?? (() => options.systemPrompt !== undefined)
   }
 
   /** Whether the configured `systemPrompt` is in effect (a handler's prompt replaces everything instead). */
   private replaced(ctx: PromptContext): boolean {
-    return ctx.systemPromptOverride == null && this.replacement !== undefined
+    return ctx.systemPromptOverride == null && this.hasReplacement(ctx)
   }
 
   private *rendered(

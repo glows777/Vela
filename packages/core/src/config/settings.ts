@@ -19,7 +19,10 @@ import type { ExtensionConfigDefinition } from './extension-config.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
-import type { ConfigResourceSplit } from './runtime-resources.ts'
+import {
+  type ConfigResourceSplit,
+  readLocalSystemFile,
+} from './runtime-resources.ts'
 
 /** Contents of settings.json (user: `~/.vela/settings.json`, project: `<cwd>/.vela/settings.json`). */
 export interface VelaSettings {
@@ -61,6 +64,8 @@ export type ExtensionEntry =
   | { name: string; path: string }
 
 export interface LoadConfigOptions {
+  /** @internal Vela frontends select these files when preparing each session. */
+  deferSystemFiles?: boolean
   /** Installed extensions own any additional settings sources and trust resources. */
   extensionConfigs?: readonly ExtensionConfigDefinition[]
   /** Project directory, default process.cwd() */
@@ -222,16 +227,6 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const userContext = loadAgentContextFile(agentDir)
   let skillDirs: string[] | undefined
   let contextFiles: ContextFile[] | undefined
-  // The project file wins over the user file (like APPEND_SYSTEM.md)
-  const systemFile = [
-    ...(trusted ? [join(projectDir, 'SYSTEM.md')] : []),
-    join(agentDir, 'SYSTEM.md'),
-  ].find((file) => existsSync(file))
-  const appendFile = [
-    ...(trusted ? [join(projectDir, 'APPEND_SYSTEM.md')] : []),
-    join(agentDir, 'APPEND_SYSTEM.md'),
-  ].find((file) => existsSync(file))
-
   const extensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
   for (const definition of options.extensionConfigs ?? [])
     extensionConfig[definition.name] = definition.resolve(
@@ -239,6 +234,13 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       { cwd, agentDir, projectDir, trusted, env },
     )
 
+  const promptDirs = options.deferSystemFiles
+    ? []
+    : trusted
+      ? [projectDir, agentDir]
+      : [agentDir]
+  const systemPrompt = readLocalSystemFile(promptDirs, 'SYSTEM.md')
+  const appendSystemPrompt = readLocalSystemFile(promptDirs, 'APPEND_SYSTEM.md')
   return {
     cwd,
     agentDir,
@@ -250,6 +252,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     files,
     extensions,
     sessionResources: {
+      agentDir,
       cwd,
       userContextFiles: userContext ? [userContext] : [],
       hostSkillDirs,
@@ -290,10 +293,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     set contextFiles(value) {
       contextFiles = value
     },
-    ...(systemFile ? { systemPrompt: readFileSync(systemFile, 'utf-8') } : {}),
-    ...(appendFile
-      ? { appendSystemPrompt: readFileSync(appendFile, 'utf-8') }
-      : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(appendSystemPrompt !== undefined ? { appendSystemPrompt } : {}),
     providers: loadModels({ agentDir, env }),
     credentials: fileCredentialStore(join(agentDir, 'auth.json')),
     extensionConfig,

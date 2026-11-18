@@ -56,7 +56,7 @@ import {
 import { setSavedSessionArchived } from './session/index.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
-import { WorkspaceResources } from './session/resources.ts'
+import { sessionSystemFile, WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
 import { type SessionSearchHit, searchSessionText } from './session/search.ts'
 import {
@@ -348,6 +348,8 @@ export function createVela(options: VelaOptions = {}): Vela {
       : (resourceSplit?.userContextFiles ?? options.contextFiles ?? [])
   const sessions = new Map<string, VelaSession>()
   const resources = new WorkspaceResources({
+    systemPrompt: options.systemPrompt,
+    appendSystemPrompt: options.appendSystemPrompt,
     contextFiles,
     skills: skillLoader.list(),
     promptTemplates,
@@ -355,14 +357,23 @@ export function createVela(options: VelaOptions = {}): Vela {
 
   // Named sections in pi's order; preamble, tools, rules and docs give way to a replacement prompt
   const builder = new SystemPromptBuilder({
-    systemPrompt: options.systemPrompt,
+    hasReplacement: (ctx) =>
+      resources.get(ctx.sessionId).systemPrompt !== undefined,
     sections: [
-      { name: 'preamble', render: preamble(options.systemPrompt) },
+      {
+        name: 'preamble',
+        render: (ctx) =>
+          preamble(resources.get(ctx.sessionId).systemPrompt)(ctx),
+      },
       { name: 'tools', core: true, render: toolList() },
       { name: 'deferred_tools', render: deferredTools() },
       { name: 'rules', core: true, render: rules() },
       { name: 'docs', core: true, render: docs(resolveDocs(options.docs)) },
-      { name: 'addendum', render: addendum(options.appendSystemPrompt) },
+      {
+        name: 'addendum',
+        render: (ctx) =>
+          addendum(resources.get(ctx.sessionId).appendSystemPrompt)(ctx),
+      },
       {
         name: 'project_context',
         render: (ctx) =>
@@ -477,7 +488,19 @@ export function createVela(options: VelaOptions = {}): Vela {
             (template) => !templateNames.has(template.name),
           ),
         ]
+        const readSystem = (name: 'SYSTEM.md' | 'APPEND_SYSTEM.md') =>
+          sessionSystemFile(
+            env,
+            name,
+            workspaceMode === 'all',
+            resourceSplit?.agentDir,
+            signal,
+          )
         return {
+          systemPrompt: options.systemPrompt ?? (await readSystem('SYSTEM.md')),
+          appendSystemPrompt:
+            options.appendSystemPrompt ??
+            (await readSystem('APPEND_SYSTEM.md')),
           skills,
           promptTemplates: selectedTemplates,
           contextFiles:
