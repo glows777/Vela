@@ -6,6 +6,7 @@ import {
 import type {
   CallRecord,
   ResponseRecord,
+  ResultRecord,
   ToolHistoryStore,
 } from '../session/tool-history.ts'
 import { ToolResultError } from './types.ts'
@@ -116,4 +117,43 @@ export interface CallOptions {
   /** Set for calls a tool made through ctx.executeTool() */
   parentToolCallId?: string
   onUpdate?: (partialResult: unknown) => void
+}
+
+/** Refusal before execution is a known result, unlike a tool interrupted after it started. */
+export async function rejectDrainingCall(
+  history: ToolHistoryStore,
+  name: string,
+  id: string | undefined,
+  input: unknown,
+  call?: CallRecord,
+): Promise<ToolRejection> {
+  const reason = `Tool ${name} was not executed because the session is shutting down`
+  const attempt = call ?? (await history.begin(name, id, input))
+  await history.append<ResultRecord>({
+    type: 'tool_result',
+    callId: attempt.callId,
+    status: 'rejected',
+    durationMs: 0,
+    error: reason,
+    modelOutput: errorOutput(reason),
+  })
+  return new ToolRejection(reason)
+}
+
+export async function recordToolRejection(
+  history: ToolHistoryStore,
+  toolName: string,
+  toolCallId: string,
+  input: unknown,
+  error: unknown,
+): Promise<void> {
+  if (history.hasAttempt(toolCallId)) return
+  const call = await history.begin(toolName, toolCallId, input)
+  await history.append<ResultRecord>({
+    type: 'tool_result',
+    callId: call.callId,
+    status: 'rejected',
+    durationMs: 0,
+    error: error instanceof Error ? error.message : String(error),
+  })
 }

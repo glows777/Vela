@@ -982,6 +982,7 @@
     compact: (focus?: string) => Promise<void>
     continueInterrupted: () => Promise<void>
     customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
+    drain: () => Promise<void>
     executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; id?: string; }) => Promise<BashResult>
     exportHtml: (path?: string) => Promise<string>
     exportJsonl: (path?: string) => Promise<string>
@@ -1584,6 +1585,7 @@
     compact: (focus?: string) => Promise<void>
     continueInterrupted: () => Promise<void>
     customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
+    drain: () => Promise<void>
     executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; id?: string; }) => Promise<BashResult>
     exportHtml: (path?: string) => Promise<string>
     exportJsonl: (path?: string) => Promise<string>

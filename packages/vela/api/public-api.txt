@@ -973,7 +973,7 @@
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
-    dispose: () => Promise<void>
+    dispose: (options?: { graceful?: boolean; }) => Promise<void>
     extensions: () => LoadedChannelExtension[]
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
@@ -1203,6 +1203,7 @@
     compact: (focus?: string) => Promise<void>
     continueInterrupted: () => Promise<void>
     customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
+    drain: () => Promise<void>
     executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; id?: string; }) => Promise<BashResult>
     exportHtml: (path?: string) => Promise<string>
     exportJsonl: (path?: string) => Promise<string>

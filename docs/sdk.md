@@ -99,7 +99,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. See [SDK host access](channels-reference.md#sdk-host-access). |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
 | `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
-| `dispose()` | Stops channels, closes all sessions (aborting running work and saving) and deletes the temp data dir if there is one |
+| `dispose(options?)` | Stops channels, closes all sessions and deletes any temporary data directory. Default cancels running work; channel-aware Vela accepts `{ graceful: true }` to drain in-flight channel tools first. The embedding host must enforce its own deadline. |
 
 ## Sessions
 
@@ -165,6 +165,7 @@ Images are normalized once, when they enter: `prompt`, `steer`, `followUp`, `sen
 | `queue`, `clearQueue()` | Copy of the queued user inputs; remove all queued messages and return the user inputs |
 | `steeringMode`, `followUpMode` | `one-at-a-time` (default) or `all`: how many queued messages are taken at once |
 | `abort(reason?)` | Aborts the running loop and extension commands, and waits until the loop has stopped. Queued messages stay queued. |
+| `drain()` | Permanently stops admitting new work, lets already-running tools finish and save, and interrupts before the next model/tool iteration. Does not close the session or impose a timeout; the host must enforce its deadline and then abort/close. |
 | `waitForIdle()` | Waits for the running loop (including queued messages and manual compaction) without aborting it |
 | `isRunning` | Whether an agent loop or compaction holds the run lock |
 | `hasWork` | Whether work outside a turn (a background command) is still running; channel idle cleanup keeps such a session open |
@@ -514,3 +515,5 @@ An existing unbound session accepts its first scope/channel binding while preser
 The umbrella `@glows777/vela` preserves its root and `./testing` entries and the `vela` executable. Channel-aware `createVela`, `channels()`, `channel(name)`, `startChannels()` and `channelIdleMs` retain their existing shapes; `runningChannels()` supplies the connected-name snapshot used by serve.
 
 The experimental `@glows777/vela-core/diagnostics` entry also provides the canonical frontend helpers for HTML/session views, session IDs, thinking choices, tool validation, and config trust/path decisions. `resolveModel(ref, { providers, credentials })` resolves a supplied object, provider reference or configured default without assembling a Vela or reading project resources. With no configured default it throws the CLI’s existing no-model guidance. These helpers are experimental; the exact surface is recorded in the core API snapshot.
+
+`vela serve` uses graceful disposal on its first shutdown signal, with a 30-second total cap. Bare SDK `dispose()` and explicit Stop retain immediate cancellation. A second signal exits immediately. See [channel shutdown](channels.md#shutdown-and-recovery).

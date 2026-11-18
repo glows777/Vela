@@ -153,7 +153,7 @@
     channels: () => { name: string; description: string; }[]
     commands: () => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
-    dispose: () => Promise<void>
+    dispose: (options?: { graceful?: boolean; }) => Promise<void>
     extensions: () => LoadedChannelExtension[]
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>

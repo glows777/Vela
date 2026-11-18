@@ -63,6 +63,8 @@ interface AgentLoopParameter {
    */
   compactOnOverflow?: (signal?: AbortSignal) => Promise<void>
   abortSignal?: AbortSignal
+  /** Stop admitting model/tool work while already executing tools finish normally. */
+  isDraining?: () => boolean
   /** Event callback; without it agentLoop produces no terminal output. */
   onEvent?: VelaEventListener
   /** Retry, context and other limits; missing fields use defaults. */
@@ -119,6 +121,7 @@ export const agentLoop = async ({
   transformContext,
   compactOnOverflow,
   abortSignal,
+  isDraining,
   onEvent,
   limits: limitOverrides,
   reasoning,
@@ -156,6 +159,12 @@ export const agentLoop = async ({
     }
   }
 
+  const shutdown = () =>
+    new DOMException('Run interrupted by graceful shutdown', 'AbortError')
+  const checkDrain = () => {
+    if (isDraining?.()) throw shutdown()
+  }
+
   const currentSystem = () =>
     typeof systemPrompt === 'function' ? systemPrompt() : systemPrompt
   const currentReasoning = () =>
@@ -164,6 +173,7 @@ export const agentLoop = async ({
     // Like pi: no turn limit. Run until the model stops calling tools and nothing is queued
     // (or until aborted / stopped by loop detection)
     for (;;) {
+      checkDrain()
       abortSignal?.throwIfAborted()
       toolRegistry.assertHealthy()
       turn++
@@ -185,11 +195,15 @@ export const agentLoop = async ({
         abortSignal,
       )
       let checkpointFailure: { error: unknown } | undefined
-      if (onCheckpoint) {
+      if (onCheckpoint || isDraining) {
         for (const tool of Object.values(request.tools)) {
           const execute = tool.execute
           if (!execute) continue
           tool.execute = async (input, options) => {
+            if (isDraining?.())
+              throw new Error(
+                'Tool was not executed because the session is shutting down.',
+              )
             // SDK lifecycle callbacks swallow errors. Check again at the actual
             // execution boundary so a failed flush cannot authorize side effects.
             if (checkpointFailure)
@@ -266,6 +280,7 @@ export const agentLoop = async ({
                 }
             }
           }
+          checkDrain()
           const result = streamText({
             model,
             // Messages are copied here, so compaction or an abort never sees cache markers in history
@@ -446,6 +461,15 @@ export const agentLoop = async ({
             keepInterrupted(step, 'aborted', ABORTED_RESULT, ABORTED_RESULT)
             throw abortSignal.reason ?? error
           }
+          if (isDraining?.()) {
+            keepInterrupted(
+              step,
+              'aborted',
+              'Run interrupted by graceful shutdown',
+              'Tool was not executed because the model request was interrupted by shutdown.',
+            )
+            throw shutdown()
+          }
           const errorMessage = errorMessageOf(error)
           // Once tools ran, sending the request again would run them twice
           // A provider-hosted tool can execute before its first stream event arrives.
@@ -624,6 +648,13 @@ export const agentLoop = async ({
         throw new Error(CONTENT_FILTER_ERROR)
       }
 
+      if (isDraining?.()) {
+        emit({ type: 'turn_end', turn, message: assistant, toolResults })
+        if (needToolCall) throw shutdown()
+        endReason = 'done'
+        break
+      }
+
       if (shouldBreak) {
         emit({ type: 'turn_end', turn, message: assistant, toolResults })
         endReason = 'loop'
@@ -658,9 +689,10 @@ export const agentLoop = async ({
     emit({
       type: 'agent_end',
       messages: newMessages,
-      reason: abortSignal?.aborted ? 'aborted' : 'error',
+      reason: abortSignal?.aborted || isDraining?.() ? 'aborted' : 'error',
       error,
-      ...(!abortSignal?.aborted && { errorKind: classifyAgentError(error) }),
+      ...(!abortSignal?.aborted &&
+        !isDraining?.() && { errorKind: classifyAgentError(error) }),
     })
     throw error
   } finally {

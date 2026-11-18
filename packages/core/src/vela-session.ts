@@ -37,7 +37,11 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
-import type { SessionDeps as SessionDependencies } from './session/deps.ts'
+import type {
+  SessionDeps as SessionDependencies,
+  ForkResult as SessionForkResult,
+} from './session/deps.ts'
+import { waitForDrain } from './session/drain.ts'
 import {
   assertCustomType,
   type BranchSummaryEntry,
@@ -62,7 +66,11 @@ import {
   type NavigateTreeOptions,
   type QueueMode,
 } from './session/options.ts'
-import { reconcileInterruptedTools } from './session/recovery.ts'
+import {
+  assertInterruptedTurn,
+  assertLegacyAnchors,
+  reconcileInterruptedTools,
+} from './session/recovery.ts'
 import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
@@ -79,14 +87,7 @@ import { usageLedgerPath } from './usage/ledger.ts'
 import { CONTEXT_WINDOW, TokenTracker } from './usage/tracker.ts'
 
 /** What `fork()` / `clone()` returns. */
-export interface ForkResult {
-  /** True when an extension cancelled it (no session was created) */
-  cancelled: boolean
-  /** The new session, open in the same Vela (the original stays open) */
-  session?: VelaSession
-  /** Text of the user message forked from (`before`), for the input box */
-  selectedText?: string
-}
+export interface ForkResult extends SessionForkResult<VelaSession> {}
 
 /** Shared parts createVela() hands to every session. */
 export type SessionDeps = SessionDependencies<VelaSession>
@@ -134,6 +135,8 @@ export class VelaSession {
   /** Options the session was opened with (a fork opens with the same) */
   private readonly options: SessionOptions
   private closed = false
+  private draining = false
+  private drained?: Promise<void>
   /** The close in progress: a second caller waits for the final save instead of returning early */
   private closing?: Promise<void>
   private started?: Promise<void>
@@ -173,6 +176,7 @@ export class VelaSession {
       sessionId: id,
       scope: () => this.scope,
     })
+    this.registry.isDraining = () => this.draining
     routing.applySessionRouting(this, options)
     const toolListError = options.tools
       ? getToolListError(options.tools)
@@ -207,6 +211,7 @@ export class VelaSession {
       timestamps: this.timestamps,
       prepare: this.execEnv,
       isClosed: () => this.closed,
+      isDraining: () => this.draining,
     })
     this.contextManager.autoCompaction =
       options.autoCompaction ?? deps.autoCompaction
@@ -857,20 +862,13 @@ export class VelaSession {
    * Repairs missing tool results before asking the model; unsafe interrupted tools are not replayed.
    * Rejects while another operation holds the session's run lock.
    */
-  continueInterrupted(): Promise<void> {
+  async continueInterrupted(): Promise<void> {
+    if (this.draining) return Promise.reject(this.drainError())
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
     if (this.busy.locked)
       return Promise.reject(new Error(`Session ${this.id} is already running`))
-    if (!this.messages.some((message) => message.role === 'user'))
-      return Promise.reject(new Error('No saved turn to continue'))
-    const last = this.messages.at(-1)
-    if (
-      last?.role === 'assistant' &&
-      (typeof last.content === 'string' ||
-        !last.content.some((part) => part.type === 'tool-call'))
-    )
-      return Promise.reject(new Error('No interrupted turn to continue'))
+    assertInterruptedTurn(this.messages)
     return this.trackRun(this.run(undefined, {}))
   }
 
@@ -917,6 +915,7 @@ export class VelaSession {
       id?: string
     } = {},
   ): Promise<BashResult> {
+    if (this.draining) throw this.drainError()
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
     return this.userBash.execute(command, options)
   }
@@ -944,6 +943,7 @@ export class VelaSession {
     options: PromptOptions,
     mode: 'command' | 'expand' | 'literal' = 'expand',
   ): Promise<void> {
+    if (this.draining) return Promise.reject(this.drainError())
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
     const { extensions, expandInput } = this.deps
@@ -952,6 +952,7 @@ export class VelaSession {
       return this.promptModel(input, options)
     return this.trackInput(options.signal, async (signal) => {
       await abortable(this.startExtensions(), signal)
+      if (this.draining) throw this.drainError()
       if (this.closed) throw new Error(`Session ${this.id} is closed`)
       signal.throwIfAborted()
       const command = mode === 'command' && slash
@@ -974,6 +975,7 @@ export class VelaSession {
         text = event.text
         images = event.images
       }
+      if (this.draining) throw this.drainError()
       if (mode !== 'literal' && text.startsWith('/')) {
         signal.throwIfAborted()
         text = await abortable(expandInput(text, this, signal), signal)
@@ -1125,8 +1127,20 @@ export class VelaSession {
     while (this.running) await this.running
   }
 
+  /** Stop admission and wait for active tools without cancelling them; the host owns the deadline. */
+  drain(): Promise<void> {
+    this.draining = true
+    this.drained ??= waitForDrain(this, this.userBash.running)
+    return this.drained
+  }
+
+  private drainError(): Error {
+    return new Error(`Session ${this.id} is draining; new work is not accepted`)
+  }
+
   /** Takes from the queues by mode: steer first, then followUp. */
   private dequeue(kind: 'steering' | 'followUp'): ModelMessage[] {
+    if (this.draining) return []
     return this.messageQueue.dequeue(
       kind,
       kind === 'steering' ? this.steeringMode : this.followUpMode,
@@ -1148,6 +1162,7 @@ export class VelaSession {
     message: ModelMessage,
     options: PromptOptions,
   ): Promise<void> {
+    if (this.draining) return Promise.reject(this.drainError())
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
     // Input hooks can finish after cancellation, while the aborted loop is still cleaning up.
@@ -1222,28 +1237,10 @@ export class VelaSession {
       if (input === undefined) {
         await this.start(controller.signal)
         await this.store.assertNew()
-        // Legacy execution could begin before the assistant call was saved. Without
-        // a transcript anchor it cannot be attributed to this branch: preserve evidence and stop.
-        const known = new Set(
-          this.store
-            .getEntries()
-            .flatMap((entry) =>
-              entry.type === 'message' &&
-              entry.message.role === 'assistant' &&
-              Array.isArray(entry.message.content)
-                ? entry.message.content.flatMap((part) =>
-                    part.type === 'tool-call' ? [part.toolCallId] : [],
-                  )
-                : [],
-            ),
+        await assertLegacyAnchors(
+          this.store.getEntries(),
+          this.registry.results.history,
         )
-        const orphan = (
-          await this.registry.results.history.legacyUnfinished()
-        ).find((call) => !call.toolCallId || !known.has(call.toolCallId))
-        if (orphan)
-          throw new Error(
-            `Tool ${orphan.toolName} has an unfinished legacy attempt (${orphan.callId}) without a saved assistant step. Its effects and branch are unknown; recovery stopped without replaying it. Reconcile its effects before continuing.`,
-          )
         await reconcileInterruptedTools({
           messages: this.messages,
           recover: (name, id, args, signal) =>
@@ -1380,6 +1377,7 @@ export class VelaSession {
         ),
       onMessage: (message, producer) => this.record(message, producer),
       onCheckpoint: () => this.save(),
+      isDraining: () => this.draining,
       injectNotice: (content) =>
         this.messageQueue.customMessage({
           customType: 'loop',

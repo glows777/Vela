@@ -62,6 +62,7 @@ export class ChannelGateway {
   private readonly admission: TopicAdmission
   private readonly feedback: RunFeedback
   private stopped = false
+  private draining?: Promise<PromiseSettledResult<void>[]>
   private readonly logger: VelaLogger
 
   constructor(private options: GatewayOptions) {
@@ -412,15 +413,27 @@ export class ChannelGateway {
     }
   }
 
-  async stopAll(): Promise<void> {
+  /** Close admission immediately, even while extension factories are settling. */
+  beginShutdown(graceful = false): void {
     this.stopped = true
     this.started.clear()
     this.routines.stop()
     this.idle.stop()
+    if (graceful)
+      this.draining ??= Promise.allSettled(
+        [...this.feedback.active].map((session) => session.drain()),
+      )
+  }
+
+  async stopAll(graceful = false): Promise<void> {
+    this.beginShutdown(graceful)
     // Drain all active work before stopping its channels, even if an independent close fails.
     const errors: unknown[] = []
+    const draining = await this.draining
     const drained = await Promise.allSettled([
-      ...[...this.feedback.active].map((session) => session.abort()),
+      ...[...this.feedback.active].map((session) =>
+        graceful ? session.drain() : session.abort(),
+      ),
       ...this.queues.values(),
       ...this.input.admitting.values(),
       ...this.commands.active,
@@ -429,7 +442,7 @@ export class ChannelGateway {
       ...this.events.active,
     ])
     this.run.clearSaveFailures()
-    for (const result of drained)
+    for (const result of [...(draining ?? []), ...drained])
       if (result.status === 'rejected') errors.push(result.reason)
 
     for (const runtime of this.runtimes.values()) runtime.clear()

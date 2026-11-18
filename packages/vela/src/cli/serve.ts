@@ -59,7 +59,26 @@ export async function runServe(options: {
 }): Promise<number> {
   const { vela, write } = options
   // Before starting: a stop request while a transport is still connecting must reach dispose() too
-  const shutdown = shutdownSignals()
+  const shutdown = shutdownSignals(() => {
+    // Bound the entire shutdown, including non-cooperative tools and cleanup hooks.
+    // The last durable assistant/tool checkpoints are recovered on the next start.
+    const deadline = setTimeout(() => {
+      write(
+        '[serve] Shutdown exceeded 30 seconds; unfinished work will recover as interrupted.',
+      )
+      for (const session of vela.sessions()) {
+        session.abortBash()
+        void session.abort(
+          new DOMException('Shutdown deadline exceeded', 'AbortError'),
+        )
+      }
+      process.exit(143)
+    }, 30_000)
+    deadline.unref()
+    return vela
+      .dispose({ graceful: true })
+      .finally(() => clearTimeout(deadline))
+  })
   // Also before starting: a recovered message can be answered while later channels are still connecting
   const unsubscribe = vela.subscribe((event) => {
     const line = formatChannelEvent(event)
@@ -93,7 +112,7 @@ export async function runServe(options: {
  * Installs the stop handlers and returns the first stop request. They stay installed for the rest of
  * the run, so a second signal exits right away instead of waiting for a slow shutdown.
  */
-function shutdownSignals(): {
+function shutdownSignals(shutdown: () => Promise<void>): {
   stopped: Promise<void>
   requested: () => boolean
 } {
@@ -113,7 +132,12 @@ function shutdownSignals(): {
     process.on(signal, () => {
       if (stopping) process.exit(code)
       stopping = true
-      stop()
+      void shutdown().then(stop, (error) => {
+        process.stderr.write(
+          `[serve] Shutdown failed: ${errorMessage(error)}\n`,
+        )
+        stop()
+      })
     })
   return { stopped, requested: () => stopping }
 }

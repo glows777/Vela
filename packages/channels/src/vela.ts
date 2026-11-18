@@ -40,6 +40,8 @@ export interface ChannelVela extends Omit<CoreVela, 'extensions'> {
   channel(name: string): ChannelHost
   startChannels(): Promise<void>
   runningChannels(): string[]
+  /** Stop admission and finish in-flight tools before disposing. Hosts must enforce their shutdown deadline. */
+  dispose(options?: { graceful?: boolean }): Promise<void>
   /** Enqueues to matching subscriptions, without waiting for model execution. Channels must be started. */
   publishEvent(event: ChannelEvent): Promise<void>
 }
@@ -82,6 +84,7 @@ export function createChannelVela(
     (receiverConfig as { github?: unknown } | undefined)?.github,
   )
   let stopping = false
+  let graceful = false
   let core: CoreVela
   let gateway: ChannelGateway | undefined
   const runtime = (api?: CoreExtensionAPI): ChannelGateway =>
@@ -103,7 +106,7 @@ export function createChannelVela(
       errors.push(error)
     }
     try {
-      await runtime().stopAll()
+      await runtime().stopAll(graceful)
     } catch (error) {
       errors.push(error)
     }
@@ -151,12 +154,20 @@ export function createChannelVela(
         ? stop
         : () => {
             stopping = true
-            return runtime().stopAll()
+            return runtime().stopAll(graceful)
           },
   })
   gateways.set(core, runtime())
   const loaded = core.extensions.bind(core)
+  const dispose = core.dispose.bind(core)
   return Object.assign(core, {
+    dispose(options?: { graceful?: boolean }) {
+      if (!stopping) graceful = options?.graceful === true
+      stopping = true
+      // Close admission synchronously, before async factory/receiver cleanup.
+      runtime().beginShutdown(graceful)
+      return dispose()
+    },
     extensions: () =>
       loaded().map((entry, index) => ({
         ...entry,
