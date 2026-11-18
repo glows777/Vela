@@ -353,6 +353,8 @@ export async function runAttempt(
   }
   const files = fixtures(config.scenario)
   const exitScenario = ['G6', 'G7', 'G8'].includes(config.scenario)
+  // A group session runs in the chat's workspace, so a scenario that needs files there seeds them itself.
+  const workspaceScenario = config.scenario === 'G10'
   const topicRoots =
     config.scenario === 'G6'
       ? ['g6_b', 'g6_a']
@@ -362,12 +364,13 @@ export async function runAttempt(
   const { channelSessionId } = await load<
     typeof import('../../packages/channels/src/session-id.ts')
   >(config.runtime, paths.channelId)
-  const scope = exitScenario
-    ? await load<typeof import('../../packages/channels/src/scope.ts')>(
-        config.runtime,
-        paths.scope,
-      )
-    : undefined
+  const scope =
+    exitScenario || workspaceScenario
+      ? await load<typeof import('../../packages/channels/src/scope.ts')>(
+          config.runtime,
+          paths.scope,
+        )
+      : undefined
   const bun = (...args: string[]) =>
     command(config.cwd, [process.execPath, '--no-env-file', ...args])
   const readTask = (path: string) =>
@@ -607,6 +610,11 @@ export async function runAttempt(
           if (channelError) throw channelError
           channelStarted = false
         }
+        if (workspaceScenario)
+          for (const [path, content] of Object.entries(files)) {
+            await mkdir(dirname(join(workspace, path)), { recursive: true })
+            await Bun.write(join(workspace, path), content)
+          }
         const unmentioned =
           config.scenario === 'G3' || config.scenario === 'G10'
         fake.deliver(
@@ -627,6 +635,11 @@ export async function runAttempt(
         while (!channelStarted && !channelError) await Bun.sleep(1)
         await drain()
         if (channelError) throw channelError
+        if (workspaceScenario)
+          for (const path of Object.keys(files))
+            evidence.files[path] = await Bun.file(join(workspace, path))
+              .text()
+              .catch(() => '')
         evidence.topics = fake.topics.map((topic) => topic.title)
         evidence.deliveries = fake.sent.map((item) => ({
           scope:
