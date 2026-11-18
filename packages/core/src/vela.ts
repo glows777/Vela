@@ -335,9 +335,13 @@ export function createVela(options: VelaOptions = {}): Vela {
     options.promptTemplateDirs,
     options.contextFiles,
   )
-  const skillLoader = new SkillLoader(options.skillDirs ?? [])
+  const skillLoader = new SkillLoader(
+    resourceSplit?.hostSkillDirs ?? options.skillDirs ?? [],
+  )
   skillLoader.load()
-  const templates = loadPromptTemplates(options.promptTemplateDirs ?? [])
+  const templates = loadPromptTemplates(
+    resourceSplit?.hostPromptDirs ?? options.promptTemplateDirs ?? [],
+  )
   for (const { message, path } of [
     ...skillLoader.diagnostics,
     ...templates.diagnostics,

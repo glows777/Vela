@@ -829,3 +829,34 @@ test('trusted CLI workspace loads its skills and templates through env', async (
     dir.cleanup()
   }
 })
+
+test('trusted workspace discovers ancestor .agents skills through the environment up to git root', async () => {
+  const dir = tempDir()
+  const root = join(dir.path, 'project')
+  const workspace = join(root, 'nested')
+  const agentDir = join(dir.path, 'agent')
+  mkdirSync(join(root, '.git'), { recursive: true })
+  mkdirSync(join(root, '.agents', 'skills', 'parent'), { recursive: true })
+  mkdirSync(workspace, { recursive: true })
+  mkdirSync(agentDir, { recursive: true })
+  writeFileSync(
+    join(root, '.agents', 'skills', 'parent', 'SKILL.md'),
+    '---\nname: parent\ndescription: PARENT_SKILL\n---\nParent body',
+  )
+  const config = loadConfig({ cwd: workspace, agentDir, trusted: true })
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({
+    cwd: workspace,
+    model,
+    contextFiles: config.contextFiles,
+    skillDirs: config.skillDirs,
+    promptTemplateDirs: config.promptDirs,
+  })
+  try {
+    await vela.session('ancestor').prompt('hello')
+    expect(model.calls[0]!.system).toContain('PARENT_SKILL')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
