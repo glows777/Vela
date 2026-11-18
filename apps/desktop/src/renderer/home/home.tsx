@@ -123,7 +123,9 @@ export function Home({
           </h2>
           {project ? (
             <Composer
+              key={project.id}
               label="Message Vela"
+              draftKey={`home:${project.id}`}
               focusSignal={focusSignal}
               hint={
                 <>

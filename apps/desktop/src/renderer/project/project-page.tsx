@@ -53,7 +53,9 @@ export function ProjectPage({
           )}
         </Conversation>
         <Composer
+          key={project.id}
           label="Message Vela in this project"
+          draftKey={`project:${project.id}`}
           hint={
             <>
               Runs in <code>{project.cwd}</code> on this computer.

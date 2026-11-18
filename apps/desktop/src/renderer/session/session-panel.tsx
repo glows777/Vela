@@ -232,7 +232,9 @@ function SessionDetail({
         </Conversation>
       </div>
       <Composer
+        key={session.sessionId}
         label="Message in this session"
+        draftKey={`session:${session.sessionId}`}
         running={running}
         onSend={(text) => send(project.id, session.sessionId, text)}
       />

@@ -50,7 +50,8 @@ let starting: Promise<void> | undefined
 const attempts = new Map<string, { message: string; replyId?: string }>()
 /** Sessions whose whole history is already in the snapshot. */
 const complete = new Set<string>()
-const loading = new Set<string>()
+/** The read in flight per session, so a full read can queue behind a title read. */
+const loading = new Map<string, Promise<boolean>>()
 
 const publish = (change: Partial<Snapshot>) => {
   snapshot = { ...snapshot, ...change }
@@ -106,25 +107,12 @@ function mergeSessions(sessions: Session[]) {
   publish({ sessions: merged })
 }
 
-/**
- * One forward page walks the whole history: the host has no "latest N" cursor, so a
- * conversation is read in full once per app run and then kept by the event stream.
- * `firstOnly` reads the title message that anchors a session card.
- */
-async function loadMessages(
+/** One forward page walk: true when the read returned the history it asked for. */
+async function readHistory(
   projectId: string,
   sessionId: string,
-  firstOnly = false,
+  firstOnly: boolean,
 ) {
-  const key = `${projectId}/${sessionId}`
-  if (
-    firstOnly
-      ? (snapshot.messages[sessionId] ?? []).length > 0
-      : complete.has(key)
-  )
-    return
-  if (loading.has(key)) return
-  loading.add(key)
   try {
     const collected: Message[] = []
     let after: string | undefined
@@ -140,11 +128,50 @@ async function loadMessages(
       if (page.messages.length === 0) break
     } while (after)
     mergeMessages(sessionId, collected)
-    if (!firstOnly) complete.add(key)
+    return true
   } catch (cause) {
     publish({ error: errorMessage(cause) })
-  } finally {
-    loading.delete(key)
+    return false
+  }
+}
+
+/**
+ * One forward page walks the whole history: the host has no "latest N" cursor, so a
+ * conversation is read in full once per app run and then kept by the event stream.
+ * `firstOnly` reads the title message that anchors a session card.
+ *
+ * A session card is read as a title first and in full when it opens. Those two reads
+ * can overlap — the panel opens while `loadProject` is still fetching titles — and the
+ * full read must wait for the title read rather than be dropped, which would leave the
+ * session showing only its title.
+ */
+async function loadMessages(
+  projectId: string,
+  sessionId: string,
+  firstOnly = false,
+) {
+  const key = `${projectId}/${sessionId}`
+  const ready = () =>
+    firstOnly
+      ? (snapshot.messages[sessionId] ?? []).length > 0
+      : complete.has(key)
+  while (!ready()) {
+    const pending = loading.get(key)
+    if (pending) {
+      if (firstOnly) return
+      await pending
+      continue
+    }
+    const read = readHistory(projectId, sessionId, firstOnly)
+      .then((done) => {
+        if (done && !firstOnly) complete.add(key)
+        return done
+      })
+      .finally(() => {
+        if (loading.get(key) === read) loading.delete(key)
+      })
+    loading.set(key, read)
+    if (!(await read) || firstOnly) return
   }
 }
 

@@ -871,12 +871,10 @@ const journeyFour = async (page: Page) => {
     .waitFor({ timeout: 30_000 })
   checks.push("Alpha's panel lists the session started in it.")
 
-  // Open Alpha's session, then leave for Beta through Home: the panel must not keep
-  // Alpha's session under Beta.
+  // A draft belongs to the conversation it was typed in, and leaving a session
+  // through Home for another project must not carry it over.
   await panel.getByRole('button', { name: /Fix the retry backoff/ }).click()
-  await panel
-    .getByRole('heading', { name: 'Fix the retry backoff', exact: true })
-    .waitFor()
+  await panel.getByLabel('Message in this session').fill('an unsent reply')
   await page.getByRole('button', { name: 'Home', exact: true }).click()
   await page
     .getByRole('region', { name: 'Recent sessions' })
@@ -887,6 +885,11 @@ const journeyFour = async (page: Page) => {
     .getByRole('heading', { name: 'Write the Beta notes', exact: true })
     .waitFor()
   assert.equal(
+    await panel.getByLabel('Message in this session').inputValue(),
+    '',
+    "The other session's draft does not follow",
+  )
+  assert.equal(
     await panel.getByText('Fix the retry backoff', { exact: true }).count(),
     0,
     "Beta's panel never shows Alpha's session",
@@ -894,6 +897,16 @@ const journeyFour = async (page: Page) => {
   checks.push(
     'Leaving a session through Home and opening another project resets the panel to that project.',
   )
+
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await panel.getByRole('button', { name: /Fix the retry backoff/ }).click()
+  assert.equal(
+    await panel.getByLabel('Message in this session').inputValue(),
+    'an unsent reply',
+    "The session's own draft comes back",
+  )
+  await panel.getByLabel('Message in this session').fill('')
+  checks.push('An unsent reply stays with the session it was typed in.')
 
   await sidebar.getByRole('button', { name: 'Beta Local' }).click()
   await panel.getByRole('button', { name: /Write the Beta notes/ }).waitFor()
