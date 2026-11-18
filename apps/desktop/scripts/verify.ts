@@ -624,7 +624,7 @@ const waitForSessionState = async (
 /** Journey 2: bigger work in its card and panel; running, Stop, continue, then fail. */
 const journeyTwo = async (page: Page) => {
   const alpha = await projectNamed(page, 'Alpha')
-  const panel = page.getByLabel('Sessions')
+  const panel = page.getByRole('complementary', { name: 'Sessions' })
   await waitForIdle(page, alpha.sessionId)
   await panel.getByRole('heading', { name: 'Sessions', exact: true }).waitFor()
 
@@ -716,7 +716,7 @@ const journeyTwo = async (page: Page) => {
 /** Journey 3: a session that asks a question, from Home to the answer and back. */
 const journeyThree = async (page: Page) => {
   const alpha = await projectNamed(page, 'Alpha')
-  const panel = page.getByLabel('Sessions')
+  const panel = page.getByRole('complementary', { name: 'Sessions' })
   const topic = await waitForSessionState(
     page,
     alpha.id,
@@ -762,6 +762,9 @@ const journeyThree = async (page: Page) => {
     .waitFor()
   checks.push('The panel lists it under Needs you.')
 
+  // A question from Home must open the panel even when it was closed.
+  await panel.getByRole('button', { name: 'Close sessions' }).click()
+  await panel.waitFor({ state: 'detached' })
   await page.getByRole('button', { name: 'Home', exact: true }).click()
   const need = page.getByRole('button', {
     name: /Which colour should I use\?/,
@@ -778,6 +781,7 @@ const journeyThree = async (page: Page) => {
   await panel
     .getByRole('heading', { name: 'Fix the retry backoff', exact: true })
     .waitFor()
+  checks.push('A question opened from Home reopens the panel on its session.')
   await waitForIdle(page, topic.sessionId)
   await sendIn(page, 'Message in this session', 'Blue')
   await panel
@@ -800,7 +804,7 @@ const journeyThree = async (page: Page) => {
 /** Journey 4: two projects, their own histories and places, then a restart. */
 const journeyFour = async (page: Page) => {
   const sidebar = page.getByLabel('Sidebar')
-  const panel = page.getByLabel('Sessions')
+  const panel = page.getByRole('complementary', { name: 'Sessions' })
   await sidebar.getByRole('button', { name: 'New project' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('Folder path').fill(beta)

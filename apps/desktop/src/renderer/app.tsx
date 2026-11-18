@@ -31,11 +31,12 @@ export function App() {
   /**
    * Every way into a project goes through here, so the panel never keeps a session
    * from the project the person just left. Sidebar, Home, a session card and a new
-   * project all land on the same state.
+   * project all land on the same state. A closed panel stays closed when the person
+   * only picks a project, and opens when the destination is a session.
    */
   const openProjectPage = (projectId: string, sessionId?: string) => {
     setView({ name: 'project', projectId })
-    setPanel({ open: panel.open, ...(sessionId ? { sessionId } : {}) })
+    setPanel(sessionId ? { open: true, sessionId } : { open: panel.open })
     void loadProject(projectId)
   }
 
