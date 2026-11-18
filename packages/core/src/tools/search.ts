@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process'
-import { readFile, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import z from 'zod'
+import { followFileInfo } from '../execution/file-info.ts'
+import { createLocalExecutionEnv } from '../execution/local.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import { type BinaryResolver, createBinaryResolver } from './binaries.ts'
-import { resolveIn } from './file.ts'
 import type { ToolDefinition } from './registry.ts'
 
 // Same tools, parameters and output as pi: grep runs ripgrep, find runs fd. Both respect .gitignore
@@ -23,62 +22,67 @@ const truncateLine = (line: string) =>
 
 /** Paths in the output: relative to the search directory, with forward slashes. */
 const relativeTo = (searchPath: string, path: string) => {
-  const posix = (isAbsolute(path) ? relative(searchPath, path) : path)
-    .split(sep)
-    .join('/')
-  // fd prints directories with a trailing separator; keep it so they read as directories
-  return /[\\/]$/.test(path) && !posix.endsWith('/') ? `${posix}/` : posix
+  const root = searchPath.replaceAll('\\', '/').replace(/\/$/, '')
+  const candidate = path.replaceAll('\\', '/')
+  if (candidate.startsWith(`${root}/`)) return candidate.slice(root.length + 1)
+  if (candidate.startsWith('/') || /^[A-Za-z]:\//.test(candidate))
+    return candidate.split('/').filter(Boolean).at(-1) ?? ''
+  return candidate
 }
 
 /**
  * Run a search program and hand each stdout line to onLine; onLine returns false to stop early
  * (the process is killed). Resolves with the exit code, or null when it was stopped.
  */
-function runLines(
+async function runLines(
+  env: ExecutionEnv,
   command: string,
   args: string[],
   onLine: (line: string) => boolean,
   signal?: AbortSignal,
 ): Promise<{ code: number | null; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    signal?.throwIfAborted()
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-    const decoder = new TextDecoder()
-    let pending = ''
-    let stderr = ''
-    let stopped = false
-    const stop = () => {
+  signal?.throwIfAborted()
+  const controller = new AbortController()
+  const abort = () => controller.abort(signal?.reason)
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  let pending = '',
+    stderr = '',
+    stopped = false
+  const consume = (line: string) => {
+    if (!stopped && !onLine(line)) {
       stopped = true
-      child.kill()
+      controller.abort()
     }
-    signal?.addEventListener('abort', stop, { once: true })
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
-    const consume = (line: string) => {
-      if (!stopped && !onLine(line)) stop()
-    }
-    child.stdout.on('data', (chunk: Buffer) => {
-      pending += decoder.decode(chunk, { stream: true })
-      let end = pending.indexOf('\n')
-      while (end >= 0) {
-        consume(pending.slice(0, end))
-        pending = pending.slice(end + 1)
-        end = pending.indexOf('\n')
-      }
-    })
-    child.on('error', (error) => {
-      signal?.removeEventListener('abort', stop)
-      reject(new Error(`Failed to run ${command}: ${error.message}`))
-    })
-    child.on('close', (code) => {
-      signal?.removeEventListener('abort', stop)
-      pending += decoder.decode()
-      if (pending) consume(pending)
-      if (signal?.aborted) reject(signal.reason)
-      else resolve({ code: stopped ? null : code, stderr })
-    })
-  })
+  }
+  try {
+    const result = await env.exec(
+      [command, ...args],
+      {
+        onOutput: (text, _signal, info) => {
+          if (info.stream === 'stderr') {
+            stderr += text
+            return
+          }
+          pending += text
+          let end = pending.indexOf('\n')
+          while (end >= 0) {
+            consume(pending.slice(0, end))
+            pending = pending.slice(end + 1)
+            end = pending.indexOf('\n')
+          }
+        },
+      },
+      controller.signal,
+    )
+    if (signal?.aborted) throw signal.reason
+    if (pending && !stopped) consume(pending)
+    if (stopped) return { code: null, stderr }
+    if (!result.ok) throw result.error
+    return { code: result.value.exitCode, stderr }
+  } finally {
+    signal?.removeEventListener('abort', abort)
+  }
 }
 
 /** Wait for rg / fd, but stop waiting when the tool call is aborted (a first download can take a while). */
@@ -98,12 +102,15 @@ function binary(
   })
 }
 
-async function isDirectory(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory()
-  } catch {
-    throw new Error(`Path not found: ${path}`)
-  }
+async function isDirectory(
+  env: ExecutionEnv,
+  path: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const result = await followFileInfo(env, path, signal)
+  if (!result.ok)
+    throw new Error(`Path not found: ${path}`, { cause: result.error })
+  return result.value.kind === 'directory'
 }
 
 const grepToolParamSchema = z.object({
@@ -155,9 +162,17 @@ export const createGrepTool = (
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof grepToolParamSchema>, context) => {
     const { pattern, path = '.', glob, ignoreCase, literal } = input
-    const rg = await binary(resolveBinary, 'rg', context?.signal)
-    const searchPath = resolveIn(cwd, path)
-    const directory = await isDirectory(searchPath)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const rg =
+      env.id === 'node:local'
+        ? await binary(resolveBinary, 'rg', context?.signal)
+        : 'rg'
+    const absolute = await env.absolutePath(path, context?.signal)
+    if (!absolute.ok) throw absolute.error
+    const searchPath = absolute.value
+    const directory = await isDirectory(env, searchPath, context?.signal)
     const contextLines = input.context && input.context > 0 ? input.context : 0
     const limit = Math.max(1, input.limit ?? GREP_DEFAULT_LIMIT)
     const formatPath = (file: string) => {
@@ -165,7 +180,9 @@ export const createGrepTool = (
         const rel = relativeTo(searchPath, file)
         if (rel && !rel.startsWith('..')) return rel
       }
-      return basename(file)
+      return (
+        file.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? file
+      )
     }
 
     const args = ['--json', '--line-number', '--color=never', '--hidden']
@@ -173,13 +190,18 @@ export const createGrepTool = (
     if (literal) args.push('--fixed-strings')
     if (glob) args.push('--glob', glob)
     // Like find: outside a git repo rg ignores .gitignore unless told otherwise (pi's grep misses this)
-    if (!(await insideGitRepo(directory ? searchPath : dirname(searchPath))))
+    const gitRoot = directory
+      ? { ok: true as const, value: searchPath }
+      : await env.joinPath([searchPath, '..'], context?.signal)
+    if (!gitRoot.ok) throw gitRoot.error
+    if (!(await insideGitRepo(env, gitRoot.value, context?.signal)))
       args.push('--no-require-git')
     // --hidden would also search git's own files (logs, config); pi doesn't exclude them, Vela does
     args.push('--glob', '!.git', '--', pattern, searchPath)
 
     const matches: { file: string; line: number; text?: string }[] = []
     const { code, stderr } = await runLines(
+      env,
       rg,
       args,
       (line) => {
@@ -218,9 +240,10 @@ export const createGrepTool = (
     const linesOf = async (file: string) => {
       let lines = fileLines.get(file)
       if (!lines) {
-        lines = await readFile(file, 'utf8')
-          .then((text) => text.replace(/\r\n?/g, '\n').split('\n'))
-          .catch(() => [])
+        const result = await env.readTextFile(file, context?.signal)
+        lines = result.ok
+          ? result.value.replace(/\r\n?/g, '\n').split('\n')
+          : []
         fileLines.set(file, lines)
       }
       return lines
@@ -289,16 +312,21 @@ const findToolParamSchema = z.object({
     .describe(`Maximum number of results (default: ${FIND_DEFAULT_LIMIT})`),
 })
 
-async function insideGitRepo(path: string): Promise<boolean> {
-  for (let current = path; ; current = dirname(current)) {
-    if (
-      await stat(join(current, '.git')).then(
-        () => true,
-        () => false,
-      )
-    )
-      return true
-    if (dirname(current) === current) return false
+async function insideGitRepo(
+  env: ExecutionEnv,
+  path: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  for (let current = path; ; ) {
+    const git = await env.joinPath([current, '.git'], signal)
+    if (!git.ok) throw git.error
+    const exists = await env.exists(git.value, signal)
+    if (!exists.ok) throw exists.error
+    if (exists.value) return true
+    const parent = await env.joinPath([current, '..'], signal)
+    if (!parent.ok) throw parent.error
+    if (parent.value === current) return false
+    current = parent.value
   }
 }
 
@@ -315,16 +343,25 @@ export const createFindTool = (
   maxResultChars: 12000,
   execute: async (input: z.infer<typeof findToolParamSchema>, context) => {
     const { pattern, path = '.' } = input
-    const fd = await binary(resolveBinary, 'fd', context?.signal)
-    const searchPath = resolveIn(cwd, path)
-    if (!(await isDirectory(searchPath)))
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const fd =
+      env.id === 'node:local'
+        ? await binary(resolveBinary, 'fd', context?.signal)
+        : 'fd'
+    const absolute = await env.absolutePath(path, context?.signal)
+    if (!absolute.ok) throw absolute.error
+    const searchPath = absolute.value
+    if (!(await isDirectory(env, searchPath, context?.signal)))
       throw new Error(`Not a directory: ${searchPath}`)
     const limit = Math.max(1, input.limit ?? FIND_DEFAULT_LIMIT)
 
     const args = ['--glob', '--color=never', '--hidden']
     // Outside a git repo fd ignores .gitignore unless told otherwise; inside one, its default
     // git-aware behavior keeps parent .gitignore rules from crossing nested repos (same as pi)
-    if (!(await insideGitRepo(searchPath))) args.push('--no-require-git')
+    if (!(await insideGitRepo(env, searchPath, context?.signal)))
+      args.push('--no-require-git')
     args.push('--max-results', String(limit))
     // fd matches the basename unless --full-path; then it matches the absolute path, so a
     // pattern with a slash needs a leading **/ to match anything
@@ -337,13 +374,14 @@ export const createFindTool = (
         pattern !== '**'
       )
         effective = `**/${pattern}`
-      if (process.platform === 'win32')
+      if (/^[A-Za-z]:[\\/]/.test(env.cwd))
         effective = effective.replaceAll('/', String.raw`[/\\]`)
     }
     args.push('--', effective, searchPath)
 
     const results: string[] = []
     const { code, stderr } = await runLines(
+      env,
       fd,
       args,
       (line) => {

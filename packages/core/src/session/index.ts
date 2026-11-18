@@ -599,7 +599,7 @@ export class SessionStore {
 }
 
 const RESULT_FILE =
-  /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.txt/i
+  /^(?:vela-(?:output|result|micro)-)?[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.(?:txt|log)/i
 
 function replacePaths(text: string, pairs: [string, string][]): string {
   return pairs.reduce(

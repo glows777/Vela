@@ -208,7 +208,7 @@ The hash keeps two folders whose readable names collide (`/a-b/c` and `/a/b-c`) 
 
 ## Project trust
 
-A project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.skills/`, and `.agents/skills/` in the working folder or a parent up to the git root) can change Vela's behavior, run code on your machine or put instructions in front of the model, so Vela loads them only for trusted projects (like pi's project resources). Projects with none of these are not asked about. `AGENTS.md` and `CLAUDE.md` don't count: they load either way (see [Context files](#context-files)).
+A project's `.vela/settings.json`, `.vela/extensions/`, `.vela/prompts/`, `.vela/SYSTEM.md`, `.vela/APPEND_SYSTEM.md` and skills (`.vela/skills/`, `.skills/`, and `.agents/skills/` in the working folder or a parent up to the git root) can change Vela's behavior, run code on your machine or put instructions in front of the model, so Vela loads them only for trusted projects (like pi's project resources). Projects with none of these are not asked about. `AGENTS.md` and `CLAUDE.md` don't count: they load either way (see [Context files](#context-files)).
 
 | Situation | Result |
 |---|---|
@@ -297,6 +297,8 @@ Templates load from `<project>/.vela/prompts/` (trusted projects only), the `pro
 The system prompt is built from named, tagged sections: the intro paragraph (untagged), `<tools>`, `<deferred_tools>`, `<rules>`, `<docs>`, `<addendum>`, `<project_context>`, `<skills>`, `<cwd>`, `<env>`, then one section per extension (for example `<memory>`). `/context` counts it as one part of the window, and `VELA_DEBUG=1` lists which sections are on. `<env>` names the operating system and the shell. It does not name the date, the time of day, the timezone or the git branch.
 
 `<tools>` names every tool this session can call that has a `promptSnippet`, and `<rules>` carries the rules those tools bring with them, so a session narrowed to `read_file` is never told to use `bash`, `write_file` or `edit_file`.
+
+The CLI resolves these two project files from the session’s working directory, including when resuming a saved session or opening another project through Local. Their contents are part of the session resource snapshot and stay stable across ordinary wakes.
 
 Text in `~/.vela/SYSTEM.md`, or in `<project>/.vela/SYSTEM.md` when the project is trusted (the project file wins), replaces the default prompt: it becomes the intro paragraph and `<tools>`, `<rules>` and `<docs>` are left out. `--system-prompt <text or file>` (repeatable) replaces both for one run. In the SDK, pass `systemPrompt` to `createVela()`. Addendum, project context, skills, cwd, environment and extension sections stay.
 

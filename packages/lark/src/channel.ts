@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
-import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { join } from 'node:path'
 import type {
   ChannelConnection,
   ChannelDefinition,
@@ -31,6 +30,7 @@ import {
 } from './cards.ts'
 import { type LarkChat, parseChats } from './chats.ts'
 import { LarkConnection } from './connection.ts'
+import { downloadFile } from './file-download.ts'
 import {
   formatGroupContext,
   messageTime,
@@ -39,7 +39,7 @@ import {
   topicLines,
 } from './history.ts'
 import { errorMessage } from './log.ts'
-import { imageKeys, messageText, safeName } from './messages.ts'
+import { imageKeys, messageText } from './messages.ts'
 import { finishProgress, LarkProgress } from './progress.ts'
 import { LarkTopics } from './topics.ts'
 import type {
@@ -200,7 +200,10 @@ export class LarkChannel implements ChannelDefinition {
     IncomingMessage,
     Map<string, Promise<ImageContent>>
   >()
-  private readonly files = new WeakMap<IncomingMessage, Promise<string>>()
+  private readonly files = new WeakMap<
+    IncomingMessage,
+    ReturnType<typeof downloadFile>
+  >()
   // Custom transports without appId cannot identify own-app history items.
   private readonly lastReplies = new Map<string, LarkSentMessage>()
   private readonly handledTriggers = new Map<string, LarkSentMessage>()
@@ -469,6 +472,7 @@ export class LarkChannel implements ChannelDefinition {
       return
     }
     let images: ImageContent[]
+    let files: IncomingMessage['files']
     let imageCache = this.images.get(msg)
     if (!imageCache) {
       imageCache = new Map()
@@ -484,10 +488,17 @@ export class LarkChannel implements ChannelDefinition {
       if (event.message.message_type === 'file') {
         let file = this.files.get(msg)
         if (!file) {
-          file = this.downloadFile(event.message)
+          file = downloadFile(
+            event.message,
+            this.transport,
+            this.config.dataDir,
+            this.storage(event.message.chat_id),
+          )
           this.files.set(msg, file)
         }
-        input = await file
+        const attachment = await file
+        input = `[file: ${attachment.name}]`
+        files = [attachment]
       }
     } catch (error) {
       if (msg.passive) {
@@ -509,7 +520,7 @@ export class LarkChannel implements ChannelDefinition {
       return
     }
     this.topics.triggerImages.set(event, [...images])
-    msg = { ...msg, text: input, images }
+    msg = { ...msg, text: input, images, ...(files ? { files } : {}) }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (!msg.passive && msg.text.startsWith('/')) return msg
     const name = await this.senderName(msg.senderId)
@@ -635,69 +646,6 @@ export class LarkChannel implements ChannelDefinition {
       data: bytes.toString('base64'),
       mimeType: imageMimeType(bytes) ?? 'application/octet-stream',
     }
-  }
-
-  private async downloadFile(
-    message: LarkMessageEvent['message'],
-  ): Promise<string> {
-    const content = JSON.parse(message.content) as {
-      file_key: string
-      file_name?: string
-    }
-    if (!message.message_id || !content.file_key || !this.transport)
-      throw new Error('File has no resource key or message id')
-    const messageId = safeName(message.message_id, 64)
-    const name = safeName(
-      content.file_name ?? 'file',
-      254 - Buffer.byteLength(messageId),
-    )
-    await mkdir(this.config.dataDir, { recursive: true })
-    const root = await realpath(this.config.dataDir)
-    const directory = resolve(
-      root,
-      relative(
-        resolve(this.config.dataDir),
-        resolve(this.storage(message.chat_id)),
-      ),
-      'files',
-    )
-    await mkdir(directory, { recursive: true })
-    if ((await realpath(directory)) !== directory)
-      throw new Error('File directory must not contain symlinks')
-    const path = join(directory, `${messageId}-${name}`)
-    const reference = `[file: ${name}, saved at ${path}]`
-    try {
-      const existing = await lstat(path)
-      if (!existing.isFile())
-        throw new Error('Attachment destination is not a regular file')
-      return reference
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-    // Only completed downloads get the replayable name. A crash may leave a .part file,
-    // but redelivery cannot mistake those bytes for a completed attachment.
-    const temporary = join(directory, `${randomUUID()}.part`)
-    const file = await open(temporary, 'wx')
-    try {
-      const stream = await this.transport.getResource(
-        message.message_id,
-        content.file_key,
-        'file',
-      )
-      let size = 0
-      for await (const chunk of stream) {
-        const bytes = Buffer.from(chunk)
-        size += bytes.length
-        if (size > MAX_ATTACHMENT_BYTES) throw new FileTooLarge()
-        await file.writeFile(bytes)
-      }
-      await file.close()
-      await rename(temporary, path)
-    } finally {
-      await file.close()
-      await rm(temporary, { force: true })
-    }
-    return reference
   }
 
   private senderName(id: string): Promise<string> {

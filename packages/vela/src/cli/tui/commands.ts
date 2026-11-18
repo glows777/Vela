@@ -1,7 +1,10 @@
+import { CombinedAutocompleteProvider } from '@earendil-works/pi-tui'
+import type { VelaSession } from '@glows777/vela-core'
+import type { Vela } from '../../vela.ts'
 import { keyLabel } from './editor.ts'
 
 /** Commands the TUI handles itself (besides extension and CLI slash commands), for autocomplete */
-export const TUI_COMMANDS = [
+const TUI_COMMANDS = [
   { name: 'new', description: 'Start a new session' },
   { name: 'resume', description: 'Resume a saved session' },
   { name: 'name', description: 'Set the session name' },
@@ -30,7 +33,7 @@ export const TUI_COMMANDS = [
   { name: 'hotkeys', description: 'Show keyboard shortcuts' },
   { name: 'quit', description: 'Quit Vela' },
 ]
-export const CLI_COMMANDS = [
+const CLI_COMMANDS = [
   { name: 'status', description: 'Session overview' },
   { name: 'context', description: 'Context usage' },
   { name: 'usage', description: 'Token usage and cost' },
@@ -51,3 +54,33 @@ export const HOTKEYS = [
   `${keyLabel('pasteImage')} paste a clipboard image as a file path for read_file`,
   `${keyLabel('clear')} clear editor, twice to exit · ${keyLabel('exit')} exit when editor is empty`,
 ]
+
+export function commandCompletions(
+  vela: Vela,
+  session: VelaSession,
+  resources: Awaited<ReturnType<VelaSession['resources']>>,
+  fdPath?: string,
+): CombinedAutocompleteProvider {
+  return new CombinedAutocompleteProvider(
+    [
+      ...TUI_COMMANDS,
+      ...CLI_COMMANDS,
+      ...resources.promptTemplates.map((t) => ({
+        name: t.name,
+        description: t.argumentHint
+          ? `${t.argumentHint} — ${t.description}`
+          : t.description,
+      })),
+      ...resources.skills.map((s) => ({
+        name: `skill:${s.name}`,
+        description: s.description,
+      })),
+      ...vela.commands().map((c) => ({
+        name: c.name,
+        description: c.description ?? `Extension ${c.extension}`,
+      })),
+    ],
+    session.cwd,
+    fdPath,
+  )
+}

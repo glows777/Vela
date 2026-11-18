@@ -24,11 +24,18 @@ function error(
   })
 }
 class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
-  constructor(options: { cwd: string; shellPath?: string }) {
-    super(options.cwd)
+  constructor(options: {
+    cwd: string
+    shellPath?: string
+    tempRoot?: string
+    loginShell?: boolean
+  }) {
+    super(options.cwd, options.tempRoot)
     this.shellPath = options.shellPath
+    this.loginShell = options.loginShell ?? false
   }
   private readonly shellPath?: string
+  private readonly loginShell: boolean
   private readonly active = new Set<ChildProcess>()
   async exec(
     command: string | readonly string[],
@@ -41,7 +48,7 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       for (const child of this.active)
         if (
           (child.exitCode !== null || child.signalCode !== null) &&
-          !this.groupAlive(child)
+          this.groupStatus(child) === 'missing'
         )
           this.active.delete(child)
     if (
@@ -56,7 +63,7 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         ? [
             this.shellPath ??
               (process.platform === 'win32' ? 'bash.exe' : 'bash'),
-            '-c',
+            this.loginShell ? '-lc' : '-c',
             command,
           ]
         : [...command]
@@ -252,8 +259,16 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         }
       }
       if (stopped) {
-        const e = error(stopped, stopped, streamError)
-        if (spillPath) e.spillPath = spillPath
+        const message =
+          stopped === 'unknown'
+            ? `Failed to preserve complete shell output: ${String(streamError)}`
+            : stopped
+        const e = error(stopped, message, streamError)
+        if (spillPath) {
+          if (stopped === 'unknown')
+            await this.remove(spillPath, { force: true })
+          else e.spillPath = spillPath
+        }
         return { ok: false, error: e }
       }
       return {
@@ -282,23 +297,52 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       signal?.removeEventListener('abort', abort)
       // The shell may exit while a background descendant still owns its group.
       // Keep that group reachable until cleanup; otherwise drop the finished child.
-      if (process.platform === 'win32' || !this.groupAlive(child))
+      if (process.platform === 'win32' || this.groupStatus(child) === 'missing')
         this.active.delete(child)
     }
   }
   async cleanup(): Promise<void> {
     await Promise.all(
-      [...this.active].map((child) => signalProcessTree(child, 'SIGKILL')),
+      [...this.active].map(async (child) => {
+        try {
+          await signalProcessTree(child, 'SIGKILL')
+        } catch (cause) {
+          const exited = child.exitCode !== null || child.signalCode !== null
+          if (!exited || (cause as NodeJS.ErrnoException)?.code !== 'EPERM')
+            throw cause
+          // A reaped shell can still own a live group. Probe it before giving up.
+          const group = this.groupStatus(child)
+          // On Darwin, teardown of a reaped shell is best effort if the probe also denies access.
+          if (
+            group !== 'missing' &&
+            !(process.platform === 'darwin' && group === 'denied')
+          )
+            throw cause
+        }
+        this.active.delete(child)
+      }),
     )
-    this.active.clear()
   }
-  private groupAlive(child: ChildProcess): boolean {
-    if (child.pid === undefined) return false
+  withResultRoot(root: string): LocalExecutionEnv {
+    // A resolver may reuse its adapter across sessions. Preserve its overrides
+    // and active children without changing the result directory of another call.
+    if (this.tempRoot !== undefined) return this
+    const scoped: LocalExecutionEnv = Object.create(this)
+    scoped.tempRoot = root
+    return scoped
+  }
+  private groupStatus(
+    child: ChildProcess,
+  ): 'present' | 'missing' | 'denied' | 'unknown' {
+    if (child.pid === undefined) return 'missing'
     try {
       process.kill(-child.pid, 0)
-      return true
+      return 'present'
     } catch (cause) {
-      return (cause as NodeJS.ErrnoException).code !== 'ESRCH'
+      const code = (cause as NodeJS.ErrnoException).code
+      if (code === 'ESRCH') return 'missing'
+      if (code === 'EPERM') return 'denied'
+      return 'unknown'
     }
   }
 }
@@ -307,4 +351,21 @@ export function createLocalExecutionEnv(options: {
   shellPath?: string
 }): ExecutionEnv {
   return new LocalExecutionEnv(options)
+}
+
+/** @internal Scope the stock local adapter's files to their owning session. */
+export function scopeLocalResults(
+  env: ExecutionEnv,
+  root: string,
+): ExecutionEnv {
+  return env instanceof LocalExecutionEnv ? env.withResultRoot(root) : env
+}
+
+/** @internal Use the session-owned result root for local spill files. */
+export function createSessionLocalExecutionEnv(options: {
+  cwd: string
+  shellPath?: string
+  tempRoot: string
+}): ExecutionEnv {
+  return new LocalExecutionEnv({ ...options, loginShell: true })
 }

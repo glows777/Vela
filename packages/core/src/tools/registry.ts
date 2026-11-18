@@ -1,6 +1,7 @@
 import type { FlexibleSchema, Tool, ToolSet } from 'ai'
 import { tool as AITool, asSchema } from 'ai'
 import type { VelaEventListener } from '../agent/events.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import {
   isToolContent,
@@ -12,6 +13,7 @@ import type { SessionScope } from '../session/scope.ts'
 import type { ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import { prepareCallResult } from './call-result.ts'
+import { ExecutionGate } from './execution-gate.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 import {
   type ExecuteToolOptions,
@@ -29,6 +31,7 @@ import { validateInput } from './validation.ts'
 
 /** Context passed to a tool's execute. */
 export interface ToolContext {
+  /** @internal */ execution?: ExecutionEnv
   sessionId?: string
   scope?: Readonly<SessionScope>
   toolCallId?: string
@@ -128,40 +131,6 @@ interface SharedToolState {
   tools: Map<string, ToolDefinition>
   interception?: ToolInterception
   logger: VelaLogger
-}
-
-/**
- * One session's tool calls: parallel calls run together; a sequential call waits for the calls
- * started before it and holds back the calls started after it (first come, first served).
- */
-class ExecutionGate {
-  private barrier: Promise<void> = Promise.resolve()
-  private readonly running = new Set<Promise<unknown>>()
-
-  async run<T>(mode: ToolExecutionMode, fn: () => Promise<T>): Promise<T> {
-    if (mode === 'parallel') {
-      await this.barrier
-      const job = fn()
-      this.running.add(job)
-      try {
-        return await job
-      } finally {
-        this.running.delete(job)
-      }
-    }
-    const previous = this.barrier
-    let release!: () => void
-    this.barrier = new Promise((resolve) => {
-      release = resolve
-    })
-    try {
-      await previous
-      await Promise.allSettled([...this.running])
-      return await fn()
-    } finally {
-      release()
-    }
-  }
 }
 
 export class ToolRegistry {
@@ -419,7 +388,12 @@ export class ToolRegistry {
     if (!this.isAvailable(name))
       return await reject(`[Rejected] ${name} is not enabled in this session`)
     const interception = this.shared.interception
-    const context = {
+    const context: {
+      sessionId?: string
+      toolCallId?: string
+      parentToolCallId?: string
+      execution?: ExecutionEnv
+    } = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
       ...(options.parentToolCallId === undefined
@@ -459,12 +433,7 @@ export class ToolRegistry {
       this.shared.logger.debug(`[tools] ${name} started (${mode})`)
       this.assertHealthy()
       const history = this.results.history
-      const call = await history.begin(
-        name,
-        options.toolCallId,
-        input,
-        this.results.dir,
-      )
+      const call = await history.begin(name, options.toolCallId, input)
       const started = performance.now()
       let settled = false
       const onUpdate = (partialResult: unknown) => {
@@ -487,6 +456,7 @@ export class ToolRegistry {
       try {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
+          execution: context.execution,
           sessionId: this.sessionId,
           scope: this.scope?.(),
           results: this.results,
@@ -525,10 +495,10 @@ export class ToolRegistry {
         raw,
         name,
         results: this.results,
+        environment: context.execution,
         call,
         started,
         signal,
-        toolCallId: options.toolCallId,
         maxResultChars: tool.maxResultChars,
         onPersistenceFailure: (error) => {
           this.persistenceFailure = error

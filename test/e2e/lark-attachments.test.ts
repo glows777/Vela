@@ -6,7 +6,7 @@ import {
   realpathSync,
   symlinkSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type {
   LanguageModelV4FilePart,
@@ -36,6 +36,12 @@ const imageParts = (prompt: LanguageModelV4Prompt) =>
         )
       : [],
   )
+function savedAttachment(text: string): string {
+  const path = text.match(/saved at ([^\]\n]+)/)?.[1]
+  if (!path) throw new Error(`No attachment path in ${text}`)
+  return path
+}
+
 async function until(check: () => boolean) {
   const deadline = Date.now() + 2000
   while (!check()) {
@@ -151,14 +157,13 @@ for (const name of ['notes.txt', '../../outside.txt', '..\\..\\outside.txt']) {
     f.resources.set('file', [Buffer.from('hello'), Buffer.from(' world')])
     f.deliver(dm('file', { file_key: 'file', file_name: name }))
     await until(() => f.sent.length === 1)
+    const path = savedAttachment(f.t.model.calls[0]!.lastUserText)
     const directory = f.t.dataPath('channels/lark-oc_dm/files')
     const files = readdirSync(directory)
-    expect(files).toHaveLength(1)
-    const path = join(directory, files[0]!)
-    expect(dirname(path)).toBe(directory)
+    expect(files).toEqual([basename(path)])
+    expect(path).toBe(join(realpathSync(directory), files[0]!))
     expect(files[0]).not.toContain('..')
     expect(readFileSync(path, 'utf8')).toBe('hello world')
-    expect(f.t.model.calls[0]?.lastUserText).toContain(`saved at ${path}]`)
   })
 }
 
@@ -327,12 +332,8 @@ test('Lark first file creates a fresh data directory before the first session sa
   f.resources.set('file', [Buffer.from('first')])
   f.deliver(dm('file', { file_key: 'file', file_name: 'first.txt' }))
   await until(() => f.sent.length === 1)
-  expect(
-    readFileSync(
-      f.t.dataPath('channels/lark-oc_dm/files/attachment-first.txt'),
-      'utf8',
-    ),
-  ).toBe('first')
+  const path = savedAttachment(f.t.model.calls[0]!.lastUserText)
+  expect(readFileSync(path, 'utf8')).toBe('first')
 })
 
 test('Lark file prepared by expired Steer is reused when the gateway processes its default queue', async () => {
@@ -362,7 +363,8 @@ test('Lark file prepared by expired Steer is reused when the gateway processes i
     raw: dm('text', { text: 'active' }, 'active'),
   })
   const queued = await channel.prepareMessage(input)
-  expect(queued?.text).toContain('saved at')
+  expect(queued?.text).toContain('[file: once.txt]')
+  expect(readFileSync(queued!.files![0]!.hostPath, 'utf8')).toBe('once')
   expect(f.resourceCalls).toHaveLength(1)
   await channel.stop()
 })
@@ -407,7 +409,9 @@ test('Lark redelivery after process restart reuses the completed regular file', 
   const event = dm('file', { file_key: 'file', file_name: 'notes.txt' })
   f.deliver(event)
   await until(() => f.sent.length === 1)
+  const originalPath = savedAttachment(f.t.model.calls[0]!.lastUserText)
   await f.t.vela.dispose()
+  f.resources.delete('file')
   const next = createTestVela({
     cwd: f.t.cwd,
     dataDir: f.t.vela.dataDir,
@@ -417,14 +421,11 @@ test('Lark redelivery after process restart reuses the completed regular file', 
   await next.vela.startChannels()
   f.deliver(event)
   await until(() => f.sent.length === 2)
-  expect(next.model.calls[0]?.lastUserText).toContain('attachment-notes.txt')
+  const replayPath = savedAttachment(next.model.calls[0]!.lastUserText)
+  expect(replayPath).toBe(originalPath)
+  // Existing completed file must remain usable without a second resource download.
   expect(f.resourceCalls).toHaveLength(1)
-  expect(
-    readFileSync(
-      f.t.dataPath('channels/lark-oc_dm/files/attachment-notes.txt'),
-      'utf8',
-    ),
-  ).toBe('complete')
+  expect(readFileSync(replayPath, 'utf8')).toBe('complete')
   await next.vela.dispose()
 })
 
@@ -445,13 +446,12 @@ for (const name of [
     )
     await until(() => f.sent.length === 1)
     expect(f.t.model.calls).toHaveLength(1)
-    const directory = f.t.dataPath('channels/lark-oc_dm/files')
-    const saved = readdirSync(directory)[0]!
+    const path = savedAttachment(f.t.model.calls[0]!.lastUserText)
+    const saved = basename(path)
     expect(Buffer.byteLength(saved)).toBeLessThanOrEqual(255)
     expect(saved).not.toMatch(/[:?*"<>|]|[. ]$/)
     expect(saved).toEndWith('.pdf')
-    expect(readFileSync(join(directory, saved), 'utf8')).toBe('report')
-    expect(f.t.model.calls[0]?.lastUserText).toContain(join(directory, saved))
+    expect(readFileSync(path, 'utf8')).toBe('report')
   })
 }
 
@@ -485,13 +485,132 @@ test('Lark exposes the reusable file only after the stream completes', async () 
     release()
   }
   await until(() => f.sent.length === 1)
-  expect(
-    readFileSync(
-      f.t.dataPath('channels/lark-oc_dm/files/attachment-notes.txt'),
-      'utf8',
-    ),
-  ).toBe('firstlast')
+  const path = savedAttachment(f.t.model.calls[0]!.lastUserText)
+  expect(readFileSync(path, 'utf8')).toBe('firstlast')
 })
+
+test.each(['settle', 'stop'])(
+  'a file Steer waiting for its environment handles %s while preparing attachment delivery',
+  async (outcome) => {
+    const { createVela } = await import('@glows777/vela')
+    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const fake = fakeLark()
+    fake.resources.set('file', [Buffer.from('queued bytes')])
+    let finish!: () => void
+    let releaseEnv!: () => void
+    let entered = false
+    let holdNext = false
+    const held = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      releaseEnv = resolve
+    })
+    const t = createTestVela(
+      {
+        responses: [
+          fauxToolCall('hold_pause', {}),
+          ...(outcome === 'settle'
+            ? [fauxText('first answer'), fauxText('queued answer')]
+            : []),
+        ],
+      },
+      (options) =>
+        createVela({
+          ...options,
+          extensions: [
+            ...(options.extensions ?? []),
+            lark({
+              appId: 'cli_bot',
+              owners: ['ou_alice'],
+              chats: [{ id: 'oc_group' }],
+              transport: fake.transport,
+            }),
+            function hold(api) {
+              api.registerTool({
+                name: 'pause',
+                description: 'Wait',
+                inputSchema: z.object({}),
+                execute: async () => {
+                  await held
+                  return 'done'
+                },
+              })
+            },
+          ],
+          env: async ({ location }) => {
+            const env = createLocalExecutionEnv({ cwd: location.cwd })
+            if (holdNext) {
+              holdNext = false
+              entered = true
+              await gate
+              if (outcome === 'stop') {
+                // Let resolution succeed, then stop at the gateway's local-file admission.
+                let checkedByResolver = false
+                Object.defineProperty(env, 'id', {
+                  get() {
+                    if (checkedByResolver)
+                      fake.click(1, 'stop', {
+                        operator: { open_id: 'ou_alice' },
+                      })
+                    checkedByResolver = true
+                    return 'node:local'
+                  },
+                })
+              }
+            }
+            return env
+          },
+        }),
+    )
+    try {
+      await t.vela.startChannels()
+      fake.deliver(larkEvent({ message_id: 'start' }))
+      await until(() => t.model.calls.length === 1)
+      fake.deliver(
+        larkEvent({
+          message_id: 'file-message',
+          message_type: 'file',
+          content: JSON.stringify({
+            file_key: 'file',
+            file_name: 'queued.txt',
+          }),
+        }),
+      )
+      await until(() => fake.cards.length === 1)
+      if (outcome === 'stop') {
+        fake.deliver(larkEvent({ message_id: 'stop-message' }))
+        await until(() => fake.cards.length === 2)
+      }
+      holdNext = true
+      fake.click(0, 'steer', { operator: { open_id: 'ou_alice' } })
+      await until(() => entered)
+      if (outcome === 'stop') {
+        releaseEnv()
+        await until(() =>
+          fake.reactions.some(
+            (r) => r.messageId === 'file-message' && r.emoji === 'CrossMark',
+          ),
+        )
+        expect(
+          fake.reactions.find(
+            (r) => r.messageId === 'file-message' && r.emoji === 'OnIt',
+          )?.removed,
+        ).toBe(true)
+        expect(t.model.calls).toHaveLength(1)
+        return
+      }
+      finish()
+      await until(() => fake.sent.length === 2)
+      const path = savedAttachment(t.model.calls[2]!.lastUserText)
+      expect(readFileSync(path, 'utf8')).toBe('queued bytes')
+      expect(fake.resourceCalls).toHaveLength(1)
+    } finally {
+      finish()
+      releaseEnv()
+    }
+  },
+)
 
 test('Lark expired Steer reuses downloaded images when the default queue runs', async () => {
   let finish!: () => void
@@ -561,9 +680,9 @@ test('Lark filename truncation does not expose a trailing space', async () => {
     }),
   )
   await until(() => f.sent.length === 1)
-  expect(readdirSync(f.t.dataPath('channels/lark-oc_dm/files'))[0]).not.toMatch(
-    /[. ]$/,
-  )
+  expect(
+    basename(savedAttachment(f.t.model.calls[0]!.lastUserText)),
+  ).not.toMatch(/[. ]$/)
 })
 
 test('Lark expired group Steer reuses history images after the active run fails without a reply', async () => {
@@ -715,15 +834,18 @@ test.each([
         : dm('file', { file_key: 'file', file_name: 'notes.txt' }),
     )
     await until(() => fake.sent.length > 0)
-    const path = join(
-      realpathSync(canonicalData),
-      'channels',
-      storageKey,
-      'files/attachment-notes.txt',
-    )
     expect(t.model.calls).toHaveLength(1)
+    const path = savedAttachment(t.model.calls[0]!.lastUserText)
+    expect(path).toBe(
+      join(
+        realpathSync(canonicalData),
+        'channels',
+        storageKey,
+        'files',
+        'attachment-notes.txt',
+      ),
+    )
     expect(readFileSync(path, 'utf8')).toBe('canonical attachment bytes')
-    expect(t.model.calls[0]!.lastUserText).toContain(`saved at ${path}]`)
   },
 )
 
@@ -740,4 +862,117 @@ test('Lark still rejects a symlink inside the attachment storage directory', asy
   expect(readdirSync(outside)).toEqual([])
   expect(f.t.model.calls).toHaveLength(0)
   expect(f.resourceCalls).toEqual([])
+})
+
+test('a custom local adapter reads the canonical Lark attachment after restart without copying or downloading it', async () => {
+  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const { createVela } = await import('@glows777/vela')
+  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const dir = tempDir()
+  const fake = fakeLark()
+  fake.resources.set('file', [Buffer.from('attachment bytes')])
+  const event = dm('file', { file_key: 'file', file_name: 'test.txt' })
+  const expected = join(
+    realpathSync(dir.path),
+    '.data/channels/lark-oc_dm/files/attachment-test.txt',
+  )
+  let writes = 0
+  try {
+    for (let run = 1; run <= 2; run++) {
+      const model = createFauxModel({
+        responses: [
+          fauxToolCall('read_file', { path: expected }),
+          fauxText('received'),
+        ],
+      })
+      const vela = createVela({
+        cwd: dir.path,
+        dataDir: '.data',
+        model,
+        env: ({ location }) => {
+          const env = createLocalExecutionEnv({ cwd: location.cwd })
+          const write = env.writeFile.bind(env)
+          env.writeFile = (...args) => {
+            writes++
+            return write(...args)
+          }
+          return env
+        },
+        extensions: [lark({ owners: ['ou_alice'], transport: fake.transport })],
+      })
+      try {
+        await vela.startChannels()
+        fake.deliver(event)
+        await until(() => fake.sent.length === run)
+        expect(savedAttachment(model.calls[0]!.lastUserText)).toBe(expected)
+        expect(model.calls[1]!.toolResults[0]!.output).toContain(
+          'attachment bytes',
+        )
+      } finally {
+        await vela.dispose()
+      }
+      fake.resources.delete('file')
+    }
+    expect(fake.resourceCalls).toHaveLength(1)
+    expect(writes).toBe(0)
+  } finally {
+    dir.cleanup()
+  }
+})
+
+test('a Lark attachment cannot publish a host path to an unavailable environment', async () => {
+  const { createVela } = await import('@glows777/vela')
+  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const dir = tempDir()
+  const fake = fakeLark()
+  fake.resources.set('file', [Buffer.from('private')])
+  const model = createFauxModel({ responses: [] })
+  const vela = createVela({
+    cwd: dir.path,
+    dataDir: '.data',
+    model,
+    env: () => undefined,
+    extensions: [lark({ owners: ['ou_alice'], transport: fake.transport })],
+  })
+  try {
+    await vela.startChannels()
+    fake.deliver(dm('file', { file_key: 'file', file_name: 'private.txt' }))
+    await until(() => fake.sent.length > 0)
+    expect(model.calls).toHaveLength(0)
+    expect(fake.sent[0]!.text).not.toContain('saved at')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('cloned memory session retains referenced attachment after parent closes', async () => {
+  const { memorySessionStorage } = await import('@glows777/vela-core')
+  const { createVela } = await import('@glows777/vela')
+  const { createFauxModel } = await import('@glows777/vela-core/testing')
+  const dir = tempDir()
+  const fake = fakeLark()
+  fake.resources.set('file', [Buffer.from('clone attachment')])
+  const model = createFauxModel({ responses: [fauxText('received')] })
+  const vela = createVela({
+    cwd: dir.path,
+    dataDir: '.data',
+    sessionStorage: memorySessionStorage(),
+    model,
+    extensions: [lark({ owners: ['ou_alice'], transport: fake.transport })],
+  })
+  try {
+    await vela.startChannels()
+    fake.deliver(dm('file', { file_key: 'file', file_name: 'clone.txt' }))
+    await until(() => fake.sent.length === 1)
+    const parent = vela.session('lark-oc_dm')
+    const child = (await parent.clone({ sessionId: 'attachment-clone' }))
+      .session!
+    const childPath = savedAttachment(JSON.stringify(child.messages))
+    await parent.close()
+    expect(readFileSync(childPath, 'utf8')).toBe('clone attachment')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
 })

@@ -206,6 +206,8 @@
     readBinaryFile: (path: string, signal?: AbortSignal) => Promise<Result<Uint8Array, FileError>>
     readTextFile: (path: string, signal?: AbortSignal) => Promise<Result<string, FileError>>
     readonly id: string
+    remove: (path: string, options: { recursive?: boolean; force?: boolean; } | undefined, signal?: AbortSignal) => Promise<Result<void, FileError>>
+    renameFile: (sourcePath: string, destinationPath: string, signal?: AbortSignal) => Promise<Result<void, FileError>>
     writeFile: (path: string, content: string | Uint8Array, signal?: AbortSignal) => Promise<Result<void, FileError>>
   interface ExecutionError
     cause?: unknown
@@ -327,6 +329,7 @@
     channelId: string
     chatKind?: "group" | "direct" | undefined
     externalEvent?: ChannelEvent | undefined
+    files?: { name: string; hostPath: string; }[] | undefined
     handoff?: { id: string; from: string; depth: number; } | undefined
     images?: ImageContent[] | undefined
     isNewTopic?: boolean | undefined

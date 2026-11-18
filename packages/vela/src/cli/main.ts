@@ -30,6 +30,7 @@ import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
   loadConfig,
+  savedTrust,
   type VelaConfig,
 } from '../config/index.ts'
 import { createVela } from '../vela.ts'
@@ -177,6 +178,7 @@ try {
   })
   if (trust.warning) console.error(trust.warning)
   config = loadConfig({
+    deferSystemFiles: true,
     cwd,
     agentDir,
     env,
@@ -280,15 +282,22 @@ const vela = createVela({
   cwd,
   dataDir: config.dataDir,
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
-  skillDirs: config.skillDirs,
-  promptTemplateDirs: config.promptDirs,
-  contextFiles: args.noContextFiles ? false : config.contextFiles,
+  sessionResources: config.sessionResources && {
+    ...config.sessionResources,
+    workspaceModeAt: (location) =>
+      join(location, '.vela') === agentDir
+        ? 'home'
+        : args.approve !== false && savedTrust(agentDir, location)
+          ? 'all'
+          : 'none',
+  },
+  contextFiles: args.noContextFiles ? false : undefined,
   systemPrompt: args.systemPrompt.length
     ? args.systemPrompt.map(readPromptInput).join('\n\n')
-    : config.systemPrompt,
+    : undefined,
   appendSystemPrompt: args.appendSystemPrompt.length
     ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
-    : config.appendSystemPrompt,
+    : undefined,
   limits: config.settings.limits,
   autoCompaction: config.settings.autoCompaction,
   shellPath: resolveShellPath(config.settings.shellPath, { env }),
@@ -458,8 +467,8 @@ function applyModelArgs(
   }
 }
 
-function reportContextFiles(): void {
-  const line = formatContextFileList(inspectVela(vela).contextFiles, {
+async function reportContextFiles(session: VelaSession): Promise<void> {
+  const line = formatContextFileList((await session.resources()).contextFiles, {
     cwd,
     homeDir: homedir(),
     agentDir,
@@ -494,10 +503,10 @@ if (mode !== 'interactive' && mode !== 'serve') {
 }
 
 if (mode === 'print' || mode === 'json') {
-  reportContextFiles()
   // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
   const session = vela.session(sessionId)
   if (resume) await session.resume()
+  await reportContextFiles(session)
   // Extension providers resolve only after extensions load (if loading fails, prompt reports it)
   await vela.ready().catch(() => {})
   if (!applyModelArgs(session)) await exit(1)
@@ -511,7 +520,6 @@ if (mode === 'print' || mode === 'json') {
     }),
   )
 } else if (mode === 'rpc') {
-  reportContextFiles()
   await vela
     .ready()
     .catch((error) =>
@@ -524,6 +532,7 @@ if (mode === 'print' || mode === 'json') {
     newSessionId,
     // Start even without a model; the client can set_model (the error goes to stderr)
     configure: (session) => void applyModelArgs(session),
+    onReady: reportContextFiles,
     input: process.stdin,
     write: writeStdout,
     describeError: cliErrorMessage,

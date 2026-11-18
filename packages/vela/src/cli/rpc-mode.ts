@@ -6,7 +6,6 @@ import type {
   VelaSession,
 } from '@glows777/vela-core'
 import { messageText } from '@glows777/vela-core'
-import { inspectVela } from '@glows777/vela-core/diagnostics'
 import type { Vela } from '../vela.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'
@@ -37,6 +36,7 @@ export interface RpcModeOptions {
   newSessionId: () => string
   /** Called after the startup session opens (and resumes): command-line --model / --thinking override saved settings */
   configure?: (session: VelaSession) => void
+  onReady?: (session: VelaSession) => Promise<void>
   input: AsyncIterable<Uint8Array>
   write: (text: string) => Promise<void>
   /** Message for a failed command's `error` (the CLI swaps the SDK's no-model hint for its own); defaults to the error's message */
@@ -99,6 +99,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   let session = vela.session(options.sessionId, { ui })
   if (options.resume) await session.resume()
   options.configure?.(session)
+  await options.onReady?.(session)
 
   // Failures inside the agent loop are already reported in agent_end; when the prompt Promise rejects, this decides whether to report again
   let reportedError: unknown
@@ -347,23 +348,26 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       await session.save()
     },
     // Like pi: extension commands, prompt templates and skills, each with its `source`
-    get_commands: () => ({
-      commands: [
-        ...vela
-          .commands()
-          .map((command) => ({ ...command, source: 'extension' as const })),
-        ...inspectVela(vela).promptTemplates.map((t) => ({
-          name: t.name,
-          description: t.description,
-          source: 'prompt' as const,
-        })),
-        ...inspectVela(vela).skills.map((s) => ({
-          name: `skill:${s.name}`,
-          description: s.description,
-          source: 'skill' as const,
-        })),
-      ],
-    }),
+    async get_commands() {
+      const resources = await session.resources()
+      return {
+        commands: [
+          ...vela
+            .commands()
+            .map((command) => ({ ...command, source: 'extension' as const })),
+          ...resources.promptTemplates.map((t) => ({
+            name: t.name,
+            description: t.description,
+            source: 'prompt' as const,
+          })),
+          ...resources.skills.map((s) => ({
+            name: `skill:${s.name}`,
+            description: s.description,
+            source: 'skill' as const,
+          })),
+        ],
+      }
+    },
   }
 
   async function enqueue(command: RpcCommand, behavior: 'steer' | 'followUp') {

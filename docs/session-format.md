@@ -135,7 +135,7 @@ Next to the session file, each session has a directory:
 
 ```
 <dataDir>/sessions/<id>/
-  tool-results/<callId>.txt               full output of long tool results
+  tool-results/                           environment-allocated full output files (default local)
   <historyId>/tool-history.jsonl          every tool call and result, append-only
   <historyId>/snapshots/through-<seq>.jsonl  fixed views of the history at a summary
 ```
@@ -145,11 +145,13 @@ Next to the session file, each session has a directory:
 `tool-history.jsonl` has one record per line, numbered by `seq`:
 
 ```json
-{"type":"tool_call","callId":"d3296c41-...","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"},"plannedOutputPath":"/.../tool-results/d3296c41-....txt","version":1,"seq":1,"timestamp":"2026-10-08T10:50:32.614Z"}
+{"type":"tool_call","callId":"d3296c41-...","toolCallId":"call_1","toolName":"read_file","input":{"path":"notes.txt"},"version":1,"seq":1,"timestamp":"2026-10-08T10:50:32.614Z"}
 {"type":"tool_result","callId":"d3296c41-...","status":"completed","durationMs":7.9,"output":"Ship the docs on Friday.","version":1,"seq":2,"timestamp":"2026-10-08T10:50:32.627Z"}
 ```
 
 `tool_result.status` is `completed`, `failed`, `cancelled` or `rejected`; the body is in `output` or, for long output, in the file at `outputPath`. Execution details (`exitCode`, `signal`, `isError`, `timedOut`, `error`) are included when known. A `tool_call` without a `tool_result` has an unknown outcome.
+
+Older call records may contain `plannedOutputPath`. New calls allocate a spill only after crossing the output threshold. A completed result records the actual environment path. If execution finishes and the terminal history write fails, the error can report the file while the process is alive. A restart with only the begin record leaves the outcome unconfirmed.
 
 The model reads this history (through `bash` and `read_file`) to look up tool calls that were summarized away. The header's `toolHistoryId` points to it and a `compaction` entry's `toolHistoryViewSeq` to the snapshot its summary refers to; resuming fails if that history or snapshot is missing, rather than continuing with a broken reference.
 

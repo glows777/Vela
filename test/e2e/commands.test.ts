@@ -37,8 +37,8 @@ test('/status reports the session, model and context usage', async () => {
   t.session.setName('refactor')
   await t.run('hi')
 
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/status')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/status')).toBe(true)
     expect(t.dispatch('/status extra')).toBe(false)
   })
   const plain = stripTerminalSequences(output)
@@ -62,8 +62,8 @@ test('/status reports the session, model and context usage', async () => {
 test('/status on a fresh session shows identity and omits usage totals', async () => {
   const t = createTestVela({ thinkingLevel: 'low' })
   t.session.channel = 'lark'
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/status')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/status')).toBe(true)
   })
   expect(output).toContain(`Session: ${t.session.id}\n`)
   const destination = join(
@@ -112,11 +112,14 @@ test('/status names a forked session and includes the cost of a priced model', a
   const forked = (await t.session.fork(user.id, { sessionId: 'copy' })).session
   if (!forked) throw new Error('fork failed')
 
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/status')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/status')).toBe(true)
     expect(
-      createCliDispatcher(t.vela)('/status', { ...t.ctx, session: forked }),
-    ).toBe(true)
+      await createCliDispatcher(t.vela)('/status', {
+        ...t.ctx,
+        session: forked,
+      }),
+    ).not.toBe(false)
   })
   expect(output).toContain('Model: fake/priced')
   expect(output).toContain('Usage: ↑1.0M ↓1.0k $1.0050 (1 step)')
@@ -131,8 +134,8 @@ test('/status says a memory session is not saved instead of inventing a file pat
     responses: [fauxText('ok', { usage: { input: 1000, output: 20 } })],
   })
   await t.run('hi')
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/status')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/status')).toBe(true)
   })
   expect(output).toContain('Path: in-memory (not saved)')
   expect(output).not.toContain('.jsonl')
@@ -155,8 +158,8 @@ test('/status strips control sequences from the working directory and session pa
     if (where.type !== 'file') return
     expect(where.path).toContain('\u001b[32mDIR\u001b[0m')
     expect(t.vela.cwd).toContain('\u001b[31mPATH_REPRO\u001b[0m')
-    const { output } = await captureConsole(() => {
-      expect(t.dispatch('/status')).toBe(true)
+    const { output } = await captureConsole(async () => {
+      expect(await t.command('/status')).toBe(true)
     })
     const shownCwd = t.vela.cwd
       .replaceAll('\u001b[31m', '')
@@ -191,8 +194,8 @@ test('a durable custom storage that omits persistence() is not called in-memory'
     expect(t.session.persistence).toEqual({ type: 'unknown' })
     await t.run('hi')
     expect(t.session.persistence).toEqual({ type: 'unknown' })
-    const { output } = await captureConsole(() => {
-      expect(t.dispatch('/status')).toBe(true)
+    const { output } = await captureConsole(async () => {
+      expect(await t.command('/status')).toBe(true)
     })
     expect(output).toContain('Path: custom storage (path unknown)')
     expect(output).not.toContain('in-memory (not saved)')
@@ -223,8 +226,8 @@ test('/status strips control and ANSI sequences from session metadata', async ()
   const t = createTestVela({ model: 'bad\u001b[31mx' })
   t.session.setName('na\u001b[32mme\u0007\u001b]52;c;AQID\u0007')
   t.session.channel = 'ch\u001b[33mannel'
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/status')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/status')).toBe(true)
   })
   expect(output).toContain(`Session: name (${t.session.id})`)
   expect(output).toContain('Channel: channel')
@@ -238,8 +241,8 @@ test('/status strips control and ANSI sequences from session metadata', async ()
 
 test('/status reports an unavailable model instead of failing', async () => {
   const t = createTestVela({ model: 'missing/nope', providers: {} })
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/status')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/status')).toBe(true)
   })
   expect(output).toContain(
     'Model: (unavailable: No provider named missing (available: none))',

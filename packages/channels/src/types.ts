@@ -25,6 +25,8 @@ export interface IncomingMessage {
   senderName: string
   text: string
   images?: ImageContent[]
+  /** Private files staged by the channel. Each name has a matching [file: <name>] marker in text. */
+  files?: Array<{ name: string; hostPath: string }>
   /** Reply to this service message instead of starting a new message (for group conversations). */
   replyToId?: string
   /** The root message identifies a topic independently of its platform container. */

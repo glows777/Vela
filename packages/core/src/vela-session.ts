@@ -15,7 +15,8 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
-import { localCwd } from './execution/location.ts'
+import { abortable, localCwd } from './execution/location.ts'
+import type { ExecutionEnv } from './execution/types.ts'
 import type {
   BeforeAgentStartResult,
   ExtensionEventName,
@@ -67,6 +68,7 @@ import {
   type NavigateTreeOptions,
   type QueueMode,
 } from './session/options.ts'
+import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
 import { newSessionId } from './session/session-id.ts'
@@ -174,14 +176,22 @@ export interface SessionDeps {
   registry: ToolRegistry
   builder: SystemPromptBuilder
   /** Expands `/skill:<name>` and prompt templates in session input (src/prompt/templates.ts) */
-  expandInput: (text: string) => string
+  expandInput: (
+    text: string,
+    session: VelaSession,
+    signal?: AbortSignal,
+  ) => Promise<string>
   extensions: SessionExtensionHooks
   /** Session events also go to Vela's subscribers */
   forward: (event: VelaEvent, sessionId: string) => void
   onClose: (session: VelaSession) => void
   onSaved: (sessionId: string) => void
   onCwdChange: (session: VelaSession) => void
-  ensureLocal: (session: VelaSession) => Promise<void>
+  ensureLocal: (session: VelaSession) => Promise<ExecutionEnv>
+  prepareWorkspace: (
+    session: VelaSession,
+    signal?: AbortSignal,
+  ) => Promise<SessionResources>
 }
 
 /**
@@ -202,8 +212,9 @@ export class VelaSession {
   readonly store: SessionStore
   /** @internal */
   readonly tracker: TokenTracker
-  /** @internal */
-  readonly contextManager: ContextManager
+  /** @internal */ readonly contextManager: ContextManager
+  /** @internal */ execEnv = (signal?: AbortSignal) =>
+    abortable(this.deps.ensureLocal(this), signal)
   /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
   readonly registry: ToolRegistry
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */
@@ -286,22 +297,18 @@ export class VelaSession {
       { messages: this.messages, timestamps: new Map(), summary: '' },
       this.emit,
       this.limits,
+      this.execEnv,
     )
     this.timestamps = this.contextManager.state.timestamps
-    const owner = this
     this.userBash = new UserBash({
       store: this.store,
-      get cwd() {
-        return owner.cwd
-      },
-      shellPath: deps.shellPath,
       emit: this.emit,
       busy: this.busy,
       save: () => this.saveOrReport(),
       messages: this.messages,
       tracker: this.tracker,
       timestamps: this.timestamps,
-      prepare: () => this.deps.ensureLocal(this),
+      prepare: this.execEnv,
       isClosed: () => this.closed,
     })
     this.contextManager.autoCompaction =
@@ -442,7 +449,6 @@ export class VelaSession {
     const after = this.thinkingLevel
     if (after !== before) this.store.appendThinkingLevelChange(after)
   }
-
   /** Channel this session answers on. Open supplies it, and `resume()` restores a saved one. */
   channel?: string
 
@@ -478,7 +484,7 @@ export class VelaSession {
   }
 
   /** Running extension commands (commands don't hold the run lock; several can run at once and may call prompt()) */
-  private readonly commands = new Map<AbortController, Promise<boolean>>()
+  private readonly commands = new Map<AbortController, Promise<void>>()
 
   /** @internal Abort signal while running (agent loop or extension command) */
   get signal(): AbortSignal | undefined {
@@ -514,7 +520,8 @@ export class VelaSession {
     this.deps.forward(event, this.id)
     // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
     // between a tool call and its result
-    if (event.type === 'turn_end') this.flushPendingCustom()
+    if (event.type === 'turn_end')
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
   }
 
   /** @internal `override` (`null`: none) keeps a preview or a new turn from inheriting a replacement */
@@ -529,6 +536,11 @@ export class VelaSession {
       activeTools: this.registry.getActiveTools(),
       systemPromptOverride: override,
     }
+  }
+
+  /** @internal Session-scoped resource inventory for Vela's own CLI. */
+  resources(): Promise<SessionResources> {
+    return this.deps.prepareWorkspace(this)
   }
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
@@ -643,7 +655,7 @@ export class VelaSession {
       return await run
     } finally {
       if (this.running === running) this.running = undefined
-      this.flushPendingCustom()
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
       while (this.userBash.flush()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
@@ -668,7 +680,7 @@ export class VelaSession {
     // Selecting a user message moves to its parent, so only another entry at the leaf is a no-op
     if (targetId === oldLeafId && !isUser) return { cancelled: false }
     return this.exclusive('navigate the session tree', async (signal) => {
-      await this.start()
+      await this.start(signal)
       const oldBranch = this.store.getBranch(oldLeafId)
       const targetIds = new Set(
         this.store.getBranch(targetId).map((entry) => entry.id),
@@ -825,8 +837,8 @@ export class VelaSession {
       selectedText = contentText(entry.message.content)
     }
     // Holds the run lock so no prompt appends to this session (or its tool history) while it is copied
-    return this.exclusive('fork', async () => {
-      await this.start()
+    return this.exclusive('fork', async (signal) => {
+      await this.start(signal)
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
       const branch = leafId === null ? [] : this.store.getBranch(leafId)
@@ -1004,68 +1016,63 @@ export class VelaSession {
    * Other input goes through the extensions' `input` handlers first (like pi); a handled input resolves without running.
    */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
-    if (this.closed)
-      return Promise.reject(new Error(`Session ${this.id} is closed`))
-    if (input.startsWith('/'))
-      return (async () => {
-        await this.start()
-        if (this.closed) throw new Error(`Session ${this.id} is closed`)
-        if (await this.runCommand(input, options.signal)) return
-        return this.promptInput(input, options)
-      })()
-    return this.promptInput(input, options)
+    return this.promptInput(input, options, 'command')
   }
 
-  /**
-   * Runs the `input` handlers, then expands and prompts (or queues). Without input handlers nothing is awaited
-   * before the run lock is taken or the input queued, so back-to-back calls keep their order.
-   */
+  /** Plain input queues synchronously. Slash commands and hooks can await cancellable work. */
   private promptInput(
     input: string,
     options: PromptOptions,
-    expand = true,
+    mode: 'command' | 'expand' | 'literal' = 'expand',
   ): Promise<void> {
-    const next = (text: string, images = options.images) =>
-      expand
-        ? this.promptExpanded(text, { ...options, images })
-        : this.promptModel(text, { ...options, images })
-    if (!this.deps.extensions.hasHandlers('input')) return next(input)
-    return (async () => {
-      await this.start()
-      const result = await this.deps.extensions.input(
-        this,
-        input,
-        options.source ?? 'sdk',
-        this.prompting ? options.streamingBehavior : undefined,
-        options.images,
-      )
-      if (result === undefined) return
-      return next(result.text, result.images)
-    })()
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    const { extensions, expandInput } = this.deps
+    const slash = mode !== 'literal' && input.startsWith('/')
+    if (!slash && !extensions.hasHandlers('input'))
+      return this.promptModel(input, options)
+    return this.trackInput(options.signal, async (signal) => {
+      await abortable(this.startExtensions(), signal)
+      if (this.closed) throw new Error(`Session ${this.id} is closed`)
+      signal.throwIfAborted()
+      const command = mode === 'command' && slash
+      if (command && (await extensions.runCommand(this, input, signal))) return
+      signal.throwIfAborted()
+      let text = input,
+        images = options.images
+      if (extensions.hasHandlers('input')) {
+        const event = await abortable(
+          extensions.input(
+            this,
+            text,
+            options.source ?? 'sdk',
+            this.prompting ? options.streamingBehavior : undefined,
+            images,
+          ),
+          signal,
+        )
+        if (!event) return
+        text = event.text
+        images = event.images
+      }
+      if (mode !== 'literal' && text.startsWith('/')) {
+        signal.throwIfAborted()
+        text = await abortable(expandInput(text, this, signal), signal)
+      }
+      return this.promptModel(text, { ...options, images, signal })
+    })
   }
 
-  /**
-   * Expands `/skill:<name>` and prompt templates, then prompts (or queues). A skill file that can't be
-   * read rejects instead of sending the raw command.
-   */
-  private promptExpanded(input: string, options: PromptOptions): Promise<void> {
-    if (!input.startsWith('/')) return this.promptModel(input, options)
-    let expanded: string
-    try {
-      expanded = this.deps.expandInput(input)
-    } catch (error) {
-      return Promise.reject(error)
-    }
-    return this.promptModel(expanded, options)
-  }
-
-  /** Runs an extension command; abort() and options.signal abort the command's ctx.signal. */
-  private async runCommand(input: string, signal?: AbortSignal) {
+  /** Register async input before dispatch so abort also covers resource expansion. */
+  private async trackInput(
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<void>,
+  ) {
     const controller = new AbortController()
     const forward = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', forward, { once: true })
     if (signal?.aborted) forward()
-    const task = this.deps.extensions.runCommand(this, input, controller.signal)
+    const task = run(controller.signal)
     this.commands.set(controller, task)
     try {
       return await task
@@ -1108,7 +1115,7 @@ export class VelaSession {
     options: SendMessageOptions = {},
   ): Promise<void> {
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
-    const entry = this.customMessage(message)
+    const entry = this.messageQueue.customMessage(message)
     if (options.deliverAs === 'nextTurn') {
       this.messageQueue.nextTurnMessages.push(entry)
       return
@@ -1157,7 +1164,7 @@ export class VelaSession {
         images,
         ...(options.deliverAs ? { streamingBehavior: options.deliverAs } : {}),
       },
-      false,
+      'literal',
     )
   }
 
@@ -1174,25 +1181,6 @@ export class VelaSession {
   /** The custom message fields of a history message an extension sent with sendMessage(); undefined for other messages. */
   customMessageOf(message: ModelMessage): CustomMessageInfo | undefined {
     return this.messageQueue.customMessages.get(message)
-  }
-
-  /** Builds the user message a custom message becomes and remembers its fields. */
-  private customMessage(message: CustomMessage): ModelMessage {
-    assertCustomType(message.customType)
-    if (typeof message.content !== 'string' && !Array.isArray(message.content))
-      throw new Error('A custom message needs content (a string or parts)')
-    const entry: ModelMessage = { role: 'user', content: message.content }
-    this.messageQueue.customMessages.set(entry, {
-      customType: message.customType,
-      display: message.display === true,
-      ...(message.details === undefined ? {} : { details: message.details }),
-    })
-    return entry
-  }
-
-  private flushPendingCustom(): void {
-    for (const message of this.messageQueue.pendingCustom.splice(0))
-      this.append(message)
   }
 
   /** Clears queued messages and returns the user inputs among them (the TUI puts them back in the input box before aborting). */
@@ -1273,7 +1261,12 @@ export class VelaSession {
   }
 
   /** Before first use: waits for extensions to load and fires session_start (once). */
-  private start(): Promise<void> {
+  private async start(signal?: AbortSignal): Promise<void> {
+    await this.deps.prepareWorkspace(this, signal)
+    await this.startExtensions()
+  }
+
+  private startExtensions(): Promise<void> {
     this.started ??= this.deps.extensions.ready.then(() =>
       this.deps.extensions.sessionStart(this),
     )
@@ -1316,7 +1309,9 @@ export class VelaSession {
         inputs = next()
         if (!inputs.length) {
           // Messages may be queued while saving: check again after saving; there is no await between here and unlock
-          this.flushPendingCustom()
+          this.messageQueue.flushPendingCustom((message) =>
+            this.append(message),
+          )
           await this.saveOrReport()
           saved = true
           inputs = next()
@@ -1324,7 +1319,7 @@ export class VelaSession {
       }
     } finally {
       options.signal?.removeEventListener('abort', forward)
-      this.flushPendingCustom()
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
       this.toolDetails.clear()
       if (!saved) await this.saveOrReport()
       // Until the last flush finds nothing there is no await before unlocking: a later `!` command records itself
@@ -1333,7 +1328,7 @@ export class VelaSession {
       busy.controller = undefined
       this.prompting = false
       // Sent while saving (written with the next entry or when the session closes)
-      this.flushPendingCustom()
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error
@@ -1352,7 +1347,7 @@ export class VelaSession {
     inputs: ModelMessage[],
     signal: AbortSignal,
   ): Promise<void> {
-    await this.start()
+    await this.start(signal)
     signal.throwIfAborted()
     const { info } = this.resolveModel()
     // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
@@ -1370,12 +1365,14 @@ export class VelaSession {
     const started = await this.deps.extensions.beforeAgentStart(this, input)
     this.turn = started
     // An invalid message from a before_agent_start handler fails the prompt here, before agent_start
-    const added = started.messages.map((message) => this.customMessage(message))
+    const added = started.messages.map((message) =>
+      this.messageQueue.customMessage(message),
+    )
     // Appending to a saved session that was not resumed would mix two conversations in one log
     await this.store.assertNew()
     // `!` commands that finished during an earlier loop of this run come before the new input
     this.userBash.flush()
-    this.flushPendingCustom()
+    this.messageQueue.flushPendingCustom((message) => this.append(message))
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
     for (const message of [
@@ -1421,7 +1418,7 @@ export class VelaSession {
         ),
       onMessage: (message, producer) => this.record(message, producer),
       injectNotice: (content) =>
-        this.customMessage({
+        this.messageQueue.customMessage({
           customType: 'loop',
           content,
           display: true,
@@ -1461,7 +1458,7 @@ export class VelaSession {
    */
   async compact(focus?: string): Promise<void> {
     await this.exclusive('compact', async (signal) => {
-      await this.start()
+      await this.start(signal)
       const request = await this.compactionRequest(signal)
       await this.contextManager.compact(request, focus)
       await this.saveOrReport()

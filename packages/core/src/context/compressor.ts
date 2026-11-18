@@ -1,5 +1,5 @@
-import { open } from 'node:fs/promises'
 import { generateText, type LanguageModelUsage } from 'ai'
+import type { ExecutionEnv } from '../execution/types.ts'
 import type { ToolResultPart } from '../messages.ts'
 import { type ModelMessage, toModelMessages } from '../messages.ts'
 import {
@@ -7,6 +7,7 @@ import {
   summaryMessageText,
 } from '../session/entries.ts'
 import type { SessionStore } from '../session/index.ts'
+import type { LegacyResultRecord } from '../session/tool-history.ts'
 import {
   archiveToolResults,
   getStoredResult,
@@ -128,19 +129,59 @@ export function planMicrocompact(
 export async function persistMicrocompact(
   candidates: MicroCandidate[],
   store: ToolResultStore,
-): Promise<void> {
-  for (const candidate of candidates) {
-    if (candidate.text !== undefined)
-      await store.savePlanned(
-        candidate.reference,
-        candidate.text,
-        candidate.toolName,
-        candidate.toolCallId,
-      )
-    else {
-      // Open the reference, not just stat it, before removing the remaining preview.
-      await (await open(candidate.reference.path, 'r')).close()
+  env: ExecutionEnv,
+  signal?: AbortSignal,
+): Promise<Map<string, string>> {
+  const paths = new Map<string, string>()
+  const created: string[] = []
+  let historyStarted = false
+  try {
+    for (const candidate of candidates) {
+      signal?.throwIfAborted()
+      if (candidate.text !== undefined) {
+        const temp = await env.createTempFile(
+          { prefix: 'vela-micro-', suffix: '.txt' },
+          signal,
+        )
+        if (!temp.ok) throw temp.error
+        created.push(temp.value)
+        const written = await env.writeFile(temp.value, candidate.text, signal)
+        if (!written.ok) throw written.error
+        const recorded = await store.history.completed(candidate.toolCallId)
+        if (
+          !recorded &&
+          !store.history.hasLegacy(candidate.toolCallId, temp.value)
+        ) {
+          historyStarted = true
+          await store.history.append<LegacyResultRecord>({
+            type: 'legacy_result',
+            toolCallId: candidate.toolCallId,
+            toolName: candidate.toolName,
+            outputPath: temp.value,
+            bytes: Buffer.byteLength(candidate.text),
+            note: 'Archived from old context; the original call arguments/execution time were not recorded at call time, so do not replay from this.',
+          })
+        }
+        paths.set(candidate.reference.path, temp.value)
+      } else {
+        const opened = await env.openBinaryReader(
+          candidate.reference.path,
+          undefined,
+          signal,
+        )
+        if (!opened.ok) throw opened.error
+        await opened.value.close()
+      }
     }
+    return paths
+  } catch (error) {
+    if (!historyStarted)
+      await Promise.all(
+        created.map((path) =>
+          env.remove(path, { force: true }, undefined).catch(() => {}),
+        ),
+      )
+    throw error
   }
 }
 

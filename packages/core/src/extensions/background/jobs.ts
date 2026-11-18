@@ -1,14 +1,9 @@
-import { type ChildProcess, spawn } from 'node:child_process'
-import { constants } from 'node:os'
-import { setTimeout as delay } from 'node:timers/promises'
+import type { ExecutionEnv } from '../../execution/types.ts'
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
 import { fitOutputTail, OUTPUT_MAX_BYTES } from '../../tools/output-tail.ts'
-import { signalProcessTree } from '../../tools/process-tree.ts'
 import type { VelaSession } from '../../vela-session.ts'
 
-/** SIGTERM first, then SIGKILL when the process group ignores it. */
-const STOP_GRACE_MS = 2000
 /** The command head in a delivery message and in `background_stop`. */
 const COMMAND_HEAD = 160
 
@@ -50,7 +45,8 @@ export class OutputTail {
 interface Job {
   id: string
   command: string
-  child: ChildProcess
+  controller: AbortController
+  finished: Promise<void>
   output: OutputTail
   state: 'running' | 'exited'
   exitCode?: number
@@ -74,26 +70,6 @@ const commandHead = (command: string) => {
   return head.length > COMMAND_HEAD ? `${head.slice(0, COMMAND_HEAD)}…` : head
 }
 
-const exitCodeOf = (code: number | null, signal: NodeJS.Signals | null) =>
-  code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0)
-
-/** Whether the process group still has members; POSIX only, and ESRCH means it is gone. */
-function groupAlive(job: Job): boolean {
-  const pid = job.child.pid
-  if (pid === undefined) return false
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    return (
-      !!error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      error.code === 'EPERM'
-    )
-  }
-}
-
 /** The jobs of one session; they die with it, and nothing is persisted. */
 export class BackgroundJobs {
   private readonly jobs = new Map<string, Job>()
@@ -105,53 +81,53 @@ export class BackgroundJobs {
     private readonly logger: VelaLogger,
   ) {}
 
-  start(command: string): { id: string; pid?: number } {
+  start(command: string, env: ExecutionEnv): { id: string } {
     const id = `bg-${++this.sequence}`
     const output = new OutputTail()
-    let child: ChildProcess
-    try {
-      child = spawn(this.shellPath(), ['-lc', command], {
-        cwd: this.session.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // A POSIX process group, or taskkill /T on Windows, reaches pipelines and descendants.
-        detached: process.platform !== 'win32',
-      })
-    } catch (error) {
-      throw new Error(
-        `Could not start background command: ${errorMessage(error)}`,
-      )
+    const controller = new AbortController()
+    const job: Job = {
+      id,
+      command,
+      controller,
+      output,
+      state: 'running',
+      finished: Promise.resolve(),
     }
-    const job: Job = { id, command, child, output, state: 'running' }
     this.jobs.set(id, job)
-    // A channel topic stays open while its command runs, so idle cleanup cannot kill a long build.
-    const finished = new Promise<void>((resolve) => {
-      child.once('exit', () => resolve())
-      child.once('error', () => resolve())
+    const shell = env.id === 'node:local' ? this.shellPath() : undefined
+    const execution = shell ? [shell, '-lc', command] : command
+    job.finished = Promise.resolve().then(async () => {
+      try {
+        const result = await env.exec(
+          execution,
+          { onOutput: (chunk) => output.append(chunk) },
+          controller.signal,
+        )
+        job.state = 'exited'
+        if (job.silent) return
+        if (!result.ok) {
+          this.deliver(
+            `Background command ${id} could not start or run: ${result.error.message}.`,
+            job,
+          )
+          return
+        }
+        job.exitCode = result.value.exitCode
+        const state = job.stopped
+          ? 'was stopped'
+          : `finished with exit code ${job.exitCode}`
+        this.deliver(`Background command ${id} ${state}.`, job)
+      } catch (error) {
+        job.state = 'exited'
+        if (!job.silent)
+          this.deliver(
+            `Background command ${id} could not start or run: ${errorMessage(error)}.`,
+            job,
+          )
+      }
     })
-    this.session.trackWork(finished)
-    child.stdout?.setEncoding('utf8')
-    child.stderr?.setEncoding('utf8')
-    child.stdout?.on('data', (chunk: string) => output.append(chunk))
-    child.stderr?.on('data', (chunk: string) => output.append(chunk))
-    child.once('error', (error) => {
-      if (job.state === 'exited') return
-      job.state = 'exited'
-      this.deliver(
-        `Background command ${id} could not start: ${errorMessage(error)}.`,
-        job,
-      )
-    })
-    child.once('exit', (code, signal) => {
-      if (job.state === 'exited') return
-      job.state = 'exited'
-      job.exitCode = exitCodeOf(code, signal)
-      if (job.silent) return
-      const state = job.stopped
-        ? 'was stopped'
-        : `finished with exit code ${job.exitCode}`
-      this.deliver(`Background command ${id} ${state}.`, job)
-    })
-    return { id, ...(child.pid === undefined ? {} : { pid: child.pid }) }
+    this.session.trackWork(job.finished)
+    return { id }
   }
 
   snapshot(id: string): JobSnapshot {
@@ -207,41 +183,11 @@ export class BackgroundJobs {
     return job
   }
 
-  /** SIGTERM the process group, SIGKILL it after the grace period, and wait for exit. */
+  /** Abort through the originating execution environment and wait for completion. */
   private async terminate(job: Job): Promise<void> {
     if (job.state === 'exited') return
-    const exited = new Promise<void>((resolve) => {
-      job.child.once('exit', () => resolve())
-      job.child.once('error', () => resolve())
-    })
-    // One implementation with the bash tool: a POSIX process group, or taskkill /T on Windows.
-    const kill = (signal: 'SIGTERM' | 'SIGKILL') => {
-      void signalProcessTree(job.child, signal).catch(() =>
-        job.child.kill(signal),
-      )
-    }
-    const startedAt = Date.now()
-    kill('SIGTERM')
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const grace = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, STOP_GRACE_MS)
-    })
-    try {
-      await Promise.race([exited, grace])
-    } finally {
-      clearTimeout(timer)
-    }
-    // The shell can exit on SIGTERM while descendants are still shutting down (or ignoring it), and
-    // its exit is neither the group finishing nor a reason to shorten the grace. Wait for the rest
-    // of the group until the deadline, then escalate.
-    while (
-      process.platform !== 'win32' &&
-      groupAlive(job) &&
-      Date.now() - startedAt < STOP_GRACE_MS
-    )
-      await delay(20)
-    if (process.platform !== 'win32' && groupAlive(job)) kill('SIGKILL')
-    await exited
+    job.controller.abort()
+    await job.finished
   }
 
   private deliver(status: string, job: Job): void {

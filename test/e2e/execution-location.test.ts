@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
@@ -258,14 +258,19 @@ test('execution environment resolver is consulted for each tool call and fails c
     model,
     env: ({ sessionId, location }) => {
       calls.push(`${sessionId}:${location.environment}`)
-      return calls.length === 1
+      // Prepare workspace resources, allow the first read, then take the environment offline.
+      return calls.length <= 2
         ? createLocalExecutionEnv({ cwd: location.cwd })
         : undefined
     },
   })
   try {
     await vela.session('resolver').prompt('read twice')
-    expect(calls).toEqual(['resolver:local', 'resolver:local'])
+    expect(calls).toEqual([
+      'resolver:local',
+      'resolver:local',
+      'resolver:local',
+    ])
     expect(model.calls[1]!.toolResults[0]!.output).toContain('host marker')
     expect(model.calls[2]!.toolResults[0]!.output).not.toContain('host marker')
     expect(model.calls[2]!.toolResults[0]!.output).toContain('unavailable')
@@ -865,18 +870,22 @@ test('stopping a model tool call does not wait for an unresolved environment', a
       release = resolve
     },
   )
+  let prepared = false
   const vela = createVela({
     cwd: dir.path,
     model: createFauxModel({
       responses: [fauxToolCall('read_file', { path: 'marker' })],
     }),
     env: () => {
+      if (!prepared) return createLocalExecutionEnv({ cwd: dir.path })
       entered()
       return pending
     },
   })
   try {
     const session = vela.session('stop-resolver')
+    await session.resources()
+    prepared = true
     const run = session.prompt('read')
     await called
     const stopped = session.abort()
@@ -912,3 +921,47 @@ test('cleanup stops a background descendant after its shell has exited', async (
     dir.cleanup()
   }
 })
+
+test.skipIf(process.platform === 'win32')(
+  'cleanup reports a denied signal to a surviving group and can retry it',
+  async () => {
+    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const dir = tempDir()
+    const env = createLocalExecutionEnv({ cwd: dir.path })
+    const kill = process.kill.bind(process)
+    let pgid: number | undefined
+    let attempts = 0
+    const denied = Object.assign(new Error('group kill denied'), {
+      code: 'EPERM',
+    })
+    const spy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === pgid && signal === 'SIGKILL' && ++attempts === 1) throw denied
+      return kill(pid, signal)
+    })
+    try {
+      const shell = await env.exec(
+        ['sh', '-c', 'sleep 30 >/dev/null 2>&1 & echo $$'],
+        {
+          onOutput: (text) => {
+            pgid = -Number(text.trim())
+          },
+        },
+      )
+      expect(shell.ok).toBe(true)
+      expect(pgid).toBeLessThan(0)
+      expect(kill(pgid!, 0)).toBe(true)
+      await expect(env.cleanup()).rejects.toBe(denied)
+      expect(kill(pgid!, 0)).toBe(true)
+      await env.cleanup()
+      expect(attempts).toBe(2)
+    } finally {
+      spy.mockRestore()
+      if (pgid && attempts < 2) {
+        try {
+          kill(pgid, 'SIGKILL')
+        } catch {}
+      }
+      dir.cleanup()
+    }
+  },
+)

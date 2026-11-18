@@ -132,8 +132,14 @@ async function resolveBinary(
 }
 
 function onPath(command: string): boolean {
-  const result = spawnSync(command, ['--version'], { stdio: 'ignore' })
-  return !result.error
+  // Resolve the name without executing a candidate outside the session environment.
+  const result =
+    platform() === 'win32'
+      ? spawnSync('where.exe', [command], { stdio: 'ignore' })
+      : spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'vela', command], {
+          stdio: 'ignore',
+        })
+  return result.status === 0
 }
 
 async function download(

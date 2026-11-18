@@ -19,6 +19,7 @@ import madge from 'madge'
 import desktopConfig from '../apps/desktop/tsconfig.json'
 import { checkBoundaries } from './check-boundaries.ts'
 import { checkDocLinks } from './check-doc-links.ts'
+import { checkExecutionBoundaries } from './check-execution-boundaries.ts'
 import { readWorkspaces } from './workspaces.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -35,9 +36,9 @@ const MAX_CYCLES = 0
 
 /** Files that were already over the limit when the ratchet landed, pinned at their size that day. */
 const LINE_CEILINGS = new Map<string, number>([
-  ['packages/core/src/vela-session.ts', 1536],
-  ['packages/vela/src/cli/interactive.ts', 1389],
-  ['packages/core/src/tools/registry.ts', 764],
+  ['packages/core/src/vela-session.ts', 1533],
+  ['packages/vela/src/cli/interactive.ts', 1371],
+  ['packages/core/src/tools/registry.ts', 734],
 ])
 
 const failures: string[] = []
@@ -214,6 +215,12 @@ report(
   boundaries.length === 0,
   `package boundaries: ${boundaries.length === 0 ? 'ok' : 'failed'}`,
   boundaries,
+)
+const execution = await checkExecutionBoundaries(ROOT)
+report(
+  execution.length === 0,
+  `execution boundaries: ${execution.length === 0 ? 'ok' : 'failed'}`,
+  execution,
 )
 const links = await checkDocLinks(ROOT)
 report(

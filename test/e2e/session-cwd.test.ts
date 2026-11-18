@@ -36,6 +36,8 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
   }
   mkdirSync(join(host, '.vela', 'prompts'), { recursive: true })
   writeFileSync(join(host, '.vela', 'prompts', 'hello.md'), 'Host template $1')
+  mkdirSync(join(a, '.vela', 'prompts'), { recursive: true })
+  writeFileSync(join(a, '.vela', 'prompts', 'hello.md'), 'Alpha template $1')
   const modelA = createFauxModel({ responses: [] })
   const modelB = createFauxModel({ responses: [] })
   const vela = createVela({
@@ -76,8 +78,10 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
       expect(model.calls[0]!.system).toContain(path)
       expect(model.calls[0]!.system).toContain(`Instructions for ${name}`)
       expect(model.calls[0]!.system).not.toContain('Pinned host instructions')
-      expect(model.calls[0]!.system).toContain('host-skill')
-      expect(model.calls[0]!.system).not.toContain('local-skill')
+      expect(model.calls[0]!.system).not.toContain('host-skill')
+      if (name === 'ALPHA')
+        expect(model.calls[0]!.system).toContain('local-skill')
+      else expect(model.calls[0]!.system).not.toContain('local-skill')
       expect(model.calls[1]!.toolResults[0]!.output).toBe(name)
       expect(model.calls[4]!.toolResults.at(-1)!.output).toContain('result.txt')
       expect(model.calls[5]!.toolResults.at(-1)!.output).toContain(name)
@@ -102,7 +106,7 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
     expect(await sb.exportHtml('export.html')).toBe(join(host, 'export.html'))
     modelA.push(fauxText('template'))
     await sa.prompt('/hello check')
-    expect(modelA.calls.at(-1)!.lastUserText).toBe('Host template check')
+    expect(modelA.calls.at(-1)!.lastUserText).toBe('Alpha template check')
     const cloned = (await sa.clone({ sessionId: 'clone' })).session!
     expect((await cloned.executeBash('cat same.txt')).output).toBe('ALPHA')
     await sa.close()

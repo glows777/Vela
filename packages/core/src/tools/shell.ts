@@ -1,21 +1,14 @@
-import { spawn } from 'node:child_process'
-import { type FileHandle, open, stat } from 'node:fs/promises'
-import { constants } from 'node:os'
 import z from 'zod'
-import type { ExecutionMetadata } from '../session/tool-history.ts'
-import { ToolResultStore } from '../session/tool-results.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
+import { environmentBash } from './environment-bash.ts'
 import {
   fitOutputTail,
   OUTPUT_MAX_BYTES,
   OUTPUT_MAX_LINES,
-  type OutputTailFit,
 } from './output-tail.ts'
-import { signalProcessTree } from './process-tree.ts'
 import type { ToolDefinition } from './registry.ts'
 
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000 // setTimeout's limit
-/** How often a running command's output tail is sent to onUpdate (pi's BASH_UPDATE_THROTTLE_MS) */
-const BASH_UPDATE_INTERVAL_MS = 100
 
 const bashToolParamSchema = z.object({
   command: z.string().describe('Shell command to run'),
@@ -28,10 +21,6 @@ const bashToolParamSchema = z.object({
 export interface BashToolOptions {
   /** Shell to run commands with (settings `shellPath`). Default: bash on PATH, or bash.exe on Windows */
   shellPath?: string
-}
-
-function defaultShellPath(): string {
-  return process.platform === 'win32' ? 'bash.exe' : 'bash'
 }
 
 export const createBashTool = (
@@ -56,168 +45,9 @@ export const createBashTool = (
       throw new Error(
         `Invalid timeout: must be a positive number of seconds, at most ${MAX_TIMEOUT_SECONDS}`,
       )
-    const results = context?.results ?? new ToolResultStore()
-    // Open before executing: storage failure must not lead to rerunning a command.
-    const { path, file } = await results.createFile(context?.callId)
-    let status: string | undefined
-    const execution: ExecutionMetadata = {}
-    try {
-      const run = await runShell(command, file, path, {
-        cwd,
-        shellPath: shellPath ?? defaultShellPath(),
-        timeout,
-        signal: context?.signal,
-        onUpdate: context?.onUpdate
-          ? (text) => context.onUpdate?.({ content: [{ type: 'text', text }] })
-          : undefined,
-      })
-      execution.exitCode = run.exitCode
-      execution.signal = run.signal
-      execution.timedOut = run.timedOut || undefined
-      execution.isError = run.exitCode !== 0 || run.timedOut
-      if (run.timedOut) status = `Command timed out after ${timeout} seconds`
-      else if (run.cancelled) status = 'Command aborted'
-      else if (run.exitCode !== 0)
-        status = `Command exited with code ${run.exitCode}${run.signal ? ` (signal ${run.signal})` : ''}`
-    } catch (error) {
-      execution.isError = true
-      const code =
-        error && typeof error === 'object' && 'code' in error
-          ? error.code
-          : undefined
-      let workingDirectoryError: string | undefined
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
-        const workingDirectory = cwd ?? process.cwd()
-        try {
-          if (!(await stat(workingDirectory)).isDirectory())
-            workingDirectoryError = `Working directory is not a directory: ${workingDirectory}`
-        } catch (directoryError) {
-          const directoryErrorCode =
-            directoryError &&
-            typeof directoryError === 'object' &&
-            'code' in directoryError
-              ? directoryError.code
-              : undefined
-          if (
-            directoryErrorCode === 'ENOENT' ||
-            directoryErrorCode === 'ENOTDIR'
-          )
-            workingDirectoryError = `Working directory not found: ${workingDirectory}`
-        }
-      }
-      const resolvedShell = shellPath ?? defaultShellPath()
-      const shellUnavailable = code === 'ENOENT' && !workingDirectoryError
-      execution.toolUnavailable = shellUnavailable || undefined
-      execution.error =
-        workingDirectoryError ??
-        (shellUnavailable
-          ? `Shell not found: ${resolvedShell}. The command did not run. Bash is disabled for this session; ${process.platform === 'win32' ? 'install Git for Windows or set shellPath to its bin\\bash.exe' : 'install Bash or set shellPath to a Bash-compatible executable'}. Read-only fallback tools may now be available.`
-          : error instanceof Error
-            ? error.message
-            : String(error))
-      status = execution.error
-    }
-    const { size } = await stat(path)
-    const tail = await readTail(path, size)
-    let preview = tail.text || (size ? '' : '(no output)')
-    if (tail.truncated)
-      preview += `\n\n[Showing the last ${tail.lines} lines${tail.partialLine ? ' (the last line is cut)' : ''} of ${size} bytes of output. Full output: ${path}]`
-    if (status) preview += `${preview ? '\n\n' : ''}${status}`
-    return results.reference(path, preview, context?.callId, execution)
+    return environmentBash(command, timeout, cwd, shellPath, context)
   },
 })
-
-/** How a command run by `runShell` ended. */
-interface ShellRun {
-  /** The exit code, or 128 + the signal number when a signal killed it */
-  exitCode: number
-  signal: NodeJS.Signals | null
-  timedOut: boolean
-  /** `signal` aborted the command */
-  cancelled: boolean
-}
-
-/**
- * Runs a command with stdout and stderr going to `file`, which it closes. The process group is
- * killed on timeout or abort. Throws if the command cannot start.
- */
-async function runShell(
-  command: string,
-  file: FileHandle,
-  path: string,
-  options: {
-    cwd?: string
-    shellPath?: string
-    timeout?: number
-    signal?: AbortSignal
-    /** The output tail while the command runs */
-    onUpdate?: (text: string) => void
-    /** Each new piece of output, all of it, in order */
-    onDelta?: (delta: string) => void
-  },
-): Promise<ShellRun> {
-  const { signal: abortSignal } = options
-  const streaming =
-    options.onUpdate || options.onDelta
-      ? streamOutput(path, options.onUpdate, options.onDelta)
-      : undefined
-  try {
-    const proc = spawn(
-      options.shellPath ?? defaultShellPath(),
-      ['-lc', command],
-      {
-        cwd: options.cwd,
-        stdio: ['ignore', file.fd, file.fd],
-        // POSIX process groups and Windows taskkill /T stop pipelines and descendants.
-        detached: process.platform !== 'win32',
-      },
-    )
-    const exited = new Promise<{
-      code: number | null
-      signal: NodeJS.Signals | null
-    }>((resolve, reject) => {
-      proc.once('error', reject)
-      proc.once('exit', (code, signal) => resolve({ code, signal }))
-    })
-    let termination: Promise<void> | undefined
-    const terminate = () => {
-      termination ??= signalProcessTree(proc, 'SIGKILL')
-    }
-    let timedOut = false
-    const timer =
-      options.timeout === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true
-            terminate()
-          }, options.timeout * 1000)
-    abortSignal?.addEventListener('abort', terminate, { once: true })
-    if (abortSignal?.aborted) terminate()
-    try {
-      const result = await exited
-      await termination
-      return {
-        // Killed by a signal: 128 + signal number, as shells report it
-        exitCode:
-          result.code ??
-          128 + (result.signal ? (constants.signals[result.signal] ?? 0) : 0),
-        signal: result.signal,
-        timedOut,
-        cancelled: !!abortSignal?.aborted,
-      }
-    } finally {
-      clearTimeout(timer)
-      abortSignal?.removeEventListener('abort', terminate)
-    }
-  } finally {
-    await streaming?.stop()
-    try {
-      await file.sync()
-    } finally {
-      await file.close()
-    }
-  }
-}
 
 /** A command the user ran themselves (`!cmd`), shaped like pi's `BashResult`. */
 export interface BashResult {
@@ -232,109 +62,77 @@ export interface BashResult {
   fullOutputPath?: string
 }
 
-/**
- * Runs a command for the user (pi's `executeBash`), not as a tool: no tool selection, hooks or tool
- * history. The whole output goes to a file from `results`; the result holds its tail.
- */
+/** Run a user command inside the selected execution environment. */
 export async function runBash(
   command: string,
   options: {
-    results: ToolResultStore
-    cwd?: string
-    shellPath?: string
+    env: ExecutionEnv
     signal?: AbortSignal
-    /** The output tail while the command runs */
     onUpdate?: (output: string) => void
-    /** Each new piece of output, all of it, in order */
     onDelta?: (delta: string) => void
   },
 ): Promise<BashResult> {
-  const { path, file } = await options.results.createFile()
-  const run = await runShell(command, file, path, {
-    ...options,
-    shellPath: options.shellPath ?? defaultShellPath(),
-  })
-  const { size } = await stat(path)
-  const tail = await readTail(path, size)
+  let body = '',
+    cut = false
+  let pendingDelta = ''
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const publish = (final: boolean) => {
+    if (timer) clearTimeout(timer)
+    timer = undefined
+    const delta = pendingDelta
+    pendingDelta = ''
+    try {
+      if (delta) options.onDelta?.(delta)
+    } catch {
+      // A disconnected output subscriber cannot cancel the user's command.
+    }
+    if (!final) {
+      try {
+        options.onUpdate?.(fitOutputTail(body, cut).text)
+      } catch {}
+    }
+  }
+  const run = await options.env
+    .exec(
+      command,
+      {
+        spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
+        onOutput: (text) => {
+          const combined = Buffer.from(body + text)
+          if (combined.length > OUTPUT_MAX_BYTES) cut = true
+          body = combined.subarray(-OUTPUT_MAX_BYTES).toString()
+          if (options.onDelta) pendingDelta += text
+          if (!timer && (options.onDelta || options.onUpdate))
+            timer = setTimeout(() => publish(false), 100)
+        },
+      },
+      options.signal,
+    )
+    .finally(() => publish(true))
+  const tail = fitOutputTail(body, cut)
+  if (!run.ok) {
+    if (run.error.code === 'aborted')
+      return {
+        output: tail.text.replace(/\n$/, ''),
+        exitCode: undefined,
+        cancelled: true,
+        truncated: tail.truncated || !!run.error.spillPath,
+        ...(run.error.spillPath ? { fullOutputPath: run.error.spillPath } : {}),
+      }
+    if (
+      run.error.code === 'unknown' &&
+      run.error.message.startsWith('Failed to preserve complete shell output:')
+    )
+      throw new Error(
+        `Command started and was stopped because its full output could not be saved; it may have had partial effects. ${tail.text}`,
+      )
+    throw run.error
+  }
   return {
     output: tail.text.replace(/\n$/, ''),
-    exitCode: run.cancelled ? undefined : run.exitCode,
-    cancelled: run.cancelled,
-    truncated: tail.truncated,
-    ...(tail.truncated ? { fullOutputPath: path } : {}),
-  }
-}
-
-/**
- * Sends the output tail to onUpdate and each new piece of output to onDelta while the command runs.
- * Unlike pi, which reads pipes, the output goes straight to the result file, so the file is polled;
- * stop() reads once more so onDelta gets everything.
- */
-function streamOutput(
-  path: string,
-  onUpdate?: (text: string) => void,
-  onDelta?: (delta: string) => void,
-): { stop(): Promise<void> } {
-  let sent = 0
-  const decoder = new TextDecoder()
-  let pending: Promise<void> = Promise.resolve()
-  const poll = async (final = false) => {
-    const { size } = await stat(path)
-    if (size > sent && onDelta) {
-      const delta = decoder.decode(await readRange(path, sent, size - sent), {
-        stream: !final,
-      })
-      if (delta) onDelta(delta)
-    } else if (final && onDelta) {
-      const rest = decoder.decode()
-      if (rest) onDelta(rest)
-    }
-    if (size === sent) return
-    sent = size
-    // The final read is only for onDelta: the caller gets the tail from the result
-    if (onUpdate && !final) onUpdate((await readTail(path, size)).text)
-  }
-  let busy = false
-  const timer = setInterval(() => {
-    // Skip a tick while the previous read is still running; a read error only skips an update
-    if (busy) return
-    busy = true
-    pending = poll()
-      .catch(() => {})
-      .finally(() => {
-        busy = false
-      })
-  }, BASH_UPDATE_INTERVAL_MS)
-  return {
-    stop: async () => {
-      clearInterval(timer)
-      await pending
-      if (onDelta) await poll(true).catch(() => {})
-    },
-  }
-}
-
-/**
- * The last output of the file, cut at line starts. Only the bytes that can be part of the tail are
- * read, so a huge log costs one bounded read.
- */
-async function readTail(path: string, size: number): Promise<OutputTailFit> {
-  const start = Math.max(0, size - OUTPUT_MAX_BYTES)
-  const bytes = await readRange(path, start, size - start)
-  return fitOutputTail(new TextDecoder().decode(bytes), start > 0)
-}
-
-async function readRange(
-  path: string,
-  position: number,
-  length: number,
-): Promise<Uint8Array> {
-  const handle = await open(path, 'r')
-  try {
-    const buffer = new Uint8Array(length)
-    const { bytesRead } = await handle.read(buffer, 0, length, position)
-    return buffer.subarray(0, bytesRead)
-  } finally {
-    await handle.close()
+    exitCode: run.value.exitCode,
+    cancelled: false,
+    truncated: !!run.value.spillPath,
+    ...(run.value.spillPath ? { fullOutputPath: run.value.spillPath } : {}),
   }
 }

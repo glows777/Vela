@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ToolExecutionResult } from '@glows777/vela-core'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
@@ -258,6 +258,20 @@ test('write_file overwrites a file read to EOF until the file changes on disk', 
     'Refusing to overwrite "rules.md": the file changed on disk since this session read or wrote it. Read it again, or use edit_file for a targeted change.',
   )
   expect(await t.readFile(file)).toBe('changed outside the session\n')
+})
+
+test('a complete read through a symlink authorizes writing the same unchanged target', async () => {
+  const t = createTestVela({
+    files: { 'notes.txt': 'before' },
+    responses: [
+      fauxToolCall('read_file', { path: 'alias.txt' }),
+      fauxToolCall('write_file', { path: 'notes.txt', content: 'after' }),
+      fauxText('done'),
+    ],
+  })
+  symlinkSync(join(t.cwd, 'notes.txt'), join(t.cwd, 'alias.txt'))
+  await t.run('Read the link, then update the target')
+  expect(await t.readFile('notes.txt')).toBe('after')
 })
 
 test('write_file accepts a read that follows the footer to EOF', async () => {

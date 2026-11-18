@@ -1,4 +1,5 @@
 import type { VelaEventListener } from '../agent/events.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import type { ModelMessage } from '../messages.ts'
 import { type BashResult, runBash } from '../tools/shell.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
@@ -20,15 +21,13 @@ export class UserBash {
   constructor(
     private readonly host: {
       store: SessionStore
-      cwd: string
-      shellPath?: string
       emit: VelaEventListener
       busy: { locked: boolean }
       save: () => Promise<void>
       messages: ModelMessage[]
       tracker: TokenTracker
       timestamps: Map<ModelMessage, number>
-      prepare: () => Promise<void>
+      prepare: () => Promise<ExecutionEnv>
       isClosed: () => boolean
     },
   ) {}
@@ -69,12 +68,13 @@ export class UserBash {
     try {
       // Register the command before awaiting its environment so abort/close can stop it.
       let onAbort!: () => void
-      const cancelled = new Promise<void>((resolve) => {
-        onAbort = resolve
+      const cancelled = new Promise<undefined>((resolve) => {
+        onAbort = () => resolve(undefined)
         controller.signal.addEventListener('abort', onAbort, { once: true })
       })
+      let environment: ExecutionEnv | undefined
       try {
-        await Promise.race([this.host.prepare(), cancelled])
+        environment = await Promise.race([this.host.prepare(), cancelled])
       } finally {
         controller.signal.removeEventListener('abort', onAbort)
       }
@@ -84,9 +84,7 @@ export class UserBash {
       const result: BashResult = controller.signal.aborted
         ? { output: '', exitCode: undefined, cancelled: true, truncated: false }
         : await runBash(command, {
-            results: this.host.store.results,
-            cwd: this.host.cwd,
-            shellPath: this.host.shellPath,
+            env: environment!,
             signal: controller.signal,
             onUpdate: options.onUpdate,
             onDelta: (delta) =>

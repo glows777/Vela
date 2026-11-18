@@ -8,6 +8,8 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
+  rm,
   writeFile,
 } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -171,7 +173,10 @@ class Reader implements BinaryReader {
 }
 export class LocalFiles {
   readonly id = 'node:local'
-  constructor(public cwd: string) {}
+  constructor(
+    public cwd: string,
+    protected tempRoot?: string,
+  ) {}
   private path(path: string) {
     let value = path
     if (value === '~') value = homedir()
@@ -271,8 +276,36 @@ export class LocalFiles {
     return attempt(p, signal, async () => {
       await mkdir(dirname(p), { recursive: true })
       signal?.throwIfAborted()
-      await writeFile(p, content, { signal })
+      if (dirname(p) !== this.tempRoot) {
+        await writeFile(p, content, { signal })
+        return
+      }
+      // Persist session-owned results before history can publish their path.
+      const handle = await open(p, 'w', 0o600)
+      try {
+        await handle.writeFile(content, { signal })
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
     })
+  }
+  renameFile(
+    sourcePath: string,
+    destinationPath: string,
+    signal?: AbortSignal,
+  ) {
+    const source = this.path(sourcePath)
+    const destination = this.path(destinationPath)
+    return attempt(source, signal, () => rename(source, destination))
+  }
+  remove(
+    path: string,
+    options: { recursive?: boolean; force?: boolean } | undefined,
+    signal?: AbortSignal,
+  ) {
+    const p = this.path(path)
+    return attempt(p, signal, () => rm(p, options))
   }
   fileInfo(path: string, signal?: AbortSignal) {
     const p = this.path(path)
@@ -315,12 +348,13 @@ export class LocalFiles {
     signal?: AbortSignal,
   ) {
     return attempt(undefined, signal, async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'vela-'))
+      const dir = this.tempRoot ?? (await mkdtemp(join(tmpdir(), 'vela-')))
+      if (this.tempRoot) await mkdir(dir, { recursive: true, mode: 0o700 })
       const p = join(
         dir,
         `${options?.prefix ?? ''}${crypto.randomUUID()}${options?.suffix ?? ''}`,
       )
-      await writeFile(p, '', { flag: 'wx' })
+      await writeFile(p, '', { flag: 'wx', mode: 0o600 })
       return p
     })
   }

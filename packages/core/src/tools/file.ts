@@ -1,7 +1,6 @@
-import { constants, createReadStream, readdirSync } from 'node:fs'
-import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
 import z from 'zod'
+import { createLocalExecutionEnv } from '../execution/local.ts'
+import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import { imageMimeType, isBinaryFile } from '../images/metadata.ts'
 import {
   applyEditsToNormalizedContent,
@@ -12,8 +11,8 @@ import {
   restoreLineEndings,
   splitBom,
 } from './edit-diff.ts'
-import { withFileMutationQueue } from './file-mutation-queue.ts'
-import { fileStat, stateFor, statIfExists } from './file-write-guard.ts'
+import { withEnvironmentMutationQueue } from './file-mutation-queue.ts'
+import { stateFor } from './file-write-guard.ts'
 import type { ToolDefinition } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
 
@@ -30,27 +29,23 @@ const binaryFileError = (path: string) =>
     `Cannot read ${path}: binary file. Use bash tools such as pdftotext or unzip -l to inspect it.`,
   )
 
-/** Check the file header and return images before entering the text pager. */
+function unwrap<T>(result: Result<T, FileError>): T {
+  if (!result.ok) throw result.error
+  return result.value
+}
+
+/** Inspect the environment's file header and return supported images whole. */
 async function readSpecialFile(
+  env: ExecutionEnv,
   file: string,
   path: string,
   signal?: AbortSignal,
 ): Promise<ToolExecutionResult | undefined> {
-  const handle = await open(file, 'r')
+  const handle = unwrap(await env.openBinaryReader(file, undefined, signal))
   try {
-    const header = Buffer.alloc(FILE_HEADER_BYTES)
-    let headerLength = 0
-    while (headerLength < header.length) {
-      const { bytesRead } = await handle.read(
-        header,
-        headerLength,
-        header.length - headerLength,
-        headerLength,
-      )
-      if (!bytesRead) break
-      headerLength += bytesRead
-    }
-    const bytes = header.subarray(0, headerLength)
+    const bytes = Buffer.from(
+      unwrap(await handle.read(0, FILE_HEADER_BYTES, signal)),
+    )
     const mimeType = imageMimeType(bytes)
     if (!mimeType) {
       if (isBinaryFile(bytes, true)) throw binaryFileError(path)
@@ -58,16 +53,14 @@ async function readSpecialFile(
     }
     const tooLarge = () =>
       new Error('Cannot read image: image exceeds the safe decoding size limit')
-    if ((await handle.stat()).size > READ_MAX_IMAGE_BYTES) throw tooLarge()
-    const chunks: Buffer[] = []
+    if (unwrap(await handle.info(signal)).size > READ_MAX_IMAGE_BYTES)
+      throw tooLarge()
+    const chunks: Uint8Array[] = []
     let length = 0
-    for await (const chunk of handle.createReadStream({
-      start: 0,
-      autoClose: false,
-      signal,
-    })) {
+    while (true) {
+      const chunk = unwrap(await handle.read(length, 64 * 1024, signal))
+      if (!chunk.length) break
       length += chunk.length
-      // Also bound a file that grows after stat, or a stream with an unknown size.
       if (length > READ_MAX_IMAGE_BYTES) throw tooLarge()
       chunks.push(chunk)
     }
@@ -88,16 +81,6 @@ const utf8Bytes = (char: string) => {
   const code = char.codePointAt(0) ?? 0
   return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
 }
-
-/** Writes a text file, creating missing parent directories (like Bun.write). */
-async function writeText(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, content)
-}
-
-/** Resolves relative paths against cwd, or the process working directory when cwd is unset. */
-export const resolveIn = (cwd: string | undefined, path: string) =>
-  cwd ? resolve(cwd, path) : resolve(path)
 
 export const readFileParamSchema = z.object({
   path: z
@@ -140,11 +123,16 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       limit = READ_MAX_LINES,
       column = 0,
     } = readFileParamSchema.parse(input)
-    const file = resolveIn(cwd, path)
-    const image = await readSpecialFile(file, path, context?.signal)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const file = unwrap(await env.absolutePath(path, context?.signal))
+    const image = await readSpecialFile(env, file, path, context?.signal)
     if (image) return image
     const state = stateFor(context)
-    const snapshot = await fileStat(file)
+    const canonical = unwrap(await env.canonicalPath(file, context?.signal))
+    const guardKey = `${env.id}:${canonical}`
+    const snapshot = unwrap(await env.fileInfo(canonical, context?.signal))
     const decoder = new TextDecoder('utf-8', { fatal: true })
     // Validate every chunk the pager reads, including bytes past the header.
     // Streaming preserves UTF-8 characters split across chunks.
@@ -193,17 +181,30 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
       }
       return true
     }
-    for await (const chunk of createReadStream(file)) {
-      if (!consume(decodeText(chunk))) break
+    const reader = unwrap(
+      await env.openBinaryReader(file, undefined, context?.signal),
+    )
+    try {
+      let position = 0
+      while (true) {
+        const chunk = unwrap(
+          await reader.read(position, 64 * 1024, context?.signal),
+        )
+        if (!chunk.length) break
+        position += chunk.length
+        if (!consume(decodeText(Buffer.from(chunk)))) break
+      }
+    } finally {
+      await reader.close()
     }
     if (!more) consume(decodeText())
     if (!reachedStart && !(line === offset && col === column))
       throw new Error('offset/column is past the end of the file')
     if (!more) {
-      state?.noteRead(file, offset, column, undefined, snapshot)
+      state?.noteRead(guardKey, offset, column, undefined, snapshot)
       return body
     }
-    state?.noteRead(file, offset, column, { line, col }, snapshot)
+    state?.noteRead(guardKey, offset, column, { line, col }, snapshot)
     const next = `More content exists. Continue read_file with path=${JSON.stringify(path)}, offset=${line}, column=${col}, limit=${limit}.`
     return `${body}\n\n[read_file: lines ${offset}-${lastLine}, starting column=${column}; ${body.length} UTF-16 code units shown. ${next}]`
   },
@@ -229,18 +230,38 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
     { path, content }: { path: string; content: string },
     context,
   ) => {
-    const resolved = resolveIn(cwd, path)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const signal = context?.signal
+    const resolved = unwrap(await env.absolutePath(path, signal))
     const state = stateFor(context)
-    // Writes to the same file queue up; different files are written in parallel (like pi)
-    await withFileMutationQueue(resolved, async () => {
-      if (state) {
-        const current = await statIfExists(resolved)
-        const refusal = state.refusal(resolved, path, current)
-        if (refusal) throw new Error(refusal)
-      }
-      await writeText(resolved, content)
-      if (state) state.noteWritten(resolved, await fileStat(resolved))
-    })
+    await withEnvironmentMutationQueue(
+      resolved,
+      async (canonical) => {
+        const guardKey = `${env.id}:${canonical}`
+        if (state) {
+          const info = await env.fileInfo(canonical, signal)
+          if (!info.ok && info.error.code !== 'not_found') throw info.error
+          const refusal = state.refusal(
+            guardKey,
+            path,
+            info.ok ? info.value : undefined,
+          )
+          if (refusal) throw new Error(refusal)
+        }
+        const parent = unwrap(await env.joinPath([resolved, '..'], signal))
+        unwrap(await env.createDir(parent, { recursive: true }, signal))
+        unwrap(await env.writeFile(resolved, content, signal))
+        if (state)
+          state.noteWritten(
+            guardKey,
+            unwrap(await env.fileInfo(canonical, signal)),
+          )
+      },
+      env,
+      signal,
+    )
     return `Wrote ${content.length} characters to ${path}`
   },
 })
@@ -258,11 +279,15 @@ export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   annotations: { readOnlyHint: true },
   promptSnippet: 'List directory contents',
   activeByDefault: false,
-  execute: async ({ path = '.' }: { path?: string }) => {
-    const resolved = resolveIn(cwd, path)
-    return readdirSync(resolved, { withFileTypes: true })
+  execute: async ({ path = '.' }: { path?: string }, context) => {
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
+    const resolved = unwrap(await env.absolutePath(path, context?.signal))
+    return unwrap(await env.listDir(resolved, context?.signal))
       .map(
-        (entry) => `${entry.isDirectory() ? '[DIR]' : '[FILE]'} ${entry.name}`,
+        (entry) =>
+          `${entry.kind === 'directory' ? '[DIR]' : '[FILE]'} ${entry.name}`,
       )
       .join('\n')
   },
@@ -357,54 +382,67 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
   ],
   execute: async (input: EditInput, context) => {
     const { path, edits } = input
-    const resolved = resolveIn(cwd, path)
+    const env =
+      context?.execution ??
+      createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
     const signal = context?.signal
+    const resolved = unwrap(await env.absolutePath(path, signal))
     const state = stateFor(context)
-    return withFileMutationQueue(resolved, async () => {
-      // Check the signal after each await instead of rejecting from an abort listener, so the
-      // queue stays locked until an in-flight filesystem operation has settled (like pi)
-      const throwIfAborted = () => {
-        if (signal?.aborted) throw new Error('Operation aborted')
-      }
-      throwIfAborted()
-      try {
-        await access(resolved, constants.R_OK | constants.W_OK)
-      } catch (error) {
+    return withEnvironmentMutationQueue(
+      resolved,
+      async (canonical) => {
+        const guardKey = `${env.id}:${canonical}`
+        const throwIfAborted = () => {
+          if (signal?.aborted) throw new Error('Operation aborted')
+        }
         throwIfAborted()
-        const code =
-          error instanceof Error && 'code' in error
-            ? `Error code: ${error.code}`
-            : String(error)
-        throw new Error(`Could not edit file: ${path}. ${code}.`)
-      }
-      const raw = await readFile(resolved, 'utf8')
-      throwIfAborted()
-      // The model never includes an invisible BOM in oldText; match without it and restore it on write
-      const { bom, text } = splitBom(raw)
-      const ending = detectLineEnding(text)
-      const { baseContent, newContent } = applyEditsToNormalizedContent(
-        normalizeToLF(text),
-        edits,
-        path,
-      )
-      throwIfAborted()
-      await writeFile(resolved, bom + restoreLineEndings(newContent, ending))
-      if (state) state.noteWritten(resolved, await fileStat(resolved))
-      throwIfAborted()
-      const { diff, firstChangedLine } = generateDiffString(
-        baseContent,
-        newContent,
-      )
-      const details: EditFileDetails = {
-        diff,
-        patch: generateUnifiedPatch(path, baseContent, newContent),
-        ...(firstChangedLine === undefined ? {} : { firstChangedLine }),
-      }
-      return new ToolExecutionResult(
-        details,
-        `Successfully replaced ${edits.length} block(s) in ${path}.`,
-      )
-    })
+        const read = await env.readTextFile(resolved, signal)
+        if (!read.ok)
+          throw new Error(
+            `Could not edit file: ${path}. ${read.error.message}`,
+            { cause: read.error },
+          )
+        const raw = read.value
+        throwIfAborted()
+        // The model never includes an invisible BOM in oldText; match without it and restore it on write
+        const { bom, text } = splitBom(raw)
+        const ending = detectLineEnding(text)
+        const { baseContent, newContent } = applyEditsToNormalizedContent(
+          normalizeToLF(text),
+          edits,
+          path,
+        )
+        throwIfAborted()
+        unwrap(
+          await env.writeFile(
+            resolved,
+            bom + restoreLineEndings(newContent, ending),
+            signal,
+          ),
+        )
+        if (state)
+          state.noteWritten(
+            guardKey,
+            unwrap(await env.fileInfo(canonical, signal)),
+          )
+        throwIfAborted()
+        const { diff, firstChangedLine } = generateDiffString(
+          baseContent,
+          newContent,
+        )
+        const details: EditFileDetails = {
+          diff,
+          patch: generateUnifiedPatch(path, baseContent, newContent),
+          ...(firstChangedLine === undefined ? {} : { firstChangedLine }),
+        }
+        return new ToolExecutionResult(
+          details,
+          `Successfully replaced ${edits.length} block(s) in ${path}.`,
+        )
+      },
+      env,
+      signal,
+    )
   },
 })
 

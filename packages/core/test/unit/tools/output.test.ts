@@ -21,6 +21,7 @@ import {
 import { readFileTool } from '../../../src/tools/file.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { createBashTool } from '../../../src/tools/shell.ts'
+import { ToolExecutionResult } from '../../../src/tools/types.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
 import { createTestBashTool, testBashTool } from '../../support/bash.ts'
 
@@ -76,7 +77,7 @@ test('long Unicode lines can be continued without missing or splitting a charact
   expect(recovered).toBe(raw)
 })
 
-test('storage failure rejects the result instead of returning an unreadable reference', async () => {
+test('storage failure returns a bounded warning without an unreadable reference', async () => {
   const path = join(dir, 'not-a-directory')
   await Bun.write(path, 'occupied')
   const registry = new ToolRegistry(new ToolResultStore(path))
@@ -86,12 +87,13 @@ test('storage failure rejects the result instead of returning an unreadable refe
     inputSchema: z.object({}),
     execute: async () => 'x'.repeat(60_000),
   })
-  await expect(
-    registry.toAISDKFormat().large!.execute!(
-      {},
-      { toolCallId: 'fail', messages: [], context: {} },
-    ),
-  ).rejects.toThrow('Failed to save tool result')
+  const output = await registry.toAISDKFormat().large!.execute!(
+    {},
+    { toolCallId: 'fail', messages: [], context: {} },
+  )
+  expect(output).toContain('could not be saved')
+  expect(output).not.toContain('Full output:')
+  expect(String(output).length).toBeLessThan(60_000)
 })
 
 test('real Bash captures large stdout and stderr with exit status and a bounded tail', async () => {
@@ -266,15 +268,17 @@ test('AI SDK passes the saved reference to the next step and accepts a paged fol
   expect(result.text).toBe('Recovered middle evidence.')
 })
 
-test('Bash storage failure prevents command execution', async () => {
+test('short Bash output completes without reserving an output file', async () => {
   const blocked = join(dir, 'blocked-results')
   await Bun.write(blocked, 'not a directory')
   const results = new ToolResultStore(blocked)
   const marker = join(dir, 'must-not-exist')
-  await expect(
-    testBashTool.execute({ command: `touch '${marker}'` }, { results }),
-  ).rejects.toThrow('Failed to save tool result')
-  expect(await Bun.file(marker).exists()).toBe(false)
+  const output = await testBashTool.execute(
+    { command: `touch '${marker}'` },
+    { results },
+  )
+  expect(output).toBeInstanceOf(ToolExecutionResult)
+  expect(await Bun.file(marker).exists()).toBe(true)
 })
 
 test('Bash timeout preserves output already written to disk', async () => {
@@ -282,7 +286,10 @@ test('Bash timeout preserves output already written to disk', async () => {
   // and the command is killed before printf runs (#372)
   const timeout = 2
   const result = await createTestBashTool().execute(
-    { command: "printf 'BEFORE_TIMEOUT\\n'; sleep 20", timeout },
+    {
+      command: "printf '%060000d\\n' 0; printf 'BEFORE_TIMEOUT\\n'; sleep 20",
+      timeout,
+    },
     { results: new ToolResultStore(join(dir, 'timeout-results')) },
   )
   const stored = getStoredResult({ type: 'json', value: result as never })!
@@ -301,9 +308,10 @@ test('Bash rejects an invalid timeout and reports a missing shell without runnin
   const result = await createBashTool(undefined, {
     shellPath: join(dir, 'no-such-shell'),
   }).execute({ command: 'true' }, { results })
-  const stored = getStoredResult({ type: 'json', value: result as never })!
-  expect(stored.preview).toContain('The command did not run')
-  expect(stored.execution).toMatchObject({
+  if (!(result instanceof ToolExecutionResult))
+    throw new Error('Expected an inline result')
+  expect(result.text).toContain('The command did not run')
+  expect(result.execution).toMatchObject({
     isError: true,
     toolUnavailable: true,
   })
@@ -319,13 +327,14 @@ test('Bash reports a missing working directory without disabling the shell', asy
       ),
     },
   )
-  const stored = getStoredResult({ type: 'json', value: result as never })!
+  if (!(result instanceof ToolExecutionResult))
+    throw new Error('Expected an inline result')
 
-  expect(stored.preview).toContain(
-    `Working directory not found: ${missingDirectory}`,
+  expect(result.text).toContain(
+    `Working directory unavailable: ${missingDirectory}`,
   )
-  expect(stored.execution).toMatchObject({ isError: true })
-  expect(stored.execution?.toolUnavailable).toBeUndefined()
+  expect(result.execution).toMatchObject({ isError: true })
+  expect(result.execution?.toolUnavailable).toBeUndefined()
 })
 
 posixTest('Bash runs commands with the configured shellPath', async () => {
@@ -335,6 +344,7 @@ posixTest('Bash runs commands with the configured shellPath', async () => {
     { command: 'echo "$0"' },
     { results: new ToolResultStore(join(dir, 'shell-path')) },
   )
-  const stored = getStoredResult({ type: 'json', value: result as never })!
-  expect(stored.preview.trim()).toBe('/bin/sh')
+  if (!(result instanceof ToolExecutionResult))
+    throw new Error('Expected an inline result')
+  expect(result.text.trim()).toBe('/bin/sh')
 })

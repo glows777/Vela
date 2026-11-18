@@ -1334,6 +1334,67 @@ test.concurrent('extensions are discovered in ~/.vela/extensions and configured 
   expect(stderr).toContain('[greet] loaded {"token":"t0k"}')
 })
 
+test.concurrent('a resumed CLI session uses the saved trust of its own workspace', async () => {
+  const home = tempDir('vela-home-')
+  const a = tempDir('vela-cli-a-')
+  const b = tempDir('vela-cli-b-')
+  dirs.push(home, a, b)
+  await Bun.write(
+    join(home.path, 'settings.json'),
+    JSON.stringify({ dataDir: join(home.path, 'shared-data') }),
+  )
+  await Bun.write(join(home.path, 'SYSTEM.md'), 'USER_SYSTEM')
+  await Bun.write(join(home.path, 'APPEND_SYSTEM.md'), 'USER_APPEND')
+  await Bun.write(
+    join(home.path, 'extensions/observer.ts'),
+    `export default api =>
+    api.on('before_agent_start', e => { console.error('system-files', e.systemPrompt.match(/(?:USER|A|B)_(?:SYSTEM|APPEND)/g)?.join(' ')) })`,
+  )
+  const trustFile = join(home.path, 'trust.json')
+  await Bun.write(
+    trustFile,
+    JSON.stringify({ [a.path]: true, [b.path]: false }),
+  )
+  const options = { agentDir: home.path, model: `faux:${scenario('hello')}` }
+  const first = await cli(['--session', 'work', '-p', 'hello'], {
+    ...options,
+    cwd: b.path,
+    files: {
+      '.vela/prompts/proof.md': 'B_WORKSPACE_TEMPLATE',
+      '.vela/SYSTEM.md': 'B_SYSTEM',
+      '.vela/APPEND_SYSTEM.md': 'B_APPEND',
+    },
+  })
+  expect(first.code).toBe(0)
+  const args = ['--session', 'work', '--mode', 'json', '/proof']
+  const denied = await cli(args, {
+    ...options,
+    cwd: a.path,
+    files: {
+      '.vela/prompts/proof.md': 'A_WORKSPACE_TEMPLATE',
+      '.vela/SYSTEM.md': 'A_SYSTEM',
+      '.vela/APPEND_SYSTEM.md': 'A_APPEND',
+    },
+  })
+  expect(denied.code).toBe(0)
+  expect(denied.stderr).toContain('system-files USER_SYSTEM USER_APPEND')
+  expect(denied.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
+  expect(denied.stdout).not.toContain('A_WORKSPACE_TEMPLATE')
+
+  await Bun.write(trustFile, JSON.stringify({ [a.path]: true, [b.path]: true }))
+  const disabled = await cli(['--no-approve', ...args], {
+    ...options,
+    cwd: a.path,
+  })
+  expect(disabled.code).toBe(0)
+  expect(disabled.stderr).toContain('system-files USER_SYSTEM USER_APPEND')
+  expect(disabled.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
+  const allowed = await cli(args, { ...options, cwd: a.path })
+  expect(allowed.code).toBe(0)
+  expect(allowed.stderr).toContain('system-files B_SYSTEM B_APPEND')
+  expect(allowed.stdout).toContain('B_WORKSPACE_TEMPLATE')
+})
+
 test.concurrent('project extensions load only when the project is trusted', async () => {
   const files = { '.vela/extensions/local.ts': GREET('local') }
   const skipped = await cli(['-p', 'hello'], {

@@ -1,4 +1,7 @@
 import type { CompactionReason, VelaEventListener } from '../agent/events.ts'
+import { createSessionLocalExecutionEnv } from '../execution/local.ts'
+import { abortable } from '../execution/location.ts'
+import type { ExecutionEnv } from '../execution/types.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import type { ModelMessage } from '../messages.ts'
 import type { SessionState, SessionStore } from '../session/index.ts'
@@ -26,6 +29,7 @@ export class ContextManager {
     public onEvent?: VelaEventListener,
     /** Compaction thresholds and input cap; missing fields use defaults. */
     limits: Partial<VelaLimits> = {},
+    private readonly resolveEnv?: () => Promise<ExecutionEnv>,
   ) {
     this.limits = resolveLimits(limits)
   }
@@ -220,9 +224,51 @@ export class ContextManager {
       savings >= this.limits.minMicroSavings &&
       microAfter < this.limits.summaryThreshold
     ) {
-      await persistMicrocompact(micro.candidates, this.store.results)
-      request.abortSignal?.throwIfAborted()
-      this.applyMicrocompact(micro.messages)
+      const signal = request.abortSignal
+      const pending =
+        this.resolveEnv?.() ??
+        Promise.resolve(
+          createSessionLocalExecutionEnv({
+            cwd: process.cwd(),
+            tempRoot: this.store.results.dir,
+          }),
+        )
+      const env = await abortable(pending, signal)
+      const paths = await persistMicrocompact(
+        micro.candidates,
+        this.store.results,
+        env,
+        signal,
+      )
+      signal?.throwIfAborted()
+      const rewritten = micro.messages.map((message) => {
+        if (message.role !== 'tool' || !Array.isArray(message.content))
+          return message
+        let changed = false
+        const content = message.content.map((part) => {
+          if (
+            part.type !== 'tool-result' ||
+            part.output.type !== 'json' ||
+            !part.output.value ||
+            typeof part.output.value !== 'object' ||
+            Array.isArray(part.output.value)
+          )
+            return part
+          const reference = part.output.value as Record<string, unknown>
+          const next =
+            typeof reference.path === 'string'
+              ? paths.get(reference.path)
+              : undefined
+          if (!next) return part
+          changed = true
+          return {
+            ...part,
+            output: { ...part.output, value: { ...reference, path: next } },
+          }
+        })
+        return changed ? { ...message, content } : message
+      })
+      this.applyMicrocompact(rewritten)
       this.tracker.reduceEstimatedTokens(microAfter)
       this.onEvent?.({
         type: 'context_prepare',

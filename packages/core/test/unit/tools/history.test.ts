@@ -18,7 +18,7 @@ import {
 } from '../../../src/testing/faux.ts'
 import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
-import { testBashTool } from '../../support/bash.ts'
+import { createTestBashTool, testBashTool } from '../../support/bash.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'vela-tool-history-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -107,32 +107,33 @@ test('native MCP errors and thrown errors are recorded without parsing preview s
   })
 })
 
-test('result storage failure leaves an unfinished call and prevents further execution', async () => {
-  class BrokenResults extends ToolResultStore {
-    override async save(): Promise<never> {
-      throw new Error('injected disk failure')
-    }
-  }
-  const store = new BrokenResults(join(root, 'broken', 'outputs'))
+test('terminal storage failure on an inline result leaves only the begin record and prevents replay', async () => {
+  const { mkdir, rename } = await import('node:fs/promises')
+  const store = new ToolResultStore(join(root, 'broken', 'outputs'))
   const registry = new ToolRegistry(store)
+  const backup = store.indexPath + '.backup'
   let executions = 0
   registry.register({
-    name: 'large',
+    name: 'short',
     description: '',
     inputSchema: z.object({}),
     execute: async () => {
       executions++
-      return 'x'.repeat(60_000)
+      await rename(store.indexPath, backup)
+      await mkdir(store.indexPath)
+      return 'completed'
     },
   })
   await expect(
-    registry.toAISDKFormat().large!.execute!({}, options('one')),
+    registry.toAISDKFormat().short!.execute!({}, options('one')),
   ).rejects.toThrow('ran, but saving its result failed')
-  expect((await read(store)).map((record) => record.type)).toEqual([
-    'tool_call',
-  ])
+  const records = (await Bun.file(backup).text())
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(records.map((record) => record.type)).toEqual(['tool_call'])
   await expect(
-    registry.toAISDKFormat().large!.execute!({}, options('two')),
+    registry.toAISDKFormat().short!.execute!({}, options('two')),
   ).rejects.toThrow()
   expect(executions).toBe(1)
 })
@@ -194,42 +195,29 @@ test('new sessions get separate histories; session resume reuses exact history a
 test('Bash cancellation persists status and original stdout', async () => {
   const results = new ToolResultStore(join(root, 'cancel', 'outputs'))
   const registry = new ToolRegistry(results)
-  registry.register(testBashTool)
+  registry.register(createTestBashTool(root))
   const abort = new AbortController()
   const pending = registry.toAISDKFormat().bash!.execute!(
-    { command: "printf 'BEFORE_CANCEL\\n'; sleep 30 & wait" },
+    { command: "printf 'BEFORE_CANCEL\\n'; touch ready; sleep 30 & wait" },
     options('cancel', abort.signal),
   )
   void Promise.resolve(pending).catch(() => {})
   try {
-    let ready = false
     const deadline = Date.now() + 3000
-    while (Date.now() < deadline) {
-      if (results.history.throughSequence > 0) {
-        const call = (await read(results))[0]
-        const file = Bun.file(call.plannedOutputPath)
-        if (await file.exists())
-          ready = (await file.text()).includes('BEFORE_CANCEL')
-      }
-      if (ready) break
+    while (
+      !(await Bun.file(join(root, 'ready')).exists()) &&
+      Date.now() < deadline
+    )
       await Bun.sleep(10)
-    }
-    expect(ready).toBe(true)
+    expect(await Bun.file(join(root, 'ready')).exists()).toBe(true)
     abort.abort()
-    // An aborted command is an error result whose text ends with the status (like pi)
     await expect(Promise.resolve(pending)).rejects.toThrow(
-      /BEFORE_CANCEL\n\n\nCommand aborted$/,
+      /BEFORE_CANCEL[\s\S]*Command aborted$/,
     )
-    const [call, result] = await read(results)
-    expect(await Bun.file(call.plannedOutputPath).text()).toContain(
-      'BEFORE_CANCEL',
-    )
-    expect(result).toMatchObject({
-      outputPath: call.plannedOutputPath,
-      status: 'cancelled',
-      signal: process.platform === 'win32' ? null : 'SIGKILL',
-      isError: true,
-    })
+    const [, result] = await read(results)
+    expect(result).toMatchObject({ status: 'cancelled', isError: true })
+    expect(result.output).toContain('BEFORE_CANCEL')
+    expect(result.outputPath).toBeUndefined()
   } finally {
     abort.abort()
     await Promise.allSettled([pending])
@@ -355,7 +343,7 @@ for (const kind of ['bash', 'generic'] as const) {
         const result =
           kind === 'bash'
             ? await testBashTool.execute(
-                { command: "printf 'RECOVERY_EVIDENCE\\n'" },
+                { command: "printf '%060000d\\n' 0; echo RECOVERY_EVIDENCE" },
                 context,
               )
             : 'RECOVERY_EVIDENCE\n'.repeat(4000)
@@ -367,7 +355,9 @@ for (const kind of ['bash', 'generic'] as const) {
     let failure: unknown
     try {
       await registry.toAISDKFormat()[kind]!.execute!(
-        kind === 'bash' ? { command: "printf 'RECOVERY_EVIDENCE\\n'" } : {},
+        kind === 'bash'
+          ? { command: "printf '%060000d\\n' 0; echo RECOVERY_EVIDENCE" }
+          : {},
         options(`terminal-${kind}`),
       )
     } catch (error) {
@@ -384,7 +374,8 @@ for (const kind of ['bash', 'generic'] as const) {
     expect(files).toHaveLength(1)
     const outputPath = join(results.dir, files[0]!)
     expect(await Bun.file(outputPath).text()).toContain('RECOVERY_EVIDENCE')
-    expect(calls[0].plannedOutputPath).toBe(outputPath)
+    expect(calls[0].plannedOutputPath).toBeUndefined()
+    expect(String(failure)).toContain('not pre-recorded')
     expect(String(failure)).toContain(outputPath)
     expect(String(failure)).toContain(calls[0].callId)
     expect(String(failure)).toContain('do not rerun it automatically')
@@ -393,12 +384,10 @@ for (const kind of ['bash', 'generic'] as const) {
       registry.toAISDKFormat()[kind]!.execute!({}, options('next')),
     ).rejects.toThrow()
     expect(executions).toBe(1)
-    // A fresh reader can locate the original from the pre-execution record alone.
+    // Only the begin record survived. The session cannot confirm or replay this call.
     const restored = new ToolHistoryStore(backup)
     await restored.load()
     expect(await restored.completed(`terminal-${kind}`)).toBeUndefined()
-    expect(await Bun.file(calls[0].plannedOutputPath).text()).toContain(
-      'RECOVERY_EVIDENCE',
-    )
+    expect(await Bun.file(outputPath).text()).toContain('RECOVERY_EVIDENCE')
   })
 }
