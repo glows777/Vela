@@ -1365,10 +1365,7 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
   expect(denied.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
   expect(denied.stdout).not.toContain('A_WORKSPACE_TEMPLATE')
 
-  await Bun.write(
-    trustFile,
-    JSON.stringify({ [a.path]: true, [b.path]: true }),
-  )
+  await Bun.write(trustFile, JSON.stringify({ [a.path]: true, [b.path]: true }))
   const disabled = await cli(['--no-approve', ...args], {
     ...options,
     cwd: a.path,

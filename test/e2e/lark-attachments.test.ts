@@ -511,24 +511,25 @@ test('a file Steer waiting for its environment returns to the queue when the cur
         fauxText('first answer'),
         fauxText('queued answer'),
       ],
-      extensions: [
-        lark({ owners: ['ou_alice'], transport: fake.transport }),
-        function hold(api) {
-          api.registerTool({
-            name: 'pause',
-            description: 'Wait',
-            inputSchema: z.object({}),
-            execute: async () => {
-              await held
-              return 'done'
-            },
-          })
-        },
-      ],
     },
     (options) =>
       createVela({
         ...options,
+        extensions: [
+          ...(options.extensions ?? []),
+          lark({ owners: ['ou_alice'], transport: fake.transport }),
+          function hold(api) {
+            api.registerTool({
+              name: 'pause',
+              description: 'Wait',
+              inputSchema: z.object({}),
+              execute: async () => {
+                await held
+                return 'done'
+              },
+            })
+          },
+        ],
         env: async ({ location }) => {
           if (holdNext) {
             holdNext = false
