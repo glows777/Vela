@@ -187,12 +187,11 @@ export interface SessionDeps {
   onClose: (session: VelaSession) => void
   onSaved: (sessionId: string) => void
   onCwdChange: (session: VelaSession) => void
-  resourceSnapshot: (sessionId: string) => SessionResources
   ensureLocal: (session: VelaSession) => Promise<ExecutionEnv>
   prepareWorkspace: (
     session: VelaSession,
     signal?: AbortSignal,
-  ) => Promise<void>
+  ) => Promise<SessionResources>
 }
 
 /**
@@ -540,9 +539,8 @@ export class VelaSession {
   }
 
   /** @internal Session-scoped resource inventory for Vela's own CLI. */
-  async resources(): Promise<SessionResources> {
-    await this.deps.prepareWorkspace(this)
-    return this.deps.resourceSnapshot(this.id)
+  resources(): Promise<SessionResources> {
+    return this.deps.prepareWorkspace(this)
   }
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
@@ -553,7 +551,6 @@ export class VelaSession {
   /** @internal Runs this turn's handlers on a fresh prompt for /context, keeping nothing */
   async previewPrompt(): Promise<BeforeAgentStartResult> {
     await this.start()
-    await this.deps.prepareWorkspace(this)
     return this.deps.extensions.beforeAgentStart(this, '')
   }
 
@@ -683,7 +680,7 @@ export class VelaSession {
     // Selecting a user message moves to its parent, so only another entry at the leaf is a no-op
     if (targetId === oldLeafId && !isUser) return { cancelled: false }
     return this.exclusive('navigate the session tree', async (signal) => {
-      await this.start()
+      await this.start(signal)
       const oldBranch = this.store.getBranch(oldLeafId)
       const targetIds = new Set(
         this.store.getBranch(targetId).map((entry) => entry.id),
@@ -771,7 +768,6 @@ export class VelaSession {
     focus: string | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
-    await this.deps.prepareWorkspace(this, signal)
     let start = 0
     this.messages.forEach((message, index) => {
       const id = this.store.idOf(message)
@@ -841,8 +837,8 @@ export class VelaSession {
       selectedText = contentText(entry.message.content)
     }
     // Holds the run lock so no prompt appends to this session (or its tool history) while it is copied
-    return this.exclusive('fork', async () => {
-      await this.start()
+    return this.exclusive('fork', async (signal) => {
+      await this.start(signal)
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
       const branch = leafId === null ? [] : this.store.getBranch(leafId)
@@ -1024,7 +1020,7 @@ export class VelaSession {
       return Promise.reject(new Error(`Session ${this.id} is closed`))
     if (input.startsWith('/'))
       return (async () => {
-        await this.start()
+        await this.startExtensions()
         if (this.closed) throw new Error(`Session ${this.id} is closed`)
         if (await this.runCommand(input, options.signal)) return
         return this.promptInput(input, options)
@@ -1047,7 +1043,7 @@ export class VelaSession {
         : this.promptModel(text, { ...options, images })
     if (!this.deps.extensions.hasHandlers('input')) return next(input)
     return (async () => {
-      await this.start()
+      await this.startExtensions()
       const result = await this.deps.extensions.input(
         this,
         input,
@@ -1266,7 +1262,12 @@ export class VelaSession {
   }
 
   /** Before first use: waits for extensions to load and fires session_start (once). */
-  private start(): Promise<void> {
+  private async start(signal?: AbortSignal): Promise<void> {
+    await this.deps.prepareWorkspace(this, signal)
+    await this.startExtensions()
+  }
+
+  private startExtensions(): Promise<void> {
     this.started ??= this.deps.extensions.ready.then(() =>
       this.deps.extensions.sessionStart(this),
     )
@@ -1347,9 +1348,8 @@ export class VelaSession {
     inputs: ModelMessage[],
     signal: AbortSignal,
   ): Promise<void> {
-    await this.start()
+    await this.start(signal)
     signal.throwIfAborted()
-    await this.deps.prepareWorkspace(this, signal)
     const { info } = this.resolveModel()
     // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
     // resumed session keeps it even when the credentials change later
@@ -1459,8 +1459,7 @@ export class VelaSession {
    */
   async compact(focus?: string): Promise<void> {
     await this.exclusive('compact', async (signal) => {
-      await this.start()
-      await this.deps.prepareWorkspace(this, signal)
+      await this.start(signal)
       const request = await this.compactionRequest(signal)
       await this.contextManager.compact(request, focus)
       await this.saveOrReport()

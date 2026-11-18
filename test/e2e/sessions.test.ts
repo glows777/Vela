@@ -327,14 +327,13 @@ test('a session in the 0.5.0 flat layout lists, resumes and is converted on open
     ],
   })
   await first.run('Run the legacy command')
-  const history = readFileSync(first.session.registry.results.indexPath, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  // A pre-change session stored the whole reference instead of a preview plus a full-output path
+  // Seed the on-disk output a 0.5.0 install wrote even for a short command.
+  mkdirSync(first.session.registry.results.dir, { recursive: true })
+  const path = join(first.session.registry.results.dir, 'legacy-output.txt')
+  writeFileSync(path, 'legacy\n')
   const legacy = {
     kind: 'vela-tool-result',
-    path: history[1].outputPath,
+    path,
     indexPath: first.session.registry.results.indexPath,
     bytes: 7,
     preview: 'legacy\n',

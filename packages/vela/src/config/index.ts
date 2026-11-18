@@ -64,15 +64,14 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       env: options.env ?? {},
     },
   )
-  return {
-    ...core,
+  return Object.assign(core, {
     settings,
     mcp: {
       servers: section.mcpServers as Record<string, unknown>,
       sources: section.sources as Record<string, string>,
       errors: section.errors as string[],
     },
-  }
+  })
 }
 export function projectTrustRequired(
   cwd: string,

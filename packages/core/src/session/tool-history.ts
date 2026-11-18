@@ -178,7 +178,6 @@ export class ToolHistoryStore {
     toolName: string,
     toolCallId: string | undefined,
     input: unknown,
-    outputDir?: string,
   ): Promise<CallRecord> {
     const callId = crypto.randomUUID()
     return this.append<CallRecord>({
@@ -187,9 +186,6 @@ export class ToolHistoryStore {
       toolCallId: toolCallId ?? null,
       toolName,
       input,
-      ...(outputDir && {
-        plannedOutputPath: join(resolve(outputDir), `${callId}.txt`),
-      }),
     })
   }
 

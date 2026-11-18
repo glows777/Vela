@@ -12,6 +12,7 @@ export async function loadEnvironmentSkills(
   env: ExecutionEnv,
   cwd: string,
   signal?: AbortSignal,
+  homeSkillsOnly = false,
 ): Promise<SkillDefinition[]> {
   const join = async (...parts: string[]) =>
     unwrap(await env.joinPath(parts, signal))
@@ -103,6 +104,10 @@ export async function loadEnvironmentSkills(
       else if (rootFiles && entryKind === 'file' && entry.name.endsWith('.md'))
         await add(file)
     }
+  }
+  if (homeSkillsOnly) {
+    await scan(await join(cwd, '.skills'), true)
+    return [...found.values()]
   }
   await scan(await join(cwd, '.vela', 'skills'), true)
   let current = cwd

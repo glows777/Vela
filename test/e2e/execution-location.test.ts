@@ -258,14 +258,19 @@ test('execution environment resolver is consulted for each tool call and fails c
     model,
     env: ({ sessionId, location }) => {
       calls.push(`${sessionId}:${location.environment}`)
-      return calls.length === 1
+      // Prepare workspace resources, allow the first read, then take the environment offline.
+      return calls.length <= 2
         ? createLocalExecutionEnv({ cwd: location.cwd })
         : undefined
     },
   })
   try {
     await vela.session('resolver').prompt('read twice')
-    expect(calls).toEqual(['resolver:local', 'resolver:local'])
+    expect(calls).toEqual([
+      'resolver:local',
+      'resolver:local',
+      'resolver:local',
+    ])
     expect(model.calls[1]!.toolResults[0]!.output).toContain('host marker')
     expect(model.calls[2]!.toolResults[0]!.output).not.toContain('host marker')
     expect(model.calls[2]!.toolResults[0]!.output).toContain('unavailable')
@@ -865,18 +870,22 @@ test('stopping a model tool call does not wait for an unresolved environment', a
       release = resolve
     },
   )
+  let prepared = false
   const vela = createVela({
     cwd: dir.path,
     model: createFauxModel({
       responses: [fauxToolCall('read_file', { path: 'marker' })],
     }),
     env: () => {
+      if (!prepared) return createLocalExecutionEnv({ cwd: dir.path })
       entered()
       return pending
     },
   })
   try {
     const session = vela.session('stop-resolver')
+    await session.resources()
+    prepared = true
     const run = session.prompt('read')
     await called
     const stopped = session.abort()

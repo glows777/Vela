@@ -23,9 +23,9 @@ const SKILLS = [
 
 test('/skill lists the skills with how to run them', async () => {
   const t = createTestVela({ skills: SKILLS })
-  const { output } = await captureConsole(() => {
-    expect(t.dispatch('/skill')).toBe(true)
-    expect(t.dispatch('/skills')).toBe(true)
+  const { output } = await captureConsole(async () => {
+    expect(await t.command('/skill')).toBe(true)
+    expect(await t.command('/skills')).toBe(true)
   })
   expect(output).toContain('/skill:code-review — Review code changes')
   expect(output).toContain('/skill:release — Cut a release (manual only)')

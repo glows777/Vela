@@ -8,8 +8,9 @@ import type {
   CredentialStore,
   LoginOptions,
 } from './auth/types.ts'
-import { configResourceSplit } from './config/runtime-resources.ts'
+import type { ConfigResourceSplit } from './config/runtime-resources.ts'
 import { createSessionLocalExecutionEnv } from './execution/local.ts'
+import { abortable } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
@@ -52,6 +53,7 @@ import {
 import { setSavedSessionArchived } from './session/index.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
+import { WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
 import { type SessionSearchHit, searchSessionText } from './session/search.ts'
 import {
@@ -65,11 +67,7 @@ import {
   expandEnvironmentSkill,
   loadEnvironmentSkills,
 } from './skills/environment-skills.ts'
-import {
-  formatSkillsForPrompt,
-  type SkillDefinition,
-  SkillLoader,
-} from './skills/loader.ts'
+import { formatSkillsForPrompt, SkillLoader } from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
@@ -77,6 +75,8 @@ import { registerToolSearchTool } from './tools/tool-search.ts'
 import { VelaSession } from './vela-session.ts'
 
 export interface VelaOptions {
+  /** @internal Host/workspace resource split from the frontend configuration. */
+  sessionResources?: ConfigResourceSplit
   /** Resolve the execution environment for a session tool call. */
   env?: (target: {
     sessionId: string
@@ -249,13 +249,8 @@ export interface VelaInternals {
   runner: ExtensionRunner
   builder: SystemPromptBuilder
   skillLoader: SkillLoader
-  skillsFor: (sessionId: string) => readonly SkillDefinition[]
   promptTemplates: PromptTemplate[]
   loadedContextFiles: readonly ContextFile[]
-  prepareWorkspace: (
-    session: VelaSession,
-    signal?: AbortSignal,
-  ) => Promise<void>
   /** Finds (or downloads) rg / fd, shared with the grep and find tools */
   resolveBinary: BinaryResolver
 }
@@ -330,11 +325,7 @@ export function createVela(options: VelaOptions = {}): Vela {
 
   registerToolSearchTool(registry)
 
-  const resourceSplit = configResourceSplit(
-    options.skillDirs,
-    options.promptTemplateDirs,
-    options.contextFiles,
-  )
+  const resourceSplit = options.sessionResources
   const skillLoader = new SkillLoader(
     resourceSplit?.hostSkillDirs ?? options.skillDirs ?? [],
   )
@@ -349,11 +340,15 @@ export function createVela(options: VelaOptions = {}): Vela {
     logger.warn(`[resources] ${path}: ${message}`)
   const promptTemplates = templates.templates
   const contextFiles =
-    options.contextFiles === false ? [] : (options.contextFiles ?? [])
+    options.contextFiles === false
+      ? []
+      : (resourceSplit?.userContextFiles ?? options.contextFiles ?? [])
   const sessions = new Map<string, VelaSession>()
-  const sessionContextFiles = new Map<string, readonly ContextFile[]>()
-  const sessionSkills = new Map<string, readonly SkillDefinition[]>()
-  const sessionTemplates = new Map<string, PromptTemplate[]>()
+  const resources = new WorkspaceResources({
+    contextFiles,
+    skills: skillLoader.list(),
+    promptTemplates,
+  })
 
   // Named sections in pi's order; preamble, tools, rules and docs give way to a replacement prompt
   const builder = new SystemPromptBuilder({
@@ -368,15 +363,13 @@ export function createVela(options: VelaOptions = {}): Vela {
       {
         name: 'project_context',
         render: (ctx) =>
-          projectContext(
-            sessionContextFiles.get(ctx.sessionId) ?? contextFiles,
-          )(ctx),
+          projectContext(resources.get(ctx.sessionId).contextFiles)(ctx),
       },
       {
         name: 'skills',
         render: (ctx) =>
           formatSkillsForPrompt(
-            sessionSkills.get(ctx.sessionId) ?? skillLoader.list(),
+            resources.get(ctx.sessionId).skills,
             (ctx.activeTools ?? []).map((tool) => tool.name),
           ),
       },
@@ -411,7 +404,9 @@ export function createVela(options: VelaOptions = {}): Vela {
           tempRoot: session.registry.results.dir,
         })
     if (env?.id !== 'node:local' || env.cwd !== session.cwd)
-      throw new Error('Execution environment unavailable before E2')
+      throw new Error(
+        `Execution environment unavailable for local:${session.cwd}`,
+      )
     return env
   }
 
@@ -419,76 +414,83 @@ export function createVela(options: VelaOptions = {}): Vela {
     session: VelaSession,
     signal?: AbortSignal,
   ) => {
-    if (sessionContextFiles.has(session.id)) return
-    const location = session.cwd
-    const pending = ensureLocal(session)
-    let onAbort: (() => void) | undefined
-    const cancelled = new Promise<never>((_, reject) => {
-      onAbort = () => reject(signal?.reason)
-      signal?.addEventListener('abort', onAbort, { once: true })
-      if (signal?.aborted) onAbort()
-    })
-    let env: ExecutionEnv
-    try {
-      env = await Promise.race([pending, cancelled])
-    } finally {
-      if (onAbort) signal?.removeEventListener('abort', onAbort)
-    }
-    const workspace =
-      options.contextFiles === false
-        ? []
-        : await loadEnvironmentContextFiles(env, location, signal)
-    const workspaceSkills = (
-      resourceSplit
-        ? !resourceSplit.workspaceSkills
-        : options.skillDirs && location === cwd
-    )
-      ? []
-      : await loadEnvironmentSkills(env, location, signal)
-    const workspaceNames = new Set(workspaceSkills.map((skill) => skill.name))
-    const skills = [
-      ...workspaceSkills,
-      ...skillLoader.list().filter((skill) => !workspaceNames.has(skill.name)),
-    ]
-    const workspaceTemplates = (
-      resourceSplit
-        ? !resourceSplit.workspaceTemplates
-        : options.promptTemplateDirs && location === cwd
-    )
-      ? []
-      : await loadEnvironmentTemplates(env, location, signal)
-    const templateNames = new Set(
-      workspaceTemplates.map((template) => template.name),
-    )
-    const selectedTemplates = [
-      ...workspaceTemplates,
-      ...promptTemplates.filter(
-        (template) => !templateNames.has(template.name),
-      ),
-    ]
-    signal?.throwIfAborted()
-    if (session.cwd !== location)
-      throw new Error('Session location changed during resource preparation')
-    sessionSkills.set(session.id, skills)
-    sessionTemplates.set(session.id, selectedTemplates)
-    sessionContextFiles.set(
+    if (sessions.get(session.id) !== session)
+      throw new Error('Session is closed')
+    await resources.prepare(
       session.id,
-      options.contextFiles === false
-        ? []
-        : resourceSplit
-          ? [
-              ...resourceSplit.userContextFiles,
-              ...workspace.filter(
-                (item) =>
-                  !resourceSplit.userContextFiles.some(
-                    (host) => host.path === item.path,
-                  ),
-              ),
-            ]
-          : location === cwd && options.contextFiles
-            ? contextFiles
-            : workspace,
+      async (signal) => {
+        const location = session.cwd
+        const env = await abortable(ensureLocal(session), signal)
+        const pinned =
+          !resourceSplit &&
+          location === cwd &&
+          options.contextFiles !== undefined
+        const workspace =
+          options.contextFiles === false || pinned
+            ? []
+            : await loadEnvironmentContextFiles(env, location, signal)
+        const workspaceSkills = (
+          resourceSplit
+            ? resourceSplit.workspaceSkills === 'none' ||
+              (resourceSplit.workspaceSkills === 'home' && location !== cwd)
+            : options.skillDirs && location === cwd
+        )
+          ? []
+          : await loadEnvironmentSkills(
+              env,
+              location,
+              signal,
+              resourceSplit?.workspaceSkills === 'home',
+            )
+        const workspaceNames = new Set(
+          workspaceSkills.map((skill) => skill.name),
+        )
+        const skills = [
+          ...workspaceSkills,
+          ...skillLoader
+            .list()
+            .filter((skill) => !workspaceNames.has(skill.name)),
+        ]
+        const workspaceTemplates = (
+          resourceSplit
+            ? !resourceSplit.workspaceTemplates
+            : options.promptTemplateDirs && location === cwd
+        )
+          ? []
+          : await loadEnvironmentTemplates(env, location, signal)
+        const templateNames = new Set(
+          workspaceTemplates.map((template) => template.name),
+        )
+        const selectedTemplates = [
+          ...workspaceTemplates,
+          ...promptTemplates.filter(
+            (template) => !templateNames.has(template.name),
+          ),
+        ]
+        return {
+          skills,
+          promptTemplates: selectedTemplates,
+          contextFiles:
+            options.contextFiles === false
+              ? []
+              : resourceSplit
+                ? [
+                    ...resourceSplit.userContextFiles,
+                    ...workspace.filter(
+                      (item) =>
+                        !resourceSplit.userContextFiles.some(
+                          (host) => host.path === item.path,
+                        ),
+                    ),
+                  ]
+                : pinned
+                  ? contextFiles
+                  : workspace,
+        }
+      },
+      signal,
     )
+    return resources.get(session.id)
   }
 
   const session = (
@@ -525,23 +527,23 @@ export function createVela(options: VelaOptions = {}): Vela {
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
         expandInput: async (text, owner, signal) => {
           await prepareWorkspace(owner, signal)
-          const expanded =
-            !resourceSplit && options.skillDirs && owner.cwd === cwd
-              ? skillLoader.expand(text)
-              : await expandEnvironmentSkill(
-                  text,
-                  sessionSkills.get(owner.id) ?? [],
-                  await ensureLocal(owner),
-                  signal,
-                )
-          return (
-            expanded ??
-            expandPromptTemplate(
-              text,
-              sessionTemplates.get(owner.id) ?? promptTemplates,
-            ) ??
-            text
-          )
+          const snapshot = resources.get(owner.id)
+          const name = /^\/skill:([^\s]+)/.exec(text)?.[1]
+          const skill =
+            name && snapshot.skills.find((item) => item.name === name)
+          if (skill) {
+            const expanded =
+              skillLoader.get(skill.name) === skill
+                ? skillLoader.expand(text)
+                : await expandEnvironmentSkill(
+                    text,
+                    snapshot.skills,
+                    await abortable(ensureLocal(owner), signal),
+                    signal,
+                  )
+            if (expanded !== undefined) return expanded
+          }
+          return expandPromptTemplate(text, snapshot.promptTemplates) ?? text
         },
         extensions: runner,
         forward: (event, sessionId) => {
@@ -552,23 +554,14 @@ export function createVela(options: VelaOptions = {}): Vela {
         onSaved: (id) => options.onSessionSaved?.(id),
         ensureLocal,
         prepareWorkspace,
-        resourceSnapshot: (id) => ({
-          contextFiles: sessionContextFiles.get(id) ?? contextFiles,
-          skills: sessionSkills.get(id) ?? skillLoader.list(),
-          promptTemplates: sessionTemplates.get(id) ?? promptTemplates,
-        }),
         onCwdChange: (changed) => {
           sessionCwds.set(changed.registry, changed.cwd)
-          sessionContextFiles.delete(changed.id)
-          sessionSkills.delete(changed.id)
-          sessionTemplates.delete(changed.id)
+          resources.clear(changed.id)
         },
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
-            sessionContextFiles.delete(closed.id)
-            sessionSkills.delete(closed.id)
-            sessionTemplates.delete(closed.id)
+            resources.clear(closed.id)
           }
         },
       },
@@ -601,24 +594,12 @@ export function createVela(options: VelaOptions = {}): Vela {
         try {
           const signal = session.signal
           if (signal?.aborted) throw signal.reason
-          let onAbort: (() => void) | undefined
-          try {
-            context.execution = await Promise.race([
-              ensureLocal(session),
-              new Promise<never>((_, reject) => {
-                onAbort = () => reject(signal?.reason)
-                signal?.addEventListener('abort', onAbort, { once: true })
-                if (signal?.aborted) onAbort()
-              }),
-            ])
-          } finally {
-            if (onAbort) signal?.removeEventListener('abort', onAbort)
-          }
+          context.execution = await abortable(ensureLocal(session), signal)
         } catch {
           return {
             input,
             block: true,
-            reason: 'Execution environment unavailable before E2',
+            reason: `Execution environment unavailable for local:${session.cwd}`,
           }
         }
       }
@@ -757,11 +738,8 @@ export function createVela(options: VelaOptions = {}): Vela {
     runner,
     builder,
     skillLoader,
-    skillsFor: (sessionId) =>
-      sessionSkills.get(sessionId) ?? skillLoader.list(),
     promptTemplates,
     loadedContextFiles: contextFiles,
-    prepareWorkspace,
     resolveBinary,
   })
   return vela

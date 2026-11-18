@@ -66,7 +66,7 @@ export async function inspectSession(
   options: { previewExtensions?: boolean } = {},
 ): Promise<SessionInspection> {
   const internal = velaInternals(vela)
-  await internal.prepareWorkspace(session)
+  const resources = await session.resources()
   const preview = options.previewExtensions
     ? await session.previewPrompt()
     : undefined
@@ -79,7 +79,7 @@ export async function inspectSession(
   const active = session.registry.getActiveTools()
   const skills =
     formatSkillsForPrompt(
-      internal.skillsFor(session.id),
+      resources.skills,
       active.map((tool) => tool.name),
     ) ?? ''
   return {

@@ -5,8 +5,12 @@ import { Glob } from 'bun'
 import ts from 'typescript'
 
 const hostHelpers: Record<string, readonly string[]> = {
+  // Public host resource loaders, including Vela's own installed documentation.
+  'packages/core/src/prompt/context-files.ts': ['fs'],
+  'packages/core/src/prompt/templates.ts': ['fs'],
+  'packages/core/src/prompt/index.ts': ['fs'],
+  'packages/core/src/skills/loader.ts': ['fs'],
   'packages/core/src/tools/binaries.ts': ['fs', 'child_process'],
-  'packages/core/src/tools/file-mutation-queue.ts': ['fs'],
   'packages/core/src/tools/process-tree.ts': ['child_process'],
 }
 
@@ -14,11 +18,19 @@ const hostHelpers: Record<string, readonly string[]> = {
 export async function checkExecutionBoundaries(
   root: string,
 ): Promise<string[]> {
-  const dir = join(root, 'packages/core/src/tools')
   const paths: string[] = []
-  for await (const path of new Glob('**/*.ts').scan({ cwd: dir, dot: true }))
-    paths.push(join(dir, path))
-  paths.push(join(root, 'packages/core/src/session/user-bash.ts'))
+  for (const pattern of [
+    'packages/core/src/tools/**/*.ts',
+    'packages/core/src/prompt/**/*.ts',
+    'packages/core/src/skills/**/*.ts',
+    'packages/core/src/extensions/background/**/*.ts',
+    'packages/core/src/session/user-bash.ts',
+    'packages/core/src/context/compressor.ts',
+    'packages/channels/src/attachments.ts',
+  ]) {
+    for await (const path of new Glob(pattern).scan(root))
+      paths.push(join(root, path))
+  }
   const errors: string[] = []
   for (const file of paths) {
     const path = relative(root, file).replaceAll('\\', '/')

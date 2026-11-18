@@ -1,5 +1,6 @@
 import type { CompactionReason, VelaEventListener } from '../agent/events.ts'
 import { createSessionLocalExecutionEnv } from '../execution/local.ts'
+import { abortable } from '../execution/location.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { resolveLimits, type VelaLimits } from '../limits.ts'
 import type { ModelMessage } from '../messages.ts'
@@ -232,18 +233,7 @@ export class ContextManager {
             tempRoot: this.store.results.dir,
           }),
         )
-      let onAbort: (() => void) | undefined
-      const aborted = new Promise<never>((_, reject) => {
-        onAbort = () => reject(signal?.reason)
-        signal?.addEventListener('abort', onAbort, { once: true })
-        if (signal?.aborted) onAbort()
-      })
-      let env: ExecutionEnv
-      try {
-        env = await Promise.race([pending, aborted])
-      } finally {
-        if (onAbort) signal?.removeEventListener('abort', onAbort)
-      }
+      const env = await abortable(pending, signal)
       const paths = await persistMicrocompact(
         micro.candidates,
         this.store.results,

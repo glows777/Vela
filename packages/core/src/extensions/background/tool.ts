@@ -79,7 +79,7 @@ export function createBackgroundTools(
     {
       name: 'stop',
       description:
-        'Stop a background command through its execution environment. Returns its last output. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
+        'Abort a background command through its execution environment. Returns its last output. An unknown id means its result was already delivered or returned by a stop, or it ended with a restart or session close.',
       inputSchema: stopSchema,
       activeByDefault: false,
       executionMode: 'sequential',

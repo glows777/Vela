@@ -12,13 +12,14 @@ import {
 import {
   type ContextFile,
   loadAgentContextFile,
+  loadContextFiles,
 } from '../prompt/context-files.ts'
 import { isToolModifier, mergeDefaultTools } from '../tools/tool-selection.ts'
 import type { ExtensionConfigDefinition } from './extension-config.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
-import { rememberResourceSplit } from './runtime-resources.ts'
+import type { ConfigResourceSplit } from './runtime-resources.ts'
 
 /** Contents of settings.json (user: `~/.vela/settings.json`, project: `<cwd>/.vela/settings.json`). */
 export interface VelaSettings {
@@ -80,6 +81,8 @@ export interface LoadConfigOptions {
 
 /** Result of loadConfig(), ready to wire into createVela(). */
 export interface VelaConfig {
+  /** @internal Resource provenance for Vela-owned frontends. */
+  sessionResources?: ConfigResourceSplit
   cwd: string
   agentDir: string
   dataDir: string
@@ -206,22 +209,6 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   // Project skills and prompts need trust like project extensions (pi skips .pi/skills, .agents/skills and
   // .pi/prompts when untrusted). Run from the home directory, `.skills` next to ~/.vela counts as user-level.
   const homeDir = resolve(options.homeDir ?? homedir())
-  const skillDirs = [
-    ...new Set([
-      ...(trusted ? [join(projectDir, 'skills')] : []),
-      ...(trusted || projectDir === agentDir ? [join(cwd, '.skills')] : []),
-      ...(settings.skills ?? []),
-      join(agentDir, 'skills'),
-      join(homeDir, '.agents', 'skills'),
-    ]),
-  ]
-  const promptDirs = [
-    ...new Set([
-      ...(trusted ? [join(projectDir, 'prompts')] : []),
-      ...(settings.prompts ?? []),
-      join(agentDir, 'prompts'),
-    ]),
-  ]
   const hostSkillDirs = [
     ...new Set([
       ...(settings.skills ?? []),
@@ -233,14 +220,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     ...new Set([...(settings.prompts ?? []), join(agentDir, 'prompts')]),
   ]
   const userContext = loadAgentContextFile(agentDir)
-  const contextFiles = userContext ? [userContext] : []
-  rememberResourceSplit([skillDirs, promptDirs, contextFiles], {
-    userContextFiles: contextFiles,
-    hostSkillDirs,
-    hostPromptDirs,
-    workspaceSkills: trusted || projectDir === agentDir,
-    workspaceTemplates: trusted,
-  })
+  let skillDirs: string[] | undefined
+  let contextFiles: ContextFile[] | undefined
   // The project file wins over the user file (like APPEND_SYSTEM.md)
   const systemFile = [
     ...(trusted ? [join(projectDir, 'SYSTEM.md')] : []),
@@ -268,9 +249,47 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     userExtensionConfig,
     files,
     extensions,
-    skillDirs,
-    promptDirs,
-    contextFiles,
+    sessionResources: {
+      userContextFiles: userContext ? [userContext] : [],
+      hostSkillDirs,
+      hostPromptDirs,
+      workspaceSkills: trusted
+        ? 'all'
+        : projectDir === agentDir
+          ? 'home'
+          : 'none',
+      workspaceTemplates: trusted,
+    },
+    // SDK consumers can still request the host's original local configuration view.
+    // Vela's frontends pass sessionResources, so they never force these workspace reads.
+    get skillDirs() {
+      skillDirs ??= [
+        ...new Set([
+          ...(trusted
+            ? [join(projectDir, 'skills'), ...ancestorAgentsSkillDirs(cwd)]
+            : []),
+          ...(trusted || projectDir === agentDir ? [join(cwd, '.skills')] : []),
+          ...hostSkillDirs,
+        ]),
+      ]
+      return skillDirs
+    },
+    set skillDirs(value) {
+      skillDirs = value
+    },
+    promptDirs: [
+      ...new Set([
+        ...(trusted ? [join(projectDir, 'prompts')] : []),
+        ...hostPromptDirs,
+      ]),
+    ],
+    get contextFiles() {
+      contextFiles ??= loadContextFiles({ cwd, agentDir })
+      return contextFiles
+    },
+    set contextFiles(value) {
+      contextFiles = value
+    },
     ...(systemFile ? { systemPrompt: readFileSync(systemFile, 'utf-8') } : {}),
     ...(appendFile
       ? { appendSystemPrompt: readFileSync(appendFile, 'utf-8') }

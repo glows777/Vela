@@ -1,19 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { ResourceDiagnostic } from '../skills/loader.ts'
-import { parseFrontmatter } from './frontmatter.ts'
+import { type PromptTemplate, parseTemplate } from './template-definition.ts'
 
-/** A prompt template: `/<name> args` expands to its body (same as pi's `PromptTemplate`). */
-export interface PromptTemplate {
-  /** File name without `.md` */
-  name: string
-  /** Frontmatter `description`, or the body's first line (at most 60 characters) */
-  description: string
-  /** Frontmatter `argument-hint`, shown in completion */
-  argumentHint?: string
-  content: string
-  filePath: string
-}
+export type { PromptTemplate } from './template-definition.ts'
 
 /**
  * Loads templates from `.md` files in the given directories (not recursive) or given `.md` files, like pi
@@ -58,28 +48,14 @@ function isFile(path: string): boolean {
 }
 
 function loadTemplate(filePath: string): PromptTemplate | ResourceDiagnostic {
-  let frontmatter: Record<string, unknown>
-  let body: string
   try {
-    ;({ frontmatter, body } = parseFrontmatter(readFileSync(filePath, 'utf-8')))
+    return parseTemplate(
+      basename(filePath, '.md'),
+      filePath,
+      readFileSync(filePath, 'utf-8'),
+    )
   } catch (error) {
     return { message: (error as Error).message, path: filePath }
-  }
-  let description =
-    typeof frontmatter.description === 'string' ? frontmatter.description : ''
-  if (!description) {
-    const firstLine = body.split('\n').find((line) => line.trim())
-    if (firstLine)
-      description =
-        firstLine.length > 60 ? `${firstLine.slice(0, 60)}...` : firstLine
-  }
-  const hint = frontmatter['argument-hint']
-  return {
-    name: basename(filePath, '.md'),
-    description,
-    ...(typeof hint === 'string' && hint ? { argumentHint: hint } : {}),
-    content: body,
-    filePath,
   }
 }
 

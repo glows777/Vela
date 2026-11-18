@@ -280,9 +280,8 @@ const vela = createVela({
   cwd,
   dataDir: config.dataDir,
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
-  skillDirs: config.skillDirs,
-  promptTemplateDirs: config.promptDirs,
-  contextFiles: args.noContextFiles ? false : config.contextFiles,
+  sessionResources: config.sessionResources,
+  contextFiles: args.noContextFiles ? false : undefined,
   systemPrompt: args.systemPrompt.length
     ? args.systemPrompt.map(readPromptInput).join('\n\n')
     : config.systemPrompt,

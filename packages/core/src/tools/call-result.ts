@@ -140,15 +140,12 @@ export async function prepareCallResult({
       ? raw instanceof ToolExecutionResult && raw.content
         ? `full model text saved at: ${stored.path}; native result details remain unconfirmed`
         : `full output saved at: ${stored.path}`
-      : `planned output path: ${call.plannedOutputPath} (may be missing or incomplete)`
+      : 'no full output file was saved'
     const status =
       execution.exitCode === undefined ? '' : ` exitCode=${execution.exitCode}`
-    const recovery =
-      stored && stored.path === call.plannedOutputPath
-        ? 'The output location is also recorded in tool_call.plannedOutputPath.'
-        : stored
-          ? 'The actual output path shown above was not recorded in tool_call.plannedOutputPath.'
-          : 'The planned output path may not contain the output.'
+    const recovery = stored
+      ? 'The output path was allocated after the call began and was not pre-recorded.'
+      : ''
     const failure = new Error(
       `Tool ${name} ran, but saving its result failed. The result is unconfirmed; do not rerun it automatically. callId=${call.callId}${status}; ${location}. ${recovery} Verify it is complete; do not treat the call as successful because of it. ${error}`,
     )

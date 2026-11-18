@@ -1,6 +1,5 @@
 import type { ExecutionEnv } from '../execution/types.ts'
-import { parseFrontmatter } from './frontmatter.ts'
-import type { PromptTemplate } from './templates.ts'
+import { type PromptTemplate, parseTemplate } from './template-definition.ts'
 
 /** Read workspace templates from the selected execution environment. */
 export async function loadEnvironmentTemplates(
@@ -30,34 +29,32 @@ export async function loadEnvironmentTemplates(
   for (const entry of entries.value
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.kind !== 'file' || !entry.name.endsWith('.md')) continue
+    if (
+      !entry.name.endsWith('.md') ||
+      (entry.kind !== 'file' && entry.kind !== 'symlink')
+    )
+      continue
     const file = await env.joinPath([path.value, entry.name], signal)
     if (!file.ok) throw file.error
+    if (entry.kind === 'symlink') {
+      const target = await env.canonicalPath(file.value, signal)
+      if (!target.ok) {
+        if (target.error.code === 'not_found') continue
+        throw target.error
+      }
+      const info = await env.fileInfo(target.value, signal)
+      if (!info.ok) throw info.error
+      if (info.value.kind !== 'file') continue
+    }
     const source = await env.readTextFile(file.value, signal)
     if (!source.ok) throw source.error
-    let data: ReturnType<typeof parseFrontmatter>
     try {
-      data = parseFrontmatter(source.value)
+      templates.push(
+        parseTemplate(entry.name.slice(0, -3), file.value, source.value),
+      )
     } catch {
-      continue
+      // Invalid frontmatter skips only this template.
     }
-    let description =
-      typeof data.frontmatter.description === 'string'
-        ? data.frontmatter.description
-        : ''
-    if (!description) {
-      const line = data.body.split('\n').find((item) => item.trim())
-      if (line)
-        description = line.length > 60 ? `${line.slice(0, 60)}...` : line
-    }
-    const hint = data.frontmatter['argument-hint']
-    templates.push({
-      name: entry.name.slice(0, -3),
-      description,
-      ...(typeof hint === 'string' && hint ? { argumentHint: hint } : {}),
-      content: data.body,
-      filePath: file.value,
-    })
   }
   return templates
 }

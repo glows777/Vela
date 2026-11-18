@@ -8,7 +8,7 @@ import type { CommandHandler } from './index.ts'
 
 /** `/status`: session overview (model, id and where it is saved, context and token usage). */
 export const statusCommands: CommandHandler[] = [
-  (cmd, { print, vela, session, agentDir }) => {
+  (cmd, { print, session, agentDir }) => {
     if (cmd !== '/status') return false
     return (async () => {
       let model: string
@@ -27,11 +27,11 @@ export const statusCommands: CommandHandler[] = [
         '\n[status]',
         `  Session: ${name ? `${name} (${session.id})` : session.id}`,
         `  Path: ${sessionPath(session, agentDir)}`,
-        `  Cwd: ${plain(vela.cwd)}`,
+        `  Cwd: ${plain(session.cwd)}`,
       ]
       const contextFiles = plain(
         formatContextFileList((await session.resources()).contextFiles, {
-          cwd: vela.cwd,
+          cwd: session.cwd,
           homeDir: homedir(),
           agentDir,
         }),

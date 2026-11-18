@@ -130,8 +130,9 @@ export const createReadFileTool = (cwd?: string): ToolDefinition => ({
     const image = await readSpecialFile(env, file, path, context?.signal)
     if (image) return image
     const state = stateFor(context)
-    const guardKey = `${env.id}:${file}`
-    const snapshot = unwrap(await env.fileInfo(file, context?.signal))
+    const canonical = unwrap(await env.canonicalPath(file, context?.signal))
+    const guardKey = `${env.id}:${canonical}`
+    const snapshot = unwrap(await env.fileInfo(canonical, context?.signal))
     const decoder = new TextDecoder('utf-8', { fatal: true })
     // Validate every chunk the pager reads, including bytes past the header.
     // Streaming preserves UTF-8 characters split across chunks.
@@ -234,13 +235,13 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
       createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
     const signal = context?.signal
     const resolved = unwrap(await env.absolutePath(path, signal))
-    const guardKey = `${env.id}:${resolved}`
     const state = stateFor(context)
     await withEnvironmentMutationQueue(
       resolved,
-      async () => {
+      async (canonical) => {
+        const guardKey = `${env.id}:${canonical}`
         if (state) {
-          const info = await env.fileInfo(resolved, signal)
+          const info = await env.fileInfo(canonical, signal)
           if (!info.ok && info.error.code !== 'not_found') throw info.error
           const refusal = state.refusal(
             guardKey,
@@ -255,7 +256,7 @@ export const createWriteFileTool = (cwd?: string): ToolDefinition => ({
         if (state)
           state.noteWritten(
             guardKey,
-            unwrap(await env.fileInfo(resolved, signal)),
+            unwrap(await env.fileInfo(canonical, signal)),
           )
       },
       env,
@@ -386,16 +387,22 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
       createLocalExecutionEnv({ cwd: cwd ?? process.cwd() })
     const signal = context?.signal
     const resolved = unwrap(await env.absolutePath(path, signal))
-    const guardKey = `${env.id}:${resolved}`
     const state = stateFor(context)
     return withEnvironmentMutationQueue(
       resolved,
-      async () => {
+      async (canonical) => {
+        const guardKey = `${env.id}:${canonical}`
         const throwIfAborted = () => {
           if (signal?.aborted) throw new Error('Operation aborted')
         }
         throwIfAborted()
-        const raw = unwrap(await env.readTextFile(resolved, signal))
+        const read = await env.readTextFile(resolved, signal)
+        if (!read.ok)
+          throw new Error(
+            `Could not edit file: ${path}. ${read.error.message}`,
+            { cause: read.error },
+          )
+        const raw = read.value
         throwIfAborted()
         // The model never includes an invisible BOM in oldText; match without it and restore it on write
         const { bom, text } = splitBom(raw)
@@ -416,7 +423,7 @@ export const createEditFileTool = (cwd?: string): ToolDefinition => ({
         if (state)
           state.noteWritten(
             guardKey,
-            unwrap(await env.fileInfo(resolved, signal)),
+            unwrap(await env.fileInfo(canonical, signal)),
           )
         throwIfAborted()
         const { diff, firstChangedLine } = generateDiffString(

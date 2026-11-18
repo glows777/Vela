@@ -348,23 +348,26 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       await session.save()
     },
     // Like pi: extension commands, prompt templates and skills, each with its `source`
-    get_commands: async () => ({
-      commands: [
-        ...vela
-          .commands()
-          .map((command) => ({ ...command, source: 'extension' as const })),
-        ...(await session.resources()).promptTemplates.map((t) => ({
-          name: t.name,
-          description: t.description,
-          source: 'prompt' as const,
-        })),
-        ...(await session.resources()).skills.map((s) => ({
-          name: `skill:${s.name}`,
-          description: s.description,
-          source: 'skill' as const,
-        })),
-      ],
-    }),
+    async get_commands() {
+      const resources = await session.resources()
+      return {
+        commands: [
+          ...vela
+            .commands()
+            .map((command) => ({ ...command, source: 'extension' as const })),
+          ...resources.promptTemplates.map((t) => ({
+            name: t.name,
+            description: t.description,
+            source: 'prompt' as const,
+          })),
+          ...resources.skills.map((s) => ({
+            name: `skill:${s.name}`,
+            description: s.description,
+            source: 'skill' as const,
+          })),
+        ],
+      }
+    },
   }
 
   async function enqueue(command: RpcCommand, behavior: 'steer' | 'followUp') {

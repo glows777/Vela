@@ -1,4 +1,4 @@
-import { createLocalExecutionEnv } from '../execution/local.ts'
+import { createSessionLocalExecutionEnv } from '../execution/local.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
 import {
   fitOutputTail,
@@ -16,13 +16,18 @@ export async function environmentBash(
   shellPath: string | undefined,
   context: ToolContext | undefined,
 ) {
+  const results = context?.results ?? new ToolResultStore()
   const env =
     context?.execution ??
-    createLocalExecutionEnv({ cwd: cwd ?? process.cwd(), shellPath })
-  const results = context?.results ?? new ToolResultStore()
+    createSessionLocalExecutionEnv({
+      cwd: cwd ?? process.cwd(),
+      shellPath,
+      tempRoot: results.dir,
+    })
   let tail = '',
     cut = false,
     bytes = 0
+  let lastUpdate = -Infinity
   const result = await env.exec(
     command,
     {
@@ -33,9 +38,13 @@ export async function environmentBash(
         const combined = Buffer.from(tail + text)
         if (combined.length > OUTPUT_MAX_BYTES) cut = true
         tail = combined.subarray(-OUTPUT_MAX_BYTES).toString()
-        context?.onUpdate?.({
-          content: [{ type: 'text', text: fitOutputTail(tail, cut).text }],
-        })
+        const now = performance.now()
+        if (context?.onUpdate && now - lastUpdate >= 100) {
+          lastUpdate = now
+          context.onUpdate({
+            content: [{ type: 'text', text: fitOutputTail(tail, cut).text }],
+          })
+        }
       },
     },
     context?.signal,

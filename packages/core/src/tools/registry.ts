@@ -433,12 +433,7 @@ export class ToolRegistry {
       this.shared.logger.debug(`[tools] ${name} started (${mode})`)
       this.assertHealthy()
       const history = this.results.history
-      const call = await history.begin(
-        name,
-        options.toolCallId,
-        input,
-        this.results.dir,
-      )
+      const call = await history.begin(name, options.toolCallId, input)
       const started = performance.now()
       let settled = false
       const onUpdate = (partialResult: unknown) => {

@@ -1,16 +1,8 @@
 import { spawnSync } from 'node:child_process'
-import {
-  accessSync,
-  chmodSync,
-  constants,
-  createWriteStream,
-  existsSync,
-  readdirSync,
-  statSync,
-} from 'node:fs'
+import { chmodSync, createWriteStream, existsSync, readdirSync } from 'node:fs'
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { VelaLogger } from '../logger.ts'
@@ -140,20 +132,14 @@ async function resolveBinary(
 }
 
 function onPath(command: string): boolean {
-  const extensions =
+  // Resolve the name without executing a candidate outside the session environment.
+  const result =
     platform() === 'win32'
-      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')
-      : ['']
-  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
-    for (const extension of extensions) {
-      try {
-        const candidate = join(directory || '.', command + extension)
-        accessSync(candidate, constants.X_OK)
-        if (statSync(candidate).isFile()) return true
-      } catch {}
-    }
-  }
-  return false
+      ? spawnSync('where.exe', [command], { stdio: 'ignore' })
+      : spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'vela', command], {
+          stdio: 'ignore',
+        })
+  return result.status === 0
 }
 
 async function download(

@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CombinedAutocompleteProvider,
   type Component,
   Container,
   Loader,
@@ -40,7 +39,7 @@ import {
 import { createCliDispatcher } from './dispatcher.ts'
 import { formatContextFileList } from './status-display.ts'
 import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
-import { CLI_COMMANDS, HOTKEYS, TUI_COMMANDS } from './tui/commands.ts'
+import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
   AssistantMessage,
   agentEndNotice,
@@ -102,6 +101,8 @@ export class InteractiveMode {
   private readonly terminal: Terminal
   private readonly vela: Vela
   private readonly options: InteractiveOptions
+  private fdPath?: string
+  private refreshCompletion?: () => void
   private session!: VelaSession
 
   private readonly header = new Container()
@@ -211,6 +212,18 @@ export class InteractiveMode {
     } catch (error) {
       this.addNotice(errorMessage(error), 'error')
     }
+    // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
+    resolveBinary(vela, 'fd')
+      .then((fdPath) => {
+        this.fdPath = fdPath
+        this.refreshCompletion?.()
+      })
+      .catch((error) =>
+        this.addNotice(
+          `@ file completion is off: ${errorMessage(error)}`,
+          'warning',
+        ),
+      )
     const modelOk = await this.openSession(sessionId, resume, true)
     if ((options.setupOnly || !modelOk) && options.agentDir) {
       try {
@@ -262,46 +275,7 @@ export class InteractiveMode {
       }
     }
     if (this.shuttingDown) return
-    await this.setAutocomplete()
-    // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
-    resolveBinary(vela, 'fd')
-      .then((fdPath) => this.setAutocomplete(fdPath))
-      .catch((error) =>
-        this.addNotice(
-          `@ file completion is off: ${errorMessage(error)}`,
-          'warning',
-        ),
-      )
     this.tui.requestRender()
-  }
-
-  private async setAutocomplete(fdPath?: string): Promise<void> {
-    const vela = this.vela
-    const resources = await this.session.resources()
-    this.editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(
-        [
-          ...TUI_COMMANDS,
-          ...CLI_COMMANDS,
-          ...resources.promptTemplates.map((t) => ({
-            name: t.name,
-            description: t.argumentHint
-              ? `${t.argumentHint} — ${t.description}`
-              : t.description,
-          })),
-          ...resources.skills.map((s) => ({
-            name: `skill:${s.name}`,
-            description: s.description,
-          })),
-          ...vela.commands().map((c) => ({
-            name: c.name,
-            description: c.description ?? `Extension ${c.extension}`,
-          })),
-        ],
-        vela.cwd,
-        fdPath,
-      ),
-    )
   }
 
   // ---------------------------------------------------------------- Sessions
@@ -326,15 +300,18 @@ export class InteractiveMode {
       setupNext && !isModelUsable(session, this.options.hasUsableModel)
     this.options.configure(session, { quiet: silent })
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
-    if (startup) {
-      const contextFiles = formatContextFileList(
-        (await session.resources()).contextFiles,
-        {
-          cwd: session.cwd,
-          homeDir: homedir(),
-          agentDir: this.options.agentDir,
-        },
+    const resources = await session.resources()
+    this.refreshCompletion = () =>
+      this.editor.setAutocompleteProvider(
+        commandCompletions(this.vela, session, resources, this.fdPath),
       )
+    this.refreshCompletion()
+    if (startup) {
+      const contextFiles = formatContextFileList(resources.contextFiles, {
+        cwd: session.cwd,
+        homeDir: homedir(),
+        agentDir: this.options.agentDir,
+      })
       if (contextFiles) this.addNotice(`[context] ${contextFiles}`)
     }
     this.renderHeader(modelOk || setupNext)

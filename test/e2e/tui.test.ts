@@ -961,6 +961,26 @@ test('@ suggests files in the working directory (fd found on PATH, like pi)', as
   await tui.until('src/alpha-file.ts')
 })
 
+test('switching session updates command and file completion to its workspace', async () => {
+  const t = createTestVela({
+    files: {
+      'other/.vela/prompts/othercmd.md': 'Only in the other session',
+      'other/scope-file.txt': 'content',
+    },
+  })
+  t.vela.session('tui-new-1', { cwd: 'other' })
+  const tui = await startTui(t.vela)
+  await tui.started
+  tui.submit('/new')
+  await tui.until('session tui-new-1')
+  tui.terminal.type('/otherc')
+  await tui.until('Only in the other session')
+  tui.terminal.press(KEYS.ctrlC)
+  tui.terminal.type('read @scope-file')
+  await tui.until('scope-file.txt')
+  expect(tui.screen()).not.toContain('other/scope-file.txt')
+})
+
 test('/ suggests prompt templates (with their argument hint) and skills as skill:<name>', async () => {
   const t = createTestVela({
     files: {

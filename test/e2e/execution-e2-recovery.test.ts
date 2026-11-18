@@ -9,6 +9,7 @@ import {
   tempDir,
 } from '@glows777/vela/testing'
 import { createLocalExecutionEnv, loadConfig } from '@glows777/vela-core'
+import { inspectSession } from '@glows777/vela-core/diagnostics'
 
 test('read_file uses the selected execution environment instead of reading the host', async () => {
   const dir = tempDir()
@@ -738,9 +739,7 @@ test('CLI config keeps user instructions host-side but reads workspace instructi
   const vela = createVela({
     cwd: workspace,
     model,
-    contextFiles: config.contextFiles,
-    skillDirs: config.skillDirs,
-    promptTemplateDirs: config.promptDirs,
+    sessionResources: structuredClone(config.sessionResources),
     env: ({ location }) => {
       const env = createLocalExecutionEnv({ cwd: location.cwd })
       const read = env.readTextFile.bind(env)
@@ -782,9 +781,7 @@ test('untrusted CLI workspace does not load workspace skills or templates', asyn
   const vela = createVela({
     cwd: workspace,
     model,
-    contextFiles: config.contextFiles,
-    skillDirs: config.skillDirs,
-    promptTemplateDirs: config.promptDirs,
+    sessionResources: structuredClone(config.sessionResources),
   })
   try {
     await vela.session('untrusted').prompt('/untrusted')
@@ -816,9 +813,7 @@ test('trusted CLI workspace loads its skills and templates through env', async (
   const vela = createVela({
     cwd: workspace,
     model,
-    contextFiles: config.contextFiles,
-    skillDirs: config.skillDirs,
-    promptTemplateDirs: config.promptDirs,
+    sessionResources: structuredClone(config.sessionResources),
   })
   try {
     await vela.session('trusted').prompt('/project')
@@ -848,9 +843,7 @@ test('trusted workspace discovers ancestor .agents skills through the environmen
   const vela = createVela({
     cwd: workspace,
     model,
-    contextFiles: config.contextFiles,
-    skillDirs: config.skillDirs,
-    promptTemplateDirs: config.promptDirs,
+    sessionResources: structuredClone(config.sessionResources),
   })
   try {
     await vela.session('ancestor').prompt('hello')
@@ -878,6 +871,62 @@ test('workspace skill discovery follows symlinks and tolerates malformed neighbo
   try {
     await vela.session('linked-skills').prompt('hello')
     expect(model.calls[0]!.system).toContain('LINKED_SKILL')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('overlapping session inspections and subsequent wakes share one workspace prompt', async () => {
+  const dir = tempDir()
+  const instructions = join(dir.path, 'AGENTS.md')
+  writeFileSync(instructions, 'cache fixture')
+  let loads = 0
+  const model = createFauxModel({
+    responses: [fauxText('one'), fauxText('two')],
+  })
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = (path, signal) => {
+        if (path === instructions) loads++
+        return read(path, signal)
+      }
+      return env
+    },
+  })
+  try {
+    const session = vela.session('inspection')
+    const [first, second] = await Promise.all([
+      inspectSession(vela, session),
+      inspectSession(vela, session),
+    ])
+    await session.prompt('one')
+    await session.prompt('two')
+    expect(first.systemPrompt).toBe(second.systemPrompt)
+    expect(model.calls[0]!.system).toBe(model.calls[1]!.system)
+    expect(loads).toBe(1)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('a workspace prompt template can link to a shared Markdown file', async () => {
+  const dir = tempDir()
+  const prompts = join(dir.path, '.vela', 'prompts')
+  mkdirSync(prompts, { recursive: true })
+  const target = join(dir.path, 'shared.md')
+  writeFileSync(target, 'Shared prompt for $1')
+  symlinkSync(target, join(prompts, 'review.md'))
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({ cwd: dir.path, model })
+  try {
+    await vela.session('linked-template').prompt('/review code')
+    expect(model.calls[0]!.lastUserText).toBe('Shared prompt for code')
   } finally {
     await vela.dispose()
     dir.cleanup()

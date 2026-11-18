@@ -36,6 +36,8 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
   }
   mkdirSync(join(host, '.vela', 'prompts'), { recursive: true })
   writeFileSync(join(host, '.vela', 'prompts', 'hello.md'), 'Host template $1')
+  mkdirSync(join(a, '.vela', 'prompts'), { recursive: true })
+  writeFileSync(join(a, '.vela', 'prompts', 'hello.md'), 'Alpha template $1')
   const modelA = createFauxModel({ responses: [] })
   const modelB = createFauxModel({ responses: [] })
   const vela = createVela({
@@ -104,7 +106,7 @@ test('SDK sessions use independent cwd for tools and context, preserving applica
     expect(await sb.exportHtml('export.html')).toBe(join(host, 'export.html'))
     modelA.push(fauxText('template'))
     await sa.prompt('/hello check')
-    expect(modelA.calls.at(-1)!.lastUserText).toBe('Host template check')
+    expect(modelA.calls.at(-1)!.lastUserText).toBe('Alpha template check')
     const cloned = (await sa.clone({ sessionId: 'clone' })).session!
     expect((await cloned.executeBash('cat same.txt')).output).toBe('ALPHA')
     await sa.close()

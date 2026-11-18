@@ -237,6 +237,8 @@ Custom `LarkTransport` implementations must provide `getBotId`, `getSenderName`,
 
 `startTopic(messageId, title)` posts the title as the first visible message and returns `{ messageId, createTime, rootId, threadId }` from the successful threaded reply. `forward(messageId, threadId)` returns `{ messageId, createTime }` from the successful forward. Missing required receipt fields and platform errors must reject; do not pretend an unthreaded send created a topic.
 
+A channel can include `files` on an incoming message. Each entry carries a source message ID (`id`), a filename (`name`) and bytes (`data`). The gateway replaces the matching `[file: <name>]` marker with the session environment path after writing the file. Normal delivery and steering use the same operation.
+
 For attachments, implement `getResource(messageId, key, type)` returning a Node readable stream, where `type` is `image` or `file`. The default transport calls `im.messageResource.get` and uses `getReadableStream()`.
 
 For run controls, implement `sendCard(chatId, card, replyToId?)` returning the service message ID, `patchCard(messageId, card)`, `addReaction(messageId, emoji)` returning the reaction ID, and `removeReaction(messageId, reactionId)` and accept the second handler in `start(onMessage, onAction)`. Send the Card 2.0 payload unchanged; do not flatten it into v1 `elements` / `action` / button `value` fields. Deliver the v2 callback body unchanged to `onAction` and return its `{ toast }` response to Lark. Group cards use `replyToId`; DM cards use `chatId`. Card delivery must not be recorded as an ordinary text answer.
