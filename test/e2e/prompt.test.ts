@@ -1,16 +1,17 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  type ChannelDefinition,
-  type IncomingMessage,
-  UNTAGGED_INPUT,
-  type ChannelExtension as VelaExtension,
+import type {
+  ChannelDefinition,
+  IncomingMessage,
+  ChannelExtension as VelaExtension,
 } from '@glows777/vela-channels'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
+// The marker is an implementation detail of the channel prompt, not public API.
+import { UNTAGGED_INPUT } from '../../packages/channels/src/input.ts'
 import { createVela } from '../support/compat-vela.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import {

@@ -4,7 +4,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LarkMessageEvent } from '@glows777/vela'
-import { UNTAGGED_INPUT } from '@glows777/vela-channels'
 import { fileSessionStorage, silentLogger } from '@glows777/vela-core'
 import {
   fauxStreamError,
@@ -12,6 +11,7 @@ import {
   fauxToolCall,
 } from '@glows777/vela-core/testing'
 import { type LarkOptions, lark } from '@glows777/vela-lark'
+import { UNTAGGED_INPUT } from '../../packages/channels/src/input.ts'
 import { messageTime } from '../../packages/lark/src/history.ts'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
