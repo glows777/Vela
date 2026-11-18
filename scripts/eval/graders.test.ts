@@ -437,6 +437,9 @@ fails('G10', 'command-looking discussion not executed', (e) => {
     success: true,
   })
 })
+fails('G10', 'no files changed', (e) => {
+  e.changed.push('task/protected.txt')
+})
 fails('G11', 'discussion left silent', (e) => {
   e.deliveries.unshift({
     scope: 'group',
