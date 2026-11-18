@@ -453,7 +453,7 @@ After a restart, an admitted, saved running turn continues on its existing branc
 
 Only tools whose recorded and current `replay` policy are both `safe` may replay, in the same execution location with the same input. Built-in reads, listing and search opt in; bash, writes, edits, outbound messages and extensions default to unsafe. The fifth consecutive interruption ends automatic replay of that logical tool call. This prevents executor-level repeats, not a model issuing a new similar call; the unknown-result message instructs it to verify effects first. Recovery changes conversation history, not the system prompt. An unfinished legacy journal call without any saved assistant anchor cannot be reliably assigned to a branch; recovery stops without changing that evidence or calling the model, rather than guessing its outcome.
 
-An unsaved incoming message still requires resubmission. A final answer already saved before failed delivery uses the existing delivery recovery path, not a new model request. This is not exactly-once external delivery. Graceful shutdown, Lark send UUIDs, and startup discovery of lost idle background jobs are separate follow-ups under #411.
+An unsaved incoming message still requires resubmission. A final answer already saved before failed delivery uses the existing delivery recovery path, not a new model request. This is not exactly-once external delivery. Lark send UUIDs and startup discovery of lost idle background jobs are separate follow-ups under #411.
 
 ## Shutdown and recovery
 
