@@ -23,6 +23,16 @@ All files are optional. A file that is not valid JSON, or a recognized key below
 
 When you start Vela from your home directory, `<project>/.vela` is `~/.vela` itself; it is read once, as user configuration, and no trust question is asked.
 
+## Settings follow the session location
+
+For sessions opened or resumed in another project, declared `skills` and `prompts`, `defaultModel`, `defaultThinkingLevel`, `limits`, `autoCompaction` and `shellPath` come from that session's trusted `.vela/settings.json`, not the directory where Vela started. Relative declared resource paths resolve beside that settings file. A denied project contributes none of these values or resources; it does not fall back to the startup project's configuration. User settings remain the shared base, and explicit CLI/SDK overrides retain priority. Saved model/thinking selections and later manual selections are not replaced by project defaults.
+
+Resources and defaults are prepared once for the session's location. Opening B between two turns in A does not rebuild A's prompt or tools. Editing A's settings leaves an already-prepared A session unchanged; a new A session reads the updated settings. This keeps normal wakes stable rather than inserting changing configuration into the system prompt.
+
+`dataDir` is a bootstrap exception: the host resolves its storage directory at startup, before it can locate saved sessions. It does not move when a session resumes elsewhere. `serve` continues to ignore project `defaultTools`; channel tool selection retains its existing rules.
+
+This migration covers settings and declared resources only. Project extension instances, project MCP connections, frontend `enabledModels` filtering and the remaining `defaultTools` migration are follow-up work in [#452](https://github.com/glows777/Vela/issues/452); they are not yet isolated by this change. Providers and credentials remain host-level configuration.
+
 ## Merge rules
 
 Project settings are applied on top of user settings:

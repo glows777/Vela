@@ -295,12 +295,12 @@ export class InteractiveMode {
         )
       }
     }
+    const resources = await session.resources()
     const setupNext = startup && Boolean(this.options.agentDir)
     const silent =
       setupNext && !isModelUsable(session, this.options.hasUsableModel)
     this.options.configure(session, { quiet: silent })
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
-    const resources = await session.resources()
     this.refreshCompletion = () =>
       this.editor.setAutocompleteProvider(
         commandCompletions(this.vela, session, resources, this.fdPath),

@@ -1,9 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ContextFile } from '../prompt/context-files.ts'
+import type { VelaSettings } from './settings-values.ts'
 
 /** Internal source split for resources assembled by loadConfig and consumed by createVela. */
 export interface ConfigResourceSplit {
+  fallbackModel?: string
+  fallbackShellPath?: string
+  userSettings?: VelaSettings
+  env?: Record<string, string | undefined>
   userContextFiles: ContextFile[]
   hostSkillDirs: string[]
   hostPromptDirs: string[]

@@ -18,7 +18,7 @@ import type { ResolvedModel, ThinkingLevel } from '../models/index.ts'
 import type { SystemPromptBuilder } from '../prompt/index.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { SessionOptions } from './options.ts'
-import type { SessionResources } from './resources.ts'
+import type { PreparedSessionResources } from './resources.ts'
 import type { SessionStorage } from './storage.ts'
 
 /** What the extension runtime does during the session lifecycle (provided by createVela). */
@@ -118,7 +118,7 @@ export interface SessionDeps<Session> {
   prepareWorkspace: (
     session: Session,
     signal?: AbortSignal,
-  ) => Promise<SessionResources>
+  ) => Promise<PreparedSessionResources>
 }
 
 /** What `fork()` / `clone()` returns. */

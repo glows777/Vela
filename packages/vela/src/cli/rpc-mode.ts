@@ -98,6 +98,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
 
   let session = vela.session(options.sessionId, { ui })
   if (options.resume) await session.resume()
+  await session.resources()
   options.configure?.(session)
   await options.onReady?.(session)
 
@@ -116,6 +117,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       throw new Error('A task is running; abort it or wait for it to finish')
   }
   const switchTo = async (next: VelaSession) => {
+    await next.resources()
     const previous = session
     session = next
     if (previous !== next) await previous.close()
