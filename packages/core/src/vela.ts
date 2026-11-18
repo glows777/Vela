@@ -429,18 +429,22 @@ export function createVela(options: VelaOptions = {}): Vela {
           options.contextFiles === false || pinned
             ? []
             : await loadEnvironmentContextFiles(env, location, signal)
+        const workspaceMode = !resourceSplit
+          ? undefined
+          : location === resourceSplit.cwd
+            ? resourceSplit.workspaceSkills
+            : (resourceSplit.workspaceModeAt?.(location) ?? 'none')
         const workspaceSkills = (
-          resourceSplit
-            ? resourceSplit.workspaceSkills === 'none' ||
-              (resourceSplit.workspaceSkills === 'home' && location !== cwd)
-            : options.skillDirs && location === cwd
+          workspaceMode === undefined
+            ? options.skillDirs && location === cwd
+            : workspaceMode === 'none'
         )
           ? []
           : await loadEnvironmentSkills(
               env,
               location,
               signal,
-              resourceSplit?.workspaceSkills === 'home',
+              workspaceMode === 'home',
             )
         const workspaceNames = new Set(
           workspaceSkills.map((skill) => skill.name),
@@ -451,9 +455,9 @@ export function createVela(options: VelaOptions = {}): Vela {
           ...hostSkills.filter((skill) => !workspaceNames.has(skill.name)),
         ]
         const workspaceTemplates = (
-          resourceSplit
-            ? !resourceSplit.workspaceTemplates
-            : options.promptTemplateDirs && location === cwd
+          workspaceMode === undefined
+            ? options.promptTemplateDirs && location === cwd
+            : workspaceMode !== 'all'
         )
           ? []
           : await loadEnvironmentTemplates(env, location, signal)

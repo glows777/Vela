@@ -259,8 +259,16 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         }
       }
       if (stopped) {
-        const e = error(stopped, stopped, streamError)
-        if (spillPath) e.spillPath = spillPath
+        const message =
+          stopped === 'unknown'
+            ? `Failed to preserve complete shell output: ${String(streamError)}`
+            : stopped
+        const e = error(stopped, message, streamError)
+        if (spillPath) {
+          if (stopped === 'unknown')
+            await this.remove(spillPath, { force: true })
+          else e.spillPath = spillPath
+        }
         return { ok: false, error: e }
       }
       return {

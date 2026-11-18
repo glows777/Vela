@@ -30,6 +30,7 @@ import type { LanguageModel } from 'ai'
 import {
   defaultAgentDir,
   loadConfig,
+  savedTrust,
   type VelaConfig,
 } from '../config/index.ts'
 import { createVela } from '../vela.ts'
@@ -280,7 +281,15 @@ const vela = createVela({
   cwd,
   dataDir: config.dataDir,
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
-  sessionResources: config.sessionResources,
+  sessionResources: config.sessionResources && {
+    ...config.sessionResources,
+    workspaceModeAt: (location) =>
+      join(location, '.vela') === agentDir
+        ? 'home'
+        : savedTrust(agentDir, location)
+          ? 'all'
+          : 'none',
+  },
   contextFiles: args.noContextFiles ? false : undefined,
   systemPrompt: args.systemPrompt.length
     ? args.systemPrompt.map(readPromptInput).join('\n\n')

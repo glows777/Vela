@@ -15,7 +15,7 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
-import { localCwd } from './execution/location.ts'
+import { abortable, localCwd } from './execution/location.ts'
 import type { ExecutionEnv } from './execution/types.ts'
 import type {
   BeforeAgentStartResult,
@@ -212,9 +212,9 @@ export class VelaSession {
   readonly store: SessionStore
   /** @internal */
   readonly tracker: TokenTracker
-  /** @internal */
-  readonly contextManager: ContextManager
-  /** @internal */ execEnv = () => this.deps.ensureLocal(this)
+  /** @internal */ readonly contextManager: ContextManager
+  /** @internal */ execEnv = (signal?: AbortSignal) =>
+    abortable(this.deps.ensureLocal(this), signal)
   /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
   readonly registry: ToolRegistry
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */

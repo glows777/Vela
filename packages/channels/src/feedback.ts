@@ -439,11 +439,22 @@ export class RunFeedback {
       await Promise.all(inputs.map((input) => input.finish('stopped')))
       return true
     }
-    prepared = await materializeAttachments(
-      run.session,
-      prepared,
-      run.lifetime.signal,
-    )
+    try {
+      prepared = await materializeAttachments(
+        run.session,
+        prepared,
+        run.lifetime.signal,
+      )
+    } catch (error) {
+      // A naturally settled run returns an unconsumed Steer to the default queue.
+      if (
+        run.lifetime.signal.aborted &&
+        !run.stopped &&
+        !this.options.stopped()
+      )
+        return false
+      throw error
+    }
     if (!this.runIsLive(run)) return false
     run.inputs.push(...inputs)
     publishChannelEvent(run.session, {

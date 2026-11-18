@@ -1334,6 +1334,46 @@ test.concurrent('extensions are discovered in ~/.vela/extensions and configured 
   expect(stderr).toContain('[greet] loaded {"token":"t0k"}')
 })
 
+test.concurrent('a resumed CLI session uses the saved trust of its own workspace', async () => {
+  const home = tempDir('vela-home-')
+  const a = tempDir('vela-cli-a-')
+  const b = tempDir('vela-cli-b-')
+  dirs.push(home, a, b)
+  await Bun.write(
+    join(home.path, 'settings.json'),
+    JSON.stringify({ dataDir: join(home.path, 'shared-data') }),
+  )
+  const trustFile = join(home.path, 'trust.json')
+  await Bun.write(
+    trustFile,
+    JSON.stringify({ [a.path]: true, [b.path]: false }),
+  )
+  const options = { agentDir: home.path, model: `faux:${scenario('hello')}` }
+  const first = await cli(['--session', 'work', '-p', 'hello'], {
+    ...options,
+    cwd: b.path,
+    files: { '.vela/prompts/proof.md': 'B_WORKSPACE_TEMPLATE' },
+  })
+  expect(first.code).toBe(0)
+  const args = ['--session', 'work', '--mode', 'json', '/proof']
+  const denied = await cli(args, {
+    ...options,
+    cwd: a.path,
+    files: { '.vela/prompts/proof.md': 'A_WORKSPACE_TEMPLATE' },
+  })
+  expect(denied.code).toBe(0)
+  expect(denied.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
+  expect(denied.stdout).not.toContain('A_WORKSPACE_TEMPLATE')
+
+  await Bun.write(
+    trustFile,
+    JSON.stringify({ [a.path]: true, [b.path]: true }),
+  )
+  const allowed = await cli(args, { ...options, cwd: a.path })
+  expect(allowed.code).toBe(0)
+  expect(allowed.stdout).toContain('B_WORKSPACE_TEMPLATE')
+})
+
 test.concurrent('project extensions load only when the project is trusted', async () => {
   const files = { '.vela/extensions/local.ts': GREET('local') }
   const skipped = await cli(['-p', 'hello'], {

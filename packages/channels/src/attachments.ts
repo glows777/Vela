@@ -8,8 +8,7 @@ export async function materializeAttachments(
   signal?: AbortSignal,
 ): Promise<IncomingMessage> {
   if (!message.files?.length) return message
-  const env = await session.execEnv()
-  signal?.throwIfAborted()
+  const env = await session.execEnv(signal)
   if (env.id !== 'node:local')
     throw new Error('File attachments require a local execution environment')
 

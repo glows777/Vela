@@ -1,4 +1,5 @@
 import z from 'zod'
+import { followFileInfo } from '../execution/file-info.ts'
 import { createLocalExecutionEnv } from '../execution/local.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { type BinaryResolver, createBinaryResolver } from './binaries.ts'
@@ -106,7 +107,7 @@ async function isDirectory(
   path: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const result = await env.fileInfo(path, signal)
+  const result = await followFileInfo(env, path, signal)
   if (!result.ok)
     throw new Error(`Path not found: ${path}`, { cause: result.error })
   return result.value.kind === 'directory'

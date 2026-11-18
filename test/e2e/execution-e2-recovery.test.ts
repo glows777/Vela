@@ -330,6 +330,35 @@ test('grep uses the execution environment instead of host search', async () => {
   }
 })
 
+test('grep and find preserve nested relative paths when a search root is a directory symlink', async () => {
+  const dir = tempDir()
+  mkdirSync(join(dir.path, 'actual', 'nested'), { recursive: true })
+  writeFileSync(join(dir.path, 'actual/nested/hit.txt'), 'needle')
+  symlinkSync(join(dir.path, 'actual'), join(dir.path, 'linked'), 'dir')
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('grep', { pattern: 'needle', path: 'linked' }),
+      fauxToolCall('find', { pattern: 'hit.txt', path: 'linked' }),
+      fauxText('done'),
+    ],
+  })
+  const vela = createVela({ cwd: dir.path, model })
+  try {
+    await vela
+      .session('search-link', { tools: ['+grep', '+find'] })
+      .prompt('search linked')
+    expect(model.calls[1]!.toolResults[0]!.output).toContain(
+      'nested/hit.txt:1: needle',
+    )
+    expect(model.calls[2]!.toolResults.at(-1)!.output).toContain(
+      'nested/hit.txt',
+    )
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
 test('grep returns real local matches and context through the selected environment', async () => {
   const dir = tempDir()
   writeFileSync(join(dir.path, 'notes.txt'), 'before\nneedle here\nafter\n')
@@ -433,6 +462,42 @@ test('background commands use their session environment, not host spawn', async 
     await Bun.sleep(80)
     expect(execs).toBe(1)
     expect(existsSync(marker)).toBe(false)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('model and user bash report partial effects on a real local spill failure', async () => {
+  const { createSessionLocalExecutionEnv } = await import(
+    '../../packages/core/src/execution/local.ts'
+  )
+  const { readFileSync } = await import('node:fs')
+  const dir = tempDir()
+  const root = join(dir.path, 'blocked-root')
+  writeFileSync(root, 'ordinary file')
+  const command = 'echo started >> runs; seq 1 2100'
+  const model = createFauxModel({
+    responses: [fauxToolCall('bash', { command }), fauxText('stopped')],
+  })
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) =>
+      createSessionLocalExecutionEnv({ cwd: location.cwd, tempRoot: root }),
+  })
+  try {
+    const session = vela.session('failed-spill')
+    await session.prompt('run once')
+    expect(model.calls[1]!.toolResults[0]!.output).toContain(
+      'Do not automatically rerun',
+    )
+    await expect(session.executeBash(command)).rejects.toThrow(
+      'may have had partial effects',
+    )
+    expect(readFileSync(join(dir.path, 'runs'), 'utf8')).toBe(
+      'started\nstarted\n',
+    )
   } finally {
     await vela.dispose()
     dir.cleanup()
@@ -586,6 +651,26 @@ test('microcompaction stores recoverable tool output in the session environment'
     dir.cleanup()
   }
 })
+
+test.each(['missing', 'directory'])(
+  'an instruction override linked to a %s target allows the regular AGENTS.md to load',
+  async (target) => {
+    const dir = tempDir()
+    const destination = join(dir.path, target)
+    if (target === 'directory') mkdirSync(destination)
+    symlinkSync(destination, join(dir.path, 'AGENTS.override.md'), 'dir')
+    writeFileSync(join(dir.path, 'AGENTS.md'), 'FALLBACK_INSTRUCTIONS')
+    const model = createFauxModel({ responses: [fauxText('done')] })
+    const vela = createVela({ cwd: dir.path, model })
+    try {
+      await vela.session('linked-instructions').prompt('hello')
+      expect(model.calls[0]!.system).toContain('FALLBACK_INSTRUCTIONS')
+    } finally {
+      await vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
 
 test('workspace AGENTS instructions come from the selected session environment', async () => {
   const dir = tempDir()

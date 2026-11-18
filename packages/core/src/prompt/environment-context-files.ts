@@ -1,3 +1,4 @@
+import { followFileInfo } from '../execution/file-info.ts'
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import type { ContextFile } from './context-files.ts'
 
@@ -31,12 +32,12 @@ export async function loadEnvironmentContextFiles(
   const fromDir = async (dir: string): Promise<ContextFile | undefined> => {
     for (const name of NAMES) {
       const path = await join(dir, name)
-      const info = await env.fileInfo(path, signal)
+      const info = await followFileInfo(env, path, signal)
       if (!info.ok) {
         if (info.error.code === 'not_found') continue
         throw info.error
       }
-      if (info.value.kind !== 'file' && info.value.kind !== 'symlink') continue
+      if (info.value.kind !== 'file') continue
       const text = await env.readTextFile(path, signal)
       if (!text.ok) throw text.error
       return { path, content: text.value.replace(/^\uFEFF/, '') }

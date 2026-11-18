@@ -250,6 +250,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     files,
     extensions,
     sessionResources: {
+      cwd,
       userContextFiles: userContext ? [userContext] : [],
       hostSkillDirs,
       hostPromptDirs,
@@ -258,7 +259,6 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
         : projectDir === agentDir
           ? 'home'
           : 'none',
-      workspaceTemplates: trusted,
     },
     // SDK consumers can still request the host's original local configuration view.
     // Vela's frontends pass sessionResources, so they never force these workspace reads.

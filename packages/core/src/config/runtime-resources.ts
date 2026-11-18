@@ -5,6 +5,7 @@ export interface ConfigResourceSplit {
   userContextFiles: ContextFile[]
   hostSkillDirs: string[]
   hostPromptDirs: string[]
+  cwd: string
   workspaceSkills: 'all' | 'none' | 'home'
-  workspaceTemplates: boolean
+  workspaceModeAt?: (cwd: string) => ConfigResourceSplit['workspaceSkills']
 }

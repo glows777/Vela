@@ -489,6 +489,76 @@ test('Lark exposes the reusable file only after the stream completes', async () 
   expect(readFileSync(path, 'utf8')).toBe('firstlast')
 })
 
+test('a file Steer waiting for its environment returns to the queue when the current turn ends', async () => {
+  const { createVela } = await import('@glows777/vela')
+  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+  const fake = fakeLark()
+  fake.resources.set('file', [Buffer.from('queued bytes')])
+  let finish!: () => void
+  let releaseEnv!: () => void
+  let entered = false
+  let holdNext = false
+  const held = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    releaseEnv = resolve
+  })
+  const t = createTestVela(
+    {
+      responses: [
+        fauxToolCall('hold_pause', {}),
+        fauxText('first answer'),
+        fauxText('queued answer'),
+      ],
+      extensions: [
+        lark({ owners: ['ou_alice'], transport: fake.transport }),
+        function hold(api) {
+          api.registerTool({
+            name: 'pause',
+            description: 'Wait',
+            inputSchema: z.object({}),
+            execute: async () => {
+              await held
+              return 'done'
+            },
+          })
+        },
+      ],
+    },
+    (options) =>
+      createVela({
+        ...options,
+        env: async ({ location }) => {
+          if (holdNext) {
+            holdNext = false
+            entered = true
+            await gate
+          }
+          return createLocalExecutionEnv({ cwd: location.cwd })
+        },
+      }),
+  )
+  try {
+    await t.vela.startChannels()
+    fake.deliver(dm('text', { text: 'start' }, 'start'))
+    await until(() => t.model.calls.length === 1)
+    fake.deliver(dm('file', { file_key: 'file', file_name: 'queued.txt' }))
+    await until(() => fake.cards.length === 1)
+    holdNext = true
+    fake.click(0, 'steer', { operator: { open_id: 'ou_alice' } })
+    await until(() => entered)
+    finish()
+    await until(() => fake.sent.length === 2)
+    const path = savedAttachment(t.model.calls[2]!.lastUserText)
+    expect(readFileSync(path, 'utf8')).toBe('queued bytes')
+    expect(fake.resourceCalls).toHaveLength(1)
+  } finally {
+    finish()
+    releaseEnv()
+  }
+})
+
 test('Lark expired Steer reuses downloaded images when the default queue runs', async () => {
   let finish!: () => void
   const held = new Promise<void>((r) => {
