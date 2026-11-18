@@ -120,3 +120,13 @@ export interface SessionDeps<Session> {
     signal?: AbortSignal,
   ) => Promise<SessionResources>
 }
+
+/** What `fork()` / `clone()` returns. */
+export interface ForkResult<Session> {
+  /** True when an extension cancelled it (no session was created) */
+  cancelled: boolean
+  /** The new session, open in the same Vela (the original stays open) */
+  session?: Session
+  /** Text of the user message forked from (`before`), for the input box */
+  selectedText?: string
+}

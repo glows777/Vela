@@ -10,15 +10,17 @@ import {
   toolContentText,
 } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
-import type { ResultRecord } from '../session/tool-history.ts'
+import type { CallRecord, ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import { prepareCallResult } from './call-result.ts'
-import { ExecutionGate } from './execution-gate.ts'
+import { ExecutionGate, NestedExecutionGate } from './execution-gate.ts'
 import {
   type CallOptions,
   errorOutput,
   persistResponse,
+  recordToolRejection,
   recoverToolCall,
+  rejectDrainingCall,
   ToolRejection,
 } from './recovery.ts'
 import { countToolTokens, toAISDKTools } from './sdk-tools.ts'
@@ -129,6 +131,8 @@ interface SharedToolState {
 }
 
 export class ToolRegistry {
+  /** @internal Session-owned admission gate; never shared with other registry forks. */
+  isDraining: () => boolean = () => false
   private readonly shared: SharedToolState
   private onEvent?: VelaEventListener
   private sessionId?: string
@@ -189,15 +193,13 @@ export class ToolRegistry {
     error: unknown,
   ): Promise<void> {
     this.assertHealthy()
-    if (this.results.history.hasAttempt(toolCallId)) return
-    const call = await this.results.history.begin(toolName, toolCallId, input)
-    await this.results.history.append<ResultRecord>({
-      type: 'tool_result',
-      callId: call.callId,
-      status: 'rejected',
-      durationMs: 0,
-      error: error instanceof Error ? error.message : String(error),
-    })
+    await recordToolRejection(
+      this.results.history,
+      toolName,
+      toolCallId,
+      input,
+      error,
+    )
   }
 
   private get tools(): Map<string, ToolDefinition> {
@@ -251,35 +253,7 @@ export class ToolRegistry {
   discoveredTools = new Set<string>() // loaded with tool_search; a resumed session restores it from its history
 
   private readonly gate = new ExecutionGate()
-  /** Sequential nested calls run one at a time (like pi's nested call queue) */
-  private nestedTail: Promise<void> = Promise.resolve()
-  /** Nested calls running while holding that queue: their own nested calls don't wait for it again */
-  private readonly nestedHolders = new Set<string>()
-
-  private async runNested<T>(
-    mode: ToolExecutionMode,
-    parentToolCallId: string,
-    toolCallId: string | undefined,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    const holds = this.nestedHolders.has(parentToolCallId)
-    const exclusive = mode === 'sequential' && !holds
-    let release: (() => void) | undefined
-    if (exclusive) {
-      const previous = this.nestedTail
-      this.nestedTail = new Promise((resolve) => {
-        release = resolve
-      })
-      await previous
-    }
-    if ((holds || exclusive) && toolCallId) this.nestedHolders.add(toolCallId)
-    try {
-      return await fn()
-    } finally {
-      if (toolCallId) this.nestedHolders.delete(toolCallId)
-      release?.()
-    }
-  }
+  private readonly nestedGate = new NestedExecutionGate()
 
   register(...tools: ToolDefinition[]) {
     for (const tool of tools) {
@@ -350,6 +324,15 @@ export class ToolRegistry {
       )
       return new ToolRejection(reason)
     }
+    const rejectDraining = (call?: CallRecord) =>
+      rejectDrainingCall(
+        this.results.history,
+        name,
+        options.toolCallId,
+        input,
+        call,
+      )
+    if (this.isDraining()) return rejectDraining()
     if (tool.hostedOnly)
       return await reject(`[Rejected] ${name} is unavailable locally`)
     if (!this.isAvailable(name))
@@ -395,8 +378,14 @@ export class ToolRegistry {
     const gated = <T>(fn: () => Promise<T>) =>
       options.parentToolCallId === undefined
         ? this.gate.run(mode, fn)
-        : this.runNested(mode, options.parentToolCallId, options.toolCallId, fn)
+        : this.nestedGate.run(
+            mode,
+            options.parentToolCallId,
+            options.toolCallId,
+            fn,
+          )
     return await gated(async () => {
+      if (this.isDraining()) return rejectDraining()
       this.shared.logger.debug(`[tools] ${name} started (${mode})`)
       this.assertHealthy()
       const history = this.results.history
@@ -422,6 +411,7 @@ export class ToolRegistry {
           ? { interruption: (options.recovery.interruption ?? 0) + 1 }
           : {}),
       })
+      if (this.isDraining()) return rejectDraining(call)
       const started = performance.now()
       let settled = false
       const onUpdate = (partialResult: unknown) => {

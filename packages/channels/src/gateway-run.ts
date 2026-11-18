@@ -305,6 +305,9 @@ export class GatewayRun {
       }
     }
     await this.handoff.beforeRun(id, session, merged)
+    // Shutdown may arrive while resume/attachments prepare a run not yet active.
+    // Keep its durable pending input for restart, but never start its model now.
+    if (this.stopped()) return 'stopped'
     if (processing.stopped) return stopped(session)
     processing.preparing = false
     return this.feedback.prompt(

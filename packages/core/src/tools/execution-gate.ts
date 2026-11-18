@@ -33,3 +33,36 @@ export class ExecutionGate {
     }
   }
 }
+
+/** Sequential nested calls serialize without reacquiring their parent's gate. */
+export class NestedExecutionGate {
+  /** Sequential nested calls run one at a time (like pi's nested call queue) */
+  private nestedTail: Promise<void> = Promise.resolve()
+  /** Nested calls running while holding that queue: their own nested calls don't wait for it again */
+  private readonly nestedHolders = new Set<string>()
+
+  async run<T>(
+    mode: ToolExecutionMode,
+    parentToolCallId: string,
+    toolCallId: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const holds = this.nestedHolders.has(parentToolCallId)
+    const exclusive = mode === 'sequential' && !holds
+    let release: (() => void) | undefined
+    if (exclusive) {
+      const previous = this.nestedTail
+      this.nestedTail = new Promise((resolve) => {
+        release = resolve
+      })
+      await previous
+    }
+    if ((holds || exclusive) && toolCallId) this.nestedHolders.add(toolCallId)
+    try {
+      return await fn()
+    } finally {
+      if (toolCallId) this.nestedHolders.delete(toolCallId)
+      release?.()
+    }
+  }
+}

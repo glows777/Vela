@@ -29,6 +29,7 @@ export class UserBash {
       timestamps: Map<ModelMessage, number>
       prepare: () => Promise<ExecutionEnv>
       isClosed: () => boolean
+      isDraining: () => boolean
     },
   ) {}
   get isRunning(): boolean {
@@ -81,6 +82,8 @@ export class UserBash {
       if (this.host.isClosed()) throw new Error('Session is closed')
       // Appending to a saved session that was not resumed would mix two conversations in one log
       await this.host.store.assertNew()
+      if (this.host.isDraining())
+        throw new Error('Session is draining; shell command was not executed')
       const result: BashResult = controller.signal.aborted
         ? { output: '', exitCode: undefined, cancelled: true, truncated: false }
         : await runBash(command, {

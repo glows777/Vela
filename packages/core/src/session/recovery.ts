@@ -1,4 +1,6 @@
 import type { ModelMessage, ToolResultOutput } from '../messages.ts'
+import type { SessionEntry } from './entries.ts'
+import type { ToolHistoryStore } from './tool-history.ts'
 
 /** Repair only missing results. Existing results and the branch containing them stay untouched. */
 export async function reconcileInterruptedTools({
@@ -60,4 +62,41 @@ export async function reconcileInterruptedTools({
     // A second crash must see the repair before attempting another sibling or model request.
     await save()
   }
+}
+
+/** Legacy executors could begin before their assistant step was saved. */
+export async function assertLegacyAnchors(
+  entries: readonly SessionEntry[],
+  history: ToolHistoryStore,
+): Promise<void> {
+  const known = new Set(
+    entries.flatMap((entry) =>
+      entry.type === 'message' &&
+      entry.message.role === 'assistant' &&
+      Array.isArray(entry.message.content)
+        ? entry.message.content.flatMap((part) =>
+            part.type === 'tool-call' ? [part.toolCallId] : [],
+          )
+        : [],
+    ),
+  )
+  const orphan = (await history.legacyUnfinished()).find(
+    (call) => !call.toolCallId || !known.has(call.toolCallId),
+  )
+  if (orphan)
+    throw new Error(
+      `Tool ${orphan.toolName} has an unfinished legacy attempt (${orphan.callId}) without a saved assistant step. Its effects and branch are unknown; recovery stopped without replaying it. Reconcile its effects before continuing.`,
+    )
+}
+
+export function assertInterruptedTurn(messages: readonly ModelMessage[]): void {
+  if (!messages.some((message) => message.role === 'user'))
+    throw new Error('No saved turn to continue')
+  const last = messages.at(-1)
+  if (
+    last?.role === 'assistant' &&
+    (typeof last.content === 'string' ||
+      !last.content.some((part) => part.type === 'tool-call'))
+  )
+    throw new Error('No interrupted turn to continue')
 }
