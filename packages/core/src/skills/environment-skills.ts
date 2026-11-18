@@ -25,6 +25,7 @@ export async function loadEnvironmentSkills(
   }
   const found = new Map<string, SkillDefinition>()
   const visited = new Set<string>()
+  const seenFiles = new Set<string>()
   const scan = async (dir: string, rootFiles: boolean): Promise<void> => {
     signal?.throwIfAborted()
     const canonical = await env.canonicalPath(dir, signal)
@@ -34,13 +35,18 @@ export async function loadEnvironmentSkills(
     const entries = await env.listDir(dir, signal)
     if (!entries.ok) return skip(entries.error, dir)
     const add = async (filePath: string) => {
+      const real = await env.canonicalPath(filePath, signal)
+      if (!real.ok) return skip(real.error, filePath)
+      if (seenFiles.has(real.value)) return
       const content = await env.readTextFile(filePath, signal)
       if (!content.ok) return skip(content.error, filePath)
       const skill = parseSkill(filePath, content.value, report)
       if (!skill) return
       const existing = found.get(skill.name)
-      if (!existing) found.set(skill.name, skill)
-      else
+      if (!existing) {
+        seenFiles.add(real.value)
+        found.set(skill.name, skill)
+      } else
         report({
           path: filePath,
           message: `skill name "${skill.name}" is already used by ${existing.filePath}; skipped`,

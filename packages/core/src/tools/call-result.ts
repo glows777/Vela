@@ -84,8 +84,11 @@ export async function prepareCallResult({
         if (!written.ok) {
           spillFailed = true
           // Cleanup is best effort; an incomplete file is never published.
-          const cleanup = await env.remove(temp.value, { force: true })
-          if (!cleanup.ok)
+          const removed = await env.remove(temp.value, { force: true }).then(
+            (result) => result.ok,
+            () => false,
+          )
+          if (!removed)
             warning += ' The incomplete output file could not be removed.'
         } else
           stored = new StoredToolResult(

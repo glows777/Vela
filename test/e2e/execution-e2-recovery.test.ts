@@ -6,7 +6,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import {
   createFauxModel,
@@ -618,59 +618,67 @@ test('model and user bash report partial effects on a real local spill failure',
   }
 })
 
-test('oversized tool output is saved through the session environment', async () => {
-  const { default: z } = await import('zod')
-  const dir = tempDir()
-  const model = createFauxModel({
-    responses: [fauxToolCall('extension-1_large_report', {}), fauxText('done')],
-  })
-  let writes = 0
-  let removals = 0
-  const vela = createVela({
-    cwd: dir.path,
-    model,
-    extensions: [
-      (api) => {
-        api.registerTool({
-          name: 'large_report',
-          description: 'test',
-          inputSchema: z.object({}),
-          maxResultChars: 100,
-          execute: async () => 'report-data'.repeat(100),
-        })
-      },
-    ],
-    env: ({ location }) => {
-      const env = createLocalExecutionEnv({ cwd: location.cwd })
-      const remove = env.remove.bind(env)
-      env.remove = async (...args) => {
-        removals++
-        return remove(...args)
-      }
-      env.writeFile = async () => {
-        writes++
-        return {
-          ok: false,
-          error: Object.assign(new Error('storage denied'), {
-            code: 'permission_denied' as const,
-          }),
+test.each([false, true])(
+  'failed spill retains tool history even when cleanup disconnects (%p)',
+  async (disconnect) => {
+    const { default: z } = await import('zod')
+    const dir = tempDir()
+    const model = createFauxModel({
+      responses: [
+        fauxToolCall('extension-1_large_report', {}),
+        fauxText('done'),
+      ],
+    })
+    let writes = 0
+    let removals = 0
+    const vela = createVela({
+      cwd: dir.path,
+      model,
+      extensions: [
+        (api) => {
+          api.registerTool({
+            name: 'large_report',
+            description: 'test',
+            inputSchema: z.object({}),
+            maxResultChars: 100,
+            execute: async () => 'report-data'.repeat(100),
+          })
+        },
+      ],
+      env: ({ location }) => {
+        const env = createLocalExecutionEnv({ cwd: location.cwd })
+        const remove = env.remove.bind(env)
+        env.remove = async (...args) => {
+          removals++
+          if (disconnect) throw new Error('adapter disconnected')
+          return remove(...args)
         }
-      }
-      return env
-    },
-  })
-  try {
-    await vela.session('report-boundary').prompt('report')
-    expect(writes).toBe(1)
-    expect(removals).toBe(1)
-    const output = String(model.calls[1]!.toolResults[0]!.output)
-    expect(output).toContain('could not be saved')
-    expect(output).not.toContain('Full output:')
-  } finally {
-    await vela.dispose()
-    dir.cleanup()
-  }
-})
+        env.writeFile = async () => {
+          writes++
+          return {
+            ok: false,
+            error: Object.assign(new Error('storage denied'), {
+              code: 'permission_denied' as const,
+            }),
+          }
+        }
+        return env
+      },
+    })
+    try {
+      await vela.session('report-boundary').prompt('report')
+      expect(writes).toBe(1)
+      expect(removals).toBe(1)
+      const output = String(model.calls[1]!.toolResults[0]!.output)
+      expect(output).toContain('could not be saved')
+      expect(output).not.toContain('Full output:')
+      if (disconnect) expect(output).toContain('could not be removed')
+    } finally {
+      await vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
 
 test('execution environment publishes a complete file by rename and removes staging on failure', async () => {
   const dir = tempDir()
@@ -713,16 +721,17 @@ test.each([false, true])(
       const parent = vela.session('parent-spill')
       const result = await parent.executeBash("printf '%060000d' 0")
       expect(result.fullOutputPath).toBeDefined()
-      expect(
-        result.fullOutputPath!.startsWith(parent.registry.results.dir + '/'),
-      ).toBe(true)
+      expect(dirname(result.fullOutputPath!)).toBe(parent.registry.results.dir)
       if (process.platform !== 'win32') {
         const { statSync } = await import('node:fs')
         expect(statSync(result.fullOutputPath!).mode & 0o777).toBe(0o600)
       }
       const child = (await parent.clone({ sessionId: 'child-spill' })).session!
-      const blob = JSON.stringify(child.messages)
-      const path = blob.match(/Full output: ([^\]\\]+)/)?.[1]
+      const message = child.messages.find((item) => item.role === 'user')
+      const path =
+        typeof message?.content === 'string'
+          ? message.content.match(/Full output: (.+)\]$/)?.[1]
+          : undefined
       expect(path).toBeDefined()
       await parent.close()
       expect(readFileSync(path!, 'utf8')).toHaveLength(60000)
@@ -1078,11 +1087,18 @@ test('workspace skill discovery follows symlinks and tolerates malformed neighbo
   )
   writeFileSync(join(skills, 'bad.md'), '---\ninvalid: [\n---\nno')
   symlinkSync(realSkill, join(skills, 'link'), 'dir')
+  symlinkSync(join(realSkill, 'SKILL.md'), join(skills, 'alias.md'), 'file')
+  const warnings: string[] = []
   const model = createFauxModel({ responses: [fauxText('done')] })
-  const vela = createVela({ cwd: dir.path, model })
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    logger: { ...console, warn: (message) => warnings.push(message) },
+  })
   try {
     await vela.session('linked-skills').prompt('hello')
     expect(model.calls[0]!.system).toContain('LINKED_SKILL')
+    expect(warnings.join(' ')).not.toContain('already used')
   } finally {
     await vela.dispose()
     dir.cleanup()
