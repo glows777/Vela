@@ -46,11 +46,20 @@ export interface LarkTransport {
   startTopic(
     messageId: string,
     title: string,
+    uuid?: string,
   ): Promise<LarkSentMessage & { rootId: string; threadId: string }>
   forward(messageId: string, threadId: string): Promise<LarkSentMessage>
-  // biome-ignore lint/suspicious/noConfusingVoidType: public shape: callers may ignore the sent message (Promise<void>)
-  send(chatId: string, text: string): Promise<void | LarkSentMessage>
-  reply(messageId: string, text: string): Promise<LarkSentMessage>
+  send(
+    chatId: string,
+    text: string,
+    uuid?: string,
+    // biome-ignore lint/suspicious/noConfusingVoidType: public shape: callers may ignore the sent message (Promise<void>)
+  ): Promise<void | LarkSentMessage>
+  reply(
+    messageId: string,
+    text: string,
+    uuid?: string,
+  ): Promise<LarkSentMessage>
   sendCard(chatId: string, card: LarkCard, replyToId?: string): Promise<string>
   patchCard(messageId: string, card: LarkCard): Promise<void>
   addReaction(
@@ -159,7 +168,7 @@ export function larkTransport(
       ++lifetime
       wsClient?.close()
     },
-    async startTopic(messageId, title) {
+    async startTopic(messageId, title, uuid) {
       const { data } = checked(
         await client.im.message.reply({
           path: { message_id: messageId },
@@ -167,6 +176,7 @@ export function larkTransport(
             msg_type: 'text',
             content: JSON.stringify({ text: title }),
             reply_in_thread: true,
+            ...(uuid === undefined ? {} : { uuid }),
           },
         }),
       )
@@ -196,12 +206,13 @@ export function larkTransport(
         throw new Error('Lark forward returned no message receipt')
       return { messageId: data.message_id, createTime: data.create_time }
     },
-    async send(chatId, text) {
+    async send(chatId, text, uuid) {
       const { data } = checked(
         await client.im.message.create({
           params: { receive_id_type: 'chat_id' },
           data: {
             receive_id: chatId,
+            ...(uuid === undefined ? {} : { uuid }),
             msg_type: 'text',
             content: JSON.stringify({ text }),
           },
@@ -254,11 +265,15 @@ export function larkTransport(
         }),
       )
     },
-    async reply(messageId, text) {
+    async reply(messageId, text, uuid) {
       const response = checked(
         await client.im.message.reply({
           path: { message_id: messageId },
-          data: { msg_type: 'text', content: JSON.stringify({ text }) },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+            ...(uuid === undefined ? {} : { uuid }),
+          },
         }),
       )
       const data = response.data

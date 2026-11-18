@@ -164,3 +164,88 @@ test('custom transports use start success/failure fallback and ignore completion
   await starting
   expect(states.at(-1)).toEqual({ connected: false })
 })
+
+test('real SDK text create, reply and topic requests receive the channel delivery UUID unchanged', async () => {
+  intercept()
+  const c = channel()
+  await c.start()
+  const requests: { url: string; data: Record<string, unknown> }[] = []
+  sdk.defaultHttpInstance.defaults.adapter = async (config) => {
+    requests.push({
+      url: config.url ?? '',
+      data:
+        typeof config.data === 'string' ? JSON.parse(config.data) : config.data,
+    })
+    return {
+      data: {
+        code: 0,
+        data: {
+          message_id: 'sent',
+          create_time: '123',
+          root_id: 'root',
+          thread_id: 'thread',
+        },
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    }
+  }
+  try {
+    await c.send({
+      channelId: 'chat',
+      text: 'new message',
+      deliveryId: 'create-stable-id',
+    })
+    await c.send({
+      channelId: 'chat',
+      replyToId: 'incoming',
+      text: 'reply',
+      deliveryId: 'reply-stable-id',
+    })
+    await c.topicCapabilities.startTopic(
+      {
+        channelId: 'chat',
+        senderId: 'owner',
+        senderName: 'Owner',
+        replyToId: 'incoming',
+        text: 'start',
+      },
+      'topic title',
+      'topic-stable-id',
+    )
+    await c.send({
+      channelId: 'chat',
+      text: 'new message',
+      deliveryId: 'create-stable-id',
+    })
+    await c.send({ channelId: 'chat', text: 'legacy caller' })
+    expect(requests.map((request) => request.data.uuid)).toEqual([
+      'create-stable-id',
+      'reply-stable-id',
+      'topic-stable-id',
+      'create-stable-id',
+      undefined,
+    ])
+    expect(requests[0]).toMatchObject({
+      url: expect.stringContaining('/im/v1/messages'),
+      data: {
+        receive_id: 'chat',
+        msg_type: 'text',
+        content: JSON.stringify({ text: 'new message' }),
+      },
+    })
+    expect(requests[1]?.url).toContain('/im/v1/messages/incoming/reply')
+    expect(requests[2]).toMatchObject({
+      url: expect.stringContaining('/im/v1/messages/incoming/reply'),
+      data: {
+        reply_in_thread: true,
+        content: JSON.stringify({ text: 'topic title' }),
+      },
+    })
+    expect(requests[4]?.data).not.toHaveProperty('uuid')
+  } finally {
+    await c.stop()
+  }
+})

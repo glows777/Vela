@@ -168,6 +168,8 @@ export class ChannelGateway {
       if (!runtime || !record || record.activeSessionId !== id) return undefined
       return {
         runtime,
+        session: this.find(id),
+        channel: record.channel,
         capabilities: this.channels.get(record.channel)?.topicCapabilities,
         ...(record.chatKind === 'group'
           ? { kind: record.rootId ? ('topic' as const) : ('group' as const) }

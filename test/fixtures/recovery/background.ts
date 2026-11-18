@@ -1,6 +1,9 @@
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fsyncSync,
+  openSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs'
@@ -17,6 +20,34 @@ const restart = mode.startsWith('restart')
 const report = (name: string, value: unknown) =>
   writeFileSync(join(cwd, name), JSON.stringify(value))
 const fake = fakeLark()
+if (mode === 'restart-accepted' || mode === 'restart-ledger') {
+  const path = join(cwd, 'notice-ledger.json')
+  const ledger: {
+    attempts: { uuid?: string; text: string }[]
+    deliveries: { uuid?: string; text: string }[]
+  } = existsSync(path)
+    ? JSON.parse(readFileSync(path, 'utf8'))
+    : { attempts: [], deliveries: [] }
+  const reply = fake.transport.reply.bind(fake.transport)
+  fake.transport.reply = async (id, text, uuid) => {
+    ledger.attempts.push({ uuid, text })
+    if (!uuid || !ledger.deliveries.some((entry) => entry.uuid === uuid))
+      ledger.deliveries.push({ uuid, text })
+    report('notice-ledger.json', ledger)
+    const fd = openSync(path, 'r')
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    if (mode === 'restart-accepted' && text.includes('RESTART NOTICE')) {
+      report('notice-accepted.json', true)
+      return new Promise<never>(() => {})
+    }
+    return reply(id, text, uuid)
+  }
+}
+
 const command = `echo $$ > '${cwd}/shell.pid'; while [ ! -f '${cwd}/release' ]; do sleep 0.05; done; echo REAL BACKGROUND RESULT`
 const t = createTestVela({
   cwd,

@@ -199,3 +199,65 @@ test('two outstanding jobs each produce one durable notice without clearing the 
     jobs.map((job: { token: string }) => job.token).sort(),
   )
 }, 45000)
+
+test('unknown notice accepted before SIGKILL reuses its final UUID without another job input', async () => {
+  const { cwd, child } = await fixture('waiting')
+  await until(() => existsSync(join(cwd, 'ready.json')), child)
+  child.kill('SIGKILL')
+  await child.exited
+  const interrupted = await fixture('restart-accepted', 'topic', cwd)
+  await until(
+    () => existsSync(join(cwd, 'notice-accepted.json')),
+    interrupted.child,
+  )
+  const accepted = read(cwd, 'notice-ledger.json')
+  expect(accepted.attempts).toHaveLength(1)
+  expect(accepted.attempts[0].uuid).toBeString()
+  expect(accepted.attempts[0].text).toContain('RESTART NOTICE')
+  interrupted.child.kill('SIGKILL')
+  await interrupted.child.exited
+  const resumed = await fixture('restart-ledger', 'topic', cwd)
+  await until(() => resumed.child.exitCode !== null, resumed.child)
+  expect(resumed.child.exitCode).toBe(0)
+  expect(read(cwd, 'calls.json')).toHaveLength(0)
+  const ledger = read(cwd, 'notice-ledger.json')
+  expect(ledger.attempts).toHaveLength(2)
+  expect(ledger.attempts[1].uuid).toBe(accepted.attempts[0].uuid)
+  expect(ledger.deliveries).toHaveLength(1)
+  expect(JSON.stringify(ledger)).not.toContain('INITIAL ANSWER')
+  expect(read(cwd, '.vela-data/channels/index.json').records[0].state).toBe(
+    'done',
+  )
+  expect(
+    read(cwd, '.vela-data/channels/index.json').records[0].outstandingJobs ??
+      [],
+  ).toHaveLength(0)
+  const entries = readFileSync(
+    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
+    'utf8',
+  )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(
+    entries.filter(
+      (entry) =>
+        entry.type === 'custom' &&
+        entry.customType === 'channel.input' &&
+        entry.data?.backgroundJobToken,
+    ),
+  ).toHaveLength(1)
+  const intents = entries.filter(
+    (entry) =>
+      entry.type === 'custom' &&
+      entry.customType === 'channel.lark_delivery' &&
+      entry.data?.uuid === accepted.attempts[0].uuid,
+  )
+  expect(intents.some((entry) => entry.data.confirmed === true)).toBe(true)
+  const again = await fixture('restart-ledger', 'topic', cwd)
+  await until(() => again.child.exitCode !== null, again.child)
+  expect(again.child.exitCode).toBe(0)
+  expect(read(cwd, 'calls.json')).toHaveLength(0)
+  expect(read(cwd, 'sent.json')).toHaveLength(0)
+  expect(read(cwd, 'notice-ledger.json')).toEqual(ledger)
+}, 45000)

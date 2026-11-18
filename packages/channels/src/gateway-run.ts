@@ -4,6 +4,7 @@ import { publishChannelEvent } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
 import { materializeAttachments } from './attachments.ts'
 import type { TopicCommands } from './commands.ts'
+import { sendAnswer } from './delivery.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type { RunFeedback } from './feedback.ts'
 import type { GatewayIdle } from './gateway-idle.ts'
@@ -385,7 +386,7 @@ export class GatewayRun {
       ...(msg.replyToId ? { replyToId: msg.replyToId } : {}),
     }
     try {
-      await channel.send(reply)
+      await sendAnswer(session, channel, reply)
     } catch (error) {
       publishChannelEvent(session, {
         type: 'channel_error',

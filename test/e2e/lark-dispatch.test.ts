@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import { drainChannels } from '@glows777/vela-channels/testing'
 import { memorySessionStorage } from '@glows777/vela-core'
 import {
   type FauxRequest,
@@ -537,6 +538,8 @@ test('topic listing after restart retains recorded same-group topics and stable 
     expect(JSON.stringify(second.t.model.calls[2]?.prompt)).toContain(
       'remember cobalt',
     )
+    // A visible send precedes durable confirmation and the terminal directory state.
+    await drainChannels(second.t.vela)
     second.fake.deliver(larkEvent({ content: '{"text":"list tasks again"}' }))
     await until(() => second.fake.sent.length === 3)
     const observed = JSON.parse(second.fake.sent[2]!.text)
@@ -924,6 +927,7 @@ test('topic overview reports running, durable waiting, then done with requester 
     expect(Number.isNaN(Date.parse(running.updatedAt))).toBe(false)
     release()
     await until(() => first.fake.sent.length === 2)
+    await drainChannels(first.t.vela)
     first.fake.deliver(larkEvent({ message_id: 'waiting-list' }))
     await until(() => first.fake.sent.length === 3)
     const waiting = JSON.parse(first.fake.sent[2]!.text).topics[0]
@@ -968,6 +972,7 @@ test('topic overview reports running, durable waiting, then done with requester 
         ),
       )
       await until(() => second.fake.sent.length === 2)
+      await drainChannels(second.t.vela)
       second.fake.deliver(larkEvent({ message_id: 'done-list' }))
       await until(() => second.fake.sent.length === 3)
       const done = JSON.parse(second.fake.sent[2]!.text).topics[0]
