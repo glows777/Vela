@@ -1,8 +1,10 @@
 import type {
   ExtensionAPI,
   ToolContext,
+  VelaSession,
 } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
+import { larkDelivery } from './delivery.ts'
 import { UNTAGGED_INPUT } from './input.ts'
 import { routineToolSchema } from './routines.ts'
 import type {
@@ -65,6 +67,8 @@ export class ChannelTopics {
     private resolve: (sessionId: string) =>
       | {
           runtime: ChannelRuntime
+          session?: VelaSession
+          channel?: string
           capabilities?: ChannelTopicCapabilities
           kind?: 'group' | 'topic'
         }
@@ -190,7 +194,18 @@ export class ChannelTopics {
         ctx,
       ) => {
         const { id, msg, runtime, capabilities } = this.source(ctx)
-        const receipt = await capabilities.startTopic(msg, title)
+        const resolved = this.resolve(id)
+        const send = (deliveryId?: string) =>
+          capabilities.startTopic(msg, title, deliveryId)
+        const receipt =
+          resolved?.channel === 'lark'
+            ? await larkDelivery(
+                requireDeliverySession(resolved.session, ctx?.toolCallId),
+                `tool:${ctx!.toolCallId}:start_topic`,
+                { channelId: msg.channelId, replyToId: msg.replyToId, title },
+                send,
+              )
+            : await send()
         const original = capabilities.originalText
           ? capabilities.originalText(msg)?.trim()
           : msg.text.trim()
@@ -301,4 +316,15 @@ export function topicSessionOptions(msg: IncomingMessage) {
           ...backgroundToolNames,
         ])
   return { tools }
+}
+
+function requireDeliverySession(
+  session: VelaSession | undefined,
+  toolCallId: string | undefined,
+): VelaSession {
+  if (!session || !toolCallId)
+    throw new Error(
+      'Lark topic delivery requires a saved session and tool call identity',
+    )
+  return session
 }

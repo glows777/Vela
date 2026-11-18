@@ -146,7 +146,7 @@
     handled?: ((message: IncomingMessage) => void) | undefined
     originalText?: ((message: IncomingMessage) => string | undefined) | undefined
     readTopic: (chatId: string, threadId: string) => Promise<string>
-    startTopic: (message: IncomingMessage, title: string) => Promise<{ messageId: string; rootId: string; threadId: string; }>
+    startTopic: (message: IncomingMessage, title: string, deliveryId?: string) => Promise<{ messageId: string; rootId: string; threadId: string; }>
     triggerImages?: ((message: IncomingMessage) => ImageContent[] | undefined) | undefined
   interface ChannelVela
     channel: { (name: "local"): LocalHost; (name: string): ChannelHost; }
@@ -305,6 +305,7 @@
     waitingReason?: string | undefined
   interface OutgoingMessage
     channelId: string
+    deliveryId?: string | undefined
     handoff?: { id: string; from: string; depth: number; } | undefined
     recipientId?: string | undefined
     replyToId?: string | undefined

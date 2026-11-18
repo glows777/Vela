@@ -406,12 +406,12 @@
     listTopicMessages: (threadId: string, pageToken?: string) => Promise<{ items: LarkHistoryMessage[]; pageToken?: string; }>
     patchCard: (messageId: string, card: LarkCard) => Promise<void>
     removeReaction: (messageId: string, reactionId: string) => Promise<void>
-    reply: (messageId: string, text: string) => Promise<LarkSentMessage>
+    reply: (messageId: string, text: string, uuid?: string) => Promise<LarkSentMessage>
     searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: LarkHistoryMessage[]; pageToken?: string; }>
-    send: (chatId: string, text: string) => Promise<void | LarkSentMessage>
+    send: (chatId: string, text: string, uuid?: string) => Promise<void | LarkSentMessage>
     sendCard: (chatId: string, card: LarkCard, replyToId?: string) => Promise<string>
     start: (onMessage: (event: LarkMessageEvent) => void, onAction: (event: LarkCardAction) => LarkCardResponse) => Promise<void>
-    startTopic: (messageId: string, title: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
+    startTopic: (messageId: string, title: string, uuid?: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
   function lastCustomMessage: (session: VelaSession, customType: string) => ModelMessage | undefined
   interface LineScan
@@ -620,6 +620,7 @@
     refresh?: ((credential: OAuthCredential, signal: AbortSignal) => Promise<OAuthCredential>) | undefined
   interface OutgoingMessage
     channelId: string
+    deliveryId?: string | undefined
     handoff?: { id: string; from: string; depth: number; } | undefined
     recipientId?: string | undefined
     replyToId?: string | undefined

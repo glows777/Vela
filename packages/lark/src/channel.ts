@@ -426,11 +426,15 @@ export class LarkChannel implements ChannelDefinition {
         : message.text
     // A failed send throws: the gateway reports it as channel_error instead of a channel_reply that never arrived
     if (message.replyToId) {
-      const receipt = await this.transport.reply(message.replyToId, text)
+      const receipt = await this.transport.reply(
+        message.replyToId,
+        text,
+        message.deliveryId,
+      )
       if (!this.config.appId && !message.topic)
         this.lastReplies.set(message.channelId, receipt)
     } else {
-      await this.transport.send(message.channelId, text)
+      await this.transport.send(message.channelId, text, message.deliveryId)
     }
   }
 

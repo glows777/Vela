@@ -4,6 +4,7 @@ import type {
   VelaLogger,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
+import { sendAnswer } from './delivery.ts'
 import {
   type ChannelDirectory,
   type ChannelRecord,
@@ -253,7 +254,7 @@ export class ChannelRecovery {
       !last.stopReason &&
       finalAnswer(last.message)
     ) {
-      await channel.send({
+      await sendAnswer(session, channel, {
         ...msg,
         recipientId: msg.senderId,
         text: finalAnswer(last.message),
@@ -270,7 +271,9 @@ export class ChannelRecovery {
     msg.text =
       typeof content === 'string'
         ? content
-        : content.map((part) => ('text' in part ? part.text : '')).join('\n')
+        : content
+            .map((part) => (part.type === 'text' ? part.text : ''))
+            .join('\n')
     msg.images =
       typeof content === 'string'
         ? undefined
@@ -291,6 +294,6 @@ function finalAnswer(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content
   if (message.content.some((part) => part.type === 'tool-call')) return ''
   return message.content
-    .map((part) => ('text' in part ? part.text : ''))
+    .map((part) => (part.type === 'text' ? part.text : ''))
     .join('')
 }

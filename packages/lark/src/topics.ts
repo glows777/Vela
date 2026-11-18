@@ -26,8 +26,8 @@ export class LarkTopics {
   ) {}
 
   readonly capabilities: ChannelTopicCapabilities = {
-    startTopic: (msg, title) =>
-      this.transport().startTopic(msg.replyToId!, title),
+    startTopic: (msg, title, deliveryId) =>
+      this.transport().startTopic(msg.replyToId!, title, deliveryId),
     forwardToTopic: async (msg, target) => {
       const receipt = await this.transport().forward(
         msg.replyToId!,
