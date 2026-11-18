@@ -70,7 +70,11 @@ await Bun.write(
 await Bun.write(
   scenario,
   JSON.stringify({
+    // Steps play in order, so every journey waits for a session to be idle before its
+    // next input. A hand-off costs three: the hub's tool call, the hub's suppressed
+    // reply and the new session's first answer.
     responses: [
+      // Bridge journey and journey 1.
       {
         toolCalls: [{ name: 'bash', input: { command: 'printf shell-check' } }],
       },
@@ -78,9 +82,8 @@ await Bun.write(
       { text: 'Image processed' },
       { text: 'Alpha answer' },
       { text: 'Second answer' },
-      // Journey 2: the hub hands off, and the session works, stops, continues, fails,
-      // then asks a question that journey 3 answers. Everything after the hand-off
-      // goes to that one session, so only the two hand-off replies can race.
+      // Journey 2: bigger work in a session, stopped, continued, failed, then asked a
+      // question that journey 3 answers in the same session.
       {
         toolCalls: [
           {
@@ -93,9 +96,8 @@ await Bun.write(
           },
         ],
       },
-      // The hub's reply after the tool result and the topic's first answer race for
-      // the next scripted step, and the hub's is suppressed on hand-off: give both
-      // the same text so either order tells the same story.
+      // The hub's reply after the tool result and the session's first answer race for
+      // the next step, and the hub's is suppressed on hand-off: same text either way.
       { text: 'I will read the retry module first.' },
       { text: 'I will read the retry module first.' },
       { toolCalls: [{ name: 'bash', input: { command: 'printf retry' } }] },
@@ -112,8 +114,22 @@ await Bun.write(
       },
       { text: 'Which colour should I use?' },
       { text: 'Blue it is.' },
-      // Journey 4: a second project, and a long answer that fills Alpha's chat.
+      // Journey 4: a second project with its own session, then a long answer that
+      // fills Alpha's chat.
       { text: 'Beta answer' },
+      {
+        toolCalls: [
+          {
+            name: 'channel_start_topic',
+            input: {
+              title: 'Write the Beta notes',
+              brief: 'Write notes about this folder.',
+            },
+          },
+        ],
+      },
+      { text: 'Reading the folder now.' },
+      { text: 'Reading the folder now.' },
       {
         text: Array.from(
           { length: 40 },
@@ -542,6 +558,12 @@ const themes = async (page: Page, name: string) => {
   await page.emulateMedia({ colorScheme: null })
 }
 
+/** A session's card in the project chat; the panel may show the same title. */
+const cardIn = (page: Page, title: string) =>
+  page
+    .getByLabel('Project chat')
+    .getByRole('button', { name: new RegExp(`Session, ${title}`) })
+
 /** Types into the composer with this label and sends; both composers can be on screen. */
 const sendIn = async (page: Page, label: string, text: string) => {
   const form = page.locator('form').filter({ has: page.getByLabel(label) })
@@ -612,9 +634,7 @@ const journeyTwo = async (page: Page) => {
     'Fix the retry backoff in the agent and add a test',
   )
 
-  const card = page.getByRole('button', {
-    name: /Session, Fix the retry backoff/,
-  })
+  const card = cardIn(page, 'Fix the retry backoff')
   await card.waitFor({ timeout: 30_000 })
   await card.getByText('Fix the retry backoff', { exact: true }).waitFor()
   checks.push(
@@ -712,6 +732,15 @@ const journeyThree = async (page: Page) => {
   await waitForIdle(page, topic.sessionId)
   await sendIn(page, 'Message in this session', 'Ask me which colour to use')
 
+  // The failed run's card is gone once the next run starts, so its recorded reply
+  // is back: the failure keeps exactly one visible record at a time.
+  await panel.getByText(/Task failed: invalid api key/).waitFor({
+    timeout: 30_000,
+  })
+  checks.push(
+    'Starting the next run drops the error card and shows the failed reply again.',
+  )
+
   await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'waiting')
   await panel.getByText('Waiting for an answer', { exact: true }).waitFor()
   await panel
@@ -771,6 +800,7 @@ const journeyThree = async (page: Page) => {
 /** Journey 4: two projects, their own histories and places, then a restart. */
 const journeyFour = async (page: Page) => {
   const sidebar = page.getByLabel('Sidebar')
+  const panel = page.getByLabel('Sessions')
   await sidebar.getByRole('button', { name: 'New project' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('Folder path').fill(beta)
@@ -782,6 +812,24 @@ const journeyFour = async (page: Page) => {
     .getByText('Beta answer', { exact: true })
     .waitFor({ timeout: 30_000 })
   checks.push('A second project opens on its own empty conversation.')
+
+  const betaProject = await projectNamed(page, 'Beta')
+  await waitForIdle(page, betaProject.sessionId)
+  await sendIn(page, 'Message Vela in this project', 'Write the Beta notes')
+  const betaCard = cardIn(page, 'Write the Beta notes')
+  await betaCard.waitFor({ timeout: 30_000 })
+  await betaCard.click()
+  await panel
+    .getByRole('heading', { name: 'Write the Beta notes', exact: true })
+    .waitFor()
+  const betaTopic = await waitForSessionState(
+    page,
+    betaProject.id,
+    'Write the Beta notes',
+    'done',
+  )
+  await waitForIdle(page, betaTopic.sessionId)
+  checks.push("Asking Beta for bigger work opens Beta's own session.")
 
   await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
   await page
@@ -818,14 +866,37 @@ const journeyFour = async (page: Page) => {
   )
   checks.push('A conversation comes back where it was left.')
 
-  const panel = page.getByLabel('Sessions')
   await panel
     .getByRole('button', { name: /Fix the retry backoff/ })
     .waitFor({ timeout: 30_000 })
   checks.push("Alpha's panel lists the session started in it.")
 
+  // Open Alpha's session, then leave for Beta through Home: the panel must not keep
+  // Alpha's session under Beta.
+  await panel.getByRole('button', { name: /Fix the retry backoff/ }).click()
+  await panel
+    .getByRole('heading', { name: 'Fix the retry backoff', exact: true })
+    .waitFor()
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  await page
+    .getByRole('region', { name: 'Recent sessions' })
+    .getByRole('button', { name: /Write the Beta notes/ })
+    .click()
+  await page.getByRole('heading', { name: 'Beta', exact: true }).waitFor()
+  await panel
+    .getByRole('heading', { name: 'Write the Beta notes', exact: true })
+    .waitFor()
+  assert.equal(
+    await panel.getByText('Fix the retry backoff', { exact: true }).count(),
+    0,
+    "Beta's panel never shows Alpha's session",
+  )
+  checks.push(
+    'Leaving a session through Home and opening another project resets the panel to that project.',
+  )
+
   await sidebar.getByRole('button', { name: 'Beta Local' }).click()
-  await panel.getByText('No sessions yet.', { exact: false }).waitFor()
+  await panel.getByRole('button', { name: /Write the Beta notes/ }).waitFor()
   assert.equal(
     await panel.getByRole('button', { name: /Fix the retry backoff/ }).count(),
     0,

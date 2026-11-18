@@ -19,10 +19,11 @@ export interface Snapshot {
   /** Latest progress per running session, from the Local `progress` events. */
   progress: Record<string, Progress>
   /**
-   * A failed run per session, shown as one card. The reply the channel writes for
-   * that same run is hidden at runtime and comes back after a restart.
+   * A failed run per session, shown as one card. `replyId` is the recorded reply the
+   * channel wrote for that run; it stays hidden while the card is up and comes back
+   * when the card goes, so the failure is never lost or said twice.
    */
-  failures: Record<string, { message: string }>
+  failures: Record<string, { message: string; replyId?: string }>
   /** Replies that repeat a failure the card already shows. */
   hidden: Record<string, true>
   /** The last action that failed, for the page to show. */
@@ -273,9 +274,14 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
   }
   if (value.type === 'run_started') {
     if (sessionId) attempts.delete(sessionId)
+    const shown = sessionId ? snapshot.failures[sessionId] : undefined
     publish({
       progress: withoutKey(snapshot.progress, sessionId),
       failures: withoutKey(snapshot.failures, sessionId),
+      // The next run replaces the card, so the reply it was standing in for returns.
+      hidden: shown?.replyId
+        ? withoutKey(snapshot.hidden, shown.replyId)
+        : snapshot.hidden,
     })
     return
   }
@@ -288,7 +294,10 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
       failures: finished
         ? {
             ...snapshot.failures,
-            [sessionId!]: { message: attempt.message },
+            [sessionId!]: {
+              message: attempt.message,
+              ...(attempt.replyId ? { replyId: attempt.replyId } : {}),
+            },
           }
         : snapshot.failures,
       // A run that ends any other way keeps its reply.

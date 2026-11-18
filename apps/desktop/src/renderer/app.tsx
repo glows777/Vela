@@ -28,15 +28,19 @@ export function App() {
       ? snapshot.projects.find((item) => item.id === view.projectId)
       : undefined
 
-  const openProjectPage = (projectId: string) => {
+  /**
+   * Every way into a project goes through here, so the panel never keeps a session
+   * from the project the person just left. Sidebar, Home, a session card and a new
+   * project all land on the same state.
+   */
+  const openProjectPage = (projectId: string, sessionId?: string) => {
     setView({ name: 'project', projectId })
+    setPanel({ open: panel.open, ...(sessionId ? { sessionId } : {}) })
     void loadProject(projectId)
   }
 
-  const openSession = (projectId: string, sessionId: string) => {
-    setPanel({ open: true, sessionId })
-    openProjectPage(projectId)
-  }
+  const openSession = (projectId: string, sessionId: string) =>
+    openProjectPage(projectId, sessionId)
 
   const waiting = project
     ? needsYou(snapshot).some((session) => session.chatId === project.id)
@@ -48,10 +52,7 @@ export function App() {
         projects={snapshot.projects}
         current={view.name === 'home' ? 'home' : view.projectId}
         onHome={() => setView({ name: 'home' })}
-        onProject={(projectId) => {
-          setPanel({ open: panel.open })
-          openProjectPage(projectId)
-        }}
+        onProject={openProjectPage}
         onNewSession={() => {
           setView({ name: 'home' })
           setFocusSignal((value) => value + 1)

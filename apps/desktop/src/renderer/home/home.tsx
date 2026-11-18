@@ -97,7 +97,9 @@ export function Home({
                     <button
                       type="button"
                       className={styles.row}
-                      onClick={() => onOpenProject(session.chatId)}
+                      onClick={() =>
+                        onOpenSession(session.chatId, session.sessionId)
+                      }
                     >
                       <StateMark state={session.state} />
                       <span className={styles.rowTitle}>{session.task}</span>

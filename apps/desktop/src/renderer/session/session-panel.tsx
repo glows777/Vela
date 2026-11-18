@@ -38,7 +38,10 @@ export function SessionPanel({
   onClose: () => void
 }) {
   const reduced = useReducedMotion()
-  const session = sessionId ? snapshot.sessions[sessionId] : undefined
+  const candidate = sessionId ? snapshot.sessions[sessionId] : undefined
+  // A session belongs to the project whose chat started it.
+  const session =
+    candidate && candidate.chatId === project.id ? candidate : undefined
   return (
     <AnimatePresence>
       {open ? (
