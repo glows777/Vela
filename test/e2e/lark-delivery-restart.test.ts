@@ -141,6 +141,10 @@ test('an unconfirmed Lark intent older than one hour is unknown and never resent
   await run(cwd, 'expired')
   expect(finalAttempts(cwd)).toHaveLength(1)
   expect(finalDeliveries(cwd)).toHaveLength(1)
+  expect(read(cwd, 'remote-ledger.json').attempts).toHaveLength(1)
+  expect(read(cwd, '.vela-data/channels/index.json').records[0].state).toBe(
+    'done',
+  )
   expect(JSON.stringify(read(cwd, 'remote-ledger.json'))).not.toContain(
     'PRIVATE THOUGHT',
   )
@@ -150,6 +154,10 @@ test('an unconfirmed Lark intent older than one hour is unknown and never resent
   )
   await run(cwd, 'expired')
   expect(finalAttempts(cwd)).toHaveLength(1)
+  expect(read(cwd, 'remote-ledger.json').attempts).toHaveLength(1)
+  expect(read(cwd, '.vela-data/channels/index.json').records[0].state).not.toBe(
+    'running',
+  )
 }, 35000)
 
 test('a channel_start_topic title send persists the tool identity and is not replayed after SIGKILL', async () => {
@@ -214,4 +222,97 @@ for (const mode of ['before-send', 'accepted', 'confirmed'])
     const count = finalAttempts(cwd).length
     await run(cwd, 'restart')
     expect(finalAttempts(cwd)).toHaveLength(count)
+  }, 35000)
+
+for (const [name, patch, diagnostic, mode] of [
+  [
+    'clock moved backward',
+    { startedAt: Date.now() + 3600000 },
+    'window expired',
+    'accepted',
+  ],
+  [
+    'confirmed fingerprint conflict',
+    { fingerprint: 'conflicting-payload' },
+    'identity does not match',
+    'confirmed',
+  ],
+  [
+    'UUID conflict',
+    { uuid: 'conflicting-uuid' },
+    'identity does not match',
+    'accepted',
+  ],
+  [
+    'invalid timestamp',
+    { startedAt: null },
+    'identity does not match',
+    'accepted',
+  ],
+  [
+    'invalid confirmation',
+    { confirmed: 'yes' },
+    'identity does not match',
+    'accepted',
+  ],
+  [
+    'invalid recipient',
+    { payload: { recipientId: 42 } },
+    'invalid saved recipient',
+    'accepted',
+  ],
+] as const)
+  test(`Lark recovery settles ${name} without any chat notice on either restart`, async () => {
+    const cwd = root()
+    await run(cwd, mode, true)
+    const entries = readFileSync(transcript(cwd), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    for (const entry of entries)
+      if (
+        entry.type === 'custom' &&
+        entry.customType === 'channel.lark_delivery'
+      )
+        Object.assign(entry.data, patch)
+    writeFileSync(
+      transcript(cwd),
+      `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+    )
+    const ledger = read(cwd, 'remote-ledger.json')
+    await run(cwd, 'restart')
+    expect(read(cwd, 'remote-ledger.json')).toEqual(ledger)
+    expect(read(cwd, '.vela-data/channels/index.json').records[0].state).toBe(
+      'done',
+    )
+    expect(read(cwd, 'recovery.json').calls).toBe(0)
+    expect(read(cwd, 'recovery.json').logs.join('\n')).toContain(diagnostic)
+    await run(cwd, 'restart')
+    expect(read(cwd, 'remote-ledger.json')).toEqual(ledger)
+    expect(read(cwd, '.vela-data/channels/index.json').records[0].state).toBe(
+      'done',
+    )
+    expect(read(cwd, 'recovery.json').calls).toBe(0)
+  }, 35000)
+
+for (const mode of ['transient', 'transient-save'])
+  test(`a ${mode} Lark recovery failure remains retryable with the original UUID`, async () => {
+    const cwd = root()
+    await run(cwd, 'accepted', true)
+    const uuid = finalAttempts(cwd)[0]!.uuid
+    await run(cwd, mode)
+    expect(read(cwd, '.vela-data/channels/index.json').records[0].state).toBe(
+      'running',
+    )
+    expect(read(cwd, 'recovery.json').calls).toBe(0)
+    await run(cwd, 'restart')
+    expect(read(cwd, '.vela-data/channels/index.json').records[0].state).toBe(
+      'done',
+    )
+    expect(read(cwd, 'recovery.json').calls).toBe(0)
+    expect(finalAttempts(cwd)).toHaveLength(mode === 'transient' ? 3 : 2)
+    expect(finalAttempts(cwd).every((attempt) => attempt.uuid === uuid)).toBe(
+      true,
+    )
+    expect(finalDeliveries(cwd)).toHaveLength(1)
   }, 35000)

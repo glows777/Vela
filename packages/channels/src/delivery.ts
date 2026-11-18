@@ -4,6 +4,10 @@ import type { ChannelDefinition, OutgoingMessage } from './types.ts'
 
 const MARKER = 'channel.lark_delivery'
 const WINDOW_MS = 60 * 60 * 1000
+
+/** A persisted intent cannot safely be retried; unlike transport/save failures, this is terminal. */
+export class LarkDeliveryRefusedError extends Error {}
+
 interface Intent {
   identity: string
   fingerprint: string
@@ -34,7 +38,7 @@ export async function larkDelivery<T>(
       (previous.confirmed !== undefined &&
         typeof previous.confirmed !== 'boolean'))
   )
-    throw new Error(
+    throw new LarkDeliveryRefusedError(
       'Lark delivery identity does not match its saved intent; not sent',
     )
   if (previous?.confirmed) return previous.result as T
@@ -47,7 +51,7 @@ export async function larkDelivery<T>(
   }
   const age = Date.now() - intent.startedAt
   if (age < 0 || age >= WINDOW_MS)
-    throw new Error(
+    throw new LarkDeliveryRefusedError(
       'Lark delivery is unknown: its deduplication window expired; not resent',
     )
   if (!previous) session.appendEntry(MARKER, intent)
@@ -111,7 +115,9 @@ export async function sendAnswer(
   if (saved?.payload && typeof saved.payload === 'object') {
     const recipientId = (saved.payload as { recipientId?: unknown }).recipientId
     if (recipientId !== undefined && typeof recipientId !== 'string')
-      throw new Error('Lark delivery has an invalid saved recipient; not sent')
+      throw new LarkDeliveryRefusedError(
+        'Lark delivery has an invalid saved recipient; not sent',
+      )
     message = { ...message, recipientId }
   }
   await larkDelivery(

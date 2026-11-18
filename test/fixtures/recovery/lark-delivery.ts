@@ -45,6 +45,8 @@ const send = async (method: string, text: string, uuid?: string) => {
   if (!uuid || !ledger.deliveries.some((item) => item.uuid === uuid))
     ledger.deliveries.push({ uuid, text })
   durable(ledgerPath, ledger)
+  if (mode === 'transient' && text.includes('FINAL ANSWER'))
+    throw new Error('temporary transport failure')
   if (
     (mode === 'accepted' && text.includes('FINAL ANSWER')) ||
     (mode === 'tool' && text === 'TOPIC TITLE')
@@ -111,6 +113,17 @@ if (mode === 'confirmed')
 const keepAlive = setInterval(() => {}, 1000)
 try {
   await t.vela.ready()
+  if (mode === 'transient-save') {
+    const index = JSON.parse(
+      readFileSync(join(t.vela.dataDir, 'channels/index.json'), 'utf8'),
+    )
+    const session = t.vela.session(index.records[0].activeSessionId)
+    const save = session.save.bind(session)
+    session.save = async () => {
+      session.save = save
+      throw new Error('temporary save failure')
+    }
+  }
   await t.vela.startChannels()
   if (starting) {
     if (multi) {
@@ -159,7 +172,12 @@ try {
       }[]
       if (
         records.every((record) => record.state === 'done') ||
-        logs.some((line) => line.includes('window expired'))
+        logs.some(
+          (line) =>
+            line.includes('window expired') ||
+            line.includes('temporary transport failure') ||
+            line.includes('temporary save failure'),
+        )
       )
         break
       if (Date.now() > until)

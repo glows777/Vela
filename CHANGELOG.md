@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+- Fix Lark startup recovery repeatedly posting feedback errors for expired or conflicting saved delivery intents; terminal refusals now settle locally without another chat message.
+
 ### Breaking Changes
 
 - **The `@glows777/vela-core` root entry no longer re-exports the extension contracts.** The 21 hook event types and five helpers stay public, but only from `@glows777/vela-core/extension-api`: `AfterProviderResponseEvent`, `BeforeAgentStartEvent`, `BeforeAgentStartEventResult`, `BeforeProviderRequestEvent`, `ContextEvent`, `ContextEventResult`, `InputEvent`, `InputEventResult`, `ProviderStreamEvent`, `SessionBeforeForkEvent`, `SessionBeforeForkEventResult`, `SessionBeforeTreeEvent`, `SessionBeforeTreeEventResult`, `SessionShutdownEvent`, `SessionStartEvent`, `SessionTreeEvent`, `ToolCallEvent`, `ToolCallEventResult`, `ToolResultEvent`, `ToolResultEventResult`, `TreePreparation`, `configString`, `configStrings`, `customMessageIfChanged`, `customMessageMissing`, `lastCustomMessage`. Every extension package already imports them from that subpath, and `@glows777/vela` still exports all 26 from its root, so umbrella users change nothing. `FetchFunction`, `TokenStatus` and `SessionEntryBase` also leave the core root and are internal to the package now: no import in the repo, docs or examples used them, and the public types whose shapes were flattened from them (`SessionUsage`, `SessionEntry`) still declare the same members ([#403](https://github.com/glows777/Vela/issues/403)).
