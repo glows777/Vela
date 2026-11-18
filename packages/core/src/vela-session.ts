@@ -1016,52 +1016,51 @@ export class VelaSession {
    * Other input goes through the extensions' `input` handlers first (like pi); a handled input resolves without running.
    */
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
-    if (this.closed)
-      return Promise.reject(new Error(`Session ${this.id} is closed`))
-    const slash = input.startsWith('/')
-    if (!slash && !this.deps.extensions.hasHandlers('input'))
-      return this.promptModel(input, options)
-    return this.trackInput(options.signal, async (signal) => {
-      await abortable(this.startExtensions(), signal)
-      if (slash && (await this.deps.extensions.runCommand(this, input, signal)))
-        return
-      signal.throwIfAborted()
-      return this.promptInput(input, { ...options, signal })
-    })
+    return this.promptInput(input, options, 'command')
   }
 
-  /** Run input hooks before expanding and submitting or queuing the result. */
+  /** Plain input queues synchronously. Slash commands and hooks can await cancellable work. */
   private promptInput(
     input: string,
     options: PromptOptions,
-    expand = true,
+    mode: 'command' | 'expand' | 'literal' = 'expand',
   ): Promise<void> {
-    const next = (text: string, images = options.images) =>
-      expand
-        ? this.promptExpanded(text, { ...options, images })
-        : this.promptModel(text, { ...options, images })
-    if (!this.deps.extensions.hasHandlers('input')) return next(input)
-    return (async () => {
-      await this.startExtensions()
-      const result = await this.deps.extensions.input(
-        this,
-        input,
-        options.source ?? 'sdk',
-        this.prompting ? options.streamingBehavior : undefined,
-        options.images,
-      )
-      if (result === undefined) return
-      return next(result.text, result.images)
-    })()
-  }
-
-  /** Expand skills and templates before submitting their text to the model. */
-  private promptExpanded(input: string, options: PromptOptions): Promise<void> {
-    if (!input.startsWith('/')) return this.promptModel(input, options)
-    return abortable(
-      this.deps.expandInput(input, this, options.signal),
-      options.signal,
-    ).then((expanded) => this.promptModel(expanded, options))
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    const { extensions, expandInput } = this.deps
+    const slash = mode !== 'literal' && input.startsWith('/')
+    if (!slash && !extensions.hasHandlers('input'))
+      return this.promptModel(input, options)
+    return this.trackInput(options.signal, async (signal) => {
+      await abortable(this.startExtensions(), signal)
+      if (this.closed) throw new Error(`Session ${this.id} is closed`)
+      signal.throwIfAborted()
+      const command = mode === 'command' && slash
+      if (command && (await extensions.runCommand(this, input, signal))) return
+      signal.throwIfAborted()
+      let text = input,
+        images = options.images
+      if (extensions.hasHandlers('input')) {
+        const event = await abortable(
+          extensions.input(
+            this,
+            text,
+            options.source ?? 'sdk',
+            this.prompting ? options.streamingBehavior : undefined,
+            images,
+          ),
+          signal,
+        )
+        if (!event) return
+        text = event.text
+        images = event.images
+      }
+      if (mode !== 'literal' && text.startsWith('/')) {
+        signal.throwIfAborted()
+        text = await abortable(expandInput(text, this, signal), signal)
+      }
+      return this.promptModel(text, { ...options, images, signal })
+    })
   }
 
   /** Register async input before dispatch so abort also covers resource expansion. */
@@ -1165,7 +1164,7 @@ export class VelaSession {
         images,
         ...(options.deliverAs ? { streamingBehavior: options.deliverAs } : {}),
       },
-      false,
+      'literal',
     )
   }
 

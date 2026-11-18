@@ -50,52 +50,88 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   },
 )
 
-test('stopping a pending skill expansion prevents the model turn', async () => {
-  const dir = tempDir()
-  const base = join(dir.path, '.skills/example')
-  mkdirSync(base, { recursive: true })
-  const file = join(base, 'SKILL.md')
-  writeFileSync(
-    file,
-    '---\nname: example\ndescription: example skill\n---\nbody',
-  )
+test.each(['prompt', 'steer', 'followUp'] as const)(
+  'stopping a pending skill expansion via %s prevents the model turn',
+  async (method) => {
+    const dir = tempDir()
+    const base = join(dir.path, '.skills/example')
+    mkdirSync(base, { recursive: true })
+    const file = join(base, 'SKILL.md')
+    writeFileSync(
+      file,
+      '---\nname: example\ndescription: example skill\n---\nbody',
+    )
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const model = createFauxModel({ responses: [fauxText('unexpected')] })
+    let hold = false
+    const vela = createVela({
+      cwd: dir.path,
+      model,
+      env: ({ location }) => {
+        const env = createLocalExecutionEnv({ cwd: location.cwd })
+        const read = env.readTextFile.bind(env)
+        env.readTextFile = async (path, signal) => {
+          if (hold && path === file) {
+            entered.resolve()
+            await release.promise
+          }
+          return read(path, signal)
+        }
+        return env
+      },
+    })
+    try {
+      const session = vela.session('stopped-skill')
+      await session.resources()
+      hold = true
+      const submitted = session[method]('/skill:example').then(
+        () => 'completed',
+        () => 'cancelled',
+      )
+      await entered.promise
+      await session.abort()
+      release.resolve()
+      expect(await submitted).toBe('cancelled')
+      expect(model.calls).toHaveLength(0)
+    } finally {
+      release.resolve()
+      await vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
+
+test('closing a session can cancel an input hook waiting on an external service', async () => {
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   const model = createFauxModel({ responses: [fauxText('unexpected')] })
-  let hold = false
   const vela = createVela({
-    cwd: dir.path,
     model,
-    env: ({ location }) => {
-      const env = createLocalExecutionEnv({ cwd: location.cwd })
-      const read = env.readTextFile.bind(env)
-      env.readTextFile = async (path, signal) => {
-        if (hold && path === file) {
+    extensions: [
+      (api) => {
+        api.on('input', async () => {
           entered.resolve()
           await release.promise
-        }
-        return read(path, signal)
-      }
-      return env
-    },
+          return { action: 'continue' }
+        })
+      },
+    ],
   })
   try {
-    const session = vela.session('stopped-skill')
-    await session.resources()
-    hold = true
-    const submitted = session.prompt('/skill:example').then(
-      () => 'completed',
-      () => 'cancelled',
-    )
+    const session = vela.session('close-input')
+    const submitted = session.prompt('hello').catch(() => {})
     await entered.promise
-    await session.abort()
-    release.resolve()
-    expect(await submitted).toBe('cancelled')
+    const closed = await Promise.race([
+      session.close().then(() => true),
+      Bun.sleep(500).then(() => false),
+    ])
+    expect(closed).toBe(true)
+    await submitted
     expect(model.calls).toHaveLength(0)
   } finally {
     release.resolve()
     await vela.dispose()
-    dir.cleanup()
   }
 })
 
