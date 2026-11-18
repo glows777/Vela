@@ -59,7 +59,12 @@ import {
   type SessionSummary,
 } from './session/storage.ts'
 import { ToolResultStore } from './session/tool-results.ts'
-import { SkillLoader } from './skills/loader.ts'
+import { loadEnvironmentSkills } from './skills/environment-skills.ts'
+import {
+  formatSkillsForPrompt,
+  type SkillDefinition,
+  SkillLoader,
+} from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
@@ -319,9 +324,7 @@ export function createVela(options: VelaOptions = {}): Vela {
 
   registerToolSearchTool(registry)
 
-  const skillLoader = new SkillLoader(
-    options.skillDirs ?? [join(cwd, '.vela', 'skills'), join(cwd, '.skills')],
-  )
+  const skillLoader = new SkillLoader(options.skillDirs ?? [])
   skillLoader.load()
   const templates = loadPromptTemplates(
     options.promptTemplateDirs ?? [join(cwd, '.vela', 'prompts')],
@@ -336,6 +339,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     options.contextFiles === false ? [] : (options.contextFiles ?? [])
   const sessions = new Map<string, VelaSession>()
   const sessionContextFiles = new Map<string, readonly ContextFile[]>()
+  const sessionSkills = new Map<string, readonly SkillDefinition[]>()
 
   // Named sections in pi's order; preamble, tools, rules and docs give way to a replacement prompt
   const builder = new SystemPromptBuilder({
@@ -357,7 +361,8 @@ export function createVela(options: VelaOptions = {}): Vela {
       {
         name: 'skills',
         render: (ctx) =>
-          skillLoader.buildPromptSection(
+          formatSkillsForPrompt(
+            sessionSkills.get(ctx.sessionId) ?? skillLoader.list(),
             (ctx.activeTools ?? []).map((tool) => tool.name),
           ),
       },
@@ -401,10 +406,6 @@ export function createVela(options: VelaOptions = {}): Vela {
     signal?: AbortSignal,
   ) => {
     if (sessionContextFiles.has(session.id)) return
-    if (options.contextFiles === false) {
-      sessionContextFiles.set(session.id, [])
-      return
-    }
     const location = session.cwd
     const pending = ensureLocal(session)
     let onAbort: (() => void) | undefined
@@ -419,10 +420,18 @@ export function createVela(options: VelaOptions = {}): Vela {
     } finally {
       if (onAbort) signal?.removeEventListener('abort', onAbort)
     }
-    const workspace = await loadEnvironmentContextFiles(env, location, signal)
+    const workspace =
+      options.contextFiles === false
+        ? []
+        : await loadEnvironmentContextFiles(env, location, signal)
+    const skills =
+      options.skillDirs && location === cwd
+        ? skillLoader.list()
+        : await loadEnvironmentSkills(env, location, signal)
     signal?.throwIfAborted()
     if (session.cwd !== location)
       throw new Error('Session location changed during resource preparation')
+    sessionSkills.set(session.id, skills)
     sessionContextFiles.set(
       session.id,
       location === cwd && options.contextFiles ? contextFiles : workspace,
@@ -477,11 +486,13 @@ export function createVela(options: VelaOptions = {}): Vela {
         onCwdChange: (changed) => {
           sessionCwds.set(changed.registry, changed.cwd)
           sessionContextFiles.delete(changed.id)
+          sessionSkills.delete(changed.id)
         },
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
             sessionContextFiles.delete(closed.id)
+            sessionSkills.delete(closed.id)
           }
         },
       },
