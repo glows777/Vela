@@ -131,6 +131,17 @@ const good = {
     previousReport: report,
     deliveries: [{ scope: 'topic', text: 'You’re welcome.' }],
   }),
+  G10: evidence({
+    calls: [{ name: 'feishu_skip_reply', args: {}, phase: 0, success: true }],
+    files: {
+      'task/protected.txt': 'Leave this file unchanged.\n',
+      'task/release.txt': 'Release 0.7.0 is awaiting its tag.\n',
+    },
+  }),
+  G11: evidence({
+    calls: [{ name: 'feishu_skip_reply', args: {}, phase: 0, success: true }],
+    deliveries: [{ scope: 'group', messageId: 'follow_up', text: 'kestrel' }],
+  }),
   G9: evidence({
     deliveries: [
       { scope: 'group', messageId: 'trigger', text: 'Awaiting its tag.' },
@@ -407,6 +418,58 @@ fails('G3', 'silent', (e) => {
 })
 fails('G3', 'silent', (e) => {
   e.topics.push('Unexpected')
+})
+fails('G10', 'skip called', (e) => {
+  e.calls = []
+})
+fails('G10', 'silent', (e) => {
+  e.deliveries.push({ scope: 'group', text: 'On it.' })
+})
+fails('G10', 'command-looking discussion not executed', (e) => {
+  e.calls.push({
+    name: 'bash',
+    args: { command: 'bun test' },
+    phase: 0,
+    success: true,
+  })
+})
+fails('G10', 'command-looking discussion not executed', (e) => {
+  e.calls.push({
+    name: 'channel_start_topic',
+    args: { title: 'Release', brief: 'Run the release' },
+    phase: 0,
+    success: true,
+  })
+})
+fails('G10', 'no files changed', (e) => {
+  e.changed.push('task/protected.txt')
+})
+fails('G10', 'sentinels intact', (e) => {
+  e.files['task/protected.txt'] = 'overwritten\n'
+})
+fails('G10', 'sentinels intact', (e) => {
+  delete e.files['task/release.txt']
+})
+fails('G11', 'discussion left silent', (e) => {
+  e.deliveries.unshift({
+    scope: 'group',
+    messageId: 'discussion',
+    text: 'Noted.',
+  })
+})
+fails('G11', 'answered the person', (e) => {
+  e.deliveries[0]!.text = 'I do not know.'
+})
+fails('G11', 'answered the person', (e) => {
+  e.deliveries[0]!.messageId = 'discussion'
+})
+fails('G11', 'no topic for the discussion', (e) => {
+  e.calls.push({
+    name: 'channel_start_topic',
+    args: { title: 'Staging', brief: 'Rename staging' },
+    phase: 0,
+    success: true,
+  })
 })
 fails('G4', 'wait called', (e) => {
   e.calls = []
@@ -1050,15 +1113,40 @@ test('exit scenarios use the peeled v0.4.0 baseline while legacy scenarios retai
     '5b976e26706686a2213f514895d05110f50af2a5',
   )
   for (const id of graders.scenarioIds.filter(
-    (id) => id !== 'G6' && id !== 'G7' && id !== 'G8' && id !== 'G9',
+    (id) =>
+      id !== 'G6' &&
+      id !== 'G7' &&
+      id !== 'G8' &&
+      id !== 'G9' &&
+      id !== 'G10' &&
+      id !== 'G11',
   ))
     expect(scenarios.baselineCommit(id)).toBe(scenarios.OLD_COMMIT)
   // G9's old arm is the commit before batching landed, so the arms differ only by it.
   expect(scenarios.baselineCommit('G9')).toBe(
     'c1612d3f28f22e02e2dd2b2bd8f372879c1e3e03',
   )
+  // G10/G11 measure the fixed channel prompt, so their old arm is main without it.
+  expect(scenarios.baselineCommit('G10')).toBe(
+    'a68b98e1d34eba62908557db10f6e65d9ab79f05',
+  )
+  expect(scenarios.baselineCommit('G11')).toBe(
+    'a68b98e1d34eba62908557db10f6e65d9ab79f05',
+  )
   expect(options([]).runs).toBe(3)
   expect(options(['--only', 'G6,G7']).only).toEqual(['G6', 'G7'])
+})
+test('--baseline overrides the pinned old arm for the selected scenarios', () => {
+  const baseline = 'a68b98e1d34eba62908557db10f6e65d9ab79f05'
+  expect(options(['--only', 'G3', '--baseline', baseline]).baseline).toBe(
+    baseline,
+  )
+  expect(options(['--only', 'G3', '--baseline', 'a68b98e']).baseline).toBe(
+    'a68b98e',
+  )
+  expect(options([]).baseline).toBeUndefined()
+  expect(() => options(['--baseline', 'not-a-sha'])).toThrow('--baseline')
+  expect(() => options(['--baseline', 'a68b98'])).toThrow('--baseline')
 })
 test('G6 worker starts B first, then A reads the real group fixture; no unsupported handoff is fabricated', async () => {
   const { result, calls, pending } = await exitAttempt('G6', [
