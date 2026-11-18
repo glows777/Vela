@@ -4,6 +4,18 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-18
+
+### Fixed
+
+- **A channel's system prompt no longer changes with the kind of wake.** The group and topic sections appended a clause per input — untagged discussion, a hand-off note, or nothing — so a session that switched between a person's message, untagged discussion and a hand-off note rewrote its system prompt, and every prefix-caching provider reread the whole conversation at full price. Each session kind now has one fixed section, chosen from the saved chat record, and an untagged input carries a short marker in the text the model receives instead ([#445](https://github.com/glows777/Vela/issues/445)).
+
+### Changed
+
+- **The date and the timezone left the system prompt.** After the git branch left `<env>`, that section still rendered the local calendar date and the IANA timezone on every request. A session that continued past midnight received a new system prompt on the next request. The cached prefix was rewritten. `<env>` now names only the operating system and the shell. The date, the time of day and the timezone are not injected into the system prompt or into a message. The model reads the clock with `date` when it needs it. Pi's system prompt has no `<env>` section. Vela keeps `<env>` for those two session-stable facts. A faux scenario checks that one session's assembled system prompt is the same bytes across a local date rollover. The scenario does not prove a cache hit from a real provider ([#444](https://github.com/glows777/Vela/pull/444)).
+
+- **The git branch left the system prompt.** `<env>` carried `git branch: <name>` read from the working tree on every request, so anything that checked out a branch in that tree during a session — another session sharing the checkout, or a git command the agent itself ran — rewrote the request's cached prefix. Every provider that caches by prefix then re-read the whole conversation at full price: on one Lark group that was 20 of 694 requests in a day and 55% of its cost, with 242k–355k tokens re-sent each time. The branch is no longer injected at all, like pi. `<env>` was left with the date, time zone, OS and shell, and the model reads the branch with `git branch --show-current` when it needs it, so a stale branch cannot mislead it either. Sharing one working tree between parallel tasks is still the underlying hazard; separate worktrees for parallel work are the intended fix and are not part of this change ([#442](https://github.com/glows777/Vela/issues/442)).
+
 ## [0.7.0] - 2026-11-16
 
 ### Breaking Changes
