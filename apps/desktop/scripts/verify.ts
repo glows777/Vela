@@ -439,6 +439,29 @@ const journeyOne = async (page: Page) => {
     'Sending from Home opens that project and shows the answer there.',
   )
 
+  // A real rejected submission: Local refuses text over 100000 characters, so the
+  // host rejects it before anything is recorded.
+  const projectComposer = page.getByLabel('Message Vela in this project')
+  const bubbles = await page.locator('[data-role="user"]').count()
+  const tooLong = 'x'.repeat(100_001)
+  await projectComposer.fill(tooLong)
+  await page.getByRole('button', { name: 'Send' }).click()
+  await page.getByRole('alert').waitFor()
+  assert.equal(
+    (await projectComposer.inputValue()).length,
+    tooLong.length,
+    'A rejected draft comes back',
+  )
+  assert.equal(
+    await page.locator('[data-role="user"]').count(),
+    bubbles,
+    'A rejected draft leaves no message behind',
+  )
+  checks.push(
+    'A submission the host rejects shows the error, restores the draft and records no message.',
+  )
+  await projectComposer.fill('')
+
   await page.emulateMedia({
     colorScheme: 'light',
     contrast: 'no-preference',

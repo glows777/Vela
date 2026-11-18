@@ -1,11 +1,12 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { restoreDraft } from '../../shared/draft.ts'
 import { Button } from './arc/button/button.tsx'
 import styles from './composer.module.css'
 
 /**
  * One composer for Home and a project. Enter sends, Shift+Enter adds a line, and an
  * IME composition keeps its Enter. The field clears at once; a rejected submission
- * puts the draft back if the person has not typed something else.
+ * puts its text back above whatever was typed since, so neither draft is lost.
  */
 export function Composer({
   label,
@@ -31,8 +32,7 @@ export function Composer({
     const body = text.trim()
     if (!body) return
     setText('')
-    const restore = () =>
-      setText((current) => (current === '' ? body : current))
+    const restore = () => setText((current) => restoreDraft(body, current))
     void Promise.resolve(onSend(body)).then(
       (accepted) => {
         if (!accepted) restore()

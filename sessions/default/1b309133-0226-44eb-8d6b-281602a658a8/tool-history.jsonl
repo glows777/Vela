@@ -1,0 +1,2 @@
+{"type":"tool_call","callId":"00bfc646-43f9-4675-9b4c-5f6826a26b6e","toolCallId":"faux-call-1-1","toolName":"write","input":{},"version":1,"seq":1,"timestamp":"2026-11-18T11:40:34.163Z"}
+{"type":"tool_result","callId":"00bfc646-43f9-4675-9b4c-5f6826a26b6e","status":"rejected","durationMs":0,"error":"Tool was not executed because its checkpoint could not be saved: checkpoint disk unavailable","version":1,"seq":2,"timestamp":"2026-11-18T11:40:34.164Z"}
