@@ -27,28 +27,39 @@ export async function environmentBash(
   let tail = '',
     cut = false,
     bytes = 0
-  let lastUpdate = -Infinity
-  const result = await env.exec(
-    command,
-    {
-      timeout,
-      spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
-      onOutput: (text) => {
-        bytes += Buffer.byteLength(text)
-        const combined = Buffer.from(tail + text)
-        if (combined.length > OUTPUT_MAX_BYTES) cut = true
-        tail = combined.subarray(-OUTPUT_MAX_BYTES).toString()
-        const now = performance.now()
-        if (context?.onUpdate && now - lastUpdate >= 100) {
-          lastUpdate = now
-          context.onUpdate({
-            content: [{ type: 'text', text: fitOutputTail(tail, cut).text }],
-          })
-        }
+  let updateTimer: ReturnType<typeof setTimeout> | undefined
+  const onUpdate = context?.onUpdate
+  const result = await env
+    .exec(
+      command,
+      {
+        timeout,
+        spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
+        onOutput: (text) => {
+          bytes += Buffer.byteLength(text)
+          const combined = Buffer.from(tail + text)
+          if (combined.length > OUTPUT_MAX_BYTES) cut = true
+          tail = combined.subarray(-OUTPUT_MAX_BYTES).toString()
+          if (onUpdate && !updateTimer) {
+            // Publish the latest tail even if the command goes quiet after a burst.
+            updateTimer = setTimeout(() => {
+              updateTimer = undefined
+              try {
+                onUpdate({
+                  content: [
+                    { type: 'text', text: fitOutputTail(tail, cut).text },
+                  ],
+                })
+              } catch {
+                // A failed progress notification does not interrupt the command.
+              }
+            }, 100)
+          }
+        },
       },
-    },
-    context?.signal,
-  )
+      context?.signal,
+    )
+    .finally(() => clearTimeout(updateTimer))
   if (!result.ok) {
     const output = fitOutputTail(tail, cut).text || '(no output)'
     const message =
