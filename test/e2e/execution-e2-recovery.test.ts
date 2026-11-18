@@ -716,13 +716,19 @@ test.skipIf(process.platform === 'win32')(
       cwd: dir.path,
       tempRoot: blocked,
     })
+    let cleaning = false
     const groups = new Set<number>()
     const attempts: number[] = []
     const kill = process.kill.bind(process)
     const spy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
       if (groups.has(pid)) {
         // Keep just our two groups on the adapter's cleanup list after the shells exit.
-        if (signal === 0) return true
+        if (signal === 0) {
+          if (!cleaning) return true
+          throw Object.assign(new Error('retired group'), {
+            code: process.platform === 'darwin' ? 'EPERM' : 'ESRCH',
+          })
+        }
         if (signal === 'SIGKILL') {
           attempts.push(pid)
           throw Object.assign(new Error('group kill denied'), { code: 'EPERM' })
@@ -749,7 +755,8 @@ test.skipIf(process.platform === 'win32')(
         },
       })
       expect(groups.size).toBe(2)
-      expect(attempts.splice(0)).toEqual([[...groups][1]])
+      expect(attempts.splice(0)).toEqual([...groups].slice(1))
+      cleaning = true
       await env.cleanup()
       expect(attempts).toEqual([...groups])
     } finally {

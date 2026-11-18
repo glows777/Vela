@@ -48,7 +48,7 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       for (const child of this.active)
         if (
           (child.exitCode !== null || child.signalCode !== null) &&
-          !this.groupAlive(child)
+          this.groupStatus(child) === 'missing'
         )
           this.active.delete(child)
     if (
@@ -297,7 +297,7 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       signal?.removeEventListener('abort', abort)
       // The shell may exit while a background descendant still owns its group.
       // Keep that group reachable until cleanup; otherwise drop the finished child.
-      if (process.platform === 'win32' || !this.groupAlive(child))
+      if (process.platform === 'win32' || this.groupStatus(child) === 'missing')
         this.active.delete(child)
     }
   }
@@ -307,15 +307,21 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
         try {
           await signalProcessTree(child, 'SIGKILL')
         } catch (cause) {
-          // Darwin may return EPERM after the shell and its group have exited.
-          // Only tolerate that refusal for a shell whose exit we have observed.
           const exited = child.exitCode !== null || child.signalCode !== null
           if (!exited || (cause as NodeJS.ErrnoException)?.code !== 'EPERM')
             throw cause
+          // A reaped shell can still own a live group. Probe it before giving up.
+          const group = this.groupStatus(child)
+          // On Darwin, teardown of a reaped shell is best effort if the probe also denies access.
+          if (
+            group !== 'missing' &&
+            !(process.platform === 'darwin' && group === 'denied')
+          )
+            throw cause
         }
+        this.active.delete(child)
       }),
     )
-    this.active.clear()
   }
   withResultRoot(root: string): LocalExecutionEnv {
     // A resolver may reuse its adapter across sessions. Preserve its overrides
@@ -325,13 +331,18 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
     scoped.tempRoot = root
     return scoped
   }
-  private groupAlive(child: ChildProcess): boolean {
-    if (child.pid === undefined) return false
+  private groupStatus(
+    child: ChildProcess,
+  ): 'present' | 'missing' | 'denied' | 'unknown' {
+    if (child.pid === undefined) return 'missing'
     try {
       process.kill(-child.pid, 0)
-      return true
+      return 'present'
     } catch (cause) {
-      return (cause as NodeJS.ErrnoException).code !== 'ESRCH'
+      const code = (cause as NodeJS.ErrnoException).code
+      if (code === 'ESRCH') return 'missing'
+      if (code === 'EPERM') return 'denied'
+      return 'unknown'
     }
   }
 }

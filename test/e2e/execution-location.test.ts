@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
@@ -921,3 +921,47 @@ test('cleanup stops a background descendant after its shell has exited', async (
     dir.cleanup()
   }
 })
+
+test.skipIf(process.platform === 'win32')(
+  'cleanup reports a denied signal to a surviving group and can retry it',
+  async () => {
+    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const dir = tempDir()
+    const env = createLocalExecutionEnv({ cwd: dir.path })
+    const kill = process.kill.bind(process)
+    let pgid: number | undefined
+    let attempts = 0
+    const denied = Object.assign(new Error('group kill denied'), {
+      code: 'EPERM',
+    })
+    const spy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === pgid && signal === 'SIGKILL' && ++attempts === 1) throw denied
+      return kill(pid, signal)
+    })
+    try {
+      const shell = await env.exec(
+        ['sh', '-c', 'sleep 30 >/dev/null 2>&1 & echo $$'],
+        {
+          onOutput: (text) => {
+            pgid = -Number(text.trim())
+          },
+        },
+      )
+      expect(shell.ok).toBe(true)
+      expect(pgid).toBeLessThan(0)
+      expect(kill(pgid!, 0)).toBe(true)
+      await expect(env.cleanup()).rejects.toBe(denied)
+      expect(kill(pgid!, 0)).toBe(true)
+      await env.cleanup()
+      expect(attempts).toBe(2)
+    } finally {
+      spy.mockRestore()
+      if (pgid && attempts < 2) {
+        try {
+          kill(pgid, 'SIGKILL')
+        } catch {}
+      }
+      dir.cleanup()
+    }
+  },
+)
