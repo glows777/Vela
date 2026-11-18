@@ -175,7 +175,11 @@ export interface SessionDeps {
   registry: ToolRegistry
   builder: SystemPromptBuilder
   /** Expands `/skill:<name>` and prompt templates in session input (src/prompt/templates.ts) */
-  expandInput: (text: string) => string
+  expandInput: (
+    text: string,
+    session: VelaSession,
+    signal?: AbortSignal,
+  ) => Promise<string>
   extensions: SessionExtensionHooks
   /** Session events also go to Vela's subscribers */
   forward: (event: VelaEvent, sessionId: string) => void
@@ -1053,13 +1057,9 @@ export class VelaSession {
    */
   private promptExpanded(input: string, options: PromptOptions): Promise<void> {
     if (!input.startsWith('/')) return this.promptModel(input, options)
-    let expanded: string
-    try {
-      expanded = this.deps.expandInput(input)
-    } catch (error) {
-      return Promise.reject(error)
-    }
-    return this.promptModel(expanded, options)
+    return this.deps
+      .expandInput(input, this, options.signal)
+      .then((expanded) => this.promptModel(expanded, options))
   }
 
   /** Runs an extension command; abort() and options.signal abort the command's ctx.signal. */

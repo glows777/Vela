@@ -653,6 +653,10 @@ test('workspace skill metadata comes from the selected session environment', asy
     expect(reads).toBeGreaterThan(0)
     expect(model.calls[0]!.system).toContain('ENV_SKILL_ONLY')
     expect(model.calls[0]!.system).not.toContain('HOST_SKILL_ONLY')
+    model.push(fauxText('done'))
+    await vela.session('skill-boundary').prompt('/skill:example extra')
+    expect(model.calls[1]!.lastUserText).toContain('Env body')
+    expect(model.calls[1]!.lastUserText).not.toContain('Host body')
   } finally {
     await vela.dispose()
     dir.cleanup()

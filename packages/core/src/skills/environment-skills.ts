@@ -87,3 +87,26 @@ export async function loadEnvironmentSkills(
   await scan(await join(cwd, '.skills'), true)
   return [...found.values()]
 }
+
+/** Expand a workspace skill through the selected environment. */
+export async function expandEnvironmentSkill(
+  text: string,
+  skills: readonly SkillDefinition[],
+  env: ExecutionEnv,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!text.startsWith('/skill:')) return
+  const space = text.search(/\s/)
+  const name = space === -1 ? text.slice(7) : text.slice(7, space)
+  const skill = skills.find((item) => item.name === name)
+  if (!skill) return
+  const content = await env.readTextFile(skill.filePath, signal)
+  if (!content.ok)
+    throw new Error(
+      `Could not load skill ${name} from ${skill.filePath}: ${content.error.message}`,
+    )
+  const body = parseFrontmatter(content.value).body
+  const block = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`
+  const args = space === -1 ? '' : text.slice(space + 1).trim()
+  return args ? `${block}\n\n${args}` : block
+}

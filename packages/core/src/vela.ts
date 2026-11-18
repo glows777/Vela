@@ -59,7 +59,10 @@ import {
   type SessionSummary,
 } from './session/storage.ts'
 import { ToolResultStore } from './session/tool-results.ts'
-import { loadEnvironmentSkills } from './skills/environment-skills.ts'
+import {
+  expandEnvironmentSkill,
+  loadEnvironmentSkills,
+} from './skills/environment-skills.ts'
 import {
   formatSkillsForPrompt,
   type SkillDefinition,
@@ -470,10 +473,19 @@ export function createVela(options: VelaOptions = {}): Vela {
         registry,
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
-        expandInput: (text) =>
-          skillLoader.expand(text) ??
-          expandPromptTemplate(text, promptTemplates) ??
-          text,
+        expandInput: async (text, owner, signal) => {
+          await prepareWorkspace(owner, signal)
+          const expanded =
+            options.skillDirs && owner.cwd === cwd
+              ? skillLoader.expand(text)
+              : await expandEnvironmentSkill(
+                  text,
+                  sessionSkills.get(owner.id) ?? [],
+                  await ensureLocal(owner),
+                  signal,
+                )
+          return expanded ?? expandPromptTemplate(text, promptTemplates) ?? text
+        },
         extensions: runner,
         forward: (event, sessionId) => {
           for (const listener of listeners) listener(event, sessionId)
