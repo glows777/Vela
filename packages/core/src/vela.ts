@@ -27,6 +27,7 @@ import {
 } from './models/index.ts'
 import type { ContextFile } from './prompt/context-files.ts'
 import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
+import { loadEnvironmentTemplates } from './prompt/environment-templates.ts'
 import {
   addendum,
   type DocsPaths,
@@ -330,9 +331,7 @@ export function createVela(options: VelaOptions = {}): Vela {
 
   const skillLoader = new SkillLoader(options.skillDirs ?? [])
   skillLoader.load()
-  const templates = loadPromptTemplates(
-    options.promptTemplateDirs ?? [join(cwd, '.vela', 'prompts')],
-  )
+  const templates = loadPromptTemplates(options.promptTemplateDirs ?? [])
   for (const { message, path } of [
     ...skillLoader.diagnostics,
     ...templates.diagnostics,
@@ -344,6 +343,7 @@ export function createVela(options: VelaOptions = {}): Vela {
   const sessions = new Map<string, VelaSession>()
   const sessionContextFiles = new Map<string, readonly ContextFile[]>()
   const sessionSkills = new Map<string, readonly SkillDefinition[]>()
+  const sessionTemplates = new Map<string, PromptTemplate[]>()
 
   // Named sections in pi's order; preamble, tools, rules and docs give way to a replacement prompt
   const builder = new SystemPromptBuilder({
@@ -437,10 +437,24 @@ export function createVela(options: VelaOptions = {}): Vela {
       ...workspaceSkills,
       ...skillLoader.list().filter((skill) => !workspaceNames.has(skill.name)),
     ]
+    const workspaceTemplates =
+      options.promptTemplateDirs && location === cwd
+        ? []
+        : await loadEnvironmentTemplates(env, location, signal)
+    const templateNames = new Set(
+      workspaceTemplates.map((template) => template.name),
+    )
+    const selectedTemplates = [
+      ...workspaceTemplates,
+      ...promptTemplates.filter(
+        (template) => !templateNames.has(template.name),
+      ),
+    ]
     signal?.throwIfAborted()
     if (session.cwd !== location)
       throw new Error('Session location changed during resource preparation')
     sessionSkills.set(session.id, skills)
+    sessionTemplates.set(session.id, selectedTemplates)
     sessionContextFiles.set(
       session.id,
       location === cwd && options.contextFiles ? contextFiles : workspace,
@@ -490,7 +504,14 @@ export function createVela(options: VelaOptions = {}): Vela {
                   await ensureLocal(owner),
                   signal,
                 )
-          return expanded ?? expandPromptTemplate(text, promptTemplates) ?? text
+          return (
+            expanded ??
+            expandPromptTemplate(
+              text,
+              sessionTemplates.get(owner.id) ?? promptTemplates,
+            ) ??
+            text
+          )
         },
         extensions: runner,
         forward: (event, sessionId) => {
@@ -505,12 +526,14 @@ export function createVela(options: VelaOptions = {}): Vela {
           sessionCwds.set(changed.registry, changed.cwd)
           sessionContextFiles.delete(changed.id)
           sessionSkills.delete(changed.id)
+          sessionTemplates.delete(changed.id)
         },
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
             sessionContextFiles.delete(closed.id)
             sessionSkills.delete(closed.id)
+            sessionTemplates.delete(closed.id)
           }
         },
       },
