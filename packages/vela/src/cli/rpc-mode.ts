@@ -6,7 +6,6 @@ import type {
   VelaSession,
 } from '@glows777/vela-core'
 import { messageText } from '@glows777/vela-core'
-import { inspectVela } from '@glows777/vela-core/diagnostics'
 import type { Vela } from '../vela.ts'
 import { jsonEvent, toJsonLine } from './json-event.ts'
 import { nextModel, scopedModels } from './model-cycle.ts'
@@ -347,17 +346,17 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       await session.save()
     },
     // Like pi: extension commands, prompt templates and skills, each with its `source`
-    get_commands: () => ({
+    get_commands: async () => ({
       commands: [
         ...vela
           .commands()
           .map((command) => ({ ...command, source: 'extension' as const })),
-        ...inspectVela(vela).promptTemplates.map((t) => ({
+        ...(await session.resources()).promptTemplates.map((t) => ({
           name: t.name,
           description: t.description,
           source: 'prompt' as const,
         })),
-        ...inspectVela(vela).skills.map((s) => ({
+        ...(await session.resources()).skills.map((s) => ({
           name: `skill:${s.name}`,
           description: s.description,
           source: 'skill' as const,

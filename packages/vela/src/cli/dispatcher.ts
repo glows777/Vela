@@ -1,4 +1,3 @@
-import { inspectVela } from '@glows777/vela-core/diagnostics'
 import type { Vela } from '../vela.ts'
 import { channelCommands } from './commands/channel.ts'
 import { extensionCommands } from './commands/extensions.ts'
@@ -19,13 +18,13 @@ import { statusCommands } from './commands/status.ts'
  * goes to session.prompt(), which runs extension commands. Text without a leading `/` is never
  * a command (like pi): it goes to the model.
  */
-export function createCliDispatcher(vela: Vela): CommandHandler {
+export function createCliDispatcher(_vela: Vela): CommandHandler {
   const dispatch = createDispatcher([
     ...debugCommands,
     ...statusCommands,
     ...contextCommands,
     ...modelCommands,
-    ...createSkillCommands({ list: () => inspectVela(vela).skills }),
+    ...createSkillCommands(),
     ...extensionCommands,
     ...channelCommands,
     ...securityCommands,
