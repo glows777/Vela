@@ -12,6 +12,7 @@ import { getStoredResult } from '../session/tool-results.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import { normalizeUsage, type TokenTracker } from '../usage/tracker.ts'
 import { withPromptCache } from './cache.ts'
+import { checkpointMessage } from './checkpoint.ts'
 import type { VelaEvent, VelaEventListener } from './events.ts'
 import { LoopDetector } from './loop-detection.ts'
 import { isContextOverflow } from './overflow.ts'
@@ -91,6 +92,8 @@ interface AgentLoopParameter {
    * the identity of the model that answered.
    */
   onMessage?: (message: ModelMessage, producer: string) => void
+  /** Flush the recorded assistant tool calls before the SDK may execute them. */
+  onCheckpoint?: () => Promise<void>
   /**
    * Turns a loop-detection warning into the message appended after that step (pi's custom notice).
    * The model sees the returned message. Absent, the warning is only an event.
@@ -124,6 +127,7 @@ export const agentLoop = async ({
   takeFollowUp,
   newMessages = [],
   onMessage,
+  onCheckpoint,
   onInterrupted,
   injectNotice,
 }: AgentLoopParameter) => {
@@ -134,6 +138,7 @@ export const agentLoop = async ({
   let turn = 0
   let hostedPauses = 0
   const hostedCalls = new Set<string>()
+  const checkpoints = new WeakMap<StepMessage, AssistantModelMessage>()
   // Each agent loop has its own call history, so concurrent sessions don't interfere
   const loopDetector = new LoopDetector()
   const emit = (event: VelaEvent) => onEvent?.(event)
@@ -179,6 +184,19 @@ export const agentLoop = async ({
         messages,
         abortSignal,
       )
+      let checkpointFailure: { error: unknown } | undefined
+      if (onCheckpoint) {
+        for (const tool of Object.values(request.tools)) {
+          const execute = tool.execute
+          if (!execute) continue
+          tool.execute = async (input, options) => {
+            // SDK lifecycle callbacks swallow errors. Check again at the actual
+            // execution boundary so a failed flush cannot authorize side effects.
+            if (checkpointFailure) throw checkpointFailure.error
+            return execute(input, options)
+          }
+        }
+      }
       await prepareContext?.(request)
       abortSignal?.throwIfAborted()
       const inferenceSystem = currentSystem()
@@ -259,13 +277,36 @@ export const agentLoop = async ({
             // Errors are thrown in the 'error' branch below and reported via events, not printed by the SDK
             onError: () => {},
             // The model finished (tools run only after this): its tool calls tell when the message is complete
-            onLanguageModelCallEnd: (event) =>
+            onLanguageModelCallEnd: async (event) => {
               current.modelFinished(
                 event.finishReason,
                 event.content.flatMap((part) =>
                   part.type === 'tool-call' ? [part.toolCallId] : [],
                 ),
-              ),
+              )
+              if (
+                onCheckpoint &&
+                (event.finishReason === 'stop' ||
+                  event.finishReason === 'tool-calls') &&
+                event.content.some(
+                  (part) => part.type === 'tool-call' && !part.providerExecuted,
+                )
+              ) {
+                // The SDK awaits this hook before executing client tools. StreamMessage can
+                // still lag behind it, so use the complete normalized model response here.
+                try {
+                  const assistant = await checkpointMessage(
+                    event,
+                    request.tools,
+                  )
+                  checkpoints.set(current, assistant)
+                  add(assistant, false)
+                  await onCheckpoint()
+                } catch (error) {
+                  checkpointFailure = { error }
+                }
+              }
+            },
           })
 
           for await (const part of result.stream) {
@@ -380,11 +421,13 @@ export const agentLoop = async ({
           }
 
           finalStep = await result.finalStep
+          if (checkpointFailure) throw checkpointFailure.error
           abortSignal?.throwIfAborted()
           if (retried)
             emit({ type: 'auto_retry_end', success: true, attempt: retried })
           break
         } catch (error) {
+          if (checkpointFailure) throw checkpointFailure.error
           if (abortSignal?.aborted) {
             // Keep what this step produced: the text and whole tool calls so far, each call answered
             // (its real result, or "Operation aborted" like pi), so the model knows what already happened
@@ -396,6 +439,7 @@ export const agentLoop = async ({
           // A provider-hosted tool can execute before its first stream event arrives.
           const canResend =
             !step.toolsStarted &&
+            !checkpoints.has(step) &&
             !Object.values(request.tools).some(
               (tool) => tool.type === 'provider',
             )
@@ -542,7 +586,8 @@ export const agentLoop = async ({
       }
       // The assistant message was announced while it streamed
       for (const message of responseMessages)
-        add(message, message.role !== 'assistant')
+        if (message.role !== 'assistant' || !checkpoints.has(step))
+          add(message, message.role !== 'assistant')
       const assistant = responseMessages.find(
         (message): message is AssistantModelMessage =>
           message.role === 'assistant',
@@ -635,7 +680,17 @@ export const agentLoop = async ({
     openCallResult: string,
   ): void {
     step.endInterrupted(stopReason, errorMessage)
-    let assistant = step.snapshot({ complete: step.complete })
+    const checkpoint = checkpoints.get(step)
+    let assistant = checkpoint ?? step.snapshot({ complete: step.complete })
+    if (checkpoint && Array.isArray(checkpoint.content)) {
+      for (const call of checkpoint.content) {
+        if (call.type !== 'tool-call' || call.providerExecuted) continue
+        if (
+          !step.toolCalls.some((known) => known.toolCallId === call.toolCallId)
+        )
+          step.toolCalls.push(call)
+      }
+    }
     step.closeOpenCalls(openCallResult)
     // A call that finished after the stream stopped never reached its tool-result: drop its details
     for (const call of step.toolCalls) toolRegistry.takeDetails(call.toolCallId)
@@ -663,10 +718,10 @@ export const agentLoop = async ({
       }
     }
     const toolMessage = step.toolMessage(true)
-    if (!step.complete && !step.toolsStarted) {
+    if (!checkpoint && !step.complete && !step.toolsStarted) {
       if (assistant.content.length) onInterrupted?.(assistant, stopReason)
     } else {
-      if (assistant.content.length) add(assistant, false)
+      if (!checkpoint && assistant.content.length) add(assistant, false)
       if (toolMessage) add(toolMessage)
     }
     emit({

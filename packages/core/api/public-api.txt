@@ -700,6 +700,7 @@
     namespace?: ToolNamespace | undefined
     promptGuidelines?: readonly string[] | undefined
     promptSnippet?: string | undefined
+    replay?: "safe" | "unsafe" | undefined
     searchHint?: string | undefined
   type ToolExecutionMode = 'sequential' | 'parallel'
   class ToolExecutionResult
@@ -979,6 +980,7 @@
     clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
     close: () => Promise<void>
     compact: (focus?: string) => Promise<void>
+    continueInterrupted: () => Promise<void>
     customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
     executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; id?: string; }) => Promise<BashResult>
     exportHtml: (path?: string) => Promise<string>
@@ -1390,6 +1392,7 @@
     namespace?: ToolNamespace | undefined
     promptGuidelines?: readonly string[] | undefined
     promptSnippet?: string | undefined
+    replay?: "safe" | "unsafe" | undefined
     searchHint?: string | undefined
   type ToolExecutionMode = 'sequential' | 'parallel'
   class ToolExecutionResult
@@ -1579,6 +1582,7 @@
     clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
     close: () => Promise<void>
     compact: (focus?: string) => Promise<void>
+    continueInterrupted: () => Promise<void>
     customMessageOf: (message: ModelMessage) => CustomMessageInfo | undefined
     executeBash: (command: string, options?: { excludeFromContext?: boolean; onUpdate?: (output: string) => void; id?: string; }) => Promise<BashResult>
     exportHtml: (path?: string) => Promise<string>

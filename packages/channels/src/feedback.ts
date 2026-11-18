@@ -589,6 +589,7 @@ export class RunFeedback {
     input: IncomingMessage,
     /** Every passive input one prompt covers, oldest first; the last one is answered. */
     batch?: IncomingMessage[],
+    recovered = false,
   ): Promise<ChannelOutcome | undefined> {
     this.active.add(session)
     const run: ChannelRun = {
@@ -687,15 +688,17 @@ export class RunFeedback {
       await this.options.directory.begin(id, msg)
       if (run.stopped)
         throw new DOMException('Stopped before prompting', 'AbortError')
-      this.options.recovery.track(id, session, batch ?? msg)
+      if (!recovered) this.options.recovery.track(id, session, batch ?? msg)
       promptStarted = true
       this.options.logger.debug(
         `[${channelName}] input ${msg.replyToId ?? '-'} prompt at=${new Date().toISOString()}`,
       )
-      await session.prompt(modelInputText(msg), {
-        source: 'channel',
-        images: msg.images,
-      })
+      if (recovered) await session.continueInterrupted()
+      else
+        await session.prompt(modelInputText(msg), {
+          source: 'channel',
+          images: msg.images,
+        })
       if (session.messages.at(-1) !== previous)
         answer = lastAssistantText(session.messages)
     } catch (error) {
@@ -717,7 +720,7 @@ export class RunFeedback {
       }
       // A rejected turn never reached the model: keep the history it promised and drop the input,
       // or every later prompt in the top-level group fails with the same error and cannot be reset.
-      if (outcome === 'failed' && !msg.topic && isGroupInput(msg))
+      if (!recovered && outcome === 'failed' && !msg.topic && isGroupInput(msg))
         await this.options.recovery.dropRejectedInput(
           session,
           channelName,

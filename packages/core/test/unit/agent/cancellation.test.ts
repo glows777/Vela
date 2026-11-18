@@ -59,7 +59,7 @@ test('agent cancellation reaches the tool, waits for its durable result, and nev
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
-  expect(rows).toHaveLength(2)
+  expect(rows).toHaveLength(3)
   expect(rows[1]).toMatchObject({
     status: 'cancelled',
     output: 'cancelled tool output',

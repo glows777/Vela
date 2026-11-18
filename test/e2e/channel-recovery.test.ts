@@ -503,3 +503,41 @@ test('restart drops active and queued passive work with operator diagnostics and
   )
   expect(index.records[0].pendingMessageIds).toEqual([])
 }, 10000)
+
+test('restart keeps completed steps and reports an interrupted unsafe tool without repeating its effects', async () => {
+  const cwd = await crash('unsafe-step')
+  const { fake, t, start } = setup(cwd, [
+    (req) => {
+      const history = JSON.stringify(req.prompt)
+      expect(history).toContain('completed.txt')
+      expect(history).toContain('interrupted by a restart')
+      expect(history).toContain('may have partially run')
+      return fauxText('recovered without repeating tools')
+    },
+  ])
+  await start()
+  await until(() =>
+    fake.sent.some((m) => m.text.includes('recovered without repeating tools')),
+  )
+  expect(
+    readFileSync(
+      join(t.vela.session('lark-oc_group-root').cwd, 'completed.txt'),
+      'utf8',
+    ),
+  ).toBe('completed')
+  expect(
+    readFileSync(
+      join(t.vela.session('lark-oc_group-root').cwd, 'interrupted.txt'),
+      'utf8',
+    ),
+  ).toBe('started')
+  const session = t.vela.session('lark-oc_group-root')
+  expect(
+    session
+      .getBranch()
+      .filter(
+        (entry) => entry.type === 'message' && entry.message.role === 'user',
+      ),
+  ).toHaveLength(1)
+  expect(t.model.calls).toHaveLength(1)
+})

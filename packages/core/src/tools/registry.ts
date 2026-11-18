@@ -1,12 +1,12 @@
-import type { FlexibleSchema, Tool, ToolSet } from 'ai'
-import { tool as AITool, asSchema } from 'ai'
+import type { FlexibleSchema, ToolSet } from 'ai'
+import { asSchema } from 'ai'
 import type { VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { silentLogger, type VelaLogger } from '../logger.ts'
 import {
   isToolContent,
   normalizeToolContent,
-  toAIToolOutput,
+  type ToolResultOutput,
   toolContentText,
 } from '../messages.ts'
 import type { SessionScope } from '../session/scope.ts'
@@ -14,6 +14,14 @@ import type { ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import { prepareCallResult } from './call-result.ts'
 import { ExecutionGate } from './execution-gate.ts'
+import {
+  type CallOptions,
+  errorOutput,
+  persistResponse,
+  recoverToolCall,
+  ToolRejection,
+} from './recovery.ts'
+import { countToolTokens, toAISDKTools } from './sdk-tools.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 import {
   type ExecuteToolOptions,
@@ -28,7 +36,6 @@ import {
   ToolResultError,
 } from './types.ts'
 import { validateInput } from './validation.ts'
-
 /** Context passed to a tool's execute. */
 export interface ToolContext {
   /** @internal */ execution?: ExecutionEnv
@@ -78,6 +85,8 @@ export interface ToolDefinition {
    * "parallel" (default) tools run concurrently. Only calls of the same session wait for each
    * other. write_file / edit_file additionally queue per file across all sessions.
    */
+  /** Whether an interrupted call may be replayed after a restart. Default unsafe. */
+  replay?: 'safe' | 'unsafe'
   executionMode?: ToolExecutionMode
   /** Hints about what the tool does (MCP's tool annotations, like pi); not verified, core does not act on them */
   annotations?: ToolAnnotations
@@ -107,20 +116,6 @@ const EXPOSURES: readonly ToolExposure[] = [
   'deferred',
   'hidden',
 ]
-
-/** An availability check or hook turned the call down; the model gets `reason` as an error result. */
-class ToolRejection {
-  constructor(readonly reason: string) {}
-}
-
-/** Per call: how the call was issued */
-interface CallOptions {
-  toolCallId?: string
-  abortSignal?: AbortSignal
-  /** Set for calls a tool made through ctx.executeTool() */
-  parentToolCallId?: string
-  onUpdate?: (partialResult: unknown) => void
-}
 
 /**
  * State shared by all sessions of one Vela: tool definitions and hooks.
@@ -327,40 +322,12 @@ export class ToolRegistry {
   }
 
   toAISDKFormat(hostedTools: ToolSet = {}): ToolSet {
-    const result: Record<string, Tool> = {}
-    for (const tool of this.getActiveTools()) {
-      const hosted = hostedTools[tool.name]
-      if (hosted) {
-        result[tool.name] = hosted
-        continue
-      }
-      if (tool.hostedOnly) continue
-      result[tool.name] = AITool({
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-        toModelOutput: ({ output }) =>
-          isToolContent(output)
-            ? toAIToolOutput({ type: 'content', value: output })
-            : typeof output === 'string'
-              ? { type: 'text', value: output }
-              : {
-                  type: 'json',
-                  value: JSON.parse(JSON.stringify(output ?? null)),
-                },
-        execute: (input: unknown, options) =>
-          this.track(async () => {
-            const output = await this.runCall(tool, input, {
-              toolCallId: options?.toolCallId,
-              abortSignal: options?.abortSignal,
-            })
-            // Throw the reason string so the model and events receive the same text as ctx.executeTool,
-            // without an Error prefix. The model can still continue.
-            if (output instanceof ToolRejection) throw output.reason
-            return output
-          }),
-      })
-    }
-    return result
+    return toAISDKTools(
+      this.getActiveTools(),
+      hostedTools,
+      (tool, input, options) =>
+        this.track(() => this.runCall(tool, input, options)),
+    )
   }
 
   /** Availability checks, hooks, execution, tool history and post hooks for one call. */
@@ -433,7 +400,28 @@ export class ToolRegistry {
       this.shared.logger.debug(`[tools] ${name} started (${mode})`)
       this.assertHealthy()
       const history = this.results.history
-      const call = await history.begin(name, options.toolCallId, input)
+      const location = context.execution && {
+        environment: context.execution.id,
+        cwd: context.execution.cwd,
+      }
+      // Recovery never silently moves a call to a different environment or replays changed input.
+      if (
+        options.recovery &&
+        (!location ||
+          JSON.stringify(location) !==
+            JSON.stringify(options.recovery.location) ||
+          JSON.stringify(input) !== JSON.stringify(options.recovery.input))
+      )
+        return new ToolRejection(
+          `Tool ${name} was interrupted by a restart and may have partially run; its location or input changed, so it was not replayed`,
+        )
+      const call = await history.begin(name, options.toolCallId, input, {
+        replay: tool.replay ?? 'unsafe',
+        location,
+        ...(options.recovery
+          ? { interruption: (options.recovery.interruption ?? 0) + 1 }
+          : {}),
+      })
       const started = performance.now()
       let settled = false
       const onUpdate = (partialResult: unknown) => {
@@ -485,6 +473,7 @@ export class ToolRegistry {
           status: signal?.aborted ? 'cancelled' : 'failed',
           durationMs: performance.now() - started,
           error: error instanceof Error ? error.message : String(error),
+          modelOutput: errorOutput(error),
         })
         throw error
       }
@@ -519,6 +508,7 @@ export class ToolRegistry {
       }
       // Normalize after all post hooks, including replacement image payloads.
       if (isToolContent(output)) output = await normalizeToolContent(output)
+      await persistResponse(history, call.callId, output, execution.isError)
       // Like pi: a failed command is an error result, with its output (and where the full output is) as the message
       if (execution.isError)
         throw new ToolResultError(
@@ -528,6 +518,30 @@ export class ToolRegistry {
         )
       return output
     })
+  }
+
+  /** @internal Reconcile a missing transcript result before continuing. */
+  recoverToolCall(
+    name: string,
+    id: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<ToolResultOutput> {
+    return recoverToolCall(
+      this,
+      name,
+      id,
+      input,
+      signal,
+      (tool, args, recovery) =>
+        this.track(() =>
+          this.runCall(tool, args, {
+            toolCallId: id,
+            abortSignal: signal,
+            recovery,
+          }),
+        ),
+    )
   }
 
   /**
@@ -707,24 +721,10 @@ export class ToolRegistry {
   }
 
   countTokenEstimate(): { active: number; deferred: number; total: number } {
-    let active = 0
-    let deferred = 0
-
-    const declared = new Set(this.getActiveTools().map((tool) => tool.name))
-    for (const tool of this.tools.values()) {
-      if (tool.exposure === 'hidden') continue
-      const schemaSize = JSON.stringify({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-      }).length
-      const tokens = Math.ceil(schemaSize / 4)
-
-      if (declared.has(tool.name)) active += tokens
-      else deferred += tokens
-    }
-
-    return { active, deferred, total: active + deferred }
+    return countToolTokens(
+      this.getAllTools(),
+      new Set(this.getActiveTools().map((tool) => tool.name)),
+    )
   }
 
   unregister(name: string): boolean {

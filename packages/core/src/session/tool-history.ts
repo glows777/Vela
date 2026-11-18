@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { mkdir, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import type { ToolResultOutput } from '../messages.ts'
 
 export interface ExecutionMetadata {
   error?: string
@@ -22,10 +23,23 @@ export interface CallRecord {
   toolName: string
   input: unknown
   /** Reserved before execution; the file may be absent or incomplete without a result record. */
+  replay?: 'safe' | 'unsafe'
+  location?: { environment: string; cwd: string }
+  interruption?: number
   plannedOutputPath?: string
 }
 
+export interface ResponseRecord {
+  version: 1
+  type: 'tool_response'
+  seq: number
+  timestamp: string
+  callId: string
+  output: ToolResultOutput
+}
+
 export interface ResultRecord extends ExecutionMetadata {
+  modelOutput?: ToolResultOutput
   version: 1
   type: 'tool_result'
   seq: number
@@ -55,7 +69,11 @@ export interface LegacyResultRecord {
   note: string
 }
 
-export type HistoryRecord = CallRecord | ResultRecord | LegacyResultRecord
+export type HistoryRecord =
+  | CallRecord
+  | ResultRecord
+  | LegacyResultRecord
+  | ResponseRecord
 type NewRecord<T> = T extends HistoryRecord
   ? Omit<T, 'version' | 'seq' | 'timestamp'>
   : never
@@ -69,10 +87,7 @@ export class ToolHistoryStore {
   private byteLength = 0
   private readonly byteOffsets = new Map<number, number>()
   private failure: Error | undefined
-  private readonly calls = new Map<
-    string,
-    Pick<CallRecord, 'callId' | 'toolCallId'>
-  >()
+  private readonly calls = new Map<string, CallRecord>()
   private readonly results = new Map<string, ResultRecord>()
   private readonly legacy = new Set<string>()
 
@@ -129,12 +144,13 @@ export class ToolHistoryStore {
 
   private remember(record: HistoryRecord): void {
     this.sequence = record.seq
-    if (record.type === 'tool_call')
-      this.calls.set(record.callId, {
-        callId: record.callId,
-        toolCallId: record.toolCallId,
-      })
+    if (record.type === 'tool_call') this.calls.set(record.callId, record)
     if (record.type === 'tool_result') this.results.set(record.callId, record)
+    if (record.type === 'tool_response') {
+      const result = this.results.get(record.callId)
+      if (!result) throw new Error('Tool response without a terminal result')
+      result.modelOutput = record.output
+    }
     if (record.type === 'legacy_result')
       this.legacy.add(JSON.stringify([record.toolCallId, record.outputPath]))
   }
@@ -178,6 +194,7 @@ export class ToolHistoryStore {
     toolName: string,
     toolCallId: string | undefined,
     input: unknown,
+    recovery: Pick<CallRecord, 'replay' | 'location' | 'interruption'> = {},
   ): Promise<CallRecord> {
     const callId = crypto.randomUUID()
     return this.append<CallRecord>({
@@ -186,7 +203,28 @@ export class ToolHistoryStore {
       toolCallId: toolCallId ?? null,
       toolName,
       input,
+      ...recovery,
     })
+  }
+
+  async legacyUnfinished(): Promise<CallRecord[]> {
+    await this.queue
+    this.assertHealthy()
+    await this.load()
+    return [...this.calls.values()].filter(
+      (call) => call.replay === undefined && !this.results.has(call.callId),
+    )
+  }
+
+  async attempts(
+    toolCallId: string,
+  ): Promise<{ call: CallRecord; result?: ResultRecord }[]> {
+    await this.queue
+    this.assertHealthy()
+    await this.load()
+    return [...this.calls.values()]
+      .filter((call) => call.toolCallId === toolCallId)
+      .map((call) => ({ call, result: this.results.get(call.callId) }))
   }
 
   async completed(toolCallId: string): Promise<ResultRecord | undefined> {

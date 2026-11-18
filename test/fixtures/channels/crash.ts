@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
 import {
@@ -42,12 +42,22 @@ const note = (req: FauxRequest) => {
 }
 const t = createTestVela({
   cwd,
-  responses: mode?.startsWith('note')
-    ? Array(5).fill(note)
-    : [
-        ...(mode === 'forward' ? [fauxText('topic established')] : []),
-        mode === 'answer' ? fauxText('saved answer') : fauxHang(),
-      ],
+  responses:
+    mode === 'unsafe-step'
+      ? [
+          fauxToolCall('bash', {
+            command: 'printf completed >> completed.txt',
+          }),
+          fauxToolCall('bash', {
+            command: 'printf started >> interrupted.txt; sleep 120',
+          }),
+        ]
+      : mode?.startsWith('note')
+        ? Array(5).fill(note)
+        : [
+            ...(mode === 'forward' ? [fauxText('topic established')] : []),
+            mode === 'answer' ? fauxText('saved answer') : fauxHang(),
+          ],
   extensions: [
     lark({
       owners: ['ou_alice'],
@@ -170,6 +180,16 @@ if (mode?.startsWith('note')) {
         ),
     )
   if (mode === 'note') while (!saved()) await Bun.sleep(5)
+  ready()
+}
+if (mode === 'unsafe-step') {
+  while (
+    !existsSync(
+      join(t.vela.session('lark-oc_group-root').cwd, 'interrupted.txt'),
+    )
+  )
+    await Bun.sleep(5)
+  await t.vela.session('lark-oc_group-root').save()
   ready()
 }
 setInterval(() => {}, 1000)

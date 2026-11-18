@@ -500,6 +500,7 @@ test.each(['settle', 'stop'])(
     let releaseEnv!: () => void
     let entered = false
     let holdNext = false
+    let toolEntered = false
     const held = new Promise<void>((resolve) => {
       finish = resolve
     })
@@ -532,6 +533,7 @@ test.each(['settle', 'stop'])(
                 description: 'Wait',
                 inputSchema: z.object({}),
                 execute: async () => {
+                  toolEntered = true
                   await held
                   return 'done'
                 },
@@ -566,7 +568,9 @@ test.each(['settle', 'stop'])(
     try {
       await t.vela.startChannels()
       fake.deliver(larkEvent({ message_id: 'start' }))
-      await until(() => t.model.calls.length === 1)
+      // A model request can precede the durable assistant checkpoint and tool environment
+      // resolution. Arm the attachment gate only after the held tool really started.
+      await until(() => toolEntered)
       fake.deliver(
         larkEvent({
           message_id: 'file-message',
