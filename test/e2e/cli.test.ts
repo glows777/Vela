@@ -2089,3 +2089,53 @@ for (const mode of ['-p', '--mode json']) {
     }
   })
 }
+
+test.concurrent('tool flags select prepared project tools and scoped builtins', async () => {
+  const source = `import { z } from ${JSON.stringify(import.meta.resolve('zod'))}; export default function scoped(vela) {
+    vela.registerTool({ name: 'project_probe', description: 'project probe', inputSchema: z.object({}), execute: async () => ({ content: [{ type: 'text', text: 'PROJECT_TOOL_OK' }] }) })
+  }`
+  const selected = await cli(
+    ['--approve', '--tools', 'scoped_*,memory', '--mode', 'json', 'hello'],
+    {
+      model: 'faux:probe.json',
+      files: {
+        '.vela/extensions/scoped.ts': source,
+        'probe.json': JSON.stringify({
+          responses: [
+            { toolCalls: [{ name: 'scoped_project_probe', input: {} }] },
+            { text: 'done' },
+          ],
+        }),
+      },
+    },
+  )
+  expect({ code: selected.code, stderr: selected.stderr }).toMatchObject({
+    code: 0,
+  })
+  expect(selected.stdout).toContain('PROJECT_TOOL_OK')
+  const denied = await cli(
+    ['--no-approve', '--tools', 'scoped_*', '-p', 'hello'],
+    {
+      model: `faux:${scenario('hello')}`,
+      files: { '.vela/extensions/scoped.ts': source },
+    },
+  )
+  expect(denied.code).toBe(2)
+  expect(denied.stderr).toContain('Unknown tool: scoped_*')
+})
+
+test.concurrent('a failed project factory reports its location and cause without a runtime stack', async () => {
+  const result = await cli(['--approve', '-p', 'hello'], {
+    model: `faux:${scenario('hello')}`,
+    files: {
+      '.vela/extensions/broken.ts':
+        "export default function broken() { throw new Error('project setup failed') }",
+    },
+  })
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain(
+    `Project extensions at ${result.cwd} failed to prepare`,
+  )
+  expect(result.stderr).toContain('project setup failed')
+  expect(result.stderr).not.toContain('Bun v')
+})

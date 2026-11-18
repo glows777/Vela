@@ -41,6 +41,8 @@ interface RunnerDeps {
   logger: VelaLogger
   registry: ToolRegistry
   models: ModelRegistry
+  /** Internal project runtime: inherits host registrations, never their ownership. */
+  parent?: ExtensionRunner
 }
 
 export interface LoadedExtension {
@@ -52,6 +54,12 @@ export interface LoadedExtension {
 }
 
 type AnyHandler = (event: unknown, ctx: ExtensionContext) => unknown
+type RegisteredHandler = {
+  extension: string
+  fn: AnyHandler
+  toolName?: string
+  core: boolean
+}
 
 const COMMAND_NAME = /^[A-Za-z0-9][\w-]*$/
 
@@ -61,10 +69,7 @@ const COMMAND_NAME = /^[A-Za-z0-9][\w-]*$/
  * The executor awaits tool interception directly; ordinary notifications remain non-blocking.
  */
 export class ExtensionRunner {
-  private readonly handlers = new Map<
-    ExtensionEventName,
-    { extension: string; fn: AnyHandler; toolName?: string }[]
-  >()
+  private readonly handlers = new Map<ExtensionEventName, RegisteredHandler[]>()
   private readonly commandMap = new Map<
     string,
     { extension: string; command: ExtensionCommand }
@@ -84,33 +89,45 @@ export class ExtensionRunner {
     extensions: readonly VelaExtension[],
     coreExtensions: readonly VelaExtension[] = [],
   ) {
-    const load = (factories: readonly VelaExtension[]) => {
+    const factoriesSettled: Promise<void>[] = []
+    const load = (factories: readonly VelaExtension[], core = false) => {
       const pending: Promise<void>[] = []
       factories.forEach((extension, index) => {
         const name = extension.name || `extension-${index + 1}`
-        const result = extension(this.api(name))
-        if (result instanceof Promise)
-          pending.push(
-            result.catch((error) => {
-              throw new Error(
-                `Extension ${name} failed to load: ${errorMessage(error)}`,
-              )
-            }),
-          )
+        const result = extension(this.api(name, core))
+        if (result instanceof Promise) {
+          const loading = result.catch((error) => {
+            throw new Error(
+              `Extension ${name} failed to load: ${errorMessage(error)}`,
+            )
+          })
+          pending.push(loading)
+          factoriesSettled.push(loading)
+        }
       })
       return pending
     }
-    const pending = load(extensions)
+    const pending = deps.parent
+      ? [
+          deps.parent.ready
+            .then(() => Promise.all(load(extensions)))
+            .then(() => {}),
+        ]
+      : load(extensions)
     // Audit must register last, including after handlers registered by async factories.
     this.ready = Promise.all(pending)
-      .then(() => Promise.all(load(coreExtensions)))
+      .then(() => Promise.all(load(coreExtensions, true)))
       .then(() => {})
-    this.settled = Promise.allSettled([...pending, this.ready]).then(() => {})
+    this.settled = this.ready
+      .catch(() => {})
+      .then(async () => {
+        await Promise.allSettled(factoriesSettled)
+      })
     // Avoid an unhandled rejection when nobody awaits it; prompt() awaits it and reports the error
     this.ready.catch(() => {})
   }
 
-  private api(name: string): ExtensionAPI {
+  private api(name: string, core: boolean): ExtensionAPI {
     const loaded: LoadedExtension = {
       name,
       tools: [],
@@ -126,6 +143,12 @@ export class ExtensionRunner {
       config: Object.freeze({ ...deps.extensionConfig[name] }),
       logger: deps.logger,
       registerProvider: (providerName, provider) => {
+        if (deps.parent) {
+          deps.logger.warn(
+            `[extensions] Project extension "${name}" cannot register provider "${providerName}"; providers are host-only`,
+          )
+          return
+        }
         deps.models.register(providerName, provider)
         loaded.providers.push(providerName)
       },
@@ -164,7 +187,7 @@ export class ExtensionRunner {
       registerCommand: (commandName, command) => {
         if (!COMMAND_NAME.test(commandName))
           throw new Error(`Invalid command name "${commandName}"`)
-        const existing = this.commandMap.get(commandName)
+        const existing = this.command(commandName)
         if (existing)
           throw new Error(
             `Command /${commandName} is already registered by extension ${existing.extension}`,
@@ -184,6 +207,7 @@ export class ExtensionRunner {
           typeof handlerOrName === 'string' ? scopedHandler! : handlerOrName
         const entry = {
           extension: name,
+          core,
           fn: handler,
           ...(toolName === undefined ? {} : { toolName }),
         }
@@ -197,21 +221,32 @@ export class ExtensionRunner {
     }
   }
 
+  private command(
+    name: string,
+  ): { extension: string; command: ExtensionCommand } | undefined {
+    return this.commandMap.get(name) ?? this.deps.parent?.command(name)
+  }
+
   /** Loaded extensions and what they registered */
   loaded(): LoadedExtension[] {
-    return this.loadedList.map((e) => ({
-      ...e,
-      tools: [...e.tools],
-      commands: [...e.commands],
-    }))
+    return [...(this.deps.parent?.loaded() ?? []), ...this.loadedList].map(
+      (e) => ({
+        ...e,
+        tools: [...e.tools],
+        commands: [...e.commands],
+      }),
+    )
   }
 
   commands(): { name: string; description?: string; extension: string }[] {
-    return [...this.commandMap].map(([name, { extension, command }]) => ({
-      name,
-      description: command.description,
-      extension,
-    }))
+    return [
+      ...(this.deps.parent?.commands() ?? []),
+      ...[...this.commandMap].map(([name, { extension, command }]) => ({
+        name,
+        description: command.description,
+        extension,
+      })),
+    ]
   }
 
   context(session: VelaSession, signal = session.signal): ExtensionContext {
@@ -219,14 +254,21 @@ export class ExtensionRunner {
       session,
       ui: session.ui,
       hasUI: session.hasUI,
-      cwd: this.deps.cwd,
+      cwd: session.cwd,
       signal,
     }
   }
 
   /** A copy of the handler list, so unsubscribing during dispatch does not affect the current dispatch */
-  private list(event: ExtensionEventName) {
-    return [...(this.handlers.get(event) ?? [])]
+  private list(event: ExtensionEventName): RegisteredHandler[] {
+    const host = this.deps.parent?.list(event) ?? []
+    const own = this.handlers.get(event) ?? []
+    return [
+      ...host.filter((h) => !h.core),
+      ...own.filter((h) => !h.core),
+      ...host.filter((h) => h.core),
+      ...own.filter((h) => h.core),
+    ]
   }
 
   /** Read-only diagnostic snapshots in actual interception order. */
@@ -370,7 +412,7 @@ export class ExtensionRunner {
 
   /** Whether any extension handles `event` (lets callers skip copying data for nobody, like pi's hasHandlers). */
   hasHandlers(event: ExtensionEventName, toolName?: string): boolean {
-    return (this.handlers.get(event) ?? []).some(
+    return this.list(event).some(
       (handler) =>
         toolName === undefined ||
         handler.toolName === undefined ||
@@ -643,7 +685,7 @@ export class ExtensionRunner {
     const match = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/)
     if (!match) return false
     await this.ready
-    const entry = this.commandMap.get(match[1] ?? '')
+    const entry = this.command(match[1] ?? '')
     if (!entry) return false
     await entry.command.handler(
       (match[2] ?? '').trim(),

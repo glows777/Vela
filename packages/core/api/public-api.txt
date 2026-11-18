@@ -654,10 +654,10 @@
   type UserContent = | string
       | (Exclude<AIUserContent, string>[number] | ImageContent)[]
   interface Vela
-    commands: () => { name: string; description?: string; extension: string; }[]
+    commands: (sessionId?: string) => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
     dispose: () => Promise<void>
-    extensions: () => LoadedExtension[]
+    extensions: (sessionId?: string) => LoadedExtension[]
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]

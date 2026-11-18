@@ -44,6 +44,16 @@ export const BUILTIN_EXTENSIONS: Record<
   todo: () => todo(),
 }
 
+/** Config-driven session capabilities; explicit -e factories remain host-owned. */
+export const SESSION_BUILTINS = new Set([
+  'background',
+  'memory',
+  'rag',
+  'web',
+  'mcp',
+  'todo',
+])
+
 export interface CliArgs {
   setup?: boolean
   setupTarget?: 'lark' | 'github'
@@ -619,9 +629,22 @@ export async function loadCliExtensions(
   config: VelaConfig,
   args: CliArgs,
   onError: (message: string) => void,
+  hostOnly = false,
 ): Promise<VelaExtension[]> {
   const entries: ExtensionEntry[] = [
-    ...(args.noExtensions ? [] : config.extensions),
+    ...(args.noExtensions
+      ? []
+      : hostOnly
+        ? [
+            ...config.extensions.filter(
+              (entry) =>
+                'builtin' in entry && !SESSION_BUILTINS.has(entry.name),
+            ),
+            ...(
+              config.sessionResources?.hostExtensions ?? config.extensions
+            ).filter((entry) => !('builtin' in entry)),
+          ]
+        : config.extensions),
     ...args.extensions.map((source): ExtensionEntry => {
       const builtin = /^builtin:(.+)$/.exec(source)?.[1]
       if (builtin) return { name: builtin, builtin: true }

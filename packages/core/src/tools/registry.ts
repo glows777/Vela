@@ -13,6 +13,7 @@ import type { SessionScope } from '../session/scope.ts'
 import type { CallRecord, ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
 import { prepareCallResult } from './call-result.ts'
+import { validateToolDefinition } from './definition-validation.ts'
 import { ExecutionGate, NestedExecutionGate } from './execution-gate.ts'
 import {
   type CallOptions,
@@ -111,14 +112,6 @@ export interface ToolDefinition {
   hostedOnly?: true
 }
 
-const EXPOSURES: readonly ToolExposure[] = [
-  'direct',
-  'model-only',
-  'codemode',
-  'deferred',
-  'hidden',
-]
-
 /**
  * State shared by all sessions of one Vela: tool definitions and hooks.
  * Tool selection, discovered deferred tools, the tool result store,
@@ -133,7 +126,7 @@ interface SharedToolState {
 export class ToolRegistry {
   /** @internal Session-owned admission gate; never shared with other registry forks. */
   isDraining: () => boolean = () => false
-  private readonly shared: SharedToolState
+  private shared: SharedToolState
   private onEvent?: VelaEventListener
   private sessionId?: string
   private scope?: () => Readonly<SessionScope> | undefined
@@ -141,6 +134,7 @@ export class ToolRegistry {
   constructor(
     readonly results = new ToolResultStore(),
     shared?: SharedToolState,
+    private parent?: ToolRegistry,
   ) {
     this.shared = shared ?? { tools: new Map(), logger: silentLogger }
   }
@@ -150,11 +144,17 @@ export class ToolRegistry {
    * own tool result store, discovered deferred tools, persistence state and execution gate.
    */
   fork(results: ToolResultStore, options: ToolRegistryForkOptions = {}) {
-    const forked = new ToolRegistry(results, this.shared)
+    const forked = new ToolRegistry(results, this.shared, this.parent)
     forked.onEvent = options.onEvent
     forked.sessionId = options.sessionId
     forked.scope = options.scope
     return forked
+  }
+
+  /** @internal Bind a prepared project without replacing this session's execution state. */
+  bindScope(registry: ToolRegistry): void {
+    this.shared = registry.shared
+    this.parent = registry.parent
   }
 
   setLogger(logger: VelaLogger): void {
@@ -203,7 +203,14 @@ export class ToolRegistry {
   }
 
   private get tools(): Map<string, ToolDefinition> {
-    return this.shared.tools
+    if (!this.parent) return this.shared.tools
+    const tools = new Map(this.parent.tools)
+    for (const [name, tool] of this.shared.tools) {
+      if (tools.has(name))
+        throw new Error(`Tool "${name}" is registered in both host and project`)
+      tools.set(name, tool)
+    }
+    return tools
   }
 
   /** Tools selected for the session; undefined means no limit */
@@ -246,6 +253,10 @@ export class ToolRegistry {
     return enabled ?? tool.activeByDefault !== false
   }
 
+  private get interception(): ToolInterception | undefined {
+    return this.shared.interception ?? this.parent?.interception
+  }
+
   setInterception(interception: ToolInterception): void {
     this.shared.interception = interception
   }
@@ -262,28 +273,8 @@ export class ToolRegistry {
           `[Tool ToolRegistry] Tool with name "${tool.name}" is already registered.`,
         )
       }
-      // Removed in favor of executionMode; ignoring it would silently change how the tool runs
-      if ('isConcurrencySafe' in tool)
-        throw new Error(
-          `Tool "${tool.name}": isConcurrencySafe was removed. Drop isConcurrencySafe: true; replace isConcurrencySafe: false with executionMode: 'sequential'.`,
-        )
-      if ('isReadOnly' in tool)
-        throw new Error(
-          `Tool "${tool.name}": isReadOnly was removed. Use annotations: { readOnlyHint: true } (same as pi).`,
-        )
-      if (tool.exposure !== undefined && !EXPOSURES.includes(tool.exposure))
-        throw new Error(
-          `Tool "${tool.name}": exposure must be one of ${EXPOSURES.join(', ')}, got ${JSON.stringify(tool.exposure)}`,
-        )
-      if (
-        tool.executionMode !== undefined &&
-        tool.executionMode !== 'parallel' &&
-        tool.executionMode !== 'sequential'
-      )
-        throw new Error(
-          `Tool "${tool.name}": executionMode must be 'parallel' or 'sequential', got ${JSON.stringify(tool.executionMode)}`,
-        )
-      this.tools.set(tool.name, tool)
+      validateToolDefinition(tool)
+      this.shared.tools.set(tool.name, tool)
     }
   }
 
@@ -337,7 +328,7 @@ export class ToolRegistry {
       return await reject(`[Rejected] ${name} is unavailable locally`)
     if (!this.isAvailable(name))
       return await reject(`[Rejected] ${name} is not enabled in this session`)
-    const interception = this.shared.interception
+    const interception = this.interception
     const context: {
       sessionId?: string
       toolCallId?: string
@@ -719,6 +710,6 @@ export class ToolRegistry {
 
   unregister(name: string): boolean {
     this.discoveredTools.delete(name)
-    return this.tools.delete(name)
+    return this.shared.tools.delete(name)
   }
 }

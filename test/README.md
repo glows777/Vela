@@ -53,7 +53,7 @@ CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun r
 
 Run the layer that matches what you changed; run the full `bun run test` when you touch the agent loop, assembly, events, context management or the CLI entry point.
 
-`e2e/project-settings-location.test.ts` drives actual SDK assembly and CLI resume across projects: declared resources and defaults, denied trust, saved/manual/explicit choices, settings snapshots, and an A → B → A request ledger whose A system prompt and tool list remain byte-identical. This is prefix-stability evidence, not a live provider cache-billing test; project extension/MCP isolation is outside this first #452 slice.
+`e2e/project-settings-location.test.ts` drives actual SDK assembly and CLI resume across projects: declared resources and defaults, denied trust, saved/manual/explicit choices, settings snapshots, and an A → B → A request ledger whose A system prompt and tool list remain byte-identical. This is prefix-stability evidence, not a live provider cache-billing test. `e2e/project-defaults-location.test.ts` adds actual provider routing, saved/manual/explicit defaults, pinned limits and real shell-wrapper selection. `e2e/project-extensions-location.test.ts` covers same-name A/B tools and commands, denied imports, host `ctx.cwd`, shared instance disposal, changed snapshots and refused project provider/channel registration, including an A → B → A request ledger. `e2e/project-mcp-location.test.ts` runs real stdio MCP fixtures for per-project server isolation and shared-scope lifetime. `e2e/project-extensions-frontends.test.ts` drives active-project `/extensions`, TUI completion/header and RPC command discovery.
 
 ## Faux model
 

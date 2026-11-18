@@ -385,7 +385,7 @@ export class InteractiveMode {
 
   private renderHeader(modelOk: boolean): void {
     this.header.clear()
-    const extensions = this.vela.extensions().map((e) => e.name)
+    const extensions = this.vela.extensions(this.session.id).map((e) => e.name)
     const lines = [
       `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', `session ${this.session.id}`)}`,
       theme.fg(
@@ -894,7 +894,7 @@ export class InteractiveMode {
   private isExtensionCommand(text: string): boolean {
     if (!text.startsWith('/')) return false
     const name = text.slice(1).split(/\s/, 1)[0]
-    return this.vela.commands().some((c) => c.name === name)
+    return this.vela.commands(this.session.id).some((c) => c.name === name)
   }
 
   private async queue(text: string, behavior: 'steer' | 'followUp') {
