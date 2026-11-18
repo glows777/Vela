@@ -690,3 +690,37 @@ test('explicit host skills remain available alongside another session workspace'
     dir.cleanup()
   }
 })
+
+test('workspace prompt template comes from the selected session environment', async () => {
+  const dir = tempDir()
+  const prompts = join(dir.path, '.vela', 'prompts')
+  mkdirSync(prompts, { recursive: true })
+  writeFileSync(join(prompts, 'hello.md'), 'HOST_TEMPLATE_ONLY')
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  let reads = 0
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = async (path, signal) => {
+        if (path.endsWith('/.vela/prompts/hello.md')) {
+          reads++
+          return { ok: true, value: 'ENV_TEMPLATE_ONLY $1' }
+        }
+        return read(path, signal)
+      }
+      return env
+    },
+  })
+  try {
+    await vela.session('template-boundary').prompt('/hello world')
+    expect(reads).toBeGreaterThan(0)
+    expect(model.calls[0]!.lastUserText).toContain('ENV_TEMPLATE_ONLY world')
+    expect(model.calls[0]!.lastUserText).not.toContain('HOST_TEMPLATE_ONLY')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
