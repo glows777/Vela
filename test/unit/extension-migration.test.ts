@@ -37,12 +37,14 @@ test('removed umbrella LoadedExtension migration matches extensions()', async ()
   const stamped = stampRelease(changelog, '9.9.9', '2026-01-01')
   expect(unreleasedEntries(stamped)).toBe('')
   for (const text of [changelog, stamped]) {
-    expect(migrationImports(removedAliasBullet(text))).toEqual([
+    const bullet = removedAliasBullet(text)
+    expect(migrationImports(bullet)).toEqual([
       {
         name: 'LoadedChannelExtension',
         from: '@glows777/vela-channels',
       },
     ])
+    expect(bullet).toContain('returns `LoadedChannelExtension[]`')
   }
   expect(publishedMigrationMatchesExtensions).toBe(true)
 })
