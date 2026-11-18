@@ -33,7 +33,7 @@ import {
 import type { ContextFile } from './prompt/context-files.ts'
 import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from './prompt/environment-templates.ts'
-import type { DocsPaths } from './prompt/index.ts'
+import type { DocsPaths, SystemPromptBuilder } from './prompt/index.ts'
 import {
   expandPromptTemplate,
   loadPromptTemplates,
@@ -534,6 +534,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       id,
       {
         model,
+        prepareCommands: resourceSplit !== undefined,
         resolveModel,
         thinkingLevel: defaultThinkingLevel,
         autoCompaction: options.autoCompaction ?? true,

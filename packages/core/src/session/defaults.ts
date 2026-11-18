@@ -1,9 +1,11 @@
 import type { LanguageModel } from 'ai'
 import type { ContextManager } from '../context/manager.ts'
 import type { VelaLimits } from '../limits.ts'
+import { clampThinkingLevel } from '../models/catalog.ts'
 import {
   DEFAULT_THINKING_LEVEL,
   limitsForModel,
+  type ModelInfo,
   type ResolvedModel,
   THINKING_LEVELS,
   type ThinkingLevel,
@@ -40,6 +42,11 @@ export class SessionDefaultState {
     this.thinkingPinned = options.thinkingLevel !== undefined
     this.compactionPinned = options.autoCompaction !== undefined
     this.effectiveLimitOverrides = { ...deps.limitOverrides }
+  }
+
+  /** The requested level clamped to the selected model's support. */
+  thinkingLevelFor(info: ModelInfo): ThinkingLevel {
+    return clampThinkingLevel(this.thinking, info, THINKING_LEVELS)
   }
 
   async restore(

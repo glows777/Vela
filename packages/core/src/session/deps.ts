@@ -75,6 +75,8 @@ interface SessionExtensionHooks<Session> {
 
 /** Shared parts createVela() hands to every session. */
 export interface SessionDeps<Session> {
+  /** Only configuration-backed frontends need project defaults before command dispatch. */
+  prepareCommands?: boolean
   /** Default model */
   model: string | LanguageModel | undefined
   /** Resolves a model by name or object (including the provider registry) for a session */

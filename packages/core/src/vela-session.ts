@@ -24,10 +24,7 @@ import { withProviderHooks } from './extensions/provider-hooks.ts'
 import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
 import type { VelaLimits } from './limits.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
-import {
-  clampThinkingLevel,
-  supportedThinkingLevels,
-} from './models/catalog.ts'
+import { supportedThinkingLevels } from './models/catalog.ts'
 import {
   limitsForModel,
   type ModelInfo,
@@ -318,12 +315,7 @@ export class VelaSession {
     } catch {
       return this.defaults.thinking
     }
-    return this.thinkingLevelFor(info)
-  }
-
-  /** The requested level clamped to what `info` supports (the getter uses the current model). */
-  private thinkingLevelFor(info: ModelInfo): ThinkingLevel {
-    return clampThinkingLevel(this.defaults.thinking, info, THINKING_LEVELS)
+    return this.defaults.thinkingLevelFor(info)
   }
 
   /** Thinking levels the current model supports (all of them when its metadata doesn't say). */
@@ -953,7 +945,10 @@ export class VelaSession {
     if (!slash && !extensions.hasHandlers('input'))
       return this.promptModel(input, options)
     return this.trackInput(options.signal, async (signal) => {
-      await abortable(this.start(signal), signal)
+      await abortable(
+        this.deps.prepareCommands ? this.start(signal) : this.startExtensions(),
+        signal,
+      )
       if (this.draining) throw this.drainError()
       if (this.closed) throw new Error(`Session ${this.id} is closed`)
       signal.throwIfAborted()
@@ -1347,7 +1342,8 @@ export class VelaSession {
       supportsImages: info.input?.includes('image') ?? true,
       // Like pi, read per request: a level changed during the run applies to the next step. It is
       // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
-      reasoning: () => reasoningOption(this.thinkingLevelFor(info), info),
+      reasoning: () =>
+        reasoningOption(this.defaults.thinkingLevelFor(info), info),
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,
