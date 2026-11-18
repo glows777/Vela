@@ -25,11 +25,15 @@ Options:
 | Option | Default | Meaning |
 |---|---|---|
 | `--only C1,G2` | original fifteen | Comma-separated scenario IDs; M1 is explicit-only |
+| `--baseline <sha>` | the pinned baseline per scenario | Old arm for the selected scenarios except M1, which still uses the new arm's commit, so one change can be compared against its own parent commit |
 | `--runs 3` | 3 | Repetitions per arm |
 | `--thinking max` | max | Vela thinking level; `high` is used for the additional CLI round |
 | `--max-cost-usd 3` | 3 | Estimated admission cap for this invocation |
 | `--repo /path/to/Vela` | runner's repo | Checkout used for the new arm (both M1 arms) |
 | `--dream on` | off | Run manual dream in the new M1/G8 arm before recall |
+
+A run with `--baseline` is a separate batch with its own reported attribution and
+does not replace the historical per-scenario baselines.
 
 `VELA_EVAL_TODO=1` in the invoking environment loads the `todo` extension in the
 new arm when that revision provides it. Revisions without the extension (the old

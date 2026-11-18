@@ -9,7 +9,7 @@ import { type Attempt, emptyUsage, pricing, table } from './report.ts'
 import { baselineCommit, compactionFixture, OLD_COMMIT } from './scenarios.ts'
 
 const help =
-  'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>] [--dream on|off]'
+  'bun scripts/eval/run.ts [--only C1,G2] [--runs 3] [--thinking max] [--max-cost-usd 3] [--repo <path>] [--dream on|off] [--baseline <sha>]'
 // Preserve network routing without copying arbitrary user environment or credentials.
 function networkEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -57,6 +57,7 @@ export function options(args: string[]) {
     dream: false,
     maxCost: 3,
     repo: resolve(dirname(fileURLToPath(import.meta.url)), '../..'),
+    baseline: undefined as string | undefined,
   }
   for (let index = 0; index < args.length; index++) {
     const flag = args[index]
@@ -74,6 +75,13 @@ export function options(args: string[]) {
         result.only = [...new Set(ids)] as ScenarioId[]
         break
       }
+      case '--baseline':
+        if (!/^[0-9a-f]{7,}$/i.test(value))
+          throw new Error(
+            '--baseline must be a commit SHA of at least 7 hex characters',
+          )
+        result.baseline = value
+        break
       case '--dream':
         if (!['on', 'off'].includes(value))
           throw new Error('--dream must be on or off')
@@ -137,7 +145,10 @@ async function main() {
   const sha = await git('rev-parse', 'HEAD')
   const dirty = !!(await git('status', '--porcelain'))
   const baselineCommits = Object.fromEntries(
-    config.only.map((id) => [id, id === 'M1' ? sha : baselineCommit(id)]),
+    config.only.map((id) => [
+      id,
+      id === 'M1' ? sha : (config.baseline ?? baselineCommit(id)),
+    ]),
   )
   for (const commit of new Set([OLD_COMMIT, ...Object.values(baselineCommits)]))
     await git('cat-file', '-e', `${commit}^{commit}`)
@@ -254,7 +265,7 @@ async function main() {
             const cwd = join(scratch, `${scenario}-${arm}-${run}-${attempt}`)
             const runtime =
               arm === 'old' && scenario !== 'M1'
-                ? oldRuntimes.get(baselineCommit(scenario))!
+                ? oldRuntimes.get(baselineCommits[scenario]!)!
                 : config.repo
             const env = await workerEnvironment(artifactDir, scratch)
             await git('worktree', 'add', '--detach', cwd, OLD_COMMIT)

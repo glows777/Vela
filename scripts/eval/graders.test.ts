@@ -1126,6 +1126,18 @@ test('exit scenarios use the peeled v0.4.0 baseline while legacy scenarios retai
   expect(options([]).runs).toBe(3)
   expect(options(['--only', 'G6,G7']).only).toEqual(['G6', 'G7'])
 })
+test('--baseline overrides the pinned old arm for the selected scenarios', () => {
+  const baseline = 'a68b98e1d34eba62908557db10f6e65d9ab79f05'
+  expect(options(['--only', 'G3', '--baseline', baseline]).baseline).toBe(
+    baseline,
+  )
+  expect(options(['--only', 'G3', '--baseline', 'a68b98e']).baseline).toBe(
+    'a68b98e',
+  )
+  expect(options([]).baseline).toBeUndefined()
+  expect(() => options(['--baseline', 'not-a-sha'])).toThrow('--baseline')
+  expect(() => options(['--baseline', 'a68b98'])).toThrow('--baseline')
+})
 test('G6 worker starts B first, then A reads the real group fixture; no unsupported handoff is fabricated', async () => {
   const { result, calls, pending } = await exitAttempt('G6', [
     fauxText('Waiting for topic A.'),
