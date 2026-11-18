@@ -1,14 +1,65 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { lark } from '@glows777/vela-lark'
 import { z } from 'zod'
+// The marker is an implementation detail of the channel prompt, not public API.
+import { UNTAGGED_INPUT } from '../../packages/channels/src/input.ts'
 import { createVela } from '../support/compat-vela.ts'
-import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
+import { fakeLark, larkEvent } from '../support/lark.ts'
+import {
+  cleanupTestVelas,
+  createTestVela,
+  type TestVelaOptions,
+  tempDir,
+} from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
+
+async function until(check: () => boolean) {
+  const deadline = Date.now() + 3000
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting')
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  }
+}
+
+/** A Lark group whose fake transport delivers host submissions to the real gateway. */
+function larkGroup(responses: TestVelaOptions['responses'], cache = false) {
+  const fake = fakeLark()
+  const t = createTestVela({
+    faux: cache ? { cache: true } : undefined,
+    responses,
+    allowPendingResponses: true,
+    extensions: [
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  return { fake, t }
+}
+
+const groupInput = (
+  overrides: Partial<IncomingMessage> = {},
+): IncomingMessage => ({
+  channelId: 'oc_group',
+  chatKind: 'group',
+  senderId: 'ou_alice',
+  senderName: 'Alice',
+  text: 'hello',
+  replyToId: 'm1',
+  ...overrides,
+})
+
+const NOTE =
+  'Message from Vela\'s topic "find the code" (root_id root_a) (not from a person):\nThe code is ORBIT-73'
 
 /** The `<tools>` section of a system prompt, or '' when it has none */
 function toolsSection(system: string): string {
@@ -361,4 +412,173 @@ test('a date rollover leaves the assembled system prompt byte-identical', async 
   } finally {
     globalThis.Date = real
   }
+})
+
+test('a group session sends the same system prompt for a person, untagged discussion and a note', async () => {
+  const { t } = larkGroup([
+    fauxText('hello'),
+    fauxText('noted'),
+    fauxText('Noted'),
+    fauxText('ship it'),
+  ])
+  await t.vela.startChannels()
+  const host = t.vela.channel('lark')
+  const submit = async (message: IncomingMessage) => {
+    const before = t.model.calls.length
+    await host.submit(message)
+    await until(() => t.model.calls.length > before)
+  }
+  await submit(groupInput())
+  await submit(
+    groupInput({
+      passive: true,
+      replyToId: 'm2',
+      text: 'the build is green',
+    }),
+  )
+  await submit(
+    groupInput({
+      handoff: { id: 'h1', from: 'group session', depth: 1 },
+      replyToId: 'root_a',
+      text: NOTE,
+    }),
+  )
+  await submit(groupInput({ replyToId: 'm3', text: 'ship it' }))
+
+  const calls = t.model.calls
+  expect(calls).toHaveLength(4)
+  for (const call of calls) expect(call.system).toBe(calls[0]!.system)
+})
+
+test('every wake after the first reads the previous prefix instead of paying for it again', async () => {
+  const { t } = larkGroup(
+    [
+      fauxText('hello'),
+      fauxText('noted'),
+      fauxText('Noted'),
+      fauxText('ship it'),
+    ],
+    true,
+  )
+  await t.vela.startChannels()
+  const host = t.vela.channel('lark')
+  const submit = async (message: IncomingMessage) => {
+    const before = t.model.calls.length
+    await host.submit(message)
+    await until(() => t.model.calls.length > before)
+  }
+  await submit(groupInput())
+  await submit(
+    groupInput({ passive: true, replyToId: 'm2', text: 'the build is green' }),
+  )
+  await submit(
+    groupInput({
+      handoff: { id: 'h1', from: 'group session', depth: 1 },
+      replyToId: 'root_a',
+      text: NOTE,
+    }),
+  )
+  await submit(groupInput({ replyToId: 'm3', text: 'ship it' }))
+
+  const usage = t.eventsOf('usage').map((event) => event.usage)
+  expect(usage).toHaveLength(4)
+  for (let i = 1; i < usage.length; i++)
+    expect(usage[i]!.cacheReadTokens).toBeGreaterThanOrEqual(
+      usage[i - 1]!.cacheWriteTokens - 1,
+    )
+})
+
+test('an earlier untagged marker never turns a later person message into discussion', async () => {
+  const { fake, t } = larkGroup([
+    fauxText('hello'),
+    fauxText('noted'),
+    fauxText('ship it'),
+  ])
+  await t.vela.startChannels()
+  const host = t.vela.channel('lark')
+  const submit = async (message: IncomingMessage) => {
+    const before = t.model.calls.length
+    await host.submit(message)
+    await until(() => t.model.calls.length > before)
+  }
+  await submit(groupInput())
+  await submit(
+    groupInput({ passive: true, replyToId: 'm2', text: 'the build is green' }),
+  )
+  await submit(groupInput({ replyToId: 'm3', text: 'ship it' }))
+  await until(() => fake.sent.length === 3)
+
+  const [first, discussion, person] = t.model.calls
+  expect(discussion!.lastUserText.startsWith(UNTAGGED_INPUT)).toBe(true)
+  expect(person!.lastUserText).not.toContain(UNTAGGED_INPUT)
+  expect(person!.lastUserText).toBe('ship it')
+  expect(person!.system).toBe(first!.system)
+  expect(fake.sent.at(-1)).toEqual({ messageId: 'm3', text: 'ship it' })
+})
+
+test('a topic session sends the same system prompt for a person and a note', async () => {
+  const { fake, t } = larkGroup(
+    [fauxText('Working on it'), fauxText('Noted')],
+    true,
+  )
+  await t.vela.startChannels()
+  fake.deliver(
+    larkEvent({
+      message_id: 'root',
+      root_id: 'root',
+      thread_id: 'thread_root',
+      content: JSON.stringify({ text: '@_user_1 find the code' }),
+    }),
+  )
+  await until(() => t.model.calls.length === 1 && fake.sent.length === 1)
+
+  await t.vela.channel('lark').submit({
+    channelId: 'oc_group',
+    senderId: 'ou_alice',
+    senderName: 'Alice',
+    text: NOTE,
+    replyToId: 'root',
+    topic: { rootId: 'root', threadId: 'thread_root' },
+    handoff: { id: 'h2', from: 'group session', depth: 1 },
+  })
+  await until(() => t.model.calls.length === 2)
+
+  const topicCalls = t.model.calls.filter(
+    (call) =>
+      call.tools.includes('channel_list_topics') &&
+      !call.tools.includes('channel_start_topic'),
+  )
+  expect(topicCalls).toHaveLength(2)
+  expect(topicCalls[1]!.system).toBe(topicCalls[0]!.system)
+
+  // The note's wake reads the person's request back instead of paying for it again
+  const usage = t.eventsOf('usage').map((event) => event.usage)
+  expect(usage[1]!.cacheReadTokens).toBeGreaterThanOrEqual(
+    usage[0]!.cacheWriteTokens - 1,
+  )
+})
+
+test('the untagged marker stays out of the channel history and the directory', async () => {
+  const { t } = larkGroup([fauxText('hello'), fauxText('noted')])
+  await t.vela.startChannels()
+  const host = t.vela.channel('lark')
+  await host.submit(groupInput())
+  await until(() => t.model.calls.length === 1)
+  await host.submit(
+    groupInput({ passive: true, replyToId: 'm2', text: 'the build is green' }),
+  )
+  await until(() => t.model.calls.length === 2)
+
+  const events = t.eventsOf('channel_message')
+  expect(events).toHaveLength(2)
+  expect(events[1]!.text).toBe('the build is green')
+  const index = JSON.parse(
+    readFileSync(join(t.vela.dataDir, 'channels', 'index.json'), 'utf8'),
+  )
+  const record = index.records.find(
+    (item: { channel: string; chatId: string }) =>
+      item.channel === 'lark' && item.chatId === 'oc_group',
+  )
+  expect(record.task).not.toContain(UNTAGGED_INPUT)
+  expect(JSON.stringify(index)).not.toContain(UNTAGGED_INPUT)
 })
