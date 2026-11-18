@@ -247,6 +247,7 @@ export interface VelaInternals {
   runner: ExtensionRunner
   builder: SystemPromptBuilder
   skillLoader: SkillLoader
+  skillsFor: (sessionId: string) => readonly SkillDefinition[]
   promptTemplates: PromptTemplate[]
   loadedContextFiles: readonly ContextFile[]
   prepareWorkspace: (
@@ -693,6 +694,8 @@ export function createVela(options: VelaOptions = {}): Vela {
     runner,
     builder,
     skillLoader,
+    skillsFor: (sessionId) =>
+      sessionSkills.get(sessionId) ?? skillLoader.list(),
     promptTemplates,
     loadedContextFiles: contextFiles,
     prepareWorkspace,

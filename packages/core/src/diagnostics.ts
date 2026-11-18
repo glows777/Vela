@@ -1,4 +1,5 @@
 import type { ContextFile } from './prompt/context-files.ts'
+import { formatSkillsForPrompt } from './skills/loader.ts'
 import { type Vela, velaInternals } from './vela.ts'
 import type { VelaSession } from './vela-session.ts'
 
@@ -77,8 +78,10 @@ export async function inspectSession(
   const systemPrompt = session.buildSystem(sections, override)
   const active = session.registry.getActiveTools()
   const skills =
-    internal.skillLoader.buildPromptSection(active.map((tool) => tool.name)) ??
-    ''
+    formatSkillsForPrompt(
+      internal.skillsFor(session.id),
+      active.map((tool) => tool.name),
+    ) ?? ''
   return {
     windowTokens: session.usage.contextWindow,
     systemPrompt,
