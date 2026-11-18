@@ -8,6 +8,7 @@ import type {
   CredentialStore,
   LoginOptions,
 } from './auth/types.ts'
+import { configResourceSplit } from './config/runtime-resources.ts'
 import { createSessionLocalExecutionEnv } from './execution/local.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
@@ -329,6 +330,11 @@ export function createVela(options: VelaOptions = {}): Vela {
 
   registerToolSearchTool(registry)
 
+  const resourceSplit = configResourceSplit(
+    options.skillDirs,
+    options.promptTemplateDirs,
+    options.contextFiles,
+  )
   const skillLoader = new SkillLoader(options.skillDirs ?? [])
   skillLoader.load()
   const templates = loadPromptTemplates(options.promptTemplateDirs ?? [])
@@ -428,19 +434,25 @@ export function createVela(options: VelaOptions = {}): Vela {
       options.contextFiles === false
         ? []
         : await loadEnvironmentContextFiles(env, location, signal)
-    const workspaceSkills =
-      options.skillDirs && location === cwd
-        ? []
-        : await loadEnvironmentSkills(env, location, signal)
+    const workspaceSkills = (
+      resourceSplit
+        ? !resourceSplit.workspaceSkills
+        : options.skillDirs && location === cwd
+    )
+      ? []
+      : await loadEnvironmentSkills(env, location, signal)
     const workspaceNames = new Set(workspaceSkills.map((skill) => skill.name))
     const skills = [
       ...workspaceSkills,
       ...skillLoader.list().filter((skill) => !workspaceNames.has(skill.name)),
     ]
-    const workspaceTemplates =
-      options.promptTemplateDirs && location === cwd
-        ? []
-        : await loadEnvironmentTemplates(env, location, signal)
+    const workspaceTemplates = (
+      resourceSplit
+        ? !resourceSplit.workspaceTemplates
+        : options.promptTemplateDirs && location === cwd
+    )
+      ? []
+      : await loadEnvironmentTemplates(env, location, signal)
     const templateNames = new Set(
       workspaceTemplates.map((template) => template.name),
     )
@@ -457,7 +469,21 @@ export function createVela(options: VelaOptions = {}): Vela {
     sessionTemplates.set(session.id, selectedTemplates)
     sessionContextFiles.set(
       session.id,
-      location === cwd && options.contextFiles ? contextFiles : workspace,
+      options.contextFiles === false
+        ? []
+        : resourceSplit
+          ? [
+              ...resourceSplit.userContextFiles,
+              ...workspace.filter(
+                (item) =>
+                  !resourceSplit.userContextFiles.some(
+                    (host) => host.path === item.path,
+                  ),
+              ),
+            ]
+          : location === cwd && options.contextFiles
+            ? contextFiles
+            : workspace,
     )
   }
 
@@ -496,7 +522,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         expandInput: async (text, owner, signal) => {
           await prepareWorkspace(owner, signal)
           const expanded =
-            options.skillDirs && owner.cwd === cwd
+            !resourceSplit && options.skillDirs && owner.cwd === cwd
               ? skillLoader.expand(text)
               : await expandEnvironmentSkill(
                   text,

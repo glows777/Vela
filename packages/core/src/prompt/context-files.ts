@@ -27,6 +27,13 @@ function loadFromDir(dir: string): ContextFile | undefined {
   }
 }
 
+/** @internal Load only the host-owned agent directory instruction. */
+export function loadAgentContextFile(
+  agentDir: string,
+): ContextFile | undefined {
+  return loadFromDir(resolve(agentDir))
+}
+
 /**
  * Context files like pi (`core/resource-loader.ts` loadProjectContextFiles): one from `agentDir` (user-wide),
  * then one per directory from the filesystem root down to `cwd` (closer to cwd = later). Not gated by project

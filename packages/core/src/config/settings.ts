@@ -9,12 +9,16 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from '../models/index.ts'
-import { type ContextFile, loadContextFiles } from '../prompt/context-files.ts'
+import {
+  type ContextFile,
+  loadAgentContextFile,
+} from '../prompt/context-files.ts'
 import { isToolModifier, mergeDefaultTools } from '../tools/tool-selection.ts'
 import type { ExtensionConfigDefinition } from './extension-config.ts'
 import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
+import { rememberResourceSplit } from './runtime-resources.ts'
 
 /** Contents of settings.json (user: `~/.vela/settings.json`, project: `<cwd>/.vela/settings.json`). */
 export interface VelaSettings {
@@ -220,6 +224,25 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       join(agentDir, 'prompts'),
     ]),
   ]
+  const hostSkillDirs = [
+    ...new Set([
+      ...(settings.skills ?? []),
+      join(agentDir, 'skills'),
+      join(homeDir, '.agents', 'skills'),
+    ]),
+  ]
+  const hostPromptDirs = [
+    ...new Set([...(settings.prompts ?? []), join(agentDir, 'prompts')]),
+  ]
+  const userContext = loadAgentContextFile(agentDir)
+  const contextFiles = userContext ? [userContext] : []
+  rememberResourceSplit([skillDirs, promptDirs, contextFiles], {
+    userContextFiles: contextFiles,
+    hostSkillDirs,
+    hostPromptDirs,
+    workspaceSkills: trusted || projectDir === agentDir,
+    workspaceTemplates: trusted,
+  })
   // The project file wins over the user file (like APPEND_SYSTEM.md)
   const systemFile = [
     ...(trusted ? [join(projectDir, 'SYSTEM.md')] : []),
@@ -249,7 +272,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     extensions,
     skillDirs,
     promptDirs,
-    contextFiles: loadContextFiles({ cwd, agentDir }),
+    contextFiles,
     ...(systemFile ? { systemPrompt: readFileSync(systemFile, 'utf-8') } : {}),
     ...(appendFile
       ? { appendSystemPrompt: readFileSync(appendFile, 'utf-8') }
