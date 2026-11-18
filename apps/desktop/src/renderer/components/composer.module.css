@@ -1,0 +1,49 @@
+.composer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--vela-line);
+  border-radius: var(--radius-panel);
+  background: var(--vela-paper);
+  box-shadow: var(--shadow-raised);
+}
+
+/* Keyboard focus only: Arc leaves text fields to their own border, and this field has none. */
+.composer:has(:focus-visible) {
+  outline: 3px solid var(--focus-outline);
+  outline-offset: 4px;
+}
+
+.field {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.text {
+  flex: 1;
+  min-height: var(--control-height-lg);
+  max-height: 12rem;
+  padding: var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--vela-ink);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  resize: none;
+}
+
+.hint {
+  margin: 0;
+  padding-inline: var(--space-2);
+  color: var(--vela-muted);
+  font-size: var(--text-xs);
+}
+
+.hint code {
+  font-family: var(--vela-family-mono);
+  font-size: var(--text-xs);
+}

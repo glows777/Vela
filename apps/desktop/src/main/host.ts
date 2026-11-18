@@ -2,7 +2,7 @@ import type { IncomingMessage } from '@glows777/vela-channels'
 import { createChannelVela, local } from '@glows777/vela-channels'
 import { loadConfig, resolveShellPath } from '@glows777/vela-core'
 import { lark, larkConfig } from '@glows777/vela-lark'
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
@@ -107,6 +107,16 @@ export async function startHost() {
           return localHost.projects()
         case 'openProject':
           return localHost.openProject(request.input)
+        case 'chooseFolder': {
+          const owner =
+            BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+          const result = owner
+            ? await dialog.showOpenDialog(owner, {
+                properties: ['openDirectory'],
+              })
+            : await dialog.showOpenDialog({ properties: ['openDirectory'] })
+          return result.canceled ? undefined : result.filePaths[0]
+        }
         case 'messages':
           return localHost.messages(request.input)
         default:

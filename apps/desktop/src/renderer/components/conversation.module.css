@@ -1,0 +1,9 @@
+.conversation {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+  overflow-y: auto;
+  padding-block: var(--space-2);
+}

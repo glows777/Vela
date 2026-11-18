@@ -18,6 +18,7 @@ const bridge: DesktopBridge = {
     invoke({ method: 'stop', channel, target, runId }),
   projects: () => invoke({ method: 'projects' }),
   openProject: (input) => invoke({ method: 'openProject', input }),
+  chooseFolder: () => invoke({ method: 'chooseFolder' }),
   messages: (input) => invoke({ method: 'messages', input }),
   onEvent: (listener) => {
     const receive = (_: unknown, event: Event) => listener(event)
