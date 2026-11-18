@@ -10,6 +10,13 @@ export async function loadEnvironmentTemplates(
 ): Promise<PromptTemplate[]> {
   const path = await env.joinPath([cwd, '.vela', 'prompts'], signal)
   if (!path.ok) throw path.error
+  const info = await env.fileInfo(path.value, signal)
+  if (!info.ok) {
+    if (info.error.code === 'not_found') return []
+    throw info.error
+  }
+  if (info.value.kind !== 'directory' && info.value.kind !== 'symlink')
+    return []
   const entries = await env.listDir(path.value, signal)
   if (!entries.ok) {
     if (
