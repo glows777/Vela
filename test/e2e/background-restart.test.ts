@@ -110,6 +110,15 @@ for (const mode of ['normal', 'stopped'])
 test('normal result lost before input save is rebuilt as unknown, not the old answer', async () => {
   const { cwd, child } = await fixture('before-save')
   await until(() => existsSync(join(cwd, 'save-gate.json')), child)
+  // A delayed kill must still be before every background input write, not merely before save() returns.
+  await Bun.sleep(250)
+  const disk = readFileSync(
+    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
+    'utf8',
+  )
+  expect(disk).toBe(read(cwd, 'before-notice-transcript.json'))
+  expect(disk).not.toContain('backgroundJobToken')
+  expect(disk).not.toContain('NORMAL RESULT')
   child.kill('SIGKILL')
   await child.exited
   await restart(cwd, 'topic', 1)
@@ -265,6 +274,15 @@ test('unknown notice accepted before SIGKILL reuses its final UUID without anoth
 test('restart of an unsaved background result preserves the topic waiting decision', async () => {
   const { cwd, child } = await fixture('waiting-before-save')
   await until(() => existsSync(join(cwd, 'save-gate.json')), child)
+  // A delayed kill must still be before every background input write, not merely before save() returns.
+  await Bun.sleep(250)
+  const disk = readFileSync(
+    join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
+    'utf8',
+  )
+  expect(disk).toBe(read(cwd, 'before-notice-transcript.json'))
+  expect(disk).not.toContain('backgroundJobToken')
+  expect(disk).not.toContain('NORMAL RESULT')
   const pending = read(cwd, '.vela-data/channels/index.json').records[0]
   expect(pending.state).toBe('running')
   expect(pending.waitingReason).toBe('Choose the deployment target')

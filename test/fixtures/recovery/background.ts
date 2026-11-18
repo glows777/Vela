@@ -9,7 +9,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { createTestVela } from '@glows777/vela/testing'
-import { background } from '@glows777/vela-core'
+import { background, fileSessionStorage } from '@glows777/vela-core'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import { runServe } from '../../../packages/vela/src/cli/serve.ts'
@@ -49,7 +49,18 @@ if (mode === 'restart-accepted' || mode === 'restart-ledger') {
 }
 
 const command = `echo $$ > '${cwd}/shell.pid'; while [ ! -f '${cwd}/release' ]; do sleep 0.05; done; echo REAL BACKGROUND RESULT`
+const storage = fileSessionStorage(join(cwd, '.vela-data/sessions'))
+const append = storage.append.bind(storage)
+let blockBackgroundWrite = false
+storage.append = async (id, entries) => {
+  if (blockBackgroundWrite) {
+    report('save-gate.json', true)
+    await new Promise<never>(() => {})
+  }
+  await append(id, entries)
+}
 const t = createTestVela({
+  sessionStorage: storage,
   cwd,
   responses: restart
     ? [
@@ -99,12 +110,7 @@ const t = createTestVela({
     }),
     function boundary(api) {
       api.on('session_start', (_event, { session }) => {
-        if (
-          mode !== 'before-save' &&
-          mode !== 'waiting-before-save' &&
-          mode !== 'restart-after-save'
-        )
-          return
+        if (mode !== 'restart-after-save') return
         const save = session.save.bind(session)
         session.save = async (options) => {
           const marker = session
@@ -161,6 +167,16 @@ if (!restart) {
     mode === 'before-save' ||
     mode === 'waiting-before-save'
   ) {
+    if (mode === 'before-save' || mode === 'waiting-before-save') {
+      report(
+        'before-notice-transcript.json',
+        readFileSync(
+          join(cwd, '.vela-data/sessions/lark-oc_group-root/transcript.jsonl'),
+          'utf8',
+        ),
+      )
+      blockBackgroundWrite = true
+    }
     writeFileSync(join(cwd, 'release'), '')
     if (mode === 'normal')
       while (
