@@ -118,11 +118,13 @@ export class ExtensionRunner {
     this.ready = Promise.all(pending)
       .then(() => Promise.all(load(coreExtensions, true)))
       .then(() => {})
-    this.settled = this.ready
-      .catch(() => {})
-      .then(async () => {
-        await Promise.allSettled(factoriesSettled)
-      })
+    this.settled = deps.parent
+      ? this.ready
+          .catch(() => {})
+          .then(async () => {
+            await Promise.allSettled(factoriesSettled)
+          })
+      : Promise.allSettled([...pending, this.ready]).then(() => {})
     // Avoid an unhandled rejection when nobody awaits it; prompt() awaits it and reports the error
     this.ready.catch(() => {})
   }
