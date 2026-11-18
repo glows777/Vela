@@ -761,3 +761,71 @@ test('CLI config keeps user instructions host-side but reads workspace instructi
     dir.cleanup()
   }
 })
+
+test('untrusted CLI workspace does not load workspace skills or templates', async () => {
+  const dir = tempDir()
+  const workspace = join(dir.path, 'workspace')
+  const agentDir = join(dir.path, 'agent')
+  mkdirSync(join(workspace, '.skills', 'untrusted'), { recursive: true })
+  mkdirSync(join(workspace, '.vela', 'prompts'), { recursive: true })
+  mkdirSync(agentDir, { recursive: true })
+  writeFileSync(
+    join(workspace, '.skills', 'untrusted', 'SKILL.md'),
+    '---\nname: untrusted\ndescription: UNTRUSTED_SKILL\n---\nUntrusted body',
+  )
+  writeFileSync(
+    join(workspace, '.vela', 'prompts', 'untrusted.md'),
+    'UNTRUSTED_TEMPLATE',
+  )
+  const config = loadConfig({ cwd: workspace, agentDir, trusted: false })
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({
+    cwd: workspace,
+    model,
+    contextFiles: config.contextFiles,
+    skillDirs: config.skillDirs,
+    promptTemplateDirs: config.promptDirs,
+  })
+  try {
+    await vela.session('untrusted').prompt('/untrusted')
+    expect(model.calls[0]!.system).not.toContain('UNTRUSTED_SKILL')
+    expect(model.calls[0]!.lastUserText).toBe('/untrusted')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('trusted CLI workspace loads its skills and templates through env', async () => {
+  const dir = tempDir()
+  const workspace = join(dir.path, 'workspace')
+  const agentDir = join(dir.path, 'agent')
+  mkdirSync(join(workspace, '.skills', 'project'), { recursive: true })
+  mkdirSync(join(workspace, '.vela', 'prompts'), { recursive: true })
+  mkdirSync(agentDir, { recursive: true })
+  writeFileSync(
+    join(workspace, '.skills', 'project', 'SKILL.md'),
+    '---\nname: project\ndescription: PROJECT_SKILL\n---\nProject body',
+  )
+  writeFileSync(
+    join(workspace, '.vela', 'prompts', 'project.md'),
+    'PROJECT_TEMPLATE',
+  )
+  const config = loadConfig({ cwd: workspace, agentDir, trusted: true })
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({
+    cwd: workspace,
+    model,
+    contextFiles: config.contextFiles,
+    skillDirs: config.skillDirs,
+    promptTemplateDirs: config.promptDirs,
+  })
+  try {
+    await vela.session('trusted').prompt('/project')
+    expect(model.calls[0]!.system).toContain('PROJECT_SKILL')
+    expect(model.calls[0]!.lastUserText).toBe('PROJECT_TEMPLATE')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
