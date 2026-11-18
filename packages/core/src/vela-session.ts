@@ -68,6 +68,7 @@ import {
   type NavigateTreeOptions,
   type QueueMode,
 } from './session/options.ts'
+import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
 import { newSessionId } from './session/session-id.ts'
@@ -186,6 +187,7 @@ export interface SessionDeps {
   onClose: (session: VelaSession) => void
   onSaved: (sessionId: string) => void
   onCwdChange: (session: VelaSession) => void
+  resourceSnapshot: (sessionId: string) => SessionResources
   ensureLocal: (session: VelaSession) => Promise<ExecutionEnv>
   prepareWorkspace: (
     session: VelaSession,
@@ -519,7 +521,8 @@ export class VelaSession {
     this.deps.forward(event, this.id)
     // Like pi: the step's assistant and tool messages are in the history now, so a custom message cannot land
     // between a tool call and its result
-    if (event.type === 'turn_end') this.flushPendingCustom()
+    if (event.type === 'turn_end')
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
   }
 
   /** @internal `override` (`null`: none) keeps a preview or a new turn from inheriting a replacement */
@@ -534,6 +537,12 @@ export class VelaSession {
       activeTools: this.registry.getActiveTools(),
       systemPromptOverride: override,
     }
+  }
+
+  /** @internal Session-scoped resource inventory for Vela's own CLI. */
+  async resources(): Promise<SessionResources> {
+    await this.deps.prepareWorkspace(this)
+    return this.deps.resourceSnapshot(this.id)
   }
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
@@ -649,7 +658,7 @@ export class VelaSession {
       return await run
     } finally {
       if (this.running === running) this.running = undefined
-      this.flushPendingCustom()
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
       while (this.userBash.flush()) await this.saveOrReport()
       busy.locked = false
       busy.controller = undefined
@@ -1179,11 +1188,6 @@ export class VelaSession {
     return this.messageQueue.customMessages.get(message)
   }
 
-  private flushPendingCustom(): void {
-    for (const message of this.messageQueue.pendingCustom.splice(0))
-      this.append(message)
-  }
-
   /** Clears queued messages and returns the user inputs among them (the TUI puts them back in the input box before aborting). */
   clearQueue(): { steering: string[]; followUp: string[] } {
     return this.messageQueue.clear()
@@ -1305,7 +1309,9 @@ export class VelaSession {
         inputs = next()
         if (!inputs.length) {
           // Messages may be queued while saving: check again after saving; there is no await between here and unlock
-          this.flushPendingCustom()
+          this.messageQueue.flushPendingCustom((message) =>
+            this.append(message),
+          )
           await this.saveOrReport()
           saved = true
           inputs = next()
@@ -1313,7 +1319,7 @@ export class VelaSession {
       }
     } finally {
       options.signal?.removeEventListener('abort', forward)
-      this.flushPendingCustom()
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
       this.toolDetails.clear()
       if (!saved) await this.saveOrReport()
       // Until the last flush finds nothing there is no await before unlocking: a later `!` command records itself
@@ -1322,7 +1328,7 @@ export class VelaSession {
       busy.controller = undefined
       this.prompting = false
       // Sent while saving (written with the next entry or when the session closes)
-      this.flushPendingCustom()
+      this.messageQueue.flushPendingCustom((message) => this.append(message))
       this.emit({ type: 'agent_settled' })
     }
     if (failure) throw failure.error
@@ -1367,7 +1373,7 @@ export class VelaSession {
     await this.store.assertNew()
     // `!` commands that finished during an earlier loop of this run come before the new input
     this.userBash.flush()
-    this.flushPendingCustom()
+    this.messageQueue.flushPendingCustom((message) => this.append(message))
     this.emit({ type: 'agent_start', input })
     const newMessages: ModelMessage[] = []
     for (const message of [

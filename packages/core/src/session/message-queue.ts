@@ -33,6 +33,10 @@ export class MessageQueue {
     return entry
   }
 
+  flushPendingCustom(append: (message: ModelMessage) => void): void {
+    for (const message of this.pendingCustom.splice(0)) append(message)
+  }
+
   enqueue(kind: 'steering' | 'followUp', message: ModelMessage): void {
     ;(kind === 'steering' ? this.steeringQueue : this.followUpQueue).push(
       message,

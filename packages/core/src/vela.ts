@@ -552,6 +552,11 @@ export function createVela(options: VelaOptions = {}): Vela {
         onSaved: (id) => options.onSessionSaved?.(id),
         ensureLocal,
         prepareWorkspace,
+        resourceSnapshot: (id) => ({
+          contextFiles: sessionContextFiles.get(id) ?? contextFiles,
+          skills: sessionSkills.get(id) ?? skillLoader.list(),
+          promptTemplates: sessionTemplates.get(id) ?? promptTemplates,
+        }),
         onCwdChange: (changed) => {
           sessionCwds.set(changed.registry, changed.cwd)
           sessionContextFiles.delete(changed.id)

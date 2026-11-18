@@ -458,8 +458,8 @@ function applyModelArgs(
   }
 }
 
-function reportContextFiles(): void {
-  const line = formatContextFileList(inspectVela(vela).contextFiles, {
+async function reportContextFiles(session: VelaSession): Promise<void> {
+  const line = formatContextFileList((await session.resources()).contextFiles, {
     cwd,
     homeDir: homedir(),
     agentDir,
@@ -494,10 +494,10 @@ if (mode !== 'interactive' && mode !== 'serve') {
 }
 
 if (mode === 'print' || mode === 'json') {
-  reportContextFiles()
   // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
   const session = vela.session(sessionId)
   if (resume) await session.resume()
+  await reportContextFiles(session)
   // Extension providers resolve only after extensions load (if loading fails, prompt reports it)
   await vela.ready().catch(() => {})
   if (!applyModelArgs(session)) await exit(1)
@@ -511,7 +511,7 @@ if (mode === 'print' || mode === 'json') {
     }),
   )
 } else if (mode === 'rpc') {
-  reportContextFiles()
+  await reportContextFiles(vela.session(sessionId))
   await vela
     .ready()
     .catch((error) =>

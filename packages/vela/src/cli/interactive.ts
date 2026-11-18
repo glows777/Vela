@@ -28,7 +28,6 @@ import {
   branchSummaryMessageText,
   contextEntries,
   inspectSession,
-  inspectVela,
   summaryMessageText,
 } from '@glows777/vela-core/diagnostics'
 import { imageMimeType } from '@glows777/vela-core/images'
@@ -263,13 +262,7 @@ export class InteractiveMode {
       }
     }
     if (this.shuttingDown) return
-    const contextFiles = formatContextFileList(inspectVela(vela).contextFiles, {
-      cwd: vela.cwd,
-      homeDir: homedir(),
-      agentDir: options.agentDir,
-    })
-    if (contextFiles) this.addNotice(`[context] ${contextFiles}`)
-    this.setAutocomplete()
+    await this.setAutocomplete()
     // Like pi: @ file completion needs fd; find (or download) it after the UI is up so startup doesn't block
     resolveBinary(vela, 'fd')
       .then((fdPath) => this.setAutocomplete(fdPath))
@@ -282,20 +275,21 @@ export class InteractiveMode {
     this.tui.requestRender()
   }
 
-  private setAutocomplete(fdPath?: string): void {
+  private async setAutocomplete(fdPath?: string): Promise<void> {
     const vela = this.vela
+    const resources = await this.session.resources()
     this.editor.setAutocompleteProvider(
       new CombinedAutocompleteProvider(
         [
           ...TUI_COMMANDS,
           ...CLI_COMMANDS,
-          ...inspectVela(vela).promptTemplates.map((t) => ({
+          ...resources.promptTemplates.map((t) => ({
             name: t.name,
             description: t.argumentHint
               ? `${t.argumentHint} — ${t.description}`
               : t.description,
           })),
-          ...inspectVela(vela).skills.map((s) => ({
+          ...resources.skills.map((s) => ({
             name: `skill:${s.name}`,
             description: s.description,
           })),
@@ -332,6 +326,17 @@ export class InteractiveMode {
       setupNext && !isModelUsable(session, this.options.hasUsableModel)
     this.options.configure(session, { quiet: silent })
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
+    if (startup) {
+      const contextFiles = formatContextFileList(
+        (await session.resources()).contextFiles,
+        {
+          cwd: session.cwd,
+          homeDir: homedir(),
+          agentDir: this.options.agentDir,
+        },
+      )
+      if (contextFiles) this.addNotice(`[context] ${contextFiles}`)
+    }
     this.renderHeader(modelOk || setupNext)
     if (resumed) {
       this.renderHistory(session.getBranch())
