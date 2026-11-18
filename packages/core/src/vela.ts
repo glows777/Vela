@@ -9,7 +9,10 @@ import type {
   LoginOptions,
 } from './auth/types.ts'
 import type { ConfigResourceSplit } from './config/runtime-resources.ts'
-import { createSessionLocalExecutionEnv } from './execution/local.ts'
+import {
+  createSessionLocalExecutionEnv,
+  scopeLocalResults,
+} from './execution/local.ts'
 import { abortable } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
@@ -407,7 +410,9 @@ export function createVela(options: VelaOptions = {}): Vela {
       throw new Error(
         `Execution environment unavailable for local:${session.cwd}`,
       )
-    return env
+    return options.env
+      ? scopeLocalResults(env, session.registry.results.dir)
+      : env
   }
 
   const prepareWorkspace = async (
@@ -445,6 +450,8 @@ export function createVela(options: VelaOptions = {}): Vela {
               location,
               signal,
               workspaceMode === 'home',
+              ({ path, message }) =>
+                logger.warn(`[resources] ${path}: ${message}`),
             )
         const workspaceNames = new Set(
           workspaceSkills.map((skill) => skill.name),

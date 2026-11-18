@@ -6,6 +6,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
+- A first prompt (including a tool-free turn), fork or compaction that needs workspace instructions now fails if its session environment is unavailable. Retrying after recovery loads the instructions before contacting the model.
+
 - Workspace instructions, skills and prompt templates follow each session's working directory. The CLI lists and completes the active session's resources. Local file, search, shell and background calls use the selected execution adapter. Background start returns a job ID, and stop aborts the job. Short shell output stays inline. Local sessions reuse Lark's private download on redelivery and topic forwarding.
 
 - **Newly saved sessions resume in their saved execution location.** Previously reopening a session without `cwd` used the host default, even when the session started elsewhere. New records restore their saved local cwd instead, including when a different cwd was passed on reopen. Existing records without a location keep the prior fallback; fork and clone inherit the active location. This is not a sandbox.

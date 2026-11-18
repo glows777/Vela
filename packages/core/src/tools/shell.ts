@@ -74,20 +74,41 @@ export async function runBash(
 ): Promise<BashResult> {
   let body = '',
     cut = false
-  const run = await options.env.exec(
-    command,
-    {
-      spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
-      onOutput: (text) => {
-        const combined = Buffer.from(body + text)
-        if (combined.length > OUTPUT_MAX_BYTES) cut = true
-        body = combined.subarray(-OUTPUT_MAX_BYTES).toString()
-        options.onDelta?.(text)
+  let pendingDelta = ''
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const publish = (final: boolean) => {
+    if (timer) clearTimeout(timer)
+    timer = undefined
+    const delta = pendingDelta
+    pendingDelta = ''
+    try {
+      if (delta) options.onDelta?.(delta)
+    } catch {
+      // A disconnected output subscriber cannot cancel the user's command.
+    }
+    if (!final) {
+      try {
         options.onUpdate?.(fitOutputTail(body, cut).text)
+      } catch {}
+    }
+  }
+  const run = await options.env
+    .exec(
+      command,
+      {
+        spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
+        onOutput: (text) => {
+          const combined = Buffer.from(body + text)
+          if (combined.length > OUTPUT_MAX_BYTES) cut = true
+          body = combined.subarray(-OUTPUT_MAX_BYTES).toString()
+          if (options.onDelta) pendingDelta += text
+          if (!timer && (options.onDelta || options.onUpdate))
+            timer = setTimeout(() => publish(false), 100)
+        },
       },
-    },
-    options.signal,
-  )
+      options.signal,
+    )
+    .finally(() => publish(true))
   const tail = fitOutputTail(body, cut)
   if (!run.ok) {
     if (run.error.code === 'aborted')

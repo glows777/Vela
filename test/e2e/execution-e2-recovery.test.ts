@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import {
@@ -10,6 +16,87 @@ import {
 } from '@glows777/vela/testing'
 import { createLocalExecutionEnv, loadConfig } from '@glows777/vela-core'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'an unreadable workspace skill reports its path and leaves the session and neighboring skill usable',
+  async () => {
+    const dir = tempDir()
+    const warnings: string[] = []
+    for (const name of ['broken', 'working']) {
+      const base = join(dir.path, '.vela/skills', name)
+      mkdirSync(base, { recursive: true })
+      writeFileSync(
+        join(base, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: test ${name}\n---\nbody`,
+      )
+    }
+    const bad = join(dir.path, '.vela/skills/broken/SKILL.md')
+    chmodSync(bad, 0o000)
+    const model = createFauxModel({ responses: [fauxText('ok')] })
+    const vela = createVela({
+      cwd: dir.path,
+      model,
+      logger: { ...console, warn: (message) => warnings.push(message) },
+    })
+    try {
+      await vela.session('skills').prompt('hi')
+      expect(model.calls[0]!.system).toContain('test working')
+      expect(model.calls[0]!.system).not.toContain('test broken')
+      expect(warnings.join(' ')).toContain(bad)
+    } finally {
+      await vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
+
+test('a first turn cannot omit workspace instructions while its environment is offline and retries once available', async () => {
+  const dir = tempDir()
+  writeFileSync(join(dir.path, 'AGENTS.md'), 'mandatory workspace context')
+  let online = false
+  const model = createFauxModel({ responses: [fauxText('ok')] })
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) =>
+      online ? createLocalExecutionEnv({ cwd: location.cwd }) : undefined,
+  })
+  try {
+    const session = vela.session('unavailable')
+    await expect(session.prompt('hi')).rejects.toThrow('unavailable')
+    expect(model.calls).toHaveLength(0)
+    online = true
+    await session.prompt('hi')
+    expect(model.calls[0]!.system).toContain('mandatory workspace context')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('a throwing user bash progress callback does not interrupt the command', async () => {
+  const dir = tempDir()
+  const vela = createVela({
+    cwd: dir.path,
+    model: createFauxModel({ responses: [] }),
+  })
+  try {
+    let updates = 0
+    const result = await vela
+      .session('progress')
+      .executeBash('printf first; sleep 0.3; printf last', {
+        onUpdate: () => {
+          updates++
+          throw new Error('view disconnected')
+        },
+      })
+    expect(updates).toBeGreaterThan(0)
+    expect(result).toMatchObject({ output: 'firstlast', exitCode: 0 })
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
 
 test('read_file uses the selected execution environment instead of reading the host', async () => {
   const dir = tempDir()
@@ -607,31 +694,44 @@ test('execution environment publishes a complete file by rename and removes stag
   }
 })
 
-test('memory session clone retains spilled user bash output after parent closes', async () => {
-  const { memorySessionStorage } = await import('@glows777/vela-core')
-  const { readFileSync } = await import('node:fs')
-  const dir = tempDir()
-  const vela = createVela({
-    cwd: dir.path,
-    dataDir: '.data',
-    sessionStorage: memorySessionStorage(),
-    model: createFauxModel({ responses: [] }),
-  })
-  try {
-    const parent = vela.session('parent-spill')
-    const result = await parent.executeBash("printf '%060000d' 0")
-    expect(result.fullOutputPath).toBeDefined()
-    const child = (await parent.clone({ sessionId: 'child-spill' })).session!
-    const blob = JSON.stringify(child.messages)
-    const path = blob.match(/Full output: ([^\]\\]+)/)?.[1]
-    expect(path).toBeDefined()
-    await parent.close()
-    expect(readFileSync(path!, 'utf8')).toHaveLength(60000)
-  } finally {
-    await vela.dispose()
-    dir.cleanup()
-  }
-})
+test.each([false, true])(
+  'memory session clone retains private spilled bash output after parent closes (custom local factory %p)',
+  async (custom) => {
+    const { memorySessionStorage } = await import('@glows777/vela-core')
+    const { readFileSync } = await import('node:fs')
+    const dir = tempDir()
+    const vela = createVela({
+      cwd: dir.path,
+      env: custom
+        ? ({ location }) => createLocalExecutionEnv({ cwd: location.cwd })
+        : undefined,
+      dataDir: '.data',
+      sessionStorage: memorySessionStorage(),
+      model: createFauxModel({ responses: [] }),
+    })
+    try {
+      const parent = vela.session('parent-spill')
+      const result = await parent.executeBash("printf '%060000d' 0")
+      expect(result.fullOutputPath).toBeDefined()
+      expect(
+        result.fullOutputPath!.startsWith(parent.registry.results.dir + '/'),
+      ).toBe(true)
+      if (process.platform !== 'win32') {
+        const { statSync } = await import('node:fs')
+        expect(statSync(result.fullOutputPath!).mode & 0o777).toBe(0o600)
+      }
+      const child = (await parent.clone({ sessionId: 'child-spill' })).session!
+      const blob = JSON.stringify(child.messages)
+      const path = blob.match(/Full output: ([^\]\\]+)/)?.[1]
+      expect(path).toBeDefined()
+      await parent.close()
+      expect(readFileSync(path!, 'utf8')).toHaveLength(60000)
+    } finally {
+      await vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
 
 test('microcompaction stores recoverable tool output in the session environment', async () => {
   const dir = tempDir()

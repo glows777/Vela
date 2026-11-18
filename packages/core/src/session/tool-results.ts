@@ -93,11 +93,6 @@ export class ToolResultStore {
     this.historyViewSequence = viewSequence
   }
 
-  /** @internal Create the session-owned root before transferring channel files. */
-  async ensurePrivateDirectory(): Promise<void> {
-    await mkdir(this.dir, { recursive: true, mode: 0o700 })
-  }
-
   private outputPath(callId: string = crypto.randomUUID()): string {
     if (
       !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(callId)

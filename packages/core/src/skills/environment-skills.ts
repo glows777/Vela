@@ -1,6 +1,7 @@
 import type { ExecutionEnv, FileError, Result } from '../execution/types.ts'
 import { parseFrontmatter } from '../prompt/frontmatter.ts'
-import type { SkillDefinition } from './loader.ts'
+import { parseSkill } from './definition.ts'
+import type { ResourceDiagnostic, SkillDefinition } from './loader.ts'
 
 const unwrap = <T>(result: Result<T, FileError>): T => {
   if (!result.ok) throw result.error
@@ -11,64 +12,38 @@ const unwrap = <T>(result: Result<T, FileError>): T => {
 export async function loadEnvironmentSkills(
   env: ExecutionEnv,
   cwd: string,
-  signal?: AbortSignal,
-  homeSkillsOnly = false,
+  signal: AbortSignal | undefined,
+  homeSkillsOnly: boolean,
+  report: (problem: ResourceDiagnostic) => void,
 ): Promise<SkillDefinition[]> {
   const join = async (...parts: string[]) =>
     unwrap(await env.joinPath(parts, signal))
+  const skip = (error: FileError, path: string) => {
+    if (error.code === 'aborted' || error.code === 'unavailable') throw error
+    if (error.code !== 'not_found' && error.code !== 'not_directory')
+      report({ path, message: error.message })
+  }
   const found = new Map<string, SkillDefinition>()
   const visited = new Set<string>()
   const scan = async (dir: string, rootFiles: boolean): Promise<void> => {
     signal?.throwIfAborted()
     const canonical = await env.canonicalPath(dir, signal)
-    if (!canonical.ok) {
-      if (canonical.error.code === 'not_found') return
-      throw canonical.error
-    }
+    if (!canonical.ok) return skip(canonical.error, dir)
     if (visited.has(canonical.value)) return
     visited.add(canonical.value)
     const entries = await env.listDir(dir, signal)
-    if (!entries.ok) {
-      if (
-        entries.error.code === 'not_found' ||
-        entries.error.code === 'not_directory'
-      )
-        return
-      throw entries.error
-    }
+    if (!entries.ok) return skip(entries.error, dir)
     const add = async (filePath: string) => {
       const content = await env.readTextFile(filePath, signal)
-      if (!content.ok) throw content.error
-      let frontmatter: Record<string, unknown>
-      try {
-        ;({ frontmatter } = parseFrontmatter(content.value))
-      } catch {
-        return
-      }
-      const description =
-        typeof frontmatter.description === 'string'
-          ? frontmatter.description.trim()
-          : ''
-      if (!description) return
-      const parts = filePath.replaceAll('\\', '/').split('/')
-      const filename = parts.at(-1)!
-      const baseDir = filePath
-        .slice(0, filePath.length - filename.length)
-        .replace(/[\\/]$/, '')
-      const fallback =
-        filename === 'SKILL.md' ? parts.at(-2)! : filename.slice(0, -3)
-      const name =
-        typeof frontmatter.name === 'string' && frontmatter.name
-          ? frontmatter.name
-          : fallback
-      if (!found.has(name))
-        found.set(name, {
-          name,
-          description,
-          filePath,
-          baseDir,
-          disableModelInvocation:
-            frontmatter['disable-model-invocation'] === true,
+      if (!content.ok) return skip(content.error, filePath)
+      const skill = parseSkill(filePath, content.value, report)
+      if (!skill) return
+      const existing = found.get(skill.name)
+      if (!existing) found.set(skill.name, skill)
+      else
+        report({
+          path: filePath,
+          message: `skill name "${skill.name}" is already used by ${existing.filePath}; skipped`,
         })
     }
     const ordered = entries.value
@@ -76,18 +51,16 @@ export async function loadEnvironmentSkills(
       .sort((a, b) => a.name.localeCompare(b.name))
     const kind = async (entry: (typeof ordered)[number]) => {
       if (entry.kind !== 'symlink') return entry.kind
-      const target = await env.canonicalPath(
-        await join(dir, entry.name),
-        signal,
-      )
+      const path = await join(dir, entry.name)
+      const target = await env.canonicalPath(path, signal)
       if (!target.ok) {
-        if (target.error.code === 'not_found') return undefined
-        throw target.error
+        skip(target.error, path)
+        return
       }
       const info = await env.fileInfo(target.value, signal)
       if (!info.ok) {
-        if (info.error.code === 'not_found') return undefined
-        throw info.error
+        skip(info.error, path)
+        return
       }
       return info.value.kind
     }
@@ -115,7 +88,10 @@ export async function loadEnvironmentSkills(
     await scan(await join(current, '.agents', 'skills'), true)
     const git = await env.fileInfo(await join(current, '.git'), signal)
     if (git.ok) break
-    if (git.error.code !== 'not_found') throw git.error
+    if (git.error.code !== 'not_found') {
+      skip(git.error, current)
+      break
+    }
     const parent = await join(current, '..')
     if (parent === current) break
     current = parent

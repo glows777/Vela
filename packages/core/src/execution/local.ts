@@ -307,6 +307,14 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
     )
     this.active.clear()
   }
+  withResultRoot(root: string): LocalExecutionEnv {
+    // A resolver may reuse its adapter across sessions. Preserve its overrides
+    // and active children without changing the result directory of another call.
+    if (this.tempRoot !== undefined) return this
+    const scoped: LocalExecutionEnv = Object.create(this)
+    scoped.tempRoot = root
+    return scoped
+  }
   private groupAlive(child: ChildProcess): boolean {
     if (child.pid === undefined) return false
     try {
@@ -322,6 +330,14 @@ export function createLocalExecutionEnv(options: {
   shellPath?: string
 }): ExecutionEnv {
   return new LocalExecutionEnv(options)
+}
+
+/** @internal Scope the stock local adapter's files to their owning session. */
+export function scopeLocalResults(
+  env: ExecutionEnv,
+  root: string,
+): ExecutionEnv {
+  return env instanceof LocalExecutionEnv ? env.withResultRoot(root) : env
 }
 
 /** @internal Use the session-owned result root for local spill files. */

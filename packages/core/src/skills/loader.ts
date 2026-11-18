@@ -1,29 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from '../prompt/frontmatter.ts'
+import {
+  parseSkill,
+  type ResourceDiagnostic,
+  type SkillDefinition,
+} from './definition.ts'
 
-/** A skill in the Agent Skills format (same fields as pi's `Skill`). The body is read from `filePath` when used. */
-export interface SkillDefinition {
-  /** Frontmatter `name`, or the skill directory's name */
-  name: string
-  description: string
-  /** Absolute path of the skill file (usually `SKILL.md`) */
-  filePath: string
-  /** Directory the skill's relative paths resolve against */
-  baseDir: string
-  /** `disable-model-invocation: true`: not listed to the model, only `/skill:<name>` runs it */
-  disableModelInvocation: boolean
-}
-
-/** A problem found while loading resources (skipped skill, invalid name, name collision, ...). */
-export interface ResourceDiagnostic {
-  message: string
-  path: string
-}
+export type { ResourceDiagnostic, SkillDefinition } from './definition.ts'
 
 const SKILL_FILE = 'SKILL.md'
-const MAX_NAME_LENGTH = 64
-const MAX_DESCRIPTION_LENGTH = 1024
 
 /**
  * Loads skills like pi (`core/skills.ts`): a directory containing `SKILL.md` is one skill (not searched further);
@@ -142,51 +128,19 @@ export class SkillLoader {
   }
 
   private loadFile(filePath: string): SkillDefinition | undefined {
-    const declared = path.basename(filePath) === SKILL_FILE
-    let frontmatter: Record<string, unknown>
     try {
-      ;({ frontmatter } = parseFrontmatter(fs.readFileSync(filePath, 'utf-8')))
+      return parseSkill(
+        filePath,
+        fs.readFileSync(filePath, 'utf-8'),
+        (problem) => this.problems.push(problem),
+      )
     } catch (error) {
-      if (declared)
+      if (path.basename(filePath) === SKILL_FILE)
         this.problems.push({
           message: (error as Error).message,
           path: filePath,
         })
       return
-    }
-    const description =
-      typeof frontmatter.description === 'string'
-        ? frontmatter.description.trim()
-        : ''
-    // A plain .md file without a description is just a document, not a skill
-    if (!description) {
-      if (declared)
-        this.problems.push({
-          message: 'description is required; skipped',
-          path: filePath,
-        })
-      return
-    }
-    if (description.length > MAX_DESCRIPTION_LENGTH)
-      this.problems.push({
-        message: `description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`,
-        path: filePath,
-      })
-    const baseDir = path.dirname(filePath)
-    const name =
-      typeof frontmatter.name === 'string' && frontmatter.name
-        ? frontmatter.name
-        : declared
-          ? path.basename(baseDir)
-          : path.basename(filePath, '.md')
-    for (const message of nameProblems(name))
-      this.problems.push({ message, path: filePath })
-    return {
-      name,
-      description,
-      filePath,
-      baseDir,
-      disableModelInvocation: frontmatter['disable-model-invocation'] === true,
     }
   }
 }
@@ -221,22 +175,6 @@ export function formatSkillsForPrompt(
   }
   lines.push('</available_skills>')
   return lines.join('\n')
-}
-
-/** Agent Skills naming rules; violations are warnings only (the skill still loads, like pi). */
-function nameProblems(name: string): string[] {
-  const problems: string[] = []
-  if (name.length > MAX_NAME_LENGTH)
-    problems.push(`name exceeds ${MAX_NAME_LENGTH} characters (${name.length})`)
-  if (!/^[a-z0-9-]+$/.test(name))
-    problems.push(
-      'name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)',
-    )
-  if (name.startsWith('-') || name.endsWith('-'))
-    problems.push('name must not start or end with a hyphen')
-  if (name.includes('--'))
-    problems.push('name must not contain consecutive hyphens')
-  return problems
 }
 
 function isDirectory(dir: string, entry: fs.Dirent): boolean {

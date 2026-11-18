@@ -489,76 +489,128 @@ test('Lark exposes the reusable file only after the stream completes', async () 
   expect(readFileSync(path, 'utf8')).toBe('firstlast')
 })
 
-test('a file Steer waiting for its environment returns to the queue when the current turn ends', async () => {
-  const { createVela } = await import('@glows777/vela')
-  const { createLocalExecutionEnv } = await import('@glows777/vela-core')
-  const fake = fakeLark()
-  fake.resources.set('file', [Buffer.from('queued bytes')])
-  let finish!: () => void
-  let releaseEnv!: () => void
-  let entered = false
-  let holdNext = false
-  const held = new Promise<void>((resolve) => {
-    finish = resolve
-  })
-  const gate = new Promise<void>((resolve) => {
-    releaseEnv = resolve
-  })
-  const t = createTestVela(
-    {
-      responses: [
-        fauxToolCall('hold_pause', {}),
-        fauxText('first answer'),
-        fauxText('queued answer'),
-      ],
-    },
-    (options) =>
-      createVela({
-        ...options,
-        extensions: [
-          ...(options.extensions ?? []),
-          lark({ owners: ['ou_alice'], transport: fake.transport }),
-          function hold(api) {
-            api.registerTool({
-              name: 'pause',
-              description: 'Wait',
-              inputSchema: z.object({}),
-              execute: async () => {
-                await held
-                return 'done'
-              },
-            })
-          },
+test.each(['settle', 'stop'])(
+  'a file Steer waiting for its environment handles %s while preparing attachment delivery',
+  async (outcome) => {
+    const { createVela } = await import('@glows777/vela')
+    const { createLocalExecutionEnv } = await import('@glows777/vela-core')
+    const fake = fakeLark()
+    fake.resources.set('file', [Buffer.from('queued bytes')])
+    let finish!: () => void
+    let releaseEnv!: () => void
+    let entered = false
+    let holdNext = false
+    const held = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      releaseEnv = resolve
+    })
+    const t = createTestVela(
+      {
+        responses: [
+          fauxToolCall('hold_pause', {}),
+          ...(outcome === 'settle'
+            ? [fauxText('first answer'), fauxText('queued answer')]
+            : []),
         ],
-        env: async ({ location }) => {
-          if (holdNext) {
-            holdNext = false
-            entered = true
-            await gate
-          }
-          return createLocalExecutionEnv({ cwd: location.cwd })
-        },
-      }),
-  )
-  try {
-    await t.vela.startChannels()
-    fake.deliver(dm('text', { text: 'start' }, 'start'))
-    await until(() => t.model.calls.length === 1)
-    fake.deliver(dm('file', { file_key: 'file', file_name: 'queued.txt' }))
-    await until(() => fake.cards.length === 1)
-    holdNext = true
-    fake.click(0, 'steer', { operator: { open_id: 'ou_alice' } })
-    await until(() => entered)
-    finish()
-    await until(() => fake.sent.length === 2)
-    const path = savedAttachment(t.model.calls[2]!.lastUserText)
-    expect(readFileSync(path, 'utf8')).toBe('queued bytes')
-    expect(fake.resourceCalls).toHaveLength(1)
-  } finally {
-    finish()
-    releaseEnv()
-  }
-})
+      },
+      (options) =>
+        createVela({
+          ...options,
+          extensions: [
+            ...(options.extensions ?? []),
+            lark({
+              appId: 'cli_bot',
+              owners: ['ou_alice'],
+              chats: [{ id: 'oc_group' }],
+              transport: fake.transport,
+            }),
+            function hold(api) {
+              api.registerTool({
+                name: 'pause',
+                description: 'Wait',
+                inputSchema: z.object({}),
+                execute: async () => {
+                  await held
+                  return 'done'
+                },
+              })
+            },
+          ],
+          env: async ({ location }) => {
+            const env = createLocalExecutionEnv({ cwd: location.cwd })
+            if (holdNext) {
+              holdNext = false
+              entered = true
+              await gate
+              if (outcome === 'stop') {
+                // Let resolution succeed, then stop at the gateway's local-file admission.
+                let checkedByResolver = false
+                Object.defineProperty(env, 'id', {
+                  get() {
+                    if (checkedByResolver)
+                      fake.click(1, 'stop', {
+                        operator: { open_id: 'ou_alice' },
+                      })
+                    checkedByResolver = true
+                    return 'node:local'
+                  },
+                })
+              }
+            }
+            return env
+          },
+        }),
+    )
+    try {
+      await t.vela.startChannels()
+      fake.deliver(larkEvent({ message_id: 'start' }))
+      await until(() => t.model.calls.length === 1)
+      fake.deliver(
+        larkEvent({
+          message_id: 'file-message',
+          message_type: 'file',
+          content: JSON.stringify({
+            file_key: 'file',
+            file_name: 'queued.txt',
+          }),
+        }),
+      )
+      await until(() => fake.cards.length === 1)
+      if (outcome === 'stop') {
+        fake.deliver(larkEvent({ message_id: 'stop-message' }))
+        await until(() => fake.cards.length === 2)
+      }
+      holdNext = true
+      fake.click(0, 'steer', { operator: { open_id: 'ou_alice' } })
+      await until(() => entered)
+      if (outcome === 'stop') {
+        releaseEnv()
+        await until(() =>
+          fake.reactions.some(
+            (r) => r.messageId === 'file-message' && r.emoji === 'CrossMark',
+          ),
+        )
+        expect(
+          fake.reactions.find(
+            (r) => r.messageId === 'file-message' && r.emoji === 'OnIt',
+          )?.removed,
+        ).toBe(true)
+        expect(t.model.calls).toHaveLength(1)
+        return
+      }
+      finish()
+      await until(() => fake.sent.length === 2)
+      const path = savedAttachment(t.model.calls[2]!.lastUserText)
+      expect(readFileSync(path, 'utf8')).toBe('queued bytes')
+      expect(fake.resourceCalls).toHaveLength(1)
+    } finally {
+      finish()
+      releaseEnv()
+    }
+  },
+)
 
 test('Lark expired Steer reuses downloaded images when the default queue runs', async () => {
   let finish!: () => void

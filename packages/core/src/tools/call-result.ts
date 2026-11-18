@@ -42,7 +42,7 @@ export async function prepareCallResult({
   const maxChars = maxResultChars ?? DEFAULT_MAX_RESULT_CHARS
   let stored = raw instanceof StoredToolResult ? raw : undefined
   let spillFailed = false
-  const warning =
+  let warning =
     '[The tool already ran, but its full output could not be saved. Do not automatically rerun it.]'
   let text = ''
   try {
@@ -83,9 +83,10 @@ export async function prepareCallResult({
         const written = await env.writeFile(temp.value, full, signal)
         if (!written.ok) {
           spillFailed = true
-          await env
-            .remove(temp.value, { force: true }, undefined)
-            .catch(() => {})
+          // Cleanup is best effort; an incomplete file is never published.
+          const cleanup = await env.remove(temp.value, { force: true })
+          if (!cleanup.ok)
+            warning += ' The incomplete output file could not be removed.'
         } else
           stored = new StoredToolResult(
             temp.value,

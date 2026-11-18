@@ -175,7 +175,7 @@ export class LocalFiles {
   readonly id = 'node:local'
   constructor(
     public cwd: string,
-    private readonly tempRoot?: string,
+    protected tempRoot?: string,
   ) {}
   private path(path: string) {
     let value = path
@@ -276,7 +276,18 @@ export class LocalFiles {
     return attempt(p, signal, async () => {
       await mkdir(dirname(p), { recursive: true })
       signal?.throwIfAborted()
-      await writeFile(p, content, { signal })
+      if (dirname(p) !== this.tempRoot) {
+        await writeFile(p, content, { signal })
+        return
+      }
+      // Persist session-owned results before history can publish their path.
+      const handle = await open(p, 'w', 0o600)
+      try {
+        await handle.writeFile(content, { signal })
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
     })
   }
   renameFile(
@@ -343,7 +354,7 @@ export class LocalFiles {
         dir,
         `${options?.prefix ?? ''}${crypto.randomUUID()}${options?.suffix ?? ''}`,
       )
-      await writeFile(p, '', { flag: 'wx' })
+      await writeFile(p, '', { flag: 'wx', mode: 0o600 })
       return p
     })
   }
