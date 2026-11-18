@@ -114,6 +114,10 @@ await session.prompt('Summarize the open issues')
 
 A session id becomes a file name: letters, digits, `.`, `_` and `-`, not starting with `.`, at most 128 characters. Other ids throw.
 
+After a mid-tool crash, `resume()` followed by an ordinary `prompt()` repairs unresolved client-tool calls before appending the new user message. It reuses the same durable result/replay policy as `continueInterrupted()`: completed output is retained; interrupted unsafe effects are reported as unknown, not repeated. `continueInterrupted()` remains the API for continuing the old turn without a new user message. No frontend-specific recovery call is required for a normal follow-up.
+
+An older failed follow-up may already have saved a user message between an unanswered tool call and its result. This invalid ordering cannot be fixed by appending another result. Vela stops before executing tools or adding another message and asks you to open a new session or inspect the saved branch; it does not automatically rewrite historical branches or discard the saved question.
+
 `SessionOptions` apply when the session is first opened; a second `vela.session(id, options)` returns the open session unchanged. A `model` or `thinkingLevel` given then also wins over the choice saved in a resumed transcript, so a host's current configuration is not replaced by an older one. `fork()` and `clone()` restore the copied branch's own model and thinking level instead.
 
 | Option | Default | Description |
