@@ -540,6 +540,7 @@ export class VelaSession {
     what: string,
     task: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
+    if (this.draining) throw this.drainError()
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
     if (this.busy.locked)
       throw new Error(`A task is already running; ${what} after it finishes`)
@@ -1119,9 +1120,8 @@ export class VelaSession {
     return this.busy.locked
   }
 
-  /**
-   * Waits for the agent loop (including loops for queued messages and manual compaction) to finish (like pi's waitForIdle).
-   * Does not wait for extension commands: a command may call abort(), and waiting on itself would hang.
+  /** Waits for agent loops, queued messages and manual compaction (like pi's waitForIdle).
+   * Excludes extension commands: a command can call abort(), which must not wait on itself.
    */
   async waitForIdle(): Promise<void> {
     while (this.running) await this.running
