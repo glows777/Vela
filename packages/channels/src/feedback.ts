@@ -9,6 +9,7 @@ import {
   publishChannelEvent,
 } from '@glows777/vela-core/extension-api'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
+import { modelInputText } from './input.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
@@ -447,7 +448,7 @@ export class RunFeedback {
       text: prepared.text,
     })
     this.options.recovery.track(run.key, run.session, prepared)
-    await run.session.prompt(prepared.text, {
+    await run.session.prompt(modelInputText(prepared), {
       source: 'channel',
       streamingBehavior: 'steer',
       images: prepared.images,
@@ -672,7 +673,10 @@ export class RunFeedback {
       this.options.logger.debug(
         `[${channelName}] input ${msg.replyToId ?? '-'} prompt at=${new Date().toISOString()}`,
       )
-      await session.prompt(msg.text, { source: 'channel', images: msg.images })
+      await session.prompt(modelInputText(msg), {
+        source: 'channel',
+        images: msg.images,
+      })
       if (session.messages.at(-1) !== previous)
         answer = lastAssistantText(session.messages)
     } catch (error) {
