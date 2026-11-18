@@ -303,7 +303,17 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
   }
   async cleanup(): Promise<void> {
     await Promise.all(
-      [...this.active].map((child) => signalProcessTree(child, 'SIGKILL')),
+      [...this.active].map(async (child) => {
+        try {
+          await signalProcessTree(child, 'SIGKILL')
+        } catch (cause) {
+          // Darwin may return EPERM after the shell and its group have exited.
+          // Only tolerate that refusal for a shell whose exit we have observed.
+          const exited = child.exitCode !== null || child.signalCode !== null
+          if (!exited || (cause as NodeJS.ErrnoException)?.code !== 'EPERM')
+            throw cause
+        }
+      }),
     )
     this.active.clear()
   }

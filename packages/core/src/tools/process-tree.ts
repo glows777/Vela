@@ -3,14 +3,14 @@ import { type ChildProcess, spawn } from 'node:child_process'
 /**
  * Signals a child and its descendants: the POSIX process group it was spawned in, or `taskkill /T`
  * on Windows, which has no process groups and no SIGTERM to wait for. A process that is already
- * gone is not an error; any other failure is thrown to the caller.
+ * gone is not an error; other failures reject the returned promise.
  */
-export function signalProcessTree(
+export async function signalProcessTree(
   proc: ChildProcess,
   signal: 'SIGTERM' | 'SIGKILL',
 ): Promise<void> {
   const pid = proc.pid
-  if (pid === undefined) return Promise.resolve()
+  if (pid === undefined) return
   if (process.platform === 'win32')
     return new Promise((resolve) => {
       const fallback = () => {
@@ -39,5 +39,4 @@ export function signalProcessTree(
     )
       throw error
   }
-  return Promise.resolve()
 }

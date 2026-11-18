@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import {
   chmodSync,
   mkdirSync,
@@ -702,6 +702,62 @@ test('model and user bash report partial effects on a real local spill failure',
     dir.cleanup()
   }
 })
+
+test.skipIf(process.platform === 'win32')(
+  'a denied group signal preserves a spill error and cleanup attempts every tracked group',
+  async () => {
+    const { createSessionLocalExecutionEnv } = await import(
+      '../../packages/core/src/execution/local.ts'
+    )
+    const dir = tempDir()
+    const blocked = join(dir.path, 'ordinary-file')
+    writeFileSync(blocked, '')
+    const env = createSessionLocalExecutionEnv({
+      cwd: dir.path,
+      tempRoot: blocked,
+    })
+    const groups = new Set<number>()
+    const attempts: number[] = []
+    const kill = process.kill.bind(process)
+    const spy = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (groups.has(pid)) {
+        // Keep just our two groups on the adapter's cleanup list after the shells exit.
+        if (signal === 0) return true
+        if (signal === 'SIGKILL') {
+          attempts.push(pid)
+          throw Object.assign(new Error('group kill denied'), { code: 'EPERM' })
+        }
+      }
+      return kill(pid, signal)
+    })
+    const recordGroup = (text: string) => groups.add(-Number(text.trim()))
+    try {
+      const command = ['sh', '-c', 'echo $$']
+      const first = await env.exec(command, { onOutput: recordGroup })
+      expect(first.ok).toBe(true)
+      const spill = await env.exec(command, {
+        onOutput: recordGroup,
+        spill: { afterBytes: 0, afterLines: 0 },
+      })
+      expect(spill).toMatchObject({
+        ok: false,
+        error: {
+          code: 'unknown',
+          message: expect.stringContaining(
+            'Failed to preserve complete shell output',
+          ),
+        },
+      })
+      expect(groups.size).toBe(2)
+      expect(attempts.splice(0)).toEqual([[...groups][1]])
+      await env.cleanup()
+      expect(attempts).toEqual([...groups])
+    } finally {
+      spy.mockRestore()
+      dir.cleanup()
+    }
+  },
+)
 
 test.each([false, true])(
   'failed spill retains tool history even when cleanup disconnects (%p)',
