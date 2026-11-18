@@ -353,6 +353,8 @@ export async function runAttempt(
   }
   const files = fixtures(config.scenario)
   const exitScenario = ['G6', 'G7', 'G8'].includes(config.scenario)
+  // A group session runs in the chat's workspace, so a scenario that needs files there seeds them itself.
+  const workspaceScenario = config.scenario === 'G10'
   const topicRoots =
     config.scenario === 'G6'
       ? ['g6_b', 'g6_a']
@@ -362,12 +364,13 @@ export async function runAttempt(
   const { channelSessionId } = await load<
     typeof import('../../packages/channels/src/session-id.ts')
   >(config.runtime, paths.channelId)
-  const scope = exitScenario
-    ? await load<typeof import('../../packages/channels/src/scope.ts')>(
-        config.runtime,
-        paths.scope,
-      )
-    : undefined
+  const scope =
+    exitScenario || workspaceScenario
+      ? await load<typeof import('../../packages/channels/src/scope.ts')>(
+          config.runtime,
+          paths.scope,
+        )
+      : undefined
   const bun = (...args: string[]) =>
     command(config.cwd, [process.execPath, '--no-env-file', ...args])
   const readTask = (path: string) =>
@@ -592,16 +595,37 @@ export async function runAttempt(
         }
         evidence.answers = evidence.deliveries.map((item) => item.text)
       } else {
+        // G11 opens with untagged discussion so the person's follow-up shares its session and history.
+        if (config.scenario === 'G11') {
+          fake.deliver(
+            eventFactory({
+              message_id: 'discussion',
+              create_time: '3000',
+              mentions: [],
+              content: JSON.stringify({ text: prompts(config.scenario)[0] }),
+            }),
+          )
+          while (!channelStarted && !channelError) await Bun.sleep(1)
+          await drain()
+          if (channelError) throw channelError
+          channelStarted = false
+        }
+        if (workspaceScenario)
+          for (const [path, content] of Object.entries(files)) {
+            await mkdir(dirname(join(workspace, path)), { recursive: true })
+            await Bun.write(join(workspace, path), content)
+          }
+        const unmentioned =
+          config.scenario === 'G3' || config.scenario === 'G10'
         fake.deliver(
           eventFactory({
-            message_id: 'trigger',
-            create_time: '3000',
-            mentions:
-              config.scenario === 'G3'
-                ? []
-                : [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
+            message_id: config.scenario === 'G11' ? 'follow_up' : 'trigger',
+            create_time: config.scenario === 'G11' ? '4000' : '3000',
+            mentions: unmentioned
+              ? []
+              : [{ key: '@_user_1', id: { open_id: 'ou_bot' } }],
             content: JSON.stringify({
-              text: `${config.scenario === 'G3' ? '' : '@_user_1 '}${prompts(config.scenario)[0]}`,
+              text: `${unmentioned ? '' : '@_user_1 '}${prompts(config.scenario)[config.scenario === 'G11' ? 1 : 0]}`,
             }),
             ...(['G4', 'G5'].includes(config.scenario)
               ? { root_id: 'root', thread_id: 'thread' }
@@ -611,10 +635,16 @@ export async function runAttempt(
         while (!channelStarted && !channelError) await Bun.sleep(1)
         await drain()
         if (channelError) throw channelError
+        if (workspaceScenario)
+          for (const path of Object.keys(files))
+            evidence.files[path] = await Bun.file(join(workspace, path))
+              .text()
+              .catch(() => '')
         evidence.topics = fake.topics.map((topic) => topic.title)
         evidence.deliveries = fake.sent.map((item) => ({
           scope:
             config.scenario === 'G9' ||
+            config.scenario === 'G11' ||
             (item.messageId === 'trigger' &&
               !['G4', 'G5'].includes(config.scenario))
               ? 'group'
