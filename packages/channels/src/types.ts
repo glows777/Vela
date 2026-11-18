@@ -79,6 +79,8 @@ export interface ChannelRoutineInfo extends ChannelRoutine {
 }
 
 export interface OutgoingMessage {
+  /** Stable provider deduplication identity supplied by the runtime, never the model. */
+  deliveryId?: string
   routine?: IncomingMessage['routine']
   /** Set on the reply to a hand-off note; a top-level reply then mentions its recipient. */
   handoff?: IncomingMessage['handoff']
@@ -106,6 +108,7 @@ export interface ChannelTopicCapabilities {
   startTopic(
     message: IncomingMessage,
     title: string,
+    deliveryId?: string,
   ): Promise<{ messageId: string; rootId: string; threadId: string }>
   forwardToTopic(
     message: IncomingMessage,

@@ -297,6 +297,7 @@ test('a group @ goes through the real SDK: documented event in, documented reque
   expect(input).toContain('the build is red again')
   expect(input).toContain('Alice')
   expect(calls[5]!.body).toEqual({
+    uuid: expect.stringMatching(/^[a-f0-9]{40}$/),
     msg_type: 'text',
     content: JSON.stringify({ text: 'answer' }),
   })
@@ -329,6 +330,7 @@ test('a topic handoff replies in thread and later posts go to the returned topic
   const handoff = calls.find((c) => c.body.reply_in_thread)!
   expect(handoff.path).toBe('/open-apis/im/v1/messages/om_in/reply')
   expect(handoff.body).toEqual({
+    uuid: expect.stringMatching(/^[a-f0-9]{40}$/),
     msg_type: 'text',
     content: JSON.stringify({ text: 'Check cobalt' }),
     reply_in_thread: true,
