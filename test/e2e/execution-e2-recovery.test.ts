@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import {
@@ -855,6 +855,29 @@ test('trusted workspace discovers ancestor .agents skills through the environmen
   try {
     await vela.session('ancestor').prompt('hello')
     expect(model.calls[0]!.system).toContain('PARENT_SKILL')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('workspace skill discovery follows symlinks and tolerates malformed neighbors', async () => {
+  const dir = tempDir()
+  const realSkill = join(dir.path, 'shared-skill')
+  const skills = join(dir.path, '.skills')
+  mkdirSync(realSkill, { recursive: true })
+  mkdirSync(skills, { recursive: true })
+  writeFileSync(
+    join(realSkill, 'SKILL.md'),
+    '---\nname: linked\ndescription: LINKED_SKILL\n---\nLinked body',
+  )
+  writeFileSync(join(skills, 'bad.md'), '---\ninvalid: [\n---\nno')
+  symlinkSync(realSkill, join(skills, 'link'), 'dir')
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({ cwd: dir.path, model })
+  try {
+    await vela.session('linked-skills').prompt('hello')
+    expect(model.calls[0]!.system).toContain('LINKED_SKILL')
   } finally {
     await vela.dispose()
     dir.cleanup()
