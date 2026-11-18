@@ -1,0 +1,44 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--vela-line);
+  border-radius: var(--radius-panel);
+  background: var(--vela-paper);
+  box-shadow: var(--shadow-resting);
+}
+
+.waiting {
+  border-left: 3px solid var(--vela-accent);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.word {
+  flex: none;
+  margin-left: auto;
+  color: var(--vela-muted);
+  font-size: var(--text-xs);
+}
+
+.question {
+  margin: 0;
+  color: var(--vela-ink);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+}

@@ -1,6 +1,6 @@
 /** Serializable desktop host contract. No SDK or Electron objects cross this boundary. */
 type Connection = { connected: boolean; error?: string }
-type Session = {
+export type Session = {
   sessionId: string
   chatId: string
   chatKind: 'group' | 'direct'
@@ -111,6 +111,8 @@ export interface DesktopBridge {
   ): Promise<boolean>
   projects(): Promise<Project[]>
   openProject(input: { cwd: string; name?: string }): Promise<Project>
+  /** Native folder picker in main. Cancel and dismissal both return undefined. */
+  chooseFolder(): Promise<string | undefined>
   messages(input: {
     projectId: string
     sessionId: string
@@ -146,6 +148,7 @@ export type Request =
     }
   | { method: 'projects' }
   | { method: 'openProject'; input: { cwd: string; name?: string } }
+  | { method: 'chooseFolder' }
   | {
       method: 'messages'
       input: {

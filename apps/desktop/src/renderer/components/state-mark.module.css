@@ -1,0 +1,23 @@
+.mark {
+  flex: none;
+}
+
+.running {
+  color: var(--vela-ink);
+}
+
+.queued {
+  color: var(--vela-muted);
+}
+
+.waiting {
+  color: var(--vela-accent);
+}
+
+.done {
+  color: var(--vela-teal);
+}
+
+.stopped {
+  color: var(--vela-muted);
+}

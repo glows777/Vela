@@ -9,7 +9,7 @@ test/
   README.md              this file
   support/vela.ts        createTestVela() from @glows777/vela/testing plus the CLI slash-command dispatcher and captureConsole (tests only)
   fixtures/scenarios/    faux scenario JSON files for CLI replay
-  unit/                 workspace architecture, release and eval-layout contracts
+  unit/                 workspace architecture, release and eval-layout contracts, desktop browser-safe helpers
   e2e/                   end-to-end flows: real assembly + faux model
   live/                  real-model smoke tests, skipped by default
 packages/core/src/testing/  core faux, recording, replay and demo support (`@glows777/vela-core/testing`)

@@ -1,0 +1,42 @@
+.user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 80%;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-panel);
+  background: var(--vela-menu-hover);
+  color: var(--vela-ink);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.turn {
+  margin: 0;
+}
+
+.text {
+  margin: 0;
+  color: var(--vela-ink);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.system {
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-sm);
+}
