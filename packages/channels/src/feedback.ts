@@ -1,6 +1,5 @@
 import type {
   AgentErrorKind,
-  ModelMessage,
   VelaLogger,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
@@ -10,6 +9,7 @@ import {
 } from '@glows777/vela-core/extension-api'
 import { materializeAttachments } from './attachments.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
+import { lastAssistantText } from './feedback-message.ts'
 import { modelInputText } from './input.ts'
 import { errorMessage } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
@@ -268,7 +268,13 @@ export class RunFeedback {
     msg: IncomingMessage,
     admitted: Promise<void> = Promise.resolve(),
   ): () => Promise<boolean> {
-    if (msg.passive || msg.routine || msg.externalEvent || msg.handoff)
+    if (
+      msg.passive ||
+      msg.routine ||
+      msg.externalEvent ||
+      msg.handoff ||
+      msg.backgroundJobToken
+    )
       return async () => false
     const channel = this.options.channel(channelName)
     const run = this.runs.get(id)
@@ -321,6 +327,7 @@ export class RunFeedback {
       run &&
       !run.trigger.passive &&
       !run.trigger.handoff &&
+      !run.trigger.backgroundJobToken &&
       this.runIsLive(run) &&
       channel
     ) {
@@ -490,7 +497,10 @@ export class RunFeedback {
           msg,
           (error, phase) =>
             this.presentationError(channel.name, msg, error, phase),
-          acknowledge && !msg.externalEvent && !msg.handoff,
+          acknowledge &&
+            !msg.externalEvent &&
+            !msg.handoff &&
+            !msg.backgroundJobToken,
         ),
       ]
       this.acknowledgements.set(msg, inputs)
@@ -769,14 +779,16 @@ export class RunFeedback {
       await this.options.directory.forget(
         id,
         (batch ?? [msg, ...run.inputs.map((item) => item.message)]).flatMap(
-          (item) => (item.replyToId ? [item.replyToId] : []),
+          (item) =>
+            item.replyToId && !item.backgroundJobToken ? [item.replyToId] : [],
         ),
       )
       await this.options.directory.finish(
         id,
         outcome === 'stopped' ? 'stopped' : 'done',
         // A note's run leaves a person's pending decision open, even when silent.
-        outcome === 'done' && (!!answer || !!msg.handoff),
+        outcome === 'done' &&
+          (!!answer || !!msg.handoff || !!msg.backgroundJobToken),
       )
       await this.options.finished(id, msg, outcome, answer)
     }
@@ -784,16 +796,5 @@ export class RunFeedback {
   }
 }
 
-function isAbort(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError'
-}
-
-/** Text of the last assistant message (this turn's reply). */
-function lastAssistantText(messages: ModelMessage[]): string {
-  const last = messages[messages.length - 1]
-  if (last?.role !== 'assistant') return ''
-  if (typeof last.content === 'string') return last.content
-  return last.content
-    .map((part) => (part.type === 'text' ? part.text : ''))
-    .join('')
-}
+const isAbort = (error: unknown): boolean =>
+  error instanceof Error && error.name === 'AbortError'

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { ExecutionEnv } from '../../execution/types.ts'
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
@@ -43,6 +44,8 @@ export class OutputTail {
 }
 
 interface Job {
+  token: string
+  stoppedNotice?: Promise<void>
   id: string
   command: string
   controller: AbortController
@@ -70,7 +73,7 @@ const commandHead = (command: string) => {
   return head.length > COMMAND_HEAD ? `${head.slice(0, COMMAND_HEAD)}…` : head
 }
 
-/** The jobs of one session; they die with it, and nothing is persisted. */
+/** Jobs die with their session; an optional host tracks the result still owed after a restart. */
 export class BackgroundJobs {
   private readonly jobs = new Map<string, Job>()
   private sequence = 0
@@ -81,11 +84,17 @@ export class BackgroundJobs {
     private readonly logger: VelaLogger,
   ) {}
 
-  start(command: string, env: ExecutionEnv): { id: string } {
+  async start(
+    command: string,
+    env: ExecutionEnv,
+    signal?: AbortSignal,
+  ): Promise<{ id: string }> {
+    signal?.throwIfAborted()
     const id = `bg-${++this.sequence}`
     const output = new OutputTail()
     const controller = new AbortController()
     const job: Job = {
+      token: randomUUID(),
       id,
       command,
       controller,
@@ -96,38 +105,72 @@ export class BackgroundJobs {
     this.jobs.set(id, job)
     const shell = env.id === 'node:local' ? this.shellPath() : undefined
     const execution = shell ? [shell, '-lc', command] : command
-    job.finished = Promise.resolve().then(async () => {
-      try {
-        const result = await env.exec(
-          execution,
-          { onOutput: (chunk) => output.append(chunk) },
-          controller.signal,
-        )
-        job.state = 'exited'
-        if (job.silent) return
-        if (!result.ok) {
-          this.deliver(
-            `Background command ${id} could not start or run: ${result.error.message}.`,
-            job,
-          )
-          return
-        }
-        job.exitCode = result.value.exitCode
-        const state = job.stopped
-          ? 'was stopped'
-          : `finished with exit code ${job.exitCode}`
-        this.deliver(`Background command ${id} ${state}.`, job)
-      } catch (error) {
-        job.state = 'exited'
-        if (!job.silent)
-          this.deliver(
-            `Background command ${id} could not start or run: ${errorMessage(error)}.`,
-            job,
-          )
-      }
+    // Stop/close can find the job while its start record is being saved. Only the
+    // admission phase follows the tool signal; a running job has its own lifetime.
+    const abort = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', abort, { once: true })
+    const prepared = Promise.resolve().then(async () => {
+      await this.session.host?.background?.({
+        type: 'started',
+        token: job.token,
+        id,
+        commandHead: commandHead(command),
+      })
+      controller.signal.throwIfAborted()
     })
+    job.finished = prepared.then(
+      async () => {
+        try {
+          controller.signal.throwIfAborted()
+          const result = await env.exec(
+            execution,
+            { onOutput: (chunk) => output.append(chunk) },
+            controller.signal,
+          )
+          job.state = 'exited'
+          if (job.silent) return
+          if (!result.ok) {
+            this.deliver(
+              `Background command ${id} could not start or run: ${result.error.message}.`,
+              job,
+            )
+            return
+          }
+          job.exitCode = result.value.exitCode
+          const state = job.stopped
+            ? 'was stopped'
+            : `finished with exit code ${job.exitCode}`
+          this.deliver(`Background command ${id} ${state}.`, job)
+        } catch (error) {
+          job.state = 'exited'
+          if (!job.silent)
+            this.deliver(
+              `Background command ${id} could not start or run: ${errorMessage(error)}.`,
+              job,
+            )
+        }
+      },
+      () => {
+        job.state = 'exited'
+      },
+    )
     this.session.trackWork(job.finished)
-    return { id }
+    try {
+      await prepared
+      controller.signal.throwIfAborted()
+      return { id }
+    } catch (error) {
+      // A failed/cancelled admission never launches a process or claims it started.
+      await this.notifyStopped(job).catch((cleanupError) =>
+        this.logger.error(
+          `[background] Could not clear ${id}: ${errorMessage(cleanupError)}`,
+        ),
+      )
+      if (!job.stopped) this.jobs.delete(id)
+      throw error
+    } finally {
+      signal?.removeEventListener('abort', abort)
+    }
   }
 
   snapshot(id: string): JobSnapshot {
@@ -147,11 +190,12 @@ export class BackgroundJobs {
   /** End one command; the caller already receives its tail from the tool result, so this never delivers. */
   async stop(id: string): Promise<JobSnapshot> {
     const job = this.job(id)
+    job.silent = true
     if (job.state === 'running') {
       job.stopped = true
-      job.silent = true
       await this.terminate(job)
     }
+    await this.notifyStopped(job)
     const snapshot = this.snapshot(id)
     // The result has been handed to the caller; the tail and its memory go with the job.
     this.jobs.delete(id)
@@ -163,15 +207,27 @@ export class BackgroundJobs {
    * run that would answer is gone, and a close must not start a new one.
    */
   async stopAll(): Promise<void> {
-    const running = [...this.jobs.values()].filter(
-      (job) => job.state === 'running',
-    )
+    const running = [...this.jobs.values()]
     for (const job of running) {
       job.stopped = true
       job.silent = true
     }
-    await Promise.all(running.map((job) => this.terminate(job)))
+    // Admit the clear at the Stop boundary, before termination awaits: the host's
+    // serialized writes then keep jobs started by a later run. This also clears
+    // results already queued outside this in-memory map. A synchronous host error
+    // must not prevent termination of the captured jobs.
+    const cleared = (async () => {
+      await this.session.host?.background?.({ type: 'stopped' })
+    })()
+    await Promise.all([cleared, ...running.map((job) => this.terminate(job))])
     for (const job of running) this.jobs.delete(job.id)
+  }
+
+  private notifyStopped(job: Job): Promise<void> {
+    job.stoppedNotice ??= Promise.resolve().then(() =>
+      this.session.host?.background?.({ type: 'stopped', token: job.token }),
+    )
+    return job.stoppedNotice
   }
 
   private job(id: string): Job {
@@ -198,7 +254,17 @@ export class BackgroundJobs {
     const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}`
     const host = this.session.host
     const send = host
-      ? Promise.resolve(host.deliver(message))
+      ? Promise.resolve().then(() =>
+          job.silent
+            ? undefined
+            : host.background
+              ? host.background({
+                  type: 'result',
+                  token: job.token,
+                  text: message,
+                })
+              : host.deliver(message),
+        )
       : this.session.sendMessage(
           { customType: 'background', content: message, display: false },
           { triggerTurn: true, deliverAs: 'followUp' },

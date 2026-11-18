@@ -41,6 +41,8 @@ export interface IncomingMessage {
   routine?: { id: string; scheduledAt: string }
   /** Queued external data, never a human command or a steer. */
   externalEvent?: ChannelEvent
+  /** @internal Background job notification identity; not an incoming service message. */
+  backgroundJobToken?: string
   /**
    * A note from another Vela session in this group, never a human command or a steer. `depth` counts hops since the
    * last human input; `id` lets recovery tell whether the note reached the session before a crash.

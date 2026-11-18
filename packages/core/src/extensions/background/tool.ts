@@ -56,7 +56,11 @@ export function createBackgroundTools(
       execute: async ({ command }: { command: string }, context) => {
         if (!context?.execution)
           throw new Error('Execution environment unavailable')
-        const { id } = jobs(context).start(command, context.execution)
+        const { id } = await jobs(context).start(
+          command,
+          context.execution,
+          context.signal,
+        )
         return new ToolExecutionResult(
           { id },
           `Started ${id}. Its output will arrive when it exits.`,

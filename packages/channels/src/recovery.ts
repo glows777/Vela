@@ -32,6 +32,7 @@ export function storedMessage(record: ChannelRecord): IncomingMessage {
     passive: record.passive,
     handoff: record.handoff,
     routine: record.routine,
+    backgroundJobToken: record.backgroundJobToken,
     ...(record.rootId && record.threadId
       ? { topic: { rootId: record.rootId, threadId: record.threadId } }
       : {}),
@@ -54,7 +55,7 @@ export class ChannelRecovery {
   hasInput(
     session: VelaSession,
     id: string,
-    field: 'messageId' | 'handoffId' = 'messageId',
+    field: 'messageId' | 'handoffId' | 'backgroundJobToken' = 'messageId',
   ): boolean {
     return session
       .getEntries()
@@ -82,27 +83,44 @@ export class ChannelRecovery {
         return
       const batch = this.inputs.get(session)?.shift()
       const recorded = batch?.filter(
-        (input) => input.replyToId || input.routine || input.handoff,
+        (input) =>
+          input.replyToId ||
+          input.routine ||
+          input.handoff ||
+          input.backgroundJobToken,
       )
       if (!recorded?.length) return
       for (const input of recorded)
         session.appendEntry(INPUT_MARKER, {
           // A note's reply target is a topic root, not a message of its own.
           messageId:
-            input.routine || input.handoff ? undefined : input.replyToId,
+            input.routine || input.handoff || input.backgroundJobToken
+              ? undefined
+              : input.replyToId,
           handoffId: input.handoff?.id,
+          backgroundJobToken: input.backgroundJobToken,
           passive: input.passive,
           routine: input.routine,
           timestamp: Date.now(),
         })
       const ids = recorded.flatMap((input) =>
-        !input.routine && !input.handoff && input.replyToId
+        !input.routine &&
+        !input.handoff &&
+        !input.backgroundJobToken &&
+        input.replyToId
           ? [input.replyToId]
           : [],
       )
       const save = session.save().then(async () => {
-        for (const input of recorded)
+        for (const input of recorded) {
           if (input.routine) await this.routineSaved(input)
+          if (input.backgroundJobToken)
+            await this.directory.forgetBackground(
+              key,
+              input.backgroundJobToken,
+              session.id,
+            )
+        }
         if (ids.length) await this.directory.forget(key, ids)
       })
       // Keep the failure for the run's awaited drain; do not create an unhandled rejection.
@@ -237,6 +255,15 @@ export class ChannelRecovery {
         `[${record.channel}] Dropped a hand-off note interrupted before it was saved`,
       )
       await this.directory.finish(record.key, 'done', true)
+      return
+    }
+    if (
+      record.state === 'running' &&
+      record.backgroundJobToken &&
+      !this.hasInput(session, record.backgroundJobToken, 'backgroundJobToken')
+    ) {
+      // No notification input reached disk. Let the outstanding job rebuild it, never resend the prior answer.
+      await this.directory.finish(record.key, 'done')
       return
     }
     if (missingTrigger || record.passive) {

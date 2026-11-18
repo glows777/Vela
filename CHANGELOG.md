@@ -32,6 +32,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **Hosted background jobs no longer disappear silently after a service restart.** The existing channel directory records jobs before execution, and startup queues one unknown-result input for each lost job without a new human message. A saved normal-result input or explicit Stop/close clears the record; SIGTERM shutdown preserves it. Durable input markers reconcile interrupted notification persistence without claiming exactly-once remote replies (part of #411).
+
 - **Normal follow-up after a mid-tool restart repairs missing results before the new message.** SDK `resume()` then `prompt()`, and CLI interactive/print/JSON/RPC follow-ups, now use the existing result reconciliation instead of failing with `AI_MissingToolResultsError`. Finished results remain intact and unsafe effects are not replayed. Histories already damaged by an older failed follow-up stop with an explicit diagnostic before another repair or execution, rather than silently dropping that message ([#455](https://github.com/glows777/Vela/issues/455)).
 
 - **The prompt's intro paragraph no longer claims tools a session may not have.** It said the agent works by "reading, searching and editing files, running commands" even when the session was narrowed to `read_file` (the SDK's `tools`, or a chat's tool list), while `<tools>` and `<rules>` were already accurate. The intro now says only that the agent works through the tools of this session, so a session without `bash`, `write_file` or `edit_file` is not told it can edit files or run commands, and a normal CLI/SDK session still describes those tools in `<tools>` ([#406](https://github.com/glows777/Vela/issues/406)).

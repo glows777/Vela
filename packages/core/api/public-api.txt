@@ -489,7 +489,7 @@
     autoCompaction?: boolean | undefined
     channel?: string | undefined
     cwd?: string | undefined
-    host?: { deliver(text: string): void | Promise<void>; } | undefined
+    host?: { deliver(text: string): void | Promise<void>; background?(event: { type: "started"; token: string; id: string; commandHead: string; } | { type: "result"; token: string; text: string; } | { type: "stopped"; token?: string; }): void | Promise<void>; } | undefined
     location?: ExecutionLocation | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     scope?: SessionScope | undefined
@@ -1206,7 +1206,7 @@
     autoCompaction?: boolean | undefined
     channel?: string | undefined
     cwd?: string | undefined
-    host?: { deliver(text: string): void | Promise<void>; } | undefined
+    host?: { deliver(text: string): void | Promise<void>; background?(event: { type: "started"; token: string; id: string; commandHead: string; } | { type: "result"; token: string; text: string; } | { type: "stopped"; token?: string; }): void | Promise<void>; } | undefined
     location?: ExecutionLocation | undefined
     model?: string | (string & {}) | LanguageModelV4 | LanguageModelV3 | LanguageModelV2 | undefined
     scope?: SessionScope | undefined
