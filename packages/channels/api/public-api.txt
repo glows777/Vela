@@ -209,7 +209,7 @@
     channelId: string
     chatKind?: "group" | "direct" | undefined
     externalEvent?: ChannelEvent | undefined
-    files?: { id: string; name: string; data: Uint8Array; }[] | undefined
+    files?: { name: string; hostPath: string; }[] | undefined
     handoff?: { id: string; from: string; depth: number; } | undefined
     images?: ImageContent[] | undefined
     isNewTopic?: boolean | undefined

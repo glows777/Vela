@@ -481,6 +481,9 @@ test('forwarded attachments are prepared from the original service message, not 
       !req.tools.includes('channel_start_topic') &&
       req.lastUserText.includes('notes.txt'),
   )?.lastUserText
+  const path = input?.match(/saved at ([^\]\n]+)/)?.[1]
+  expect(path).toBeDefined()
+  expect(readFileSync(path!, 'utf8')).toBe('cobalt notes')
   expect(input).toContain('Bob: [file: notes.txt')
 })
 

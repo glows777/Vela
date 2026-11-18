@@ -1,13 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  rm,
-} from 'node:fs/promises'
+import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { FileTooLarge, MAX_ATTACHMENT_BYTES } from './attachments.ts'
 import { safeName } from './messages.ts'
@@ -18,7 +10,7 @@ export async function downloadFile(
   transport: LarkTransport | undefined,
   dataDir: string,
   storageDir: string,
-): Promise<{ id: string; name: string; data: Uint8Array }> {
+): Promise<{ name: string; hostPath: string }> {
   const content = JSON.parse(message.content) as {
     file_key: string
     file_name?: string
@@ -41,22 +33,12 @@ export async function downloadFile(
   if ((await realpath(directory)) !== directory)
     throw new Error('File directory must not contain symlinks')
   const path = join(directory, `${messageId}-${name}`)
-  const stage = async () => {
-    try {
-      return {
-        id: message.message_id!,
-        name,
-        data: new Uint8Array(await readFile(path)),
-      }
-    } finally {
-      await rm(path, { force: true })
-    }
-  }
+  const attachment = { name, hostPath: path }
   try {
     const existing = await lstat(path)
     if (!existing.isFile())
       throw new Error('Attachment destination is not a regular file')
-    return await stage()
+    return attachment
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
@@ -83,5 +65,5 @@ export async function downloadFile(
     await file.close()
     await rm(temporary, { force: true })
   }
-  return await stage()
+  return attachment
 }

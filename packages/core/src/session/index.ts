@@ -1,5 +1,5 @@
 import { rmSync } from 'node:fs'
-import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { CustomMessageInfo } from '../agent/events.ts'
@@ -651,30 +651,6 @@ async function inheritToolResultPaths(
       await copyFile(file, join(childDir, basename(file)))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-  }
-  // Only referenced, regular attachment files are inherited into the new session root.
-  const directories = await readdir(parent.dir, { withFileTypes: true }).catch(
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return []
-      throw error
-    },
-  )
-  for (const directory of directories) {
-    if (
-      !directory.isDirectory() ||
-      !/^attachments-[\da-f]{24}$/.test(directory.name)
-    )
-      continue
-    const source = join(parent.dir, directory.name)
-    for (const entry of await readdir(source, { withFileTypes: true })) {
-      if (!entry.isFile()) continue
-      const file = join(source, entry.name)
-      const escaped = JSON.stringify(file).slice(1, -1)
-      if (!blob.includes(file) && !blob.includes(escaped)) continue
-      const destination = join(childDir, directory.name)
-      await mkdir(destination, { recursive: true, mode: 0o700 })
-      await copyFile(file, join(destination, entry.name))
     }
   }
   const pairs: [string, string][] = [

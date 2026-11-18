@@ -237,7 +237,7 @@ Custom `LarkTransport` implementations must provide `getBotId`, `getSenderName`,
 
 `startTopic(messageId, title)` posts the title as the first visible message and returns `{ messageId, createTime, rootId, threadId }` from the successful threaded reply. `forward(messageId, threadId)` returns `{ messageId, createTime }` from the successful forward. Missing required receipt fields and platform errors must reject; do not pretend an unthreaded send created a topic.
 
-A channel can include `files` on an incoming message. Each entry carries a source message ID (`id`), a filename (`name`) and bytes (`data`). The gateway replaces the matching `[file: <name>]` marker with the session environment path after writing the file. Normal delivery and steering use the same operation.
+A channel can include `files` on an incoming message. Each entry carries `{ name, hostPath }` for a completed private download and has a matching `[file: <name>]` marker in that message’s text. After selecting a local session, the gateway inserts the host path into that marker. Normal delivery and steering use the same rule. Non-local delivery fails before exposing any host path.
 
 For attachments, implement `getResource(messageId, key, type)` returning a Node readable stream, where `type` is `image` or `file`. The default transport calls `im.messageResource.get` and uses `getReadableStream()`.
 

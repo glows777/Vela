@@ -356,7 +356,7 @@ const LARK = `
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
 import {mkdir,symlink,readFile,realpath,writeFile,rm} from 'node:fs/promises'
-import {resolve,join,sep} from 'node:path'
+import {resolve,join} from 'node:path'
 import {lark,type LarkOptions,type LarkTransport,type LarkMessageEvent} from '@glows777/vela-lark'
 // @ts-expect-error breaking rename removes old public factory
 type LegacyFactory = typeof import('@glows777/vela-lark')['feishu']
@@ -385,7 +385,7 @@ const start = message.lastIndexOf(prefix)
 assert(start >= 0)
 const path = message.slice(start + prefix.length, message.indexOf(']', start))
 const canonical = await realpath(path)
-assert(canonical.startsWith(join(await realpath(actual), 'sessions', 'lark-direct', 'tool-results') + sep))
+assert.equal(canonical, join(await realpath(actual), 'channels', 'lark-direct', 'files', 'file-notes.txt'))
 assert.equal(await readFile(path, 'utf8'), 'canonical packed attachment')
 }finally{await vela.dispose()}
 assert.equal(await readFile(join(actual,'sessions',archiveId+'.jsonl'),'utf8'),archive);assert.equal(await readFile(join(actual,'sessions',archiveId,'output.txt'),'utf8'),'retained old output');assert(!vela.sessions().some(session=>session.id===archiveId));assert(!JSON.stringify(model.calls.map(call=>call.prompt)).includes('ORCHID-PRIVATE'))

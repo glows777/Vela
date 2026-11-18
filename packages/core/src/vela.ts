@@ -445,11 +445,10 @@ export function createVela(options: VelaOptions = {}): Vela {
         const workspaceNames = new Set(
           workspaceSkills.map((skill) => skill.name),
         )
+        const hostSkills = env.id === 'node:local' ? skillLoader.list() : []
         const skills = [
           ...workspaceSkills,
-          ...skillLoader
-            .list()
-            .filter((skill) => !workspaceNames.has(skill.name)),
+          ...hostSkills.filter((skill) => !workspaceNames.has(skill.name)),
         ]
         const workspaceTemplates = (
           resourceSplit

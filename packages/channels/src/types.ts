@@ -25,8 +25,8 @@ export interface IncomingMessage {
   senderName: string
   text: string
   images?: ImageContent[]
-  /** File content supplied by the channel for transfer into the session environment. */
-  files?: Array<{ id: string; name: string; data: Uint8Array }>
+  /** Private files staged by the channel. Each name has a matching [file: <name>] marker in text. */
+  files?: Array<{ name: string; hostPath: string }>
   /** Reply to this service message instead of starting a new message (for group conversations). */
   replyToId?: string
   /** The root message identifies a topic independently of its platform container. */

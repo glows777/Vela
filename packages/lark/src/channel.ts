@@ -202,7 +202,7 @@ export class LarkChannel implements ChannelDefinition {
   >()
   private readonly files = new WeakMap<
     IncomingMessage,
-    Promise<{ id: string; name: string; data: Uint8Array }>
+    ReturnType<typeof downloadFile>
   >()
   // Custom transports without appId cannot identify own-app history items.
   private readonly lastReplies = new Map<string, LarkSentMessage>()

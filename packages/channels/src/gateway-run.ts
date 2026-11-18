@@ -224,7 +224,6 @@ export class GatewayRun {
     if (this.stopped()) return 'failed'
     const answered = evaluated[evaluated.length - 1]!
     const images = evaluated.flatMap((message) => message.images ?? [])
-    const files = evaluated.flatMap((message) => message.files ?? [])
     // The merged run answers the most recent input; earlier ones are its context.
     let merged =
       evaluated.length > 1
@@ -232,7 +231,6 @@ export class GatewayRun {
             ...answered,
             text: evaluated.map((message) => message.text).join('\n\n'),
             ...(images.length ? { images } : {}),
-            ...(files.length ? { files } : {}),
           }
         : answered
     const session = topicSession ?? this.sessions.open(id, channelName, merged)
@@ -296,7 +294,16 @@ export class GatewayRun {
       return 'failed'
     }
 
-    merged = await materializeAttachments(session, merged)
+    if (evaluated.some((message) => message.files?.length)) {
+      const resolved = await Promise.all(
+        evaluated.map((message) => materializeAttachments(session, message)),
+      )
+      merged = {
+        ...merged,
+        text: resolved.map((message) => message.text).join('\n\n'),
+        files: undefined,
+      }
+    }
     await this.handoff.beforeRun(id, session, merged)
     if (processing.stopped) return stopped(session)
     processing.preparing = false
