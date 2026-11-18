@@ -33,29 +33,3 @@ select {
   color: var(--vela-on-mint);
   background: var(--vela-mint);
 }
-.shell {
-  position: relative;
-  min-height: 100dvh;
-  display: grid;
-  place-content: center;
-  padding: var(--space-8);
-}
-.brand {
-  display: grid;
-  justify-items: center;
-  gap: var(--space-4);
-}
-.brand img {
-  border-radius: var(--radius-control);
-}
-.wordmark {
-  margin: 0;
-  padding-left: 0.16em;
-  color: var(--vela-teal);
-  font-family: var(--vela-family-display);
-  font-size: 64px;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  line-height: 1;
-  text-shadow: 0.04em 0.04em var(--vela-wordmark-offset);
-}
