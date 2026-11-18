@@ -22,7 +22,6 @@ export type {
   AuthPrompt,
   Credential,
   CredentialStore,
-  FetchFunction,
   LoginOptions,
   OAuthCredential,
   OAuthLogin,
@@ -67,22 +66,10 @@ export {
   type BackgroundOptions,
   background,
 } from './extensions/background/index.ts'
-export { configString, configStrings } from './extensions/config.ts'
-export {
-  customMessageIfChanged,
-  customMessageMissing,
-  lastCustomMessage,
-} from './extensions/custom-message.ts'
 export { memory } from './extensions/memory/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
 export { todo } from './extensions/todo/index.ts'
 export type {
-  AfterProviderResponseEvent,
-  BeforeAgentStartEvent,
-  BeforeAgentStartEventResult,
-  BeforeProviderRequestEvent,
-  ContextEvent,
-  ContextEventResult,
   CustomMessage,
   ExtensionAPI,
   ExtensionCommand,
@@ -91,24 +78,9 @@ export type {
   ExtensionEvents,
   ExtensionHandler,
   ExtensionUI,
-  InputEvent,
-  InputEventResult,
   InputSource,
-  ProviderStreamEvent,
   SendMessageOptions,
-  SessionBeforeForkEvent,
-  SessionBeforeForkEventResult,
-  SessionBeforeTreeEvent,
-  SessionBeforeTreeEventResult,
-  SessionShutdownEvent,
-  SessionStartEvent,
-  SessionTreeEvent,
   SessionUI,
-  ToolCallEvent,
-  ToolCallEventResult,
-  ToolResultEvent,
-  ToolResultEventResult,
-  TreePreparation,
   VelaExtension,
 } from './extensions/types.ts'
 export { type WebOptions, web, webConfig } from './extensions/web/index.ts'
@@ -158,7 +130,6 @@ export {
   type SessionArchivedEntry,
   type SessionChannelEntry,
   type SessionEntry,
-  type SessionEntryBase,
   type SessionFileEntry,
   type SessionHeader,
   type SessionInfoEntry,
@@ -204,7 +175,6 @@ export type {
   ModelPricing,
   StepRecord,
   StepUsage,
-  TokenStatus,
   UsageTotals,
 } from './usage/tracker.ts'
 export {

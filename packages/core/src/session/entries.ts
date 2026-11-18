@@ -32,7 +32,7 @@ export interface SessionHeader {
  * Fields every entry has (like pi): entries form a tree through `parentId`. A new entry's parent is the
  * session's current leaf, so moving the leaf to an earlier entry and appending starts a new branch.
  */
-export interface SessionEntryBase {
+interface SessionEntryBase {
   type: string
   /** 8 hex characters, unique within the session */
   id: string
