@@ -208,9 +208,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const homeDir = resolve(options.homeDir ?? homedir())
   const skillDirs = [
     ...new Set([
-      ...(trusted
-        ? [join(projectDir, 'skills'), ...ancestorAgentsSkillDirs(cwd)]
-        : []),
+      ...(trusted ? [join(projectDir, 'skills')] : []),
       ...(trusted || projectDir === agentDir ? [join(cwd, '.skills')] : []),
       ...(settings.skills ?? []),
       join(agentDir, 'skills'),

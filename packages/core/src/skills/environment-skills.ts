@@ -105,6 +105,16 @@ export async function loadEnvironmentSkills(
     }
   }
   await scan(await join(cwd, '.vela', 'skills'), true)
+  let current = cwd
+  while (true) {
+    await scan(await join(current, '.agents', 'skills'), true)
+    const git = await env.fileInfo(await join(current, '.git'), signal)
+    if (git.ok) break
+    if (git.error.code !== 'not_found') throw git.error
+    const parent = await join(current, '..')
+    if (parent === current) break
+    current = parent
+  }
   await scan(await join(cwd, '.skills'), true)
   return [...found.values()]
 }
