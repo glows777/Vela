@@ -109,6 +109,7 @@ export const readFileParamSchema = z.object({
 })
 export const createReadFileTool = (cwd?: string): ToolDefinition => ({
   name: 'read_file',
+  replay: 'safe',
   description: `Reads a text file, a saved tool result file, or a JPEG, PNG, GIF, WebP or BMP image detected by its contents. Images are returned whole as image content; offset, limit and column are ignored for images and only paginate text. A text page is at most ${READ_MAX_LINES} lines or ${READ_MAX_BYTES / 1024}KB, whichever comes first. When more content remains, appends a footer with the range shown and the offset/column for the next page. At EOF, returns only the file content with no added footer.`,
   inputSchema: readFileParamSchema,
   annotations: { readOnlyHint: true },
@@ -274,6 +275,7 @@ const listDirectoryToolParamSchema = z.object({
 })
 export const createListDirectoryTool = (cwd?: string): ToolDefinition => ({
   name: 'list_directory',
+  replay: 'safe',
   description: 'Lists the files and subdirectories in a directory.',
   inputSchema: listDirectoryToolParamSchema,
   annotations: { readOnlyHint: true },

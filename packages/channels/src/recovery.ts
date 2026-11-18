@@ -13,7 +13,7 @@ import { errorMessage } from './log.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
 const INTERRUPTION_NOTICE =
-  'The previous run was interrupted. Continuing from the last saved input.'
+  'The previous run was interrupted. Continuing from the last saved step.'
 const RESEND_NOTICE =
   'This message arrived just before the restart and was not saved. Please send it again.'
 const INPUT_MARKER = 'channel.input'
@@ -278,9 +278,6 @@ export class ChannelRecovery {
             (part): part is ImageContent =>
               part.type === 'image' && 'data' in part,
           )
-    const navigation = await session.navigateTree(user.id, { summarize: false })
-    if (navigation.cancelled)
-      throw new Error('Recovery was cancelled by the session tree hook')
     await channel.send({
       ...msg,
       recipientId: msg.senderId,

@@ -42,6 +42,7 @@ export function loadedToolNames(result: string): string[] {
 export const registerToolSearchTool = (registry: ToolRegistry) => {
   const toolSearchTool: ToolDefinition = {
     name: 'tool_search',
+    replay: 'safe',
     // Like pi, the description does not list the tools, so it stays the same when tools register
     description:
       'Searches tools that are not loaded yet (such as MCP server tools) by keyword and loads the best matches; they are available from your next call. Exact tool names separated by commas load exactly those tools.',

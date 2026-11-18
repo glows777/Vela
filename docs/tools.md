@@ -164,7 +164,7 @@ Each tool has a result limit in characters:
 
 When a result is longer than its limit, Vela saves the full result through the selected execution environment (the default local adapter uses `sessions/<id>/tool-results/`) and gives the model a preview instead: the head up to the limit, followed by one line giving the full-output path and explaining that `read_file` with `offset` reads the rest. Bash retains its tail preview and adds a path only when truncated. Complete bash output is plain text. If shell output storage fails during execution, the adapter stops the command. The reported tail can include partial effects. If the terminal history write fails after a successful spill, the error names the actual file. The earlier call record cannot recover a path allocated later.
 
-Every call and result is also recorded in a tool history log (JSONL) in the session's directory. The compaction summary keeps one line with the earlier-output snapshot location.
+Every call and result is also recorded in a tool history log (JSONL) in the session's directory. A `tool_response` record preserves the final normalized, post-hook model output separately from the native `tool_result`, so crash recovery can restore the exact response without rewriting native evidence. The compaction summary keeps one line with the earlier-output snapshot location.
 
 ### Microcompaction
 

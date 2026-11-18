@@ -445,3 +445,12 @@ If `gh` is unavailable or not logged in, local settings are still saved and setu
 For supported events, signatures, allowlists, subscriptions and delivery limits, see [GitHub webhooks](channels-reference.md#github-webhooks).
 
 When an agent run fails, the `Task failed:` reply keeps the original error text and appends the shared [failure-kind hint](sdk.md#failed-agent-runs). This does not change retry policy, passive-message suppression or cancellation replies.
+
+
+### Interrupted-turn recovery
+
+After a restart, an admitted, saved running turn continues on its existing branch. Completed steps are not rewound to the original input. Each missing tool result is reconciled and saved before asking the model again: a journaled final model response is restored once; an unsafe or unidentifiable interrupted call reports that it may have partially run. Native results saved before a post-hook response is finalized remain evidence, but do not justify fabricating success or rerunning the tool.
+
+Only tools whose recorded and current `replay` policy are both `safe` may replay, in the same execution location with the same input. Built-in reads, listing and search opt in; bash, writes, edits, outbound messages and extensions default to unsafe. The fifth consecutive interruption ends automatic replay of that logical tool call. This prevents executor-level repeats, not a model issuing a new similar call; the unknown-result message instructs it to verify effects first. Recovery changes conversation history, not the system prompt. An unfinished legacy journal call without any saved assistant anchor cannot be reliably assigned to a branch; recovery stops without changing that evidence or calling the model, rather than guessing its outcome.
+
+An unsaved incoming message still requires resubmission. A final answer already saved before failed delivery uses the existing delivery recovery path, not a new model request. This is not exactly-once external delivery. Graceful shutdown, Lark send UUIDs, and startup discovery of lost idle background jobs are separate follow-ups under #411.

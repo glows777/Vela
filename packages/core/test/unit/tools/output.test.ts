@@ -153,6 +153,7 @@ test('small results stay inline and invalid read cursors fail clearly', async ()
   expect(records.map((record) => record.type)).toEqual([
     'tool_call',
     'tool_result',
+    'tool_response',
   ])
   expect(records[1].output).toBe('small')
   const path = join(dir, 'short.txt')

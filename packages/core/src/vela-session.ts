@@ -1,5 +1,4 @@
 import { join } from 'node:path'
-import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
 import type {
   CustomMessage,
@@ -16,20 +15,14 @@ import {
   type RequestSnapshot,
 } from './context/request.ts'
 import { abortable, localCwd } from './execution/location.ts'
-import type { ExecutionEnv } from './execution/types.ts'
 import type {
   BeforeAgentStartResult,
-  ExtensionEventName,
   InputSource,
-  ProviderStreamEvent,
-  SessionBeforeTreeEventResult,
-  SessionTreeEvent,
   TreePreparation,
 } from './extensions/events.ts'
 import { withProviderHooks } from './extensions/provider-hooks.ts'
 import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
 import type { VelaLimits } from './limits.ts'
-import type { VelaLogger } from './logger.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
 import {
   clampThinkingLevel,
@@ -44,6 +37,7 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
+import type { SessionDeps as SessionDependencies } from './session/deps.ts'
 import {
   assertCustomType,
   type BranchSummaryEntry,
@@ -68,13 +62,13 @@ import {
   type NavigateTreeOptions,
   type QueueMode,
 } from './session/options.ts'
+import { reconcileInterruptedTools } from './session/recovery.ts'
 import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
 import { newSessionId } from './session/session-id.ts'
 import {
   type SessionPersistence,
-  type SessionStorage,
   sessionArtifactsUseDataDir,
 } from './session/storage.ts'
 import { UserBash } from './session/user-bash.ts'
@@ -94,105 +88,8 @@ export interface ForkResult {
   selectedText?: string
 }
 
-/** What the extension runtime does during the session lifecycle (provided by createVela). */
-interface SessionExtensionHooks {
-  /** All extensions have loaded */
-  ready: Promise<void>
-  sessionStart(session: VelaSession): Promise<void>
-  sessionShutdown(session: VelaSession): Promise<void>
-  beforeAgentStart(
-    session: VelaSession,
-    prompt: string,
-  ): Promise<BeforeAgentStartResult>
-  runCommand(
-    session: VelaSession,
-    text: string,
-    signal: AbortSignal,
-  ): Promise<boolean>
-  beforeTree(
-    session: VelaSession,
-    preparation: TreePreparation,
-    signal: AbortSignal,
-  ): Promise<SessionBeforeTreeEventResult>
-  tree(session: VelaSession, event: SessionTreeEvent): Promise<void>
-  /** True when an extension cancels the fork */
-  beforeFork(
-    session: VelaSession,
-    entryId: string,
-    position: 'before' | 'at',
-  ): Promise<boolean>
-  hasHandlers(event: ExtensionEventName, toolName?: string): boolean
-  /** Text after the input handlers; undefined when a handler handled it */
-  input(
-    session: VelaSession,
-    text: string,
-    source: InputSource,
-    streamingBehavior?: 'steer' | 'followUp',
-    images?: ImageContent[],
-  ): Promise<{ text: string; images?: ImageContent[] } | undefined>
-  transformContext(
-    session: VelaSession,
-    messages: ModelMessage[],
-    producer: string,
-  ): Promise<ModelMessage[]>
-  beforeProviderRequest(
-    session: VelaSession,
-    params: LanguageModelV4CallOptions,
-  ): Promise<LanguageModelV4CallOptions>
-  afterProviderResponse(
-    session: VelaSession,
-    headers: Record<string, string>,
-  ): Promise<void>
-  providerStreamEvent(session: VelaSession, event: ProviderStreamEvent): void
-}
-
 /** Shared parts createVela() hands to every session. */
-export interface SessionDeps {
-  /** Default model */
-  model: string | LanguageModel | undefined
-  /** Resolves a model by name or object (including the provider registry) for a session */
-  resolveModel: (
-    model: string | LanguageModel | undefined,
-    session: VelaSession,
-  ) => ResolvedModel
-  thinkingLevel: ThinkingLevel
-  /** Automatic compaction for new sessions */
-  autoCompaction: boolean
-  /** Opens a new session in the same Vela (fork / clone); throws if the id is already open */
-  openSession: (id: string, options: SessionOptions) => VelaSession
-  /** Explicitly given limits; the rest are derived from the model's context window */
-  limitOverrides: Partial<VelaLimits>
-  logger: VelaLogger
-  dataDir: string
-  /** Working directory, recorded in new session files; `executeBash()` runs commands here */
-  cwd?: string
-  /** Shell for `executeBash()` (settings `shellPath`); default bash on PATH, or bash.exe on Windows */
-  shellPath?: string
-  /** Where session history is stored (file / memory / custom) */
-  sessionStorage: SessionStorage
-  /** dataDir is a temp dir that dispose() deletes (no dataDir given): tool history may be gone on resume */
-  temporaryDataDir?: boolean
-  /** Vela-level tool registry; each session forks its own from it */
-  registry: ToolRegistry
-  builder: SystemPromptBuilder
-  /** Expands `/skill:<name>` and prompt templates in session input (src/prompt/templates.ts) */
-  expandInput: (
-    text: string,
-    session: VelaSession,
-    signal?: AbortSignal,
-  ) => Promise<string>
-  extensions: SessionExtensionHooks
-  /** Session events also go to Vela's subscribers */
-  forward: (event: VelaEvent, sessionId: string) => void
-  onClose: (session: VelaSession) => void
-  onSaved: (sessionId: string) => void
-  onCwdChange: (session: VelaSession) => void
-  ensureLocal: (session: VelaSession) => Promise<ExecutionEnv>
-  prepareWorkspace: (
-    session: VelaSession,
-    signal?: AbortSignal,
-  ) => Promise<SessionResources>
-}
+export type SessionDeps = SessionDependencies<VelaSession>
 
 /**
  * One conversation: its own message history, compaction state, usage, tool results and run lock.
@@ -955,6 +852,28 @@ export class VelaSession {
     return true
   }
 
+  /**
+   * Continues a restored interrupted turn on its current branch, without adding user input.
+   * Repairs missing tool results before asking the model; unsafe interrupted tools are not replayed.
+   * Rejects while another operation holds the session's run lock.
+   */
+  continueInterrupted(): Promise<void> {
+    if (this.closed)
+      return Promise.reject(new Error(`Session ${this.id} is closed`))
+    if (this.busy.locked)
+      return Promise.reject(new Error(`Session ${this.id} is already running`))
+    if (!this.messages.some((message) => message.role === 'user'))
+      return Promise.reject(new Error('No saved turn to continue'))
+    const last = this.messages.at(-1)
+    if (
+      last?.role === 'assistant' &&
+      (typeof last.content === 'string' ||
+        !last.content.some((part) => part.type === 'tool-call'))
+    )
+      return Promise.reject(new Error('No interrupted turn to continue'))
+    return this.trackRun(this.run(undefined, {}))
+  }
+
   /** Appends a message to history and the session (without calling the model). */
   append(message: ModelMessage): void {
     this.messages.push(message)
@@ -1247,7 +1166,10 @@ export class VelaSession {
       )
       return Promise.resolve()
     }
-    const run = this.run(message, options)
+    return this.trackRun(this.run(message, options))
+  }
+
+  private trackRun(run: Promise<void>): Promise<void> {
     const running = run.then(
       () => {
         if (this.running === running) this.running = undefined
@@ -1277,7 +1199,7 @@ export class VelaSession {
   private prompting = false
 
   private async run(
-    input: ModelMessage,
+    input: ModelMessage | undefined,
     options: PromptOptions,
   ): Promise<void> {
     const busy = this.busy
@@ -1297,8 +1219,45 @@ export class VelaSession {
     try {
       // steer / followUp are normally taken inside agentLoop (like pi). If the loop ends early (error / budget /
       // loop detection), remaining messages run in a new loop (steer first). After an abort, stop and keep the queue.
-      let inputs = [input]
-      while (inputs.length) {
+      if (input === undefined) {
+        await this.start(controller.signal)
+        await this.store.assertNew()
+        // Legacy execution could begin before the assistant call was saved. Without
+        // a transcript anchor it cannot be attributed to this branch: preserve evidence and stop.
+        const known = new Set(
+          this.store
+            .getEntries()
+            .flatMap((entry) =>
+              entry.type === 'message' &&
+              entry.message.role === 'assistant' &&
+              Array.isArray(entry.message.content)
+                ? entry.message.content.flatMap((part) =>
+                    part.type === 'tool-call' ? [part.toolCallId] : [],
+                  )
+                : [],
+            ),
+        )
+        const orphan = (
+          await this.registry.results.history.legacyUnfinished()
+        ).find((call) => !call.toolCallId || !known.has(call.toolCallId))
+        if (orphan)
+          throw new Error(
+            `Tool ${orphan.toolName} has an unfinished legacy attempt (${orphan.callId}) without a saved assistant step. Its effects and branch are unknown; recovery stopped without replaying it. Reconcile its effects before continuing.`,
+          )
+        await reconcileInterruptedTools({
+          messages: this.messages,
+          recover: (name, id, args, signal) =>
+            this.registry.recoverToolCall(name, id, args, signal),
+          append: (message) => this.append(message),
+          save: () => this.save(),
+          signal: controller.signal,
+        })
+        this.registry.discoveredTools = new Set(await this.store.loadedTools())
+        // Flush even when a crashed model request left no tool calls to repair.
+        await this.save()
+      }
+      let inputs = input === undefined ? [] : [input]
+      do {
         saved = false
         try {
           await this.runLoop(inputs, controller.signal)
@@ -1316,7 +1275,7 @@ export class VelaSession {
           saved = true
           inputs = next()
         }
-      }
+      } while (inputs.length)
     } finally {
       options.signal?.removeEventListener('abort', forward)
       this.messageQueue.flushPendingCustom((message) => this.append(message))
@@ -1383,6 +1342,9 @@ export class VelaSession {
       this.append(message)
       newMessages.push(message)
     }
+    // Recovery notices (including lost background jobs) are their own durable deduplication
+    // evidence. Flush them before the resumed request, even when it calls no tools.
+    if (!inputs.length) await this.save()
     await agentLoop({
       model: this.requestModel(),
       supportsImages: info.input?.includes('image') ?? true,
@@ -1417,6 +1379,7 @@ export class VelaSession {
           ),
         ),
       onMessage: (message, producer) => this.record(message, producer),
+      onCheckpoint: () => this.save(),
       injectNotice: (content) =>
         this.messageQueue.customMessage({
           customType: 'loop',

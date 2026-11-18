@@ -316,6 +316,7 @@ export class GatewayRun {
       inputs,
       input,
       evaluated.length > 1 ? evaluated : undefined,
+      recovered,
     )
   }
 

@@ -101,7 +101,7 @@ test('native MCP errors and thrown errors are recorded without parsing preview s
     isError: true,
     output: native,
   })
-  expect(records[3]).toMatchObject({
+  expect(records[4]).toMatchObject({
     status: 'failed',
     error: 'explicit failure',
   })
@@ -188,7 +188,7 @@ test('new sessions get separate histories; session resume reuses exact history a
   expect(resumed.results.historyId).not.toBe(session.results.historyId)
   await resumed.loadSaved()
   expect(resumed.results.indexPath).toBe(session.results.indexPath)
-  expect(resumed.results.history.throughSequence).toBe(2)
+  expect(resumed.results.history.throughSequence).toBe(3)
   expect((await resumed.results.history.completed('one'))?.output).toBe('saved')
 })
 

@@ -88,7 +88,7 @@ test('ordered async input rewrites reach later handlers, execution and original 
   expect(t.eventsOf('audit').map((event) => event.path)).toEqual(['final.txt'])
 })
 
-test('async tool_result transformations chain before the next model request without rewriting history', async () => {
+test('async tool_result transformations chain before the next model request without rewriting native history, preserving the final response for recovery', async () => {
   const entered = gate()
   const pending = gate()
   const t = createTestVela({
@@ -118,9 +118,18 @@ test('async tool_result transformations chain before the next model request with
   pending.release()
   await run
   expect(t.model.calls[1]!.toolResults[0]!.output).toBe('first-second')
+  const history = (
+    await Bun.file(t.session.registry.results.history.path).text()
+  )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(history.find((record) => record.type === 'tool_result').output).toBe(
+    'original text',
+  )
   expect(
-    await Bun.file(t.session.registry.results.history.path).text(),
-  ).not.toContain('first-second')
+    history.find((record) => record.type === 'tool_response').output,
+  ).toEqual({ type: 'text', value: 'first-second' })
 })
 
 test('a block without a reason retains the extension rejection message', async () => {
