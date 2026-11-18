@@ -8,7 +8,7 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import { createLocalExecutionEnv } from '@glows777/vela-core'
+import { createLocalExecutionEnv, loadConfig } from '@glows777/vela-core'
 
 test('read_file uses the selected execution environment instead of reading the host', async () => {
   const dir = tempDir()
@@ -719,6 +719,43 @@ test('workspace prompt template comes from the selected session environment', as
     expect(reads).toBeGreaterThan(0)
     expect(model.calls[0]!.lastUserText).toContain('ENV_TEMPLATE_ONLY world')
     expect(model.calls[0]!.lastUserText).not.toContain('HOST_TEMPLATE_ONLY')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('CLI config keeps user instructions host-side but reads workspace instructions from env', async () => {
+  const dir = tempDir()
+  const workspace = join(dir.path, 'workspace')
+  const agentDir = join(dir.path, 'agent')
+  mkdirSync(workspace, { recursive: true })
+  mkdirSync(agentDir, { recursive: true })
+  writeFileSync(join(agentDir, 'AGENTS.md'), 'USER_INSTRUCTIONS')
+  writeFileSync(join(workspace, 'AGENTS.md'), 'HOST_WORKSPACE_INSTRUCTIONS')
+  const config = loadConfig({ cwd: workspace, agentDir, trusted: true })
+  const model = createFauxModel({ responses: [fauxText('done')] })
+  const vela = createVela({
+    cwd: workspace,
+    model,
+    contextFiles: config.contextFiles,
+    skillDirs: config.skillDirs,
+    promptTemplateDirs: config.promptDirs,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = async (path, signal) =>
+        path === join(workspace, 'AGENTS.md')
+          ? { ok: true, value: 'ENV_WORKSPACE_INSTRUCTIONS' }
+          : read(path, signal)
+      return env
+    },
+  })
+  try {
+    await vela.session('cli-resources').prompt('hello')
+    expect(model.calls[0]!.system).toContain('USER_INSTRUCTIONS')
+    expect(model.calls[0]!.system).toContain('ENV_WORKSPACE_INSTRUCTIONS')
+    expect(model.calls[0]!.system).not.toContain('HOST_WORKSPACE_INSTRUCTIONS')
   } finally {
     await vela.dispose()
     dir.cleanup()
