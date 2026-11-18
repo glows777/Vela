@@ -11,12 +11,15 @@ import styles from './composer.module.css'
 export function Composer({
   label,
   hint,
+  running = false,
   focusSignal = 0,
   onSend,
   children,
 }: {
   label: string
   hint?: ReactNode
+  /** Draws the composer edge that marks a live run (app.md, Running). */
+  running?: boolean
   focusSignal?: number
   onSend: (text: string) => Promise<boolean>
   children?: ReactNode
@@ -43,7 +46,7 @@ export function Composer({
 
   return (
     <form
-      className={styles.composer}
+      className={[styles.composer, running ? styles.running : ''].join(' ')}
       onSubmit={(event) => {
         event.preventDefault()
         submit()

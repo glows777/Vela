@@ -2,6 +2,13 @@ import { useSyncExternalStore } from 'react'
 import type { Event, Message, Project, Session } from '../shared/bridge.ts'
 import { vela } from './vela.ts'
 
+/** The last progress a session reported while it ran. */
+type Progress = {
+  stage: 'tool' | 'retry' | 'compaction'
+  tool?: string
+  state?: 'started' | 'finished' | 'failed'
+}
+
 export interface Snapshot {
   ready: boolean
   projects: Project[]
@@ -9,6 +16,15 @@ export interface Snapshot {
   sessions: Record<string, Session>
   /** Visible history per session id, loaded on demand. */
   messages: Record<string, Message[]>
+  /** Latest progress per running session, from the Local `progress` events. */
+  progress: Record<string, Progress>
+  /**
+   * A failed run per session, shown as one card. The reply the channel writes for
+   * that same run is hidden at runtime and comes back after a restart.
+   */
+  failures: Record<string, { message: string }>
+  /** Replies that repeat a failure the card already shows. */
+  hidden: Record<string, true>
   /** The last action that failed, for the page to show. */
   error: string
 }
@@ -18,11 +34,19 @@ const initial: Snapshot = {
   projects: [],
   sessions: {},
   messages: {},
+  progress: {},
+  failures: {},
+  hidden: {},
   error: '',
 }
 let snapshot = initial
 const listeners = new Set<() => void>()
 let starting: Promise<void> | undefined
+/**
+ * The error a live run reported and the reply it wrote, until `run_finished` says
+ * whether that run failed. Only a started session has a card to show it in.
+ */
+const attempts = new Map<string, { message: string; replyId?: string }>()
 /** Sessions whose whole history is already in the snapshot. */
 const complete = new Set<string>()
 const loading = new Set<string>()
@@ -123,6 +147,11 @@ async function loadMessages(
   }
 }
 
+/** Reads one session's whole history; the panel needs it when a session opens. */
+export function loadSession(projectId: string, sessionId: string) {
+  void loadMessages(projectId, sessionId)
+}
+
 /** Reads the project chat and the first message of every started session, which anchors its card. */
 export async function loadProject(projectId: string) {
   try {
@@ -206,7 +235,15 @@ export async function send(
   }
 }
 
+const withoutKey = <Value>(record: Record<string, Value>, key?: string) => {
+  if (key === undefined || record[key] === undefined) return record
+  const next = { ...record }
+  delete next[key]
+  return next
+}
+
 function apply(value: Extract<Event, { type: 'local' }>['value']) {
+  const sessionId = value.sessionId
   if (value.type === 'session') {
     mergeSessions([value.data])
     if (
@@ -215,8 +252,74 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
       (snapshot.messages[value.data.sessionId] ?? []).length === 0
     )
       void loadMessages(value.projectId, value.data.sessionId, true)
-  } else if (value.type === 'message') {
-    mergeMessages(value.data.sessionId, [value.data])
+    return
+  }
+  if (value.type === 'message') {
+    const message = value.data
+    const attempt = attempts.get(message.sessionId)
+    // The reply recorded for a failed run would say the card's message twice; hide
+    // it now and keep it hidden only if the run really fails.
+    if (message.role === 'assistant' && attempt && !attempt.replyId) {
+      attempt.replyId = message.id
+      publish({ hidden: { ...snapshot.hidden, [message.id]: true } })
+    }
+    mergeMessages(message.sessionId, [message])
+    return
+  }
+  if (value.type === 'progress') {
+    if (sessionId)
+      publish({ progress: { ...snapshot.progress, [sessionId]: value.data } })
+    return
+  }
+  if (value.type === 'run_started') {
+    if (sessionId) attempts.delete(sessionId)
+    publish({
+      progress: withoutKey(snapshot.progress, sessionId),
+      failures: withoutKey(snapshot.failures, sessionId),
+    })
+    return
+  }
+  if (value.type === 'run_finished') {
+    const attempt = sessionId ? attempts.get(sessionId) : undefined
+    if (sessionId) attempts.delete(sessionId)
+    const finished = value.data.outcome === 'failed' && attempt !== undefined
+    publish({
+      progress: withoutKey(snapshot.progress, sessionId),
+      failures: finished
+        ? {
+            ...snapshot.failures,
+            [sessionId!]: { message: attempt.message },
+          }
+        : snapshot.failures,
+      // A run that ends any other way keeps its reply.
+      hidden:
+        attempt?.replyId && !finished
+          ? withoutKey(snapshot.hidden, attempt.replyId)
+          : snapshot.hidden,
+    })
+    return
+  }
+  if (value.type === 'error' && sessionId) {
+    const session = snapshot.sessions[sessionId]
+    if (!session?.topic) return
+    attempts.set(sessionId, { message: value.data.message })
+  }
+}
+
+/** Stops the run this session is in, if it still has one. */
+export async function stop(session: Session) {
+  if (!session.runId) return
+  try {
+    await vela.stop(
+      'local',
+      {
+        chatId: session.chatId,
+        ...(session.topic ? { rootId: session.topic.rootId } : {}),
+      },
+      session.runId,
+    )
+  } catch (cause) {
+    publish({ error: errorMessage(cause) })
   }
 }
 

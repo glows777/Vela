@@ -37,13 +37,14 @@ const data = await mkdtemp(resolve(dataParent, 'vela-data-'))
 const profile = resolve(scratch, 'user-data')
 const project = resolve(scratch, 'project')
 const alpha = resolve(scratch, 'alpha')
+const beta = resolve(scratch, 'beta')
 const scenario = resolve(scratch, 'faux.json')
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
 const disabledConfig = process.env.VELA_DESKTOP_VERIFY_DISABLED === '1'
 await Promise.all(
-  [home, data, profile, project, alpha].map((path) =>
+  [home, data, profile, project, alpha, beta].map((path) =>
     mkdir(path, { recursive: true }),
   ),
 )
@@ -77,6 +78,48 @@ await Bun.write(
       { text: 'Image processed' },
       { text: 'Alpha answer' },
       { text: 'Second answer' },
+      // Journey 2: the hub hands off, and the session works, stops, continues, fails,
+      // then asks a question that journey 3 answers. Everything after the hand-off
+      // goes to that one session, so only the two hand-off replies can race.
+      {
+        toolCalls: [
+          {
+            name: 'channel_start_topic',
+            input: {
+              title: 'Fix the retry backoff',
+              brief:
+                'Fix the retry backoff in src/agent/retry.ts and add a test.',
+            },
+          },
+        ],
+      },
+      // The hub's reply after the tool result and the topic's first answer race for
+      // the next scripted step, and the hub's is suppressed on hand-off: give both
+      // the same text so either order tells the same story.
+      { text: 'I will read the retry module first.' },
+      { text: 'I will read the retry module first.' },
+      { toolCalls: [{ name: 'bash', input: { command: 'printf retry' } }] },
+      { hang: true },
+      { text: 'Continued after the stop.' },
+      { error: 'invalid api key' },
+      {
+        toolCalls: [
+          {
+            name: 'channel_wait_for_input',
+            input: { reason: 'Which colour should I use?' },
+          },
+        ],
+      },
+      { text: 'Which colour should I use?' },
+      { text: 'Blue it is.' },
+      // Journey 4: a second project, and a long answer that fills Alpha's chat.
+      { text: 'Beta answer' },
+      {
+        text: Array.from(
+          { length: 40 },
+          (_, index) => `Paragraph ${index + 1} of a long answer from Vela.`,
+        ).join('\n\n'),
+      },
     ],
     // Background requests (memory consolidation) use generateText; without their
     // own queue they would consume the scripted stream answers above.
@@ -350,7 +393,7 @@ const journeyOne = async (page: Page) => {
   await create.click()
   await dialog.waitFor({ state: 'hidden' })
   await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor()
-  const header = page.locator('header')
+  const header = page.getByRole('banner')
   assert(
     (await header.textContent())?.includes(alpha),
     'The header names the folder',
@@ -416,14 +459,12 @@ const journeyOne = async (page: Page) => {
     'After a reload the project and both messages come back from recorded history.',
   )
 
-  const alphaId = await page.evaluate(async () => {
-    const projects = await window.vela.projects()
-    return projects.find((project) => project.name === 'Alpha')?.id
-  })
+  const alphaProject = await projectNamed(page, 'Alpha')
+  await waitForIdle(page, alphaProject.sessionId)
   await page.getByRole('button', { name: 'Home', exact: true }).click()
   assert.equal(
     await page.getByLabel('Project', { exact: true }).inputValue(),
-    alphaId,
+    alphaProject.id,
     'Home starts on the project used last',
   )
   const homeComposer = page.getByLabel('Message Vela', { exact: true })
@@ -462,6 +503,20 @@ const journeyOne = async (page: Page) => {
   )
   await projectComposer.fill('')
 
+  const hint = page.getByText(/on this computer/)
+  await hint.waitFor()
+  assert(
+    (await hint.textContent())?.includes(alpha),
+    'The composer names the folder where Vela runs',
+  )
+  await noOverflow(page)
+  await themes(page, 'journey-1')
+  checks.push(
+    'The composer names the folder where Vela runs, in light and dark, with no horizontal overflow.',
+  )
+}
+/** The same screen in light and dark, each once the tokens have switched. */
+const themes = async (page: Page, name: string) => {
   await page.emulateMedia({
     colorScheme: 'light',
     contrast: 'no-preference',
@@ -474,14 +529,7 @@ const journeyOne = async (page: Page) => {
         .trim() === expected,
     tokens.tokens['vela-ink'].light,
   )
-  const hint = page.getByText(/on this computer/)
-  await hint.waitFor()
-  assert(
-    (await hint.textContent())?.includes(alpha),
-    'The composer names the folder where Vela runs',
-  )
-  await noOverflow(page)
-  await snapshot(page, 'journey-1-light')
+  await snapshot(page, `${name}-light`)
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.waitForFunction(
     (expected) =>
@@ -490,12 +538,306 @@ const journeyOne = async (page: Page) => {
         .trim() === expected,
     tokens.tokens['vela-ink'].dark,
   )
-  await snapshot(page, 'journey-1-dark')
+  await snapshot(page, `${name}-dark`)
   await page.emulateMedia({ colorScheme: null })
+}
+
+/** Types into the composer with this label and sends; both composers can be on screen. */
+const sendIn = async (page: Page, label: string, text: string) => {
+  const form = page.locator('form').filter({ has: page.getByLabel(label) })
+  await form.getByLabel(label).fill(text)
+  await form.getByRole('button', { name: 'Send' }).click()
+}
+
+/**
+ * Waits until a session has no live run. Input sent during a run steers it instead
+ * of starting a new one, which is right for a person and wrong for a scripted queue.
+ */
+const waitForIdle = async (page: Page, sessionId: string, timeout = 30_000) => {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const sessions = await page.evaluate(() => window.vela.sessions('local'))
+    const session = sessions.find((item) => item.sessionId === sessionId)
+    if (
+      session &&
+      !session.runId &&
+      session.state !== 'running' &&
+      session.state !== 'queued'
+    )
+      return session
+    await Bun.sleep(50)
+  }
+  throw new Error(`Session ${sessionId} never settled`)
+}
+
+/** The Local project the sidebar lists under this name. */
+const projectNamed = async (page: Page, name: string) => {
+  const projects = await page.evaluate(() => window.vela.projects())
+  const project = projects.find((item) => item.name === name)
+  assert(project, `No project named ${name}`)
+  return project
+}
+
+/** Waits for the recorded session to reach a state, which the window learns by event. */
+const waitForSessionState = async (
+  page: Page,
+  projectId: string,
+  task: string,
+  state: string,
+  timeout = 30_000,
+) => {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const sessions = await page.evaluate(
+      (projectId) => window.vela.sessions('local', projectId),
+      projectId,
+    )
+    const session = sessions.find((item) => item.task === task)
+    if (session?.state === state) return session
+    await Bun.sleep(50)
+  }
+  throw new Error(`Session "${task}" never reached ${state}`)
+}
+
+/** Journey 2: bigger work in its card and panel; running, Stop, continue, then fail. */
+const journeyTwo = async (page: Page) => {
+  const alpha = await projectNamed(page, 'Alpha')
+  const panel = page.getByLabel('Sessions')
+  await waitForIdle(page, alpha.sessionId)
+  await panel.getByRole('heading', { name: 'Sessions', exact: true }).waitFor()
+
+  await sendIn(
+    page,
+    'Message Vela in this project',
+    'Fix the retry backoff in the agent and add a test',
+  )
+
+  const card = page.getByRole('button', {
+    name: /Session, Fix the retry backoff/,
+  })
+  await card.waitFor({ timeout: 30_000 })
+  await card.getByText('Fix the retry backoff', { exact: true }).waitFor()
   checks.push(
-    'The composer names the folder where Vela runs, in light and dark, with no horizontal overflow.',
+    'Asking for bigger work shows a session card in the project chat.',
+  )
+
+  await card.click()
+  const topic = (await waitForSessionState(
+    page,
+    alpha.id,
+    'Fix the retry backoff',
+    'done',
+  ))!
+  await panel.getByRole('button', { name: 'All sessions' }).waitFor()
+  await panel
+    .getByRole('heading', { name: 'Fix the retry backoff', exact: true })
+    .waitFor()
+  await panel
+    .getByText('I will read the retry module first.', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  checks.push(
+    'The card opens that session in the panel, under Sessions › title, with its reply.',
+  )
+
+  await waitForIdle(page, topic.sessionId)
+  await sendIn(page, 'Message in this session', 'Keep going')
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'running')
+  await panel.getByText('bash', { exact: true }).waitFor({ timeout: 30_000 })
+  await panel.getByRole('button', { name: 'Stop' }).waitFor()
+  await panel.getByText('Running', { exact: true }).waitFor()
+  checks.push('A running session shows one state word, the live tool and Stop.')
+
+  await panel.getByRole('button', { name: 'Stop' }).click()
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'stopped')
+  await waitForIdle(page, topic.sessionId)
+  await panel.getByText('Stopped', { exact: true }).waitFor()
+  assert.equal(await panel.getByRole('button', { name: 'Stop' }).count(), 0)
+  checks.push(
+    'Stop ends the run: the state word says Stopped and Stop is gone.',
+  )
+
+  await sendIn(page, 'Message in this session', 'Continue')
+  await panel
+    .getByText('Continued after the stop.', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'done')
+  checks.push('A new message continues the stopped session and it finishes.')
+
+  await waitForIdle(page, topic.sessionId)
+  await sendIn(page, 'Message in this session', 'Now fail')
+  const failure = panel.getByRole('alert')
+  await failure.waitFor({ timeout: 30_000 })
+  await failure
+    .getByText('Vela stopped on an error.', { exact: true })
+    .waitFor()
+  assert(
+    (await failure.textContent())?.includes('invalid api key'),
+    'The card carries what the provider said',
+  )
+  assert.equal(
+    await panel.getByText(/Check the error above/).count(),
+    0,
+    'The reply the card repeats is hidden',
+  )
+  checks.push(
+    'A failed run shows one error card and hides the reply that repeats it.',
+  )
+
+  await themes(page, 'journey-2')
+  await page.setViewportSize({ width: 800, height: 600 })
+  await noOverflow(page)
+  await snapshot(page, 'journey-2-minimum')
+  await page.setViewportSize({ width: 1280, height: 800 })
+  checks.push(
+    'The panel floats over the chat at 800px without overflowing the window.',
   )
 }
+
+/** Journey 3: a session that asks a question, from Home to the answer and back. */
+const journeyThree = async (page: Page) => {
+  const alpha = await projectNamed(page, 'Alpha')
+  const panel = page.getByLabel('Sessions')
+  const topic = await waitForSessionState(
+    page,
+    alpha.id,
+    'Fix the retry backoff',
+    'done',
+  )
+
+  await panel.getByRole('button', { name: 'All sessions' }).click()
+  await panel.getByRole('button', { name: /Fix the retry backoff/ }).click()
+  await panel
+    .getByRole('heading', { name: 'Fix the retry backoff', exact: true })
+    .waitFor()
+  await waitForIdle(page, topic.sessionId)
+  await sendIn(page, 'Message in this session', 'Ask me which colour to use')
+
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'waiting')
+  await panel.getByText('Waiting for an answer', { exact: true }).waitFor()
+  await panel
+    .getByText('Which colour should I use?', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  await page
+    .getByRole('banner')
+    .getByText('Waiting for you', { exact: true })
+    .waitFor()
+  checks.push(
+    'A session that needs an answer shows Waiting for an answer, its question and the header label.',
+  )
+  await themes(page, 'journey-3')
+
+  await panel.getByRole('button', { name: 'All sessions' }).click()
+  await panel
+    .getByRole('region', { name: 'Needs you' })
+    .getByRole('button', { name: /Fix the retry backoff/ })
+    .waitFor()
+  checks.push('The panel lists it under Needs you.')
+
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  const need = page.getByRole('button', {
+    name: /Which colour should I use\?/,
+  })
+  await need.waitFor({ timeout: 30_000 })
+  assert(
+    (await need.textContent())?.includes('Alpha · Local'),
+    'The row names its project and tag',
+  )
+  checks.push('Home leads with it under Needs you, naming its project and tag.')
+
+  await need.click()
+  await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor()
+  await panel
+    .getByRole('heading', { name: 'Fix the retry backoff', exact: true })
+    .waitFor()
+  await waitForIdle(page, topic.sessionId)
+  await sendIn(page, 'Message in this session', 'Blue')
+  await panel
+    .getByText('Blue it is.', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  await waitForSessionState(page, alpha.id, 'Fix the retry backoff', 'done')
+  checks.push('Answering in the panel clears the state and finishes the run.')
+
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  await page.getByText('Nothing needs you right now.').waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', { name: /Which colour should I use\?/ })
+      .count(),
+    0,
+  )
+  checks.push('Home no longer lists the answered session as needing you.')
+}
+
+/** Journey 4: two projects, their own histories and places, then a restart. */
+const journeyFour = async (page: Page) => {
+  const sidebar = page.getByLabel('Sidebar')
+  await sidebar.getByRole('button', { name: 'New project' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Folder path').fill(beta)
+  await dialog.getByLabel('Name').fill('Beta')
+  await dialog.getByRole('button', { name: 'Create project' }).click()
+  await page.getByRole('heading', { name: 'Beta', exact: true }).waitFor()
+  await sendIn(page, 'Message Vela in this project', 'What is in Beta?')
+  await page
+    .getByText('Beta answer', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  checks.push('A second project opens on its own empty conversation.')
+
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await page
+    .getByText('Alpha answer', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  assert.equal(await page.getByText('Beta answer', { exact: true }).count(), 0)
+  checks.push(
+    'Switching back to a project shows its history, not the other one.',
+  )
+
+  const alpha = await projectNamed(page, 'Alpha')
+  await waitForIdle(page, alpha.sessionId)
+  await sendIn(page, 'Message Vela in this project', 'Summarise this folder')
+  // The whole answer is one message, so the last paragraph is a substring of it.
+  const last = page.getByText('Paragraph 40 of a long answer from Vela.')
+  await last.waitFor({ timeout: 30_000 })
+  const chat = page.getByLabel('Project chat')
+  const place = await chat.evaluate((node) => {
+    node.scrollTop = 120
+    return node.scrollTop
+  })
+  assert(place > 0, 'The answer left the chat scrollable')
+  await sidebar.getByRole('button', { name: 'Beta Local' }).click()
+  await page.getByText('Beta answer', { exact: true }).waitFor()
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await last.waitFor({ timeout: 30_000 })
+  await page.waitForFunction(
+    (expected) =>
+      Math.abs(
+        (document.querySelector<HTMLElement>('[aria-label="Project chat"]')
+          ?.scrollTop ?? 0) - expected,
+      ) < 8,
+    place,
+  )
+  checks.push('A conversation comes back where it was left.')
+
+  const panel = page.getByLabel('Sessions')
+  await panel
+    .getByRole('button', { name: /Fix the retry backoff/ })
+    .waitFor({ timeout: 30_000 })
+  checks.push("Alpha's panel lists the session started in it.")
+
+  await sidebar.getByRole('button', { name: 'Beta Local' }).click()
+  await panel.getByText('No sessions yet.', { exact: false }).waitFor()
+  assert.equal(
+    await panel.getByRole('button', { name: /Fix the retry backoff/ }).count(),
+    0,
+  )
+  checks.push("Beta's panel has no session from Alpha.")
+
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await page.getByText('Alpha answer', { exact: true }).waitFor()
+  await noOverflow(page)
+  await themes(page, 'journey-4')
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -540,7 +882,8 @@ async function closeElectron(browser: import('playwright').Browser) {
   if (result instanceof Error && !result.message.includes('has been closed'))
     throw result
 }
-async function development() {
+/** One development Electron, from Forge start to a closed process. */
+async function launchDev() {
   console.log('Desktop verification: launching development Electron')
   const child = spawn(
     'bunx',
@@ -588,80 +931,142 @@ async function development() {
       reject(new Error(`Forge exited ${code}\n${output}`))
     })
   })
+  let browser: import('playwright').Browser | undefined
   try {
     const url = await endpoint
     console.log('Desktop verification: DevTools endpoint ready')
-    const browser = await chromium.connectOverCDP(url)
+    browser = await chromium.connectOverCDP(url)
     console.log('Desktop verification: connected to Electron')
-    try {
-      const context = browser.contexts()[0]!
-      const page =
-        context.pages()[0] ??
-        (await context.waitForEvent('page', { timeout: 30_000 }))
-      watch(page)
-      await page.bringToFront()
-      await page.waitForLoadState('networkidle')
-      console.log('Desktop verification: first window loaded')
-      if (badConfig) {
-        await page
-          .getByRole('alert')
-          .getByText('Vela could not start. Check your settings and restart.')
-          .waitFor()
-        checks.push('Invalid configuration produces a visible startup error.')
-        return
-      }
-      await page
-        .getByRole('heading', { name: 'Vela design foundation' })
-        .waitFor()
-      checks.push(
-        'Development preview is ready on first load, before any media-mode reload.',
-      )
-      await rendererSafety(page)
-      checks.push(...(await verifyControls(page, evidence)))
-      console.log('Desktop verification: specimen controls passed')
-      await page.setViewportSize({ width: 800, height: 600 })
-      await noOverflow(page)
-      await snapshot(page, 'specimen-minimum')
-      checks.push('Minimum preview layout passes.')
-      await page.goto(new URL('index.html', page.url()).href)
-      await page.getByRole('heading', { name: 'VELA', exact: true }).waitFor()
-      await rendererSafety(page)
-      await noOverflow(page)
-      await snapshot(page, 'shell-development')
-      if (disabledConfig) {
-        assert.deepEqual(
-          (await page.evaluate(() => window.vela.channels())).map(
-            (channel) => channel.name,
-          ),
-          ['local'],
-        )
-        checks.push('CLI built-in switches load and disabled Lark stays off.')
-        return
-      }
-      console.log('Desktop verification: starting bridge journey')
-      await bridgeJourney(page)
-      console.log('Desktop verification: bridge journey passed')
-      console.log('Desktop verification: starting journey 1')
-      await journeyOne(page)
-      console.log('Desktop verification: journey 1 passed')
-    } finally {
-      console.log('Desktop verification: closing Electron')
-      await closeElectron(browser)
-      console.log('Desktop verification: Electron closed')
-    }
-  } finally {
+  } catch (error) {
+    // Nothing to close yet: stop the detached Forge ourselves.
     if (child.pid && child.exitCode === null)
       process.kill(-child.pid, 'SIGTERM')
-    console.log('Desktop verification: waiting for Forge to close')
-    await waitForForge(closed, () => {
-      child.stdout?.destroy()
-      child.stderr?.destroy()
-      child.unref()
-    })
-    console.log('Desktop verification: Forge closed')
-    await Bun.write(resolve(evidence, 'forge.log'), output)
+    throw error
+  }
+  const context = browser.contexts()[0]!
+  const page =
+    context.pages()[0] ??
+    (await context.waitForEvent('page', { timeout: 30_000 }))
+  watch(page)
+  await page.bringToFront()
+  await page.waitForLoadState('networkidle')
+  console.log('Desktop verification: first window loaded')
+  return {
+    page,
+    close: async () => {
+      try {
+        console.log('Desktop verification: closing Electron')
+        await closeElectron(browser)
+        console.log('Desktop verification: Electron closed')
+      } finally {
+        if (child.pid && child.exitCode === null)
+          process.kill(-child.pid, 'SIGTERM')
+        console.log('Desktop verification: waiting for Forge to close')
+        await waitForForge(closed, () => {
+          child.stdout?.destroy()
+          child.stderr?.destroy()
+          child.unref()
+        })
+        console.log('Desktop verification: Forge closed')
+        await Bun.write(resolve(evidence, 'forge.log'), output)
+      }
+    },
   }
 }
+
+async function development() {
+  const first = await launchDev()
+  try {
+    const { page } = first
+    if (badConfig) {
+      await page
+        .getByRole('alert')
+        .getByText('Vela could not start. Check your settings and restart.')
+        .waitFor()
+      checks.push('Invalid configuration produces a visible startup error.')
+      return
+    }
+    await page
+      .getByRole('heading', { name: 'Vela design foundation' })
+      .waitFor()
+    checks.push(
+      'Development preview is ready on first load, before any media-mode reload.',
+    )
+    await rendererSafety(page)
+    checks.push(...(await verifyControls(page, evidence)))
+    console.log('Desktop verification: specimen controls passed')
+    await page.setViewportSize({ width: 800, height: 600 })
+    await noOverflow(page)
+    await snapshot(page, 'specimen-minimum')
+    checks.push('Minimum preview layout passes.')
+    await page.goto(new URL('index.html', page.url()).href)
+    await page.getByRole('heading', { name: 'VELA', exact: true }).waitFor()
+    await rendererSafety(page)
+    await noOverflow(page)
+    await snapshot(page, 'shell-development')
+    if (disabledConfig) {
+      assert.deepEqual(
+        (await page.evaluate(() => window.vela.channels())).map(
+          (channel) => channel.name,
+        ),
+        ['local'],
+      )
+      checks.push('CLI built-in switches load and disabled Lark stays off.')
+      return
+    }
+    console.log('Desktop verification: starting bridge journey')
+    await bridgeJourney(page)
+    console.log('Desktop verification: bridge journey passed')
+    await page.setViewportSize({ width: 1280, height: 800 })
+    console.log('Desktop verification: starting journey 1')
+    await journeyOne(page)
+    console.log('Desktop verification: journey 1 passed')
+    console.log('Desktop verification: starting journey 2')
+    await journeyTwo(page)
+    console.log('Desktop verification: journey 2 passed')
+    console.log('Desktop verification: starting journey 3')
+    await journeyThree(page)
+    console.log('Desktop verification: journey 3 passed')
+    console.log('Desktop verification: starting journey 4')
+    await journeyFour(page)
+    console.log('Desktop verification: journey 4 passed')
+  } finally {
+    await first.close()
+  }
+  await restartJourney()
+}
+
+/** Journey 4's second half: the app starts again on the same scratch data. */
+async function restartJourney() {
+  console.log('Desktop verification: restarting Electron')
+  const second = await launchDev()
+  try {
+    const { page } = second
+    await page.setViewportSize({ width: 1280, height: 800 })
+    // The development window opens the specimen first; the product entry is index.html.
+    await page.goto(new URL('index.html', page.url()).href)
+    await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
+    const sidebar = page.getByLabel('Sidebar')
+    for (const name of ['Alpha', 'Beta'])
+      await sidebar.getByRole('button', { name: `${name} Local` }).waitFor()
+    await sidebar.getByRole('button', { name: 'Beta Local' }).click()
+    await page
+      .getByText('What is in Beta?', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page.getByText('Beta answer', { exact: true }).waitFor()
+    await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+    await page
+      .getByRole('heading', { name: 'Alpha', exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'After a restart the same data directory brings back both projects and their conversations.',
+    )
+    await snapshot(page, 'journey-4-restart')
+  } finally {
+    await second.close()
+  }
+}
+
 async function packaged(appPath: string) {
   const appRoot = resolve(appPath)
   const resources = resolve(
@@ -733,7 +1138,9 @@ async function packaged(appPath: string) {
       tokens.tokens['vela-ink']['high-contrast'],
     )
     await snapshot(page, 'packaged-system-high-contrast')
+    await page.setViewportSize({ width: 1280, height: 800 })
     await bridgeJourney(page)
+    await journeyOne(page)
     const asar = await import('@electron/asar')
     const files = asar.listPackage(resolve(resources, 'app.asar'), {
       isPack: false,

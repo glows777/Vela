@@ -1,5 +1,9 @@
 .card {
   display: flex;
+  font: inherit;
+  color: var(--vela-ink);
+  text-align: left;
+  cursor: pointer;
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-4);
@@ -7,6 +11,10 @@
   border-radius: var(--radius-panel);
   background: var(--vela-paper);
   box-shadow: var(--shadow-resting);
+}
+
+.card:hover {
+  background: var(--vela-menu-hover);
 }
 
 .waiting {
