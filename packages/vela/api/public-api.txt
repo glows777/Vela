@@ -282,10 +282,6 @@
     select: (title: string, options: string[]) => Promise<string | undefined>
     setStatus: (key: string, text?: string) => void
     setWidget: (key: string, lines?: string[]) => void
-  type FetchFunction = (
-      input: string | URL | Request,
-      init?: RequestInit,
-      ) => Promise<Response>
   function fileCredentialStore: (path: string) => CredentialStore
   interface FileError
     cause?: unknown
@@ -437,12 +433,6 @@
     homeDir?: string | undefined
     trusted?: boolean | undefined
   function loadContextFiles: (options: { cwd: string; agentDir?: string; }) => ContextFile[]
-  interface LoadedExtension
-    channels: string[]
-    commands: string[]
-    name: string
-    providers: string[]
-    tools: string[]
   function loadModels: (options: { agentDir: string; env?: Env; overrides?: Record<string, ProviderConfig>; }) => Record<string, ProviderDefinition>
   function local: (options: LocalOptions) => ChannelExtension
   class LocalError
@@ -721,11 +711,6 @@
       | CustomEntry
       | CustomMessageEntry
       | BashExecutionEntry
-  interface SessionEntryBase
-    id: string
-    parentId: string | null
-    timestamp: string
-    type: string
   type SessionFileEntry = SessionHeader | SessionEntry
   interface SessionHeader
     channel?: string | undefined
@@ -864,10 +849,6 @@
     timestamp: string
     type: "thinking_level_change"
   function todo: () => VelaExtension
-  interface TokenStatus
-    needsAction: boolean
-    percent: number
-    tokens: number
   interface ToolAnnotations
     destructiveHint?: boolean | undefined
     idempotentHint?: boolean | undefined

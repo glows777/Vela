@@ -1,8 +1,5 @@
 # @glows777/vela-core
 
-  interface AfterProviderResponseEvent
-    headers: Record<string, string>
-    type: "after_provider_response"
   function agentErrorHint: (kind: AgentErrorKind | undefined) => string | undefined
   type AgentErrorKind = | 'auth'
       | 'billing'
@@ -63,17 +60,6 @@
     fullOutputPath?: string | undefined
     output: string
     truncated: boolean
-  interface BeforeAgentStartEvent
-    prompt: string
-    sections: Record<string, string>
-    systemPrompt: string
-    type: "before_agent_start"
-  interface BeforeAgentStartEventResult
-    message?: CustomMessage | undefined
-    systemPrompt?: string | undefined
-  interface BeforeProviderRequestEvent
-    params: LanguageModelV4CallOptions
-    type: "before_provider_request"
   interface BinaryReader
     close: (signal?: AbortSignal) => Promise<void>
     info: (signal?: AbortSignal) => Promise<Result<FileInfo, FileError>>
@@ -101,8 +87,6 @@
     summary: string
     tokensAfter: number
     tokensBefore: number
-  function configString: (config: Readonly<Record<string, unknown>>, key: string) => string | undefined
-  function configStrings: (config: Readonly<Record<string, unknown>>, key: string) => string[] | undefined
   interface ContextEditEntry
     id: string
     parentId: string | null
@@ -110,11 +94,6 @@
     targetId: string
     timestamp: string
     type: "context_edit"
-  interface ContextEvent
-    messages: ModelMessage[]
-    type: "context"
-  interface ContextEventResult
-    messages?: ModelMessage[] | undefined
   interface ContextFile
     content: string
     path: string
@@ -147,12 +126,10 @@
     parentId: string | null
     timestamp: string
     type: "custom_message"
-  function customMessageIfChanged: (session: VelaSession, customType: string, content: string) => CustomMessage | undefined
   interface CustomMessageInfo
     customType: string
     details?: unknown
     display: boolean
-  function customMessageMissing: (messages: readonly ModelMessage[], markers: readonly string[]) => boolean
   function defineJsonSchemaTool: (tool: ToolDefinition & { inputSchema: Schema<unknown>; }) => ToolDefinition
   interface DocsPaths
     docs?: string | undefined
@@ -252,10 +229,6 @@
     select: (title: string, options: string[]) => Promise<string | undefined>
     setStatus: (key: string, text?: string) => void
     setWidget: (key: string, lines?: string[]) => void
-  type FetchFunction = (
-      input: string | URL | Request,
-      init?: RequestInit,
-      ) => Promise<Response>
   function fileCredentialStore: (path: string) => CredentialStore
   interface FileError
     cause?: unknown
@@ -295,15 +268,6 @@
     mimeType: string
     type: "image"
   function importExtension: (path: string, name: string) => Promise<VelaExtension>
-  interface InputEvent
-    images?: ImageContent[] | undefined
-    source: InputSource
-    streamingBehavior?: "steer" | "followUp" | undefined
-    text: string
-    type: "input"
-  type InputEventResult = | { action: 'continue' }
-      | { action: 'transform'; text: string; images?: ImageContent[] }
-      | { action: 'handled' }
   type InputSource = | 'interactive'
       | 'rpc'
       | 'extension'
@@ -320,7 +284,6 @@
     targetId: string
     timestamp: string
     type: "label"
-  function lastCustomMessage: (session: VelaSession, customType: string) => ModelMessage | undefined
   interface LineScan
     end: number
     firstLineBytes: number
@@ -451,11 +414,6 @@
     defaultModel?: string | undefined
     models?: ModelSpec[] | undefined
     oauth?: OAuthLogin | undefined
-  interface ProviderStreamEvent
-    data: unknown
-    model: string
-    provider: string
-    type: "provider_stream_event"
   function publishChannelEvent: (session: VelaSession, event: Extract<VelaEvent, { type: "channel_message" | "channel_reply" | "channel_error"; }>) => void
   type QueueMode = 'one-at-a-time' | 'all'
   function resolveBinary: (vela: Vela, name: "rg" | "fd") => Promise<string>
@@ -473,21 +431,6 @@
     parentId: string | null
     timestamp: string
     type: "session_archived"
-  interface SessionBeforeForkEvent
-    entryId: string
-    position: "before" | "at"
-    type: "session_before_fork"
-  interface SessionBeforeForkEventResult
-    cancel?: boolean | undefined
-  interface SessionBeforeTreeEvent
-    preparation: TreePreparation
-    signal: AbortSignal
-    type: "session_before_tree"
-  interface SessionBeforeTreeEventResult
-    cancel?: boolean | undefined
-    focus?: string | undefined
-    label?: string | undefined
-    summary?: { summary: string; } | undefined
   interface SessionChannelEntry
     channel: string
     id: string
@@ -507,11 +450,6 @@
       | CustomEntry
       | CustomMessageEntry
       | BashExecutionEntry
-  interface SessionEntryBase
-    id: string
-    parentId: string | null
-    timestamp: string
-    type: string
   type SessionFileEntry = SessionHeader | SessionEntry
   interface SessionHeader
     channel?: string | undefined
@@ -568,10 +506,6 @@
   interface SessionSearchHit
     id: string
     match: string
-  interface SessionShutdownEvent
-    type: "session_shutdown"
-  interface SessionStartEvent
-    type: "session_start"
   interface SessionStorage
     append: (id: string, entries: SessionFileEntry[]) => Promise<void>
     list?: (() => Promise<SessionSummary[]>) | undefined
@@ -586,12 +520,6 @@
     messageCount: number
     name?: string | undefined
     updatedAt: string
-  interface SessionTreeEvent
-    fromExtension?: boolean | undefined
-    newLeafId: string | null
-    oldLeafId: string | null
-    summaryEntry?: BranchSummaryEntry | undefined
-    type: "session_tree"
   interface SessionTreeNode
     children: SessionTreeNode[]
     entry: SessionEntry
@@ -653,24 +581,11 @@
     timestamp: string
     type: "thinking_level_change"
   function todo: () => VelaExtension
-  interface TokenStatus
-    needsAction: boolean
-    percent: number
-    tokens: number
   interface ToolAnnotations
     destructiveHint?: boolean | undefined
     idempotentHint?: boolean | undefined
     openWorldHint?: boolean | undefined
     readOnlyHint?: boolean | undefined
-  interface ToolCallEvent
-    input: Record<string, unknown>
-    parentToolCallId?: string | undefined
-    toolCallId: string | undefined
-    toolName: string
-    type: "tool_call"
-  interface ToolCallEventResult
-    block?: boolean | undefined
-    reason?: string | undefined
   interface ToolCallOutcome
     durationMs?: number | undefined
     isError: boolean
@@ -723,28 +638,9 @@
     description?: string | undefined
     instructions?: string | undefined
     name: string
-  interface ToolResultEvent
-    content?: ToolContent | undefined
-    input: unknown
-    output: string
-    parentToolCallId?: string | undefined
-    toolCallId: string | undefined
-    toolName: string
-    type: "tool_result"
-  interface ToolResultEventResult
-    content?: ToolContent | undefined
-    output?: string | undefined
   type ToolResultPart = Omit<AIToolResultPart, 'output'> & {
       output: ToolResultOutput
       }
-  interface TreePreparation
-    commonAncestorId: string | null
-    entriesToSummarize: SessionEntry[]
-    focus?: string | undefined
-    label?: string | undefined
-    oldLeafId: string | null
-    targetId: string
-    userWantsSummary: boolean
   interface UsageTotals
     baselineCost?: number | undefined
     cacheReadTokens: number
