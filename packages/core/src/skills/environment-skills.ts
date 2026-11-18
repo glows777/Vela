@@ -38,7 +38,12 @@ export async function loadEnvironmentSkills(
     const add = async (filePath: string) => {
       const content = await env.readTextFile(filePath, signal)
       if (!content.ok) throw content.error
-      const { frontmatter } = parseFrontmatter(content.value)
+      let frontmatter: Record<string, unknown>
+      try {
+        ;({ frontmatter } = parseFrontmatter(content.value))
+      } catch {
+        return
+      }
       const description =
         typeof frontmatter.description === 'string'
           ? frontmatter.description.trim()
@@ -68,18 +73,34 @@ export async function loadEnvironmentSkills(
     const ordered = entries.value
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
-    const declared = ordered.find(
-      (entry) => entry.name === 'SKILL.md' && entry.kind === 'file',
-    )
-    if (declared) {
+    const kind = async (entry: (typeof ordered)[number]) => {
+      if (entry.kind !== 'symlink') return entry.kind
+      const target = await env.canonicalPath(
+        await join(dir, entry.name),
+        signal,
+      )
+      if (!target.ok) {
+        if (target.error.code === 'not_found') return undefined
+        throw target.error
+      }
+      const info = await env.fileInfo(target.value, signal)
+      if (!info.ok) {
+        if (info.error.code === 'not_found') return undefined
+        throw info.error
+      }
+      return info.value.kind
+    }
+    const declared = ordered.find((entry) => entry.name === 'SKILL.md')
+    if (declared && (await kind(declared)) === 'file') {
       await add(await join(dir, declared.name))
       return
     }
     for (const entry of ordered) {
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
       const file = await join(dir, entry.name)
-      if (entry.kind === 'directory') await scan(file, false)
-      else if (rootFiles && entry.kind === 'file' && entry.name.endsWith('.md'))
+      const entryKind = await kind(entry)
+      if (entryKind === 'directory') await scan(file, false)
+      else if (rootFiles && entryKind === 'file' && entry.name.endsWith('.md'))
         await add(file)
     }
   }
