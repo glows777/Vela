@@ -192,7 +192,10 @@ export const agentLoop = async ({
           tool.execute = async (input, options) => {
             // SDK lifecycle callbacks swallow errors. Check again at the actual
             // execution boundary so a failed flush cannot authorize side effects.
-            if (checkpointFailure) throw checkpointFailure.error
+            if (checkpointFailure)
+              throw new Error(
+                `Tool was not executed because its checkpoint could not be saved: ${errorMessageOf(checkpointFailure.error)}`,
+              )
             return execute(input, options)
           }
         }
@@ -427,7 +430,16 @@ export const agentLoop = async ({
             emit({ type: 'auto_retry_end', success: true, attempt: retried })
           break
         } catch (error) {
-          if (checkpointFailure) throw checkpointFailure.error
+          if (checkpointFailure) {
+            const reason = errorMessageOf(checkpointFailure.error)
+            keepInterrupted(
+              step,
+              'error',
+              reason,
+              `Tool was not executed because its checkpoint could not be saved: ${reason}`,
+            )
+            throw checkpointFailure.error
+          }
           if (abortSignal?.aborted) {
             // Keep what this step produced: the text and whole tool calls so far, each call answered
             // (its real result, or "Operation aborted" like pi), so the model knows what already happened

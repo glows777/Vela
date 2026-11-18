@@ -16,6 +16,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- **Interrupted-turn recovery keeps finished steps.** `session.continueInterrupted()` reconciles and resumes the saved branch without a new user message; channel restart recovery no longer rewinds completed tool work. `ToolDefinition.replay` defaults to unsafe. Replaying requires both recorded and current safe policy, unchanged input/location, and fewer than five consecutive interruptions. Uncertain effects are reported, not silently repeated; this is not exactly-once external delivery. Graceful drain, Lark send UUIDs, and lost-background-job startup notices remain separate follow-ups ([#411](https://github.com/glows777/Vela/issues/411), [#454](https://github.com/glows777/Vela/pull/454)).
+
 - **Execution environment contract and local adapter.** An SDK host can provide an `env` resolver for each session tool call and inspect `ExecutionEnv` types. E1 uses the resolver as a local-only availability check and rejects nonlocal locations and missing resolutions without falling back. Tools still execute through their existing local implementations; execution-side routing and container isolation follow in later phases ([#410](https://github.com/glows777/Vela/issues/410)).
 
 - **`@glows777/vela` exports `background`.** The umbrella re-exported every built-in factory except this one, so `import { background } from '@glows777/vela'` failed while `@glows777/vela-core` worked. It now re-exports `background` and `BackgroundOptions`, and the Background docs name the import path next to their `background()` example ([#408](https://github.com/glows777/Vela/issues/408)).
