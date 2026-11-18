@@ -164,9 +164,14 @@ export async function openProject(input: { cwd: string; name?: string }) {
   return project
 }
 
-export async function send(projectId: string, sessionId: string, text: string) {
+/** True when the host accepted the message; a draft stays restorable on false. */
+export async function send(
+  projectId: string,
+  sessionId: string,
+  text: string,
+): Promise<boolean> {
   const body = text.trim()
-  if (!body) return
+  if (!body) return false
   const clientMessageId = crypto.randomUUID()
   mergeMessages(sessionId, [
     {
@@ -186,6 +191,7 @@ export async function send(projectId: string, sessionId: string, text: string) {
       clientMessageId,
     })
     publish({ error: '' })
+    return true
   } catch (cause) {
     publish({
       messages: {
@@ -196,6 +202,7 @@ export async function send(projectId: string, sessionId: string, text: string) {
       },
       error: errorMessage(cause),
     })
+    return false
   }
 }
 

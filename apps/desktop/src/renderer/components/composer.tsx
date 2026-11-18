@@ -3,8 +3,9 @@ import { Button } from './arc/button/button.tsx'
 import styles from './composer.module.css'
 
 /**
- * One composer for Home and a project. Enter sends, Shift+Enter adds a line; the
- * field clears as soon as the message is handed to the bridge.
+ * One composer for Home and a project. Enter sends, Shift+Enter adds a line, and an
+ * IME composition keeps its Enter. The field clears at once; a rejected submission
+ * puts the draft back if the person has not typed something else.
  */
 export function Composer({
   label,
@@ -16,7 +17,7 @@ export function Composer({
   label: string
   hint?: ReactNode
   focusSignal?: number
-  onSend: (text: string) => void
+  onSend: (text: string) => Promise<boolean>
   children?: ReactNode
 }) {
   const [text, setText] = useState('')
@@ -29,8 +30,15 @@ export function Composer({
   const submit = () => {
     const body = text.trim()
     if (!body) return
-    onSend(body)
     setText('')
+    const restore = () =>
+      setText((current) => (current === '' ? body : current))
+    void Promise.resolve(onSend(body)).then(
+      (accepted) => {
+        if (!accepted) restore()
+      },
+      () => restore(),
+    )
   }
 
   return (
@@ -52,6 +60,7 @@ export function Composer({
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
               submit()

@@ -49,7 +49,7 @@ export function ProjectPage({
               Runs in <code>{project.cwd}</code> on this computer.
             </>
           }
-          onSend={(text) => void send(project.id, project.sessionId, text)}
+          onSend={(text) => send(project.id, project.sessionId, text)}
         />
         {snapshot.error ? (
           <p className={styles.error} role="alert">

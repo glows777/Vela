@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
 import { StateMark } from '../components/state-mark.tsx'
 import {
@@ -25,9 +25,16 @@ export function Home({
   const needs = needsYou(snapshot)
   const recent = recentSessions(snapshot)
   const [picked, setPicked] = useState('')
-  const project =
-    snapshot.projects.find((item) => item.id === picked) ??
-    lastUsedProject(snapshot)
+
+  // Latch the suggested project once: later activity must not move the destination
+  // while the person is typing.
+  useEffect(() => {
+    if (picked || !snapshot.ready) return
+    const suggestion = lastUsedProject(snapshot)
+    if (suggestion) setPicked(suggestion.id)
+  }, [picked, snapshot])
+
+  const project = snapshot.projects.find((item) => item.id === picked)
 
   if (!snapshot.ready) return <div className={styles.page} aria-busy="true" />
 
@@ -117,7 +124,11 @@ export function Home({
                   Runs in <code>{project.cwd}</code> on this computer.
                 </>
               }
-              onSend={(text) => void send(project.id, project.sessionId, text)}
+              onSend={async (text) => {
+                const accepted = await send(project.id, project.sessionId, text)
+                if (accepted) onOpenProject(project.id)
+                return accepted
+              }}
             >
               <label className={styles.picker}>
                 <span>Project</span>

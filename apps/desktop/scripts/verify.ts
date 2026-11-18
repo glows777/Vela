@@ -76,6 +76,7 @@ await Bun.write(
       { text: 'Desktop faux reply' },
       { text: 'Image processed' },
       { text: 'Alpha answer' },
+      { text: 'Second answer' },
     ],
     // Background requests (memory consolidation) use generateText; without their
     // own queue they would consume the scripted stream answers above.
@@ -413,6 +414,29 @@ const journeyOne = async (page: Page) => {
   await page.getByText('Alpha answer', { exact: true }).waitFor()
   checks.push(
     'After a reload the project and both messages come back from recorded history.',
+  )
+
+  const alphaId = await page.evaluate(async () => {
+    const projects = await window.vela.projects()
+    return projects.find((project) => project.name === 'Alpha')?.id
+  })
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  assert.equal(
+    await page.getByLabel('Project', { exact: true }).inputValue(),
+    alphaId,
+    'Home starts on the project used last',
+  )
+  const homeComposer = page.getByLabel('Message Vela', { exact: true })
+  await homeComposer.fill('A second question')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await page
+    .getByText('A second question', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  await page
+    .getByText('Second answer', { exact: true })
+    .waitFor({ timeout: 30_000 })
+  checks.push(
+    'Sending from Home opens that project and shows the answer there.',
   )
 
   await page.emulateMedia({
