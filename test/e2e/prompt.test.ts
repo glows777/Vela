@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChannelExtension as VelaExtension } from '@glows777/vela-channels'
+import type {
+  IncomingMessage,
+  ChannelExtension as VelaExtension,
+} from '@glows777/vela-channels'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
