@@ -275,15 +275,25 @@ const logger =
 // Extensions that failed to load (already reported on stderr); --list-models exits 1 when there are any
 const extensionErrors: string[] = []
 const vela = createVela({
-  model: recorder?.model ?? chosenModel,
+  model:
+    recorder?.model ??
+    (args.model ||
+    env.VELA_MODEL === 'mock' ||
+    env.VELA_MODEL?.startsWith('faux:')
+      ? chosenModel
+      : undefined),
   providers: config.providers,
   credentials: config.credentials,
-  thinkingLevel: args.thinking ?? config.settings.defaultThinkingLevel,
+  thinkingLevel: args.thinking,
   cwd,
   dataDir: config.dataDir,
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
   sessionResources: config.sessionResources && {
     ...config.sessionResources,
+    fallbackModel: env.OPENAI_API_MODEL_NAME
+      ? `openai/${env.OPENAI_API_MODEL_NAME}`
+      : undefined,
+    fallbackShellPath: resolveShellPath(undefined, { env }),
     workspaceModeAt: (location) =>
       join(location, '.vela') === agentDir
         ? 'home'
@@ -298,9 +308,6 @@ const vela = createVela({
   appendSystemPrompt: args.appendSystemPrompt.length
     ? args.appendSystemPrompt.map(readPromptInput).join('\n\n')
     : undefined,
-  limits: config.settings.limits,
-  autoCompaction: config.settings.autoCompaction,
-  shellPath: resolveShellPath(config.settings.shellPath, { env }),
   eventDefaultTarget: config.settings.eventDefaultTarget,
   logger,
   // grep / find download ripgrep / fd here when they are not installed (same as pi); VELA_OFFLINE=1 turns that off

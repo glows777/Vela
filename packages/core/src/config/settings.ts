@@ -3,20 +3,14 @@ import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileCredentialStore } from '../auth/store.ts'
 import type { CredentialStore } from '../auth/types.ts'
-import { assertLimitKeys, type VelaLimits } from '../limits.ts'
-import {
-  type ProviderDefinition,
-  THINKING_LEVELS,
-  type ThinkingLevel,
-} from '../models/index.ts'
+import type { ProviderDefinition } from '../models/index.ts'
 import {
   type ContextFile,
   loadAgentContextFile,
   loadContextFiles,
 } from '../prompt/context-files.ts'
-import { isToolModifier, mergeDefaultTools } from '../tools/tool-selection.ts'
 import type { ExtensionConfigDefinition } from './extension-config.ts'
-import { deepMerge, interpolateDeep, isPlainObject } from './interpolate.ts'
+import { interpolateDeep } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
 import {
@@ -24,39 +18,13 @@ import {
   readLocalSystemFile,
 } from './runtime-resources.ts'
 
-/** Contents of settings.json (user: `~/.vela/settings.json`, project: `<cwd>/.vela/settings.json`). */
-export interface VelaSettings {
-  /** Default model `provider/id` (pi splits this into defaultProvider + defaultModel) */
-  defaultModel?: string
-  /** Default thinking level; medium when unset (like pi) */
-  defaultThinkingLevel?: ThinkingLevel
-  /**
-   * Models Ctrl+P cycles through (pi's `enabledModels`): `provider/id` patterns where `*` matches anything,
-   * or a bare id / pattern matched against every provider. Unset: all available models.
-   */
-  enabledModels?: string[]
-  /** Project data directory, relative to cwd; default `<agentDir>/projects/<encoded cwd>` */
-  dataDir?: string
-  /** Shell the bash tool runs commands with (like pi); the CLI selects Git Bash on Windows */
-  shellPath?: string
-  /**
-   * Tools a new session starts with: plain names (or `*` patterns) replace the default set, while
-   * `+name` / `-name` entries adjust it (like pi's `defaultTools`).
-   */
-  defaultTools?: string[]
-  /** Overrides any subset of VelaLimits */
-  limits?: Partial<VelaLimits>
-  /** Automatic compaction (like pi's `compaction.enabled`); default true. Manual /compact works either way */
-  autoCompaction?: boolean
-  /** Extension files or directories (relative to this settings file), plus `builtin:<name>` / `+builtin:<name>` / `-builtin:<name>` */
-  extensions?: string[]
-  /** Extra skill directories or files (relative to this settings file) */
-  skills?: string[]
-  /** Extra prompt template directories or files (relative to this settings file) */
-  prompts?: string[]
-  /** Per-extension config section `extensionConfig.<extension name>`; strings support `$VAR` / `${VAR}` */
-  extensionConfig?: Record<string, Record<string, unknown>>
-}
+import {
+  mergeSettings,
+  parseSettings,
+  type VelaSettings,
+} from './settings-values.ts'
+
+export type { VelaSettings } from './settings-values.ts'
 
 /** An extension to load: built-ins by name, others by file path. */
 export type ExtensionEntry =
@@ -157,8 +125,6 @@ export function projectTrustRequired(
   )
 }
 
-const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
-
 /**
  * Reads user and project settings.json and discovers extensions and skill directories
  * (like pi: project overrides user, objects deep-merge, extensions / skills concatenate).
@@ -176,12 +142,15 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const layers: VelaSettings[] = []
   const userFile = join(agentDir, 'settings.json')
   const projectFile = join(projectDir, 'settings.json')
+  let userSettings: VelaSettings = {}
   let userExtensionConfig: Record<string, Record<string, unknown>> = {}
   for (const file of trusted ? [userFile, projectFile] : [userFile]) {
     const settings = readSettings(file)
     if (!settings) continue
-    if (file === userFile)
+    if (file === userFile) {
+      userSettings = settings
       userExtensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
+    }
     files.push(file)
     layers.push(settings)
   }
@@ -216,13 +185,13 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   const homeDir = resolve(options.homeDir ?? homedir())
   const hostSkillDirs = [
     ...new Set([
-      ...(settings.skills ?? []),
+      ...(userSettings.skills ?? []),
       join(agentDir, 'skills'),
       join(homeDir, '.agents', 'skills'),
     ]),
   ]
   const hostPromptDirs = [
-    ...new Set([...(settings.prompts ?? []), join(agentDir, 'prompts')]),
+    ...new Set([...(userSettings.prompts ?? []), join(agentDir, 'prompts')]),
   ]
   const userContext = loadAgentContextFile(agentDir)
   let skillDirs: string[] | undefined
@@ -254,6 +223,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     sessionResources: {
       agentDir,
       cwd,
+      userSettings,
+      env: { ...env },
       userContextFiles: userContext ? [userContext] : [],
       hostSkillDirs,
       hostPromptDirs,
@@ -272,7 +243,9 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
             ? [join(projectDir, 'skills'), ...ancestorAgentsSkillDirs(cwd)]
             : []),
           ...(trusted || projectDir === agentDir ? [join(cwd, '.skills')] : []),
-          ...hostSkillDirs,
+          ...(settings.skills ?? []),
+          join(agentDir, 'skills'),
+          join(homeDir, '.agents', 'skills'),
         ]),
       ]
       return skillDirs
@@ -283,7 +256,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     promptDirs: [
       ...new Set([
         ...(trusted ? [join(projectDir, 'prompts')] : []),
-        ...hostPromptDirs,
+        ...(settings.prompts ?? []),
+        join(agentDir, 'prompts'),
       ]),
     ],
     get contextFiles() {
@@ -329,88 +303,9 @@ function findGitRoot(start: string): string | undefined {
 /** Reads one settings file: undefined if missing, throws if malformed. Resource paths become absolute. */
 function readSettings(file: string): VelaSettings | undefined {
   if (!existsSync(file)) return
-  let raw: unknown
-  try {
-    raw = JSON.parse(readFileSync(file, 'utf-8'))
-  } catch (error) {
-    throw new Error(`${file} is not valid JSON: ${(error as Error).message}`)
-  }
-  if (!isPlainObject(raw)) throw new Error(`${file} must be a JSON object`)
-  const base = dirname(file)
-  const settings = { ...raw } as VelaSettings & Record<string, unknown>
-  for (const key of RESOURCE_KEYS) {
-    const list = settings[key]
-    if (list === undefined) continue
-    if (!Array.isArray(list) || list.some((item) => typeof item !== 'string'))
-      throw new Error(`${file}: ${key} must be an array of strings`)
-    settings[key] = list.map((item) =>
-      /^[+-]?builtin:/.test(item) ? item : resolveConfigPath(base, item),
-    )
-  }
-  for (const key of ['limits', 'extensionConfig'] as const)
-    if (settings[key] !== undefined && !isPlainObject(settings[key]))
-      throw new Error(`${file}: ${key} must be an object`)
-  if (settings.limits !== undefined)
-    assertLimitKeys(settings.limits, `${file}: limits`)
-  for (const key of ['dataDir', 'shellPath'] as const)
-    if (settings[key] !== undefined && typeof settings[key] !== 'string')
-      throw new Error(`${file}: ${key} must be a string`)
-  if (
-    settings.autoCompaction !== undefined &&
-    typeof settings.autoCompaction !== 'boolean'
+  return parseSettings(readFileSync(file, 'utf-8'), file, (item) =>
+    resolveConfigPath(dirname(file), item),
   )
-    throw new Error(`${file}: autoCompaction must be true or false`)
-  if (
-    settings.defaultModel !== undefined &&
-    (typeof settings.defaultModel !== 'string' ||
-      !settings.defaultModel.includes('/'))
-  )
-    throw new Error(`${file}: defaultModel must be "provider/id"`)
-  if (
-    settings.enabledModels !== undefined &&
-    (!Array.isArray(settings.enabledModels) ||
-      settings.enabledModels.some((item) => typeof item !== 'string'))
-  )
-    throw new Error(`${file}: enabledModels must be an array of strings`)
-  if (
-    settings.defaultTools !== undefined &&
-    (!Array.isArray(settings.defaultTools) ||
-      settings.defaultTools.some((item) => typeof item !== 'string'))
-  )
-    throw new Error(`${file}: defaultTools must be an array of strings`)
-  const toolPattern = settings.defaultTools?.find(
-    (entry) => isToolModifier(entry) && entry.includes('*'),
-  )
-  if (toolPattern)
-    throw new Error(
-      `${file}: +name and -name entries take exact tool names, not patterns: ${toolPattern}`,
-    )
-  if (
-    settings.defaultThinkingLevel !== undefined &&
-    !THINKING_LEVELS.includes(settings.defaultThinkingLevel)
-  )
-    throw new Error(
-      `${file}: defaultThinkingLevel must be one of ${THINKING_LEVELS.join(' / ')}`,
-    )
-  return settings
-}
-
-/** Project overrides user: objects deep-merge, extensions / skills concatenate, other values are replaced. */
-function mergeSettings(
-  base: VelaSettings,
-  override: VelaSettings,
-): VelaSettings {
-  const merged = deepMerge(base, override) as VelaSettings
-  for (const key of RESOURCE_KEYS) {
-    const list = [...(base[key] ?? []), ...(override[key] ?? [])]
-    if (list.length) merged[key] = list
-  }
-  const defaultTools = mergeDefaultTools(
-    base.defaultTools,
-    override.defaultTools,
-  )
-  if (defaultTools !== undefined) merged.defaultTools = defaultTools
-  return merged
 }
 
 const EXTENSION_FILE = /\.(ts|js|mjs)$/

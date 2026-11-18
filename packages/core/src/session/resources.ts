@@ -1,9 +1,12 @@
+import type { LanguageModel } from 'ai'
 import {
   readLocalSystemFile,
   type SystemFile,
 } from '../config/runtime-resources.ts'
 import { abortable } from '../execution/location.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
+import type { VelaLimits } from '../limits.ts'
+import type { ThinkingLevel } from '../models/index.ts'
 import type { ContextFile } from '../prompt/context-files.ts'
 import type { PromptTemplate } from '../prompt/templates.ts'
 import type { SkillDefinition } from '../skills/loader.ts'
@@ -17,9 +20,22 @@ export interface SessionResources {
   promptTemplates: readonly PromptTemplate[]
 }
 
+/** Internal effective defaults after user/project/explicit-host precedence has been applied. */
+export interface SessionDefaults {
+  model?: string | LanguageModel
+  thinkingLevel?: ThinkingLevel
+  limits?: Partial<VelaLimits>
+  autoCompaction?: boolean
+}
+
+/** Assembly-only metadata; the public resource inventory does not expose configuration. */
+export interface PreparedSessionResources extends SessionResources {
+  defaults?: SessionDefaults
+}
+
 /** One load per location, shared by previews, commands and the session's first model request. */
 export class WorkspaceResources {
-  private readonly snapshots = new Map<string, SessionResources>()
+  private readonly snapshots = new Map<string, PreparedSessionResources>()
   private readonly loading = new Map<
     string,
     {
@@ -29,9 +45,9 @@ export class WorkspaceResources {
     }
   >()
 
-  constructor(private readonly host: SessionResources) {}
+  constructor(private readonly host: PreparedSessionResources) {}
 
-  get(id: string): SessionResources {
+  get(id: string): PreparedSessionResources {
     return this.snapshots.get(id) ?? this.host
   }
 
@@ -43,7 +59,7 @@ export class WorkspaceResources {
 
   async prepare(
     id: string,
-    load: (signal: AbortSignal) => Promise<SessionResources>,
+    load: (signal: AbortSignal) => Promise<PreparedSessionResources>,
     signal?: AbortSignal,
   ): Promise<void> {
     signal?.throwIfAborted()

@@ -33,21 +33,7 @@ import {
 import type { ContextFile } from './prompt/context-files.ts'
 import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from './prompt/environment-templates.ts'
-import {
-  addendum,
-  type DocsPaths,
-  deferredTools,
-  docs,
-  environment,
-  extensionSections,
-  preamble,
-  projectContext,
-  resolveDocs,
-  rules,
-  SystemPromptBuilder,
-  toolList,
-  workingDirectory,
-} from './prompt/index.ts'
+import type { DocsPaths, SystemPromptBuilder } from './prompt/index.ts'
 import {
   expandPromptTemplate,
   loadPromptTemplates,
@@ -56,6 +42,8 @@ import {
 import { setSavedSessionArchived } from './session/index.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
+import { ProjectConfig } from './session/project-config.ts'
+import { createSessionPrompt } from './session/prompt-builder.ts'
 import { sessionSystemFile, WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
 import { type SessionSearchHit, searchSessionText } from './session/search.ts'
@@ -70,7 +58,7 @@ import {
   expandEnvironmentSkill,
   loadEnvironmentSkills,
 } from './skills/environment-skills.ts'
-import { formatSkillsForPrompt, SkillLoader } from './skills/loader.ts'
+import { SkillLoader } from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
 import { ToolRegistry } from './tools/registry.ts'
@@ -285,6 +273,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       ? memorySessionStorage()
       : fileSessionStorage(join(dataDir, 'sessions'), options.logger))
   let { model } = options
+  let defaultsChanged = false
   let defaultThinkingLevel = options.thinkingLevel ?? DEFAULT_THINKING_LEVEL
   const models = new ModelRegistry(options.providers, options.credentials)
   const resolveModel = (
@@ -329,6 +318,8 @@ export function createVela(options: VelaOptions = {}): Vela {
   registerToolSearchTool(registry)
 
   const resourceSplit = options.sessionResources
+  const projectConfig = new ProjectConfig(resourceSplit, dataDir, logger)
+  const sessionShells = new Map<string, string | undefined>()
   const skillLoader = new SkillLoader(
     resourceSplit?.hostSkillDirs ?? options.skillDirs ?? [],
   )
@@ -347,6 +338,10 @@ export function createVela(options: VelaOptions = {}): Vela {
       ? []
       : (resourceSplit?.userContextFiles ?? options.contextFiles ?? [])
   const sessions = new Map<string, VelaSession>()
+  const hostDefaults = new Map<
+    string,
+    { model?: string | LanguageModel; thinkingLevel?: ThinkingLevel }
+  >()
   const resources = new WorkspaceResources({
     systemPrompt: options.systemPrompt,
     appendSystemPrompt: options.appendSystemPrompt,
@@ -355,50 +350,12 @@ export function createVela(options: VelaOptions = {}): Vela {
     promptTemplates,
   })
 
-  // Named sections in pi's order; preamble, tools, rules and docs give way to a replacement prompt
-  const builder = new SystemPromptBuilder({
-    hasReplacement: (ctx) =>
-      resources.get(ctx.sessionId).systemPrompt !== undefined,
-    sections: [
-      {
-        name: 'preamble',
-        render: (ctx) =>
-          preamble(resources.get(ctx.sessionId).systemPrompt)(ctx),
-      },
-      { name: 'tools', core: true, render: toolList() },
-      { name: 'deferred_tools', render: deferredTools() },
-      { name: 'rules', core: true, render: rules() },
-      { name: 'docs', core: true, render: docs(resolveDocs(options.docs)) },
-      {
-        name: 'addendum',
-        render: (ctx) =>
-          addendum(resources.get(ctx.sessionId).appendSystemPrompt)(ctx),
-      },
-      {
-        name: 'project_context',
-        render: (ctx) =>
-          projectContext(resources.get(ctx.sessionId).contextFiles)(ctx),
-      },
-      {
-        name: 'skills',
-        render: (ctx) =>
-          formatSkillsForPrompt(
-            resources.get(ctx.sessionId).skills,
-            (ctx.activeTools ?? []).map((tool) => tool.name),
-          ),
-      },
-      {
-        name: 'cwd',
-        render: (ctx) =>
-          workingDirectory(sessions.get(ctx.sessionId)?.cwd ?? cwd)(ctx),
-      },
-      {
-        name: 'env',
-        render: environment({ shell: options.shellPath }),
-      },
-      { name: 'extensions', render: extensionSections() },
-    ],
-  })
+  const builder = createSessionPrompt(
+    (id) => resources.get(id),
+    (id) => sessions.get(id)?.cwd ?? cwd,
+    (id) => sessionShells.get(id) ?? options.shellPath,
+    options.docs,
+  )
 
   const listeners = new Set<VelaSessionEventListener>()
   let disposed = false
@@ -410,7 +367,7 @@ export function createVela(options: VelaOptions = {}): Vela {
       sessionId: session.id,
       location: { environment: 'local', cwd: session.cwd },
     }
-    const env = options.env
+    let env = options.env
       ? await options.env(target)
       : createSessionLocalExecutionEnv({
           cwd: session.cwd,
@@ -421,6 +378,20 @@ export function createVela(options: VelaOptions = {}): Vela {
       throw new Error(
         `Execution environment unavailable for local:${session.cwd}`,
       )
+    if (resourceSplit) {
+      const settings = await projectConfig.get(session.id, env)
+      const shellPath =
+        options.shellPath ??
+        settings.shellPath ??
+        resourceSplit?.fallbackShellPath
+      sessionShells.set(session.id, shellPath)
+      if (!options.env && shellPath !== options.shellPath)
+        env = createSessionLocalExecutionEnv({
+          cwd: session.cwd,
+          shellPath,
+          tempRoot: session.registry.results.dir,
+        })
+    }
     return options.env
       ? scopeLocalResults(env, session.registry.results.dir)
       : env
@@ -445,11 +416,8 @@ export function createVela(options: VelaOptions = {}): Vela {
           options.contextFiles === false || pinned
             ? []
             : await loadEnvironmentContextFiles(env, location, signal)
-        const workspaceMode = !resourceSplit
-          ? undefined
-          : location === resourceSplit.cwd
-            ? resourceSplit.workspaceSkills
-            : (resourceSplit.workspaceModeAt?.(location) ?? 'none')
+        const workspaceMode = projectConfig.mode(location)
+        const settings = await projectConfig.get(session.id, env)
         const workspaceSkills = (
           workspaceMode === undefined
             ? options.skillDirs && location === cwd
@@ -463,6 +431,7 @@ export function createVela(options: VelaOptions = {}): Vela {
               workspaceMode === 'home',
               ({ path, message }) =>
                 logger.warn(`[resources] ${path}: ${message}`),
+              settings.skills ?? [],
             )
         const workspaceNames = new Set(
           workspaceSkills.map((skill) => skill.name),
@@ -478,7 +447,12 @@ export function createVela(options: VelaOptions = {}): Vela {
             : workspaceMode !== 'all'
         )
           ? []
-          : await loadEnvironmentTemplates(env, location, signal)
+          : await loadEnvironmentTemplates(
+              env,
+              location,
+              signal,
+              settings.prompts ?? [],
+            )
         const templateNames = new Set(
           workspaceTemplates.map((template) => template.name),
         )
@@ -497,6 +471,20 @@ export function createVela(options: VelaOptions = {}): Vela {
             signal,
           )
         return {
+          defaults: resourceSplit
+            ? {
+                model:
+                  hostDefaults.get(session.id)?.model ??
+                  settings.defaultModel ??
+                  resourceSplit.fallbackModel,
+                thinkingLevel:
+                  hostDefaults.get(session.id)?.thinkingLevel ??
+                  settings.defaultThinkingLevel,
+                limits: { ...settings.limits, ...options.limits },
+                autoCompaction:
+                  options.autoCompaction ?? settings.autoCompaction,
+              }
+            : undefined,
           systemPrompt: options.systemPrompt ?? (await readSystem('SYSTEM.md')),
           appendSystemPrompt:
             options.appendSystemPrompt ??
@@ -536,10 +524,17 @@ export function createVela(options: VelaOptions = {}): Vela {
       applySessionRouting(existing, sessionOptions)
       return existing
     }
+    hostDefaults.set(id, {
+      model,
+      thinkingLevel: defaultsChanged
+        ? defaultThinkingLevel
+        : options.thinkingLevel,
+    })
     const created: VelaSession = new VelaSession(
       id,
       {
         model,
+        prepareCommands: resourceSplit !== undefined,
         resolveModel,
         thinkingLevel: defaultThinkingLevel,
         autoCompaction: options.autoCompaction ?? true,
@@ -590,11 +585,16 @@ export function createVela(options: VelaOptions = {}): Vela {
         onCwdChange: (changed) => {
           sessionCwds.set(changed.registry, changed.cwd)
           resources.clear(changed.id)
+          projectConfig.clear(changed.id)
+          sessionShells.delete(changed.id)
         },
         onClose: (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
             resources.clear(closed.id)
+            projectConfig.clear(closed.id)
+            sessionShells.delete(closed.id)
+            hostDefaults.delete(closed.id)
           }
         },
       },
@@ -680,6 +680,7 @@ export function createVela(options: VelaOptions = {}): Vela {
     setDefaults: (nextModel, thinkingLevel) => {
       resolveModel(nextModel)
       model = nextModel
+      defaultsChanged = true
       defaultThinkingLevel = thinkingLevel
       defaultModel = undefined
     },

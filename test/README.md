@@ -53,6 +53,8 @@ CI (`.github/workflows/ci.yml`) runs `bun run test`, `bun run typecheck`, `bun r
 
 Run the layer that matches what you changed; run the full `bun run test` when you touch the agent loop, assembly, events, context management or the CLI entry point.
 
+`e2e/project-settings-location.test.ts` drives actual SDK assembly and CLI resume across projects: declared resources and defaults, denied trust, saved/manual/explicit choices, settings snapshots, and an A → B → A request ledger whose A system prompt and tool list remain byte-identical. This is prefix-stability evidence, not a live provider cache-billing test; project extension/MCP isolation is outside this first #452 slice.
+
 ## Faux model
 
 ```ts

@@ -24,10 +24,7 @@ import { withProviderHooks } from './extensions/provider-hooks.ts'
 import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
 import type { VelaLimits } from './limits.ts'
 import type { ImageContent, ModelMessage, TextContent } from './messages.ts'
-import {
-  clampThinkingLevel,
-  supportedThinkingLevels,
-} from './models/catalog.ts'
+import { supportedThinkingLevels } from './models/catalog.ts'
 import {
   limitsForModel,
   type ModelInfo,
@@ -37,6 +34,7 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
+import { SessionDefaultState } from './session/defaults.ts'
 import type {
   SessionDeps as SessionDependencies,
   ForkResult as SessionForkResult,
@@ -156,8 +154,7 @@ export class VelaSession {
     this.cwd = localCwd(options.location, deps.cwd, options.cwd)
     this.deps = deps
     this.options = options
-    this.modelChoice = options.model ?? deps.model
-    this.thinking = options.thinkingLevel ?? deps.thinkingLevel
+    this.defaults = new SessionDefaultState(deps, options)
     this.limits = limitsForModel({}, deps.limitOverrides)
     this.builder = deps.builder
     this.store = new SessionStore(
@@ -217,9 +214,9 @@ export class VelaSession {
     this.contextManager.autoCompaction =
       options.autoCompaction ?? deps.autoCompaction
     // Like pi: a new session starts with its model and thinking level (written with the first message)
-    if (typeof this.modelChoice === 'string')
-      this.store.appendModelChange(this.modelChoice)
-    this.store.appendThinkingLevelChange(this.thinking)
+    if (typeof this.defaults.modelChoice === 'string')
+      this.store.appendModelChange(this.defaults.modelChoice)
+    this.store.appendThinkingLevelChange(this.defaults.thinking)
   }
 
   private displayName?: string
@@ -237,32 +234,29 @@ export class VelaSession {
     this.store.appendSessionInfo(next)
   }
 
-  /** Selected model (name or object); resolution is deferred until first use (providers registered by extensions may not be loaded yet) */
-  private modelChoice: string | LanguageModel | undefined
-  private resolved?: ResolvedModel
-  private thinking: ThinkingLevel
+  private readonly defaults: SessionDefaultState
 
   private resolveModel(): ResolvedModel {
-    if (!this.resolved)
-      this.applyModel(this.deps.resolveModel(this.modelChoice, this))
-    return this.resolved as ResolvedModel
+    if (!this.defaults.resolved)
+      this.applyModel(this.deps.resolveModel(this.defaults.modelChoice, this))
+    return this.defaults.resolved as ResolvedModel
   }
 
   private applyModel(resolved: ResolvedModel): void {
-    this.resolved = resolved
-    this.hooked = undefined
-    const limits = limitsForModel(resolved.info, this.deps.limitOverrides)
+    this.defaults.resolved = resolved
+    this.defaults.hooked = undefined
+    const limits = limitsForModel(
+      resolved.info,
+      this.defaults.effectiveLimitOverrides,
+    )
     Object.assign(this.limits, limits)
     Object.assign(this.contextManager.limits, limits)
     const window = resolved.info.contextWindow ?? CONTEXT_WINDOW
     this.tracker.setModel(window, resolved.info.cost)
   }
 
-  /** The current model wrapped with the extension provider hooks (what requests go through) */
-  private hooked?: LanguageModel
-
   private requestModel(): LanguageModel {
-    this.hooked ??= withProviderHooks(this.model, {
+    this.defaults.hooked ??= withProviderHooks(this.model, {
       has: (event, toolName) =>
         this.deps.extensions.hasHandlers(event, toolName),
       beforeRequest: (params) =>
@@ -275,7 +269,7 @@ export class VelaSession {
           ...event,
         }),
     })
-    return this.hooked
+    return this.defaults.hooked
   }
 
   /** Current model (AI SDK LanguageModel). Throws if the name cannot be resolved. */
@@ -295,12 +289,13 @@ export class VelaSession {
    */
   setModel(model: string | LanguageModel): void {
     this.selectModel(model, true)
+    this.defaults.modelPinned = true
   }
 
   private selectModel(model: string | LanguageModel, record: boolean): void {
     const resolved = this.deps.resolveModel(model, this)
     const thinking = this.thinkingLevel
-    this.modelChoice = model
+    this.defaults.modelChoice = model
     this.applyModel(resolved)
     if (record && typeof model === 'string')
       this.store.appendModelChange(resolved.info.ref ?? model)
@@ -318,14 +313,9 @@ export class VelaSession {
     try {
       info = this.resolveModel().info
     } catch {
-      return this.thinking
+      return this.defaults.thinking
     }
-    return this.thinkingLevelFor(info)
-  }
-
-  /** The requested level clamped to what `info` supports (the getter uses the current model). */
-  private thinkingLevelFor(info: ModelInfo): ThinkingLevel {
-    return clampThinkingLevel(this.thinking, info, THINKING_LEVELS)
+    return this.defaults.thinkingLevelFor(info)
   }
 
   /** Thinking levels the current model supports (all of them when its metadata doesn't say). */
@@ -347,8 +337,9 @@ export class VelaSession {
       throw new Error(
         `Thinking level must be one of ${THINKING_LEVELS.join(' / ')}`,
       )
+    this.defaults.thinkingPinned = true
     const before = this.thinkingLevel
-    this.thinking = level
+    this.defaults.thinking = level
     const after = this.thinkingLevel
     if (after !== before) this.store.appendThinkingLevelChange(after)
   }
@@ -443,7 +434,19 @@ export class VelaSession {
 
   /** @internal Session-scoped resource inventory for Vela's own CLI. */
   resources(): Promise<SessionResources> {
-    return this.deps.prepareWorkspace(this)
+    return this.prepare()
+  }
+
+  private async prepare(signal?: AbortSignal): Promise<SessionResources> {
+    const resources = await this.deps.prepareWorkspace(this, signal)
+    signal?.throwIfAborted()
+    this.defaults.apply(
+      resources.defaults,
+      this.store,
+      this.limits,
+      this.contextManager,
+    )
+    return resources
   }
 
   /** @internal This session's system prompt (rebuilt before each turn's requests). */
@@ -533,6 +536,7 @@ export class VelaSession {
   }
 
   set autoCompaction(enabled: boolean) {
+    this.defaults.compactionPinned = true
     this.contextManager.autoCompaction = enabled
   }
 
@@ -695,22 +699,9 @@ export class VelaSession {
     this.registry.discoveredTools = new Set(await this.store.loadedTools())
     for (const [message, info] of context.custom)
       this.messageQueue.customMessages.set(message, info)
-    if (
-      context.thinkingLevel &&
-      THINKING_LEVELS.includes(context.thinkingLevel)
+    await this.defaults.restore(context, this.deps, this.id, (model) =>
+      this.selectModel(model, false),
     )
-      this.thinking = context.thinkingLevel
-    if (context.model && context.model !== this.resolved?.info.ref) {
-      // Providers registered by extensions resolve only after extensions load
-      await this.deps.extensions.ready.catch(() => {})
-      try {
-        this.selectModel(context.model, false)
-      } catch (error) {
-        this.deps.logger.warn(
-          `[session] Saved model ${context.model} for ${this.id} is unavailable, keeping the current model: ${error instanceof Error ? error.message : error}`,
-        )
-      }
-    }
     // The branch's latest summary points into the tool call history up to this sequence
     const results = this.store.results
     const sequence = context.toolHistoryViewSeq
@@ -753,8 +744,8 @@ export class VelaSession {
         {
           ...unrouted,
           location: { environment: 'local', cwd: this.cwd },
-          model: this.modelChoice,
-          thinkingLevel: this.thinking,
+          model: this.defaults.modelChoice,
+          thinkingLevel: this.defaults.thinking,
           autoCompaction: this.autoCompaction,
         },
       )
@@ -825,7 +816,7 @@ export class VelaSession {
       path,
       entries: this.store.getBranch(),
       name: this.name,
-      model: this.modelChoice,
+      model: this.defaults.modelChoice,
       format,
     })
   }
@@ -850,12 +841,13 @@ export class VelaSession {
       routing.bindSavedChannel(this, saved.channel)
     // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
     if (this.options.thinkingLevel !== undefined)
-      this.thinking = this.options.thinkingLevel
+      this.defaults.thinking = this.options.thinkingLevel
     if (
       this.options.model !== undefined &&
-      this.options.model !== this.modelChoice
+      this.options.model !== this.defaults.modelChoice
     )
       this.selectModel(this.options.model, false)
+    await this.prepare()
     return true
   }
 
@@ -953,7 +945,10 @@ export class VelaSession {
     if (!slash && !extensions.hasHandlers('input'))
       return this.promptModel(input, options)
     return this.trackInput(options.signal, async (signal) => {
-      await abortable(this.startExtensions(), signal)
+      await abortable(
+        this.deps.prepareCommands ? this.start(signal) : this.startExtensions(),
+        signal,
+      )
       if (this.draining) throw this.drainError()
       if (this.closed) throw new Error(`Session ${this.id} is closed`)
       signal.throwIfAborted()
@@ -1200,7 +1195,7 @@ export class VelaSession {
 
   /** Before first use: waits for extensions to load and fires session_start (once). */
   private async start(signal?: AbortSignal): Promise<void> {
-    await this.deps.prepareWorkspace(this, signal)
+    await this.prepare(signal)
     await this.startExtensions()
   }
 
@@ -1308,8 +1303,8 @@ export class VelaSession {
     const { info } = this.resolveModel()
     // Like pi, save a model picked automatically (no model chosen: the first provider with a credential), so a
     // resumed session keeps it even when the credentials change later
-    if (this.modelChoice === undefined) {
-      this.modelChoice = info.ref
+    if (this.defaults.modelChoice === undefined) {
+      this.defaults.modelChoice = info.ref
       this.store.appendModelChange(info.ref)
     }
     inputs = await Promise.all(
@@ -1347,7 +1342,8 @@ export class VelaSession {
       supportsImages: info.input?.includes('image') ?? true,
       // Like pi, read per request: a level changed during the run applies to the next step. It is
       // clamped to `info`, the model that serves this loop, like `setModel` waits for the next prompt.
-      reasoning: () => reasoningOption(this.thinkingLevelFor(info), info),
+      reasoning: () =>
+        reasoningOption(this.defaults.thinkingLevelFor(info), info),
       systemPrompt: () => this.buildSystem(),
       toolRegistry: this.registry,
       messages: this.messages,

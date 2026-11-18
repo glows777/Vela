@@ -18,7 +18,7 @@ import type { ResolvedModel, ThinkingLevel } from '../models/index.ts'
 import type { SystemPromptBuilder } from '../prompt/index.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { SessionOptions } from './options.ts'
-import type { SessionResources } from './resources.ts'
+import type { PreparedSessionResources } from './resources.ts'
 import type { SessionStorage } from './storage.ts'
 
 /** What the extension runtime does during the session lifecycle (provided by createVela). */
@@ -75,6 +75,8 @@ interface SessionExtensionHooks<Session> {
 
 /** Shared parts createVela() hands to every session. */
 export interface SessionDeps<Session> {
+  /** Only configuration-backed frontends need project defaults before command dispatch. */
+  prepareCommands?: boolean
   /** Default model */
   model: string | LanguageModel | undefined
   /** Resolves a model by name or object (including the provider registry) for a session */
@@ -118,7 +120,7 @@ export interface SessionDeps<Session> {
   prepareWorkspace: (
     session: Session,
     signal?: AbortSignal,
-  ) => Promise<SessionResources>
+  ) => Promise<PreparedSessionResources>
 }
 
 /** What `fork()` / `clone()` returns. */
