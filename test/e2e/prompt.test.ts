@@ -578,7 +578,10 @@ test('an earlier untagged marker never turns a later person message into discuss
 })
 
 test('a topic session sends the same system prompt for a person and a note', async () => {
-  const { fake, t } = larkGroup([fauxText('Working on it'), fauxText('Noted')])
+  const { fake, t } = larkGroup(
+    [fauxText('Working on it'), fauxText('Noted')],
+    true,
+  )
   await t.vela.startChannels()
   fake.deliver(
     larkEvent({
@@ -608,6 +611,12 @@ test('a topic session sends the same system prompt for a person and a note', asy
   )
   expect(topicCalls).toHaveLength(2)
   expect(topicCalls[1]!.system).toBe(topicCalls[0]!.system)
+
+  // The note's wake reads the person's request back instead of paying for it again
+  const usage = t.eventsOf('usage').map((event) => event.usage)
+  expect(usage[1]!.cacheReadTokens).toBeGreaterThanOrEqual(
+    usage[0]!.cacheWriteTokens - 1,
+  )
 })
 
 test('the untagged marker stays out of the channel history and the directory', async () => {
