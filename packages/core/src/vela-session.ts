@@ -69,6 +69,7 @@ import {
 import {
   assertInterruptedTurn,
   assertLegacyAnchors,
+  pendingToolCalls,
   reconcileInterruptedTools,
 } from './session/recovery.ts'
 import type { SessionResources } from './session/resources.ts'
@@ -1234,7 +1235,7 @@ export class VelaSession {
     try {
       // steer / followUp are normally taken inside agentLoop (like pi). If the loop ends early (error / budget /
       // loop detection), remaining messages run in a new loop (steer first). After an abort, stop and keep the queue.
-      if (input === undefined) {
+      if (input === undefined || pendingToolCalls(this.messages).length) {
         await this.start(controller.signal)
         await this.store.assertNew()
         await assertLegacyAnchors(
@@ -1250,7 +1251,6 @@ export class VelaSession {
           signal: controller.signal,
         })
         this.registry.discoveredTools = new Set(await this.store.loadedTools())
-        // Flush even when a crashed model request left no tool calls to repair.
         await this.save()
       }
       let inputs = input === undefined ? [] : [input]
