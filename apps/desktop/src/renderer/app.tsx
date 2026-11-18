@@ -5,11 +5,11 @@ import { HeaderBar } from './frame/header-bar.tsx'
 import { NewProjectDialog } from './frame/new-project.tsx'
 import { Sidebar } from './frame/sidebar.tsx'
 import { Home } from './home/home.tsx'
+import type { Panel } from './panel.ts'
 import { ProjectPage } from './project/project-page.tsx'
 import { loadProject, start, useStore } from './store.ts'
 
 type View = { name: 'home' } | { name: 'project'; projectId: string }
-export type Panel = { open: boolean; sessionId?: string }
 
 /** The frame: a fixed sidebar and header bar around Home or one project. */
 export function App() {
