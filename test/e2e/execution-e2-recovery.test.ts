@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import {
@@ -84,6 +84,33 @@ test('write_file does not write to the host when its environment denies the writ
     expect(writes).toBe(1)
     const { existsSync } = await import('node:fs')
     expect(existsSync(join(dir.path, 'forbidden.txt'))).toBe(false)
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('write_file can update its own new file under a symlinked workspace directory', async () => {
+  const dir = tempDir()
+  mkdirSync(join(dir.path, 'actual'))
+  symlinkSync(join(dir.path, 'actual'), join(dir.path, 'linked'), 'dir')
+  const path = 'linked/new/note.txt'
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('write_file', { path, content: 'first' }),
+      fauxToolCall('write_file', { path, content: 'second' }),
+      fauxToolCall('write_file', {
+        path: 'actual/new/note.txt',
+        content: 'third',
+      }),
+      fauxText('done'),
+    ],
+  })
+  const vela = createVela({ cwd: dir.path, model })
+  try {
+    await vela.session('write-through-link').prompt('create and revise note')
+    expect(model.calls[2]!.toolResults.at(-1)!.output).toContain('Wrote')
+    expect(readFileSync(join(dir.path, path), 'utf8')).toBe('third')
   } finally {
     await vela.dispose()
     dir.cleanup()
