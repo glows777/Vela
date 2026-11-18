@@ -50,6 +50,55 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   },
 )
 
+test('stopping a pending skill expansion prevents the model turn', async () => {
+  const dir = tempDir()
+  const base = join(dir.path, '.skills/example')
+  mkdirSync(base, { recursive: true })
+  const file = join(base, 'SKILL.md')
+  writeFileSync(
+    file,
+    '---\nname: example\ndescription: example skill\n---\nbody',
+  )
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const model = createFauxModel({ responses: [fauxText('unexpected')] })
+  let hold = false
+  const vela = createVela({
+    cwd: dir.path,
+    model,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      const read = env.readTextFile.bind(env)
+      env.readTextFile = async (path, signal) => {
+        if (hold && path === file) {
+          entered.resolve()
+          await release.promise
+        }
+        return read(path, signal)
+      }
+      return env
+    },
+  })
+  try {
+    const session = vela.session('stopped-skill')
+    await session.resources()
+    hold = true
+    const submitted = session.prompt('/skill:example').then(
+      () => 'completed',
+      () => 'cancelled',
+    )
+    await entered.promise
+    await session.abort()
+    release.resolve()
+    expect(await submitted).toBe('cancelled')
+    expect(model.calls).toHaveLength(0)
+  } finally {
+    release.resolve()
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
 test('a first turn cannot omit workspace instructions while its environment is offline and retries once available', async () => {
   const dir = tempDir()
   writeFileSync(join(dir.path, 'AGENTS.md'), 'mandatory workspace context')

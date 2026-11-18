@@ -484,7 +484,7 @@ export class VelaSession {
   }
 
   /** Running extension commands (commands don't hold the run lock; several can run at once and may call prompt()) */
-  private readonly commands = new Map<AbortController, Promise<boolean>>()
+  private readonly commands = new Map<AbortController, Promise<void>>()
 
   /** @internal Abort signal while running (agent loop or extension command) */
   get signal(): AbortSignal | undefined {
@@ -1018,20 +1018,19 @@ export class VelaSession {
   prompt(input: string, options: PromptOptions = {}): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
-    if (input.startsWith('/'))
-      return (async () => {
-        await this.startExtensions()
-        if (this.closed) throw new Error(`Session ${this.id} is closed`)
-        if (await this.runCommand(input, options.signal)) return
-        return this.promptInput(input, options)
-      })()
-    return this.promptInput(input, options)
+    const slash = input.startsWith('/')
+    if (!slash && !this.deps.extensions.hasHandlers('input'))
+      return this.promptModel(input, options)
+    return this.trackInput(options.signal, async (signal) => {
+      await abortable(this.startExtensions(), signal)
+      if (slash && (await this.deps.extensions.runCommand(this, input, signal)))
+        return
+      signal.throwIfAborted()
+      return this.promptInput(input, { ...options, signal })
+    })
   }
 
-  /**
-   * Runs the `input` handlers, then expands and prompts (or queues). Without input handlers nothing is awaited
-   * before the run lock is taken or the input queued, so back-to-back calls keep their order.
-   */
+  /** Run input hooks before expanding and submitting or queuing the result. */
   private promptInput(
     input: string,
     options: PromptOptions,
@@ -1056,24 +1055,25 @@ export class VelaSession {
     })()
   }
 
-  /**
-   * Expands `/skill:<name>` and prompt templates, then prompts (or queues). A skill file that can't be
-   * read rejects instead of sending the raw command.
-   */
+  /** Expand skills and templates before submitting their text to the model. */
   private promptExpanded(input: string, options: PromptOptions): Promise<void> {
     if (!input.startsWith('/')) return this.promptModel(input, options)
-    return this.deps
-      .expandInput(input, this, options.signal)
-      .then((expanded) => this.promptModel(expanded, options))
+    return abortable(
+      this.deps.expandInput(input, this, options.signal),
+      options.signal,
+    ).then((expanded) => this.promptModel(expanded, options))
   }
 
-  /** Runs an extension command; abort() and options.signal abort the command's ctx.signal. */
-  private async runCommand(input: string, signal?: AbortSignal) {
+  /** Register async input before dispatch so abort also covers resource expansion. */
+  private async trackInput(
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<void>,
+  ) {
     const controller = new AbortController()
     const forward = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', forward, { once: true })
     if (signal?.aborted) forward()
-    const task = this.deps.extensions.runCommand(this, input, controller.signal)
+    const task = run(controller.signal)
     this.commands.set(controller, task)
     try {
       return await task
