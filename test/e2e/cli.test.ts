@@ -1369,6 +1369,12 @@ test.concurrent('a resumed CLI session uses the saved trust of its own workspace
     trustFile,
     JSON.stringify({ [a.path]: true, [b.path]: true }),
   )
+  const disabled = await cli(['--no-approve', ...args], {
+    ...options,
+    cwd: a.path,
+  })
+  expect(disabled.code).toBe(0)
+  expect(disabled.stdout).not.toContain('B_WORKSPACE_TEMPLATE')
   const allowed = await cli(args, { ...options, cwd: a.path })
   expect(allowed.code).toBe(0)
   expect(allowed.stdout).toContain('B_WORKSPACE_TEMPLATE')

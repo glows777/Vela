@@ -286,7 +286,7 @@ const vela = createVela({
     workspaceModeAt: (location) =>
       join(location, '.vela') === agentDir
         ? 'home'
-        : savedTrust(agentDir, location)
+        : args.approve !== false && savedTrust(agentDir, location)
           ? 'all'
           : 'none',
   },
