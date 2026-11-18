@@ -36,6 +36,7 @@ export interface RpcModeOptions {
   newSessionId: () => string
   /** Called after the startup session opens (and resumes): command-line --model / --thinking override saved settings */
   configure?: (session: VelaSession) => void
+  onReady?: (session: VelaSession) => Promise<void>
   input: AsyncIterable<Uint8Array>
   write: (text: string) => Promise<void>
   /** Message for a failed command's `error` (the CLI swaps the SDK's no-model hint for its own); defaults to the error's message */
@@ -98,6 +99,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   let session = vela.session(options.sessionId, { ui })
   if (options.resume) await session.resume()
   options.configure?.(session)
+  await options.onReady?.(session)
 
   // Failures inside the agent loop are already reported in agent_end; when the prompt Promise rejects, this decides whether to report again
   let reportedError: unknown

@@ -511,7 +511,6 @@ if (mode === 'print' || mode === 'json') {
     }),
   )
 } else if (mode === 'rpc') {
-  await reportContextFiles(vela.session(sessionId))
   await vela
     .ready()
     .catch((error) =>
@@ -524,6 +523,7 @@ if (mode === 'print' || mode === 'json') {
     newSessionId,
     // Start even without a model; the client can set_model (the error goes to stderr)
     configure: (session) => void applyModelArgs(session),
+    onReady: reportContextFiles,
     input: process.stdin,
     write: writeStdout,
     describeError: cliErrorMessage,
