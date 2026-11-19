@@ -1,14 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { createLocalExecutionEnv } from '@glows777/vela-core'
-import {
-  createFauxModel,
-  fauxText,
-  fauxToolCall,
-} from '@glows777/vela-core/testing'
+import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { background } from '../../packages/core/src/extensions/background/index.ts'
-import { createVela } from '../../packages/vela/src/vela.ts'
-import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
+import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -514,7 +508,7 @@ test('two overlapping requests never move the same call twice', async () => {
   ).toHaveLength(1)
 })
 
-test('a `!!` command cannot be moved to the background, so its output never reaches the model', async () => {
+test('a `!!` command stays in the foreground, so its output never reaches the model', async () => {
   const t = createTestVela({
     responses: [(request) => fauxText(request.lastUserText)],
     extensions: [background()],
@@ -526,47 +520,73 @@ test('a `!!` command cannot be moved to the background, so its output never reac
   })
   await until(() => t.session.isBashRunning, 'the command to start')
   await until(() => updates.some((output) => output.includes('SECRET')))
-  expect(t.session.backgroundTasks()).rejects.toThrow(
-    'A command started with excludeFromContext cannot be moved to the background',
-  )
+  // Moving everything skips it: a job's exit is delivered to the model, which `!!` promised not to do.
+  expect(await t.session.backgroundTasks()).toEqual([])
   expect(await command).toMatchObject({ cancelled: false, exitCode: 0 })
   await t.run('hello')
-  // The exit would have triggered its own turn; the exclusion keeps the output out of the context.
+  // No job was created, so no exit turn; the exclusion keeps the output out of the context.
   expect(t.model.calls).toHaveLength(1)
   expect(JSON.stringify(t.messages)).not.toContain('SECRET')
 })
 
-test('cancelling a `!` command while the session is still starting does not wait for the environment', async () => {
-  const dir = tempDir()
-  let release!: () => void
-  const gate = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const vela = createVela({
-    cwd: dir.path,
-    model: createFauxModel({ responses: [] }),
+test('moving everything leaves a `!!` behind and takes the model call beside it', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'echo CALL; sleep 0.4' }),
+      fauxText('moved'),
+      fauxText('finished'),
+    ],
     extensions: [background()],
-    env: async () => {
-      await gate
-      return createLocalExecutionEnv({ cwd: dir.path })
-    },
+    allowPendingResponses: true,
   })
-  try {
-    const session = vela.session('starting')
-    const command = session.executeBash('echo LATE')
-    // The environment never resolves until the gate opens; abort must not wait behind it.
-    await Bun.sleep(50)
-    const aborting = session.abortBash()
-    const result = await Promise.race([
-      command,
-      Bun.sleep(1000).then(() => 'hung' as const),
-    ])
-    expect(result).toMatchObject({ cancelled: true, exitCode: undefined })
-    expect(session.isBashRunning).toBe(false)
-    release()
-    await aborting
-  } finally {
-    await vela.dispose()
-    dir.cleanup()
-  }
+  const updates: string[] = []
+  const own = t.session.executeBash('echo SECRET; sleep 0.4', {
+    excludeFromContext: true,
+    onUpdate: (output) => updates.push(output),
+  })
+  await until(() => updates.some((output) => output.includes('SECRET')))
+  const running = t.run('start the check')
+  await until(
+    () => t.eventsOf('tool_execution_update').length > 0,
+    'the tool call to produce output',
+  )
+  // Only the model-issued call moves; the user's excluded command keeps its own result.
+  expect(await t.session.backgroundTasks()).toEqual(['bg-1'])
+  await running
+  expect(await own).toMatchObject({ cancelled: false, exitCode: 0 })
+  await until(
+    () => JSON.stringify(t.messages).includes('Background command bg-1'),
+    'the moved job exit',
+  )
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+    'Command was manually moved to the background with ID: bg-1.',
+  )
+  expect(JSON.stringify(t.messages)).not.toContain('SECRET')
+})
+
+test('cancelling a `!` command during a slow `session_start` returns at once', async () => {
+  const gate = Promise.withResolvers<void>()
+  const t = createTestVela({
+    responses: [(request) => fauxText(request.lastUserText)],
+    extensions: [
+      background(),
+      function slowStart(api) {
+        api.on('session_start', () => gate.promise)
+      },
+    ],
+    allowPendingResponses: true,
+  })
+  const command = t.session.executeBash('echo LATE')
+  await until(() => t.session.isBashRunning, 'the command to reach its startup')
+  const aborting = t.session.abortBash()
+  // The hook is still suspended; cancelling must not wait for it.
+  const result = await Promise.race([
+    command,
+    Bun.sleep(1000).then(() => 'hung' as const),
+  ])
+  expect(result).toMatchObject({ cancelled: true, exitCode: undefined })
+  expect(t.session.isBashRunning).toBe(false)
+  expect(t.exists('LATE')).toBe(false)
+  gate.resolve()
+  await aborting
 })

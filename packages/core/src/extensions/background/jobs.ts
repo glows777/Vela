@@ -216,10 +216,13 @@ export class BackgroundJobs implements BackgroundCommands {
     const foreground = [...this.foreground].filter(
       (entry) => entry.state === 'foreground',
     )
+    // A job delivers its exit to the model, which a `!!` command promised not to do: it stays in
+    // the foreground, where Esc still cancels it, and is left out of a move-everything request.
+    const claimable = foreground.filter((entry) => !entry.excludeFromContext)
     const targets =
       toolCallId === undefined
-        ? foreground
-        : foreground.filter((entry) => entry.toolCallId === toolCallId)
+        ? claimable
+        : claimable.filter((entry) => entry.toolCallId === toolCallId)
     if (toolCallId !== undefined && targets.length === 0) {
       // Sorted so the message reads the same however the calls happened to start.
       const running = foreground
@@ -233,12 +236,6 @@ export class BackgroundJobs implements BackgroundCommands {
         }`,
       )
     }
-    // A job delivers its exit to the model, which a `!!` command promised not to do.
-    const excluded = targets.find((entry) => entry.excludeFromContext)
-    if (excluded)
-      throw new Error(
-        `A command started with excludeFromContext cannot be moved to the background: its exit is delivered to the model, and this command's output stays out of the context. Let it finish, or cancel it with abortBash().`,
-      )
     // Claim every target before the first await: an overlapping request then finds nothing to move.
     for (const entry of targets) entry.unfollow()
     const ids: string[] = []

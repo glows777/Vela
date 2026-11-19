@@ -122,17 +122,21 @@ export class UserBash {
             }),
           output,
         })
-      const foreground = this.host.background()?.watch({
-        command,
-        signal: controller.signal,
-        output,
-        start,
-        ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
-        exit: (settled) => ({
-          exitCode: settled.exitCode,
-          spillPath: settled.fullOutputPath,
-        }),
-      })
+      // A cancelled command is not registered, so it cannot be claimed and never starts a shell
+      // that only has to be killed.
+      const foreground = controller.signal.aborted
+        ? undefined
+        : this.host.background()?.watch({
+            command,
+            signal: controller.signal,
+            output,
+            start,
+            ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
+            exit: (settled) => ({
+              exitCode: settled.exitCode,
+              spillPath: settled.fullOutputPath,
+            }),
+          })
       const result: BashResult = controller.signal.aborted
         ? { output: '', exitCode: undefined, cancelled: true, truncated: false }
         : foreground
