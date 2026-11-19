@@ -831,9 +831,15 @@ export class VelaSession {
     const saved = await this.store.loadSaved()
     if (!saved) return false
     if (saved.location) {
+      if (this.started) {
+        await this.started.then(() =>
+          this.deps.extensions.sessionShutdown(this),
+        )
+        this.started = undefined
+      }
       // The public property stays readonly; resume restores the persisted internal value.
       ;(this as { cwd: string }).cwd = localCwd(saved.location)
-      this.deps.onCwdChange(this)
+      await this.deps.onCwdChange(this)
     }
     this.displayName = saved.name
     await this.loadBranch(saved)
@@ -940,18 +946,19 @@ export class VelaSession {
     if (this.draining) return Promise.reject(this.drainError())
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
-    const { extensions, expandInput } = this.deps
+    const { expandInput, prepareCommands } = this.deps
     const slash = mode !== 'literal' && input.startsWith('/')
-    if (!slash && !extensions.hasHandlers('input'))
-      return this.promptModel(input, options)
+    const hooks = prepareCommands || this.deps.extensions.hasHandlers('input')
+    if (!slash && !hooks) return this.promptModel(input, options)
     return this.trackInput(options.signal, async (signal) => {
       await abortable(
-        this.deps.prepareCommands ? this.start(signal) : this.startExtensions(),
+        prepareCommands ? this.start(signal) : this.startExtensions(),
         signal,
       )
       if (this.draining) throw this.drainError()
       if (this.closed) throw new Error(`Session ${this.id} is closed`)
       signal.throwIfAborted()
+      const extensions = this.deps.extensions
       const command = mode === 'command' && slash
       if (command && (await extensions.runCommand(this, input, signal))) return
       signal.throwIfAborted()
@@ -1206,7 +1213,6 @@ export class VelaSession {
     return this.started
   }
 
-  /** A prompt() run is in progress (it drains the queue before finishing) */
   private prompting = false
 
   private async run(
@@ -1439,13 +1445,7 @@ export class VelaSession {
 
   /** Token estimate, context usage and this session's total usage. */
   get usage(): SessionUsage {
-    const last = this.tracker.recent(1)[0]
-    return {
-      ...this.tracker.status,
-      totals: this.tracker.totals(),
-      contextWindow: this.tracker.contextWindow,
-      ...(last ? { lastRecord: { ...last } } : {}),
-    }
+    return this.tracker.snapshot()
   }
 
   /** Aborts the running task, waits for it to finish and save, then removes the session from Vela. */
@@ -1482,7 +1482,7 @@ export class VelaSession {
     } finally {
       this.store.releaseTransient()
       this.listeners.clear()
-      this.deps.onClose(this)
+      await this.deps.onClose(this)
     }
     if (errors.length)
       throw new AggregateError(errors, 'Session shutdown failed')

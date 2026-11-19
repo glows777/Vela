@@ -75,7 +75,7 @@ export function commandCompletions(
         name: `skill:${s.name}`,
         description: s.description,
       })),
-      ...vela.commands().map((c) => ({
+      ...vela.commands(session.id).map((c) => ({
         name: c.name,
         description: c.description ?? `Extension ${c.extension}`,
       })),

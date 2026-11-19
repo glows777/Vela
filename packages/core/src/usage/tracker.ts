@@ -89,6 +89,17 @@ export const CONTEXT_WINDOW = 200_000
  * One object manages both, but they never share a number.
  */
 export class TokenTracker {
+  /** Snapshot used by the session usage inspector; callers cannot mutate recent records. */
+  snapshot() {
+    const last = this.recent(1)[0]
+    return {
+      ...this.status,
+      totals: this.totals(),
+      contextWindow: this.contextWindow,
+      ...(last ? { lastRecord: { ...last } } : {}),
+    }
+  }
+
   /** Usage details of each successful model request, accumulated across agentLoops. */
   private steps: StepRecord[] = []
   /** Optional JSONL usage log path. */

@@ -409,3 +409,32 @@ test("tool_search is model-only and lists the loaded tools with each namespace's
   )
   expect(await run('unrelated words')).toBe('No matching tools found.')
 })
+
+test('project scopes isolate definitions while session forks see later host registrations', () => {
+  const host = makeRegistry()
+  host.register(tool('host'))
+  const a = new ToolRegistry(undefined, undefined, host)
+  const b = new ToolRegistry(undefined, undefined, host)
+  a.register(tool('a'))
+  b.register(tool('b'))
+  const session = host.fork(new ToolResultStore())
+  const results = session.results
+  session.bindScope(a)
+  host.register(tool('later'))
+  expect(session.getAllTools().map((t) => t.name)).toEqual([
+    'host',
+    'later',
+    'a',
+  ])
+  expect(host.get('a')).toBeUndefined()
+  expect(b.get('a')).toBeUndefined()
+  expect(a.unregister('host')).toBe(false)
+  expect(host.get('host')).toBeDefined()
+  expect(() => a.register(tool('host'))).toThrow('already registered')
+  session.bindScope(b)
+  expect(session.results).toBe(results)
+  expect(session.get('a')).toBeUndefined()
+  expect(session.get('b')).toBeDefined()
+  host.unregister('later')
+  expect(session.get('later')).toBeUndefined()
+})

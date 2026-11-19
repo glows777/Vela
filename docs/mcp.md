@@ -34,7 +34,7 @@ Keep servers with credentials in the user file, and use the project file only fo
 |---|---|---|
 | `command`, `args` | stdio | One executable and its arguments, not a shell command line. A leading `~/` names the home directory |
 | `env` | stdio | Extra environment variables. The server also inherits Vela's environment, as `bash` does |
-| `cwd` | stdio | Working directory, relative to Vela's working folder (default: the working folder) |
+| `cwd` | stdio | Working directory, relative to the owning instance's directory: selected project for configuration-driven MCP, host directory for explicit host MCP |
 | `url` | HTTP | The streamable HTTP endpoint |
 | `headers` | HTTP | Request headers, for example `Authorization` |
 | `type` | both | Optional: `stdio`, `http` or `streamable-http`. A `command` means stdio and a `url` means HTTP |
@@ -54,7 +54,9 @@ Rules, the same as pi's:
 
 ## Connections
 
-One set of connections serves all sessions of a Vela: a Lark bot with many conversations starts each stdio server once. (pi connects per session; Vela runs many sessions at once.) Servers connect in the background when the first session starts and close when the Vela is disposed; closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
+Configuration-driven CLI MCP connections belong to the selected session project's location and configuration snapshot. Sessions sharing that snapshot share connections; A and B can use the same server name with different definitions without changing each other's tools. A denied project uses only the user server definitions. Editing settings or `mcp.json` affects a newly prepared session, not an existing one. Connections start when the instance first handles a session and close after its last session closes. Closing a stdio server closes its stdin, then sends SIGTERM, then SIGKILL.
+
+An explicit SDK `mcp()` factory or CLI `-e builtin:mcp` remains host-owned and shared by that host's sessions; it is not recreated as configuration-driven project MCP. Non-local project MCP is unsupported: neither its stdio command nor its HTTP endpoint is silently executed from the host. This slice does not add E3 or remote MCP transport support.
 
 - The first prompt waits up to 10 seconds only for servers with `direct` tools, which must be in its request. A server still connecting is named in the system prompt, and `tool_search` waits for every server before it searches.
 - Connecting to an HTTP server is retried twice after a network error or a 408, 429 or 5xx status. Tool calls are never retried, because the server may already have acted.

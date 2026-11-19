@@ -71,7 +71,7 @@ export type ExtensionHandler<K extends ExtensionEventName> = (
   | Promise<ExtensionEvents[K][1] | undefined>
 
 export interface ExtensionAPI {
-  /** Working directory for tools */
+  /** Directory where this extension instance was loaded; handler ctx.cwd is the session directory. */
   readonly cwd: string
   /** Vela's data directory; an extension keeps its own data in `<dataDir>/<extension name>/` */
   readonly dataDir: string
@@ -83,7 +83,7 @@ export interface ExtensionAPI {
   readonly config: Readonly<Record<string, unknown>>
   readonly logger: VelaLogger
   /**
-   * Registers a tool shared by all sessions. The model sees it as `<extension name>_<name>` (e.g. the
+   * Registers a tool shared by sessions using this extension instance. The model sees it as `<extension name>_<name>` (e.g. the
    * web extension's `fetch` is `web_fetch`), so it cannot clash with built-in tools; a
    * duplicate name throws. The prefix is not repeated when the tool name equals the extension name
    * (the memory extension's `memory` tool is just `memory`) or already starts with
@@ -94,12 +94,13 @@ export interface ExtensionAPI {
   /** Removes a tool this extension registered, by its registered name; returns whether it existed. */
   unregisterTool(name: string): boolean
   /**
-   * Runs once when the Vela is disposed, after all sessions closed (for resources shared by all
-   * sessions, such as MCP server connections). Errors are logged and collected by dispose().
+   * Runs once when the owning instance is disposed: host instances after all sessions close,
+   * project instances after their last session releases them. Errors are logged and collected.
    */
   onShutdown(handler: () => void | Promise<void>): void
   /**
-   * Registers a model provider (like pi's registerProvider, but only the "return an AI SDK model" form).
+   * Registers a host model provider (like pi's registerProvider, only the "return an AI SDK model" form).
+   * Project extensions cannot register providers; the attempt is reported and skipped.
    * Afterwards `provider/id` works in createVela's model, `session.setModel()`, and the CLI's
    * `--model` / `/model`. Provider names are not prefixed; a name that already exists throws.
    * With `oauth` (or `apiKeyLogin`) the provider appears in `/login`; `createModel(id, ctx)` reads the stored

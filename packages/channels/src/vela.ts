@@ -33,7 +33,7 @@ export interface ChannelVelaOptions extends Omit<CoreOptions, 'extensions'> {
   eventDefaultTarget?: { channel: string; chatId: string }
 }
 export interface ChannelVela extends Omit<CoreVela, 'extensions'> {
-  extensions(): LoadedChannelExtension[]
+  extensions(sessionId?: string): LoadedChannelExtension[]
   channels(): { name: string; description: string }[]
   /** Look up a registered channel after ready(); startChannels() loads its state. */
   channel(name: 'local'): LocalHost
@@ -168,8 +168,8 @@ export function createChannelVela(
       runtime().beginShutdown(graceful)
       return dispose()
     },
-    extensions: () =>
-      loaded().map((entry, index) => ({
+    extensions: (sessionId?: string) =>
+      loaded(sessionId).map((entry, index) => ({
         ...entry,
         channels: [...(registered[index] ?? [])],
       })),
