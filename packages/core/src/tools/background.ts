@@ -27,6 +27,15 @@ export interface BackgroundSnapshot {
   fullOutputPath?: string
 }
 
+/** A job as `/tasks` lists it: the snapshot plus when it started and, once it ended, when. */
+export interface BackgroundTask {
+  snapshot: BackgroundSnapshot
+  /** Epoch milliseconds: when the command started, or when it was moved to the background */
+  startedAt: number
+  /** Epoch milliseconds when it exited; unset while it runs */
+  endedAt?: number
+}
+
 /** What a background command runs with: its output sink, its own abort signal and its shell. */
 export interface BackgroundStart {
   /** Every chunk of output as it arrives, in order */
@@ -89,6 +98,8 @@ export interface BackgroundCommands {
   detach(toolCallId?: string): Promise<string[]>
   /** A job's state and output tail; throws for an id that already delivered or was stopped. */
   snapshot(id: string): BackgroundSnapshot
+  /** Every job still in the table, oldest first, for `/tasks`. */
+  tasks(): BackgroundTask[]
   /** Ends a job and returns its final state; the caller gets the tail, so this never delivers. */
   stop(id: string): Promise<BackgroundSnapshot>
   /**

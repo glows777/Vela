@@ -772,3 +772,51 @@ test('without the background extension bash refuses run_in_background and starts
   await t.run('start it in the background')
   expect(existsSync(t.path('marker'))).toBe(false)
 })
+
+test('/tasks lists a running job, /tasks stop ends it with its tail, and the footer status follows', async () => {
+  const notices: string[] = []
+  const statuses: (string | undefined)[] = []
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'echo READY; sleep 30',
+        run_in_background: true,
+      }),
+      fauxText('Started the check.'),
+    ],
+    extensions: [background()],
+    session: {
+      ui: {
+        notify: (message) => notices.push(message),
+        confirm: async () => false,
+        select: async () => undefined,
+        input: async () => undefined,
+        setStatus: (key, text) => {
+          if (key === 'background') statuses.push(text)
+        },
+      },
+    },
+  })
+  await t.run('start a slow check in the background')
+  expect(statuses).toEqual(['1 background task · bg-1'])
+  // The call returns at admission; the list shows the tail once the command writes it.
+  await until(async () => {
+    await t.run('/tasks')
+    return notices.at(-1)!.includes('\n  READY')
+  }, 'the job to write its output')
+  expect(notices.at(-1)).toMatch(
+    /^\[tasks\] 1 background task\nbg-1 · running · \d+s · \$ echo READY; sleep 30\n {2}READY$/,
+  )
+  await t.run('/tasks stop bg-1')
+  expect(notices.at(-1)).toMatch(
+    /^bg-1 · stopped · \d+s · \$ echo READY; sleep 30\n {2}READY$/,
+  )
+  expect(statuses.at(-1)).toBeUndefined()
+  await t.run('/tasks')
+  expect(notices.at(-1)).toBe('No background tasks')
+  await t.run('/tasks stop bg-1')
+  expect(notices.at(-1)).toContain('Unknown background command bg-1.')
+  expect(notices.at(-1)).toContain(
+    'It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.',
+  )
+})

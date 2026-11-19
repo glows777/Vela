@@ -47,6 +47,7 @@ export const KEYS = {
   up: '\x1b[A',
   down: '\x1b[B',
   shiftTab: '\x1b[Z',
+  ctrlB: '\x02',
   ctrlC: '\x03',
   ctrlD: '\x04',
   ctrlL: '\x0c',

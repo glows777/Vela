@@ -49,6 +49,8 @@ export const HOTKEYS = [
   `${keyLabel('dequeue')} move queued messages back to the editor`,
   `${keyLabel('interrupt')} interrupt (queued messages go back to the editor), or cancel a ! command`,
   '!cmd run a shell command and send its output with the next message · !!cmd run it without sending',
+  `${keyLabel('background')} move the running command to the background (under tmux press it twice; it replaces the editor's ${keyLabel('background')} cursor-left, so use Left)`,
+  '/tasks list background tasks, /tasks stop <id> ends one (alias /bashes)',
   `${keyLabel('cycleThinking')} cycle thinking level · ${keyLabel('selectModel')} select model · ${keyLabel('cycleModelForward')} / ${keyLabel('cycleModelBackward')} cycle models`,
   `${keyLabel('expandTools')} expand / collapse tool output · ${keyLabel('toggleThinking')} show / hide thinking`,
   `${keyLabel('pasteImage')} paste a clipboard image as a file path for read_file`,
