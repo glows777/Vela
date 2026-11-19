@@ -138,13 +138,60 @@ export function cliProjectExtensions(
   }
 }
 
+/** Only the owner can bind a group to an environment. Keep the normal merged chat options. */
+function ownerChatLocations(chats: unknown, owner: unknown) {
+  const rows = (value: unknown) =>
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map((id) => id.trim())
+          .filter(Boolean)
+      : value
+  const trusted = rows(owner)
+  const selected = new Map<string, unknown>()
+  if (Array.isArray(trusted))
+    for (const row of trusted)
+      if (
+        row &&
+        typeof row.id === 'string' &&
+        Object.hasOwn(row, 'environment')
+      )
+        selected.set(row.id.trim(), row.environment)
+  if (!selected.size && typeof chats === 'string') return chats
+  const merged = rows(chats)
+  if (!Array.isArray(merged)) return chats
+  return merged.map((row) => {
+    const id = typeof row === 'string' ? row.trim() : row?.id?.trim?.()
+    if (selected.has(id))
+      return {
+        ...(typeof row === 'string' ? { id } : row),
+        environment: selected.get(id),
+      }
+    if (row && typeof row === 'object' && Object.hasOwn(row, 'environment')) {
+      const { environment: _, ...rest } = row
+      return rest
+    }
+    return row
+  })
+}
+
 /** Host singletons consume user config, except explicit factories and host-owned listeners. */
 export function cliHostExtensionConfig(config: VelaConfig, args: CliArgs) {
   const sections = { ...config.userExtensionConfig }
   for (const name of new Set(['lark', ...explicitNames(args)])) {
     if (HOST_STORAGE_BUILTINS.has(name)) continue
     const section = config.extensionConfig[name]
-    if (section) sections[name] = section
+    if (section)
+      sections[name] =
+        name === 'lark' && section.chats !== undefined
+          ? {
+              ...section,
+              chats: ownerChatLocations(
+                section.chats,
+                config.userExtensionConfig.lark?.chats,
+              ),
+            }
+          : section
   }
   const resolved = extensionConfigFromEnv(
     config.sessionResources?.env ?? {},

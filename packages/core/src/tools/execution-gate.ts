@@ -66,3 +66,26 @@ export class NestedExecutionGate {
     }
   }
 }
+
+/** Tracks active tool calls from model, host and nested dispatch until their records settle. */
+export class ActiveCalls {
+  private readonly active = new Set<Promise<unknown>>()
+
+  track<T>(run: () => Promise<T>): Promise<T> {
+    const job = run()
+    this.active.add(job)
+    void job.then(
+      () => this.active.delete(job),
+      () => this.active.delete(job),
+    )
+    return job
+  }
+
+  get running(): boolean {
+    return this.active.size > 0
+  }
+
+  async waitForIdle(): Promise<void> {
+    while (this.active.size) await Promise.allSettled([...this.active])
+  }
+}

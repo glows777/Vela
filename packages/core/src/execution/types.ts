@@ -130,7 +130,7 @@ export interface ExecutionEnv {
     content: string | Uint8Array,
     signal?: AbortSignal,
   ): Promise<Result<void, FileError>>
-  /** Rename in this environment (pi semantics); reserved for the remote attachment cache in E3. */
+  /** Rename in this environment (pi semantics); used to publish a completed remote attachment. */
   renameFile(
     sourcePath: string,
     destinationPath: string,

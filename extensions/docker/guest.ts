@@ -6,6 +6,7 @@ import type {
   Result,
   ShellExecOptions,
 } from '../../packages/core/src/execution/types.ts'
+import { readEnvironmentInventory } from '../../packages/core/src/session/environment-inventory.ts'
 
 // This program is supplied by the host on docker exec's argv. Each process owns one operation or reader.
 async function main() {
@@ -81,6 +82,23 @@ async function main() {
     } else {
       const signal = cancel.signal
       switch (op) {
+        case 'discoverWorkspace':
+          try {
+            reply({
+              ok: true,
+              value: await readEnvironmentInventory(env, args[0], signal),
+            })
+          } catch (cause) {
+            reply({
+              ok: false,
+              error: signal.aborted
+                ? Object.assign(Error('Operation aborted'), { code: 'aborted' })
+                : cause instanceof Error
+                  ? cause
+                  : Error(String(cause)),
+            })
+          }
+          break
         case 'absolutePath':
           reply(await env.absolutePath(args[0], signal))
           break

@@ -27,6 +27,16 @@ const recordSchema = z
     waitingReason: z.string().optional(),
     passive: z.boolean().optional(),
     backgroundJobToken: z.string().optional(),
+    locationNotice: z
+      .object({
+        token: z.string(),
+        environment: z.string(),
+        cwd: z.string(),
+        senderId: z.string(),
+        replyToId: z.string().optional(),
+        text: z.string().optional(),
+      })
+      .optional(),
     outstandingJobs: z
       .array(
         z.object({
@@ -178,6 +188,7 @@ export class ChannelDirectory {
       state: 'done' as const,
       waitingReason: undefined,
       outstandingJobs: undefined,
+      locationNotice: undefined,
       backgroundJobToken: undefined,
     }
     await this.save(next, true)
@@ -278,6 +289,23 @@ export class ChannelDirectory {
       (input) => !ids.includes(pendingMessageId(input)),
     )
     await this.save(record)
+  }
+
+  setLocationNotice(
+    key: string,
+    sessionId: string,
+    notice: ChannelRecord['locationNotice'],
+  ): Promise<void> {
+    return this.write(() => {
+      const record = this.get(key)
+      if (!record || record.activeSessionId !== sessionId)
+        throw Error('Channel session was replaced')
+      return {
+        ...record,
+        locationNotice: notice,
+        updatedAt: new Date().toISOString(),
+      }
+    })
   }
 
   /** Persist the start before execution; a retired generation may not launch new jobs. */
@@ -411,6 +439,7 @@ export class ChannelDirectory {
         // Job writes must not replace state changed by Stop/begin while atomic I/O awaited.
         // Those operations already queued their own save against this same record.
         current.outstandingJobs = next.outstandingJobs
+        current.locationNotice = next.locationNotice
         if (current.updatedAt < next.updatedAt)
           current.updatedAt = next.updatedAt
       } else this.records.set(next.key, next)

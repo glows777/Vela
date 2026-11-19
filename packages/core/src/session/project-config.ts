@@ -45,7 +45,7 @@ export class ProjectConfig {
       pending = split
         ? loadProjectSettings(env, {
             cwd: env.cwd,
-            trusted: this.mode(env.cwd) === 'all',
+            trusted: env.id === 'node:local' && this.mode(env.cwd) === 'all',
             agentDir: split.agentDir,
             env: split.env,
           }).then(async ({ settings }) => {
