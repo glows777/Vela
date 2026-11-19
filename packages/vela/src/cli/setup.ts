@@ -24,6 +24,7 @@ import {
   type VelaConfig,
   type VelaSettings,
 } from '../config/index.ts'
+import { resolveShellPath } from './shell.ts'
 import { applyToolModifiers, type ToolLoadout } from './tool-selection.ts'
 
 type Env = Record<string, string | undefined>
@@ -33,7 +34,8 @@ export const BUILTIN_EXTENSIONS: Record<
   string,
   (settings: VelaSettings) => VelaExtension
 > = {
-  background: () => background(),
+  background: (settings) =>
+    background({ shellPath: resolveShellPath(settings.shellPath) }),
   memory: () => memory(),
   rag: () => rag(),
   web: () => web(),

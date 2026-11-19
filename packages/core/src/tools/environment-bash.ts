@@ -118,8 +118,9 @@ export async function environmentBash(
 }
 
 /**
- * Starts a command as a background task: the call returns at once with the job's id and the file
- * that receives its complete output, and the job table delivers the exit to the session.
+ * Starts a command as a background task: the call returns at once with the job's id and the tail the
+ * command already wrote, and the job table delivers the exit to the session. The complete output goes
+ * to the environment's own spill file, so a session whose environment is not the host can page it.
  */
 export async function backgroundBash(
   command: string,
@@ -137,28 +138,27 @@ export async function backgroundBash(
       shellPath,
       tempRoot: results.dir,
     })
-  // In the session's environment, so a container session can page it with read_file.
-  const file = await env.createTempFile({
-    prefix: 'vela-bash-',
-    suffix: '.log',
-  })
-  if (!file.ok)
-    throw new Error(
-      `Could not create a file for the background command's output: ${file.error.message}`,
-    )
-  const outputPath = file.value
   const { id, output, truncated } = await commands.adopt({
     command,
     // Cancelling this call during admission starts nothing; the running job gets its own signal.
     signal: context?.signal,
-    start: ({ onOutput, signal }) =>
-      env.exec(command, { timeout, outputPath, onOutput }, signal),
+    start: ({ onOutput, signal, shell }) =>
+      env.exec(
+        // Only a local session has a host shell to honour; other environments run the command.
+        shell !== undefined && env.id === 'node:local'
+          ? [shell, '-lc', command]
+          : command,
+        {
+          timeout,
+          spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
+          onOutput,
+        },
+        signal,
+      ),
   })
   const tail = output
     ? `${output}${truncated ? '\n\n[Showing the last output only]' : ''}\n\n`
     : ''
-  const text = `${tail}Command running in background with ID: ${id}. Output is being written to: ${outputPath}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
-  return new ToolExecutionResult({ id, outputPath }, text, {
-    backgroundTaskId: id,
-  })
+  const text = `${tail}Command running in background with ID: ${id}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+  return new ToolExecutionResult({ id }, text, { backgroundTaskId: id })
 }

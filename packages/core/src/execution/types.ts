@@ -88,12 +88,6 @@ export interface ShellExecOptions {
     info: { stream: 'stdout' | 'stderr' },
   ) => void
   spill?: { afterBytes: number; afterLines: number }
-  /**
-   * Write the complete raw output here from the first byte. The caller creates the file in this
-   * environment (`createTempFile`) and names it in its result, so a long-running command's output
-   * file exists before the command exits; `spill` allocates its file only once it overflows.
-   */
-  outputPath?: string
 }
 export interface ShellExecResult {
   exitCode: number

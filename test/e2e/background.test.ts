@@ -486,7 +486,7 @@ test('a Local project hub runs bash and a background exit arrives as the next hu
   )
 })
 
-test('bash run_in_background returns at once with its id and output file, then the exit starts a turn', async () => {
+test('bash run_in_background returns at once with its id, then the exit starts its own turn', async () => {
   const t = createTestVela({
     responses: [
       fauxToolCall('bash', {
@@ -505,36 +505,28 @@ test('bash run_in_background returns at once with its id and output file, then t
   await t.run('start the slow check')
   await until(() => t.model.calls.length === 3, 'the exit turn')
   await until(() => !t.session.isRunning, 'the delivery run to settle')
+  const started = t.model.calls[1]!.toolResults[0]!.output
+  expect(started).toContain('Command running in background with ID: bg-1.')
+  expect(started).toContain(
+    'You will be notified when it completes; do not poll the file or start a second copy.',
+  )
   // The delivery starts its own turn with the exit state and the tail.
   const delivery = t.model.calls[2]!.lastUserText
   expect(delivery).toStartWith(
     'Background command bg-1 finished with exit code 0.',
   )
   expect(delivery).toContain('READY')
-  const started = t.model.calls[1]!.toolResults[0]!.output
-  expect(started).toContain('Command running in background with ID: bg-1.')
-  expect(started).toContain('Output is being written to: ')
-  expect(started).toContain(
-    'You will be notified when it completes; do not poll the file or start a second copy.',
-  )
-  const path = /Output is being written to: (.*)\./.exec(started)![1]!
-  expect(await Bun.file(path).text()).toContain('READY')
   expect(
     await Bun.file(t.session.registry.results.history.path).text(),
   ).toContain('"backgroundTaskId":"bg-1"')
 })
 
-test('the background output file keeps output past the tail, and read_file pages it', async () => {
+test('a long background command spills in the session environment, and read_file pages it', async () => {
   let log = ''
   const t = createTestVela({
     responses: [
       fauxToolCall('bash', { command: 'seq 1 20000', run_in_background: true }),
-      (request) => {
-        log = /Output is being written to: (.*)\./.exec(
-          request.toolResults[0]!.output,
-        )![1]!
-        return fauxText('Started it.')
-      },
+      () => fauxText('Started it.'),
       fauxText('It finished.'),
       () => fauxToolCall('read_file', { path: log, offset: 1, limit: 3 }),
       (request) => {
@@ -551,11 +543,13 @@ test('the background output file keeps output past the tail, and read_file pages
   await t.run('start the noisy command')
   await until(() => t.model.calls.length === 3, 'the exit turn')
   await until(() => !t.session.isRunning, 'the delivery run to settle')
-  // The tail the model reads is bounded to the last 2,000 lines; the file holds all 20,000.
+  // The tail the model reads is bounded to the last 2,000 lines; the exit delivery names the file.
   const delivery = t.model.calls[2]!.lastUserText
-  expect(delivery).toContain('Showing the last output only')
   expect(delivery).toContain('\n18001\n')
   expect(delivery).not.toContain('\n1\n')
+  log = /Full output: (\S+)/.exec(delivery)![1]!
+  // The file is the environment's own spill file, inside the session, so read_file pages all of it.
+  expect(log).toStartWith(t.session.registry.results.dir)
   expect(await Bun.file(log).text()).toEndWith('20000\n')
   expect((await Bun.file(log).text()).split('\n').length).toBe(20001)
   await t.run('read the log')

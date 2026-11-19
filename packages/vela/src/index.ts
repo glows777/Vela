@@ -31,6 +31,7 @@ export type {
   AuthEvent,
   AuthInteraction,
   AuthPrompt,
+  BackgroundOptions,
   BashResult,
   BinaryReader,
   CompactionReason,

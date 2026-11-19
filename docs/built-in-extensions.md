@@ -195,11 +195,11 @@ Long-running commands whose result arrives on its own, for work that must not ho
 
 | Tool | Parameters | Behavior |
 |---|---|---|
-| `bash` | `command`, `run_in_background: true` | Starts the command in the session's execution environment and returns at once with its id and its output file (for example `bg-1`). A host that cannot record the job fails the call before the command starts; an execution failure after that arrives as the job result. |
+| `bash` | `command`, `run_in_background: true` | Starts the command in the session's execution environment and returns at once with its id (for example `bg-1`) and any output it already wrote. A host that cannot record the job fails the call before the command starts; an execution failure after that arrives as the job result. |
 | `background_output` | `id` | The command's state (`running` or `exited`) and its output tail: the last 2,000 lines or 50KB, whichever is hit first |
 | `background_stop` | `id` | Aborts the command through the session's execution environment and returns its final output tail. The local implementation terminates the process group immediately. |
 
-**Output file.** The complete combined output goes to a file in the session's execution environment, created with `createTempFile` and named in the start result (`Output is being written to: <path>.`), so `read_file` pages all of it, including in a session whose environment is not the host. The tail kept for the model stays bounded, and the exit delivery names the command and carries that tail.
+**Output.** The tail kept for the model stays bounded (the last 2,000 lines or 50 KB), and `background_output` reads it while the command runs. When the output passes those limits, the session's execution environment spills the complete output to its own file, and the exit delivery and `background_output` name it (`Full output: <path>`), so `read_file` pages all of it — including in a session whose environment is not the host.
 
 **Delivery.** When a command exits on its own, the session gets one message with the exit state, the command head and the output tail. A stop never delivers: `background_stop` returns the tail in its tool result, and Stop, session close and shutdown have no run left to answer. In the CLI and SDK it is a hidden custom message (`customType: background`) that starts a turn, or joins the current run as a follow-up, so the model never polls. In a channel the result enters that conversation's gateway queue like any other input: it is answered as a new reply in its topic, or in the group's main timeline as a reply to the person's last message, with the usual anchor, card, reaction and Stop. A silent topic evaluation needs no special case, and an explicit answer never merges into a passive one.
 
@@ -207,7 +207,7 @@ Long-running commands whose result arrives on its own, for work that must not ho
 
 **Visibility.** Every session that loads the extension gets both tools, so a long command never blocks the conversation that started it. A job also needs the tool that ends it: a DM, or a chat whose `tools` list removes `background_stop`, keeps `bash` but refuses `run_in_background`, instead of starting a command nobody could stop. See [Channels](channels.md#group-workspaces-memory-and-tools).
 
-**SDK.** `background()` takes no options: a command runs through the session's execution environment, which decides the shell, the working directory and the authority. The CLI loads it by default; the SDK loads it explicitly with `import { background } from '@glows777/vela'` (or from `@glows777/vela-core`), then `createVela({ extensions: [background()] })`. That one entry makes `run_in_background` work and gives the session `background_output` and `background_stop`.
+**Shell.** A background command runs through the session's execution environment, which supplies the working directory and the authority. `background({ shellPath })` picks the shell for a local session (the CLI passes the resolved `shellPath` setting); an environment that is not local runs the command itself and chooses its own shell. The CLI loads the extension by default; the SDK loads it explicitly with `import { background } from '@glows777/vela'` (or from `@glows777/vela-core`), then `createVela({ extensions: [background()] })`. That one entry makes `run_in_background` work and gives the session `background_output` and `background_stop`.
 
 ## todo
 

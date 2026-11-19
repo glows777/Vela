@@ -41,7 +41,9 @@
       options: readonly { id: string; label: string }[]
       }
       )
-  function background: () => VelaExtension
+  function background: (options?: BackgroundOptions) => VelaExtension
+  interface BackgroundOptions
+    shellPath?: string | undefined
   interface BashExecutionEntry
     cancelled: boolean
     command: string
@@ -810,7 +812,6 @@
     env?: Record<string, string> | undefined
     inheritEnv?: boolean | undefined
     onOutput?: ((text: string, signal: AbortSignal | undefined, info: { stream: "stdout" | "stderr"; }) => void) | undefined
-    outputPath?: string | undefined
     spill?: { afterBytes: number; afterLines: number; } | undefined
     timeout?: number | undefined
   interface ShellExecResult

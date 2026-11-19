@@ -107,6 +107,110 @@ test('a single huge line keeps the tail of its cut end instead of reporting no o
   expect(Buffer.byteLength(read.text)).toBeLessThanOrEqual(MAX_BYTES)
 })
 
+test('background({ shellPath }) runs a local job with that shell, and leaves other environments alone', async () => {
+  const root = directory()
+  const argvs: (string | readonly string[])[] = []
+  const env = createLocalExecutionEnv({ cwd: root })
+  env.exec = async (command) => {
+    argvs.push(command)
+    return { ok: true, value: { exitCode: 0 } }
+  }
+  const jobs = new BackgroundJobs(
+    sessionStub(root, []),
+    silentLogger,
+    '/opt/bash',
+  )
+  const context = {
+    execution: env,
+    results: new ToolResultStore(join(root, 'results')),
+  }
+  await backgroundBash('echo hi', undefined, root, undefined, context, jobs)
+  expect(argvs).toEqual([['/opt/bash', '-lc', 'echo hi']])
+
+  // An environment that is not the local adapter runs the command itself.
+  const remote = { ...env, id: 'test:remote' } as typeof env
+  remote.exec = async (command) => {
+    argvs.push(command)
+    return { ok: true, value: { exitCode: 0 } }
+  }
+  await backgroundBash(
+    'echo hi',
+    undefined,
+    root,
+    undefined,
+    { ...context, execution: remote },
+    jobs,
+  )
+  expect(argvs[1]).toBe('echo hi')
+})
+
+test('cancelling the bash call while its job is being recorded starts nothing', async () => {
+  const root = directory()
+  const gate = Promise.withResolvers<void>()
+  const controller = new AbortController()
+  const kinds: string[] = []
+  const session = sessionStub(root, [], undefined, async (event) => {
+    kinds.push(event.type)
+    if (event.type === 'started') await gate.promise
+  })
+  const jobs = new BackgroundJobs(session, silentLogger)
+  const starting = backgroundBash(
+    'touch marker; echo RAN',
+    undefined,
+    root,
+    undefined,
+    {
+      execution: createLocalExecutionEnv({ cwd: root }),
+      results: new ToolResultStore(join(root, 'results')),
+      signal: controller.signal,
+    },
+    jobs,
+  ).then(
+    () => 'started',
+    (error: Error) => error.name,
+  )
+  // The host has not finished recording the job; this is where a cancelled call still hung on.
+  await until(() => kinds.includes('started'))
+  controller.abort()
+  gate.resolve()
+  expect(await starting).toBe('AbortError')
+  expect(existsSync(join(root, 'marker'))).toBe(false)
+  await Bun.sleep(50)
+  expect(kinds).toEqual(['started', 'stopped'])
+})
+
+test('a running job keeps its own signal after the call that started it is cancelled', async () => {
+  const root = directory()
+  const gate = Promise.withResolvers<void>()
+  const controller = new AbortController()
+  const results: string[] = []
+  const session = sessionStub(root, [], undefined, async (event) => {
+    if (event.type === 'started') await gate.promise
+    if (event.type === 'result') results.push(event.text)
+  })
+  const jobs = new BackgroundJobs(session, silentLogger)
+  const command = 'sleep 0.2; echo RAN > marker'
+  const starting = jobs.adopt({
+    command,
+    signal: controller.signal,
+    start: ({ onOutput, signal }) =>
+      createLocalExecutionEnv({ cwd: root }).exec(
+        command,
+        { onOutput },
+        signal,
+      ),
+  })
+  gate.resolve()
+  const { id } = await starting
+  // The call is over and cancelled; the job it admitted still runs to its own end.
+  controller.abort()
+  await until(() => results.length === 1, 'the exit delivery')
+  expect(results[0]).toContain(
+    `Background command ${id} finished with exit code 0.`,
+  )
+  expect(existsSync(join(root, 'marker'))).toBe(true)
+})
+
 test('the start result carries the tail a command already produced', async () => {
   const root = directory()
   const env = createLocalExecutionEnv({ cwd: root })

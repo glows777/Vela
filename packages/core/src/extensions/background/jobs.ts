@@ -64,6 +64,8 @@ interface Job {
   state: 'running' | 'exited'
   exitCode?: number
   stopped?: boolean
+  /** The environment's file with the complete output, known once the command spills */
+  fullOutputPath?: string
   /** No delivery: the caller has the tail (`background_stop`) or the run that would answer is ending. */
   silent?: boolean
 }
@@ -81,6 +83,7 @@ export class BackgroundJobs implements BackgroundCommands {
   constructor(
     private readonly session: VelaSession,
     private readonly logger: VelaLogger,
+    private readonly shellPath?: string,
   ) {}
 
   async adopt({
@@ -158,8 +161,12 @@ export class BackgroundJobs implements BackgroundCommands {
       const result = await start({
         onOutput: (chunk) => job.output.append(chunk),
         signal: job.controller.signal,
+        ...(this.shellPath === undefined ? {} : { shell: this.shellPath }),
       })
       job.state = 'exited'
+      job.fullOutputPath = result.ok
+        ? result.value.spillPath
+        : result.error.spillPath
       if (job.silent) return
       if (!result.ok) {
         this.deliver(
@@ -194,6 +201,9 @@ export class BackgroundJobs implements BackgroundCommands {
       ...(job.stopped ? { stopped: true } : {}),
       output: text,
       truncated,
+      ...(job.fullOutputPath === undefined
+        ? {}
+        : { fullOutputPath: job.fullOutputPath }),
     }
   }
 
@@ -261,7 +271,10 @@ export class BackgroundJobs implements BackgroundCommands {
     const output = text
       ? `${text}${truncated ? '\n\n[Showing the last output only]' : ''}`
       : '(no output)'
-    const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}`
+    const fullOutput = job.fullOutputPath
+      ? `\nFull output: ${job.fullOutputPath}`
+      : ''
+    const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}${fullOutput}`
     const host = this.session.host
     const send = host
       ? Promise.resolve().then(() =>

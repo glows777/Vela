@@ -34,7 +34,10 @@ function snapshotText(snapshot: BackgroundSnapshot): string {
   const output = snapshot.output
     ? `${snapshot.output}${snapshot.truncated ? '\n\n[Showing the last output only]' : ''}`
     : '(no output)'
-  return `${snapshot.id} (${state}).\nOutput:\n${output}`
+  const fullOutput = snapshot.fullOutputPath
+    ? `\nFull output: ${snapshot.fullOutputPath}`
+    : ''
+  return `${snapshot.id} (${state}).\nOutput:\n${output}${fullOutput}`
 }
 
 export function createBackgroundTools(

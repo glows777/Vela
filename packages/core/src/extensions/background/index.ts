@@ -3,6 +3,15 @@ import type { VelaExtension } from '../types.ts'
 import { BackgroundJobs } from './jobs.ts'
 import { createBackgroundTools } from './tool.ts'
 
+export interface BackgroundOptions {
+  /**
+   * Shell for a background command in a local session; default: the session's execution
+   * environment chooses (bash on PATH, or bash.exe on Windows). An environment that is not local
+   * runs the command itself and chooses its own shell.
+   */
+  shellPath?: string
+}
+
 /**
  * Long-running commands whose result arrives on its own: `bash` with `run_in_background` returns an
  * id at once, `background_output` reads the tail, `background_stop` ends the command. The extension
@@ -13,7 +22,7 @@ import { createBackgroundTools } from './tool.ts'
  * the exit enters the gateway's queue, so it arrives as an ordinary reply in the session's topic;
  * elsewhere it is a custom message that starts a turn.
  */
-export function background(): VelaExtension {
+export function background(options: BackgroundOptions = {}): VelaExtension {
   return function background(vela) {
     const commands = (
       context: { background?: BackgroundCommands } | undefined,
@@ -26,7 +35,11 @@ export function background(): VelaExtension {
     }
     for (const tool of createBackgroundTools(commands)) vela.registerTool(tool)
     vela.on('session_start', (_event, { session }) => {
-      session.registry.background = new BackgroundJobs(session, vela.logger)
+      session.registry.background = new BackgroundJobs(
+        session,
+        vela.logger,
+        options.shellPath,
+      )
     })
     // Stop aborts the run; every job in the session goes with it, so none can be orphaned.
     vela.on('agent_end', (event, { session }) => {

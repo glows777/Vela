@@ -22,14 +22,21 @@ export interface BackgroundSnapshot {
   /** The output tail: the last 2,000 lines or 50KB of the command's output */
   output: string
   truncated: boolean
+  /** The environment's file with the complete output, known once it has spilled */
+  fullOutputPath?: string
 }
 
-/** What a background command runs with: its output sink and its own abort signal. */
+/** What a background command runs with: its output sink, its own abort signal and its shell. */
 export interface BackgroundStart {
   /** Every chunk of output as it arrives, in order */
   onOutput: (chunk: string) => void
   /** Aborts this command alone; a job outlives the tool call that started it */
   signal: AbortSignal
+  /**
+   * The shell to run a local command with, from `background({ shellPath })`; unset means the
+   * session's execution environment chooses. An environment that is not local chooses its own.
+   */
+  shell?: string
 }
 
 /**
