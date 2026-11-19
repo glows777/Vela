@@ -46,7 +46,12 @@ export async function readGroupContext(
   const historyImages: ImageContent[][] = []
   let imageCount = 0
   for (const item of history.slice(0, 50)) {
-    if (item.message_id && seen.has(item.message_id)) continue
+    // The current trigger is never a reply boundary, including a signed SDK bot post.
+    if (
+      item.message_id === message.message_id ||
+      (item.message_id && seen.has(item.message_id))
+    )
+      continue
     if (item.message_id) seen.add(item.message_id)
     if (
       (activeTrigger?.create_time &&
@@ -63,7 +68,6 @@ export async function readGroupContext(
       // Other messages can share this millisecond; exclude the known trigger by id.
       (activeTrigger?.message_id &&
         item.message_id === activeTrigger.message_id) ||
-      item.message_id === message.message_id ||
       (message.create_time &&
         Number(item.create_time) > Number(message.create_time))
     )

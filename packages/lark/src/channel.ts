@@ -5,6 +5,7 @@ import type {
   ChannelConnection,
   ChannelDefinition,
   ChannelFeedbackUpdate,
+  ChannelHost,
   ChannelRunFeedback,
   IncomingMessage,
   OutgoingMessage,
@@ -38,6 +39,7 @@ import {
   readTopicContext,
   topicLines,
 } from './history.ts'
+import { type LarkHost, LarkHostEvents, larkHost } from './host.ts'
 import { errorMessage } from './log.ts'
 import { imageKeys, messageText } from './messages.ts'
 import { finishProgress, LarkProgress } from './progress.ts'
@@ -93,6 +95,7 @@ export class LarkChannel implements ChannelDefinition {
       )
       return
     }
+    this.historyChanged(msg.channelId)
     return { ...msg, replyToId: receipt.messageId }
   }
 
@@ -186,6 +189,38 @@ export class LarkChannel implements ChannelDefinition {
   private stopped = false
   private readonly connection = new LarkConnection()
   private readonly pending = new Set<Promise<void>>()
+  private view?: LarkHost
+  private readonly hostEvents = new LarkHostEvents((error) =>
+    this.config.logger.warn(
+      `[lark] History listener failed: ${errorMessage(error)}`,
+    ),
+  )
+
+  host(base: ChannelHost): LarkHost {
+    this.view ??= larkHost(base, {
+      enabled: (chatId) => this.chats.has(chatId),
+      transport: () => {
+        if (!this.transport || this.stopped || !base.connection().connected)
+          throw new Error('Lark is not connected')
+        return this.transport
+      },
+      senderName: (id) => this.senderName(id),
+      ownAppId: this.config.appId,
+      submitNewTopic: (msg) => {
+        if (!this.topics.runtime) throw new Error('Lark is not running')
+        return this.topics.runtime.submit(msg)
+      },
+      onEvent: (listener) =>
+        this.hostEvents.subscribe(listener, base.connection().connected),
+      changed: (chatId, topic) => this.historyChanged(chatId, topic),
+    })
+    return this.view
+  }
+
+  private historyChanged(chatId: string, topic?: IncomingMessage['topic']) {
+    if (this.chats.has(chatId)) this.hostEvents.changed(chatId, topic)
+  }
+
   private readonly controls = new Map<
     string,
     {
@@ -228,7 +263,13 @@ export class LarkChannel implements ChannelDefinition {
   }
 
   onConnection(listener: (connection: ChannelConnection) => void): () => void {
-    return this.connection.subscribe(listener)
+    let connected = false
+    return this.connection.subscribe((state) => {
+      listener(state)
+      const reset = state.connected && !connected
+      connected = state.connected
+      if (reset) this.hostEvents.emit({ type: 'reset' })
+    })
   }
 
   async start(): Promise<boolean | undefined> {
@@ -421,6 +462,7 @@ export class LarkChannel implements ChannelDefinition {
     }
     const text =
       message.recipientId &&
+      !message.recipientId.startsWith('sdk:') &&
       (message.topic || message.routine || message.handoff)
         ? `<at user_id="${message.recipientId}"></at> ${message.text}`
         : message.text
@@ -436,6 +478,7 @@ export class LarkChannel implements ChannelDefinition {
     } else {
       await this.transport.send(message.channelId, text, message.deliveryId)
     }
+    this.historyChanged(message.channelId, message.topic)
   }
 
   /** The gateway prepares queued input after the preceding reply; Steer prepares it during the run. */
@@ -453,6 +496,7 @@ export class LarkChannel implements ChannelDefinition {
           )
           return
         }
+        this.historyChanged(msg.channelId)
         return { ...msg, replyToId: receipt.messageId }
       } catch (error) {
         this.config.logger.warn(
@@ -527,7 +571,10 @@ export class LarkChannel implements ChannelDefinition {
     msg = { ...msg, text: input, images, ...(files ? { files } : {}) }
     // Preserve extension commands, skills and templates; attribution must not hide their leading slash.
     if (!msg.passive && msg.text.startsWith('/')) return msg
-    const name = await this.senderName(msg.senderId)
+    const name =
+      event.sender.sender_type === 'app'
+        ? msg.senderName
+        : await this.senderName(msg.senderId)
     // A top-level group message keeps its send time even when no history is read (passive intake, a failed
     // fetch); topic history has no times yet, so topic input and DMs stay as they are.
     const question = {
@@ -705,6 +752,26 @@ export class LarkChannel implements ChannelDefinition {
     const requireExistingSession = group && !!message.thread_id && !mentioned
     if (text === '' || (passive && text === undefined) || !this.messageHandler)
       return
+    const topic =
+      group && message.thread_id && message.message_id
+        ? {
+            rootId: message.root_id || message.message_id,
+            threadId: message.thread_id,
+          }
+        : undefined
+    if (
+      group &&
+      this.hostEvents.observed &&
+      (!topic ||
+        this.topics.runtime
+          ?.topics(message.chat_id)
+          .some(
+            (known) =>
+              known.rootId === topic.rootId &&
+              known.threadId === topic.threadId,
+          ))
+    )
+      this.historyChanged(message.chat_id, topic)
     this.config.logger.debug(
       `[lark] input ${message.message_id ?? '-'} received at=${new Date().toISOString()} created=${message.create_time ?? '-'}`,
     )
@@ -716,14 +783,7 @@ export class LarkChannel implements ChannelDefinition {
         senderName: senderId,
         text: text ?? '',
         replyToId,
-        ...(group && message.thread_id && message.message_id
-          ? {
-              topic: {
-                rootId: message.root_id || message.message_id,
-                threadId: message.thread_id,
-              },
-            }
-          : {}),
+        ...(topic && { topic }),
         requireExistingSession,
         passive,
         raw: event,

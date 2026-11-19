@@ -42,6 +42,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - **Execution environment contract and local adapter.** An SDK host can provide an `env` resolver for each session tool call and inspect `ExecutionEnv` types. E1 uses the resolver as a local-only availability check and rejects nonlocal locations and missing resolutions without falling back. Tools still execute through their existing local implementations; execution-side routing and container isolation follow in later phases ([#410](https://github.com/glows777/Vela/issues/410)).
 
+- **Desktop hosts can display and reply in Lark through the SDK.** The typed Lark host reads paged group and owned-topic history, posts as the bot with the person's signature, and can start or continue a topic. The host emits best-effort history updates and stores no second copy of Lark messages ([#416](https://github.com/glows777/Vela/issues/416)).
+
 - **`@glows777/vela` exports `background`.** The umbrella re-exported every built-in factory except this one, so `import { background } from '@glows777/vela'` failed while `@glows777/vela-core` worked. It now re-exports `background` and `BackgroundOptions`, and the Background docs name the import path next to their `background()` example ([#408](https://github.com/glows777/Vela/issues/408)).
 
 ### Fixed

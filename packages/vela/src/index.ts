@@ -206,7 +206,10 @@ export type {
   LarkTransport,
 } from '@glows777/vela-lark'
 export {
+  type LarkHost,
+  type LarkHostEvent,
   type LarkOptions,
+  type LarkVisibleMessage,
   lark,
   larkConfig,
 } from '@glows777/vela-lark'

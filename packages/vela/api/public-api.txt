@@ -90,6 +90,7 @@
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
+    host?: ((base: ChannelHost) => ChannelHost) | undefined
     name: string
     onConnection?: ((listener: (connection: ChannelConnection) => void) => () => void) | undefined
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined
@@ -144,7 +145,7 @@
     path: string
   function createEmbedder: ({ modelId, apiKey, url, }: { modelId: string; apiKey: string; url: string; }) => EmbeddingFn
   function createLocalExecutionEnv: (options: { cwd: string; shellPath?: string; }) => ExecutionEnv
-  function createVela: (options?: ChannelVelaOptions) => ChannelVela
+  function createVela: (options?: ChannelVelaOptions) => Vela
   type Credential = ApiKeyCredential | OAuthCredential
   interface CredentialStore
     delete: (provider: string) => Promise<void>
@@ -385,6 +386,19 @@
     message_id?: string | undefined
     msg_type?: string | undefined
     sender?: { id?: string; sender_type?: string; } | undefined
+  interface LarkHost
+    connection: () => ChannelConnection
+    messages: (input: { chatId: string; sessionId: string; cursor?: string; limit?: number; }) => Promise<{ messages: LarkVisibleMessage[]; nextCursor?: string; }>
+    onConnection: (listener: (connection: ChannelConnection) => void) => () => void
+    onEvent: (listener: (event: LarkHostEvent) => void) => () => void
+    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
+    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    sessions: (chatId?: string) => ChannelSessionSnapshot[]
+    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
+    submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: SubmitInput & { sessionId: string; }): Promise<{ sessionId: string; messageId: string; }>; (input: SubmitInput & { newTopic: { title: string; }; }): Promise<{ sessionId: string; messageId: string; topic: { rootId: string; threadId: string; }; }>; }
+  type LarkHostEvent = | { type: 'reset' }
+      | { type: 'history_changed'; chatId: string; sessionId?: string }
   interface LarkMessageEvent
     message: { message_id?: string; root_id?: string; thread_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
     sender: { sender_id?: { open_id?: string; }; sender_type: string; }
@@ -414,6 +428,13 @@
     start: (onMessage: (event: LarkMessageEvent) => void, onAction: (event: LarkCardAction) => LarkCardResponse) => Promise<void>
     startTopic: (messageId: string, title: string, uuid?: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
+  interface LarkVisibleMessage
+    createdAt: string
+    id: string
+    role: "user" | "assistant"
+    senderName: string
+    sessionId: string
+    text: string
   function lastCustomMessage: (session: VelaSession, customType: string) => ModelMessage | undefined
   interface LineScan
     end: number
@@ -952,7 +973,7 @@
   type UserContent = | string
       | (Exclude<AIUserContent, string>[number] | ImageContent)[]
   interface Vela
-    channel: { (name: "local"): LocalHost; (name: string): ChannelHost; }
+    channel: { (name: "local"): LocalHost; (name: "lark"): LarkHost; (name: string): ChannelHost; }
     channels: () => { name: string; description: string; }[]
     commands: (sessionId?: string) => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
@@ -1347,7 +1368,7 @@
     path: string
   interface ReplayResult
     errors: unknown[]
-    t: Omit<{ vela: Vela; session: VelaSession; cwd: string; dataDir: string; events: VelaEvent[]; readonly model: FauxModel; readonly messages: ModelMessage[]; run: (input: string, runOptions?: PromptOptions) => Promise<void>; tracker: () => TokenTracker; eventTypes: () => VelaEvent["type"][]; eventsOf: <T extends VelaEvent["type"]>(type: T) => (Extract<{ type: "agent_start"; input: string; }, { type: T; }> | Extract<{ type: "turn_start"; turn: number; }, { type: T; }> | Extract<{ type: "message_start"; message: ModelMessage; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "message_update"; message: AssistantModelMessage; assistantMessageEvent: AssistantMessageEvent; }, { type: T; }> | Extract<{ type: "message_end"; message: ModelMessage; stopReason?: StopReason; errorMessage?: string; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean; details?: unknown; durationMs?: number; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "loop_detected"; level: "warning" | "critical"; detector: string; message: string; }, { type: T; }> | Extract<{ type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; }, { type: T; }> | Extract<{ type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string; }, { type: T; }> | Extract<{ type: "usage"; modelId: string; usage: StepUsage; record?: StepRecord; }, { type: T; }> | Extract<{ type: "turn_end"; turn: number; message: AssistantModelMessage; toolResults: ToolResultPart[]; }, { type: T; }> | Extract<{ type: "agent_end"; messages: ModelMessage[]; reason: "done" | "loop" | "aborted" | "error"; error?: unknown; errorKind?: AgentErrorKind; }, { type: T; }> | Extract<{ type: "queue_update"; steering: string[]; followUp: string[]; }, { type: T; }> | Extract<{ type: "agent_settled"; }, { type: T; }> | Extract<{ type: "bash_execution_update"; id?: string; delta: string; }, { type: T; }> | Extract<{ type: "context_prepare"; action: "micro" | "summary-required"; before: number; after?: number; saved?: number; calls?: number; }, { type: T; }> | Extract<{ type: "compaction_start"; reason: CompactionReason; }, { type: T; }> | Extract<{ type: "compaction_end"; reason: CompactionReason; result?: CompactionResult; aborted: boolean; willRetry: boolean; errorMessage?: string; }, { type: T; }> | Extract<{ type: "session_save_failed"; error: unknown; }, { type: T; }> | Extract<{ type: "audit"; toolName: string; path: string; }, { type: T; }> | Extract<{ type: "notify"; message: string; level: "info" | "warning" | "error"; }, { type: T; }> | Extract<{ type: "channel_message"; channel: string; senderId: string; senderName: string; text: string; }, { type: T; }> | Extract<{ type: "channel_reply"; channel: string; recipientId: string; text: string; }, { type: T; }> | Extract<{ type: "channel_error"; channel: string; senderId: string; error: unknown; aborted: boolean; source?: "feedback"; }, { type: T; }>)[]; eventsIn: (sessionId: string) => VelaEvent[]; clearEvents: () => void; streamedText: () => string; lastAssistantText: () => string; path: (relative: string) => string; dataPath: (relative: string) => string; exists: (relative: string) => boolean; readData: (relative: string) => Promise<string>; readFile: (relative: string) => Promise<string>; writeFile: (relative: string, content: string) => void; cleanup({ keepDir }?: { keepDir?: boolean | undefined; }): Promise<void>; }, "vela"> & { vela: ChannelVela; }
+    t: Omit<{ vela: Vela; session: VelaSession; cwd: string; dataDir: string; events: VelaEvent[]; readonly model: FauxModel; readonly messages: ModelMessage[]; run: (input: string, runOptions?: PromptOptions) => Promise<void>; tracker: () => TokenTracker; eventTypes: () => VelaEvent["type"][]; eventsOf: <T extends VelaEvent["type"]>(type: T) => (Extract<{ type: "agent_start"; input: string; }, { type: T; }> | Extract<{ type: "turn_start"; turn: number; }, { type: T; }> | Extract<{ type: "message_start"; message: ModelMessage; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "message_update"; message: AssistantModelMessage; assistantMessageEvent: AssistantMessageEvent; }, { type: T; }> | Extract<{ type: "message_end"; message: ModelMessage; stopReason?: StopReason; errorMessage?: string; custom?: CustomMessageInfo; }, { type: T; }> | Extract<{ type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean; details?: unknown; durationMs?: number; parentToolCallId?: string; }, { type: T; }> | Extract<{ type: "loop_detected"; level: "warning" | "critical"; detector: string; message: string; }, { type: T; }> | Extract<{ type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; }, { type: T; }> | Extract<{ type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string; }, { type: T; }> | Extract<{ type: "usage"; modelId: string; usage: StepUsage; record?: StepRecord; }, { type: T; }> | Extract<{ type: "turn_end"; turn: number; message: AssistantModelMessage; toolResults: ToolResultPart[]; }, { type: T; }> | Extract<{ type: "agent_end"; messages: ModelMessage[]; reason: "done" | "loop" | "aborted" | "error"; error?: unknown; errorKind?: AgentErrorKind; }, { type: T; }> | Extract<{ type: "queue_update"; steering: string[]; followUp: string[]; }, { type: T; }> | Extract<{ type: "agent_settled"; }, { type: T; }> | Extract<{ type: "bash_execution_update"; id?: string; delta: string; }, { type: T; }> | Extract<{ type: "context_prepare"; action: "micro" | "summary-required"; before: number; after?: number; saved?: number; calls?: number; }, { type: T; }> | Extract<{ type: "compaction_start"; reason: CompactionReason; }, { type: T; }> | Extract<{ type: "compaction_end"; reason: CompactionReason; result?: CompactionResult; aborted: boolean; willRetry: boolean; errorMessage?: string; }, { type: T; }> | Extract<{ type: "session_save_failed"; error: unknown; }, { type: T; }> | Extract<{ type: "audit"; toolName: string; path: string; }, { type: T; }> | Extract<{ type: "notify"; message: string; level: "info" | "warning" | "error"; }, { type: T; }> | Extract<{ type: "channel_message"; channel: string; senderId: string; senderName: string; text: string; }, { type: T; }> | Extract<{ type: "channel_reply"; channel: string; recipientId: string; text: string; }, { type: T; }> | Extract<{ type: "channel_error"; channel: string; senderId: string; error: unknown; aborted: boolean; source?: "feedback"; }, { type: T; }>)[]; eventsIn: (sessionId: string) => VelaEvent[]; clearEvents: () => void; streamedText: () => string; lastAssistantText: () => string; path: (relative: string) => string; dataPath: (relative: string) => string; exists: (relative: string) => boolean; readData: (relative: string) => Promise<string>; readFile: (relative: string) => Promise<string>; writeFile: (relative: string, content: string) => void; cleanup({ keepDir }?: { keepDir?: boolean | undefined; }): Promise<void>; }, "vela"> & { vela: Vela; }
   function replayScenario: (path: string, options?: Omit<TestVelaOptions, "responses" | "generate" | "model">) => Promise<ReplayResult>
   function tempDir: (prefix?: string) => { path: string; cleanup(): void; }
   type TestVela = ReturnType<typeof createTestVela>
