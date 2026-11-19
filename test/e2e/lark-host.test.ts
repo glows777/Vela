@@ -341,16 +341,14 @@ test('an incomplete topic receipt cannot admit an anchorless run', async () => {
   expect(t.model.calls).toEqual([])
 })
 
-test('chats() lists every saved group and degrades a missing name to its chat id', async () => {
-  const fake = fakeLark()
-  fake.chatNames.set(chatId, 'Vela dev')
+test('chats() lists every saved group before Lark connects', async () => {
   const t = createTestVela({
     responses: [],
     extensions: [
       lark({
         appId: 'bot',
         chats: [{ id: chatId }, 'oc_other'],
-        transport: fake.transport,
+        transport: fakeLark().transport,
       }),
     ],
   })
@@ -359,11 +357,8 @@ test('chats() lists every saved group and degrades a missing name to its chat id
   // Saved configuration is the list, so it answers before Lark connects.
   expect(await host.chats()).toEqual([{ chatId }, { chatId: 'oc_other' }])
   await t.vela.startChannels()
-  expect(await host.chats()).toEqual([
-    { chatId, name: 'Vela dev' },
-    // The fake rejects for an unknown chat; the group stays, without a name.
-    { chatId: 'oc_other' },
-  ])
+  // A custom transport has no name lookup, so the groups keep their chat ids.
+  expect(await host.chats()).toEqual([{ chatId }, { chatId: 'oc_other' }])
 })
 
 test('a failed signed submit says whether anything reached Lark', async () => {

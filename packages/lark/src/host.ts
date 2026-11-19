@@ -12,6 +12,7 @@ import type {
   LarkSentMessage,
   LarkTransport,
 } from './transport.ts'
+import { larkChatName } from './transport.ts'
 
 export interface LarkVisibleMessage {
   id: string
@@ -191,7 +192,7 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
       const transport = ops.transport()
       return Promise.all(
         ops.chatIds().map(async (chatId) => {
-          const name = await chatName(transport, chatId)
+          const name = await larkChatName(transport, chatId)
           return name === undefined ? { chatId } : { chatId, name }
         }),
       )
@@ -333,20 +334,6 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
       }
     }) as LarkHost['submit'],
     onEvent: ops.onEvent,
-  }
-}
-
-/** A name is display decoration: any failure leaves the group listed by its chat ID. */
-async function chatName(
-  transport: LarkTransport | undefined,
-  chatId: string,
-): Promise<string | undefined> {
-  if (!transport?.getChat) return undefined
-  try {
-    const name = (await transport.getChat(chatId))?.name?.trim()
-    return name || undefined
-  } catch {
-    return undefined
   }
 }
 

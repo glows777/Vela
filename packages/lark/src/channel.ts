@@ -46,6 +46,7 @@ import { finishProgress, LarkProgress } from './progress.ts'
 import { channelFileSender } from './send-file.ts'
 import { LarkTopics } from './topics.ts'
 import type {
+  LarkChatNames,
   LarkMessageEvent,
   LarkSentMessage,
   LarkTransport,
@@ -181,7 +182,7 @@ export class LarkChannel implements ChannelDefinition {
   private config: LarkChannelConfig
   private readonly chats: Map<string, LarkChat>
   private messageHandler?: (msg: IncomingMessage) => void | Promise<void>
-  private transport?: LarkTransport
+  private transport?: LarkTransport & Partial<LarkChatNames>
   private readonly seen = new Set<string>()
   private stopped = false
   private readonly connection = new LarkConnection()

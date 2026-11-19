@@ -1,5 +1,9 @@
 import type { ChannelConnection } from '@glows777/vela-channels'
-import { type LarkTransport, larkTransport } from './transport.ts'
+import {
+  type LarkChatNames,
+  type LarkTransport,
+  larkTransport,
+} from './transport.ts'
 
 type Listener = (connection: ChannelConnection) => void
 
@@ -45,7 +49,7 @@ export class LarkConnection {
     const report = (connection: ChannelConnection) => {
       if (active()) this.report(connection)
     }
-    const transport =
+    const transport: (LarkTransport & Partial<LarkChatNames>) | undefined =
       custom ??
       (appId && appSecret
         ? larkTransport(appId, appSecret, false, undefined, undefined, report)
