@@ -10,6 +10,10 @@
   box-shadow: var(--shadow-raised);
 }
 
+.running {
+  border-color: var(--vela-border-strong);
+}
+
 /* Keyboard focus only: Arc leaves text fields to their own border, and this field has none. */
 .composer:has(:focus-visible) {
   outline: 3px solid var(--focus-outline);

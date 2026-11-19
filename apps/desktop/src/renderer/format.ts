@@ -13,12 +13,45 @@ const newestFirst = (one: Session, other: Session) =>
   other.updatedAt.localeCompare(one.updatedAt)
 
 /** A session is the work started inside a project; the project chat itself is not one. */
-const started = (session: Session) => session.topic !== undefined
+export const started = (session: Session) => session.topic !== undefined
 
 function projectSessions(snapshot: Snapshot, projectId: string): Session[] {
   return Object.values(snapshot.sessions)
     .filter((session) => session.chatId === projectId && started(session))
     .sort(newestFirst)
+}
+
+/** A session's messages without the replies the failure card already states. */
+export function visibleMessages(
+  snapshot: Snapshot,
+  sessionId: string,
+): Message[] {
+  return (snapshot.messages[sessionId] ?? []).filter(
+    (message) => !snapshot.hidden[message.id],
+  )
+}
+
+/** The panel groups every started session by what it asks of the person. */
+export function sessionGroups(snapshot: Snapshot, projectId: string) {
+  const sessions = projectSessions(snapshot, projectId)
+  return [
+    {
+      label: 'Needs you',
+      sessions: sessions.filter((session) => session.state === 'waiting'),
+    },
+    {
+      label: 'Working',
+      sessions: sessions.filter(
+        (session) => session.state === 'running' || session.state === 'queued',
+      ),
+    },
+    {
+      label: 'Done',
+      sessions: sessions.filter(
+        (session) => session.state === 'done' || session.state === 'stopped',
+      ),
+    },
+  ].filter((group) => group.sessions.length > 0)
 }
 
 export function needsYou(snapshot: Snapshot): Session[] {
@@ -59,7 +92,7 @@ export function projectTimeline(
   project: Project,
 ): TimelineItem[] {
   const items: TimelineItem[] = []
-  for (const message of snapshot.messages[project.sessionId] ?? [])
+  for (const message of visibleMessages(snapshot, project.sessionId))
     items.push({ kind: 'message', at: message.createdAt, message })
   for (const session of projectSessions(snapshot, project.id)) {
     const title = snapshot.messages[session.sessionId]?.[0]

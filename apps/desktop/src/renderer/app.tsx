@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import styles from './app.module.css'
+import { needsYou } from './format.ts'
 import { HeaderBar } from './frame/header-bar.tsx'
 import { NewProjectDialog } from './frame/new-project.tsx'
 import { Sidebar } from './frame/sidebar.tsx'
 import { Home } from './home/home.tsx'
+import type { Panel } from './panel.ts'
 import { ProjectPage } from './project/project-page.tsx'
 import { loadProject, start, useStore } from './store.ts'
 
@@ -15,6 +17,7 @@ export function App() {
   const [view, setView] = useState<View>({ name: 'home' })
   const [creating, setCreating] = useState(false)
   const [focusSignal, setFocusSignal] = useState(0)
+  const [panel, setPanel] = useState<Panel>({ open: true })
 
   useEffect(() => {
     void start()
@@ -25,10 +28,24 @@ export function App() {
       ? snapshot.projects.find((item) => item.id === view.projectId)
       : undefined
 
-  const openProjectPage = (projectId: string) => {
+  /**
+   * Every way into a project goes through here, so the panel never keeps a session
+   * from the project the person just left. Sidebar, Home, a session card and a new
+   * project all land on the same state. A closed panel stays closed when the person
+   * only picks a project, and opens when the destination is a session.
+   */
+  const openProjectPage = (projectId: string, sessionId?: string) => {
     setView({ name: 'project', projectId })
+    setPanel(sessionId ? { open: true, sessionId } : { open: panel.open })
     void loadProject(projectId)
   }
+
+  const openSession = (projectId: string, sessionId: string) =>
+    openProjectPage(projectId, sessionId)
+
+  const waiting = project
+    ? needsYou(snapshot).some((session) => session.chatId === project.id)
+    : false
 
   return (
     <div className={styles.app}>
@@ -44,15 +61,21 @@ export function App() {
         onNewProject={() => setCreating(true)}
       />
       <div className={styles.main}>
-        <HeaderBar project={project} />
+        <HeaderBar project={project} waiting={waiting} />
         <main className={styles.content}>
           {project ? (
-            <ProjectPage snapshot={snapshot} project={project} />
+            <ProjectPage
+              snapshot={snapshot}
+              project={project}
+              panel={panel}
+              onPanel={setPanel}
+            />
           ) : (
             <Home
               snapshot={snapshot}
               focusSignal={focusSignal}
               onOpenProject={openProjectPage}
+              onOpenSession={openSession}
             />
           )}
         </main>
