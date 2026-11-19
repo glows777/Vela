@@ -668,6 +668,8 @@
   type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
   interface SavedSessionOptions
     includeArchived?: boolean | undefined
+  function saveLarkSection: (options: { agentDir: string; appId?: string; appSecret?: string; addChat?: string; removeChat?: string; runInApp?: boolean; env?: Record<string, string | undefined>; }) => Promise<{ written: string[]; }>
+  function saveModelSetup: (options: { agentDir: string; ref: string; providers: Record<string, ProviderDefinition>; credential?: Credential; preset?: ProviderConfig; thinkingLevel?: ThinkingLevel; }) => Promise<{ written: string[]; definition: ProviderDefinition; }>
   interface SendMessageOptions
     deliverAs?: "steer" | "followUp" | "nextTurn" | undefined
     triggerTurn?: boolean | undefined
@@ -938,6 +940,7 @@
     oldLeafId: string | null
     targetId: string
     userWantsSummary: boolean
+  function usableModel: (options: { providers: Record<string, ProviderDefinition>; credentials: CredentialStore; model?: string; }) => { usable: boolean; reason?: "no-model" | "missing-credential"; provider?: string; }
   interface UsageTotals
     baselineCost?: number | undefined
     cacheReadTokens: number
