@@ -5,7 +5,9 @@ import type { VelaLogger } from '../logger.ts'
 import { loadEnvironmentContextFiles } from '../prompt/environment-context-files.ts'
 import { loadEnvironmentTemplates } from '../prompt/environment-templates.ts'
 import { loadEnvironmentSkills } from '../skills/environment-skills.ts'
+import { readEnvironmentInventory } from './environment-inventory.ts'
 import { type SessionResources, sessionSystemFile } from './resources.ts'
+import { type InventoryEnv, workspaceDiscovery } from './workspace-discovery.ts'
 
 export function workspaceKey(id: string, location: ExecutionLocation) {
   return JSON.stringify([id, location.environment, location.cwd])
@@ -34,16 +36,38 @@ export async function loadWorkspaceInventory(
     logger: VelaLogger
   },
 ): Promise<SessionResources> {
-  const local = env.id === 'node:local'
   const location = env.cwd
+  const local = env.id === 'node:local'
+  const readSystem = (name: 'SYSTEM.md' | 'APPEND_SYSTEM.md') =>
+    sessionSystemFile(
+      env,
+      name,
+      local && workspaceMode === 'all',
+      split?.agentDir,
+      signal,
+    )
+  if (!local) {
+    const batch = (env as InventoryEnv)[workspaceDiscovery]
+    const result = batch
+      ? await batch(contextEnabled, signal)
+      : await readEnvironmentInventory(env, contextEnabled, signal)
+    for (const { path, message } of result.diagnostics)
+      logger.warn(`[resources] ${path}: ${message}`)
+    return {
+      systemPrompt: host.systemPrompt ?? (await readSystem('SYSTEM.md')),
+      appendSystemPrompt:
+        host.appendSystemPrompt ?? (await readSystem('APPEND_SYSTEM.md')),
+      skills: result.skills,
+      promptTemplates: result.promptTemplates,
+      contextFiles: contextEnabled
+        ? [...(split?.userContextFiles ?? []), ...result.contextFiles]
+        : [],
+    }
+  }
   const workspace =
     !contextEnabled || pinned
       ? []
       : await loadEnvironmentContextFiles(env, location, signal)
-  const remoteHome = local
-    ? undefined
-    : await env.absolutePath('~/.vela/skills', signal)
-  if (remoteHome && !remoteHome.ok) throw remoteHome.error
   const workspaceSkills = (
     workspaceMode === undefined
       ? explicitSkills
@@ -56,13 +80,12 @@ export async function loadWorkspaceInventory(
         signal,
         workspaceMode === 'home',
         ({ path, message }) => logger.warn(`[resources] ${path}: ${message}`),
-        local ? (settings.skills ?? []) : [remoteHome!.value],
+        settings.skills ?? [],
       )
   const workspaceNames = new Set(workspaceSkills.map((skill) => skill.name))
-  const hostSkills = local ? host.skills : []
   const skills = [
     ...workspaceSkills,
-    ...hostSkills.filter((skill) => !workspaceNames.has(skill.name)),
+    ...host.skills.filter((skill) => !workspaceNames.has(skill.name)),
   ]
   const workspaceTemplates = (
     workspaceMode === undefined
@@ -81,18 +104,10 @@ export async function loadWorkspaceInventory(
   )
   const selectedTemplates = [
     ...workspaceTemplates,
-    ...(local ? host.promptTemplates : []).filter(
+    ...host.promptTemplates.filter(
       (template) => !templateNames.has(template.name),
     ),
   ]
-  const readSystem = (name: 'SYSTEM.md' | 'APPEND_SYSTEM.md') =>
-    sessionSystemFile(
-      env,
-      name,
-      workspaceMode === 'all',
-      split?.agentDir,
-      signal,
-    )
   return {
     systemPrompt: host.systemPrompt ?? (await readSystem('SYSTEM.md')),
     appendSystemPrompt:
@@ -106,7 +121,6 @@ export async function loadWorkspaceInventory(
             ...split.userContextFiles,
             ...workspace.filter(
               (item) =>
-                !local ||
                 !split.userContextFiles.some((host) => host.path === item.path),
             ),
           ]
