@@ -42,6 +42,7 @@
   interface BackgroundOptions
     shellPath?: string | undefined
   interface BashExecutionEntry
+    backgroundTaskId?: string | undefined
     cancelled: boolean
     command: string
     excludeFromContext?: boolean | undefined
@@ -53,8 +54,9 @@
     timestamp: string
     truncated: boolean
     type: "bash_execution"
-  function bashExecutionToText: (entry: Pick<BashExecutionEntry, "command" | "output" | "exitCode" | "cancelled" | "truncated" | "fullOutputPath">) => string
+  function bashExecutionToText: (entry: Pick<BashExecutionEntry, "command" | "output" | "exitCode" | "cancelled" | "truncated" | "fullOutputPath" | "backgroundTaskId">) => string
   interface BashResult
+    backgroundTaskId?: string | undefined
     cancelled: boolean
     exitCode: number | undefined
     fullOutputPath?: string | undefined
@@ -176,6 +178,7 @@
     environment: string
   interface ExecutionMetadata
     backgroundTaskId?: string | undefined
+    backgroundedByUser?: boolean | undefined
     error?: string | undefined
     exitCode?: number | undefined
     isError?: boolean | undefined
@@ -872,6 +875,7 @@
     appendEntry: (customType: string, data?: unknown) => void
     autoCompaction: boolean
     availableThinkingLevels: () => ThinkingLevel[]
+    backgroundTasks: (toolCallId?: string) => Promise<string[]>
     channel?: string | undefined
     clearQueue: () => { steering: string[]; followUp: string[]; }
     clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>
@@ -1475,6 +1479,7 @@
     appendEntry: (customType: string, data?: unknown) => void
     autoCompaction: boolean
     availableThinkingLevels: () => ThinkingLevel[]
+    backgroundTasks: (toolCallId?: string) => Promise<string[]>
     channel?: string | undefined
     clearQueue: () => { steering: string[]; followUp: string[]; }
     clone: (options?: Omit<ForkOptions, "position">) => Promise<ForkResult>

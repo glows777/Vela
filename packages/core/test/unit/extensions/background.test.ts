@@ -5,10 +5,7 @@ import { join } from 'node:path'
 import { createLocalExecutionEnv } from '../../../src/execution/local.ts'
 import type { ExecutionEnv } from '../../../src/execution/types.ts'
 import { background } from '../../../src/extensions/background/index.ts'
-import {
-  BackgroundJobs,
-  OutputTail,
-} from '../../../src/extensions/background/jobs.ts'
+import { BackgroundJobs } from '../../../src/extensions/background/jobs.ts'
 import { silentLogger } from '../../../src/logger.ts'
 import type { SessionOptions } from '../../../src/session/options.ts'
 import { ToolResultStore } from '../../../src/session/tool-results.ts'
@@ -21,6 +18,7 @@ import { backgroundBash } from '../../../src/tools/environment-bash.ts'
 import {
   OUTPUT_MAX_BYTES as MAX_BYTES,
   OUTPUT_MAX_LINES as MAX_LINES,
+  OutputTail,
 } from '../../../src/tools/output-tail.ts'
 import type { VelaSession } from '../../../src/vela-session.ts'
 
@@ -404,28 +402,6 @@ test('outside channels the exit is a custom message that starts a turn', async (
         message.content.startsWith('Background command bg-1 finished'),
     ),
   ).toBe(true)
-})
-
-test('Stop aborts the run and kills its background command', async () => {
-  const t = createTestVela({
-    responses: [
-      fauxToolCall('bash', {
-        // A killed process never writes the marker; a surviving one does.
-        command: 'sleep 0.3; echo late > late.txt',
-        run_in_background: true,
-      }),
-      () => {
-        void t.session.abort(new DOMException('stopped', 'AbortError'))
-        return fauxText('never')
-      },
-    ],
-    extensions: [background()],
-    session: { tools: ['bash', 'background_stop'] },
-    allowPendingResponses: true,
-  })
-  await t.run('start it').catch(() => {})
-  await Bun.sleep(600)
-  expect(t.exists('late.txt')).toBe(false)
 })
 
 test('a host records a unique job token before execution and receives the same token with its result', async () => {

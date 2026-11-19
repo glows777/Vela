@@ -2,9 +2,9 @@ import z from 'zod'
 import type { ExecutionEnv } from '../execution/types.ts'
 import { backgroundBash, environmentBash } from './environment-bash.ts'
 import {
-  fitOutputTail,
   OUTPUT_MAX_BYTES,
   OUTPUT_MAX_LINES,
+  OutputTail,
 } from './output-tail.ts'
 import type { ToolDefinition } from './registry.ts'
 
@@ -76,13 +76,18 @@ export const createBashTool = (
 export interface BashResult {
   /** The output's last OUTPUT_MAX_LINES lines / OUTPUT_MAX_BYTES bytes (stdout and stderr combined) */
   output: string
-  /** Undefined when the command was cancelled */
+  /** Undefined when the command was cancelled, or when the user moved it to the background */
   exitCode: number | undefined
   cancelled: boolean
   /** Whether `output` is only the end of the output */
   truncated: boolean
   /** File with the whole output, set when `output` is truncated */
   fullOutputPath?: string
+  /**
+   * Set when the command was moved to the background while it ran: `output` is the tail so far and
+   * the exit arrives as a background result.
+   */
+  backgroundTaskId?: string
 }
 
 /** Run a user command inside the selected execution environment. */
@@ -93,10 +98,11 @@ export async function runBash(
     signal?: AbortSignal
     onUpdate?: (output: string) => void
     onDelta?: (delta: string) => void
+    /** The tail the job table also holds, so a moved command keeps reporting from the same buffer */
+    output?: OutputTail
   },
 ): Promise<BashResult> {
-  let body = '',
-    cut = false
+  const output = options.output ?? new OutputTail()
   let pendingDelta = ''
   let timer: ReturnType<typeof setTimeout> | undefined
   const publish = (final: boolean) => {
@@ -111,7 +117,7 @@ export async function runBash(
     }
     if (!final) {
       try {
-        options.onUpdate?.(fitOutputTail(body, cut).text)
+        options.onUpdate?.(output.read().text)
       } catch {}
     }
   }
@@ -121,9 +127,7 @@ export async function runBash(
       {
         spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
         onOutput: (text) => {
-          const combined = Buffer.from(body + text)
-          if (combined.length > OUTPUT_MAX_BYTES) cut = true
-          body = combined.subarray(-OUTPUT_MAX_BYTES).toString()
+          output.append(text)
           if (options.onDelta) pendingDelta += text
           if (!timer && (options.onDelta || options.onUpdate))
             timer = setTimeout(() => publish(false), 100)
@@ -132,7 +136,7 @@ export async function runBash(
       options.signal,
     )
     .finally(() => publish(true))
-  const tail = fitOutputTail(body, cut)
+  const tail = output.read()
   if (!run.ok) {
     if (run.error.code === 'aborted')
       return {

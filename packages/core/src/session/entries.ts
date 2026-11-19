@@ -98,6 +98,8 @@ export interface BashExecutionEntry extends SessionEntryBase {
   fullOutputPath?: string
   /** `!!`: kept in the session, never sent to the model */
   excludeFromContext?: boolean
+  /** The command was moved to the background while it ran; this is the tail so far. */
+  backgroundTaskId?: string
 }
 
 /** The session's model changed (`session.setModel()` with a name). */
@@ -245,11 +247,14 @@ export function bashExecutionToText(
     | 'cancelled'
     | 'truncated'
     | 'fullOutputPath'
+    | 'backgroundTaskId'
   >,
 ): string {
   let text = `Ran \`${entry.command}\`\n`
   text += entry.output ? `\`\`\`\n${entry.output}\n\`\`\`` : '(no output)'
   if (entry.cancelled) text += '\n\n(command cancelled)'
+  else if (entry.backgroundTaskId)
+    text += `\n\nCommand moved to the background with ID ${entry.backgroundTaskId}; its result will be reported when it exits.`
   else if (entry.exitCode !== undefined && entry.exitCode !== 0)
     text += `\n\nCommand exited with code ${entry.exitCode}`
   if (entry.truncated && entry.fullOutputPath)

@@ -8,6 +8,14 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Breaking Changes
 
+- **Esc no longer stops a background command.** A job belongs to its session, not to the run that started it: an interrupted run leaves it running and its exit still arrives; `background_stop`, `session.close()` and process shutdown stop it. A command still in the foreground when the run is interrupted is cancelled with it, as before ([#430](https://github.com/glows777/Vela/issues/430)).
+
+### Added
+
+- **A running `bash` call can be moved to the background.** `session.backgroundTasks(toolCallId?)` (and the RPC request `background_tasks` with an optional `tool_use_id`) takes over the named call, or every call the session runs in the foreground including your own `!` command. The call returns `Command was manually moved to the background with ID: bg-1.` with the output so far, the turn continues, and the exit arrives as the job's result. The tool result records `backgroundTaskId` with `backgroundedByUser: true` and stays `completed`; a moved `!` command is recorded as a background command (`backgroundTaskId`) rather than a finished or cancelled one. Moving is recorded before it is promised: a host that cannot save the job's start leaves the command with its call. The key binding, the footer count and `/tasks` follow ([#430](https://github.com/glows777/Vela/issues/430)).
+
+### Breaking Changes
+
 - **`background_start` is gone; `bash` starts a background command.** `bash` takes `run_in_background: true`, runs the command through the session's execution environment and returns at once with the job id, so one shell tool covers foreground and background work. Replace `background_start({ command })` with `bash({ command, run_in_background: true })`, and remove `+background_start` from a `tools` list: an unknown name now fails at startup. `background_output`, `background_stop` and `background({ shellPath })` stay ([#429](https://github.com/glows777/Vela/issues/429)).
 
 - **Extension handler `ctx.cwd` now always means the session directory**, including handlers installed by user or SDK host extensions. Use factory-time `api.cwd` for the directory the extension instance was loaded from, and `ctx.cwd`/`ctx.session.cwd` for the active project. Project extensions and session-scoped CLI built-ins/MCP now use location-and-configuration snapshot instances; same-snapshot sessions share an instance, released after the last attached session closes. Storage-owning `memory` and `rag`, user custom extensions and explicit `-e`/SDK factories remain host-owned. Project provider/channel registration is diagnosed and refused; providers, credentials, listeners and durable `dataDir` remain host-owned. Handler ordering is host → project → core, so user-listed host handlers now precede project-discovered handlers. This is registration isolation, not a JavaScript sandbox (part of [#452](https://github.com/glows777/Vela/issues/452)).

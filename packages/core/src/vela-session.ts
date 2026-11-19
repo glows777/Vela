@@ -208,6 +208,8 @@ export class VelaSession {
       tracker: this.tracker,
       timestamps: this.timestamps,
       prepare: this.execEnv,
+      start: (signal?: AbortSignal) => this.start(signal),
+      background: () => this.registry.background,
       isClosed: () => this.closed,
       isDraining: () => this.draining,
     })
@@ -898,14 +900,7 @@ export class VelaSession {
     return this.userBash.isRunning
   }
 
-  /**
-   * Runs a shell command for the user (pi's `executeBash`, the TUI's `!cmd`) in the working directory,
-   * without tool selection or hooks; one command at a time. The result is recorded
-   * in the session and reaches the model as a user message with the next prompt; `excludeFromContext`
-   * (`!!cmd`) records it without sending it. While the agent runs, recording waits until it stops.
-   * `onUpdate` gets the output's tail while the command runs; `bash_execution_update` events carry each new
-   * piece of output, with `id` (like pi). Rejects if the command cannot start.
-   */
+  /** Runs a shell command for the user (pi's `executeBash`, the TUI's `!cmd`); see `docs/sdk.md`. */
   async executeBash(
     command: string,
     options: {
@@ -923,6 +918,11 @@ export class VelaSession {
   /** Cancels the running `executeBash()` command (pi's abortBash); it is still recorded, as cancelled. */
   abortBash(): void {
     this.userBash.abort()
+  }
+
+  /** Moves running shell commands to the background; see `docs/sdk.md`. */
+  backgroundTasks(toolCallId?: string): Promise<string[]> {
+    return this.userBash.detach(toolCallId)
   }
 
   /**
@@ -1123,9 +1123,7 @@ export class VelaSession {
     return this.busy.locked
   }
 
-  /** Waits for agent loops, queued messages and manual compaction (like pi's waitForIdle).
-   * Excludes extension commands: a command can call abort(), which must not wait on itself.
-   */
+  /** Waits for agent loops, queued messages and compaction (like pi's waitForIdle), never for a command. */
   async waitForIdle(): Promise<void> {
     while (this.running) await this.running
   }

@@ -609,3 +609,60 @@ test('rpc: a failed project tool selection leaves the active session and can be 
     await rpc.close()
   }
 })
+
+test.concurrent('rpc: background_tasks moves one bash call by id, or every running call', async () => {
+  const rpc = startRpc(`faux:${scenario('slow-bash')}`)
+  try {
+    expect(
+      await rpc.call({ type: 'prompt', message: 'Run the slow checks' }),
+    ).toMatchObject({ success: true, data: { disposition: 'started' } })
+    // Wait until both commands have produced output, like a client pressing the key mid-run.
+    const updates = new Map<string, unknown>()
+    for (;;) {
+      const record = await rpc.waitFor(
+        (r) =>
+          r.type === 'tool_execution_update' &&
+          r.toolName === 'bash' &&
+          !updates.has(r.toolCallId as string),
+      )
+      updates.set(record.toolCallId as string, record)
+      if (updates.size === 2) break
+    }
+    // The ids arrive in an order the model's parallel calls decide, so sort them like the error does.
+    const [first, second] = [...updates.keys()].sort() as [string, string]
+    // An unknown id is a response error that names what is running, and changes nothing.
+    expect(
+      await rpc.call({ type: 'background_tasks', tool_use_id: 'not-a-call' }),
+    ).toMatchObject({
+      command: 'background_tasks',
+      success: false,
+      error: expect.stringContaining(
+        `No running bash call with tool call ID not-a-call. Running: ${first}, ${second}`,
+      ),
+    })
+    expect(
+      await rpc.call({ type: 'background_tasks', tool_use_id: first }),
+    ).toMatchObject({ success: true, data: { ids: ['bg-1'] } })
+    // Without an id, every call still in the foreground moves.
+    expect(await rpc.call({ type: 'background_tasks' })).toMatchObject({
+      success: true,
+      data: { ids: ['bg-2'] },
+    })
+    await rpc.waitFor((r) => r.type === 'agent_settled')
+    const messages = await rpc.call({ type: 'get_messages' })
+    const text = JSON.stringify(
+      (messages.data as { messages: unknown[] }).messages,
+    )
+    expect(text).toContain(
+      'Command was manually moved to the background with ID: bg-1.',
+    )
+    expect(text).toContain(
+      'Command was manually moved to the background with ID: bg-2.',
+    )
+    expect(text).toContain('ONE')
+    expect(text).toContain('TWO')
+  } finally {
+    // Closing ends the session, which stops both jobs without delivering.
+    await rpc.close()
+  }
+})

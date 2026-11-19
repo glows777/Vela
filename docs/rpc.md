@@ -174,6 +174,18 @@ Runs a shell command for the user, like the TUI's `!command` (see `session.execu
 
 Cancels the running `bash` command; its response then has `cancelled: true`.
 
+#### background_tasks
+
+```json
+{"id":"6d","type":"background_tasks","tool_use_id":"faux-call-1-1"}
+```
+
+```json
+{"id":"6d","type":"response","command":"background_tasks","success":true,"data":{"ids":["bg-1"]}}
+```
+
+Moves running shell commands to the background (the key binding and `/tasks` are the TUI's; this is the same action for any client). With `tool_use_id`, that model-issued `bash` call; without it, every call the session runs in the foreground, including the user's own `bash` command. Data: `{ "ids": string[] }`, the new background ids — `[]` when nothing is in the foreground. The waiting call's tool result then says the command was moved, and the exit arrives later as a background result: as its own turn, or through the host's queue in a channel. An unknown id fails with a response error naming the calls that are running. The jobs answer `background_output` and `background_stop` like any other; an interrupted run does not stop them, closing the session does. Needs the `background` extension.
+
 ### State
 
 #### get_state

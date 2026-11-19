@@ -3,6 +3,7 @@ import type {
   Result,
   ShellExecResult,
 } from '../execution/types.ts'
+import type { OutputTail } from './output-tail.ts'
 
 /** A started job as the call that started it reports it. */
 export interface BackgroundAdmission {
@@ -62,6 +63,30 @@ export interface BackgroundCommands {
      */
     signal?: AbortSignal
   }): Promise<BackgroundAdmission>
+  /**
+   * Registers a command that is already running in the foreground, so a caller can move it to the
+   * background later. The table only holds it: no id, no delivery and no tracked work until then.
+   * `start` runs with a signal that follows the run's until the command is moved.
+   */
+  watch<S>(options: {
+    command: string
+    /** The model-issued call waiting for this command; unset for the user's own `!` command. */
+    toolCallId?: string
+    /** The run's signal: a foreground command follows it, a moved one no longer does. */
+    signal?: AbortSignal
+    /** The command's bounded tail, which the job keeps for its snapshot and delivery after a move. */
+    output: OutputTail
+    /** Starts the command; the promise settles when it exits. */
+    start: (signal: AbortSignal) => Promise<S>
+    /** How the job reports that outcome (exit code, spilled output file, or a message) */
+    exit: (settled: S) => CommandExit
+  }): ForegroundCommand<S>
+  /**
+   * Moves running foreground commands to the background: every one the session is running (the
+   * user's own `!` command too), or the one model-issued call named by its tool-call id. Returns the
+   * new job ids; an unknown id throws and names the calls that are running.
+   */
+  detach(toolCallId?: string): Promise<string[]>
   /** A job's state and output tail; throws for an id that already delivered or was stopped. */
   snapshot(id: string): BackgroundSnapshot
   /** Ends a job and returns its final state; the caller gets the tail, so this never delivers. */
@@ -71,4 +96,24 @@ export interface BackgroundCommands {
    * that would answer is gone, and a close must not start a new one.
    */
   stopAll(): Promise<void>
+}
+
+/** One command running in the foreground, registered so a caller can move it to the background. */
+export interface ForegroundCommand<S> {
+  /** The command's result as the caller awaits it; rejects only when the environment throws. */
+  result: Promise<S>
+  /**
+   * Resolves with the new job's id and the tail so far once this call is moved to the background;
+   * never resolves while it stays in the foreground.
+   */
+  detached: Promise<BackgroundAdmission>
+}
+
+/** How a moved command ended, as its job reports it. */
+export interface CommandExit {
+  exitCode?: number
+  /** The environment's file with the complete output, known once the command spills */
+  spillPath?: string
+  /** The command could not start or run; the delivery carries this message */
+  error?: string
 }
