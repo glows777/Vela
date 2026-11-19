@@ -11,11 +11,13 @@ import {
 } from '../../../src/extensions/background/jobs.ts'
 import { silentLogger } from '../../../src/logger.ts'
 import type { SessionOptions } from '../../../src/session/options.ts'
+import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import { fauxText, fauxToolCall } from '../../../src/testing/faux.ts'
 import {
   cleanupTestVelas,
   createTestVela,
 } from '../../../src/testing/test-vela.ts'
+import { backgroundBash } from '../../../src/tools/environment-bash.ts'
 import {
   OUTPUT_MAX_BYTES as MAX_BYTES,
   OUTPUT_MAX_LINES as MAX_LINES,
@@ -65,15 +67,16 @@ function directory() {
 }
 
 /** Starts a command the way the bash tool does: the job owns its signal and output sink. */
-function startJob(
+async function startJob(
   jobs: BackgroundJobs,
   env: ExecutionEnv,
   command: string,
 ): Promise<string> {
-  return jobs.adopt({
+  const { id } = await jobs.adopt({
     command,
     start: ({ onOutput, signal }) => env.exec(command, { onOutput }, signal),
   })
+  return id
 }
 
 test('the output tail keeps the last 2000 lines and 50KB, and says when it cut', () => {
@@ -102,6 +105,30 @@ test('a single huge line keeps the tail of its cut end instead of reporting no o
   expect(read.truncated).toBe(true)
   expect(read.text).toContain('x')
   expect(Buffer.byteLength(read.text)).toBeLessThanOrEqual(MAX_BYTES)
+})
+
+test('the start result carries the tail a command already produced', async () => {
+  const root = directory()
+  const env = createLocalExecutionEnv({ cwd: root })
+  // A legal environment can write output before exec settles; the call must report that tail.
+  env.exec = async (_command, options) => {
+    options?.onOutput?.('READY_AT_ADMISSION\n', undefined, { stream: 'stdout' })
+    return { ok: true, value: { exitCode: 0 } }
+  }
+  const delivered: string[] = []
+  const jobs = new BackgroundJobs(sessionStub(root, delivered), silentLogger)
+  const result = await backgroundBash(
+    'start the server',
+    undefined,
+    root,
+    undefined,
+    { execution: env, results: new ToolResultStore(join(root, 'results')) },
+    jobs,
+  )
+  expect(result.text).toStartWith('READY_AT_ADMISSION\n\n')
+  expect(result.text).toContain('Command running in background with ID: bg-1.')
+  expect(result.execution.backgroundTaskId).toBe('bg-1')
+  await until(() => delivered.length === 1, 'the exit delivery')
 })
 
 test('a background command runs to completion and its delivery carries the exit code and tail', async () => {

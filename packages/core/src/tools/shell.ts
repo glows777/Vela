@@ -38,6 +38,9 @@ export const createBashTool = (
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
+  promptGuidelines: [
+    'A command that may keep running (a dev server, a watch build, a long test run) starts with run_in_background: true instead of blocking the turn.',
+  ],
   execute: async (
     {
       command,

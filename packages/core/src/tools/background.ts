@@ -4,6 +4,14 @@ import type {
   ShellExecResult,
 } from '../execution/types.ts'
 
+/** A started job as the call that started it reports it. */
+export interface BackgroundAdmission {
+  id: string
+  /** The tail the command already wrote when the call returned; empty when it has not spoken yet */
+  output: string
+  truncated: boolean
+}
+
 /** A background command as `background_output` and `background_stop` report it. */
 export interface BackgroundSnapshot {
   id: string
@@ -32,8 +40,8 @@ export interface BackgroundStart {
 export interface BackgroundCommands {
   /**
    * Takes ownership of a command: allocates its id, keeps its tail and delivers its exit to the
-   * session. Resolves with the id once the command may start, so a caller that cannot record the
-   * job in time fails the call instead of promising a result.
+   * session. Resolves once the command may start, with what it has already written, so a caller
+   * that cannot record the job in time fails the call instead of promising a result.
    */
   adopt(options: {
     command: string
@@ -46,7 +54,7 @@ export interface BackgroundCommands {
      * running job does not, because it outlives the call.
      */
     signal?: AbortSignal
-  }): Promise<string>
+  }): Promise<BackgroundAdmission>
   /** A job's state and output tail; throws for an id that already delivered or was stopped. */
   snapshot(id: string): BackgroundSnapshot
   /** Ends a job and returns its final state; the caller gets the tail, so this never delivers. */

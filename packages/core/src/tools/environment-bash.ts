@@ -147,14 +147,17 @@ export async function backgroundBash(
       `Could not create a file for the background command's output: ${file.error.message}`,
     )
   const outputPath = file.value
-  const id = await commands.adopt({
+  const { id, output, truncated } = await commands.adopt({
     command,
     // Cancelling this call during admission starts nothing; the running job gets its own signal.
     signal: context?.signal,
     start: ({ onOutput, signal }) =>
       env.exec(command, { timeout, outputPath, onOutput }, signal),
   })
-  const text = `Command running in background with ID: ${id}. Output is being written to: ${outputPath}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+  const tail = output
+    ? `${output}${truncated ? '\n\n[Showing the last output only]' : ''}\n\n`
+    : ''
+  const text = `${tail}Command running in background with ID: ${id}. Output is being written to: ${outputPath}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
   return new ToolExecutionResult({ id, outputPath }, text, {
     backgroundTaskId: id,
   })

@@ -7,6 +7,7 @@ import type {
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
 import type {
+  BackgroundAdmission,
   BackgroundCommands,
   BackgroundSnapshot,
   BackgroundStart,
@@ -92,7 +93,7 @@ export class BackgroundJobs implements BackgroundCommands {
       run: BackgroundStart,
     ) => Promise<Result<ShellExecResult, ExecutionError>>
     signal?: AbortSignal
-  }): Promise<string> {
+  }): Promise<BackgroundAdmission> {
     const id = `bg-${++this.sequence}`
     const controller = new AbortController()
     const job: Job = {
@@ -128,7 +129,9 @@ export class BackgroundJobs implements BackgroundCommands {
     try {
       await prepared
       controller.signal.throwIfAborted()
-      return id
+      // An environment can emit output before this returns; the call reports that tail.
+      const { text, truncated } = job.output.read()
+      return { id, output: text, truncated }
     } catch (error) {
       // A failed/cancelled admission never launches a process or claims it started.
       job.silent = true
