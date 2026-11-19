@@ -31,7 +31,7 @@ The umbrella `packages/vela/src/testing/` composes the channel-aware compatibili
 | Command | What it runs | Approximate time |
 |---|---|---|
 | `bun run test` | package, architecture, e2e and offline eval tests; run this before committing | 1–2 min |
-| `bun run test:unit` | unit tests only | ~5–15 s |
+| `bun run test:unit` | unit tests only (includes rerunning the package unit suites in a temp cwd, see `test/unit/test-isolation.test.ts`) | ~30 s |
 | `bun run test:e2e` | end-to-end flows only (including CLI subprocesses) | ~1 min |
 | `bun run test:live` | real model; needs `OPENAI_API_KEY` and `OPENAI_API_MODEL_NAME` | depends on the model |
 | `bun test <file or dir>` | a targeted subset | |
@@ -255,6 +255,7 @@ A recorded scenario is an ordinary faux scenario (plus `inputs`). A failed reque
 | core: unit/session/storage | memory storage saves by id and returns copies; file storage reads and writes, and still reads the old one-message-per-line format; list() for both (newest first, skips sessions without messages, names, first message) |
 | core: unit/testing/record | record then replay yields the same events; recording errors, broken streams, retries, aborts (hang) and the generate queue |
 | unit/boundary | core modules contain no console, process.stdout/stderr/exit/env or readline |
+| unit/test-isolation | the package unit suites write nothing into the working directory: rerun in a temp cwd, it stays empty |
 | `<package>`: test/public-api | each package’s public export map matches `packages/<name>/api/public-api.txt`; after changing the public surface run `bun run api:update` |
 | unit/changelog | CHANGELOG helpers behind `bun run release` and the GitHub release notes: stamping `[Unreleased]`, extracting a version's notes with repo links pointing at the tag, version bumps; the repo changelog has notes for the current version; a candidate retry reads the tag snapshot rather than main after that snapshot's entries are stamped |
 | e2e/tool-interception | awaited tool-call side effects, async block/throw/cancellation, chained input rewrites through hooks/audit/history, and awaited result changes before the next model request |

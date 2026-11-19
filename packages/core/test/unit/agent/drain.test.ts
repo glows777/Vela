@@ -1,8 +1,12 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod'
 import type { VelaEvent } from '../../../src/agent/events.ts'
 import { agentLoop } from '../../../src/agent/index.ts'
 import type { ModelMessage } from '../../../src/messages.ts'
+import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
   createFauxModel,
   fauxText,
@@ -11,12 +15,22 @@ import {
 import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
 
+const dir = mkdtempSync(join(tmpdir(), 'vela-agent-drain-'))
+afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
+// These tests do not assert on persistence, so their tool history goes to a temp directory.
+function makeRegistry() {
+  return new ToolRegistry(
+    new ToolResultStore(join(dir, crypto.randomUUID(), 'tool-results')),
+  )
+}
+
 test('drain lets an active tool finish, keeps its real output, and starts no next request or queued input', async () => {
   let draining = false
   let queued = 0
   const events: VelaEvent[] = []
   const messages: ModelMessage[] = [{ role: 'user', content: 'work' }]
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register({
     name: 'work',
     description: 'work',
@@ -58,7 +72,7 @@ test('a drain begun during the model response prevents unstarted tools and repor
   let draining = false
   let executed = false
   const messages: ModelMessage[] = [{ role: 'user', content: 'work' }]
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register({
     name: 'work',
     description: 'work',
@@ -104,7 +118,7 @@ test('a completed final answer can finish during drain', async () => {
       ],
     }),
     systemPrompt: '',
-    toolRegistry: new ToolRegistry(),
+    toolRegistry: makeRegistry(),
     messages: [{ role: 'user', content: 'work' }],
     tokenTracker: new TokenTracker(),
     isDraining: () => draining,
@@ -121,7 +135,7 @@ test('an already draining run does not start a model request', async () => {
     agentLoop({
       model,
       systemPrompt: '',
-      toolRegistry: new ToolRegistry(),
+      toolRegistry: makeRegistry(),
       messages: [],
       tokenTracker: new TokenTracker(),
       isDraining: () => true,
