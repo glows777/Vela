@@ -792,10 +792,7 @@ export class VelaSession {
 
   /** @internal Starts this new session as a copy of `parent`'s branch (fork / clone). */
   async seedFrom(parent: VelaSession, branch: SessionEntry[]): Promise<void> {
-    await this.store.seedFrom(branch, {
-      id: parent.id,
-      results: parent.store.results,
-    })
+    await this.store.seedFrom(branch, parent, this.execEnv)
     if (branch.length) await this.loadBranch(this.store.buildContext())
     await this.store.flush()
   }

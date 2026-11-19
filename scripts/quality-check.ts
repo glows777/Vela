@@ -37,7 +37,7 @@ const MAX_CYCLES = 0
 
 /** Files that were already over the limit when the ratchet landed, pinned at their size that day. */
 const LINE_CEILINGS = new Map<string, number>([
-  ['packages/core/src/vela-session.ts', 1485],
+  ['packages/core/src/vela-session.ts', 1482],
   ['packages/vela/src/cli/interactive.ts', 1362],
   ['packages/core/src/tools/registry.ts', 714],
 ])
