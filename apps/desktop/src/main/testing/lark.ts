@@ -37,6 +37,11 @@ type Control =
     }
   | { op: 'failNextTopicStart' }
   | { op: 'failNextSend' }
+  | { op: 'failNextTopicHistory' }
+  /** A card Vela posted in a topic, after the row whose text matches `after`. */
+  | { op: 'cardInTopic'; chatId: string; threadId: string; after: string }
+  /** A person recalls a message in Lark: history stops returning it. */
+  | { op: 'recall'; text: string }
 
 const botId = 'cli_desktop_fake'
 const botName = 'Vela'
@@ -54,6 +59,7 @@ export function fakeLark(dir: string): FakeTransport {
   let clock = Date.now() - 60 * 60 * 1000
   let failNextTopicStart = false
   let failNextSend = false
+  let failNextTopicHistory = false
   let threads = 0
   const chats = new Map<string, { name?: string; rows: Stored[] }>()
   const threadsById = new Map<string, Stored[]>()
@@ -123,6 +129,10 @@ export function fakeLark(dir: string): FakeTransport {
     }
   }
 
+  const visibleText = (stored: Stored) =>
+    (JSON.parse(stored.row.body?.content ?? '{}') as { text?: string }).text ??
+    ''
+
   const senderId = (senderName: string) =>
     `ou_${senderName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`
 
@@ -155,7 +165,34 @@ export function fakeLark(dir: string): FakeTransport {
       }
       if (control.op === 'failNextTopicStart') failNextTopicStart = true
       else if (control.op === 'failNextSend') failNextSend = true
-      else if (control.op === 'say')
+      else if (control.op === 'failNextTopicHistory')
+        failNextTopicHistory = true
+      else if (control.op === 'cardInTopic') {
+        const thread = threadsById.get(control.threadId)
+        const root = thread?.[0]
+        if (!thread || !root) continue
+        const at = thread.findIndex(
+          (stored) => visibleText(stored) === control.after,
+        )
+        const card: Stored = {
+          chatId: control.chatId,
+          rootId: root.rootId,
+          threadId: control.threadId,
+          row: {
+            message_id: `om_${nextClock()}`,
+            create_time: String(clock),
+            // A card has no text; the host drops it from the visible history.
+            msg_type: 'interactive',
+            body: { content: JSON.stringify({ card: 'progress' }) },
+            sender: { id: botId, sender_type: 'app' },
+          },
+        }
+        byId.set(card.row.message_id!, card)
+        thread.splice(at < 0 ? thread.length : at + 1, 0, card)
+      } else if (control.op === 'recall') {
+        for (const stored of byId.values())
+          if (visibleText(stored) === control.text) stored.row.deleted = true
+      } else if (control.op === 'say')
         say(control.chatId, control.text, control.senderName ?? 'Alice')
     }
     // Lets the verify script wait until a control line took effect before acting on it.
@@ -326,9 +363,19 @@ export function fakeLark(dir: string): FakeTransport {
       const chat = chats.get(chatId)
       return chat ? { name: chat.name } : undefined
     },
-    async listTopicMessages(threadId) {
+    async listTopicMessages(threadId, pageToken) {
+      if (failNextTopicHistory) {
+        failNextTopicHistory = false
+        throw new Error('Fake Lark denied the topic history')
+      }
+      // One row per page: a page the host filters to nothing must not end the read.
+      const rows = threadsById.get(threadId) ?? []
+      const start = pageToken ? Number(pageToken) : 0
+      const items = rows.slice(start, start + 1).map((stored) => stored.row)
+      const next = start + items.length
       return {
-        items: (threadsById.get(threadId) ?? []).map((stored) => stored.row),
+        items,
+        ...(next < rows.length ? { pageToken: String(next) } : {}),
       }
     },
     async searchMessages(chatId, { endTime, limit, pageToken }) {

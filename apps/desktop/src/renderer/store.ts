@@ -130,6 +130,38 @@ function mergeMessages(sessionId: string, incoming: Message[]) {
   })
 }
 
+/**
+ * A read is authoritative for what it covers: a message the host no longer returns —
+ * one recalled in Lark — leaves the page instead of staying cached. A complete read
+ * covers the whole conversation; a page covers only its own time range, so anything
+ * outside that range stays.
+ */
+function reconcileMessages(
+  sessionId: string,
+  incoming: Message[],
+  complete: boolean,
+) {
+  const fresh = new Map(incoming.map((message) => [message.id, message]))
+  const times = incoming.map((message) => message.createdAt).sort()
+  const oldest = times[0]
+  const newest = times.at(-1)
+  const kept = (snapshot.messages[sessionId] ?? []).filter((message) => {
+    if (fresh.has(message.id)) return true
+    if (complete || oldest === undefined || newest === undefined) return false
+    return message.createdAt < oldest || message.createdAt > newest
+  })
+  publish({
+    messages: {
+      ...snapshot.messages,
+      [sessionId]: byTime([
+        ...new Map(
+          [...kept, ...fresh.values()].map((message) => [message.id, message]),
+        ).values(),
+      ]),
+    },
+  })
+}
+
 function mergeSessions(sessions: Session[]) {
   const merged = { ...snapshot.sessions }
   for (const session of sessions) merged[session.sessionId] = session
@@ -232,16 +264,16 @@ async function readLarkGroup(
       ...(cursor ? { cursor } : {}),
       limit: 50,
     })
-    mergeMessages(project.sessionId, page.messages)
-    // A refresh of the newest page keeps a deeper cursor the person already reached.
-    if (older || !larkCursors.has(project.sessionId)) {
-      if (page.nextCursor) {
-        larkCursors.set(project.sessionId, page.nextCursor)
-        publish({ earlier: { ...snapshot.earlier, [project.sessionId]: true } })
-      } else {
-        larkCursors.delete(project.sessionId)
-        publish({ earlier: withoutKey(snapshot.earlier, project.sessionId) })
-      }
+    // A refresh of the newest page starts paging over from it: a cursor kept from
+    // before the refresh would skip messages that arrived while the app did not read.
+    if (older) mergeMessages(project.sessionId, page.messages)
+    else reconcileMessages(project.sessionId, page.messages, !page.nextCursor)
+    if (page.nextCursor) {
+      larkCursors.set(project.sessionId, page.nextCursor)
+      publish({ earlier: { ...snapshot.earlier, [project.sessionId]: true } })
+    } else {
+      larkCursors.delete(project.sessionId)
+      publish({ earlier: withoutKey(snapshot.earlier, project.sessionId) })
     }
     return undefined
   } catch (cause) {
@@ -276,9 +308,10 @@ async function readLarkTopic(
       })
       collected.push(...page.messages)
       cursor = page.nextCursor
-      if (page.messages.length === 0) break
+      // A page the host filtered to nothing (a card, a recalled row) can still have a
+      // next page; only the cursor says whether the conversation ends here.
     } while (cursor)
-    mergeMessages(session.sessionId, collected)
+    reconcileMessages(session.sessionId, collected, true)
   } catch (cause) {
     return errorMessage(cause)
   }
@@ -290,7 +323,9 @@ export function loadSession(projectId: string, sessionId: string) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   const session = snapshot.sessions[sessionId]
   if (project?.channel === 'lark' && session?.channel === 'lark')
-    void readLarkTopic(project.id, session)
+    void readLarkTopic(project.id, session).then((error) => {
+      if (error) publish({ error })
+    })
   else void loadMessages(projectId, sessionId)
 }
 

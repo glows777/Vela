@@ -2067,6 +2067,68 @@ async function larkJourneys() {
       .waitFor()
     await themes(page, 'lark-journey-topic')
 
+    // A topic whose next history read fails says why, and the read after that shows
+    // the conversation: the panel never sits on an unexplained empty conversation.
+    const threadIdent = (
+      await page.evaluate(
+        (chatId) => window.vela.sessions('lark', chatId),
+        larkProject,
+      )
+    ).find((session) => session.sessionId === topic.sessionId)!.topic!
+    await larkSays({ op: 'failNextTopicHistory' })
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    const topicAlert = panel.getByRole('alert')
+    await topicAlert.waitFor({ timeout: 30_000 })
+    assert(
+      ((await topicAlert.textContent()) ?? '').includes(
+        'Fake Lark denied the topic history',
+      ),
+      "The panel carries the history read's reason",
+    )
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByText('I will read the deploy script first.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'A topic whose history read fails shows the reason, and the next read shows the conversation.',
+    )
+
+    // A card in the middle of a topic: the host filters it out of its page, and the
+    // read must continue to the text behind it.
+    await larkSays({
+      op: 'cardInTopic',
+      chatId: larkProject,
+      threadId: threadIdent.threadId,
+      after: 'Check the deploy script',
+    })
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .getByText('The deploy script still points at staging.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await panel.getByText('progress', { exact: true }).count(),
+      0,
+      'A card is not shown as text',
+    )
+    checks.push('A page the host filters to nothing does not end a topic read.')
+
+    // A recalled message leaves the panel on the next complete read.
+    await larkSays({
+      op: 'recall',
+      text: 'The deploy script still points at staging.',
+    })
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+    await panel.getByRole('button', { name: /Check the deploy script/ }).click()
+    await panel
+      .locator('[data-role="assistant"]')
+      .getByText('The deploy script still points at staging.', { exact: true })
+      .waitFor({ state: 'detached', timeout: 30_000 })
+    checks.push('A message recalled in Lark leaves the topic on the next read.')
+    await panel.getByRole('button', { name: 'All sessions' }).click()
+
     // A topic that cannot start after the signed message reached Lark: re-read and say
     // so, restore nothing, and never resend on its own.
     const signedCopies = (text: string) =>
