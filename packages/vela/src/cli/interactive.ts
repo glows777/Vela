@@ -295,11 +295,11 @@ export class InteractiveMode {
         )
       }
     }
-    const resources = await session.resources()
+    const { defaultTools, ...resources } = await session.resources()
     const setupNext = startup && Boolean(this.options.agentDir)
     const silent =
       setupNext && !isModelUsable(session, this.options.hasUsableModel)
-    this.options.configure(session, { quiet: silent })
+    this.options.configure(session, { quiet: silent, defaultTools })
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
     this.refreshCompletion = () =>
       this.editor.setAutocompleteProvider(
@@ -1210,7 +1210,7 @@ export class InteractiveMode {
     return selectModel(this.modelHost())
   }
   private cycleModel(direction: 1 | -1): void {
-    cycleModel(this.modelHost(), direction)
+    void cycleModel(this.modelHost(), direction)
   }
 
   private authHost() {
