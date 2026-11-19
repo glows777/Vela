@@ -327,6 +327,29 @@ test('a session with bash but not the job tools is not told to use run_in_backgr
   expect(bash.description).toContain('run_in_background')
 })
 
+test('an enabled session states the background condition on the parameter, not as a rule', async () => {
+  const t = createTestVela({
+    responses: [fauxText('hello')],
+    extensions: [background()],
+  })
+  await t.run('hi')
+  expect(t.model.calls[0]!.tools).toEqual(
+    expect.arrayContaining(['bash', 'background_stop']),
+  )
+  // The condition travels with the parameter itself, which the model reads in the tool schema.
+  const bash = t.session.registry.get('bash')!
+  const schema = z.toJSONSchema(bash.inputSchema as z.ZodType) as {
+    properties?: Record<string, { description?: string }>
+  }
+  expect(schema.properties?.run_in_background?.description).toContain(
+    'Available only when this session has the background tools',
+  )
+  // No standing rule: the parameter is unusable in some legitimate tool lists.
+  expect(bash.promptGuidelines ?? []).toEqual([])
+  // The start result carries the id and the tail; the log path comes with the exit notification.
+  expect(bash.description).not.toContain('output file')
+})
+
 test('a nested bash call cancelled while its job is being recorded starts nothing', async () => {
   // The calling tool's own signal: no agent_end cleanup covers this path.
   const controller = new AbortController()
