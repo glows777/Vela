@@ -9,7 +9,8 @@ const options = {
   cwd: '/',
   env: { PATH: path, HOME: '/var/empty/vela-docker-client' },
 }
-const endpoint = ['--host', 'unix:///var/run/docker.sock']
+const socket = 'unix:///var/run/docker.sock'
+const endpoint = ['--host', socket]
 const invoke = promisify(execFile)
 export async function runDocker(args: string[]) {
   try {
@@ -20,9 +21,10 @@ export async function runDocker(args: string[]) {
     return stdout.trim()
   } catch (cause) {
     const detail = (cause as { stderr?: string }).stderr?.trim()
-    throw new Error(detail || 'Docker client or local engine unavailable', {
-      cause,
-    })
+    throw new Error(
+      `Docker at ${socket}: ${detail || 'Docker client or local engine unavailable'}`,
+      { cause },
+    )
   }
 }
 

@@ -10,6 +10,7 @@ import { prepareDocker } from '../../extensions/docker/lifecycle.ts'
 import { checkDockerOperations } from '../support/docker-conformance.ts'
 
 const image = process.env.VELA_TEST_DOCKER_IMAGE
+const volumeImage = process.env.VELA_TEST_DOCKER_VOLUME_IMAGE
 describe.skipIf(!image)('prepared Docker image', () => {
   let dir: ReturnType<typeof tempDir>
   let openDockerEnvironment: typeof import('../../extensions/docker/adapter.ts').openDockerEnvironment
@@ -70,6 +71,15 @@ describe.skipIf(!image)('prepared Docker image', () => {
     expect(await b.exists('page')).toEqual({ ok: true, value: false })
   }, 240000)
 
+  test('a failed Docker client call identifies the attempted local socket', async () => {
+    const absent = owner('absent-container')
+    await expect(
+      runDocker(['inspect', '--type', 'container', absent]),
+    ).rejects.toThrow(
+      /unix:\/\/\/var\/run\/docker\.sock.*No such (?:object|container)/is,
+    )
+  })
+
   test('a callback error after command exit returns the readable spill file', async () => {
     const env = await open('callback')
     // An incomplete UTF-8 character is delivered to the observer only on decoder flush at exit.
@@ -128,4 +138,48 @@ describe.skipIf(!image)('prepared Docker image', () => {
     ).rejects.toThrow(/EEXIST:.*mkdir '\/tmp\/vela-home'/)
     expect(await lookup(owner(name))).toBe('')
   }, 240000)
+
+  test.skipIf(!volumeImage)(
+    'rejecting an image volume removes only the new container and its anonymous volume',
+    async () => {
+      const name = 'extra-volume'
+      const options = { ...config(name), image: volumeImage! }
+      const rejection = {
+        name: 'Error',
+        message:
+          'Docker container ownership or configuration differs; explicit owner restart required',
+      }
+      let volume = ''
+      const findVolume = () =>
+        runDocker(['volume', 'ls', '-q', '--filter', `name=^${volume}$`])
+      await expect(
+        prepareDocker(options, async (args) => {
+          const result = await runDocker(args)
+          if (args[0] === 'inspect') {
+            const [container] = JSON.parse(result)
+            const mount = container.Mounts.find(
+              (m: { Destination: string }) =>
+                m.Destination === '/vela-test-volume',
+            )
+            expect(mount.Type).toBe('volume')
+            volume = mount.Name
+            expect(volume).toMatch(/^[a-f0-9]{64}$/)
+            // A second opener sees a pre-existing container. Its rejection must leave both resources alone.
+            await expect(openDockerEnvironment(options)).rejects.toMatchObject(
+              rejection,
+            )
+            expect(await lookup(owner(name))).toBe(container.Id)
+            expect(await findVolume()).toBe(volume)
+          }
+          return result
+        }),
+      ).rejects.toMatchObject(rejection)
+      expect(volume).toMatch(/^[a-f0-9]{64}$/)
+      expect({
+        container: await lookup(owner(name)),
+        volume: await findVolume(),
+      }).toEqual({ container: '', volume: '' })
+    },
+    240000,
+  )
 })

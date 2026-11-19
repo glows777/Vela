@@ -117,27 +117,33 @@ export async function prepareDocker(
   }
   if (!/^[a-f0-9]{64}$/u.test(id))
     throw Error('Ambiguous Docker container identity')
-  const [object] = JSON.parse(await run(['inspect', '--type', 'container', id]))
-  const mount = object?.Mounts?.[0]
-  if (
-    object?.Id !== id ||
-    object.Config?.Labels?.[ownerKey] !== owner ||
-    object.Config.Labels[configKey] !== config ||
-    object.Config.User !== user ||
-    object.Config.Image !== o.image ||
-    object.HostConfig?.NetworkMode !== network ||
-    object.HostConfig.Privileged !== false ||
-    object.Mounts.length !== 1 ||
-    mount.Type !== 'bind' ||
-    mount.Source !== workspace ||
-    mount.Destination !== '/workspace' ||
-    !mount.RW
-  )
-    throw Error(
-      'Docker container ownership or configuration differs; explicit owner restart required',
-    )
+  let restoreStopped = false
   try {
-    if (!object.State.Running) await run(['start', id])
+    const [object] = JSON.parse(
+      await run(['inspect', '--type', 'container', id]),
+    )
+    const mount = object?.Mounts?.[0]
+    if (
+      object?.Id !== id ||
+      object.Config?.Labels?.[ownerKey] !== owner ||
+      object.Config.Labels[configKey] !== config ||
+      object.Config.User !== user ||
+      object.Config.Image !== o.image ||
+      object.HostConfig?.NetworkMode !== network ||
+      object.HostConfig.Privileged !== false ||
+      object.Mounts.length !== 1 ||
+      mount.Type !== 'bind' ||
+      mount.Source !== workspace ||
+      mount.Destination !== '/workspace' ||
+      !mount.RW
+    )
+      throw Error(
+        'Docker container ownership or configuration differs; explicit owner restart required',
+      )
+    if (!object.State.Running) {
+      restoreStopped = true
+      await run(['start', id])
+    }
     const missingTools = await run([
       'exec',
       '--workdir',
@@ -160,8 +166,8 @@ export async function prepareDocker(
       throw Error(`Missing required Docker tools: ${missingTools}`)
   } catch (cause) {
     try {
-      if (created) await run(['rm', '-f', id])
-      else if (!object.State.Running) await run(['stop', '--timeout', '1', id])
+      if (created) await run(['rm', '-fv', id])
+      else if (restoreStopped) await run(['stop', '--timeout', '1', id])
     } catch (rollbackError) {
       throw new AggregateError(
         [cause, rollbackError],
