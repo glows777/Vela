@@ -28,8 +28,9 @@ export class ChannelSessions {
     const target = this.targets.get(session)
     return (
       !target ||
-      (session.cwd === target.cwd &&
-        session.location.environment === target.environment)
+      (session.location.environment === target.environment &&
+        // A local group binding preserves the cwd of a topic already opened by its host.
+        (target.environment === 'local' || session.cwd === target.cwd))
     )
   }
 
