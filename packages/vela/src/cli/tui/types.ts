@@ -27,7 +27,11 @@ export interface InteractiveOptions {
    */
   configure: (
     session: VelaSession,
-    options?: { quiet?: boolean; defaultTools?: readonly string[] },
+    options?: {
+      quiet?: boolean
+      startup?: boolean
+      defaultTools?: readonly string[]
+    },
   ) => boolean
   /** Called before exit (dispose, write the recording file) */
   onExit: () => Promise<void>

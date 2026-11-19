@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { loadConfig, type ThinkingLevel } from '@glows777/vela-core'
+import { selectTools } from '../../packages/vela/src/cli/setup.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 
 function project(cwd: string, label: string, thinking: ThinkingLevel) {
@@ -287,6 +288,52 @@ test('TUI model cycling uses the active project instead of startup A', async () 
     expect(session.modelInfo.ref).toBe('fake/b')
     tui.terminal.press(KEYS.ctrlP)
     await tui.until(() => session.modelInfo.ref === 'fake/start')
+  } finally {
+    await stopTuis()
+    await t.vela.dispose()
+    t.dir.cleanup()
+  }
+})
+
+test('TUI rejects invalid project tools on resume without leaving the active session', async () => {
+  const t = setup()
+  try {
+    const b = t.vela.session('saved-b', { cwd: t.b })
+    await b.prompt('A saved message in B')
+    await b.close()
+    const settings = join(t.b, '.vela/settings.json')
+    writeFileSync(
+      settings,
+      JSON.stringify({ defaultTools: ['stale_project_tool'] }),
+    )
+    const tui = await startTui(t.vela, {
+      sessionId: 'active-a',
+      configure: (session, options) => {
+        const selected = selectTools(
+          session.registry.getAllTools().map((tool) => tool.name),
+          { noTools: false, excludeTools: [] },
+          options?.defaultTools,
+        )
+        if (selected?.selection) session.setActiveTools(selected.selection)
+        return true
+      },
+    })
+    await tui.started
+    tui.submit('/resume')
+    await tui.until('Resume Session')
+    tui.terminal.press(KEYS.enter)
+    await tui.until('Unknown tool: stale_project_tool')
+    expect(tui.exited()).toBe(false)
+    expect(tui.screen()).toContain('session active-a')
+    expect(t.vela.sessions().some((session) => session.id === 'saved-b')).toBe(
+      false,
+    )
+    writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+    tui.submit('/resume')
+    await tui.until('Resume Session')
+    tui.terminal.press(KEYS.enter)
+    await tui.until('Resumed session saved-b')
+    expect(t.vela.session('saved-b').getActiveTools()).toContain('read_file')
   } finally {
     await stopTuis()
     await t.vela.dispose()

@@ -451,18 +451,24 @@ function applyModelArgs(
   target: VelaSession,
   {
     quiet = false,
+    startup = true,
     defaultTools,
-  }: { quiet?: boolean; defaultTools?: readonly string[] } = {},
+  }: {
+    quiet?: boolean
+    startup?: boolean
+    defaultTools?: readonly string[]
+  } = {},
 ): boolean {
-  recordedSession = target.id
   try {
     applyCliTools(target, defaultTools)
   } catch (error) {
+    if (!startup) throw error
     console.error(error instanceof Error ? error.message : String(error))
     configurationExitCode = 2
     void exit(2)
     return false
   }
+  recordedSession = target.id
   if (args.thinking) target.setThinkingLevel(args.thinking)
   // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
   const override =
