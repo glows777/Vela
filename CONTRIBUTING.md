@@ -1,6 +1,6 @@
 # Contributing to Vela
 
-Thanks for helping. Bug reports, fixes and small focused features are welcome. For a larger change, open an issue first so we can agree on the approach before you write it.
+Thanks for helping. Bug reports, fixes and small focused features are welcome. Every pull request has a source issue. On that issue, restate the Goal and the Acceptance before you open the pull request.
 
 ## Setup
 

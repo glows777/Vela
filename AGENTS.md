@@ -14,7 +14,7 @@ GitHub issues and PRs are the source of truth. A piece of work starts with a Goa
 
 - `status:draft` means Goal or Acceptance is still missing or contested. Do not start implementation, and do not treat a verbal clarification in chat as enough until it is written on the issue.
 - `status:ready` means Goal and Acceptance are clear enough to start. It is not permission to invent the design only in the PR.
-- Before opening a PR, the implementer comments on the same issue, restating Goal and Acceptance in their own words. If that restatement does not match, ask on the issue; do not open the PR yet.
+- Every PR has a source issue. Before opening a PR, the implementer comments on that issue, restating Goal and Acceptance in their own words. If that restatement does not match, ask on the issue; do not open the PR yet.
 - Merging a PR is not done. Done requires the agreed verification (tests, verify-vela, or the acceptance checks), posted on the original issue or PR, with evidence someone else can rerun. If acceptance is unmet, the work is not delivered.
 - After a UX miss, eval failure, or a repeated incident, open two issues when both apply: one to fix the product, and one to change the process (AGENTS.md, templates, or REVIEW.md). Agents may propose process changes; Claude reviews them; Liam decides whether they land.
 

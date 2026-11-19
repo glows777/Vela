@@ -6,7 +6,7 @@
 
 ## Work loop
 
-<!-- Link the source issue. Confirm that Goal and Acceptance were restated on that issue before opening this PR. Merge is not done until verification evidence is posted on the issue or this PR. -->
+<!-- Every PR has a source issue. Link it. Confirm that Goal and Acceptance were restated on that issue before opening this PR. Merge is not done until verification evidence is posted on the issue or this PR. -->
 
 ## How verified
 
