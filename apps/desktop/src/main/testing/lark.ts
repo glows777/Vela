@@ -53,6 +53,8 @@ type Control =
    * exists.
    */
   | { op: 'filterNewest'; chatId: string; count: number }
+  /** Named messages become cards: they fill a page with no visible text. */
+  | { op: 'filterText'; chatId: string; texts: string[] }
 
 const botId = 'cli_desktop_fake'
 const botName = 'Vela'
@@ -200,6 +202,13 @@ export function fakeLark(dir: string): FakeTransport {
             .filter((stored) => !stored.row.deleted)
             .slice(-control.count)
           for (const stored of rows) stored.row.msg_type = 'interactive'
+          break
+        }
+        case 'filterText': {
+          const wanted = new Set(control.texts)
+          for (const stored of chats.get(control.chatId)?.rows ?? [])
+            if (wanted.has(visibleText(stored)))
+              stored.row.msg_type = 'interactive'
           break
         }
         case 'recall':

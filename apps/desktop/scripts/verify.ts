@@ -57,6 +57,8 @@ const larkProject = 'oc_alpha'
 const gapProject = 'oc_gap'
 /** A third, busy group: routine live messages must not reset paging. */
 const liveProject = 'oc_live'
+/** A fourth group: a filtered page sits inside the gap a long absence leaves. */
+const jumpProject = 'oc_jump'
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
@@ -1823,7 +1825,7 @@ async function larkJourneys() {
     JSON.stringify({
       shellPath: shell,
       extensionConfig: {
-        lark: { chats: [larkProject, gapProject, liveProject] },
+        lark: { chats: [larkProject, gapProject, liveProject, jumpProject] },
       },
     }),
   )
@@ -1843,6 +1845,13 @@ async function larkJourneys() {
           messages: Array.from({ length: 120 }, (_, index) => ({
             sender: index % 2 === 0 ? 'Alice' : 'Bob',
             text: `Live message ${index + 1} of the third group.`,
+          })),
+        },
+        [jumpProject]: {
+          name: 'Vela jump',
+          messages: Array.from({ length: 100 }, (_, index) => ({
+            sender: 'Bob',
+            text: `Jump message ${index + 1} of the fourth group.`,
           })),
         },
         [larkProject]: {
@@ -2132,6 +2141,67 @@ async function larkJourneys() {
       .waitFor()
     checks.push(
       'A newest page with no visible rows never erases the history the page already read.',
+    )
+
+    // A filtered page inside the gap a long absence leaves: the refresh must read past
+    // it, or the messages after it never appear and Show earlier jumps over them.
+    await sidebar.getByRole('button', { name: 'Vela jump Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela jump', exact: true })
+      .waitFor()
+    await page
+      .getByText('Jump message 100 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await larkSays({
+      op: 'backlog',
+      chatId: jumpProject,
+      texts: Array.from(
+        { length: 120 },
+        (_, index) => `New message ${index + 101} of the fourth group.`,
+      ),
+    })
+    await larkSays({
+      op: 'filterText',
+      chatId: jumpProject,
+      texts: Array.from(
+        { length: 50 },
+        (_, index) => `New message ${index + 121} of the fourth group.`,
+      ),
+    })
+    await Bun.sleep(2500)
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela jump Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela jump', exact: true })
+      .waitFor()
+    await page
+      .getByText('New message 220 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('New message 120 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Jump message 15 of the fourth group.', { exact: true })
+        .count(),
+      0,
+      'The refresh stops where the person had paged to',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Jump message 21 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Jump message 1 of the fourth group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page.getByRole('button', { name: 'Show earlier messages' }).count(),
+      0,
+      'The oldest page is the end of the history',
+    )
+    checks.push(
+      'A filtered page inside a disconnect gap is read past, so the messages after it appear and paging still reaches the oldest.',
     )
     await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
     await page

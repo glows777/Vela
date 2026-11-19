@@ -10,6 +10,8 @@ import type {
   SettingsState,
   SubmitReceipt,
 } from '../shared/bridge.ts'
+import { errorMessage } from './errors.ts'
+import { larkHistory } from './lark-history.ts'
 import { vela } from './vela.ts'
 
 /** The last progress a session reported while it ran. */
@@ -73,10 +75,24 @@ const attempts = new Map<string, { message: string; replyId?: string }>()
 const complete = new Set<string>()
 /** The read in flight per session, so a full read can queue behind a title read. */
 const loading = new Map<string, Promise<boolean>>()
-/** The cursor of the next older page per Lark group session. */
-const larkCursors = new Map<string, string>()
-/** The Lark histories the page shows, so `reset` re-reads exactly those. */
-const larkReads = new Map<string, () => Promise<void>>()
+/**
+ * Lark history paging, with the messages this page shows as its only state: the reads
+ * are authoritative for the range they cover and a cursor is the only sign a sequence
+ * continues.
+ */
+const history = larkHistory({
+  shown: (sessionId) => snapshot.messages[sessionId] ?? [],
+  set: (sessionId, messages) =>
+    publish({ messages: { ...snapshot.messages, [sessionId]: messages } }),
+  mark: (sessionId, hasOlder) =>
+    publish({
+      earlier: hasOlder
+        ? { ...snapshot.earlier, [sessionId]: true }
+        : withoutKey(snapshot.earlier, sessionId),
+    }),
+  fail: (error) => publish({ error }),
+  read: (input) => vela.larkMessages(input),
+})
 
 const publish = (change: Partial<Snapshot>) => {
   snapshot = { ...snapshot, ...change }
@@ -90,12 +106,7 @@ const subscribe = (listener: () => void) => {
 }
 const current = () => snapshot
 export const useStore = () => useSyncExternalStore(subscribe, current)
-/** A bridge failure without Electron's transport wording; the reason is what the person needs. */
-export const errorMessage = (cause: unknown) =>
-  (cause instanceof Error ? cause.message : String(cause)).replace(
-    /^Error invoking remote method '[^']*': *([A-Za-z]*Error: )?/,
-    '',
-  )
+export { errorMessage } from './errors.ts'
 
 const byTime = (messages: Message[]) =>
   messages.sort((one, other) =>
@@ -126,38 +137,6 @@ function mergeMessages(sessionId: string, incoming: Message[]) {
     messages: {
       ...snapshot.messages,
       [sessionId]: byTime([...merged.values()]),
-    },
-  })
-}
-
-/**
- * A read is authoritative for what it covers: a message the host no longer returns —
- * one recalled in Lark — leaves the page instead of staying cached. A complete read
- * covers the whole conversation; a page covers only its own time range, so anything
- * outside that range stays.
- */
-function reconcileMessages(
-  sessionId: string,
-  incoming: Message[],
-  complete: boolean,
-) {
-  const fresh = new Map(incoming.map((message) => [message.id, message]))
-  const times = incoming.map((message) => message.createdAt).sort()
-  const oldest = times[0]
-  const newest = times.at(-1)
-  const kept = (snapshot.messages[sessionId] ?? []).filter((message) => {
-    if (fresh.has(message.id)) return true
-    if (complete || oldest === undefined || newest === undefined) return false
-    return message.createdAt < oldest || message.createdAt > newest
-  })
-  publish({
-    messages: {
-      ...snapshot.messages,
-      [sessionId]: byTime([
-        ...new Map(
-          [...kept, ...fresh.values()].map((message) => [message.id, message]),
-        ).values(),
-      ]),
     },
   })
 }
@@ -243,127 +222,12 @@ async function loadMessages(
   }
 }
 
-/**
- * A Lark group's newest history, or one older page when the person asks for it.
- * Returns the reason a read failed so the caller can keep its own wording.
- */
-async function readLarkGroup(
-  project: Project,
-  older = false,
-): Promise<string | undefined> {
-  if (project.channel !== 'lark') return
-  larkReads.set(`group:${project.id}`, async () => {
-    const error = await readLarkGroup(project)
-    if (error) publish({ error })
-  })
-  const sessionId = project.sessionId
-  const read = (cursor?: string) =>
-    vela.larkMessages({
-      chatId: project.id,
-      sessionId,
-      ...(cursor ? { cursor } : {}),
-      limit: 50,
-    })
-  try {
-    if (older) {
-      const cursor = larkCursors.get(sessionId)
-      if (cursor === undefined) return undefined
-      const page = await read(cursor)
-      mergeMessages(sessionId, page.messages)
-      rememberOlder(sessionId, page.nextCursor)
-      return undefined
-    }
-    // A refresh reads the newest page, then keeps reading back until it reaches the
-    // history this page already shows. Ordinary activity overlaps at once and keeps
-    // the paging the person reached; a long disconnect leaves a gap that is filled
-    // here instead of being skipped by an older cursor.
-    // What the page shows now: a refresh that returns any of these is contiguous.
-    const shown = new Set(
-      (snapshot.messages[sessionId] ?? []).map((message) => message.id),
-    )
-    let cursor: string | undefined
-    for (;;) {
-      const page = await read(cursor)
-      // A read is authoritative for the range it covers, never for an empty page.
-      if (page.messages.length > 0) {
-        if (cursor === undefined)
-          reconcileMessages(sessionId, page.messages, false)
-        else mergeMessages(sessionId, page.messages)
-      }
-      const reached =
-        shown.size === 0 ||
-        page.messages.some((message) => shown.has(message.id))
-      if (reached) {
-        // Nothing between the newest page and what is on screen: paging stands.
-        if (cursor !== undefined || !larkCursors.has(sessionId))
-          rememberOlder(sessionId, page.nextCursor)
-        return undefined
-      }
-      // An empty page is no evidence that older history is gone; keep it and stop.
-      if (page.messages.length === 0) return undefined
-      if (!page.nextCursor) {
-        rememberOlder(sessionId, undefined)
-        return undefined
-      }
-      cursor = page.nextCursor
-    }
-  } catch (cause) {
-    // The page must leave its loading state to show the reason.
-    if (snapshot.messages[sessionId] === undefined)
-      publish({ messages: { ...snapshot.messages, [sessionId]: [] } })
-    return errorMessage(cause)
-  }
-}
-
-/** Records where paging stands: the cursor of the next older page, or its end. */
-function rememberOlder(sessionId: string, next: string | undefined) {
-  if (next === undefined) {
-    larkCursors.delete(sessionId)
-    publish({ earlier: withoutKey(snapshot.earlier, sessionId) })
-    return
-  }
-  larkCursors.set(sessionId, next)
-  publish({ earlier: { ...snapshot.earlier, [sessionId]: true } })
-}
-
-/** A Lark topic's whole history, oldest first. Returns a failed read's reason. */
-async function readLarkTopic(
-  projectId: string,
-  session: Session,
-): Promise<string | undefined> {
-  if (session.channel !== 'lark') return
-  larkReads.set(`topic:${session.sessionId}`, async () => {
-    const error = await readLarkTopic(projectId, session)
-    if (error) publish({ error })
-  })
-  try {
-    const collected: Message[] = []
-    let cursor: string | undefined
-    do {
-      const page = await vela.larkMessages({
-        chatId: projectId,
-        sessionId: session.sessionId,
-        ...(cursor ? { cursor } : {}),
-        limit: 50,
-      })
-      collected.push(...page.messages)
-      cursor = page.nextCursor
-      // A page the host filtered to nothing (a card, a recalled row) can still have a
-      // next page; only the cursor says whether the conversation ends here.
-    } while (cursor)
-    reconcileMessages(session.sessionId, collected, true)
-  } catch (cause) {
-    return errorMessage(cause)
-  }
-  return undefined
-}
-
 /** Reads one session's whole history; the panel needs it when a session opens. */
 export function loadSession(projectId: string, sessionId: string) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   const session = snapshot.sessions[sessionId]
   if (project?.channel === 'lark' && session?.channel === 'lark')
-    void readLarkTopic(project.id, session).then((error) => {
+    void history.loadTopic(project.id, session).then((error) => {
       if (error) publish({ error })
     })
   else void loadMessages(projectId, sessionId)
@@ -374,20 +238,20 @@ export async function loadProject(projectId: string) {
   const project = snapshot.projects.find((item) => item.id === projectId)
   if (!project) return
   if (project.channel === 'lark') {
-    // Register the read even while off: Lark's `reset` when it connects runs it, so a
-    // page opened during a reconnect leaves its loading state without another click.
-    larkReads.set(`group:${project.id}`, async () => {
-      const error = await readLarkGroup(project)
-      if (error) publish({ error })
-    })
-    if (snapshot.connections.lark?.connected !== true) return
+    // The read registers itself even while off: Lark's `reset` when it connects runs it,
+    // so a page opened during a reconnect leaves its loading state without another click.
+    if (snapshot.connections.lark?.connected !== true) {
+      // Register it, but read nothing: with Lark off the reason is on the page.
+      history.watch(project)
+      return
+    }
     try {
       mergeSessions(await vela.sessions('lark', project.id))
     } catch (cause) {
       publish({ error: errorMessage(cause) })
       return
     }
-    const error = await readLarkGroup(project)
+    const error = await history.load(project)
     if (error) publish({ error })
     return
   }
@@ -404,7 +268,7 @@ export async function loadProject(projectId: string) {
 
 /** One older page of a Lark group's history. */
 export function loadEarlierLark(project: Project) {
-  void readLarkGroup(project, true).then((error) => {
+  void history.load(project, true).then((error) => {
     if (error) publish({ error })
   })
 }
@@ -555,12 +419,12 @@ async function submitLark(input: LarkSubmit): Promise<boolean> {
     )
     let refreshError: string | undefined
     if (project) {
-      refreshError = await readLarkGroup(project)
+      refreshError = await history.load(project)
       if ('sessionId' in input) {
         const session = snapshot.sessions[input.sessionId]
         if (session?.topic)
           refreshError =
-            (await readLarkTopic(input.chatId, session)) ?? refreshError
+            (await history.loadTopic(input.chatId, session)) ?? refreshError
       }
       try {
         mergeSessions(await vela.sessions('lark', input.chatId))
@@ -719,7 +583,7 @@ function apply(value: Extract<Event, { type: 'local' }>['value']) {
 /** Re-reads the Lark history the page shows after Lark says it changed. */
 function applyLark(value: Extract<Event, { type: 'lark' }>['value']) {
   if (value.type === 'reset') {
-    for (const read of [...larkReads.values()]) void read()
+    history.reread()
     void refresh()
     return
   }
@@ -727,14 +591,14 @@ function applyLark(value: Extract<Event, { type: 'lark' }>['value']) {
     (item) => item.channel === 'lark' && item.id === value.chatId,
   )
   if (project)
-    void readLarkGroup(project).then((error) => {
+    void history.load(project).then((error) => {
       if (error) publish({ error })
     })
   const session = value.sessionId
     ? snapshot.sessions[value.sessionId]
     : undefined
   if (session?.topic)
-    void readLarkTopic(value.chatId, session).then((error) => {
+    void history.loadTopic(value.chatId, session).then((error) => {
       if (error) publish({ error })
     })
 }
