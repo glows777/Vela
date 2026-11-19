@@ -42,6 +42,11 @@ type Control =
   | { op: 'cardInTopic'; chatId: string; threadId: string; after: string }
   /** A person recalls a message in Lark: history stops returning it. */
   | { op: 'recall'; text: string }
+  /**
+   * Group messages that arrive while the app does not read: appended without an
+   * event, so only the next read (or the person leaving and returning) sees them.
+   */
+  | { op: 'backlog'; chatId: string; texts: string[] }
 
 const botId = 'cli_desktop_fake'
 const botName = 'Vela'
@@ -56,7 +61,9 @@ export function fakeLark(dir: string): FakeTransport {
   let onMessage: ((event: LarkMessageEvent) => void) | undefined
   let stopped = true
   let handled = 0
-  let clock = Date.now() - 60 * 60 * 1000
+  // Times are real wall clock, in milliseconds: a history cursor carries the moment it
+  // was created, so a message that arrives later must be outside an older cursor.
+  let clock = Date.now() - 1000
   let failNextTopicStart = false
   let failNextSend = false
   let failNextTopicHistory = false
@@ -66,7 +73,7 @@ export function fakeLark(dir: string): FakeTransport {
   const byId = new Map<string, Stored>()
   const names = new Map<string, string>()
 
-  const nextClock = () => (clock += 1000)
+  const nextClock = () => (clock = Math.max(clock + 1, Date.now()))
   const stamp = () => ({
     messageId: `om_${nextClock()}`,
     createTime: String(clock),
@@ -163,37 +170,57 @@ export function fakeLark(dir: string): FakeTransport {
       } catch {
         continue
       }
-      if (control.op === 'failNextTopicStart') failNextTopicStart = true
-      else if (control.op === 'failNextSend') failNextSend = true
-      else if (control.op === 'failNextTopicHistory')
-        failNextTopicHistory = true
-      else if (control.op === 'cardInTopic') {
-        const thread = threadsById.get(control.threadId)
-        const root = thread?.[0]
-        if (!thread || !root) continue
-        const at = thread.findIndex(
-          (stored) => visibleText(stored) === control.after,
-        )
-        const card: Stored = {
-          chatId: control.chatId,
-          rootId: root.rootId,
-          threadId: control.threadId,
-          row: {
-            message_id: `om_${nextClock()}`,
-            create_time: String(clock),
-            // A card has no text; the host drops it from the visible history.
-            msg_type: 'interactive',
-            body: { content: JSON.stringify({ card: 'progress' }) },
-            sender: { id: botId, sender_type: 'app' },
-          },
+      switch (control.op) {
+        case 'failNextTopicStart':
+          failNextTopicStart = true
+          break
+        case 'failNextSend':
+          failNextSend = true
+          break
+        case 'failNextTopicHistory':
+          failNextTopicHistory = true
+          break
+        case 'backlog': {
+          // No event: the next read, or the person leaving and returning, sees them.
+          // Stamped just after the moment the last read happened, so they fall outside
+          // the history cursor the app held before it stopped reading.
+          clock = Date.now() + 2000
+          for (const text of control.texts)
+            add(control.chatId, text, { id: senderId('Alice'), app: false })
+          break
         }
-        byId.set(card.row.message_id!, card)
-        thread.splice(at < 0 ? thread.length : at + 1, 0, card)
-      } else if (control.op === 'recall') {
-        for (const stored of byId.values())
-          if (visibleText(stored) === control.text) stored.row.deleted = true
-      } else if (control.op === 'say')
-        say(control.chatId, control.text, control.senderName ?? 'Alice')
+        case 'recall':
+          for (const stored of byId.values())
+            if (visibleText(stored) === control.text) stored.row.deleted = true
+          break
+        case 'cardInTopic': {
+          const thread = threadsById.get(control.threadId)
+          const root = thread?.[0]
+          if (!thread || !root) break
+          const at = thread.findIndex(
+            (stored) => visibleText(stored) === control.after,
+          )
+          const card: Stored = {
+            chatId: control.chatId,
+            rootId: root.rootId,
+            threadId: control.threadId,
+            row: {
+              message_id: `om_${nextClock()}`,
+              create_time: String(clock),
+              // A card has no text; the host drops it from the visible history.
+              msg_type: 'interactive',
+              body: { content: JSON.stringify({ card: 'progress' }) },
+              sender: { id: botId, sender_type: 'app' },
+            },
+          }
+          byId.set(card.row.message_id!, card)
+          thread.splice(at < 0 ? thread.length : at + 1, 0, card)
+          break
+        }
+        case 'say':
+          say(control.chatId, control.text, control.senderName ?? 'Alice')
+          break
+      }
     }
     // Lets the verify script wait until a control line took effect before acting on it.
     await writeFile(

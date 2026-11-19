@@ -53,6 +53,8 @@ const larkOffScenario = resolve(scratch, 'lark-off-faux.json')
 /** The fake Lark's seed history and the person's scripted messages. */
 const larkDir = resolve(scratch, 'lark')
 const larkProject = 'oc_alpha'
+/** A second enabled group, for the history gap a long disconnect leaves. */
+const gapProject = 'oc_gap'
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
@@ -1818,13 +1820,20 @@ async function larkJourneys() {
     resolve(dir, 'settings.json'),
     JSON.stringify({
       shellPath: shell,
-      extensionConfig: { lark: { chats: [larkProject] } },
+      extensionConfig: { lark: { chats: [larkProject, gapProject] } },
     }),
   )
   await Bun.write(
     resolve(larkDir, 'seed.json'),
     JSON.stringify({
       chats: {
+        [gapProject]: {
+          name: 'Vela gap',
+          messages: Array.from({ length: 60 }, (_, index) => ({
+            sender: 'Alice',
+            text: `Gap message ${index + 1} of the second group.`,
+          })),
+        },
         [larkProject]: {
           name: 'Vela dev',
           messages: [
@@ -1986,6 +1995,64 @@ async function larkJourneys() {
     checks.push(
       'The group reads its newest page first and loads earlier history when the person asks.',
     )
+
+    // A long disconnect: the page holds 11–60, then 60 messages arrive, and the
+    // refresh returns only 71–120. Paging must restart at the refreshed page, or
+    // 61–70 stay missing for the rest of the app run.
+    await sidebar.getByRole('button', { name: 'Vela gap Lark' }).click()
+    await page.getByRole('heading', { name: 'Vela gap', exact: true }).waitFor()
+    await page
+      .getByText('Gap message 60 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Gap message 10 of the second group.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    await larkSays({
+      op: 'backlog',
+      chatId: gapProject,
+      texts: Array.from(
+        { length: 60 },
+        (_, index) => `Late message ${index + 61} of the second group.`,
+      ),
+    })
+    // The backlog is stamped just after the read that cached 11–60, so waiting long
+    // enough makes it fall outside the cursor this page holds — a real disconnect.
+    await Bun.sleep(2500)
+    // Leaving and returning reads again, as a reconnect refresh does.
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela gap Lark' }).click()
+    await page
+      .getByText('Late message 120 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Late message 65 of the second group.', { exact: true })
+        .count(),
+      0,
+      'The refresh reads the newest page only',
+    )
+    assert.equal(
+      await page
+        .getByText('Gap message 60 of the second group.', { exact: true })
+        .count(),
+      1,
+      'The page keeps the history it already read',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Late message 65 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'After a long disconnect the refreshed page supplies the gap, so paging never skips the messages in between.',
+    )
+    await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
+    await page
+      .getByText('Old message 55 of the group backlog.', { exact: true })
+      .waitFor()
     await noOverflow(page)
     await themes(page, 'lark-journey-chat')
 
