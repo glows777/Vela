@@ -6,6 +6,10 @@ import { ExtensionRunner } from '../extensions/runner.ts'
 import type { ExtensionAPI, VelaExtension } from '../extensions/types.ts'
 import type { VelaLogger } from '../logger.ts'
 import type { ModelRegistry } from '../models/index.ts'
+import {
+  resolveForegroundBudget,
+  setForegroundBudget,
+} from '../tools/foreground-budget.ts'
 import { ToolRegistry } from '../tools/registry.ts'
 import type { VelaSession } from '../vela-session.ts'
 import type { ProjectConfig } from './project-config.ts'
@@ -73,6 +77,9 @@ export class ProjectExtensions {
     const { split, config, host, registry, models, dataDir, logger } = this.deps
     const trusted = config.mode(env.cwd) === 'all'
     const settings = await config.get(session.id, env)
+    // The session's own settings decide its shell and its foreground `bash` budget, so both travel
+    // with the registry a call runs in.
+    setForegroundBudget(session.registry, resolveForegroundBudget(settings))
     const projectSettings = await config.project(session.id, env)
     const discovered = await loadProjectExtensionEntries(env, {
       trusted,
