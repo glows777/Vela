@@ -24,6 +24,7 @@
     msg_type?: string | undefined
     sender?: { id?: string; sender_type?: string; } | undefined
   interface LarkHost
+    chats: () => Promise<{ chatId: string; name?: string; }[]>
     connection: () => ChannelConnection
     messages: (input: { chatId: string; sessionId: string; cursor?: string; limit?: number; }) => Promise<{ messages: LarkVisibleMessage[]; nextCursor?: string; }>
     onConnection: (listener: (connection: ChannelConnection) => void) => () => void
@@ -48,10 +49,18 @@
   interface LarkSentMessage
     createTime: string
     messageId: string
+  class LarkSubmitError
+    cause?: unknown
+    message: string
+    name: string
+    readonly messageId?: string | undefined
+    readonly outcome: "not-sent" | "uncertain" | "posted"
+    stack?: string | undefined
   interface LarkTransport
     addReaction: (messageId: string, emoji: "OnIt" | "DONE" | "CrossMark") => Promise<string>
     forward: (messageId: string, threadId: string) => Promise<LarkSentMessage>
     getBotId: () => Promise<string>
+    getChat?: ((chatId: string) => Promise<{ name?: string; } | undefined>) | undefined
     getResource: (messageId: string, key: string, type: "image" | "file") => Promise<Readable>
     getSenderName: (openId: string) => Promise<string | undefined>
     listMessages: (chatId: string, options: { before?: string; limit: number; }) => Promise<LarkHistoryMessage[]>

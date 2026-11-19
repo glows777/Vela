@@ -69,6 +69,7 @@ const host = vela.channel('lark')
 const off = host.onEvent(event => invalidateVisibleHistory(event))
 await vela.startChannels()
 
+const groups = await host.chats()
 const receipt = await host.submit({
   chatId: 'oc_group',
   newTopic: { title: 'Review the report' },
@@ -83,9 +84,10 @@ const { messages, nextCursor } = await host.messages({
 off()
 ```
 
+- `chats()` lists the enabled groups from saved configuration, so it answers before Lark connects and while it is disconnected. An entry carries the group's `name` when the optional `LarkTransport.getChat(chatId)` returns one; otherwise it has only the `chatId`, and a name never removes a group from the list. A host that shows groups reads this list rather than inferring groups from `sessions()`, which only knows chats that already received input.
 - `messages({ chatId, sessionId, cursor?, limit? })` reads one enabled group or one of its owned topics straight from Lark. A group's logical ID is `channelSessionId('lark', chatId)` (the helper is exported by `@glows777/vela-channels`), even before its first run; topic IDs come from `sessions(chatId)`. Group pages are newest first and include topic roots, not thread replies. Topic pages are oldest first. The limit is 1–50 provider rows per page. Deleted or unsupported rows can produce a short or empty page with a next cursor. Keep passing the opaque cursor with the same chat and session until it is absent.
 - To post into an existing session, pass `sessionId` instead of `newTopic`. The bot posts signed text; the author ID is host attribution, not a Lark user ID or a permission. Group input still goes through group triage. Creating a topic posts the signed root and adds the title inside its thread before admitting the run directly in that topic. An existing topic reply targets the same thread. Follow work through `onSession`; the receipt identifies the session and posted message, not a particular queued run.
-- A failed submission is not automatically retried. The error includes the message ID if posting succeeded and a later step failed. If the transport returns no ID (including a custom transport whose `send` returns void), the result is uncertain and no run starts. Refresh history before sending again.
+- A failed submission is not automatically retried and throws `LarkSubmitError`, whose `outcome` says what reached Lark: `not-sent` (validation, an unknown or disabled target, or no connection, so nothing was posted), `uncertain` (the send failed or returned no message ID, so a message may already be visible), or `posted` (the signed message went out; opening the topic or admitting the run failed, and `messageId` names the posted message when known). Re-read visible history before sending again; only `not-sent` is safe to resend blindly. An error from the generic `submit(IncomingMessage)` overload is not a `LarkSubmitError`, because that path never posts.
 - `onEvent` is best effort: `history_changed` invalidates a group or a named topic, and `reset` tells the app to re-read visible history after connecting or reconnecting. Await `startChannels()` before acting on signals from startup, as with other host calls. Without group-message read permissions, or when `readUntagged` is off, some human messages may only appear after a re-read. Bot echo does not start work or duplicate an invalidation for the host post. Neither event is a durable delivery acknowledgement.
 
 ### Local projects and visible history

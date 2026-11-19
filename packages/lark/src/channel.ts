@@ -200,6 +200,20 @@ export class LarkChannel implements ChannelDefinition {
   host(base: ChannelHost): LarkHost {
     this.view ??= larkHost(base, {
       enabled: (chatId) => this.chats.has(chatId),
+      chatIds: () => [...this.chats.keys()],
+      chatName: async (chatId) => {
+        const transport = this.transport
+        // A name is display decoration: without a connection or the optional
+        // transport call, the host lists the chat id instead.
+        if (!transport?.getChat || this.stopped || !base.connection().connected)
+          return undefined
+        try {
+          const name = (await transport.getChat(chatId))?.name?.trim()
+          return name || undefined
+        } catch {
+          return undefined
+        }
+      },
       transport: () => {
         if (!this.transport || this.stopped || !base.connection().connected)
           throw new Error('Lark is not connected')

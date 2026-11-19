@@ -26,6 +26,30 @@ export type LarkHostEvent =
   | { type: 'reset' }
   | { type: 'history_changed'; chatId: string; sessionId?: string }
 
+/**
+ * A signed host submission that did not complete. `outcome` says whether anything
+ * reached Lark, so a caller can re-read history instead of resending blindly.
+ */
+export class LarkSubmitError extends Error {
+  /** `not-sent`: nothing was posted; `uncertain`: may have been posted; `posted`: it was, with `messageId` when known. */
+  readonly outcome: 'not-sent' | 'uncertain' | 'posted'
+  readonly messageId?: string
+
+  constructor(
+    message: string,
+    outcome: LarkSubmitError['outcome'],
+    details: { messageId?: string; cause?: unknown } = {},
+  ) {
+    super(
+      message,
+      details.cause === undefined ? undefined : { cause: details.cause },
+    )
+    this.name = 'LarkSubmitError'
+    this.outcome = outcome
+    if (details.messageId !== undefined) this.messageId = details.messageId
+  }
+}
+
 export class LarkHostEvents {
   private readonly listeners = new Set<(event: LarkHostEvent) => void>()
 
@@ -81,6 +105,8 @@ type SubmitInput = {
 }
 
 export interface LarkHost extends ChannelHost {
+  /** Every enabled group from saved configuration, whether or not Lark is connected. */
+  chats(): Promise<{ chatId: string; name?: string }[]>
   /** Group history is newest first; topic history is oldest first. */
   messages(input: {
     chatId: string
@@ -134,6 +160,8 @@ function readCursor(cursor: string, sessionId: string): Page {
 
 interface Operations {
   enabled(chatId: string): boolean
+  chatIds(): string[]
+  chatName(chatId: string): Promise<string | undefined>
   transport(): LarkTransport
   senderName(id: string): Promise<string>
   ownAppId: string
@@ -158,6 +186,15 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
 
   return {
     ...base,
+    async chats() {
+      // The list is the saved configuration: a missing name never removes a group.
+      return Promise.all(
+        ops.chatIds().map(async (chatId) => {
+          const name = await ops.chatName(chatId)
+          return name === undefined ? { chatId } : { chatId, name }
+        }),
+      )
+    },
     async messages({ chatId, sessionId, cursor, limit = 50 }) {
       const topic = topicFor(chatId, sessionId)
       if (!Number.isInteger(limit) || limit < 1 || limit > 50)
@@ -208,20 +245,35 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
     ) => {
       if (!('chatId' in input)) return base.submit(input)
       const { chatId, author } = input
-      enabled(chatId)
       const newTopic = 'newTopic' in input
-      let topic = newTopic ? undefined : topicFor(chatId, input.sessionId)
       const title = newTopic ? input.newTopic.title.trim() : undefined
       const name = author.name.trim()
       const id = author.id.trim()
       const text = input.text.trim()
-      if (!id || !name || !text || title === '')
-        throw new Error(
-          'Lark submit requires text, an author, and a title for a new topic',
-        )
-      const transport = ops.transport()
+      let transport: LarkTransport
+      let topic: IncomingMessage['topic']
+      try {
+        if (!ops.enabled(chatId)) throw new Error('Lark group is not enabled')
+        topic = newTopic ? undefined : topicFor(chatId, input.sessionId)
+        if (!id || !name || !text || title === '')
+          throw new Error(
+            'Lark submit requires text, an author, and a title for a new topic',
+          )
+        transport = ops.transport()
+      } catch (error) {
+        throw new LarkSubmitError(errorMessage(error), 'not-sent', {
+          cause: error,
+        })
+      }
       const signed = `${name}: ${text}`
-      const posted = await postSigned(transport, chatId, signed, topic)
+      let posted: LarkSentMessage & { topic?: IncomingMessage['topic'] }
+      try {
+        posted = await postSigned(transport, chatId, signed, topic)
+      } catch (error) {
+        throw new LarkSubmitError(errorMessage(error), 'uncertain', {
+          cause: error,
+        })
+      }
       ops.changed(chatId, topic)
       try {
         if (
@@ -269,9 +321,10 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
           ...(newTopic && { topic }),
         }
       } catch (error) {
-        throw new Error(
+        throw new LarkSubmitError(
           `Lark message ${posted.messageId} was posted, but submit did not complete: ${errorMessage(error)}`,
-          { cause: error },
+          'posted',
+          { cause: error, messageId: posted.messageId },
         )
       }
     }) as LarkHost['submit'],

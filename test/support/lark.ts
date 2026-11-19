@@ -26,6 +26,7 @@ export function fakeLark() {
     ['ou_bob', 'Bob'],
   ])
   const nameCalls: string[] = []
+  const chatNames = new Map<string, string>()
   const historyCalls: { chatId: string; before?: string; limit: number }[] = []
   const history: LarkHistoryMessage[] = []
   const topicHistory: LarkHistoryMessage[][] = []
@@ -76,6 +77,11 @@ export function fakeLark() {
       nameCalls.push(id)
       if (!names.has(id)) throw new Error('contact unavailable')
       return names.get(id)
+    },
+    getChat: async (chatId) => {
+      const name = chatNames.get(chatId)
+      if (!name) throw new Error('chat info unavailable')
+      return { name }
     },
     listMessages: async (chatId, options) => {
       historyCalls.push({ chatId, ...options })
@@ -157,6 +163,7 @@ export function fakeLark() {
     },
     names,
     nameCalls,
+    chatNames,
     historyCalls,
     topicHistory,
     topicHistoryCalls,

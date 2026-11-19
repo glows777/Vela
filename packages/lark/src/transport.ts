@@ -81,6 +81,8 @@ export interface LarkTransport {
   ): Promise<Readable>
   getBotId(): Promise<string>
   getSenderName(openId: string): Promise<string | undefined>
+  /** A group's display name for a chat id. Optional: without it, a host lists group ids only. */
+  getChat?(chatId: string): Promise<{ name?: string } | undefined>
   listTopicMessages(
     threadId: string,
     pageToken?: string,
@@ -318,6 +320,15 @@ export function larkTransport(
         }),
       )
       return response.data?.user?.name
+    },
+    async getChat(chatId) {
+      const response = checked(
+        await client.im.chat.get({
+          path: { chat_id: chatId },
+          params: { user_id_type: 'open_id' },
+        }),
+      )
+      return response.data?.name ? { name: response.data.name } : undefined
     },
     async listTopicMessages(threadId, pageToken) {
       const response = checked(
