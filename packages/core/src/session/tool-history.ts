@@ -15,6 +15,11 @@ export interface ExecutionMetadata {
   backgroundTaskId?: string
   /** The job was a running call the user moved to the background instead of one the call declared. */
   backgroundedByUser?: boolean
+  /**
+   * The foreground budget that expired and moved this call to the background, in milliseconds: how a
+   * timed-out call is told apart from a declared one or one the user moved.
+   */
+  timedOutAfterMs?: number
 }
 
 export interface CallRecord {

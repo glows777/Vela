@@ -19,6 +19,13 @@ export interface VelaSettings {
   /** Shell the bash tool runs commands with (like pi); the CLI selects Git Bash on Windows */
   shellPath?: string
   /**
+   * Seconds a foreground `bash` command may run before it moves to the background instead of being
+   * killed; default 120. `0` means no foreground budget: a command without `timeout` waits forever.
+   */
+  bashForegroundTimeoutSeconds?: number
+  /** Ceiling for the `timeout` a `bash` call asks for, in seconds; default 600. */
+  bashForegroundTimeoutMaxSeconds?: number
+  /**
    * Tools a new session starts with: plain names (or `*` patterns) replace the default set, while
    * `+name` / `-name` entries adjust it (like pi's `defaultTools`).
    */
@@ -38,6 +45,9 @@ export interface VelaSettings {
 }
 
 export const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
+
+/** setTimeout's limit in seconds: a budget above it would fire at once instead of waiting. */
+const MAX_SETTINGS_SECONDS = 2_147_483_647 / 1000
 
 /** Parse settings without filesystem access; callers own path resolution. */
 export function parseSettings(
@@ -70,6 +80,28 @@ export function parseSettings(
   for (const key of ['dataDir', 'shellPath'] as const)
     if (settings[key] !== undefined && typeof settings[key] !== 'string')
       throw new Error(`${file}: ${key} must be a string`)
+  const budget = settings.bashForegroundTimeoutSeconds
+  if (
+    budget !== undefined &&
+    (typeof budget !== 'number' ||
+      !Number.isFinite(budget) ||
+      budget < 0 ||
+      budget > MAX_SETTINGS_SECONDS)
+  )
+    throw new Error(
+      `${file}: bashForegroundTimeoutSeconds must be 0 or a positive number of seconds, at most ${MAX_SETTINGS_SECONDS}`,
+    )
+  const ceiling = settings.bashForegroundTimeoutMaxSeconds
+  if (
+    ceiling !== undefined &&
+    (typeof ceiling !== 'number' ||
+      !Number.isFinite(ceiling) ||
+      ceiling <= 0 ||
+      ceiling > MAX_SETTINGS_SECONDS)
+  )
+    throw new Error(
+      `${file}: bashForegroundTimeoutMaxSeconds must be a positive number of seconds, at most ${MAX_SETTINGS_SECONDS}`,
+    )
   if (
     settings.autoCompaction !== undefined &&
     typeof settings.autoCompaction !== 'boolean'
