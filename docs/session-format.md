@@ -36,7 +36,7 @@ interface SessionHeader {
 }
 ```
 
-The header records the initial `{ environment, cwd }`. A trusted move appends a `custom` record with type `vela.session.location`, an ID prefixed with `location:`, and the target in `data`. Resume uses the latest such record across all branches. A legacy transcript with no recorded location uses the caller’s local cwd or the default local cwd. Export, fork and clone write the current location into the new header. Open migrated sessions with a core version that understands relocation records. Older versions read only the initial header location.
+The header records the initial location. Local sessions start with `{ environment: 'local', cwd }`. A trusted move appends a `custom` record with type `vela.session.location`, an ID prefixed with `location:`, and the target in `data`. `resume()` restores the latest saved move across all branches. A legacy header without `location` uses the caller’s local cwd or the default local cwd when there is no saved move. `exportJsonl()`, `fork()` and `clone()` write the current location into the new header. Open migrated sessions with a core version that understands relocation records. Older versions read only the initial header location.
 
 ## Entries
 
