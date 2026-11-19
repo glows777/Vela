@@ -96,7 +96,7 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `extensions(sessionId?)` | Loaded extensions for the prepared open session: host plus its project, including registered tools, commands, providers and channels |
 | `commands(sessionId?)` | Slash commands from the host and the prepared open session's project |
 | `channels()` | Channels registered by extensions |
-| `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. See [SDK host access](channels-reference.md#sdk-host-access). |
+| `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. On the Local host, `readAttachment({ projectId, sessionId, messageId })` retrieves the bytes of a visible file message. See [SDK host access](channels-reference.md#sdk-host-access). |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
 | `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
 | `dispose(options?)` | Stops channels, closes all sessions and deletes any temporary data directory. Default cancels running work; channel-aware Vela accepts `{ graceful: true }` to drain in-flight channel tools first. The embedding host must enforce its own deadline. |

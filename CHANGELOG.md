@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+- Channel sessions can deliver a workspace file to their current conversation. Lark posts native images or file attachments. Local hosts can retrieve a snapshot by message ID ([#402](https://github.com/glows777/Vela/issues/402)).
+
 - Fix Lark startup recovery repeatedly posting feedback errors for expired or conflicting saved delivery intents; terminal refusals now settle locally without another chat message.
 
 ### Breaking Changes

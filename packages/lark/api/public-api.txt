@@ -62,6 +62,7 @@
     searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: LarkHistoryMessage[]; pageToken?: string; }>
     send: (chatId: string, text: string, uuid?: string) => Promise<void | LarkSentMessage>
     sendCard: (chatId: string, card: LarkCard, replyToId?: string) => Promise<string>
+    sendFile?: ((chatId: string, file: { kind: "image" | "file"; name: string; bytes: Uint8Array; }, options?: { replyToId?: string; replyInThread?: boolean; uuid?: string; }) => Promise<LarkSentMessage>) | undefined
     start: (onMessage: (event: LarkMessageEvent) => void, onAction: (event: LarkCardAction) => LarkCardResponse) => Promise<void>
     startTopic: (messageId: string, title: string, uuid?: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
