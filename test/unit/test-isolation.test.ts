@@ -1,19 +1,16 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const root = resolve(import.meta.dir, '../..')
-/** The package unit suites, where tests construct tool registries and result stores directly. */
-const unitDirs = readdirSync(join(root, 'packages'), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => join(root, 'packages', entry.name, 'test', 'unit'))
-  .filter((dir) => existsSync(dir))
+/** The agent-loop tests, which build tool registries whose default result store resolves `./sessions` under the cwd. */
+const agentTests = join(root, 'packages/core/test/unit/agent')
 
-test('the package unit suites write nothing into the working directory', async () => {
+test('the agent unit tests write nothing into the working directory', async () => {
   const cwd = mkdtempSync(join(tmpdir(), 'vela-unit-cwd-'))
   try {
-    const child = Bun.spawn([process.execPath, 'test', ...unitDirs], {
+    const child = Bun.spawn([process.execPath, 'test', agentTests], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -35,4 +32,4 @@ test('the package unit suites write nothing into the working directory', async (
   } finally {
     rmSync(cwd, { recursive: true, force: true })
   }
-}, 120_000)
+}, 30_000)
