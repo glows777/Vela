@@ -7,11 +7,55 @@ import {
   type ProviderDefinition,
   verifyProviderModel,
 } from '@glows777/vela-core'
-import type { ModelSetup } from '../shared/bridge.ts'
-import { customProviders } from './settings.ts'
+import { resolveModel } from '@glows777/vela-core/diagnostics'
+import type { ModelSetup, ProviderApi } from '../shared/bridge.ts'
 
 /** Long enough for a slow provider, short enough that a stuck one ends with a reason. */
 const VERIFY_TIMEOUT_MS = 60_000
+const APIS: readonly ProviderApi[] = [
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+]
+
+/**
+ * The renderer's payload crosses IPC, so its shape is checked here instead of a `TypeError` surfacing
+ * from a field read or an arbitrary string reaching a file write.
+ */
+function readModelSetup(input: unknown): ModelSetup {
+  const value = (input ?? {}) as Record<string, unknown>
+  const text = (field: unknown, name: string): string => {
+    if (typeof field !== 'string' || field.trim() === '')
+      throw new Error(`Enter a ${name}`)
+    return field.trim()
+  }
+  const provider = text(value.provider, 'provider')
+  const model = text(value.model, 'model')
+  if (value.key !== undefined && typeof value.key !== 'string')
+    throw new Error('The API key must be text')
+  let custom: ModelSetup['custom']
+  if (value.custom !== undefined) {
+    const entry = (value.custom ?? {}) as Record<string, unknown>
+    if (!APIS.includes(entry.api as ProviderApi))
+      throw new Error(`Choose one of ${APIS.join(', ')}`)
+    let url: URL
+    try {
+      url = new URL(text(entry.baseUrl, 'base URL'))
+    } catch {
+      throw new Error('Enter the base URL, such as https://example.com/v1')
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      throw new Error('The base URL must start with http:// or https://')
+    custom = { api: entry.api as ProviderApi, baseUrl: url.href }
+  }
+  const key = value.key
+  return {
+    provider,
+    model,
+    ...(typeof key === 'string' && key.trim() ? { key: key.trim() } : {}),
+    ...(custom ? { custom } : {}),
+  }
+}
 
 /**
  * Checks a provider and model with one small request, then saves it through the same steps
@@ -20,7 +64,7 @@ const VERIFY_TIMEOUT_MS = 60_000
  */
 export async function saveModel(options: {
   agentDir: string
-  input: ModelSetup
+  input: unknown
   env: Record<string, string | undefined>
 }): Promise<{
   provider: string
@@ -28,19 +72,19 @@ export async function saveModel(options: {
   definition: ProviderDefinition
   written: string[]
 }> {
-  const { agentDir, input } = options
-  const provider = input.provider.trim()
-  const model = input.model.trim()
-  if (!provider || !model) throw new Error('Choose a provider and a model')
-  const key = input.key?.trim()
-  if (input.custom && customProviders(agentDir).has(provider))
+  const { agentDir } = options
+  const input = readModelSetup(options.input)
+  const { provider, model } = input
+  const key = input.key
+  // `loadModels` starts from the built-ins, so this also refuses a name that would repoint one.
+  if (input.custom && loadModels({ agentDir, env: options.env })[provider])
     throw new Error(
       `A provider named ${provider} already exists. Pick it above to change its model or key.`,
     )
   const preset = input.custom
     ? {
         api: input.custom.api,
-        baseUrl: input.custom.baseUrl.trim(),
+        baseUrl: input.custom.baseUrl,
         models: [{ id: model }],
       }
     : undefined
@@ -65,6 +109,13 @@ export async function saveModel(options: {
       `No API key for ${provider}. Enter one; it is saved in ${authPath}.`,
     )
   const ref = `${provider}/${model}`
+  // The check a session makes when it opens: a provider name or model id nothing can load is refused
+  // here, before auth.json and models.json are written for it.
+  try {
+    resolveModel(ref, { providers, credentials: memory })
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error))
+  }
   try {
     await verifyProviderModel(
       ref,

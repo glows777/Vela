@@ -4,6 +4,7 @@ import { needsYou } from './format.ts'
 import { HeaderBar } from './frame/header-bar.tsx'
 import { NewProjectDialog } from './frame/new-project.tsx'
 import { Sidebar } from './frame/sidebar.tsx'
+import { Wordmark } from './frame/wordmark.tsx'
 import { Home } from './home/home.tsx'
 import type { Panel } from './panel.ts'
 import { ProjectPage } from './project/project-page.tsx'
@@ -54,8 +55,21 @@ export function App() {
     ? needsYou(snapshot).some((session) => session.chatId === project.id)
     : false
 
-  if (!snapshot.ready || !snapshot.settings)
-    return <div className={styles.booting} aria-busy="true" />
+  // A read that fails is a reason, not a blank window: nothing else renders while settings is
+  // missing, so the error is all the person can be shown.
+  if (!snapshot.settings)
+    return snapshot.error ? (
+      <main className={styles.hostError}>
+        <Wordmark heading />
+        <p role="alert">{snapshot.error}</p>
+        <p className={styles.hint}>
+          Fix that file and restart Vela. Settings › General shows the folder
+          once it opens.
+        </p>
+      </main>
+    ) : (
+      <div className={styles.booting} aria-busy="true" />
+    )
   if (snapshot.settings.setup.required)
     return <FirstRun settings={snapshot.settings} />
 

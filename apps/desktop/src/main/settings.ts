@@ -28,7 +28,7 @@ function resolves(
 }
 
 /** Providers `models.json` defines, by name only: their values may hold a key or a header. */
-export function customProviders(agentDir: string): Set<string> {
+function customProviders(agentDir: string): Set<string> {
   const path = join(agentDir, 'models.json')
   if (!existsSync(path)) return new Set()
   const file = JSON.parse(readFileSync(path, 'utf8')) as {

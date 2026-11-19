@@ -21,6 +21,20 @@
   min-width: 0;
 }
 
+.reason {
+  max-width: 60ch;
+  margin: 0 auto;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.hint {
+  max-width: 45ch;
+  margin: 0 auto;
+  color: var(--vela-muted);
+  font-size: var(--text-sm);
+}
+
 .booting {
   min-height: 100dvh;
   background: var(--vela-white);

@@ -14,12 +14,18 @@ import { saveUserSettings } from './cli/user-settings.ts'
 /**
  * The non-interactive half of setup, shared by `vela setup` and SDK hosts such as the desktop app:
  * what a verified answer writes, in the order it writes it. Asking the questions stays with each
- * frontend, and so does verifying the choice (`verifyProviderModel`), so neither frontend owns a
- * second copy of where the files live or which key goes in which one.
+ * frontend, and so does verifying the choice (`verifyProviderModel`) and `installation-id` (an
+ * OAuth device id only the CLI's sign-in produces), so neither frontend owns a second copy of where
+ * the files live or which key goes in which one.
  */
 
+/** A settings file as an object; a document of another shape is named instead of failing later. */
 function readObject(path: string): Record<string, unknown> {
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+  if (!existsSync(path)) return {}
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    throw new Error(`${path} must contain a JSON object`)
+  return parsed as Record<string, unknown>
 }
 
 function objectOf(value: unknown): Record<string, unknown> {
@@ -71,25 +77,34 @@ export async function saveModelSetup(options: {
   const definition = options.providers[provider]
   if (!definition) throw new Error(`No provider named ${provider}`)
   const written: string[] = []
-  const authPath = join(agentDir, 'auth.json')
-  if (options.credential) {
-    await fileCredentialStore(authPath).modify(
-      provider,
-      async () => options.credential,
+  try {
+    const authPath = join(agentDir, 'auth.json')
+    if (options.credential) {
+      await fileCredentialStore(authPath).modify(
+        provider,
+        async () => options.credential,
+      )
+      written.push(authPath)
+    }
+    if (options.preset) {
+      writeProviderPreset(agentDir, provider, options.preset)
+      written.push(join(agentDir, 'models.json'))
+    }
+    const settingsPath = join(agentDir, 'settings.json')
+    const settings = readObject(settingsPath)
+    settings.defaultModel = ref
+    if (options.thinkingLevel)
+      settings.defaultThinkingLevel = options.thinkingLevel
+    saveUserSettings(agentDir, settings)
+    written.push(settingsPath)
+  } catch (error) {
+    // A credential file may already be on disk; saying only "failed" would hide that.
+    if (written.length === 0) throw error
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} (already written: ${written.join(', ')})`,
+      { cause: error },
     )
-    written.push(authPath)
   }
-  if (options.preset) {
-    writeProviderPreset(agentDir, provider, options.preset)
-    written.push(join(agentDir, 'models.json'))
-  }
-  const settingsPath = join(agentDir, 'settings.json')
-  const settings = readObject(settingsPath)
-  settings.defaultModel = ref
-  if (options.thinkingLevel)
-    settings.defaultThinkingLevel = options.thinkingLevel
-  saveUserSettings(agentDir, settings)
-  written.push(settingsPath)
   return { written, definition }
 }
 
@@ -112,6 +127,8 @@ export async function saveLarkSection(options: {
   /** Environment for `$VAR` in saved chat ids; the CLI and the app pass `process.env`. */
   env?: Record<string, string | undefined>
 }): Promise<{ written: string[] }> {
+  if (options.addChat !== undefined && options.removeChat !== undefined)
+    throw new Error('Pass either addChat or removeChat, not both')
   const env = options.env ?? {}
   const path = join(options.agentDir, 'settings.json')
   const settings = readObject(path)
@@ -171,7 +188,10 @@ export function usableModel(options: {
   const model = options.model
   if (!model) return { usable: false, reason: 'no-model' }
   const slash = model.indexOf('/')
-  const provider = slash > 0 ? model.slice(0, slash) : model
+  // `provider/id` is the only shape a saved or session model has; a bare id names no provider.
+  if (slash <= 0 || slash === model.length - 1)
+    return { usable: false, reason: 'no-model' }
+  const provider = model.slice(0, slash)
   const definition = options.providers[provider]
   if (!definition?.authSource) return { usable: true, provider }
   return definition.authSource(options.credentials.get(provider)) !== undefined

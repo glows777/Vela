@@ -34,21 +34,18 @@ export function Models({ settings }: { settings: SettingsState }) {
           value={settings.model ?? 'Not set'}
           file="settings.json"
         />
-        <Row
-          label="Thinking level"
-          value={settings.thinkingLevel ?? 'medium'}
-          file="settings.json"
-        />
+        {settings.thinkingLevel ? (
+          <Row
+            label="Thinking level"
+            value={settings.thinkingLevel}
+            file="settings.json"
+          />
+        ) : null}
         <Row
           label="API key"
-          value={
-            !keySource
-              ? 'Not saved'
-              : keySource === 'auth.json'
-                ? 'Saved in auth.json'
-                : `From ${keySource}`
-          }
-          file="auth.json"
+          value={keySource ? 'Saved' : 'Not saved'}
+          // Where the credential actually comes from: a key Vela did not store is not in auth.json.
+          file={keySource ?? 'auth.json'}
         />
         {provider?.custom ? (
           <Row

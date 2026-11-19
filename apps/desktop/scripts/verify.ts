@@ -36,7 +36,7 @@ const home = resolve(process.env.VELA_DESKTOP_HOME ?? resolve(scratch, 'home'))
 const dataParent = resolve(process.env.VELA_DIR ?? scratch)
 await mkdir(dataParent, { recursive: true })
 const data = await mkdtemp(resolve(dataParent, 'vela-data-'))
-/** Journey 5's own empty data directory, created when that journey starts. */
+/** Journey 6's own empty data directory, created when that journey starts. */
 let firstRunData: string | undefined
 const profile = resolve(scratch, 'user-data')
 const project = resolve(scratch, 'project')
@@ -50,6 +50,8 @@ const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
 const disabledConfig = process.env.VELA_DESKTOP_VERIFY_DISABLED === '1'
 /** A saved model whose provider is gone: setup must open, not Home. */
 const staleModel = process.env.VELA_DESKTOP_VERIFY_STALE_MODEL === '1'
+/** An auth.json Vela cannot read: the window must say so instead of staying blank. */
+const brokenAuth = process.env.VELA_DESKTOP_VERIFY_BROKEN_AUTH === '1'
 await Promise.all(
   [home, data, profile, project, alpha, beta, gamma].map((path) =>
     mkdir(path, { recursive: true }),
@@ -75,6 +77,7 @@ await Bun.write(
         ...(staleModel ? { defaultModel: 'removed-provider/some-model' } : {}),
       }),
 )
+if (brokenAuth) await Bun.write(resolve(data, 'auth.json'), '{ not json')
 await Bun.write(
   scenario,
   JSON.stringify({
@@ -1366,6 +1369,7 @@ async function launchDev(overrides: Record<string, string | undefined> = {}) {
 async function development() {
   // The stale-model mode has no model handed to the host, or there would be nothing to check.
   const first = await launchDev(staleModel ? { VELA_MODEL: undefined } : {})
+
   try {
     const { page } = first
     if (badConfig) {
@@ -1390,6 +1394,20 @@ async function development() {
     await snapshot(page, 'specimen-minimum')
     checks.push('Minimum preview layout passes.')
     await page.goto(new URL('index.html', page.url()).href)
+    if (brokenAuth) {
+      const alert = page.getByRole('alert')
+      await alert.waitFor({ timeout: 30_000 })
+      const reason = (await alert.textContent()) ?? ''
+      assert(
+        reason.includes('auth.json'),
+        `The window names the unreadable file: ${reason}`,
+      )
+      checks.push(
+        'An auth.json Vela cannot read shows its reason in the window instead of a blank frame.',
+      )
+      await snapshot(page, 'broken-auth')
+      return
+    }
     if (staleModel) {
       // Setup replaces the frame, so the wordmark is not the page heading here.
       await page.getByRole('heading', { name: 'Give Vela a model.' }).waitFor()
@@ -1453,7 +1471,17 @@ async function firstRunJourney() {
   const provider = startVerifyProvider()
   const dir = await mkdtemp(resolve(dataParent, 'vela-first-run-'))
   firstRunData = dir
-  const third = await launchDev({ VELA_DIR: dir, VELA_MODEL: undefined })
+  // A developer or CI with a provider key exported would close the gate this journey needs open.
+  const third = await launchDev({
+    VELA_DIR: dir,
+    VELA_MODEL: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
+    OPENAI_API_BASE_URL: undefined,
+    OPENAI_API_MODEL_NAME: undefined,
+    OPENROUTER_API_KEY: undefined,
+    DEEPSEEK_API_KEY: undefined,
+  })
   try {
     const { page } = third
     await page.setViewportSize({ width: 1280, height: 800 })
@@ -1610,10 +1638,16 @@ async function firstRunJourney() {
     await page.getByText('faux/faux-model', { exact: true }).waitFor()
     assert.equal(
       await page.getByText('settings.json', { exact: true }).count(),
-      2,
-      'The model and the thinking level name settings.json',
+      1,
+      'The model names settings.json',
     )
-    await page.getByText('Saved in auth.json', { exact: true }).waitFor()
+    // No thinking level is recorded on a fresh install, so no row claims one.
+    assert.equal(
+      await page.getByText('Thinking level', { exact: true }).count(),
+      0,
+      'A level Vela never saved is not shown',
+    )
+    await page.getByText('Saved', { exact: true }).waitFor()
     await page.getByText('auth.json', { exact: true }).waitFor()
     await page.getByText('models.json', { exact: true }).waitFor()
     checks.push(
@@ -1640,6 +1674,30 @@ async function firstRunJourney() {
     )
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'hidden' })
+
+    // The host must be using the model it saved: an endpoint that only answers `good-key` and
+    // streams a reply, driven through the app's own composer.
+    await page
+      .getByLabel('Sidebar')
+      .getByRole('button', { name: 'Home' })
+      .click()
+    await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'New project' }).click()
+    const projectDialog = page.getByRole('dialog')
+    await projectDialog.getByLabel('Folder path').fill(project)
+    await projectDialog.getByLabel('Name').fill('Setup project')
+    await projectDialog.getByRole('button', { name: 'Create project' }).click()
+    await projectDialog.waitFor({ state: 'hidden' })
+    await page.getByRole('heading', { name: 'Setup project' }).waitFor()
+    const composer = page.getByLabel('Message Vela in this project')
+    await composer.fill('Does the saved model answer?')
+    await page.getByRole('button', { name: 'Send' }).click()
+    await page
+      .getByText('Local answer', { exact: true })
+      .waitFor({ timeout: 60_000 })
+    checks.push(
+      'The saved model answers in the app: the host uses the choice without a restart.',
+    )
 
     const cli = Bun.spawnSync(
       [

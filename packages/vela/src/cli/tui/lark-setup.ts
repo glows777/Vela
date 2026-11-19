@@ -111,7 +111,10 @@ export async function larkSetup(host: Host): Promise<boolean> {
       })
     } catch (error) {
       host.addNotice(
-        error instanceof Error ? error.message : String(error),
+        (error instanceof Error ? error.message : String(error)).replaceAll(
+          secret,
+          '[redacted]',
+        ),
         'error',
       )
       return false

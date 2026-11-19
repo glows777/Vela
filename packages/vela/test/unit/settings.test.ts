@@ -159,6 +159,48 @@ test('an enabled chat saved as an environment expression is not rewritten', asyn
   })
 })
 
+test('a failed save names the files it already wrote', async () => {
+  const dir = tempDir()
+  // Not an object: the settings write fails after auth.json and models.json are on disk.
+  writeFileSync(join(dir, 'settings.json'), '[]')
+  const preset = {
+    api: 'openai-completions' as const,
+    baseUrl: 'https://example.invalid/v1',
+    models: [{ id: 'custom-model' }],
+  }
+  await expect(
+    saveModelSetup({
+      agentDir: dir,
+      ref: 'custom/custom-model',
+      providers: loadModels({
+        agentDir: dir,
+        env: {},
+        overrides: { custom: preset },
+      }),
+      credential: { type: 'api_key', key: 'secret-key' },
+      preset,
+    }),
+  ).rejects.toThrow(`${join(dir, 'auth.json')}, ${join(dir, 'models.json')}`)
+  expect(
+    fileCredentialStore(join(dir, 'auth.json')).get('custom'),
+  ).toBeDefined()
+})
+
+test('a settings file that is not an object is named', async () => {
+  const dir = tempDir()
+  writeFileSync(join(dir, 'settings.json'), 'null')
+  await expect(
+    saveLarkSection({ agentDir: dir, appId: 'app-id' }),
+  ).rejects.toThrow(`${join(dir, 'settings.json')} must contain a JSON object`)
+})
+
+test('adding and removing a chat in one call is refused', async () => {
+  const dir = tempDir()
+  await expect(
+    saveLarkSection({ agentDir: dir, addChat: 'one', removeChat: 'two' }),
+  ).rejects.toThrow('either addChat or removeChat')
+})
+
 test('a model is usable when its provider has a credential', async () => {
   const dir = tempDir()
   const providers = loadModels({ agentDir: dir, env: {} })
@@ -170,6 +212,11 @@ test('a model is usable when its provider has a credential', async () => {
   expect(
     usableModel({ providers, credentials, model: 'faux/faux-model' }),
   ).toEqual({ usable: true, provider: 'faux' })
+  // A bare id names no provider; treating it as unknown would make any typo usable.
+  expect(usableModel({ providers, credentials, model: 'gpt-5.5' })).toEqual({
+    usable: false,
+    reason: 'no-model',
+  })
   expect(
     usableModel({ providers, credentials, model: 'anthropic/claude-opus-4-8' }),
   ).toEqual({
