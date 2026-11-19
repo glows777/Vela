@@ -35,8 +35,10 @@ const restore = () => {
  */
 test('a sign-in refreshed during a refused check is still saved', async () => {
   const dir = tempDir()
-  // A model is already saved; the refused check must leave it exactly as it was.
-  const saved = `${JSON.stringify({ defaultModel: 'openai/gpt-5.5', defaultThinkingLevel: 'low' }, null, 2)}\n`
+  // A model is already saved, and it is not the one being checked: with the same ref on both
+  // sides, writing the refused model back would produce the same bytes and the comparison below
+  // could not tell "kept" from "switched".
+  const saved = `${JSON.stringify({ defaultModel: 'openai/gpt-5', defaultThinkingLevel: 'low' }, null, 2)}\n`
   writeFileSync(join(dir, 'settings.json'), saved)
   writeFileSync(
     join(dir, 'auth.json'),
@@ -70,7 +72,7 @@ test('a sign-in refreshed during a refused check is still saved', async () => {
     await expect(
       saveModel({
         agentDir: dir,
-        input: { provider: 'openai', model: 'gpt-5.5' },
+        input: { provider: 'openai', model: 'gpt-5-mini' },
         env: {},
       }),
     ).rejects.toThrow('invalid model')
