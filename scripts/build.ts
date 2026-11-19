@@ -32,9 +32,8 @@ if (import.meta.main) {
       await chmod(join(dir, 'dist/cli/main.js'), 0o755)
     }
   }
-  const docker = join(root, 'dist', 'docker')
+  // Build into the clean package directory; development artifacts cannot enter the tarball.
+  const docker = join(root, 'packages', 'vela', 'dist', 'docker')
   await buildDockerAdapter(docker)
-  await cp(docker, join(root, 'packages', 'vela', 'dist', 'docker'), {
-    recursive: true,
-  })
+  await cp(docker, join(root, 'dist', 'docker'), { recursive: true })
 }
