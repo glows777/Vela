@@ -17,10 +17,12 @@ export interface BackgroundOptions {
  * id at once, `background_output` reads the tail, `background_stop` ends the command. The extension
  * installs the session's job table, which `bash` reaches through `ToolContext`, so one shell tool
  * covers both foreground and background work and no second id, stop or delivery implementation
- * exists. Jobs belong to their session: Stop, close and process restart end them, and nothing about
- * execution is persisted. A host may persist jobs whose results are still owed. In a channel session
- * the exit enters the gateway's queue, so it arrives as an ordinary reply in the session's topic;
- * elsewhere it is a custom message that starts a turn.
+ * exists. A running call can also be moved to the background mid-run, and it is the same kind of job
+ * afterwards. Jobs belong to their session, not to the run that started them: close and process
+ * restart end them, an interrupted run does not. Nothing about execution is persisted, though a host
+ * may persist jobs whose results are still owed. In a channel session the exit enters the gateway's
+ * queue, so it arrives as an ordinary reply in the session's topic; elsewhere it is a custom message
+ * that starts a turn.
  */
 export function background(options: BackgroundOptions = {}): VelaExtension {
   return function background(vela) {
@@ -40,15 +42,6 @@ export function background(options: BackgroundOptions = {}): VelaExtension {
         vela.logger,
         options.shellPath,
       )
-    })
-    // Stop aborts the run; every job in the session goes with it, so none can be orphaned.
-    vela.on('agent_end', (event, { session }) => {
-      if (event.reason !== 'aborted') return
-      void session.registry.background
-        ?.stopAll()
-        .catch((error) =>
-          vela.logger.error(`[background] Could not stop jobs: ${error}`),
-        )
     })
     vela.on('session_shutdown', async (_event, { session }) => {
       const jobs = session.registry.background

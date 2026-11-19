@@ -375,6 +375,7 @@ export class BashExecution implements Component {
   private exitCode?: number
   private cancelled = false
   private fullOutputPath?: string
+  private backgroundTaskId?: string
   private expanded: boolean
 
   constructor(
@@ -394,12 +395,14 @@ export class BashExecution implements Component {
     exitCode?: number
     cancelled: boolean
     fullOutputPath?: string
+    backgroundTaskId?: string
   }): void {
     this.status = 'done'
     this.output = sanitize(result.output).trimEnd()
     this.exitCode = result.exitCode
     this.cancelled = result.cancelled
     this.fullOutputPath = result.fullOutputPath
+    this.backgroundTaskId = result.backgroundTaskId
   }
 
   /** The command could not run (the error is shown as a notice) */
@@ -434,6 +437,14 @@ export class BashExecution implements Component {
     }
     if (this.status === 'running')
       lines.push('', theme.fg('muted', 'Running… (Esc to cancel)'))
+    else if (this.backgroundTaskId)
+      lines.push(
+        '',
+        theme.fg(
+          'muted',
+          `(moved to the background as ${this.backgroundTaskId})`,
+        ),
+      )
     else if (this.cancelled) lines.push('', theme.fg('yellow', '(cancelled)'))
     else if (this.status === 'error')
       lines.push('', theme.fg('red', '(failed)'))

@@ -1,6 +1,11 @@
 import type { VelaEventListener } from '../agent/events.ts'
 import type { ExecutionEnv } from '../execution/types.ts'
 import type { ModelMessage } from '../messages.ts'
+import type {
+  BackgroundCommands,
+  ForegroundCommand,
+} from '../tools/background.ts'
+import { OutputTail } from '../tools/output-tail.ts'
 import { type BashResult, runBash } from '../tools/shell.ts'
 import type { TokenTracker } from '../usage/tracker.ts'
 import {
@@ -28,6 +33,10 @@ export class UserBash {
       tracker: TokenTracker
       timestamps: Map<ModelMessage, number>
       prepare: () => Promise<ExecutionEnv>
+      /** Prepares the session and fires `session_start`, so extensions can see the command */
+      start: () => Promise<void>
+      /** The session's job table, once the `background` extension installed it */
+      background: () => BackgroundCommands | undefined
       isClosed: () => boolean
       isDraining: () => boolean
     },
@@ -84,19 +93,39 @@ export class UserBash {
       await this.host.store.assertNew()
       if (this.host.isDraining())
         throw new Error('Session is draining; shell command was not executed')
+      // A session's first act can be a `!` command; its extensions install the job table here.
+      await this.host.start()
+      // The same tail the job table keeps, so a command moved to the background keeps reporting
+      // from one buffer and its snapshot starts where the foreground output stopped.
+      const output = new OutputTail()
+      const start = (signal: AbortSignal) =>
+        runBash(command, {
+          env: environment!,
+          signal,
+          onUpdate: options.onUpdate,
+          onDelta: (delta) =>
+            this.host.emit({
+              type: 'bash_execution_update',
+              ...(options.id === undefined ? {} : { id: options.id }),
+              delta,
+            }),
+          output,
+        })
+      const foreground = this.host.background()?.watch({
+        command,
+        signal: controller.signal,
+        output,
+        start,
+        exit: (settled) => ({
+          exitCode: settled.exitCode,
+          spillPath: settled.fullOutputPath,
+        }),
+      })
       const result: BashResult = controller.signal.aborted
         ? { output: '', exitCode: undefined, cancelled: true, truncated: false }
-        : await runBash(command, {
-            env: environment!,
-            signal: controller.signal,
-            onUpdate: options.onUpdate,
-            onDelta: (delta) =>
-              this.host.emit({
-                type: 'bash_execution_update',
-                ...(options.id === undefined ? {} : { id: options.id }),
-                delta,
-              }),
-          })
+        : foreground
+          ? await this.settle(foreground)
+          : await start(controller.signal)
       this.pendingBash.push({
         type: 'bash_execution',
         command,
@@ -107,6 +136,9 @@ export class UserBash {
         ...(result.fullOutputPath
           ? { fullOutputPath: result.fullOutputPath }
           : {}),
+        ...(result.backgroundTaskId
+          ? { backgroundTaskId: result.backgroundTaskId }
+          : {}),
         ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
       })
       if (!this.host.busy.locked && this.flush()) await this.host.save()
@@ -115,6 +147,45 @@ export class UserBash {
       this.bashController = undefined
       this.bashRun = undefined
     }
+  }
+
+  /** The command's own result, or the synthetic one: its tail so far and the id it now runs under. */
+  private async settle(
+    foreground: ForegroundCommand<BashResult>,
+  ): Promise<BashResult> {
+    const outcome = await Promise.race([
+      foreground.result.then((value) => ({ type: 'result' as const, value })),
+      foreground.detached.then((admission) => ({
+        type: 'detached' as const,
+        admission,
+      })),
+    ])
+    return outcome.type === 'result'
+      ? outcome.value
+      : {
+          output: outcome.admission.output,
+          exitCode: undefined,
+          cancelled: false,
+          truncated: outcome.admission.truncated,
+          backgroundTaskId: outcome.admission.id,
+        }
+  }
+
+  /**
+   * Moves running shell commands to the background: every one this session holds in the foreground
+   * (including your own `!` command), or the one model-issued `bash` call named by its tool-call id.
+   * The waiting call returns a synthetic result naming the job, and the exit arrives later as the
+   * job's result. Returns the new background ids; an unknown id throws and names the running calls.
+   */
+  detach(toolCallId?: string): Promise<string[]> {
+    const commands = this.host.background()
+    if (!commands)
+      return Promise.reject(
+        new Error(
+          'Background commands are not enabled in this session: it has no background tools.',
+        ),
+      )
+    return commands.detach(toolCallId)
   }
 
   /** Cancels the running `executeBash()` command (pi's abortBash); it is still recorded, as cancelled. */

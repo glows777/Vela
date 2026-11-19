@@ -13,6 +13,8 @@ export interface ExecutionMetadata {
   toolUnavailable?: boolean
   /** The background job this call started, whose result arrives on its own. */
   backgroundTaskId?: string
+  /** The job was a running call the user moved to the background instead of one the call declared. */
+  backgroundedByUser?: boolean
 }
 
 export interface CallRecord {

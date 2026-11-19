@@ -203,6 +203,16 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
     abort_bash() {
       session.abortBash()
     },
+    // Moves running shell commands to the background (upstream's `background_tasks`): with an id,
+    // just that model-issued bash call; without one, every call the session runs in the foreground.
+    async background_tasks(command) {
+      if (
+        command.tool_use_id !== undefined &&
+        (typeof command.tool_use_id !== 'string' || !command.tool_use_id.trim())
+      )
+        throw new Error('tool_use_id must be a non-empty string')
+      return { ids: await session.backgroundTasks(command.tool_use_id) }
+    },
     async new_session() {
       idle()
       const next = vela.session(options.newSessionId(), { ui })

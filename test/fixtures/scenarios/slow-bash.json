@@ -1,0 +1,17 @@
+{
+  "responses": [
+    {
+      "toolCalls": [
+        {
+          "name": "bash",
+          "input": { "command": "echo ONE; sleep 30; echo NEVER" }
+        },
+        {
+          "name": "bash",
+          "input": { "command": "echo TWO; sleep 30; echo NEVER" }
+        }
+      ]
+    },
+    { "text": "Both are running." }
+  ]
+}
