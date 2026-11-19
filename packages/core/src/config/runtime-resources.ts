@@ -24,6 +24,7 @@ export interface ConfigResourceSplit<Factory = unknown> {
   useBuiltinLocal?: boolean
   fallbackModel?: string
   fallbackShellPath?: string
+  previousDataDir?: string
   userSettings?: VelaSettings
   env?: Record<string, string | undefined>
   userContextFiles: ContextFile[]

@@ -272,7 +272,13 @@ test.each([false, true])(
       const active = h.vela.session(initial.id, { location: initial.location })
       active.trackWork(job.promise)
       const next = h.input(false, 'while-busy')
-      await Bun.sleep(100)
+      const waiting = () => h.replies.filter((text) => text.includes('Waiting'))
+      for (let n = 0; n < 100 && !waiting().length; n++) await Bun.sleep(10)
+      expect(waiting()).toHaveLength(1)
+      expect(waiting()[0]).toMatch(/work.*blue.*Stop/i)
+      const second = stop ? undefined : h.input(false, 'second-in-line')
+      await Bun.sleep(125)
+      expect(waiting()).toHaveLength(1)
       expect(g.count()).toBe(0)
       expect(h.model.calls).toHaveLength(0)
       if (stop) {
@@ -292,9 +298,14 @@ test.each([false, true])(
         return
       }
       job.resolve()
-      await next
+      await Promise.all([next, second])
       expect(active.location.environment).toBe('blue')
-      expect(h.model.calls).toHaveLength(1)
+      expect(h.replies.filter((text) => text.includes('Moved'))).toHaveLength(1)
+      expect(waiting()).toHaveLength(1)
+      expect(h.model.calls.map((call) => call.lastUserText)).toEqual([
+        expect.stringContaining('while-busy'),
+        expect.stringContaining('second-in-line'),
+      ])
     } finally {
       job.resolve()
       await h.vela.dispose()
@@ -481,6 +492,15 @@ test('Stop after resume clears a waiting migration notice while existing work st
       JSON.parse(readFileSync(index, 'utf8')).records[0].locationNotice
     for (let n = 0; n < 150 && !notice(); n++) await Bun.sleep(10)
     expect(notice()).toBeDefined()
+    for (
+      let n = 0;
+      n < 100 && !h.replies.some((text) => text.includes('Waiting'));
+      n++
+    )
+      await Bun.sleep(10)
+    expect(
+      h.replies.filter((text) => /work.*blue.*Stop/i.test(text)),
+    ).toHaveLength(1)
     const channel = h.vela.channel('lark'),
       run = channel.sessions('oc_group')[0]!.runId!
     expect(await channel.stop({ chatId: 'oc_group' }, run)).toBe(true)

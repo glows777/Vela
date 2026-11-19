@@ -16,7 +16,7 @@ import type { ChannelHandoff } from './handoff.ts'
 import { errorMessage, WorkspacePreparationError } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import type { ChannelRoutines } from './routines.ts'
-import type { ChannelSessions } from './sessions.ts'
+import type { AdmissionWait, ChannelSessions } from './sessions.ts'
 import type {
   ChannelDefinition,
   ChannelOutcome,
@@ -154,10 +154,23 @@ export class GatewayRun {
       if (!record || channel?.canRecover?.(trigger, record.chatKind) === false)
         return 'done'
     }
-    const cancelled = () => processing.stopped
+    let announced = false
+    const wait: AdmissionWait = {
+      cancelled: () => processing.stopped,
+      waiting: async (session, environment) => {
+        if (announced || recovered || trigger.backgroundJobToken) return
+        announced = true
+        await this.sendReply(
+          session,
+          channelName,
+          trigger,
+          `Waiting for active work to finish before moving to the ${environment} workspace. Stop cancels this message.`,
+        )
+      },
+    }
     const topicSession =
       trigger.topic || trigger.passive
-        ? await this.admission.admit(id, channel, trigger, cancelled)
+        ? await this.admission.admit(id, channel, trigger, wait)
         : undefined
     if (trigger.topic && !topicSession) return 'failed'
     let batch = messages
@@ -282,8 +295,8 @@ export class GatewayRun {
       (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
       !this.admission.resumed.has(session)
     ) {
-      await this.sessions.resume(session, cancelled)
-      if (cancelled()) return stopped(session)
+      await this.sessions.resume(session, wait)
+      if (wait.cancelled()) return stopped(session)
       this.admission.resumed.add(session)
     }
     if (
@@ -325,9 +338,9 @@ export class GatewayRun {
           session,
           merged,
           false,
-          cancelled,
+          wait,
         )
-        if (cancelled()) return stopped(session)
+        if (wait.cancelled()) return stopped(session)
       } catch (error) {
         this.admission.resumed.delete(session)
         throw error
@@ -396,7 +409,7 @@ export class GatewayRun {
     session: VelaSession,
     msg: IncomingMessage,
     recovering = false,
-    cancelled?: () => boolean,
+    wait?: AdmissionWait,
   ) {
     return this.sessions
       .reconcile(
@@ -406,7 +419,7 @@ export class GatewayRun {
         (route, text, identity) =>
           this.sendReply(session, channel, route, text, identity),
         recovering,
-        cancelled,
+        wait,
       )
       .catch((error) => {
         throw new WorkspacePreparationError(error)

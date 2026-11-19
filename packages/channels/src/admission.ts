@@ -1,6 +1,6 @@
 import type { VelaSession } from '@glows777/vela-core/extension-api'
 import type { ChannelDirectory } from './directory.ts'
-import type { ChannelSessions } from './sessions.ts'
+import type { AdmissionWait, ChannelSessions } from './sessions.ts'
 import type {
   ChannelDefinition,
   ChannelTopic,
@@ -21,12 +21,12 @@ export class TopicAdmission {
     id: string,
     channel: ChannelDefinition | undefined,
     msg: IncomingMessage,
-    cancelled?: () => boolean,
+    wait?: AdmissionWait,
   ): Promise<VelaSession | undefined> {
     const session = this.sessions.open(id, channel?.name, msg)
     const exists = this.resumed.has(session)
       ? session.getEntries().length > 0
-      : await this.sessions.resume(session, cancelled)
+      : await this.sessions.resume(session, wait)
     if (exists === undefined) return session
     if (msg.requireExistingSession && !exists && !this.directory.get(id)) {
       await session.close()

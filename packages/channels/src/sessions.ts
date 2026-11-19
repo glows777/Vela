@@ -15,6 +15,12 @@ import { resolveChannelScope } from './scope.ts'
 import { topicSessionOptions } from './topics.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
+/** Shared by resume and relocation for one queued input. */
+export interface AdmissionWait {
+  cancelled(): boolean
+  waiting(session: VelaSession, environment: string): Promise<void>
+}
+
 /** Every opening path resolves current options from the logical chat, before resume or hooks. */
 export class ChannelSessions {
   /** Sessions this class has already given the chat's tool split (once per object, like resume). */
@@ -45,7 +51,7 @@ export class ChannelSessions {
       identity: string,
     ) => Promise<boolean>,
     recovering = false,
-    cancelled?: () => boolean,
+    wait?: AdmissionWait,
   ) {
     const target = this.targets.get(session)
     if (!target) return
@@ -69,7 +75,7 @@ export class ChannelSessions {
         }
         await this.directory.setLocationNotice(key, session.id, notice)
       }
-      await this.whenIdle(session, () => session.setLocation(target), cancelled)
+      await this.whenIdle(session, () => session.setLocation(target), wait)
       if (!this.matchesLocation(session)) {
         await this.directory.setLocationNotice(key, session.id, undefined)
         return
@@ -108,12 +114,12 @@ export class ChannelSessions {
     await this.directory.setLocationNotice(key, session.id, undefined)
   }
 
-  async resume(session: VelaSession, cancelled?: () => boolean) {
+  async resume(session: VelaSession, wait?: AdmissionWait) {
     try {
       const restored = await this.whenIdle(
         session,
         () => session.resume(),
-        cancelled,
+        wait,
       )
       // First admission has no transcript. Prepare its selected guest before handing the input
       // to the model path, so operator-only engine failures receive the same handling as moves.
@@ -134,18 +140,18 @@ export class ChannelSessions {
   private async whenIdle<T>(
     session: VelaSession,
     task: () => Promise<T>,
-    cancelled?: () => boolean,
+    wait?: AdmissionWait,
   ): Promise<T | undefined> {
     while (!this.stopped()) {
-      if (cancelled?.()) return
+      if (wait?.cancelled()) return
       try {
         return await task()
       } catch (error) {
-        if (
-          !this.targets.has(session) ||
-          (error as { code?: string })?.code !== 'SESSION_BUSY'
-        )
+        const target = this.targets.get(session)
+        if (!target || (error as { code?: string })?.code !== 'SESSION_BUSY')
           throw error
+        if (wait && !wait.cancelled() && !this.matchesLocation(session))
+          await wait.waiting(session, target.environment)
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
     }

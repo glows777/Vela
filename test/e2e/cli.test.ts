@@ -33,6 +33,55 @@ test.concurrent('no configured model points print-mode users to setup', async ()
   expect(result.stderr).toContain('vela setup')
 })
 
+test('owner environments warn on stderr when the previously effective project dataDir changes', async () => {
+  const project = tempDir('vela-project-'),
+    owner = tempDir('vela-owner-')
+  dirs.push(project, owner)
+  const cwd = project.path,
+    agentDir = owner.path
+  const legacy = join(cwd, 'previous-store')
+  const args = [
+    '--approve',
+    '--no-extensions',
+    '-p',
+    '--session',
+    'check',
+    'hello',
+  ]
+  const options = { cwd, agentDir, model: 'mock' }
+  await Bun.write(
+    join(cwd, '.vela/settings.json'),
+    JSON.stringify({ dataDir: 'previous-store' }),
+  )
+  const seed = await cli(args, options)
+  expect(seed.code).toBe(0)
+  expect(sessionFiles(legacy)).toHaveLength(1)
+  const active = projectDataDir(agentDir, cwd)
+  const settings = join(agentDir, 'settings.json')
+  await Bun.write(settings, JSON.stringify({ environments: {} }))
+  const changed = await cli(args, options)
+  expect(changed.code).toBe(0)
+  expect(changed.stderr).toContain(legacy)
+  expect(changed.stderr).toContain(active)
+  expect(changed.stderr).toMatch(/pin.*dataDir/i)
+  expect(changed.stdout).not.toContain(legacy)
+  expect(sessionFiles(active)).toHaveLength(1)
+  await Bun.write(
+    settings,
+    JSON.stringify({ environments: {}, dataDir: legacy }),
+  )
+  const checkConfig = ['--approve', '--no-extensions', '--list-models']
+  const pinned = await cli(checkConfig, options)
+  expect(pinned.code).toBe(0)
+  expect(pinned.stderr).not.toMatch(/pin.*dataDir/i)
+  const ownerOnly = await cli(checkConfig, {
+    ...options,
+    files: { '.vela/settings.json': '{}' },
+  })
+  expect(ownerOnly.code).toBe(0)
+  expect(ownerOnly.stderr).not.toMatch(/pin.*dataDir/i)
+})
+
 test.concurrent.if(hasScript)(
   'setup cancellation leaves user configuration untouched',
   async () => {

@@ -4,7 +4,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
-- Lark files reach isolated sessions through a session-owned guest cache. Forks and clones retain referenced uploads in their selected environment. A stopped workspace move leaves the current session in place, and operator installation diagnostics stay out of group replies.
+- Lark files reach isolated sessions through a session-owned guest cache. Forks and clones retain referenced uploads in their selected environment. A stopped workspace move leaves the current session in place, and operator installation diagnostics stay out of group replies ([#410](https://github.com/glows777/Vela/issues/410)).
 
 - **The Lark SDK host lists enabled groups and says whether a failed submission reached Lark.** `LarkHost.chats()` answers from saved configuration, connected or not: every enabled group with its name when the built-in transport can read it, and its chat ID otherwise (a custom `LarkTransport` has no name lookup). A failed `submit` throws `LarkSubmitError` whose `outcome` is `not-sent` (nothing was posted), `uncertain` (a post may have gone out without a receipt) or `posted` (it did, with `messageId` when known), so a host re-reads history instead of resending ([#418](https://github.com/glows777/Vela/issues/418)).
 

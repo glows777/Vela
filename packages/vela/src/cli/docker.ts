@@ -1,5 +1,8 @@
+import { createRequire } from 'node:module'
 import type { ExecutionEnv, VelaOptions } from '@glows777/vela-core'
 import type { VelaConfig } from '../config/index.ts'
+
+const require = createRequire(import.meta.url)
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -37,9 +40,9 @@ export function ownerDocker(config: VelaConfig) {
         image: entry.image,
         network: entry.network,
       } as const
-      pending = import('#docker-adapter').then(({ openDockerEnvironment }) =>
-        openDockerEnvironment(options, cwd),
-      )
+      // Source-only CLI consumers need the built guest only when opening a Docker location.
+      const adapter: typeof import('#docker-adapter') = require('#docker-adapter')
+      pending = adapter.openDockerEnvironment(options, cwd)
       opened.set(key, pending)
       void pending.catch(() => opened.delete(key))
     }

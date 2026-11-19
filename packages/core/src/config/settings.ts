@@ -199,14 +199,15 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       : [agentDir]
   const systemPrompt = readLocalSystemFile(promptDirs, 'SYSTEM.md')
   const appendSystemPrompt = readLocalSystemFile(promptDirs, 'APPEND_SYSTEM.md')
-  const dataDir = ('environments' in userSettings ? userSettings : settings)
-    .dataDir
+  const dataPath = (path?: string) =>
+    path ? resolveConfigPath(cwd, path) : projectDataDir(agentDir, cwd)
+  const previous = dataPath(settings.dataDir)
+  const dataDir =
+    'environments' in userSettings ? dataPath(userSettings.dataDir) : previous
   return {
     cwd,
     agentDir,
-    dataDir: dataDir
-      ? resolveConfigPath(cwd, dataDir)
-      : projectDataDir(agentDir, cwd),
+    dataDir,
     settings,
     userExtensionConfig,
     files,
@@ -214,6 +215,8 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     sessionResources: {
       agentDir,
       cwd,
+      previousDataDir:
+        resolve(previous) === resolve(dataDir) ? undefined : previous,
       userSettings,
       hostExtensions: resolveExtensionEntries(
         userSettings.extensions ?? [],
