@@ -2412,11 +2412,16 @@ async function larkOffJourney() {
       ((await refused.textContent()) ?? '').includes('Lark is not connected'),
       'The refusal carries the host reason',
     )
-    assert.equal(
-      await homeComposer.inputValue(),
+    // The composer clears on submit and puts the text back when the send is refused.
+    await page.waitForFunction(
+      (text) =>
+        document.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message Vela"]',
+        )?.value === text,
       'A question while Lark is off',
-      'A message that was not sent keeps its draft',
+      { timeout: 5_000 },
     )
+    checks.push('A message that was not sent keeps its draft in the composer.')
     assert.deepEqual(
       await page.evaluate(
         (chatId) => window.vela.sessions('lark', chatId),
