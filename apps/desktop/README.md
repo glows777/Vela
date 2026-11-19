@@ -2,7 +2,7 @@
 
 The private Electron workspace hosts the SDK in its main process and shows Home, Local projects and their chats alongside the separate design specimen. Product pages are separate work. Process ownership is defined in [AGENTS.md](AGENTS.md). Desktop's `0.0.0` is an internal packaging identifier.
 
-Main loads the normal user settings from `VELA_DIR` (or `~/.vela`), owns the Local and Lark channels, and disposes them on quit. Do not run this app and `vela serve` against the same Lark credentials at once. A constrained preload bridge exposes channel and Local host operations; renderer code never imports the SDK. The window is the app frame with Home, a project page, its session side panel and the New project dialog; Lark pages, routines and settings are later issues.
+Main loads the normal user settings from `VELA_DIR` (or `~/.vela`), owns the Local and Lark channels, and disposes them on quit. Do not run this app and `vela serve` against the same Lark credentials at once. A constrained preload bridge exposes channel and Local host operations; renderer code never imports the SDK. The window is the app frame with Home, a project page, its session side panel, the New project dialog, the setup screen a fresh data directory opens on, and Settings › General/Models; Lark pages and routines are later issues.
 
 ## Run locally
 
@@ -18,7 +18,7 @@ bun run desktop:verify
 
 The development preview shows Button, Dialog, Tabs, and Switch with typography, palette, and theme selection. Both HTML entries are pre-optimized for a cold first launch.
 
-For runtime evidence, including the packaged pass and scratch directory options, follow [desktop verification](../../.skills/verify-vela/desktop.md). The driver creates and removes a private data subdirectory inside a supplied `VELA_DIR`, and never overwrites an existing settings file. It verifies the Local host with a faux model, configured shell, image input and paged history, then drives journey 1 as a person would; the app itself uses the normal configured model.
+For runtime evidence, including the packaged pass and scratch directory options, follow [desktop verification](../../.skills/verify-vela/desktop.md). The driver creates and removes a private data subdirectory inside a supplied `VELA_DIR`, and never overwrites an existing settings file. It verifies the Local host with a faux model, configured shell, image input and paged history, then drives the product journeys as a person would, including first-run setup against a local provider endpoint; the app itself uses the normal configured model.
 
 ## Package locally
 

@@ -11,7 +11,7 @@ Vela desktop brings Local projects, Local sessions, Lark projects, and Lark sess
 - `src/preload/` owns that bridge and imports no SDK. Expose typed operations rather than generic IPC access. No other IPC channels.
 - `src/shared/` owns the bridge contract in one TypeScript file. It stays browser-safe and imports no main, preload, Node, Electron, or SDK code, so shared types cannot carry privileges into the renderer.
 
-Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The SDK host, shared contract, preload bridge, and real-window assertions are connected. Home, the Local project page, the session side panel and the New project dialog are product screens; Lark pages, routines and settings depend on later host calls and are not built yet.
+Only main may import `@glows777/vela*`. `desktop:check` enforces importer ownership, including local imports and TypeScript aliases. The SDK host, shared contract, preload bridge, and real-window assertions are connected. Home, the Local project page, the session side panel, the New project dialog, first-run setup and Settings › General/Models are product screens; Lark pages and routines depend on later host calls and are not built yet.
 
 While open, the app owns its Lark connection. Never use the same Lark app credentials concurrently with `vela serve`, because the two hosts would compete for one connection and persisted channel state.
 
@@ -27,4 +27,4 @@ Adopt consumed free Arc components as our code. Apply ordinary lint, dead-code, 
 
 ## Verification
 
-Follow [desktop runtime verification](../../.skills/verify-vela/desktop.md) after user-visible changes. It defines isolated home and data directories and the future faux-model SDK-host pattern. Keep evidence outside commits. Running and unsigned packaging commands live in [README.md](README.md); packaging does not authorize publication.
+Follow [desktop runtime verification](../../.skills/verify-vela/desktop.md) after user-visible changes. It defines isolated home and data directories and the faux-model SDK-host pattern the journeys use. Keep evidence outside commits. Running and unsigned packaging commands live in [README.md](README.md); packaging does not authorize publication.
