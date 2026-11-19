@@ -74,6 +74,7 @@ export async function prepareDocker(
       `label=${ownerKey}=${owner}`,
     ])
   let id = await lookup()
+  let created = false
   if (!id) {
     try {
       id = await run([
@@ -107,6 +108,7 @@ export async function prepareDocker(
         o.image,
         'infinity',
       ])
+      created = true
     } catch (e) {
       // Another process might have prepared the same named container. Inspect its identity before use.
       id = await lookup()
@@ -134,15 +136,16 @@ export async function prepareDocker(
     throw Error(
       'Docker container ownership or configuration differs; explicit owner restart required',
     )
-  if (!object.State.Running) await run(['start', id])
-  const missingTools = await run([
-    'exec',
-    '--workdir',
-    '/workspace',
-    id,
-    'node',
-    '-e',
-    `
+  try {
+    if (!object.State.Running) await run(['start', id])
+    const missingTools = await run([
+      'exec',
+      '--workdir',
+      '/workspace',
+      id,
+      'node',
+      '-e',
+      `
       const {spawnSync} = require('node:child_process')
       const missing = ['rg','fd'].filter(tool =>
         spawnSync(tool,['--version'], {stdio:'ignore'}).status !== 0)
@@ -152,10 +155,21 @@ export async function prepareDocker(
         require('node:fs').mkdirSync(process.env.HOME, {recursive:true,mode:0o700})
       }
     `,
-  ])
-  if (missingTools) {
-    if (!object.State.Running) await run(['stop', '--timeout', '1', id])
-    throw Error(`Missing required Docker tools: ${missingTools}`)
+    ])
+    if (missingTools)
+      throw Error(`Missing required Docker tools: ${missingTools}`)
+  } catch (cause) {
+    try {
+      if (created) await run(['rm', '-f', id])
+      else if (!object.State.Running) await run(['stop', '--timeout', '1', id])
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [cause, rollbackError],
+        `${cause} (Docker rollback failed: ${rollbackError})`,
+        { cause },
+      )
+    }
+    throw cause
   }
   return { id, name }
 }

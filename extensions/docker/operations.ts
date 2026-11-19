@@ -100,14 +100,15 @@ class Exchange {
           throw Error('Invalid Docker exec result')
         if (callbackError) {
           await this.cleanup()
+          const spillPath = record.ok
+            ? record.value.spillPath
+            : record.error.spillPath
           return {
             ok: false,
             error: Object.assign(callbackError, {
               name: 'ExecutionError',
               code: 'callback_error',
-              ...(record.error?.spillPath
-                ? { spillPath: record.error.spillPath }
-                : {}),
+              ...(spillPath ? { spillPath } : {}),
             }) as E,
           }
         }
