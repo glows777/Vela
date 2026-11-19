@@ -236,21 +236,21 @@ export class BackgroundJobs implements BackgroundCommands {
         }`,
       )
     }
-    // Claim every target before the first await: an overlapping request then finds nothing to move.
-    for (const entry of targets) entry.unfollow()
     const ids: string[] = []
-    for (const entry of targets) ids.push(await this.move(entry))
+    for (const entry of targets) {
+      // Claim one call at a time: a move that fails must leave the calls behind it following the
+      // run, and an overlapping request must not find an entry claimed but never recorded.
+      if (entry.state !== 'foreground' || entry.settled) continue
+      entry.unfollow()
+      ids.push(await this.move(entry))
+    }
     return ids
   }
 
-  /** Hand one foreground command to a job; a failed record leaves it in the foreground. */
+  /** Hand one claimed command to a job; a failed record leaves it in the foreground. */
   private async move(entry: Foreground): Promise<string> {
-    if (entry.settled)
-      throw new Error(
-        'The command finished before it could be moved to the background; its result came from the call.',
-      )
-    // Already claimed by `detach`: the command stopped following the run before this record
-    // started, so a Stop that races it cannot abort a command the job is about to own.
+    // `detach` claimed it: the command stopped following the run before this record started, so a
+    // Stop that races the record cannot abort a command the job is about to own.
     const id = `bg-${++this.sequence}`
     const job: Job = {
       token: randomUUID(),

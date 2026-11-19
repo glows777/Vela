@@ -75,19 +75,19 @@ export class UserBash {
       id?: string
     },
   ): Promise<BashResult> {
+    // Register the command before awaiting its environment so abort/close can stop it. The
+    // listener stays for the whole command: the startup below races the same `cancelled`, and a
+    // removed listener would leave that race waiting for a hook that never finishes.
+    let onAbort!: () => void
+    const cancelled = new Promise<undefined>((resolve) => {
+      onAbort = () => resolve(undefined)
+      controller.signal.addEventListener('abort', onAbort, { once: true })
+    })
     try {
-      // Register the command before awaiting its environment so abort/close can stop it.
-      let onAbort!: () => void
-      const cancelled = new Promise<undefined>((resolve) => {
-        onAbort = () => resolve(undefined)
-        controller.signal.addEventListener('abort', onAbort, { once: true })
-      })
-      let environment: ExecutionEnv | undefined
-      try {
-        environment = await Promise.race([this.host.prepare(), cancelled])
-      } finally {
-        controller.signal.removeEventListener('abort', onAbort)
-      }
+      const environment: ExecutionEnv | undefined = await Promise.race([
+        this.host.prepare(),
+        cancelled,
+      ])
       if (this.host.isClosed()) throw new Error('Session is closed')
       // Appending to a saved session that was not resumed would mix two conversations in one log
       await this.host.store.assertNew()
@@ -160,6 +160,7 @@ export class UserBash {
       if (!this.host.busy.locked && this.flush()) await this.host.save()
       return result
     } finally {
+      controller.signal.removeEventListener('abort', onAbort)
       this.bashController = undefined
       this.bashRun = undefined
     }

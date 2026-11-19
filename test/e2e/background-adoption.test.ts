@@ -564,21 +564,28 @@ test('moving everything leaves a `!!` behind and takes the model call beside it'
   expect(JSON.stringify(t.messages)).not.toContain('SECRET')
 })
 
-test('cancelling a `!` command during a slow `session_start` returns at once', async () => {
-  const gate = Promise.withResolvers<void>()
+test('cancelling a `!` command while `session_start` is suspended returns at once', async () => {
+  // The hook holds the command inside the startup it is waiting on; only the hook entering is not
+  // enough, so it signals that and stays suspended like a slow extension would.
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
   const t = createTestVela({
     responses: [(request) => fauxText(request.lastUserText)],
     extensions: [
       background(),
       function slowStart(api) {
-        api.on('session_start', () => gate.promise)
+        api.on('session_start', async () => {
+          entered.resolve()
+          await release.promise
+        })
       },
     ],
     allowPendingResponses: true,
   })
-  const command = t.session.executeBash('echo LATE')
-  await until(() => t.session.isBashRunning, 'the command to reach its startup')
-  const aborting = t.session.abortBash()
+  const command = t.session.executeBash('echo LATE > late.txt')
+  await entered.promise
+  await Bun.sleep(20)
+  t.session.abortBash()
   // The hook is still suspended; cancelling must not wait for it.
   const result = await Promise.race([
     command,
@@ -586,7 +593,92 @@ test('cancelling a `!` command during a slow `session_start` returns at once', a
   ])
   expect(result).toMatchObject({ cancelled: true, exitCode: undefined })
   expect(t.session.isBashRunning).toBe(false)
-  expect(t.exists('LATE')).toBe(false)
-  gate.resolve()
-  await aborting
+  expect(t.exists('late.txt')).toBe(false)
+  release.resolve()
+  // The session's own startup still finishes, so the next command runs normally.
+  await t.session.backgroundTasks().catch(() => {})
+  expect(await t.session.executeBash('echo AFTER')).toMatchObject({
+    output: 'AFTER',
+    cancelled: false,
+  })
+})
+
+test('a start record that fails mid-batch leaves the later calls following the run', async () => {
+  const events: string[] = []
+  const t = createTestVela({
+    responses: [
+      [
+        fauxToolCall('bash', { command: 'echo FIRST; sleep 0.5' }),
+        fauxToolCall('bash', {
+          command: 'echo SECOND; sleep 0.4; echo LATE > late.txt',
+        }),
+      ],
+      fauxText('never reached'),
+    ],
+    extensions: [background()],
+    session: {
+      host: {
+        deliver: () => {},
+        background: async (event) => {
+          events.push(event.type)
+          // The first call's start record fails; the second must not be left claimed.
+          if (event.type === 'started' && events.length === 1)
+            throw new Error('cannot save start')
+        },
+      },
+    },
+    allowPendingResponses: true,
+  })
+  const running = t.run('start two checks').catch(() => {})
+  await until(
+    () => t.eventsOf('tool_execution_update').length === 2,
+    'both calls to produce output',
+  )
+  expect(t.session.backgroundTasks()).rejects.toThrow('cannot save start')
+  await Bun.sleep(50)
+  // The second call still follows the run, so Esc cancels it instead of orphaning it.
+  await t.session.abort()
+  await running
+  await Bun.sleep(500)
+  expect(existsSync(t.path('late.txt'))).toBe(false)
+})
+
+test('after a failed batch, the later call can still be moved by its own id', async () => {
+  const events: string[] = []
+  const t = createTestVela({
+    responses: [
+      [
+        fauxToolCall('bash', { command: 'echo FIRST; sleep 0.5' }),
+        fauxToolCall('bash', { command: 'echo SECOND; sleep 0.5' }),
+      ],
+      fauxText('moved the second'),
+      fauxText('finished'),
+    ],
+    extensions: [background()],
+    session: {
+      host: {
+        deliver: () => {},
+        background: async (event) => {
+          events.push(event.type)
+          if (event.type === 'started' && events.length === 1)
+            throw new Error('cannot save start')
+        },
+      },
+    },
+    allowPendingResponses: true,
+  })
+  const running = t.run('start two checks')
+  await until(
+    () => t.eventsOf('tool_execution_update').length === 2,
+    'both calls to produce output',
+  )
+  expect(t.session.backgroundTasks()).rejects.toThrow('cannot save start')
+  const ids = await t.session.backgroundTasks('faux-call-1-2')
+  expect(ids).toHaveLength(1)
+  await running
+  expect(
+    t.model.calls[1]!.toolResults.find(
+      (result) => result.toolCallId === 'faux-call-1-2',
+    )!.output,
+  ).toContain(`manually moved to the background with ID: ${ids[0]}`)
 })
