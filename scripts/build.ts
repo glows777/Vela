@@ -2,6 +2,7 @@
 import { chmod, cp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { $ } from 'bun'
+import { buildDockerAdapter } from '../extensions/docker/build.ts'
 
 const root = resolve(import.meta.dir, '..')
 
@@ -19,7 +20,7 @@ export async function copyPackageAssets(
     }
 }
 
-if (import.meta.main)
+if (import.meta.main) {
   for (const name of ['core', 'channels', 'mcp', 'rag', 'lark', 'vela']) {
     const dir = join(root, 'packages', name)
     await rm(join(dir, 'dist'), { recursive: true, force: true })
@@ -31,3 +32,5 @@ if (import.meta.main)
       await chmod(join(dir, 'dist/cli/main.js'), 0o755)
     }
   }
+  await buildDockerAdapter(join(root, 'dist', 'docker'))
+}

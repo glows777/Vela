@@ -11,13 +11,16 @@
         ".skills/**/scripts/*.ts",
         "test/**/*.test.ts",
         "test/fixtures/mcp-echo-server.ts",
-        "test/support/github-setup-gh.ts"
+        "test/support/github-setup-gh.ts",
+        "extensions/docker/adapter.ts",
+        "extensions/docker/guest.ts"
       ],
       "project": [
         "scripts/**/*.ts",
         "test/**/*.ts",
         "examples/**/*.ts",
-        ".skills/**/*.ts"
+        ".skills/**/*.ts",
+        "extensions/**/*.ts"
       ]
     },
     "packages/core": {
