@@ -92,14 +92,18 @@ Only listed export-map entries are supported. Private `src/` or `dist/` paths ar
 | `setSessionArchived(id, archived)` | Archives or unarchives a saved session without opening it: appends a `session_archived` entry to its file, so the flag survives a restart and no message is deleted. Resolves when the entry is written; rejects when nothing is saved under `id`. |
 | `searchSessions(query, options?)` | Searches the user and assistant message text of saved sessions (tool output, `!` commands, summaries and extension messages are not searched), newest first. Returns `{ id, match }[]`: one hit per session, with the first matching text shortened around the query. `options.includeArchived` as in `listSessions()`. |
 | `subscribe(listener)` | Events from all sessions: `(event, sessionId) => void`. Returns an unsubscribe function. |
-| `ready()` | Resolves when all extensions (including async factories) have loaded; rejects if one failed |
-| `extensions()` | Loaded extensions and the tools, commands, providers and channels each registered |
-| `commands()` | Slash commands registered by extensions |
+| `ready()` | Resolves when host extensions (including async factories) have loaded; rejects if one failed. Session project preparation is awaited separately |
+| `extensions(sessionId?)` | Loaded extensions for the prepared open session: host plus its project, including registered tools, commands, providers and channels |
+| `commands(sessionId?)` | Slash commands from the host and the prepared open session's project |
 | `channels()` | Channels registered by extensions |
 | `channel(name)` | On the channel-aware SDK, looks up one registered channel after `ready()`. An unknown name throws. See [SDK host access](channels-reference.md#sdk-host-access). |
 | `startChannels()` | Starts all channels. See [Channels](channels.md). |
 | `publishEvent(event)` | Channel-aware SDK only: enqueue untrusted external data to subscribed conversations. Requires started channels; resolves before model completion. See [subscriptions](channels-reference.md#external-event-subscriptions). |
 | `dispose(options?)` | Stops channels, closes all sessions and deletes any temporary data directory. Default cancels running work; channel-aware Vela accepts `{ graceful: true }` to drain in-flight channel tools first. The embedding host must enforce its own deadline. |
+
+The optional selectors above inspect existing sessions; they do not open or prepare one. Await `session.resources()` before inspecting a newly opened/resumed project's extensions or commands. An unknown explicit session id throws. No-argument calls retain the default-session view (host-only before that session is prepared), not a union of all projects. `ready()` still waits for host initialization, with no new session selector.
+
+The CLI uses these selectors for active-session `/extensions`, TUI command completion and command detection, and RPC `get_commands`/command dispatch; the channel-aware wrapper preserves host channel metadata. SDK `extensions: [...]` factories remain host-owned. See [extension instance scope](extensions.md#where-extensions-load-from) for project snapshots, lifecycle and the `api.cwd`/`ctx.cwd` distinction.
 
 ## Sessions
 

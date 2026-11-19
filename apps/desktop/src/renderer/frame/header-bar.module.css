@@ -30,3 +30,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 0 auto;
+  color: var(--vela-accent-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--vela-accent);
+}

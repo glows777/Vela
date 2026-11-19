@@ -17,10 +17,12 @@ export function Home({
   snapshot,
   focusSignal,
   onOpenProject,
+  onOpenSession,
 }: {
   snapshot: Snapshot
   focusSignal: number
   onOpenProject: (projectId: string) => void
+  onOpenSession: (projectId: string, sessionId: string) => void
 }) {
   const needs = needsYou(snapshot)
   const recent = recentSessions(snapshot)
@@ -56,7 +58,9 @@ export function Home({
                     <button
                       type="button"
                       className={styles.need}
-                      onClick={() => onOpenProject(session.chatId)}
+                      onClick={() =>
+                        onOpenSession(session.chatId, session.sessionId)
+                      }
                     >
                       <span className={styles.needLabel}>
                         <StateMark state="waiting" />
@@ -93,7 +97,9 @@ export function Home({
                     <button
                       type="button"
                       className={styles.row}
-                      onClick={() => onOpenProject(session.chatId)}
+                      onClick={() =>
+                        onOpenSession(session.chatId, session.sessionId)
+                      }
                     >
                       <StateMark state={session.state} />
                       <span className={styles.rowTitle}>{session.task}</span>
@@ -117,7 +123,9 @@ export function Home({
           </h2>
           {project ? (
             <Composer
+              key={project.id}
               label="Message Vela"
+              draftKey={`home:${project.id}`}
               focusSignal={focusSignal}
               hint={
                 <>

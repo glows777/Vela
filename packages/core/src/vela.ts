@@ -43,6 +43,7 @@ import { setSavedSessionArchived } from './session/index.ts'
 import type { SessionOptions } from './session/options.ts'
 import { assertSessionId } from './session/options.ts'
 import { ProjectConfig } from './session/project-config.ts'
+import { ProjectExtensions } from './session/project-extensions.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
 import { sessionSystemFile, WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
@@ -223,9 +224,11 @@ export interface Vela {
   /** Waits for all extensions (including async factories) to load; rejects if loading fails */
   ready(): Promise<void>
   /** Loaded extensions and the tools, commands and channels they registered */
-  extensions(): LoadedExtension[]
+  extensions(sessionId?: string): LoadedExtension[]
   /** Commands registered by extensions */
-  commands(): { name: string; description?: string; extension: string }[]
+  commands(
+    sessionId?: string,
+  ): { name: string; description?: string; extension: string }[]
   /**
    * Attempts all cleanup, then rejects with AggregateError if any step failed.
    * Concurrent/repeated calls share the same result; failed cleanup is not retried.
@@ -255,11 +258,7 @@ export function velaInternals(vela: Vela): VelaInternals {
   return found
 }
 
-/**
- * Assembles a Vela: core tools (files, search, bash), hooks, prompt, skills, extensions and channels.
- * Conversations are opened with `vela.session(id)`; one Vela can have several sessions open at once.
- * They share tools and extensions, and each has its own message history, compaction, usage and run lock.
- */
+/** Assembles one host with per-session history, execution and location-bound project capabilities. */
 export function createVela(options: VelaOptions = {}): Vela {
   const cwd = resolve(options.cwd ?? process.cwd())
   // Without dataDir, use a temp dir (long tool output, tool history, extension data) deleted on dispose
@@ -418,6 +417,7 @@ export function createVela(options: VelaOptions = {}): Vela {
             : await loadEnvironmentContextFiles(env, location, signal)
         const workspaceMode = projectConfig.mode(location)
         const settings = await projectConfig.get(session.id, env)
+        await projects.prepare(session, env)
         const workspaceSkills = (
           workspaceMode === undefined
             ? options.skillDirs && location === cwd
@@ -573,22 +573,26 @@ export function createVela(options: VelaOptions = {}): Vela {
           }
           return expandPromptTemplate(text, snapshot.promptTemplates) ?? text
         },
-        extensions: runner,
+        get extensions() {
+          return projects.runner(id)
+        },
         forward: (event, sessionId) => {
           for (const listener of listeners) listener(event, sessionId)
           const source = sessions.get(sessionId)
-          if (source) runner.notify(event, source)
+          if (source) projects.runner(sessionId).notify(event, source)
         },
         onSaved: (id) => options.onSessionSaved?.(id),
         ensureLocal,
         prepareWorkspace,
-        onCwdChange: (changed) => {
+        onCwdChange: async (changed) => {
+          await projects.release(changed.id)
+          changed.registry.bindScope(registry)
           sessionCwds.set(changed.registry, changed.cwd)
           resources.clear(changed.id)
           projectConfig.clear(changed.id)
           sessionShells.delete(changed.id)
         },
-        onClose: (closed) => {
+        onClose: async (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
             resources.clear(closed.id)
@@ -596,6 +600,7 @@ export function createVela(options: VelaOptions = {}): Vela {
             sessionShells.delete(closed.id)
             hostDefaults.delete(closed.id)
           }
+          await projects.release(closed.id)
         },
       },
       sessionOptions,
@@ -618,6 +623,16 @@ export function createVela(options: VelaOptions = {}): Vela {
     [auditLog],
   )
 
+  const projects = new ProjectExtensions({
+    split: resourceSplit,
+    config: projectConfig,
+    host: runner,
+    registry,
+    models,
+    dataDir,
+    logger,
+  })
+
   registry.setInterception({
     before: async (name, input, context) => {
       const session = context.sessionId
@@ -637,13 +652,15 @@ export function createVela(options: VelaOptions = {}): Vela {
         }
       }
       return session
-        ? await runner.toolCall(
-            session,
-            context.toolCallId,
-            context.parentToolCallId,
-            name,
-            input,
-          )
+        ? await projects
+            .runner(session.id)
+            .toolCall(
+              session,
+              context.toolCallId,
+              context.parentToolCallId,
+              name,
+              input,
+            )
         : { input }
     },
     after: async (name, input, output, context) => {
@@ -651,14 +668,16 @@ export function createVela(options: VelaOptions = {}): Vela {
         ? sessions.get(context.sessionId)
         : undefined
       return session
-        ? await runner.toolResult(
-            session,
-            context.toolCallId,
-            context.parentToolCallId,
-            name,
-            input,
-            output,
-          )
+        ? await projects
+            .runner(session.id)
+            .toolResult(
+              session,
+              context.toolCallId,
+              context.parentToolCallId,
+              name,
+              input,
+              output,
+            )
         : output
     },
   })
@@ -725,8 +744,8 @@ export function createVela(options: VelaOptions = {}): Vela {
       return () => listeners.delete(listener)
     },
     ready: () => runner.ready,
-    extensions: () => runner.loaded(),
-    commands: () => runner.commands(),
+    extensions: (id) => projects.select(id, sessions).loaded(),
+    commands: (id) => projects.select(id, sessions).commands(),
     dispose() {
       disposed = true
       disposing ??= (async () => {

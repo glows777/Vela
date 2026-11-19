@@ -954,10 +954,10 @@
   interface Vela
     channel: { (name: "local"): LocalHost; (name: string): ChannelHost; }
     channels: () => { name: string; description: string; }[]
-    commands: () => { name: string; description?: string; extension: string; }[]
+    commands: (sessionId?: string) => { name: string; description?: string; extension: string; }[]
     configureProvider: (name: string, provider: ProviderDefinition) => void
     dispose: (options?: { graceful?: boolean; }) => Promise<void>
-    extensions: () => LoadedChannelExtension[]
+    extensions: (sessionId?: string) => LoadedChannelExtension[]
     listSessions: (options?: SavedSessionOptions) => Promise<SessionSummary[]>
     login: (provider: string, method: "oauth" | "api_key", interaction: AuthInteraction, options?: LoginOptions) => Promise<void>
     loginProviders: () => LoginProvider[]
