@@ -96,17 +96,30 @@ function switchModel(host: ModelHost, ref: string): void {
 }
 
 /** Ctrl+P / Shift+Ctrl+P (like pi): the next model of settings `enabledModels`, or of all available models */
-export function cycleModel(host: ModelHost, direction: 1 | -1): void {
-  const models = scopedModels(host.vela.models(), host.options.enabledModels)
-  const next = nextModel(models, currentModelRef(host), direction)
-  if (!next) {
-    host.addNotice(
-      models.length
-        ? 'Only one model to cycle through (see enabledModels in settings)'
-        : 'No models available: sign in with /login or set a provider API key',
-      'dim',
+export async function cycleModel(
+  host: ModelHost,
+  direction: 1 | -1,
+): Promise<void> {
+  const active = host.session
+  try {
+    const resources = await active.resources()
+    if (active !== host.session) return
+    const models = scopedModels(
+      host.vela.models(),
+      resources.enabledModels ?? host.options.enabledModels,
     )
-    return
+    const next = nextModel(models, currentModelRef(host), direction)
+    if (!next) {
+      host.addNotice(
+        models.length
+          ? 'Only one model to cycle through (see enabledModels in settings)'
+          : 'No models available: sign in with /login or set a provider API key',
+        'dim',
+      )
+      return
+    }
+    switchModel(host, next.ref)
+  } catch (error) {
+    if (active === host.session) host.addNotice(errorMessage(error), 'error')
   }
-  switchModel(host, next.ref)
 }

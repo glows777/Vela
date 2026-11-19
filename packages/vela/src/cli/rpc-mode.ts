@@ -34,8 +34,11 @@ export interface RpcModeOptions {
   resume: boolean
   /** Id for a new session (`new_session`) */
   newSessionId: () => string
-  /** Called after the startup session opens (and resumes): command-line --model / --thinking override saved settings */
-  configure?: (session: VelaSession) => void
+  /** Configure the prepared session. Explicit model/thinking overrides apply only on startup. */
+  configure?: (
+    session: VelaSession,
+    options: { startup: boolean; defaultTools?: readonly string[] },
+  ) => void
   onReady?: (session: VelaSession) => Promise<void>
   input: AsyncIterable<Uint8Array>
   write: (text: string) => Promise<void>
@@ -98,8 +101,11 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
 
   let session = vela.session(options.sessionId, { ui })
   if (options.resume) await session.resume()
-  await session.resources()
-  options.configure?.(session)
+  const initial = await session.resources()
+  options.configure?.(session, {
+    startup: true,
+    defaultTools: initial.defaultTools,
+  })
   await options.onReady?.(session)
 
   // Failures inside the agent loop are already reported in agent_end; when the prompt Promise rejects, this decides whether to report again
@@ -117,7 +123,11 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       throw new Error('A task is running; abort it or wait for it to finish')
   }
   const switchTo = async (next: VelaSession) => {
-    await next.resources()
+    const resources = await next.resources()
+    options.configure?.(next, {
+      startup: false,
+      defaultTools: resources.defaultTools,
+    })
     const previous = session
     session = next
     if (previous !== next) await previous.close()
@@ -294,13 +304,17 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       levels: session.availableThinkingLevels(),
     }),
     // Like pi: null when there is nothing to cycle to
-    cycle_model() {
+    async cycle_model() {
+      const active = session
+      const resources = await active.resources()
+      if (active !== session) throw new Error('Active session changed')
+      const enabledModels = resources.enabledModels ?? options.enabledModels
       let current: string | undefined
       try {
         current = session.modelInfo.ref
       } catch {}
       const next = nextModel(
-        scopedModels(vela.models(), options.enabledModels),
+        scopedModels(vela.models(), enabledModels),
         current,
       )
       if (!next) return null
@@ -308,7 +322,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       return {
         model: session.modelInfo,
         thinkingLevel: session.thinkingLevel,
-        isScoped: Boolean(options.enabledModels?.length),
+        isScoped: Boolean(enabledModels?.length),
       }
     },
     cycle_thinking_level() {

@@ -471,6 +471,8 @@ export function createVela(options: VelaOptions = {}): Vela {
             signal,
           )
         return {
+          enabledModels: settings.enabledModels,
+          defaultTools: settings.defaultTools,
           defaults: resourceSplit
             ? {
                 model:
@@ -681,7 +683,6 @@ export function createVela(options: VelaOptions = {}): Vela {
         : output
     },
   })
-
   let defaultModel: LanguageModel | undefined
   const vela: Vela = {
     cwd,

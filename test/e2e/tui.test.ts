@@ -819,11 +819,11 @@ test('the model picker filters as you type; Ctrl+P cycles through enabledModels'
 
   // plain is not in enabledModels: cycling starts from the first scoped model
   tui.terminal.press(KEYS.ctrlP)
-  expect(session.modelInfo.ref).toBe('fake/big')
+  await tui.until(() => session.modelInfo.ref === 'fake/big')
   tui.terminal.press(KEYS.ctrlP)
-  expect(session.modelInfo.ref).toBe('fake/other')
+  await tui.until(() => session.modelInfo.ref === 'fake/other')
   tui.terminal.press(KEYS.ctrlP)
-  expect(session.modelInfo.ref).toBe('fake/big')
+  await tui.until(() => session.modelInfo.ref === 'fake/big')
 })
 
 test('/login stores an API key or runs an OAuth sign-in; /logout removes it', async () => {

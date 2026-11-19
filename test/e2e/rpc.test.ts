@@ -24,9 +24,9 @@ function startRpc(
   model: string,
   args: string[] = [],
   files: Record<string, string> = {},
+  roots = { cwd: tempDir('vela-rpc-'), home: tempDir('vela-home-') },
 ) {
-  const cwd = tempDir('vela-rpc-')
-  const home = tempDir('vela-home-')
+  const { cwd, home } = roots
   dirs.push(cwd, home)
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(home.path, path)), { recursive: true })
@@ -552,5 +552,60 @@ test.concurrent('rpc: malformed image arrays fail clearly and a later valid prom
     await rpc.waitFor((r) => r.type === 'agent_settled')
   } finally {
     expect(await rpc.close()).toBe(0)
+  }
+})
+
+test('rpc: a failed project tool selection leaves the active session and can be retried', async () => {
+  const a = tempDir('vela-rpc-a-')
+  const b = tempDir('vela-rpc-b-')
+  const home = tempDir('vela-rpc-home-')
+  dirs.push(b)
+  mkdirSync(join(b.path, '.vela'))
+  const settings = join(b.path, '.vela', 'settings.json')
+  const files = {
+    'settings.json': JSON.stringify({ dataDir: join(home.path, 'data') }),
+    'trust.json': JSON.stringify({ [a.path]: true, [b.path]: true }),
+  }
+  writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+  const model = `faux:${scenario('hello')}`
+  const seed = startRpc(model, ['--session', 'saved-b'], files, {
+    cwd: b,
+    home,
+  })
+  try {
+    expect(
+      await seed.call({ type: 'prompt', message: 'Save B' }),
+    ).toMatchObject({ success: true })
+    await seed.waitFor((record) => record.type === 'agent_settled')
+  } finally {
+    await seed.close()
+  }
+  writeFileSync(
+    settings,
+    JSON.stringify({ defaultTools: ['stale_project_tool'] }),
+  )
+  const rpc = startRpc(model, ['--session', 'active-a'], files, {
+    cwd: a,
+    home,
+  })
+  try {
+    expect(
+      await rpc.call({ type: 'switch_session', sessionId: 'saved-b' }),
+    ).toMatchObject({
+      success: false,
+      error: expect.stringContaining('stale_project_tool'),
+    })
+    expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
+      sessionId: 'active-a',
+    })
+    writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+    expect(
+      await rpc.call({ type: 'switch_session', sessionId: 'saved-b' }),
+    ).toMatchObject({
+      success: true,
+      data: { sessionId: 'saved-b' },
+    })
+  } finally {
+    await rpc.close()
   }
 })
