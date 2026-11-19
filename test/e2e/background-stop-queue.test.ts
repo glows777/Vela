@@ -28,7 +28,10 @@ for (const command of ['!stop', '!restart'])
     let resultQueued = false
     const t = createTestVela({
       responses: [
-        fauxToolCall('background_start', { command: 'echo READY' }),
+        fauxToolCall('bash', {
+          command: 'echo READY',
+          run_in_background: true,
+        }),
         fauxHang('Working'),
         fauxText('Answered the next human input.'),
       ],

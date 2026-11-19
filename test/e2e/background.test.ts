@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { local } from '@glows777/vela-channels'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
+import z from 'zod'
 import { background } from '../../packages/core/src/extensions/background/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -31,7 +33,10 @@ test('a topic answers another message while a background command runs, then the 
   const fake = fakeLark()
   const t = createTestVela({
     responses: [
-      fauxToolCall('background_start', { command: 'sleep 0.5; echo READY' }),
+      fauxToolCall('bash', {
+        command: 'sleep 0.5; echo READY',
+        run_in_background: true,
+      }),
       fauxText('Started the check.'),
       fauxText('Still running.'),
       (request) => {
@@ -77,14 +82,16 @@ test('a topic answers another message while a background command runs, then the 
   ])
   const last = t.model.calls.at(-1)!
   expect(last.lastUserText).toStartWith('Background command bg-1 finished')
-  expect(t.model.calls[1]!.toolResults[0]!.output).toContain('Started bg-1')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+    'Command running in background with ID: bg-1.',
+  )
 })
 
 test('background_stop ends a topic job and background_output reports an id lost to !restart', async () => {
   const fake = fakeLark()
   const t = createTestVela({
     responses: [
-      fauxToolCall('background_start', { command: 'sleep 30' }),
+      fauxToolCall('bash', { command: 'sleep 30', run_in_background: true }),
       fauxText('Started.'),
       fauxToolCall('background_stop', { id: 'bg-1' }),
       fauxText('Stopped it.'),
@@ -129,7 +136,10 @@ test('a topic session stays open while a background command runs, past its idle 
   const t = createTestVela({
     channelIdleMs: 50,
     responses: [
-      fauxToolCall('background_start', { command: 'sleep 0.5; echo READY' }),
+      fauxToolCall('bash', {
+        command: 'sleep 0.5; echo READY',
+        run_in_background: true,
+      }),
       fauxText('Started the check.'),
       fauxText('The check finished.'),
     ],
@@ -165,10 +175,10 @@ test('a preopened topic session, closed idle and resumed, still queues its backg
   const t = createTestVela({
     channelIdleMs: 50,
     responses: [
-      fauxToolCall('background_start', { command: 'echo FIRST' }),
+      fauxToolCall('bash', { command: 'echo FIRST', run_in_background: true }),
       fauxText('Started the first check.'),
       fauxText('The first check finished.'),
-      fauxToolCall('background_start', { command: 'echo SECOND' }),
+      fauxToolCall('bash', { command: 'echo SECOND', run_in_background: true }),
       fauxText('Started the second check.'),
       fauxText('The second check finished.'),
     ],
@@ -184,11 +194,8 @@ test('a preopened topic session, closed idle and resumed, still queues its backg
   })
   await t.vela.ready()
   const topic = 'lark-oc_group-root'
-  // An SDK (or CLI) caller opens the topic session before any channel message exists. Its options
-  // apply at first open only, so the background tools come from this call.
-  const preopened = t.vela.session(topic, {
-    tools: ['+background_start', '+background_output', '+background_stop'],
-  })
+  // An SDK (or CLI) caller opens the topic session before any channel message exists.
+  const preopened = t.vela.session(topic)
   await t.vela.startChannels()
   fake.deliver(topicEvent('trigger', 'run the first check'))
   await until(() => fake.sent.length === 1, 'the first start reply')
@@ -227,7 +234,7 @@ test('a delivered job is forgotten, so background_output explains that it has en
   const fake = fakeLark()
   const t = createTestVela({
     responses: [
-      fauxToolCall('background_start', { command: 'echo DONE' }),
+      fauxToolCall('bash', { command: 'echo DONE', run_in_background: true }),
       fauxText('Started the check.'),
       fauxText('The check finished.'),
       fauxToolCall('background_output', { id: 'bg-1' }),
@@ -276,21 +283,14 @@ test('background tools run in the group session and its topics, never in a DM', 
   )
   await until(() => t.model.calls.length === 1, 'the group reply')
   expect(t.model.calls[0]!.tools).toEqual(
-    expect.arrayContaining([
-      'background_start',
-      'background_output',
-      'background_stop',
-    ]),
+    expect.arrayContaining(['bash', 'background_output', 'background_stop']),
   )
+  expect(t.model.calls[0]!.tools).not.toContain('background_start')
 
   fake.deliver(topicEvent('topic', 'do the work'))
   await until(() => t.model.calls.length === 2, 'the topic reply')
   expect(t.model.calls[1]!.tools).toEqual(
-    expect.arrayContaining([
-      'background_start',
-      'background_output',
-      'background_stop',
-    ]),
+    expect.arrayContaining(['bash', 'background_output', 'background_stop']),
   )
 
   const dm = larkEvent(
@@ -304,12 +304,121 @@ test('background tools run in the group session and its topics, never in a DM', 
   )
   fake.deliver(dm)
   await until(() => t.model.calls.length === 3, 'the DM reply')
-  for (const name of [
-    'background_start',
-    'background_output',
-    'background_stop',
-  ])
+  for (const name of ['background_output', 'background_stop'])
     expect(t.model.calls[2]!.tools).not.toContain(name)
+})
+
+test('a session with bash but not the job tools is not told to use run_in_background', async () => {
+  const t = createTestVela({
+    responses: [fauxText('hello')],
+    extensions: [background()],
+    // A legitimate narrow configuration whose bash must refuse the parameter.
+    session: { tools: ['bash'] },
+  })
+  await t.run('hi')
+  const system = t.model.calls[0]!.system
+  expect(system).not.toContain('run_in_background')
+  // The parameter explains its own condition where the model sees it.
+  const bash = t.session.registry.get('bash')!
+  expect(bash.description).toContain('run_in_background')
+})
+
+test('a nested bash call cancelled while its job is being recorded starts nothing', async () => {
+  // The calling tool's own signal: no agent_end cleanup covers this path.
+  const controller = new AbortController()
+  const gate = Promise.withResolvers<void>()
+  let started = false
+  let nested: unknown
+  const results: string[] = []
+  const t = createTestVela({
+    responses: [fauxToolCall('probe', {}), fauxText('The probe gave up.')],
+    extensions: [
+      background(),
+      function probe(vela) {
+        vela.registerTool({
+          name: 'probe',
+          description: 'Starts a background command through another tool',
+          inputSchema: z.object({}).strict(),
+          execute: async (_input, context) => {
+            nested = await context!.executeTool!(
+              'bash',
+              { command: 'touch marker; echo RAN', run_in_background: true },
+              { signal: controller.signal },
+            )
+            return 'probed'
+          },
+        })
+      },
+    ],
+    session: {
+      tools: ['bash', 'background_stop', 'probe'],
+      host: {
+        deliver() {},
+        async background(event) {
+          if (event.type === 'result') results.push(event.text)
+          if (event.type !== 'started') return
+          started = true
+          await gate.promise
+        },
+      },
+    },
+  })
+  const running = t.run('probe it')
+  await until(() => started, 'the admitted job')
+  // Cancelled while the host is still recording the job; it must launch nothing.
+  controller.abort()
+  gate.resolve()
+  await running
+  expect(nested).toMatchObject({ isError: true })
+  expect(nested).toMatchObject({ result: expect.stringContaining('aborted') })
+  // Nothing ran, so nothing has an exit to announce.
+  expect(results).toEqual([])
+  expect(existsSync(t.path('marker'))).toBe(false)
+})
+
+test('a DM refuses run_in_background because it has no tool to read or stop the job', async () => {
+  const fake = fakeLark()
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'touch cannot-run; echo RAN',
+        run_in_background: true,
+      }),
+      (request) => {
+        expect(request.toolResults[0]!.output).toContain(
+          'Background commands are not enabled in this session',
+        )
+        return fauxText('Background commands are not available here.')
+      },
+    ],
+    extensions: [
+      background(),
+      lark({
+        appId: 'bot',
+        owners: ['ou_alice'],
+        chats: ['oc_group'],
+        transport: fake.transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  await t.vela.startChannels()
+  fake.deliver(
+    larkEvent(
+      {
+        chat_id: 'oc_dm',
+        chat_type: 'p2p',
+        message_id: 'dm',
+        content: '{"text":"run the slow check"}',
+      },
+      'ou_alice',
+    ),
+  )
+  await until(() => fake.sent.length === 1, 'the reply')
+  // A DM keeps bash and loses the two job tools, so bash must not start a job it cannot end.
+  expect(t.model.calls[0]!.tools).toContain('bash')
+  expect(t.model.calls[0]!.tools).not.toContain('background_stop')
+  expect(existsSync(t.path('cannot-run'))).toBe(false)
 })
 
 test('a narrowed chat list drops the background tools the group session gets by default', async () => {
@@ -332,12 +441,7 @@ test('a narrowed chat list drops the background tools the group session gets by 
     larkEvent({ message_id: 'group', content: '{"text":"@_user_1 hi"}' }),
   )
   await until(() => t.model.calls.length === 1, 'the group reply')
-  for (const name of [
-    'background_start',
-    'background_output',
-    'background_stop',
-    'bash',
-  ])
+  for (const name of ['background_output', 'background_stop', 'bash'])
     expect(t.model.calls[0]!.tools).not.toContain(name)
   expect(t.model.calls[0]!.tools).toContain('read_file')
 })
@@ -346,7 +450,10 @@ test('a group hub runs a background command and answers its exit in the main tim
   const fake = fakeLark()
   const t = createTestVela({
     responses: [
-      fauxToolCall('background_start', { command: 'sleep 0.5; echo READY' }),
+      fauxToolCall('bash', {
+        command: 'sleep 0.5; echo READY',
+        run_in_background: true,
+      }),
       fauxText('Started the check.'),
       fauxText('Still running.'),
       (request) => {
@@ -388,7 +495,7 @@ test('a group hub runs a background command and answers its exit in the main tim
     // The exit joined the hub's own queue, so it replies in the main timeline like any input.
     { messageId: 'status', text: 'The check finished.' },
   ])
-  expect(t.model.calls.at(-1)!.tools).toContain('background_start')
+  expect(t.model.calls.at(-1)!.tools).toContain('bash')
 })
 
 test('a Local project hub runs bash and a background exit arrives as the next hub input', async () => {
@@ -396,7 +503,10 @@ test('a Local project hub runs bash and a background exit arrives as the next hu
     responses: [
       fauxToolCall('bash', { command: 'echo HUB_BASH' }),
       fauxText('The shell printed HUB_BASH.'),
-      fauxToolCall('background_start', { command: 'sleep 0.3; echo READY' }),
+      fauxToolCall('bash', {
+        command: 'sleep 0.3; echo READY',
+        run_in_background: true,
+      }),
       fauxText('Started the check.'),
       (request) => {
         expect(request.lastUserText).toStartWith(
@@ -443,4 +553,93 @@ test('a Local project hub runs bash and a background exit arrives as the next hu
   expect(t.model.calls.at(-1)!.lastUserText).toStartWith(
     'Background command bg-1 finished',
   )
+})
+
+test('bash run_in_background returns at once with its id, then the exit starts its own turn', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'sleep 0.5; echo READY > ready.txt; echo READY',
+        run_in_background: true,
+      }),
+      () => {
+        // The tool result arrived while the command still sleeps, so the turn continued.
+        expect(existsSync(t.path('ready.txt'))).toBe(false)
+        return fauxText('Started the slow check.')
+      },
+      fauxText('The check finished.'),
+    ],
+    extensions: [background()],
+  })
+  await t.run('start the slow check')
+  await until(() => t.model.calls.length === 3, 'the exit turn')
+  await until(() => !t.session.isRunning, 'the delivery run to settle')
+  const started = t.model.calls[1]!.toolResults[0]!.output
+  expect(started).toContain('Command running in background with ID: bg-1.')
+  expect(started).toContain(
+    'You will be notified when it completes; do not poll the file or start a second copy.',
+  )
+  // The delivery starts its own turn with the exit state and the tail.
+  const delivery = t.model.calls[2]!.lastUserText
+  expect(delivery).toStartWith(
+    'Background command bg-1 finished with exit code 0.',
+  )
+  expect(delivery).toContain('READY')
+  expect(
+    await Bun.file(t.session.registry.results.history.path).text(),
+  ).toContain('"backgroundTaskId":"bg-1"')
+})
+
+test('a long background command spills in the session environment, and read_file pages it', async () => {
+  let log = ''
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'seq 1 20000', run_in_background: true }),
+      () => fauxText('Started it.'),
+      fauxText('It finished.'),
+      () => fauxToolCall('read_file', { path: log, offset: 1, limit: 3 }),
+      (request) => {
+        expect(request.toolResults[0]!.output).toStartWith('1\n2\n3\n')
+        return fauxToolCall('read_file', { path: log, offset: 20000, limit: 3 })
+      },
+      (request) => {
+        expect(request.toolResults[0]!.output).toBe('20000\n')
+        return fauxText('Read the whole log.')
+      },
+    ],
+    extensions: [background()],
+  })
+  await t.run('start the noisy command')
+  await until(() => t.model.calls.length === 3, 'the exit turn')
+  await until(() => !t.session.isRunning, 'the delivery run to settle')
+  // The tail the model reads is bounded to the last 2,000 lines; the exit delivery names the file.
+  const delivery = t.model.calls[2]!.lastUserText
+  expect(delivery).toContain('\n18001\n')
+  expect(delivery).not.toContain('\n1\n')
+  log = /Full output: (\S+)/.exec(delivery)![1]!
+  // The file is the environment's own spill file, inside the session, so read_file pages all of it.
+  expect(log).toStartWith(t.session.registry.results.dir)
+  expect(await Bun.file(log).text()).toEndWith('20000\n')
+  expect((await Bun.file(log).text()).split('\n').length).toBe(20001)
+  await t.run('read the log')
+  expect(t.model.calls.length).toBe(6)
+})
+
+test('without the background extension bash refuses run_in_background and starts nothing', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command: 'touch marker; echo RAN',
+        run_in_background: true,
+      }),
+      (request) => {
+        expect(request.toolResults[0]!.output).toContain(
+          'Background commands are not enabled in this session',
+        )
+        return fauxText('It is not enabled.')
+      },
+    ],
+  })
+  await t.run('start it in the background')
+  expect(existsSync(t.path('marker'))).toBe(false)
 })

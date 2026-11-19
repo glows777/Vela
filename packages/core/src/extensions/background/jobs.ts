@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto'
-import type { ExecutionEnv } from '../../execution/types.ts'
+import type {
+  ExecutionError,
+  Result,
+  ShellExecResult,
+} from '../../execution/types.ts'
 import type { VelaLogger } from '../../logger.ts'
 import { errorMessage } from '../../logger.ts'
+import type {
+  BackgroundAdmission,
+  BackgroundCommands,
+  BackgroundSnapshot,
+  BackgroundStart,
+} from '../../tools/background.ts'
 import { fitOutputTail, OUTPUT_MAX_BYTES } from '../../tools/output-tail.ts'
 import type { VelaSession } from '../../vela-session.ts'
 
@@ -54,18 +64,10 @@ interface Job {
   state: 'running' | 'exited'
   exitCode?: number
   stopped?: boolean
+  /** The environment's file with the complete output, known once the command spills */
+  fullOutputPath?: string
   /** No delivery: the caller has the tail (`background_stop`) or the run that would answer is ending. */
   silent?: boolean
-}
-
-export interface JobSnapshot {
-  id: string
-  command: string
-  state: 'running' | 'exited'
-  exitCode?: number
-  stopped?: boolean
-  output: string
-  truncated: boolean
 }
 
 const commandHead = (command: string) => {
@@ -74,39 +76,41 @@ const commandHead = (command: string) => {
 }
 
 /** Jobs die with their session; an optional host tracks the result still owed after a restart. */
-export class BackgroundJobs {
+export class BackgroundJobs implements BackgroundCommands {
   private readonly jobs = new Map<string, Job>()
   private sequence = 0
 
   constructor(
     private readonly session: VelaSession,
-    private readonly shellPath: () => string,
     private readonly logger: VelaLogger,
+    private readonly shellPath?: string,
   ) {}
 
-  async start(
-    command: string,
-    env: ExecutionEnv,
-    signal?: AbortSignal,
-  ): Promise<{ id: string }> {
-    signal?.throwIfAborted()
+  async adopt({
+    command,
+    start,
+    signal,
+  }: {
+    command: string
+    start: (
+      run: BackgroundStart,
+    ) => Promise<Result<ShellExecResult, ExecutionError>>
+    signal?: AbortSignal
+  }): Promise<BackgroundAdmission> {
     const id = `bg-${++this.sequence}`
-    const output = new OutputTail()
     const controller = new AbortController()
     const job: Job = {
       token: randomUUID(),
       id,
       command,
       controller,
-      output,
+      output: new OutputTail(),
       state: 'running',
       finished: Promise.resolve(),
     }
     this.jobs.set(id, job)
-    const shell = env.id === 'node:local' ? this.shellPath() : undefined
-    const execution = shell ? [shell, '-lc', command] : command
-    // Stop/close can find the job while its start record is being saved. Only the
-    // admission phase follows the tool signal; a running job has its own lifetime.
+    // Stop/close can find the job while its start record is being saved. Only this
+    // admission phase follows the calling tool's signal; a running job has its own lifetime.
     const abort = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', abort, { once: true })
     const prepared = Promise.resolve().then(async () => {
@@ -119,37 +123,7 @@ export class BackgroundJobs {
       controller.signal.throwIfAborted()
     })
     job.finished = prepared.then(
-      async () => {
-        try {
-          controller.signal.throwIfAborted()
-          const result = await env.exec(
-            execution,
-            { onOutput: (chunk) => output.append(chunk) },
-            controller.signal,
-          )
-          job.state = 'exited'
-          if (job.silent) return
-          if (!result.ok) {
-            this.deliver(
-              `Background command ${id} could not start or run: ${result.error.message}.`,
-              job,
-            )
-            return
-          }
-          job.exitCode = result.value.exitCode
-          const state = job.stopped
-            ? 'was stopped'
-            : `finished with exit code ${job.exitCode}`
-          this.deliver(`Background command ${id} ${state}.`, job)
-        } catch (error) {
-          job.state = 'exited'
-          if (!job.silent)
-            this.deliver(
-              `Background command ${id} could not start or run: ${errorMessage(error)}.`,
-              job,
-            )
-        }
-      },
+      () => this.run(job, start),
       () => {
         job.state = 'exited'
       },
@@ -158,9 +132,12 @@ export class BackgroundJobs {
     try {
       await prepared
       controller.signal.throwIfAborted()
-      return { id }
+      // An environment can emit output before this returns; the call reports that tail.
+      const { text, truncated } = job.output.read()
+      return { id, output: text, truncated }
     } catch (error) {
       // A failed/cancelled admission never launches a process or claims it started.
+      job.silent = true
       await this.notifyStopped(job).catch((cleanupError) =>
         this.logger.error(
           `[background] Could not clear ${id}: ${errorMessage(cleanupError)}`,
@@ -173,7 +150,47 @@ export class BackgroundJobs {
     }
   }
 
-  snapshot(id: string): JobSnapshot {
+  private async run(
+    job: Job,
+    start: (
+      run: BackgroundStart,
+    ) => Promise<Result<ShellExecResult, ExecutionError>>,
+  ): Promise<void> {
+    try {
+      job.controller.signal.throwIfAborted()
+      const result = await start({
+        onOutput: (chunk) => job.output.append(chunk),
+        signal: job.controller.signal,
+        ...(this.shellPath === undefined ? {} : { shell: this.shellPath }),
+      })
+      job.state = 'exited'
+      job.fullOutputPath = result.ok
+        ? result.value.spillPath
+        : result.error.spillPath
+      if (job.silent) return
+      if (!result.ok) {
+        this.deliver(
+          `Background command ${job.id} could not start or run: ${result.error.message}.`,
+          job,
+        )
+        return
+      }
+      job.exitCode = result.value.exitCode
+      this.deliver(
+        `Background command ${job.id} finished with exit code ${job.exitCode}.`,
+        job,
+      )
+    } catch (error) {
+      job.state = 'exited'
+      if (!job.silent)
+        this.deliver(
+          `Background command ${job.id} could not start or run: ${errorMessage(error)}.`,
+          job,
+        )
+    }
+  }
+
+  snapshot(id: string): BackgroundSnapshot {
     const job = this.job(id)
     const { text, truncated } = job.output.read()
     return {
@@ -184,11 +201,14 @@ export class BackgroundJobs {
       ...(job.stopped ? { stopped: true } : {}),
       output: text,
       truncated,
+      ...(job.fullOutputPath === undefined
+        ? {}
+        : { fullOutputPath: job.fullOutputPath }),
     }
   }
 
   /** End one command; the caller already receives its tail from the tool result, so this never delivers. */
-  async stop(id: string): Promise<JobSnapshot> {
+  async stop(id: string): Promise<BackgroundSnapshot> {
     const job = this.job(id)
     job.silent = true
     if (job.state === 'running') {
@@ -251,7 +271,10 @@ export class BackgroundJobs {
     const output = text
       ? `${text}${truncated ? '\n\n[Showing the last output only]' : ''}`
       : '(no output)'
-    const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}`
+    const fullOutput = job.fullOutputPath
+      ? `\nFull output: ${job.fullOutputPath}`
+      : ''
+    const message = `${status}\nCommand: ${commandHead(job.command)}\nOutput:\n${output}${fullOutput}`
     const host = this.session.host
     const send = host
       ? Promise.resolve().then(() =>

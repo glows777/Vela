@@ -12,6 +12,7 @@ import {
 import type { SessionScope } from '../session/scope.ts'
 import type { CallRecord, ResultRecord } from '../session/tool-history.ts'
 import { ToolResultStore } from '../session/tool-results.ts'
+import type { BackgroundCommands } from './background.ts'
 import { prepareCallResult } from './call-result.ts'
 import { validateToolDefinition } from './definition-validation.ts'
 import { ExecutionGate, NestedExecutionGate } from './execution-gate.ts'
@@ -28,6 +29,7 @@ import { countToolTokens, toAISDKTools } from './sdk-tools.ts'
 import { createToolSearchDocument, rankTools } from './tool-ranker.ts'
 import {
   type ExecuteToolOptions,
+  type InterceptionContext,
   type ToolAnnotations,
   type ToolCallOutcome,
   type ToolExecutionMode,
@@ -42,6 +44,7 @@ import { validateInput } from './validation.ts'
 /** Context passed to a tool's execute. */
 export interface ToolContext {
   /** @internal */ execution?: ExecutionEnv
+  /** @internal */ background?: BackgroundCommands
   sessionId?: string
   scope?: Readonly<SessionScope>
   toolCallId?: string
@@ -127,6 +130,8 @@ export class ToolRegistry {
   /** @internal Session-owned admission gate; never shared with other registry forks. */
   isDraining: () => boolean = () => false
   private shared: SharedToolState
+  /** @internal The `background` extension's job table; `bash` reaches it through `ToolContext`. */
+  background?: BackgroundCommands
   private onEvent?: VelaEventListener
   private sessionId?: string
   private scope?: () => Readonly<SessionScope> | undefined
@@ -329,12 +334,7 @@ export class ToolRegistry {
     if (!this.isAvailable(name))
       return await reject(`[Rejected] ${name} is not enabled in this session`)
     const interception = this.interception
-    const context: {
-      sessionId?: string
-      toolCallId?: string
-      parentToolCallId?: string
-      execution?: ExecutionEnv
-    } = {
+    const context: InterceptionContext = {
       sessionId: this.sessionId,
       toolCallId: options.toolCallId,
       ...(options.parentToolCallId === undefined
@@ -425,8 +425,8 @@ export class ToolRegistry {
       try {
         signal?.throwIfAborted()
         raw = await tool.execute(input, {
-          execution: context.execution,
-          sessionId: this.sessionId,
+          ...context,
+          background: this.background,
           scope: this.scope?.(),
           results: this.results,
           toolCallId: options.toolCallId,

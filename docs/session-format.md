@@ -149,7 +149,7 @@ Next to the session file, each session has a directory:
 {"type":"tool_result","callId":"d3296c41-...","status":"completed","durationMs":7.9,"output":"Ship the docs on Friday.","version":1,"seq":2,"timestamp":"2026-10-08T10:50:32.627Z"}
 ```
 
-`tool_result.status` is `completed`, `failed`, `cancelled` or `rejected`; the body is in `output` or, for long output, in the file at `outputPath`. Execution details (`exitCode`, `signal`, `isError`, `timedOut`, `error`) are included when known. A `tool_call` without a `tool_result` has an unknown outcome.
+`tool_result.status` is `completed`, `failed`, `cancelled` or `rejected`; the body is in `output` or, for long output, in the file at `outputPath`. Execution details (`exitCode`, `signal`, `isError`, `timedOut`, `error`) are included when known, and `backgroundTaskId` names the job a `bash` call started. A `tool_call` without a `tool_result` has an unknown outcome.
 
 Older call records may contain `plannedOutputPath`. New calls allocate a spill only after crossing the output threshold. A completed result records the actual environment path. If execution finishes and the terminal history write fails, the error can report the file while the process is alive. A restart with only the begin record leaves the outcome unconfirmed.
 

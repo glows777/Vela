@@ -1,5 +1,6 @@
 import { createSessionLocalExecutionEnv } from '../execution/local.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
+import type { BackgroundCommands } from './background.ts'
 import {
   fitOutputTail,
   OUTPUT_MAX_BYTES,
@@ -114,4 +115,50 @@ export async function environmentBash(
   }
   preview += status
   return new ToolExecutionResult(preview, preview, execution)
+}
+
+/**
+ * Starts a command as a background task: the call returns at once with the job's id and the tail the
+ * command already wrote, and the job table delivers the exit to the session. The complete output goes
+ * to the environment's own spill file, so a session whose environment is not the host can page it.
+ */
+export async function backgroundBash(
+  command: string,
+  timeout: number | undefined,
+  cwd: string | undefined,
+  shellPath: string | undefined,
+  context: ToolContext | undefined,
+  commands: BackgroundCommands,
+): Promise<ToolExecutionResult> {
+  const results = context?.results ?? new ToolResultStore()
+  const env =
+    context?.execution ??
+    createSessionLocalExecutionEnv({
+      cwd: cwd ?? process.cwd(),
+      shellPath,
+      tempRoot: results.dir,
+    })
+  const { id, output, truncated } = await commands.adopt({
+    command,
+    // Cancelling this call during admission starts nothing; the running job gets its own signal.
+    signal: context?.signal,
+    start: ({ onOutput, signal, shell }) =>
+      env.exec(
+        // Only a local session has a host shell to honour; other environments run the command.
+        shell !== undefined && env.id === 'node:local'
+          ? [shell, '-lc', command]
+          : command,
+        {
+          timeout,
+          spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
+          onOutput,
+        },
+        signal,
+      ),
+  })
+  const tail = output
+    ? `${output}${truncated ? '\n\n[Showing the last output only]' : ''}\n\n`
+    : ''
+  const text = `${tail}Command running in background with ID: ${id}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+  return new ToolExecutionResult({ id }, text, { backgroundTaskId: id })
 }
