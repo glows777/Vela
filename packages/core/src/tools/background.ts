@@ -11,6 +11,11 @@ export interface BackgroundAdmission {
   /** The tail the command already wrote when the call returned; empty when it has not spoken yet */
   output: string
   truncated: boolean
+  /**
+   * The foreground budget that expired before this call was moved, in milliseconds; unset when the
+   * user moved it. The move records it, so the call knows why it stopped waiting.
+   */
+  timedOutAfterMs?: number
 }
 
 /** A background command as `background_output` and `background_stop` report it. */
@@ -93,9 +98,10 @@ export interface BackgroundCommands {
   /**
    * Moves running foreground commands to the background: every one the session is running (the
    * user's own `!` command too), or the one model-issued call named by its tool-call id. Returns the
-   * new job ids; an unknown id throws and names the calls that are running.
+   * new job ids; an unknown id throws and names the calls that are running. `timedOutAfterMs` is the
+   * foreground budget that expired, which the moved call reports as the reason it stopped waiting.
    */
-  detach(toolCallId?: string): Promise<string[]>
+  detach(toolCallId?: string, timedOutAfterMs?: number): Promise<string[]>
   /** A job's state and output tail; throws for an id that already delivered or was stopped. */
   snapshot(id: string): BackgroundSnapshot
   /** Every job still in the table, oldest first, for `/tasks`. */

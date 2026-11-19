@@ -220,7 +220,10 @@ export class BackgroundJobs implements BackgroundCommands {
     return { result, detached: entry.detached.promise }
   }
 
-  async detach(toolCallId?: string): Promise<string[]> {
+  async detach(
+    toolCallId?: string,
+    timedOutAfterMs?: number,
+  ): Promise<string[]> {
     const foreground = [...this.foreground].filter(
       (entry) => entry.state === 'foreground',
     )
@@ -250,13 +253,16 @@ export class BackgroundJobs implements BackgroundCommands {
       // run, and an overlapping request must not find an entry claimed but never recorded.
       if (entry.state !== 'foreground' || entry.settled) continue
       entry.unfollow()
-      ids.push(await this.move(entry))
+      ids.push(await this.move(entry, timedOutAfterMs))
     }
     return ids
   }
 
   /** Hand one claimed command to a job; a failed record leaves it in the foreground. */
-  private async move(entry: Foreground): Promise<string> {
+  private async move(
+    entry: Foreground,
+    timedOutAfterMs?: number,
+  ): Promise<string> {
     // `detach` claimed it: the command stopped following the run before this record started, so a
     // Stop that races the record cannot abort a command the job is about to own.
     const id = `bg-${++this.sequence}`
@@ -282,6 +288,12 @@ export class BackgroundJobs implements BackgroundCommands {
       // The host may already hold a start record it could not acknowledge, so clear it before
       // handing the command back to its call.
       await this.discard(job)
+      // A user's move reports this to them. A budget that expired has nobody to tell, so log it:
+      // the call keeps waiting, as a session without a budget would, instead of losing its work.
+      if (timedOutAfterMs !== undefined)
+        this.logger.error(
+          `[background] Could not move the command to the background; it stays in its call: ${errorMessage(error)}`,
+        )
       entry.follow()
       throw error
     }
@@ -296,7 +308,12 @@ export class BackgroundJobs implements BackgroundCommands {
     job.finished = entry.exitResult.then((exit) => this.exited(job, exit))
     this.session.trackWork(job.finished)
     const { text, truncated } = entry.output.read()
-    entry.detached.resolve({ id, output: text, truncated })
+    entry.detached.resolve({
+      id,
+      output: text,
+      truncated,
+      ...(timedOutAfterMs === undefined ? {} : { timedOutAfterMs }),
+    })
     this.syncStatus()
     return id
   }
