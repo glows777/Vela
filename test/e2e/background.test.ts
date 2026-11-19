@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { local } from '@glows777/vela-channels'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
+import z from 'zod'
 import { background } from '../../packages/core/src/extensions/background/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -305,6 +306,59 @@ test('background tools run in the group session and its topics, never in a DM', 
   await until(() => t.model.calls.length === 3, 'the DM reply')
   for (const name of ['background_output', 'background_stop'])
     expect(t.model.calls[2]!.tools).not.toContain(name)
+})
+
+test('a nested bash call cancelled while its job is being recorded starts nothing', async () => {
+  // The calling tool's own signal: no agent_end cleanup covers this path.
+  const controller = new AbortController()
+  const gate = Promise.withResolvers<void>()
+  let started = false
+  let nested: unknown
+  const results: string[] = []
+  const t = createTestVela({
+    responses: [fauxToolCall('probe', {}), fauxText('The probe gave up.')],
+    extensions: [
+      background(),
+      function probe(vela) {
+        vela.registerTool({
+          name: 'probe',
+          description: 'Starts a background command through another tool',
+          inputSchema: z.object({}).strict(),
+          execute: async (_input, context) => {
+            nested = await context!.executeTool!(
+              'bash',
+              { command: 'touch marker; echo RAN', run_in_background: true },
+              { signal: controller.signal },
+            )
+            return 'probed'
+          },
+        })
+      },
+    ],
+    session: {
+      tools: ['bash', 'background_stop', 'probe'],
+      host: {
+        deliver() {},
+        async background(event) {
+          if (event.type === 'result') results.push(event.text)
+          if (event.type !== 'started') return
+          started = true
+          await gate.promise
+        },
+      },
+    },
+  })
+  const running = t.run('probe it')
+  await until(() => started, 'the admitted job')
+  // Cancelled while the host is still recording the job; it must launch nothing.
+  controller.abort()
+  gate.resolve()
+  await running
+  expect(nested).toMatchObject({ isError: true })
+  expect(nested).toMatchObject({ result: expect.stringContaining('aborted') })
+  // Nothing ran, so nothing has an exit to announce.
+  expect(results).toEqual([])
+  expect(existsSync(t.path('marker'))).toBe(false)
 })
 
 test('a DM refuses run_in_background because it has no tool to read or stop the job', async () => {
