@@ -29,7 +29,7 @@ import {
   runControlsCard,
   topicRunCard,
 } from './cards.ts'
-import { type LarkChat, parseChats } from './chats.ts'
+import { type LarkChat, parseChats, validateChatTools } from './chats.ts'
 import { LarkConnection } from './connection.ts'
 import { downloadFile } from './file-download.ts'
 import {
@@ -46,6 +46,7 @@ import { finishProgress, LarkProgress } from './progress.ts'
 import { channelFileSender } from './send-file.ts'
 import { LarkTopics } from './topics.ts'
 import type {
+  LarkChatNames,
   LarkMessageEvent,
   LarkSentMessage,
   LarkTransport,
@@ -162,11 +163,7 @@ export class LarkChannel implements ChannelDefinition {
   }
 
   validateTools(names: readonly string[]): void {
-    const known = new Set(names)
-    for (const chat of this.chats.values())
-      for (const name of chat.tools ?? [])
-        if (!known.has(name))
-          throw new Error(`Unknown Lark tool "${name}" for chat ${chat.id}`)
+    validateChatTools(this.chats.values(), names)
   }
 
   private storage(chatId: string): string {
@@ -185,7 +182,7 @@ export class LarkChannel implements ChannelDefinition {
   private config: LarkChannelConfig
   private readonly chats: Map<string, LarkChat>
   private messageHandler?: (msg: IncomingMessage) => void | Promise<void>
-  private transport?: LarkTransport
+  private transport?: LarkTransport & Partial<LarkChatNames>
   private readonly seen = new Set<string>()
   private stopped = false
   private readonly connection = new LarkConnection()
@@ -200,11 +197,11 @@ export class LarkChannel implements ChannelDefinition {
   host(base: ChannelHost): LarkHost {
     this.view ??= larkHost(base, {
       enabled: (chatId) => this.chats.has(chatId),
-      transport: () => {
-        if (!this.transport || this.stopped || !base.connection().connected)
-          throw new Error('Lark is not connected')
-        return this.transport
-      },
+      chatIds: () => [...this.chats.keys()],
+      transport: () =>
+        !this.stopped && base.connection().connected
+          ? this.transport
+          : undefined,
       senderName: (id) => this.senderName(id),
       ownAppId: this.config.appId,
       submitNewTopic: (msg) => {

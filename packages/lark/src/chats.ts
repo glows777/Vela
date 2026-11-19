@@ -56,3 +56,15 @@ export function parseChats(value: unknown): LarkChat[] {
   for (const chat of chats) validateThinkingLevel(chat)
   return chats as LarkChat[]
 }
+
+/** A chat's configured tools must exist after extensions load; a typo fails startup. */
+export function validateChatTools(
+  chats: Iterable<LarkChat>,
+  names: readonly string[],
+): void {
+  const known = new Set(names)
+  for (const chat of chats)
+    for (const name of chat.tools ?? [])
+      if (!known.has(name))
+        throw new Error(`Unknown Lark tool "${name}" for chat ${chat.id}`)
+}

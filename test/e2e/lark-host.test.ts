@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { fauxText } from '@glows777/vela-core/testing'
-import { type LarkHostEvent, lark } from '@glows777/vela-lark'
+import { type LarkHostEvent, LarkSubmitError, lark } from '@glows777/vela-lark'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
 
@@ -339,4 +339,76 @@ test('an incomplete topic receipt cannot admit an anchorless run', async () => {
   expect(fake.topics).toHaveLength(1)
   expect(host.sessions(chatId)).toEqual([])
   expect(t.model.calls).toEqual([])
+})
+
+test('chats() lists every saved group before Lark connects', async () => {
+  const t = createTestVela({
+    responses: [],
+    extensions: [
+      lark({
+        appId: 'bot',
+        chats: [{ id: chatId }, 'oc_other'],
+        transport: fakeLark().transport,
+      }),
+    ],
+  })
+  await t.vela.ready()
+  const host = t.vela.channel('lark')
+  // Saved configuration is the list, so it answers before Lark connects.
+  expect(await host.chats()).toEqual([{ chatId }, { chatId: 'oc_other' }])
+  await t.vela.startChannels()
+  // A custom transport has no name lookup, so the groups keep their chat ids.
+  expect(await host.chats()).toEqual([{ chatId }, { chatId: 'oc_other' }])
+})
+
+test('a failed signed submit says whether anything reached Lark', async () => {
+  const { fake, host } = await setup([])
+  const failure = async (submission: Promise<unknown>) => {
+    try {
+      await submission
+    } catch (error) {
+      if (error instanceof LarkSubmitError) return error
+      throw error
+    }
+    throw new Error('expected the submission to fail')
+  }
+
+  const disabled = await failure(
+    host.submit({ chatId: 'oc_disabled', sessionId: group, text: 'x', author }),
+  )
+  expect(disabled.outcome).toBe('not-sent')
+  expect(disabled.messageId).toBeUndefined()
+  expect(fake.sent).toEqual([])
+
+  // A transport whose send returns no receipt leaves the outcome unknown.
+  const send = fake.transport.send
+  fake.transport.send = async (...args) => {
+    await send(...args)
+  }
+  const uncertain = await failure(
+    host.submit({
+      chatId,
+      newTopic: { title: 'A task' },
+      text: 'start it',
+      author,
+    }),
+  )
+  expect(uncertain.outcome).toBe('uncertain')
+  expect(uncertain.messageId).toBeUndefined()
+  expect(fake.sent).toHaveLength(1)
+  fake.transport.send = send
+
+  // The signed message went out; opening the topic failed afterwards.
+  fake.failReply()
+  const posted = await failure(
+    host.submit({
+      chatId,
+      newTopic: { title: 'Another' },
+      text: 'more',
+      author,
+    }),
+  )
+  expect(posted.outcome).toBe('posted')
+  expect(posted.messageId).toBe('sent_2')
+  expect(fake.sent).toHaveLength(2)
 })

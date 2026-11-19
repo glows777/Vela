@@ -27,6 +27,16 @@ let dispatcher:
       invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown>
     }
   | undefined
+/** Fires the SDK's own ready callback for tests that need a connected channel. */
+let ready: ((client: { onReady?: () => void }) => void) | undefined
+/** The long-connection stub: it never opens a socket, only hands over the dispatcher. */
+const connectStub = async function (
+  this: { onReady?: () => void },
+  params: { eventDispatcher: typeof dispatcher },
+) {
+  dispatcher = params.eventDispatcher
+  ready?.(this)
+}
 const original = {
   adapter: sdk.defaultHttpInstance.defaults.adapter,
   start: sdk.WSClient.prototype.start,
@@ -124,11 +134,7 @@ beforeAll(() => {
     }
     throw new Error(`no fake Lark route for ${call.method} ${call.path}`)
   }
-  sdk.WSClient.prototype.start = async (params: {
-    eventDispatcher: typeof dispatcher
-  }) => {
-    dispatcher = params.eventDispatcher
-  }
+  sdk.WSClient.prototype.start = connectStub
   sdk.WSClient.prototype.close = () => {}
 })
 afterAll(() => {
@@ -142,6 +148,7 @@ afterEach(async () => {
   calls.length = 0
   routes = []
   dispatcher = undefined
+  ready = undefined
 })
 
 async function start(
@@ -459,11 +466,7 @@ test('the typed Lark host uses real SDK history paging and explicit thread repli
     )
   } finally {
     // Restore this file's connect stub and don't change unrelated test lifetimes.
-    sdk.WSClient.prototype.start = async (params: {
-      eventDispatcher: typeof dispatcher
-    }) => {
-      dispatcher = params.eventDispatcher
-    }
+    sdk.WSClient.prototype.start = connectStub
   }
 })
 
@@ -580,3 +583,30 @@ for (const [scenario, post, expected] of [
     ])
   })
 }
+
+// https://open.feishu.cn/document/server-docs/im-v1/chat/get
+test('chats() names the enabled groups from the default transport only', async () => {
+  ready = (client) => client.onReady?.()
+  const t = await start([])
+  const host = t.vela.channel('lark')
+  routes = [
+    (c) =>
+      c.path === '/open-apis/im/v1/chats/oc_group' && ok({ name: 'Vela dev' }),
+  ]
+  expect(await host.chats()).toEqual([{ chatId: 'oc_group', name: 'Vela dev' }])
+  expect(
+    calls.filter((call) => call.path.startsWith('/open-apis/im/v1/chats/')),
+  ).toMatchObject([{ method: 'GET', path: '/open-apis/im/v1/chats/oc_group' }])
+
+  // A refused or nameless lookup is display-only: the group stays, without a name.
+  routes = [
+    (c) =>
+      c.path === '/open-apis/im/v1/chats/oc_group' && {
+        code: 230002,
+        msg: 'bot not in chat',
+      },
+  ]
+  expect(await host.chats()).toEqual([{ chatId: 'oc_group' }])
+  routes = [(c) => c.path === '/open-apis/im/v1/chats/oc_group' && ok({})]
+  expect(await host.chats()).toEqual([{ chatId: 'oc_group' }])
+})

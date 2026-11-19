@@ -392,6 +392,7 @@
     msg_type?: string | undefined
     sender?: { id?: string; sender_type?: string; } | undefined
   interface LarkHost
+    chats: () => Promise<{ chatId: string; name?: string; }[]>
     connection: () => ChannelConnection
     messages: (input: { chatId: string; sessionId: string; cursor?: string; limit?: number; }) => Promise<{ messages: LarkVisibleMessage[]; nextCursor?: string; }>
     onConnection: (listener: (connection: ChannelConnection) => void) => () => void
