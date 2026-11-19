@@ -110,6 +110,19 @@ const start = async (fake: Fake) => {
 }
 const sent = (fake: Fake, part: string) =>
   fake.sent.find((message) => message.text.includes(part))?.text
+/** The `<emoji>` / `<emoji>(removed)` marks of one message's reactions so far. */
+const marks = (messageId: string) =>
+  fake.reactions
+    .filter((reaction) => reaction.messageId === messageId)
+    .map(
+      (reaction) => `${reaction.emoji}${reaction.removed ? '(removed)' : ''}`,
+    )
+/**
+ * Wait for the outcome mark, which a run adds after the answer it marks is sent: the send alone is
+ * not the finish, so reading reactions right after it races the transport on a slow machine.
+ */
+const untilDone = (what: string, messageId: string) =>
+  until(what, () => marks(messageId).includes('DONE'))
 
 let fake = fakeLark()
 let vela = await start(fake)
@@ -122,7 +135,7 @@ const rootId = root.message.message_id
 const topic = { root_id: rootId, thread_id: `thread_${rootId}` }
 fake.deliver(root)
 await until('topic result', () => !!sent(fake, 'after write_file'))
-await sleep(300)
+await untilDone('topic DONE', rootId)
 const opened = fake.topics.map((t) => t.title)
 check('topics opened', opened, opened.length === 1)
 check(
@@ -138,9 +151,7 @@ check(
   topicBrief,
   topicBrief?.includes('write down the likely cause'),
 )
-const reactions = fake.reactions.map(
-  (r) => `${r.emoji}${r.removed ? '(removed)' : ''}`,
-)
+const reactions = marks(rootId)
 check('reactions', reactions, reactions.at(-1) === 'DONE')
 check('cards, patches', [fake.cards.length, fake.patches.length])
 check('topic reply', sent(fake, 'after write_file'))
@@ -170,43 +181,38 @@ check('untagged topic reply', fake.sent.at(-1)?.text)
 
 // 3. Untagged top-level chatter stays silent, and a later text answer is marked
 before = fake.sent.length
-const reactionsBefore = fake.reactions.length
-fake.deliver(
-  larkEvent(
-    { mentions: [], content: JSON.stringify({ text: 'lunch at 12?' }) },
-    'ou_bob',
-  ),
+const chatter = larkEvent(
+  { mentions: [], content: JSON.stringify({ text: 'lunch at 12?' }) },
+  'ou_bob',
 )
-await sleep(500)
-const chatter = fake.sent.length - before
-check('messages sent for chatter', chatter, chatter === 0)
-const chatterReactions = fake.reactions.slice(reactionsBefore)
+fake.deliver(chatter)
+await until('chatter settled', () =>
+  marks(chatter.message.message_id).some((mark) => mark === 'OnIt(removed)'),
+)
+const chatterMessages = fake.sent.length - before
+check('messages sent for chatter', chatterMessages, chatterMessages === 0)
+const chatterMarks = marks(chatter.message.message_id)
 check(
   'chatter reactions',
-  chatterReactions.map(
-    (reaction) => `${reaction.emoji}${reaction.removed ? '(removed)' : ''}`,
-  ),
-  chatterReactions.every((reaction) => reaction.removed) &&
-    chatterReactions.every((reaction) => reaction.emoji !== 'DONE'),
+  chatterMarks,
+  chatterMarks.every((mark) => mark.endsWith('(removed)')) &&
+    !chatterMarks.includes('DONE'),
 )
 before = fake.sent.length
-const answerMark = fake.reactions.length
-fake.deliver(
-  larkEvent(
-    { mentions: [], content: JSON.stringify({ text: 'how is the build?' }) },
-    'ou_bob',
-  ),
+const question = larkEvent(
+  { mentions: [], content: JSON.stringify({ text: 'how is the build?' }) },
+  'ou_bob',
 )
+fake.deliver(question)
 await until('passive answer', () => fake.sent.length > before)
-const passive = fake.reactions.slice(answerMark)
+await untilDone('passive DONE', question.message.message_id)
+const passive = marks(question.message.message_id)
 check('passive answer', fake.sent.at(-1)?.text)
 check(
   'passive OnIt then DONE',
-  passive.map(
-    (reaction) => `${reaction.emoji}${reaction.removed ? '(removed)' : ''}`,
-  ),
-  passive.some((reaction) => reaction.emoji === 'OnIt' && reaction.removed) &&
-    passive.some((reaction) => reaction.emoji === 'DONE' && !reaction.removed),
+  passive,
+  passive.some((mark) => mark === 'OnIt(removed)') &&
+    passive.some((mark) => mark === 'DONE'),
 )
 
 // 4. Topic overview at top level

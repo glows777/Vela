@@ -282,6 +282,32 @@ test('mistakes in settings are reported with the file name', () => {
     'home/models.json': json({ providers: { x: { api: 'grpc' } } }),
   })
   expect(() => loadConfig(badModels)).toThrow('providers.x.api must be one of')
+  for (const budget of ['-1', '"120"', 'null']) {
+    const badBudget = setup({
+      'home/settings.json': `{ "bashForegroundTimeoutSeconds": ${budget} }`,
+    })
+    expect(() => loadConfig(badBudget)).toThrow(
+      'bashForegroundTimeoutSeconds must be 0 or a positive number of seconds',
+    )
+  }
+  for (const ceiling of ['0', '-5', '"600"']) {
+    const badCeiling = setup({
+      'home/settings.json': `{ "bashForegroundTimeoutMaxSeconds": ${ceiling} }`,
+    })
+    expect(() => loadConfig(badCeiling)).toThrow(
+      'bashForegroundTimeoutMaxSeconds must be a positive number of seconds',
+    )
+  }
+  const ok = setup({
+    'home/settings.json': json({
+      bashForegroundTimeoutSeconds: 0,
+      bashForegroundTimeoutMaxSeconds: 900,
+    }),
+  })
+  expect(loadConfig(ok).settings).toMatchObject({
+    bashForegroundTimeoutSeconds: 0,
+    bashForegroundTimeoutMaxSeconds: 900,
+  })
 })
 
 // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} names the interpolation syntax under test

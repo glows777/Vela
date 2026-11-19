@@ -623,6 +623,101 @@ test('GitHub app/repository/event filters and empty mapping drop without work or
   expect(custom.replies.at(-1)?.text).toBe('Custom suite')
 })
 
+test.each([
+  ['with a body', 'Here are some automated review suggestions'],
+  ['with a null body, like an inline thread reply', null],
+] as const)(
+  'a submitted review %s still wakes the topic with its review id and inline-comment endpoint',
+  async (_shape, body) => {
+    const f = await fixture()
+    await f.subscribe(171)
+    const calls = f.model.calls.length
+    f.model.push(fauxText('Review handled'))
+    expect(
+      (
+        await send(
+          f.url,
+          {
+            action: 'submitted',
+            repository: { full_name: repo },
+            pull_request: { number: 171 },
+            review: {
+              id: 5968407723,
+              body,
+              user: { login: 'chatgpt-codex-connector[bot]' },
+              html_url:
+                'https://github.com/glows777/Vela/pull/171#pullrequestreview-5968407723',
+              state: 'commented',
+              commit_id: 'b'.repeat(40),
+            },
+          },
+          'pull_request_review',
+        )
+      ).status,
+    ).toBe(202)
+    await drainChannels(f.vela)
+    expect(f.model.calls.length).toBe(calls + 1)
+    const prompt = JSON.stringify(f.model.calls.at(-1)!.prompt)
+    expect(prompt).toContain('Review ID: 5968407723')
+    expect(prompt).toContain(
+      'GET /repos/glows777/Vela/pulls/171/reviews/5968407723/comments',
+    )
+  },
+)
+
+test('a review payload without an id still wakes the topic and invents no endpoint', async () => {
+  const f = await fixture()
+  await f.subscribe(171)
+  const calls = f.model.calls.length
+  f.model.push(fauxText('Review handled'))
+  expect(
+    (
+      await send(
+        f.url,
+        {
+          action: 'submitted',
+          repository: { full_name: repo },
+          pull_request: { number: 171 },
+          review: {
+            body: 'Legacy review body',
+            user: { login: 'glows777' },
+            html_url: 'https://github.com/glows777/Vela/pull/171#review',
+            state: 'approved',
+            commit_id: 'b'.repeat(40),
+          },
+        },
+        'pull_request_review',
+      )
+    ).status,
+  ).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(calls + 1)
+  const prompt = JSON.stringify(f.model.calls.at(-1)!.prompt)
+  expect(prompt).toContain('Legacy review body')
+  expect(prompt).not.toContain('Review ID:')
+  expect(prompt).not.toContain('Inline comments:')
+})
+
+test('an unmapped event type logs one bounded debug line and produces no event', async () => {
+  const f = await fixture()
+  await f.subscribe(171)
+  const calls = f.model.calls.length
+  expect(
+    (await send(f.url, suite(), 'pull_request_review_comment', 'inline'))
+      .status,
+  ).toBe(202)
+  const long = 'x'.repeat(200)
+  expect((await send(f.url, suite(), long, 'long-type')).status).toBe(202)
+  await drainChannels(f.vela)
+  expect(f.model.calls.length).toBe(calls)
+  const lines = f.logs.filter((entry) => entry.includes('not mapped'))
+  expect(lines[0]).toBe(
+    '[events] GitHub "pull_request_review_comment" event type is not mapped; dropped',
+  )
+  expect(lines[1]?.length).toBeLessThan(140)
+  expect(lines[1]).not.toContain(long)
+})
+
 test.each(['issue_comment', 'pull_request_review'])(
   '%s checks the complete final-line origin marker before truncation and permits unmarked same-author content',
   async (event) => {

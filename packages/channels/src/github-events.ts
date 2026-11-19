@@ -33,7 +33,11 @@ const content = z.object({
   user: actor,
   html_url: z.string(),
 })
-const review = content.extend({ state: z.string(), commit_id: z.string() })
+const review = content.extend({
+  state: z.string(),
+  commit_id: z.string(),
+  id: z.number().int().positive().optional(),
+})
 const pr = z.object({
   number,
   merged: z.boolean(),
@@ -94,7 +98,13 @@ export function githubEvents(
     pull_request: ['closed'],
     issues: ['opened', 'closed', 'labeled'],
   }
-  if (!(type in actions)) return []
+  if (!(type in actions)) {
+    // The type header is outside the signature, so it is bounded and quoted, not logged raw.
+    logger.debug(
+      `[events] GitHub ${JSON.stringify(type.slice(0, 64))} event type is not mapped; dropped`,
+    )
+    return []
+  }
   const raw = record.parse(input)
   if (!actions[type]?.includes(String(raw.action))) return []
   const { repository } = envelope.parse(raw)
@@ -203,11 +213,15 @@ export function githubEvents(
     const target = z.object({ number }).parse(raw.pull_request)
     const item = review.parse(raw.review)
     if (ownBody(item.body ?? '')) return []
+    // The review id names its comments endpoint; without it the notice stays plain rather than guessing.
+    const comments = item.id
+      ? `\nReview ID: ${item.id}\nInline comments: GET /repos/${repo}/pulls/${target.number}/reviews/${item.id}/comments`
+      : ''
     return [
       prEvent(
         target.number,
         `GitHub PR #${target.number}: ${item.user.login} submitted review (${item.state})`,
-        `Reviewer: ${item.user.login}\nState: ${item.state}\nCommit SHA: ${item.commit_id}\n${item.html_url}\n${item.body ?? ''}`,
+        `Reviewer: ${item.user.login}\nState: ${item.state}\nCommit SHA: ${item.commit_id}${comments}\n${item.html_url}\n${item.body ?? ''}`,
       ),
     ]
   }

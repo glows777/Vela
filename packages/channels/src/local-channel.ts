@@ -33,10 +33,24 @@ const projectSchema = z
   .strict()
 const messageSchema = z
   .object({
-    text: z.string().trim().min(1).max(100000),
+    text: z
+      .string()
+      .trim()
+      .min(1, 'Message must not be empty')
+      .max(100000, 'Message is too long (max 100000 characters)'),
     clientMessageId: z.string().min(1).max(200).optional(),
   })
   .strict()
+/**
+ * A reason the sender can fix in the draft: one of the `text` limits in the schema
+ * above. Any other shape failure is a malformed request and keeps its generic message.
+ */
+const refusalReason = (error: z.ZodError) =>
+  error.issues.find(
+    (issue) =>
+      issue.path[0] === 'text' &&
+      (issue.code === 'too_big' || issue.code === 'too_small'),
+  )?.message ?? 'Invalid JSON request body'
 
 export class LocalChannel implements ChannelDefinition {
   readonly name = 'local'
@@ -257,7 +271,7 @@ export class LocalChannel implements ChannelDefinition {
     const session = this.session(projectId, sessionId)
     const body = messageSchema.safeParse(input)
     if (!body.success)
-      throw new LocalError('invalid_request', 'Invalid JSON request body')
+      throw new LocalError('invalid_request', refusalReason(body.error))
     return this.submit(
       project,
       session,
