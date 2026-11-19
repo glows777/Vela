@@ -55,6 +55,8 @@ const larkDir = resolve(scratch, 'lark')
 const larkProject = 'oc_alpha'
 /** A second enabled group, for the history gap a long disconnect leaves. */
 const gapProject = 'oc_gap'
+/** A third, busy group: routine live messages must not reset paging. */
+const liveProject = 'oc_live'
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
@@ -1820,7 +1822,9 @@ async function larkJourneys() {
     resolve(dir, 'settings.json'),
     JSON.stringify({
       shellPath: shell,
-      extensionConfig: { lark: { chats: [larkProject, gapProject] } },
+      extensionConfig: {
+        lark: { chats: [larkProject, gapProject, liveProject] },
+      },
     }),
   )
   await Bun.write(
@@ -1832,6 +1836,13 @@ async function larkJourneys() {
           messages: Array.from({ length: 60 }, (_, index) => ({
             sender: 'Alice',
             text: `Gap message ${index + 1} of the second group.`,
+          })),
+        },
+        [liveProject]: {
+          name: 'Vela live',
+          messages: Array.from({ length: 120 }, (_, index) => ({
+            sender: index % 2 === 0 ? 'Alice' : 'Bob',
+            text: `Live message ${index + 1} of the third group.`,
           })),
         },
         [larkProject]: {
@@ -1863,6 +1874,8 @@ async function larkJourneys() {
         { text: 'The retry test now covers a 429.' },
         // A person asking in the group.
         { text: 'Only the deploy step changed.' },
+        // The busy group's live message.
+        { text: 'Noted, the busy group is answered.' },
         // Starting a topic from Home: a slow step keeps it visibly running.
         { toolCalls: [{ name: 'bash', input: { command: 'sleep 3' } }] },
         { text: 'I will read the deploy script first.' },
@@ -1997,8 +2010,8 @@ async function larkJourneys() {
     )
 
     // A long disconnect: the page holds 11–60, then 60 messages arrive, and the
-    // refresh returns only 71–120. Paging must restart at the refreshed page, or
-    // 61–70 stay missing for the rest of the app run.
+    // refresh returns only 71–120. The gap is filled by reading back until the new
+    // page reaches what is on screen, so 61–70 never go missing.
     await sidebar.getByRole('button', { name: 'Vela gap Lark' }).click()
     await page.getByRole('heading', { name: 'Vela gap', exact: true }).waitFor()
     await page
@@ -2019,35 +2032,106 @@ async function larkJourneys() {
         (_, index) => `Late message ${index + 61} of the second group.`,
       ),
     })
-    // The backlog is stamped just after the read that cached 11–60, so waiting long
-    // enough makes it fall outside the cursor this page holds — a real disconnect.
+    // The backlog is stamped after the read that cached 11–60, so the cursor this page
+    // holds cannot reach it: the refresh has to read back to close the gap.
     await Bun.sleep(2500)
-    // Leaving and returning reads again, as a reconnect refresh does.
     await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
     await sidebar.getByRole('button', { name: 'Vela gap Lark' }).click()
     await page
       .getByText('Late message 120 of the second group.', { exact: true })
       .waitFor({ timeout: 30_000 })
-    assert.equal(
-      await page
-        .getByText('Late message 65 of the second group.', { exact: true })
-        .count(),
-      0,
-      'The refresh reads the newest page only',
-    )
-    assert.equal(
-      await page
-        .getByText('Gap message 60 of the second group.', { exact: true })
-        .count(),
-      1,
-      'The page keeps the history it already read',
-    )
-    await page.getByRole('button', { name: 'Show earlier messages' }).click()
     await page
       .getByText('Late message 65 of the second group.', { exact: true })
       .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Gap message 10 of the second group.', { exact: true })
+        .count(),
+      0,
+      'The page still starts where the person had paged to',
+    )
+    await page
+      .getByText('Gap message 60 of the second group.', { exact: true })
+      .waitFor()
     checks.push(
-      'After a long disconnect the refreshed page supplies the gap, so paging never skips the messages in between.',
+      'After a long disconnect the refresh reads back to the page on screen, so the messages in between are not skipped.',
+    )
+    // One page further reaches the start of the group, and the button goes away.
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Gap message 1 of the second group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page.getByRole('button', { name: 'Show earlier messages' }).count(),
+      0,
+      'The oldest page is the end of the history',
+    )
+    checks.push(
+      'Paging keeps reaching back to the oldest message after the gap was filled.',
+    )
+
+    // Ordinary activity must not reset paging: a live message overlaps the page on
+    // screen, so Show earlier still reaches the oldest history.
+    await sidebar.getByRole('button', { name: 'Vela live Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela live', exact: true })
+      .waitFor()
+    await page
+      .getByText('Live message 120 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Live message 70 of the third group.', { exact: true })
+        .count(),
+      0,
+      'The first page is the newest 50 messages',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Live message 21 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await larkSays({
+      op: 'say',
+      chatId: liveProject,
+      text: 'A live message in the busy group',
+    })
+    await page
+      .getByText('A live message in the busy group', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('Noted, the busy group is answered.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await page
+        .getByText('Live message 21 of the third group.', { exact: true })
+        .count(),
+      1,
+      'The refresh kept what the person had already paged to',
+    )
+    await page.getByRole('button', { name: 'Show earlier messages' }).click()
+    await page
+      .getByText('Live message 1 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    checks.push(
+      'An ordinary live message does not reset paging: Show earlier still reaches the oldest history.',
+    )
+
+    // A newest page the host filtered to nothing carries no range, so it cannot mean
+    // the older history was recalled: the page keeps what it shows.
+    await larkSays({ op: 'filterNewest', chatId: liveProject, count: 51 })
+    await sidebar.getByRole('button', { name: 'Home', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Vela live Lark' }).click()
+    await page
+      .getByRole('heading', { name: 'Vela live', exact: true })
+      .waitFor()
+    await page
+      .getByText('Live message 1 of the third group.', { exact: true })
+      .waitFor({ timeout: 30_000 })
+    await page
+      .getByText('Live message 21 of the third group.', { exact: true })
+      .waitFor()
+    checks.push(
+      'A newest page with no visible rows never erases the history the page already read.',
     )
     await sidebar.getByRole('button', { name: 'Vela dev Lark' }).click()
     await page
@@ -2061,9 +2145,10 @@ async function larkJourneys() {
     await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
     assert.equal(
       await page.getByLabel('Project', { exact: true }).inputValue(),
-      larkProject,
+      liveProject,
       'Home defaults to the last project used',
     )
+    await page.getByLabel('Project', { exact: true }).selectOption(larkProject)
     await page
       .getByText('Vela opens a topic in Vela dev for it, started by you.')
       .waitFor()

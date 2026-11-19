@@ -256,34 +256,74 @@ async function readLarkGroup(
     const error = await readLarkGroup(project)
     if (error) publish({ error })
   })
-  try {
-    const cursor = older ? larkCursors.get(project.sessionId) : undefined
-    const page = await vela.larkMessages({
+  const sessionId = project.sessionId
+  const read = (cursor?: string) =>
+    vela.larkMessages({
       chatId: project.id,
-      sessionId: project.sessionId,
+      sessionId,
       ...(cursor ? { cursor } : {}),
       limit: 50,
     })
-    // A refresh of the newest page starts paging over from it: a cursor kept from
-    // before the refresh would skip messages that arrived while the app did not read.
-    if (older) mergeMessages(project.sessionId, page.messages)
-    else reconcileMessages(project.sessionId, page.messages, !page.nextCursor)
-    if (page.nextCursor) {
-      larkCursors.set(project.sessionId, page.nextCursor)
-      publish({ earlier: { ...snapshot.earlier, [project.sessionId]: true } })
-    } else {
-      larkCursors.delete(project.sessionId)
-      publish({ earlier: withoutKey(snapshot.earlier, project.sessionId) })
+  try {
+    if (older) {
+      const cursor = larkCursors.get(sessionId)
+      if (cursor === undefined) return undefined
+      const page = await read(cursor)
+      mergeMessages(sessionId, page.messages)
+      rememberOlder(sessionId, page.nextCursor)
+      return undefined
     }
-    return undefined
+    // A refresh reads the newest page, then keeps reading back until it reaches the
+    // history this page already shows. Ordinary activity overlaps at once and keeps
+    // the paging the person reached; a long disconnect leaves a gap that is filled
+    // here instead of being skipped by an older cursor.
+    // What the page shows now: a refresh that returns any of these is contiguous.
+    const shown = new Set(
+      (snapshot.messages[sessionId] ?? []).map((message) => message.id),
+    )
+    let cursor: string | undefined
+    for (;;) {
+      const page = await read(cursor)
+      // A read is authoritative for the range it covers, never for an empty page.
+      if (page.messages.length > 0) {
+        if (cursor === undefined)
+          reconcileMessages(sessionId, page.messages, false)
+        else mergeMessages(sessionId, page.messages)
+      }
+      const reached =
+        shown.size === 0 ||
+        page.messages.some((message) => shown.has(message.id))
+      if (reached) {
+        // Nothing between the newest page and what is on screen: paging stands.
+        if (cursor !== undefined || !larkCursors.has(sessionId))
+          rememberOlder(sessionId, page.nextCursor)
+        return undefined
+      }
+      // An empty page is no evidence that older history is gone; keep it and stop.
+      if (page.messages.length === 0) return undefined
+      if (!page.nextCursor) {
+        rememberOlder(sessionId, undefined)
+        return undefined
+      }
+      cursor = page.nextCursor
+    }
   } catch (cause) {
     // The page must leave its loading state to show the reason.
-    if (snapshot.messages[project.sessionId] === undefined)
-      publish({
-        messages: { ...snapshot.messages, [project.sessionId]: [] },
-      })
+    if (snapshot.messages[sessionId] === undefined)
+      publish({ messages: { ...snapshot.messages, [sessionId]: [] } })
     return errorMessage(cause)
   }
+}
+
+/** Records where paging stands: the cursor of the next older page, or its end. */
+function rememberOlder(sessionId: string, next: string | undefined) {
+  if (next === undefined) {
+    larkCursors.delete(sessionId)
+    publish({ earlier: withoutKey(snapshot.earlier, sessionId) })
+    return
+  }
+  larkCursors.set(sessionId, next)
+  publish({ earlier: { ...snapshot.earlier, [sessionId]: true } })
 }
 
 /** A Lark topic's whole history, oldest first. Returns a failed read's reason. */

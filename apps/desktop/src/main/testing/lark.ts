@@ -47,6 +47,12 @@ type Control =
    * event, so only the next read (or the person leaving and returning) sees them.
    */
   | { op: 'backlog'; chatId: string; texts: string[] }
+  /**
+   * The newest `count` messages of a group become cards: they still fill history
+   * pages but carry no visible text, so a page can return nothing while a next page
+   * exists.
+   */
+  | { op: 'filterNewest'; chatId: string; count: number }
 
 const botId = 'cli_desktop_fake'
 const botName = 'Vela'
@@ -187,6 +193,13 @@ export function fakeLark(dir: string): FakeTransport {
           clock = Date.now() + 2000
           for (const text of control.texts)
             add(control.chatId, text, { id: senderId('Alice'), app: false })
+          break
+        }
+        case 'filterNewest': {
+          const rows = (chats.get(control.chatId)?.rows ?? [])
+            .filter((stored) => !stored.row.deleted)
+            .slice(-control.count)
+          for (const stored of rows) stored.row.msg_type = 'interactive'
           break
         }
         case 'recall':
