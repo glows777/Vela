@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+- **The Lark SDK host lists enabled groups and says whether a failed submission reached Lark.** `LarkHost.chats()` answers from saved configuration, connected or not: every enabled group with its name when the built-in transport can read it, and its chat ID otherwise (a custom `LarkTransport` has no name lookup). A failed `submit` throws `LarkSubmitError` whose `outcome` is `not-sent` (nothing was posted), `uncertain` (a post may have gone out without a receipt) or `posted` (it did, with `messageId` when known), so a host re-reads history instead of resending ([#418](https://github.com/glows777/Vela/issues/418)).
+
 - SDK hosts can read `session.location` and move an idle session with `await session.setLocation(location)`. The move prepares resources through the host’s existing `env` resolver, persists the target, and restores it on reopen. ([#410](https://github.com/glows777/Vela/issues/410))
 
 - Channel sessions can deliver a workspace file to their current conversation. Lark posts native images or file attachments and reports Feishu’s error code and message if the post is rejected. Local hosts can retrieve a snapshot by message ID ([#402](https://github.com/glows777/Vela/issues/402)).

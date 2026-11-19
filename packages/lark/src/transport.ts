@@ -102,6 +102,26 @@ export interface LarkTransport {
 
 export class LarkResponseError extends Error {}
 
+/**
+ * The default transport also answers a group's display name. `LarkTransport` stays the
+ * custom-transport contract, so a transport without this lists groups by their chat id.
+ */
+export interface LarkChatNames {
+  getChat(chatId: string): Promise<{ name?: string } | undefined>
+}
+
+/** A name is display only: any failure leaves the group listed by its chat id. */
+export async function larkChatName(
+  transport: (LarkTransport & Partial<LarkChatNames>) | undefined,
+  chatId: string,
+): Promise<string | undefined> {
+  try {
+    return (await transport?.getChat?.(chatId))?.name?.trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
 function checked<T extends { code?: number; msg?: string }>(response: T): T {
   if (response.code !== undefined && response.code !== 0)
     throw new LarkResponseError(
@@ -117,7 +137,7 @@ export function larkTransport(
   onSetupError?: (error: Error) => void,
   onSetupReady?: () => void,
   onConnection?: (connection: ChannelConnection) => void,
-): LarkTransport {
+): LarkTransport & LarkChatNames {
   const silent = { error() {}, warn() {}, info() {}, debug() {}, trace() {} }
   const client = new lark.Client({
     appId,
@@ -318,6 +338,15 @@ export function larkTransport(
         }),
       )
       return response.data?.user?.name
+    },
+    async getChat(chatId) {
+      const response = checked(
+        await client.im.chat.get({
+          path: { chat_id: chatId },
+          params: { user_id_type: 'open_id' },
+        }),
+      )
+      return response.data?.name ? { name: response.data.name } : undefined
     },
     async listTopicMessages(threadId, pageToken) {
       const response = checked(
