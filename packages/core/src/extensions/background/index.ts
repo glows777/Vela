@@ -1,6 +1,8 @@
+import { errorMessage } from '../../logger.ts'
 import type { BackgroundCommands } from '../../tools/background.ts'
-import type { VelaExtension } from '../types.ts'
+import type { ExtensionContext, VelaExtension } from '../types.ts'
 import { BackgroundJobs } from './jobs.ts'
+import { tasks } from './tasks.ts'
 import { createBackgroundTools } from './tool.ts'
 
 export interface BackgroundOptions {
@@ -26,16 +28,32 @@ export interface BackgroundOptions {
  */
 export function background(options: BackgroundOptions = {}): VelaExtension {
   return function background(vela) {
-    const commands = (
-      context: { background?: BackgroundCommands } | undefined,
-    ) => {
-      // Tools are shared by every session, so the capability comes from the call itself.
-      const current = context?.background
+    const table = (current: BackgroundCommands | undefined) => {
       if (!current)
         throw new Error('Background commands require an open session')
       return current
     }
+    // Tools are shared by every session, so the capability comes from the call itself.
+    const commands = (
+      context: { background?: BackgroundCommands } | undefined,
+    ) => table(context?.background)
     for (const tool of createBackgroundTools(commands)) vela.registerTool(tool)
+    const tasksCommand = {
+      description:
+        'List this session’s background tasks; /tasks stop <id> ends one',
+      handler: async (args: string, ctx: ExtensionContext) => {
+        try {
+          // `session_start` installs the job table before any command runs.
+          ctx.ui.notify(
+            await tasks(args, table(ctx.session.registry.background)),
+          )
+        } catch (error) {
+          ctx.ui.notify(errorMessage(error), 'error')
+        }
+      },
+    }
+    vela.registerCommand('tasks', tasksCommand)
+    vela.registerCommand('bashes', tasksCommand)
     vela.on('session_start', (_event, { session }) => {
       session.registry.background = new BackgroundJobs(
         session,

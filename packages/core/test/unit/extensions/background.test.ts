@@ -48,6 +48,7 @@ function sessionStub(
   return {
     id: 'stub',
     cwd,
+    ui: { setStatus: () => {} },
     ...(deliver || background
       ? { host: { deliver: deliver ?? (() => {}), background } }
       : {}),

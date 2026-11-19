@@ -194,13 +194,15 @@ export class UserBash {
    * The waiting call returns a synthetic result naming the job, and the exit arrives later as the
    * job's result. Returns the new background ids; an unknown id throws and names the running calls.
    */
-  detach(toolCallId?: string): Promise<string[]> {
+  async detach(toolCallId?: string): Promise<string[]> {
+    // The job table is installed by `session_start`, so a session that has not prompted yet starts
+    // here, exactly as its first `!` command would; otherwise a first Ctrl+B would report a
+    // session that has no background tools.
+    await this.host.start()
     const commands = this.host.background()
     if (!commands)
-      return Promise.reject(
-        new Error(
-          'Background commands are not enabled in this session: it has no background tools.',
-        ),
+      throw new Error(
+        'Background commands are not enabled in this session: it has no background tools.',
       )
     return commands.detach(toolCallId)
   }

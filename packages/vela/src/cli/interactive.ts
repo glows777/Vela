@@ -39,6 +39,7 @@ import {
 import { createCliDispatcher } from './dispatcher.ts'
 import { formatContextFileList } from './status-display.ts'
 import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
+import { backgroundRunning } from './tui/background.ts'
 import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
   AssistantMessage,
@@ -72,6 +73,10 @@ import { editorTheme, theme } from './tui/theme.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
 export type { InteractiveOptions } from './tui/types.ts'
+
+/** The one refusal every command that needs an idle session gives. */
+const BUSY =
+  'A task is running; press Esc to interrupt or wait for it to finish'
 
 /**
  * Interactive mode (TUI, like pi's interactive mode): pi-tui provides components and rendering.
@@ -332,10 +337,7 @@ export class InteractiveMode {
 
   private async switchSession(id: string, resume: boolean): Promise<void> {
     if (this.session.isRunning) {
-      this.addNotice(
-        'A task is running; press Esc to interrupt or wait for it to finish',
-        'warning',
-      )
+      this.addNotice(BUSY, 'warning')
       return
     }
     const previous = this.session
@@ -830,6 +832,10 @@ export class InteractiveMode {
     })
     actions.set('exit', () => void this.shutdown())
     actions.set('pasteImage', () => void this.pasteClipboard())
+    actions.set(
+      'background',
+      () => void backgroundRunning(this.session, this.addNotice.bind(this)),
+    )
     actions.set('cycleThinking', () => {
       // Like pi: only the levels the model supports
       const levels = this.session.availableThinkingLevels()
@@ -982,10 +988,7 @@ export class InteractiveMode {
         return
       case '/resume': {
         if (this.session.isRunning) {
-          this.addNotice(
-            'A task is running; press Esc to interrupt or wait for it to finish',
-            'warning',
-          )
+          this.addNotice(BUSY, 'warning')
           return
         }
         const id = await this.pickSession()
@@ -1052,10 +1055,7 @@ export class InteractiveMode {
         return
       case '/compact':
         if (this.session.isRunning) {
-          this.addNotice(
-            'A task is running; press Esc to interrupt or wait for it to finish',
-            'warning',
-          )
+          this.addNotice(BUSY, 'warning')
           return
         }
         this.startLoader('Compacting context…')
@@ -1106,10 +1106,7 @@ export class InteractiveMode {
 
   private busyNotice(): boolean {
     if (!this.session.isRunning) return false
-    this.addNotice(
-      'A task is running; press Esc to interrupt or wait for it to finish',
-      'warning',
-    )
+    this.addNotice(BUSY, 'warning')
     return true
   }
 

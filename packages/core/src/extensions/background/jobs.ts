@@ -11,6 +11,7 @@ import type {
   BackgroundCommands,
   BackgroundSnapshot,
   BackgroundStart,
+  BackgroundTask,
   CommandExit,
   ForegroundCommand,
 } from '../../tools/background.ts'
@@ -25,6 +26,8 @@ interface Job {
   stoppedNotice?: Promise<void>
   id: string
   command: string
+  startedAt: number
+  endedAt?: number
   controller: AbortController
   finished: Promise<void>
   output: OutputTail
@@ -49,6 +52,8 @@ const commandHead = (command: string) => {
 class Foreground {
   /** `withdrawn` is a claim that was rolled back after the run aborted: nothing left to claim. */
   state: 'foreground' | 'moved' | 'withdrawn' = 'foreground'
+  /** When it started in the foreground: a moved job keeps clocking from there in `/tasks`. */
+  readonly startedAt = Date.now()
   /** Set as soon as the command's own result settles: from then on it can no longer be claimed. */
   settled = false
   /** Resolves with the job id and the tail so far once this call is moved */
@@ -122,6 +127,7 @@ export class BackgroundJobs implements BackgroundCommands {
       token: randomUUID(),
       id,
       command,
+      startedAt: Date.now(),
       controller,
       output: new OutputTail(),
       state: 'running',
@@ -151,6 +157,7 @@ export class BackgroundJobs implements BackgroundCommands {
     try {
       await prepared
       controller.signal.throwIfAborted()
+      this.syncStatus()
       // An environment can emit output before this returns; the call reports that tail.
       const { text, truncated } = job.output.read()
       return { id, output: text, truncated }
@@ -163,6 +170,7 @@ export class BackgroundJobs implements BackgroundCommands {
         ),
       )
       if (!job.stopped) this.jobs.delete(id)
+      this.syncStatus()
       throw error
     } finally {
       signal?.removeEventListener('abort', abort)
@@ -256,6 +264,7 @@ export class BackgroundJobs implements BackgroundCommands {
       token: randomUUID(),
       id,
       command: entry.command,
+      startedAt: entry.startedAt,
       controller: entry.controller,
       output: entry.output,
       state: 'running',
@@ -288,6 +297,7 @@ export class BackgroundJobs implements BackgroundCommands {
     this.session.trackWork(job.finished)
     const { text, truncated } = entry.output.read()
     entry.detached.resolve({ id, output: text, truncated })
+    this.syncStatus()
     return id
   }
 
@@ -321,7 +331,9 @@ export class BackgroundJobs implements BackgroundCommands {
   /** A declared or moved command exited the same way: record how, then deliver unless silent. */
   private exited(job: Job, exit: CommandExit): void {
     job.state = 'exited'
+    job.endedAt = Date.now()
     job.fullOutputPath = exit.spillPath
+    this.syncStatus()
     if (job.silent) return
     if (exit.error !== undefined) {
       this.deliver(
@@ -341,6 +353,8 @@ export class BackgroundJobs implements BackgroundCommands {
 
   private failed(job: Job, cause: unknown): void {
     job.state = 'exited'
+    job.endedAt = Date.now()
+    this.syncStatus()
     if (!job.silent)
       this.deliver(
         `Background command ${job.id} could not start or run: ${errorMessage(cause)}.`,
@@ -349,7 +363,19 @@ export class BackgroundJobs implements BackgroundCommands {
   }
 
   snapshot(id: string): BackgroundSnapshot {
-    const job = this.job(id)
+    return this.snapshotOf(this.job(id))
+  }
+
+  /** Every job still in the table, oldest first, for `/tasks`. */
+  tasks(): BackgroundTask[] {
+    return [...this.jobs.values()].map((job) => ({
+      snapshot: this.snapshotOf(job),
+      startedAt: job.startedAt,
+      ...(job.endedAt === undefined ? {} : { endedAt: job.endedAt }),
+    }))
+  }
+
+  private snapshotOf(job: Job): BackgroundSnapshot {
     const { text, truncated } = job.output.read()
     return {
       id: job.id,
@@ -377,6 +403,7 @@ export class BackgroundJobs implements BackgroundCommands {
     const snapshot = this.snapshot(id)
     // The result has been handed to the caller; the tail and its memory go with the job.
     this.jobs.delete(id)
+    this.syncStatus()
     return snapshot
   }
 
@@ -399,6 +426,7 @@ export class BackgroundJobs implements BackgroundCommands {
     })()
     await Promise.all([cleared, ...running.map((job) => this.terminate(job))])
     for (const job of running) this.jobs.delete(job.id)
+    this.syncStatus()
   }
 
   /** Drop a job that never existed as far as the model is concerned, clearing its start record. */
@@ -406,6 +434,7 @@ export class BackgroundJobs implements BackgroundCommands {
     job.silent = true
     job.state = 'exited'
     this.jobs.delete(job.id)
+    this.syncStatus()
     await this.notifyStopped(job).catch((cleanupError) =>
       this.logger.error(
         `[background] Could not clear ${job.id}: ${errorMessage(cleanupError)}`,
@@ -418,6 +447,19 @@ export class BackgroundJobs implements BackgroundCommands {
       this.session.host?.background?.({ type: 'stopped', token: job.token }),
     )
     return job.stoppedNotice
+  }
+
+  /** The footer's extension status slot: the running jobs and their ids, cleared when none runs. */
+  private syncStatus(): void {
+    const running = [...this.jobs.values()].filter(
+      (job) => job.state === 'running',
+    )
+    this.session.ui.setStatus(
+      'background',
+      running.length === 0
+        ? undefined
+        : `${running.length} background ${running.length === 1 ? 'task' : 'tasks'} · ${running.map((job) => job.id).join(', ')}`,
+    )
   }
 
   private job(id: string): Job {

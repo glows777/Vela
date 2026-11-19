@@ -772,3 +772,64 @@ test('without the background extension bash refuses run_in_background and starts
   await t.run('start it in the background')
   expect(existsSync(t.path('marker'))).toBe(false)
 })
+
+test('/tasks and /bashes list running jobs with their tails, stop ends them, and the footer status follows', async () => {
+  const notices: string[] = []
+  const statuses: (string | undefined)[] = []
+  const t = createTestVela({
+    responses: [
+      [
+        fauxToolCall('bash', {
+          command: 'echo READY; sleep 30',
+          run_in_background: true,
+        }),
+        fauxToolCall('bash', {
+          command: 'echo SECOND; sleep 30',
+          run_in_background: true,
+        }),
+      ],
+      fauxText('Started both checks.'),
+    ],
+    extensions: [background()],
+    session: {
+      ui: {
+        notify: (message) => notices.push(message),
+        confirm: async () => false,
+        select: async () => undefined,
+        input: async () => undefined,
+        setStatus: (key, text) => {
+          if (key === 'background') statuses.push(text)
+        },
+      },
+    },
+  })
+  await t.run('start two slow checks in the background')
+  expect(statuses.at(-1)).toBe('2 background tasks · bg-1, bg-2')
+  // The calls return at admission; the list shows a tail once the commands write it.
+  await until(async () => {
+    await t.run('/bashes')
+    return (
+      notices.at(-1)!.includes('\n  READY') &&
+      notices.at(-1)!.includes('\n  SECOND')
+    )
+  }, 'both jobs to write their output')
+  expect(notices.at(-1)).toMatch(
+    /^\[tasks\] 2 background tasks\nbg-1 · running · \d+s · \$ echo READY; sleep 30\n {2}READY\n\nbg-2 · running · \d+s · \$ echo SECOND; sleep 30\n {2}SECOND$/,
+  )
+  await t.run('/tasks stop bg-1')
+  expect(notices.at(-1)).toMatch(
+    /^bg-1 · stopped · \d+s · \$ echo READY; sleep 30\n {2}READY$/,
+  )
+  await t.run('/tasks stop bg-2')
+  expect(notices.at(-1)).toMatch(
+    /^bg-2 · stopped · \d+s · \$ echo SECOND; sleep 30\n {2}SECOND$/,
+  )
+  expect(statuses.at(-1)).toBeUndefined()
+  await t.run('/tasks')
+  expect(notices.at(-1)).toBe('No background tasks')
+  await t.run('/tasks stop bg-1')
+  expect(notices.at(-1)).toContain('Unknown background command bg-1.')
+  expect(notices.at(-1)).toContain(
+    'It may have finished and its result was delivered (or returned by background_stop), or it ended with a restart or session close.',
+  )
+})
