@@ -184,6 +184,7 @@
     isError?: boolean | undefined
     signal?: string | null | undefined
     timedOut?: boolean | undefined
+    timedOutAfterMs?: number | undefined
     toolUnavailable?: boolean | undefined
   interface ExtensionAPI
     on: { <K extends ExtensionEventName>(event: K, handler: ExtensionHandler<K>): () => void; (event: "tool_call", toolName: string, handler: ExtensionHandler<"tool_call">): () => void; }
@@ -933,6 +934,8 @@
       ) => void
   interface VelaSettings
     autoCompaction?: boolean | undefined
+    bashForegroundTimeoutMaxSeconds?: number | undefined
+    bashForegroundTimeoutSeconds?: number | undefined
     dataDir?: string | undefined
     defaultModel?: string | undefined
     defaultThinkingLevel?: ThinkingLevel | undefined
