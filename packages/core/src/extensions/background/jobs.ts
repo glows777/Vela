@@ -63,6 +63,8 @@ class Foreground {
     readonly toolCallId?: string,
     /** The run's signal this command follows while it is in the foreground */
     readonly run?: AbortSignal,
+    /** `!!`: the command's output is kept out of the model context, so it cannot become a job */
+    readonly excludeFromContext = false,
   ) {}
 
   /** An interrupted run cancels a foreground command; a moved one no longer reaches here. */
@@ -84,6 +86,7 @@ class Foreground {
     this.run?.addEventListener('abort', this.forward, { once: true })
   }
 
+  /** Take the command out of the run's reach; a claim is synchronous, so only one caller wins. */
   unfollow(): void {
     this.state = 'moved'
     this.run?.removeEventListener('abort', this.forward)
@@ -173,6 +176,7 @@ export class BackgroundJobs implements BackgroundCommands {
     output,
     start,
     exit,
+    excludeFromContext,
   }: {
     command: string
     toolCallId?: string
@@ -180,6 +184,7 @@ export class BackgroundJobs implements BackgroundCommands {
     output: OutputTail
     start: (signal: AbortSignal) => Promise<S>
     exit: (settled: S) => CommandExit
+    excludeFromContext?: boolean
   }): ForegroundCommand<S> {
     const entry = new Foreground(
       command,
@@ -187,6 +192,7 @@ export class BackgroundJobs implements BackgroundCommands {
       output,
       toolCallId,
       signal,
+      excludeFromContext === true,
     )
     this.foreground.add(entry)
     entry.follow()
@@ -207,15 +213,16 @@ export class BackgroundJobs implements BackgroundCommands {
   }
 
   async detach(toolCallId?: string): Promise<string[]> {
-    const targets = [...this.foreground].filter(
-      (entry) =>
-        entry.state === 'foreground' &&
-        (toolCallId === undefined || entry.toolCallId === toolCallId),
+    const foreground = [...this.foreground].filter(
+      (entry) => entry.state === 'foreground',
     )
+    const targets =
+      toolCallId === undefined
+        ? foreground
+        : foreground.filter((entry) => entry.toolCallId === toolCallId)
     if (toolCallId !== undefined && targets.length === 0) {
       // Sorted so the message reads the same however the calls happened to start.
-      const running = [...this.foreground]
-        .filter((entry) => entry.state === 'foreground')
+      const running = foreground
         .flatMap((entry) => (entry.toolCallId ? [entry.toolCallId] : []))
         .sort()
       throw new Error(
@@ -226,6 +233,14 @@ export class BackgroundJobs implements BackgroundCommands {
         }`,
       )
     }
+    // A job delivers its exit to the model, which a `!!` command promised not to do.
+    const excluded = targets.find((entry) => entry.excludeFromContext)
+    if (excluded)
+      throw new Error(
+        `A command started with excludeFromContext cannot be moved to the background: its exit is delivered to the model, and this command's output stays out of the context. Let it finish, or cancel it with abortBash().`,
+      )
+    // Claim every target before the first await: an overlapping request then finds nothing to move.
+    for (const entry of targets) entry.unfollow()
     const ids: string[] = []
     for (const entry of targets) ids.push(await this.move(entry))
     return ids
@@ -237,9 +252,8 @@ export class BackgroundJobs implements BackgroundCommands {
       throw new Error(
         'The command finished before it could be moved to the background; its result came from the call.',
       )
-    // Stop following the run before anything is recorded, so a Stop that races the record
-    // cannot abort a command the job is about to own.
-    entry.unfollow()
+    // Already claimed by `detach`: the command stopped following the run before this record
+    // started, so a Stop that races it cannot abort a command the job is about to own.
     const id = `bg-${++this.sequence}`
     const job: Job = {
       token: randomUUID(),

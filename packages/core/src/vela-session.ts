@@ -208,7 +208,7 @@ export class VelaSession {
       tracker: this.tracker,
       timestamps: this.timestamps,
       prepare: this.execEnv,
-      start: () => this.start(),
+      start: (signal?: AbortSignal) => this.start(signal),
       background: () => this.registry.background,
       isClosed: () => this.closed,
       isDraining: () => this.draining,

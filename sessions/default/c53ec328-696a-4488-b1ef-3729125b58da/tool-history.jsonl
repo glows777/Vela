@@ -1,0 +1,3 @@
+{"type":"tool_call","callId":"ad86e072-218b-4388-b035-1098caf3f79f","toolCallId":"faux-call-1-1","toolName":"write","input":{},"replay":"unsafe","version":1,"seq":1,"timestamp":"2026-11-19T04:31:59.813Z"}
+{"type":"tool_result","callId":"ad86e072-218b-4388-b035-1098caf3f79f","status":"completed","durationMs":0.02533400000538677,"output":"saved","version":1,"seq":2,"timestamp":"2026-11-19T04:31:59.813Z"}
+{"type":"tool_response","callId":"ad86e072-218b-4388-b035-1098caf3f79f","output":{"type":"text","value":"saved"},"version":1,"seq":3,"timestamp":"2026-11-19T04:31:59.813Z"}

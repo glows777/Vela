@@ -34,7 +34,7 @@ export class UserBash {
       timestamps: Map<ModelMessage, number>
       prepare: () => Promise<ExecutionEnv>
       /** Prepares the session and fires `session_start`, so extensions can see the command */
-      start: () => Promise<void>
+      start: (signal?: AbortSignal) => Promise<void>
       /** The session's job table, once the `background` extension installed it */
       background: () => BackgroundCommands | undefined
       isClosed: () => boolean
@@ -94,7 +94,18 @@ export class UserBash {
       if (this.host.isDraining())
         throw new Error('Session is draining; shell command was not executed')
       // A session's first act can be a `!` command; its extensions install the job table here.
-      await this.host.start()
+      // The startup follows the command's own signal, so cancelling it does not wait for workspace
+      // preparation or a slow `session_start` hook.
+      if (!controller.signal.aborted) {
+        const starting = this.host.start(controller.signal)
+        await Promise.race([
+          starting.catch((error) => {
+            // A cancelled startup is this command's cancellation, not a failure to report.
+            if (!controller.signal.aborted) throw error
+          }),
+          cancelled,
+        ])
+      }
       // The same tail the job table keeps, so a command moved to the background keeps reporting
       // from one buffer and its snapshot starts where the foreground output stopped.
       const output = new OutputTail()
@@ -116,6 +127,7 @@ export class UserBash {
         signal: controller.signal,
         output,
         start,
+        ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
         exit: (settled) => ({
           exitCode: settled.exitCode,
           spillPath: settled.fullOutputPath,

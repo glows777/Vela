@@ -1,8 +1,14 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
+import { createLocalExecutionEnv } from '@glows777/vela-core'
+import {
+  createFauxModel,
+  fauxText,
+  fauxToolCall,
+} from '@glows777/vela-core/testing'
 import { background } from '../../packages/core/src/extensions/background/index.ts'
-import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
+import { createVela } from '../../packages/vela/src/vela.ts'
+import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
 afterEach(cleanupTestVelas)
 
@@ -449,4 +455,118 @@ test('an interrupted run keeps a declared job too, and its exit still arrives', 
   expect(t.model.calls[2]!.lastUserText).toStartWith(
     'Background command bg-1 finished with exit code 0.',
   )
+})
+
+test('two overlapping requests never move the same call twice', async () => {
+  const t = createTestVela({
+    responses: [
+      [
+        fauxToolCall('bash', { command: 'echo FIRST; sleep 0.5' }),
+        fauxToolCall('bash', { command: 'echo SECOND; sleep 0.5' }),
+      ],
+      (request) => fauxText(request.lastUserText),
+    ],
+    extensions: [background()],
+    allowPendingResponses: true,
+  })
+  const running = t.run('start two checks')
+  await until(
+    () => t.eventsOf('tool_execution_update').length === 2,
+    'both calls to produce output',
+  )
+  // RPC dispatch allows overlapping requests: the first takes everything, and while it is
+  // awaiting the first start record, a second one targets the call it has not reached yet.
+  const all = t.session.backgroundTasks()
+  const targeted = t.session.backgroundTasks('faux-call-1-2')
+  const results = await Promise.allSettled([targeted, all])
+  const ids = results.flatMap((result) =>
+    result.status === 'fulfilled' ? result.value : [],
+  )
+  // Two processes, so two jobs: a second claim on the same call would make a third id.
+  expect(ids.slice().sort()).toEqual(['bg-1', 'bg-2'])
+  expect(new Set(ids).size).toBe(2)
+  await running
+  await until(
+    () =>
+      ['bg-1', 'bg-2'].every((id) =>
+        t.session.messages.some(
+          (message) =>
+            typeof message.content === 'string' &&
+            message.content.startsWith(`Background command ${id}`),
+        ),
+      ),
+    'one exit per job',
+  )
+  // Each job delivered once, so no process was handed over twice.
+  expect(
+    t.session.messages.filter(
+      (message) =>
+        typeof message.content === 'string' &&
+        message.content.startsWith('Background command bg-1'),
+    ),
+  ).toHaveLength(1)
+  expect(
+    t.session.messages.filter(
+      (message) =>
+        typeof message.content === 'string' &&
+        message.content.startsWith('Background command bg-2'),
+    ),
+  ).toHaveLength(1)
+})
+
+test('a `!!` command cannot be moved to the background, so its output never reaches the model', async () => {
+  const t = createTestVela({
+    responses: [(request) => fauxText(request.lastUserText)],
+    extensions: [background()],
+  })
+  const updates: string[] = []
+  const command = t.session.executeBash('echo SECRET; sleep 0.3', {
+    excludeFromContext: true,
+    onUpdate: (output) => updates.push(output),
+  })
+  await until(() => t.session.isBashRunning, 'the command to start')
+  await until(() => updates.some((output) => output.includes('SECRET')))
+  expect(t.session.backgroundTasks()).rejects.toThrow(
+    'A command started with excludeFromContext cannot be moved to the background',
+  )
+  expect(await command).toMatchObject({ cancelled: false, exitCode: 0 })
+  await t.run('hello')
+  // The exit would have triggered its own turn; the exclusion keeps the output out of the context.
+  expect(t.model.calls).toHaveLength(1)
+  expect(JSON.stringify(t.messages)).not.toContain('SECRET')
+})
+
+test('cancelling a `!` command while the session is still starting does not wait for the environment', async () => {
+  const dir = tempDir()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const vela = createVela({
+    cwd: dir.path,
+    model: createFauxModel({ responses: [] }),
+    extensions: [background()],
+    env: async () => {
+      await gate
+      return createLocalExecutionEnv({ cwd: dir.path })
+    },
+  })
+  try {
+    const session = vela.session('starting')
+    const command = session.executeBash('echo LATE')
+    // The environment never resolves until the gate opens; abort must not wait behind it.
+    await Bun.sleep(50)
+    const aborting = session.abortBash()
+    const result = await Promise.race([
+      command,
+      Bun.sleep(1000).then(() => 'hung' as const),
+    ])
+    expect(result).toMatchObject({ cancelled: true, exitCode: undefined })
+    expect(session.isBashRunning).toBe(false)
+    release()
+    await aborting
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
 })
