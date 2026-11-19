@@ -60,6 +60,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- **A message the Local project chat refuses says why it was refused.** Local's message schema gives the two `text` rules a sender can fix their own words — `Message is too long (max 100000 characters)` past Local's limit and `Message must not be empty` — while any other shape failure keeps `Invalid JSON request body`. The desktop shows that reason as it is, without Electron's `Error invoking remote method '…': LocalError:` wrapper ([#469](https://github.com/glows777/Vela/issues/469)).
+
 - **Hosted background jobs no longer disappear silently after a service restart.** The existing channel directory records jobs before execution, and startup queues one unknown-result input for each lost job without a new human message. A saved normal-result input or explicit Stop/close clears the record; SIGTERM shutdown preserves it. Durable input markers reconcile interrupted notification persistence without claiming exactly-once remote replies (part of #411).
 - **Lark final replies and topic-title sends carry a durable delivery identity.** A saved send intent reuses its UUID only within Lark's one-hour deduplication window; an acknowledged send is not repeated after restart. Expired uncertain sends fail as unknown instead of sending with a new identity. Topic tools remain unsafe to replay, and forwarding, progress cards and status notices are not covered by this bounded guarantee (part of #411).
 
