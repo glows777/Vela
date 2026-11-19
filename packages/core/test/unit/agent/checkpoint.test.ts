@@ -1,7 +1,11 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { z } from 'zod'
 import { agentLoop } from '../../../src/agent/index.ts'
 import type { ModelMessage } from '../../../src/messages.ts'
+import { ToolResultStore } from '../../../src/session/tool-results.ts'
 import {
   createFauxModel,
   fauxText,
@@ -10,11 +14,21 @@ import {
 import { ToolRegistry } from '../../../src/tools/registry.ts'
 import { TokenTracker } from '../../../src/usage/tracker.ts'
 
+const dir = mkdtempSync(join(tmpdir(), 'vela-agent-checkpoint-'))
+afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
+// These tests do not assert on persistence, so their tool history goes to a temp directory.
+function makeRegistry() {
+  return new ToolRegistry(
+    new ToolResultStore(join(dir, crypto.randomUUID(), 'tool-results')),
+  )
+}
+
 test('the complete assistant checkpoint is awaited before any tool side effect, and added only once', async () => {
   let flushed = false
   let executions = 0
   const messages: ModelMessage[] = [{ role: 'user', content: 'work' }]
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register({
     name: 'write',
     description: 'write marker',
@@ -52,7 +66,7 @@ test('the complete assistant checkpoint is awaited before any tool side effect, 
 
 test('a rejected checkpoint never executes a tool or resends the model request', async () => {
   let executions = 0
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register({
     name: 'write',
     description: 'write marker',
@@ -81,7 +95,7 @@ test('a rejected checkpoint never executes a tool or resends the model request',
 
 test('cancellation after a checkpoint answers its calls without duplicating the assistant', async () => {
   const controller = new AbortController()
-  const registry = new ToolRegistry()
+  const registry = makeRegistry()
   registry.register({
     name: 'wait',
     description: 'wait',
