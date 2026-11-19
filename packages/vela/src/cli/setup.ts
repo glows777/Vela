@@ -45,14 +45,9 @@ export const BUILTIN_EXTENSIONS: Record<
 }
 
 /** Config-driven session capabilities; explicit -e factories remain host-owned. */
-export const SESSION_BUILTINS = new Set([
-  'background',
-  'memory',
-  'rag',
-  'web',
-  'mcp',
-  'todo',
-])
+export const SESSION_BUILTINS = new Set(['background', 'web', 'mcp', 'todo'])
+/** One owner for each host-wide storage/lifecycle, regardless of project switches. */
+export const HOST_STORAGE_BUILTINS = new Set(['memory', 'rag'])
 
 export interface CliArgs {
   setup?: boolean
@@ -638,11 +633,16 @@ export async function loadCliExtensions(
         ? [
             ...config.extensions.filter(
               (entry) =>
-                'builtin' in entry && !SESSION_BUILTINS.has(entry.name),
+                'builtin' in entry &&
+                !SESSION_BUILTINS.has(entry.name) &&
+                !HOST_STORAGE_BUILTINS.has(entry.name),
             ),
             ...(
               config.sessionResources?.hostExtensions ?? config.extensions
-            ).filter((entry) => !('builtin' in entry)),
+            ).filter(
+              (entry) =>
+                !('builtin' in entry) || HOST_STORAGE_BUILTINS.has(entry.name),
+            ),
           ]
         : config.extensions),
     ...args.extensions.map((source): ExtensionEntry => {

@@ -10,6 +10,15 @@ import {
 } from '@glows777/vela/testing'
 import { loadConfig } from '@glows777/vela-core'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
+import {
+  cliHostExtensionConfig,
+  cliProjectExtensions,
+} from '../../packages/vela/src/cli/project-extensions.ts'
+import {
+  loadCliExtensions,
+  parseArgs,
+} from '../../packages/vela/src/cli/setup.ts'
+import { loadConfig as loadCliConfig } from '../../packages/vela/src/config/index.ts'
 
 interface Record {
   kind: string
@@ -466,5 +475,79 @@ test('the first plain input loads its project input handler before contacting th
   } finally {
     await t.vela.dispose()
     t.dir.cleanup()
+  }
+})
+
+test('CLI memory and RAG stay host-owned across two projects and project idle closes', async () => {
+  const dir = tempDir()
+  const aDir = join(dir.path, 'A')
+  const bDir = join(dir.path, 'B')
+  const args = parseArgs(['serve'])
+  const agentDir = join(dir.path, 'user')
+  mkdirSync(agentDir)
+  writeFileSync(
+    join(agentDir, 'settings.json'),
+    JSON.stringify({
+      extensionConfig: { memory: { dream: false } },
+    }),
+  )
+  for (const cwd of [aDir, bDir]) {
+    mkdirSync(join(cwd, '.vela'), { recursive: true })
+    writeFileSync(
+      join(cwd, '.vela/settings.json'),
+      JSON.stringify({
+        extensionConfig: { memory: { dream: true } },
+      }),
+    )
+  }
+  const config = loadCliConfig({
+    cwd: aDir,
+    agentDir,
+    trusted: true,
+    env: {},
+    builtins: ['memory', 'rag'],
+  })
+  const host = await loadCliExtensions(config, args, () => {}, true)
+  const extensionConfig = cliHostExtensionConfig(config, args)
+  const select = cliProjectExtensions(config, args)
+  const projectFactories: string[] = []
+  const vela = createVela({
+    cwd: aDir,
+    dataDir: join(dir.path, 'host'),
+    model: createFauxModel({
+      responses: [fauxText('A'), fauxText('B'), fauxText('B again')],
+    }),
+    extensions: host,
+    extensionConfig,
+    sessionResources: {
+      ...config.sessionResources!,
+      workspaceModeAt: () => 'all',
+      projectExtensions: async (input) => {
+        const selected = await select(input)
+        return {
+          ...selected,
+          load: async () => {
+            const factories = await selected.load()
+            projectFactories.push(...factories.map((factory) => factory.name))
+            return factories
+          },
+        }
+      },
+    },
+  })
+  try {
+    const a = vela.session('a')
+    const b = vela.session('b', { cwd: bDir })
+    await a.prompt('A')
+    await b.prompt('B')
+    await a.close()
+    await b.prompt('B remains active')
+    expect(projectFactories).toEqual([])
+    expect(host.map((factory) => factory.name)).toEqual(['memory', 'rag'])
+    expect(b.getActiveTools()).toContain('memory')
+    expect(extensionConfig.memory).toEqual({ dream: false })
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
   }
 })

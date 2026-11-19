@@ -10,6 +10,7 @@ import {
   BUILTIN_EXTENSIONS,
   type CliArgs,
   extensionConfigFromEnv,
+  HOST_STORAGE_BUILTINS,
   SESSION_BUILTINS,
   withMcpServers,
 } from './setup.ts'
@@ -44,8 +45,9 @@ export function cliProjectExtensions(
   }: Parameters<ProjectLoader>[0]) => {
     if (args.noExtensions)
       return { key: 'disabled', extensionConfig: {}, load: async () => [] }
-    if (environmentId !== 'node:local')
-      throw new Error(
+    const local = environmentId === 'node:local'
+    if (!local)
+      onDiagnostic(
         `[extensions] Skipped project extensions and MCP for unsupported environment ${environmentId}:${cwd}`,
       )
     const hostNames = new Set(
@@ -54,7 +56,10 @@ export function cliProjectExtensions(
         .map((entry) => entry.name),
     )
     for (const name of Object.keys(projectSettings.extensionConfig ?? {})) {
-      if (hostNames.has(name) && !explicit.has(name))
+      if (
+        HOST_STORAGE_BUILTINS.has(name) ||
+        (hostNames.has(name) && !explicit.has(name))
+      )
         onDiagnostic(
           `[extensions] ${cwd}: project configuration for host extension "${name}" is ignored; configure it in the user settings instead`,
         )
@@ -91,12 +96,15 @@ export function cliProjectExtensions(
       (name) =>
         !disabled.has(name) &&
         SESSION_BUILTINS.has(name) &&
+        (local || name !== 'mcp') &&
         !explicit.has(name),
     )
     const extensionConfig = extensionConfigFromEnv(
       split.env ?? {},
       settings.extensionConfig ?? {},
     )
+    for (const name of HOST_STORAGE_BUILTINS) delete extensionConfig[name]
+    if (!local) delete extensionConfig.mcp
     if (names.includes('mcp'))
       extensionConfig.mcp = mcpConfig.resolve(extensionConfig.mcp ?? {}, {
         cwd,
@@ -105,7 +113,7 @@ export function cliProjectExtensions(
         trusted: trusted && join(cwd, '.vela') !== split.agentDir,
         env: split.env ?? {},
       })
-    const selected = (trusted ? entries : []).filter(
+    const selected = (local && trusted ? entries : []).filter(
       (entry) => !explicit.has(entry.name),
     )
     return {
@@ -134,6 +142,7 @@ export function cliProjectExtensions(
 export function cliHostExtensionConfig(config: VelaConfig, args: CliArgs) {
   const sections = { ...config.userExtensionConfig }
   for (const name of new Set(['lark', ...explicitNames(args)])) {
+    if (HOST_STORAGE_BUILTINS.has(name)) continue
     const section = config.extensionConfig[name]
     if (section) sections[name] = section
   }

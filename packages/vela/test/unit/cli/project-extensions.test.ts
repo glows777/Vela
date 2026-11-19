@@ -45,7 +45,7 @@ function fixture() {
     cwd: a,
     agentDir,
     trusted: true,
-    builtins: ['mcp', 'memory'],
+    builtins: ['mcp', 'memory', 'todo'],
     env: {},
   })
   const input = {
@@ -69,7 +69,7 @@ test('MCP snapshot follows B, merges user overrides and changes key without muta
   })
   expect((await first.load()).map((factory) => factory.name)).toEqual([
     'mcp',
-    'memory',
+    'todo',
   ])
   t.write(join(t.b, '.vela'), 'mcp.json', {
     mcpServers: { project: { command: 'new-b-server' } },
@@ -99,13 +99,15 @@ test('host factories exclude config-driven session builtins; explicit MCP remain
   const t = fixture(),
     errors: string[] = []
   expect(
-    await loadCliExtensions(
-      t.config,
-      parseArgs([]),
-      (e) => errors.push(e),
-      true,
-    ),
-  ).toEqual([])
+    (
+      await loadCliExtensions(
+        t.config,
+        parseArgs([]),
+        (e) => errors.push(e),
+        true,
+      )
+    ).map((factory) => factory.name),
+  ).toEqual(['memory'])
   const args = parseArgs(['-e', 'builtin:mcp'])
   const host = await loadCliExtensions(
     t.config,
@@ -113,11 +115,9 @@ test('host factories exclude config-driven session builtins; explicit MCP remain
     (e) => errors.push(e),
     true,
   )
-  expect(host.map((factory) => factory.name)).toEqual(['mcp'])
+  expect(host.map((factory) => factory.name)).toEqual(['memory', 'mcp'])
   const scope = await cliProjectExtensions(t.config, args)(t.input)
-  expect((await scope.load()).map((factory) => factory.name)).toEqual([
-    'memory',
-  ])
+  expect((await scope.load()).map((factory) => factory.name)).toEqual(['todo'])
   expect(cliHostExtensionConfig(t.config, args).custom).toEqual({
     marker: 'user',
   })
@@ -132,12 +132,17 @@ test('project imports stay lazy and non-local configuration never imports host c
   }
   const snapshot = await cliProjectExtensions(t.config, parseArgs([]))(input)
   await expect(snapshot.load()).rejects.toThrow()
-  await expect(
-    cliProjectExtensions(
-      t.config,
-      parseArgs([]),
-    )({ ...input, environmentId: 'remote' }),
-  ).rejects.toThrow('Skipped project extensions and MCP')
+  const messages: string[] = []
+  const remote = await cliProjectExtensions(
+    t.config,
+    parseArgs([]),
+    (message) => messages.push(message),
+  )({ ...input, environmentId: 'remote' })
+  expect(messages).toEqual([
+    expect.stringContaining('Skipped project extensions and MCP'),
+  ])
+  expect(remote.extensionConfig.mcp).toBeUndefined()
+  expect((await remote.load()).map((factory) => factory.name)).toEqual(['todo'])
 })
 
 test('project overrides of host user singletons are diagnosed without changing host config', async () => {
