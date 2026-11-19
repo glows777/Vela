@@ -167,7 +167,7 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
           ? {
               sessionId,
               limit,
-              endTime: String(Math.floor(Date.now() / 1000)),
+              endTime: String(Math.floor(Date.now() / 1000) + 1),
               offset: 0,
             }
           : readCursor(cursor, sessionId)

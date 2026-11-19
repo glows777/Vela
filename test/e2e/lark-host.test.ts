@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { fauxText } from '@glows777/vela-core/testing'
 import { type LarkHostEvent, lark } from '@glows777/vela-lark'
 import { fakeLark, historyMessage, larkEvent } from '../support/lark.ts'
@@ -49,9 +49,16 @@ test('SDK history pages follow the enabled group or its exact owned topic', asyn
   const calls: Options[] = []
   fake.transport.searchMessages = async (_chatId, options) => {
     calls.push(options)
-    return options.pageToken
-      ? { items: [historyMessage('old', 'ou_alice', 'old')] }
-      : { items: [historyMessage('new', 'ou_bob', 'new')], pageToken: 'next' }
+    const rows = [
+      historyMessage('new', 'ou_bob', 'new', '1250'),
+      historyMessage('old', 'ou_alice', 'old', '500'),
+    ].filter((row) => Number(row.create_time) < Number(options.endTime) * 1000)
+    const offset = Number(options.pageToken ?? 0)
+    const next = offset + options.limit
+    return {
+      items: rows.slice(offset, next),
+      pageToken: next < rows.length ? String(next) : undefined,
+    }
   }
   fake.topicHistory.push(
     [
@@ -73,6 +80,8 @@ test('SDK history pages follow the enabled group or its exact owned topic', asyn
     replyToId: 'seed_anchor',
     chatKind: 'group',
   })
+  using clock = spyOn(Date, 'now')
+  clock.mockReturnValueOnce(1750)
   const first = await host.messages({ chatId, sessionId: group, limit: 1 })
   expect(first.messages).toEqual([
     {
@@ -81,17 +90,20 @@ test('SDK history pages follow the enabled group or its exact owned topic', asyn
       text: 'new',
       role: 'user',
       senderName: 'Bob',
-      createdAt: '1970-01-01T00:00:01.000Z',
+      createdAt: '1970-01-01T00:00:01.250Z',
     },
   ])
   first.messages[0]!.text = 'edited'
+  clock.mockReturnValueOnce(4750)
   const second = await host.messages({
     chatId,
     sessionId: group,
     cursor: first.nextCursor,
   })
+  clock.mockRestore()
   expect(second.messages.map((m) => m.id)).toEqual(['old'])
-  expect(calls[1]).toEqual({ ...calls[0]!, pageToken: 'next' })
+  expect(calls[0]?.endTime).toBe('2')
+  expect(calls[1]).toEqual({ ...calls[0]!, pageToken: '1' })
   expect(
     (await host.messages({ chatId, sessionId: group, limit: 1 })).messages[0]
       ?.text,
