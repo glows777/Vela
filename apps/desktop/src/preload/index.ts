@@ -25,6 +25,8 @@ const invoke = async (request: Request) => {
 }
 const bridge: DesktopBridge = {
   channels: () => invoke({ method: 'channels' }),
+  settings: () => invoke({ method: 'settings' }),
+  saveModel: (input) => invoke({ method: 'saveModel', input }),
   sessions: (channel, chatId) =>
     invoke({ method: 'sessions', channel, chatId }),
   connection: (channel) => invoke({ method: 'connection', channel }),

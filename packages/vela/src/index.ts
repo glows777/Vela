@@ -241,4 +241,9 @@ export {
   type VelaConfig,
   type VelaSettings,
 } from './config/index.ts'
+export {
+  saveLarkSection,
+  saveModelSetup,
+  usableModel,
+} from './settings.ts'
 export { createVela, type Vela, type VelaOptions } from './vela.ts'

@@ -12,13 +12,12 @@ import {
   type ThinkingLevel,
   type VelaSession,
   verifyProviderModel,
-  writeProviderPreset,
 } from '@glows777/vela-core'
 import { THINKING_LEVELS } from '@glows777/vela-core/diagnostics'
+import { saveModelSetup } from '../../settings.ts'
 import type { Vela } from '../../vela.ts'
 import { createVela } from '../../vela.ts'
 import { openBrowser } from '../login.ts'
-import { saveUserSettings } from '../user-settings.ts'
 import { larkSetup } from './lark-setup.ts'
 
 interface Host {
@@ -382,13 +381,6 @@ export async function setupWizard(host: Host): Promise<boolean> {
     if (save !== 'yes') return false
     const written: string[] = []
     try {
-      if (
-        newCredential ||
-        JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
-      ) {
-        await diskCredentials.modify(provider, async () => memory.get(provider))
-        written.push(authPath)
-      }
       mkdirSync(agentDir, { recursive: true, mode: 0o700 })
       if (newInstallationId) {
         writeFileSync(
@@ -397,15 +389,19 @@ export async function setupWizard(host: Host): Promise<boolean> {
         )
         written.push(join(agentDir, 'installation-id'))
       }
-      if (finalOverride) {
-        writeProviderPreset(agentDir, provider, finalOverride)
-        written.push(modelsPath)
-      }
-      settings.defaultModel = ref
-      settings.defaultThinkingLevel = thinking
-      saveUserSettings(agentDir, settings)
-      written.push(settingsPath)
-      host.vela.configureProvider(provider, finalProviders[provider]!)
+      const saved = await saveModelSetup({
+        agentDir,
+        ref,
+        providers: finalProviders,
+        ...(newCredential ||
+        JSON.stringify(memory.get(provider)) !== JSON.stringify(stored)
+          ? { credential: memory.get(provider) }
+          : {}),
+        ...(finalOverride ? { preset: finalOverride } : {}),
+        thinkingLevel: thinking as ThinkingLevel,
+      })
+      written.push(...saved.written)
+      host.vela.configureProvider(provider, saved.definition)
       host.vela.setDefaults(ref, thinking as ThinkingLevel)
       host.session.setModel(ref)
       host.session.setThinkingLevel(thinking as ThinkingLevel)

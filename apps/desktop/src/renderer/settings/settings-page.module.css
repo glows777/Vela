@@ -1,0 +1,106 @@
+.page {
+  width: 100%;
+  overflow-y: auto;
+  padding: var(--space-8) var(--space-6) var(--space-10);
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.title {
+  margin: 0;
+  color: var(--vela-ink);
+  font-family: var(--vela-family-display);
+  font-size: 48px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.navRow {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--vela-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.navRow:hover {
+  background: var(--vela-menu-hover);
+}
+
+.navRow[aria-current="page"] {
+  background: var(--vela-menu-hover);
+  font-weight: 600;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.panelHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.title2 {
+  margin: 0;
+  color: var(--vela-ink);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.note {
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-sm);
+}
+
+.rows {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .nav {
+    flex-direction: row;
+  }
+}

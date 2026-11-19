@@ -1,5 +1,12 @@
 import { useSyncExternalStore } from 'react'
-import type { Event, Message, Project, Session } from '../shared/bridge.ts'
+import type {
+  Event,
+  Message,
+  ModelSetup,
+  Project,
+  Session,
+  SettingsState,
+} from '../shared/bridge.ts'
 import { vela } from './vela.ts'
 
 /** The last progress a session reported while it ran. */
@@ -11,6 +18,8 @@ type Progress = {
 
 export interface Snapshot {
   ready: boolean
+  /** What Settings and the setup gate show; absent until the first read. */
+  settings?: SettingsState
   projects: Project[]
   /** Every Local session, by id. One project chat plus one session per started task. */
   sessions: Record<string, Session>
@@ -65,8 +74,12 @@ const subscribe = (listener: () => void) => {
 }
 const current = () => snapshot
 export const useStore = () => useSyncExternalStore(subscribe, current)
+/** A bridge failure without Electron's transport wording; the reason is what the person needs. */
 export const errorMessage = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause)
+  (cause instanceof Error ? cause.message : String(cause)).replace(
+    /^Error invoking remote method '[^']*': *([A-Za-z]*Error: )?/,
+    '',
+  )
 
 const byTime = (messages: Message[]) =>
   messages.sort((one, other) =>
@@ -197,12 +210,14 @@ export async function loadProject(projectId: string) {
 
 async function reload() {
   try {
-    const [projects, sessions] = await Promise.all([
+    const [settings, projects, sessions] = await Promise.all([
+      vela.settings(),
       vela.projects(),
       vela.sessions('local'),
     ])
     publish({
       ready: true,
+      settings,
       projects,
       sessions: Object.fromEntries(
         sessions.map((session) => [session.sessionId, session]),
@@ -212,6 +227,13 @@ async function reload() {
   } catch (cause) {
     publish({ error: errorMessage(cause) })
   }
+}
+
+/** Checks and saves a model choice; a failed check throws its reason. */
+export async function saveModel(input: ModelSetup): Promise<SettingsState> {
+  const settings = await vela.saveModel(input)
+  publish({ settings })
+  return settings
 }
 
 export async function openProject(input: { cwd: string; name?: string }) {

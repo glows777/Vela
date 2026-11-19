@@ -40,6 +40,7 @@ export function Sidebar({
   onHome,
   onRoutines,
   onProject,
+  onSettings,
   onNewSession,
   onNewProject,
 }: {
@@ -48,6 +49,7 @@ export function Sidebar({
   onHome: () => void
   onRoutines: () => void
   onProject: (projectId: string) => void
+  onSettings: () => void
   onNewSession: () => void
   onNewProject: () => void
 }) {
@@ -111,7 +113,8 @@ export function Sidebar({
         <Row
           icon={<SlidersHorizontal size={16} aria-hidden="true" />}
           label="Settings"
-          disabled
+          current={current === 'settings'}
+          onClick={onSettings}
         />
       </div>
     </aside>

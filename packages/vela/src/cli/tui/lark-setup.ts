@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectLarkSetup } from '@glows777/vela-lark'
-import { saveUserSettings } from '../user-settings.ts'
+import { saveLarkSection } from '../../settings.ts'
 
 interface Connection {
   waitForMention(): Promise<{ chatId: string; chatName?: string }>
@@ -101,40 +101,24 @@ export async function larkSetup(host: Host): Promise<boolean> {
       ],
     )
     if (confirmed !== 'yes') return false
-    if (typeof lark.chats === 'string' && lark.chats.includes('$')) {
+    try {
+      await saveLarkSection({
+        agentDir: host.agentDir,
+        ...(appId ? { appId: id } : {}),
+        ...(secretInput ? { appSecret: secret } : {}),
+        addChat: group.chatId,
+        env: process.env,
+      })
+    } catch (error) {
       host.addNotice(
-        'Existing chats use an environment expression. Add the group manually to preserve that setting.',
+        (error instanceof Error ? error.message : String(error)).replaceAll(
+          secret,
+          '[redacted]',
+        ),
         'error',
       )
       return false
     }
-    const chats: unknown[] = Array.isArray(lark.chats)
-      ? [...lark.chats]
-      : typeof lark.chats === 'string'
-        ? lark.chats
-            .split(',')
-            .map((v: string) => v.trim())
-            .filter(Boolean)
-        : []
-    if (
-      !chats.some((entry) =>
-        typeof entry === 'string'
-          ? expand(entry).trim() === group.chatId
-          : typeof object(entry).id === 'string' &&
-            expand(object(entry).id as string).trim() === group.chatId,
-      )
-    )
-      chats.push(group.chatId)
-    extensionConfig.lark = {
-      ...lark,
-      appId: appId ? id.replace(/\$/g, () => '$$') : lark.appId,
-      appSecret: secretInput
-        ? secret.replace(/\$/g, () => '$$')
-        : lark.appSecret,
-      chats,
-    }
-    settings.extensionConfig = extensionConfig
-    saveUserSettings(host.agentDir, settings)
     try {
       await connection.send(
         group.chatId,

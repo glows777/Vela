@@ -27,6 +27,51 @@ export type Message = {
   createdAt: string
   clientMessageId?: string
 }
+/** One model a provider offers, without anything that would name a key. */
+type SettingsModel = {
+  id: string
+  contextWindow?: number
+  reasoning?: boolean
+}
+export type SettingsProvider = {
+  name: string
+  /** Where its credential comes from ('auth.json', 'OPENAI_API_KEY', …); absent when none is saved. */
+  credential?: string
+  /** Defined in models.json rather than built in. */
+  custom: boolean
+  models: SettingsModel[]
+}
+/** What the pages show of Vela's configuration. Keys never cross this boundary. */
+export type SettingsState = {
+  /** The user directory (VELA_DIR). */
+  folder: string
+  /** The files a model choice writes. */
+  files: { settings: string; models: string; auth: string }
+  /** Nothing can answer before a model and its credential are saved. */
+  setup: {
+    required: boolean
+    reason?: 'no-model' | 'missing-credential' | 'unknown-model'
+    /** The provider that has no credential, for `missing-credential`. */
+    provider?: string
+  }
+  /** The saved default model, `provider/id`. */
+  model?: string
+  thinkingLevel?: string
+  providers: SettingsProvider[]
+}
+export type ProviderApi =
+  | 'openai-completions'
+  | 'openai-responses'
+  | 'anthropic-messages'
+/** A provider and model to check and then save. */
+export type ModelSetup = {
+  provider: string
+  model: string
+  /** A new API key; absent keeps the saved one. */
+  key?: string
+  /** A provider that models.json doesn't define yet; saved with this model. */
+  custom?: { api: ProviderApi; baseUrl: string }
+}
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
 /**
  * Deployment-local wall clock, as the host takes it: `at` is `YYYY-MM-DDTHH:mm` with
@@ -114,6 +159,10 @@ type LocalEvent = {
 )
 export interface DesktopBridge {
   channels(): Promise<{ name: string; description: string }[]>
+  /** Vela's configuration, without the contents of settings.json, models.json or auth.json. */
+  settings(): Promise<SettingsState>
+  /** Checks the key with one small request, then saves the choice; returns the new state. */
+  saveModel(input: ModelSetup): Promise<SettingsState>
   sessions(channel: string, chatId?: string): Promise<Session[]>
   connection(channel: string): Promise<Connection>
   submit(
@@ -165,6 +214,8 @@ export const REQUEST = 'vela:request'
 export const EVENT = 'vela:event'
 export type Request =
   | { method: 'channels' }
+  | { method: 'settings' }
+  | { method: 'saveModel'; input: ModelSetup }
   | { method: 'sessions'; channel: string; chatId?: string }
   | { method: 'connection'; channel: string }
   | {

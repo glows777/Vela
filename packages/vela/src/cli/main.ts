@@ -32,6 +32,7 @@ import {
   savedTrust,
   type VelaConfig,
 } from '../config/index.ts'
+import { usableModel } from '../settings.ts'
 import { createVela } from '../vela.ts'
 import { errorMessage } from './error.ts'
 import { readAttachments } from './files.ts'
@@ -600,14 +601,12 @@ try {
         args.thinking = undefined
         chosenModel = undefined
       },
-      hasUsableModel: (session) => {
-        const provider = session.modelInfo.provider
-        const definition = config.providers[provider]
-        return (
-          !definition?.authSource ||
-          definition.authSource(config.credentials.get(provider)) !== undefined
-        )
-      },
+      hasUsableModel: (session) =>
+        usableModel({
+          providers: config.providers,
+          credentials: config.credentials,
+          model: session.modelInfo.ref,
+        }).usable,
       onExit: async () => {
         await vela.dispose()
         await recorder?.flush()

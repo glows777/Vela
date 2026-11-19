@@ -4,15 +4,19 @@ import { needsYou } from './format.ts'
 import { HeaderBar } from './frame/header-bar.tsx'
 import { NewProjectDialog } from './frame/new-project.tsx'
 import { Sidebar } from './frame/sidebar.tsx'
+import { Wordmark } from './frame/wordmark.tsx'
 import { Home } from './home/home.tsx'
 import type { Panel } from './panel.ts'
 import { ProjectPage } from './project/project-page.tsx'
 import { RoutinesPage } from './routines/routines-page.tsx'
+import { SettingsPage } from './settings/settings-page.tsx'
+import { FirstRun } from './setup/first-run.tsx'
 import { loadProject, start, useStore } from './store.ts'
 
 type View =
   | { name: 'home' }
   | { name: 'routines' }
+  | { name: 'settings' }
   | { name: 'project'; projectId: string }
 
 /** The frame: a fixed sidebar and header bar around Home or one project. */
@@ -51,6 +55,24 @@ export function App() {
     ? needsYou(snapshot).some((session) => session.chatId === project.id)
     : false
 
+  // A read that fails is a reason, not a blank window: nothing else renders while settings is
+  // missing, so the error is all the person can be shown.
+  if (!snapshot.settings)
+    return snapshot.error ? (
+      <main className={styles.hostError}>
+        <Wordmark heading />
+        <p role="alert">{snapshot.error}</p>
+        <p className={styles.hint}>
+          Fix that file and restart Vela. Settings › General shows the folder
+          once it opens.
+        </p>
+      </main>
+    ) : (
+      <div className={styles.booting} aria-busy="true" />
+    )
+  if (snapshot.settings.setup.required)
+    return <FirstRun settings={snapshot.settings} />
+
   return (
     <div className={styles.app}>
       <Sidebar
@@ -59,6 +81,7 @@ export function App() {
         onHome={() => setView({ name: 'home' })}
         onRoutines={() => setView({ name: 'routines' })}
         onProject={openProjectPage}
+        onSettings={() => setView({ name: 'settings' })}
         onNewSession={() => {
           setView({ name: 'home' })
           setFocusSignal((value) => value + 1)
@@ -68,12 +91,20 @@ export function App() {
       <div className={styles.main}>
         <HeaderBar
           project={project}
-          title={view.name === 'routines' ? 'Routines' : undefined}
+          title={
+            view.name === 'routines'
+              ? 'Routines'
+              : view.name === 'settings'
+                ? 'Settings'
+                : undefined
+          }
           waiting={waiting}
         />
         <main className={styles.content}>
           {view.name === 'routines' ? (
             <RoutinesPage snapshot={snapshot} />
+          ) : view.name === 'settings' ? (
+            <SettingsPage settings={snapshot.settings} />
           ) : project ? (
             <ProjectPage
               snapshot={snapshot}
