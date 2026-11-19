@@ -1,2 +1,0 @@
-{"type":"tool_call","callId":"64812aef-812d-4289-84e9-8a29df261ee4","toolCallId":"faux-call-1-1","toolName":"work","input":{},"version":1,"seq":1,"timestamp":"2026-11-19T04:31:59.796Z"}
-{"type":"tool_result","callId":"64812aef-812d-4289-84e9-8a29df261ee4","status":"rejected","durationMs":0,"error":"Tool was not executed because the session is shutting down.","version":1,"seq":2,"timestamp":"2026-11-19T04:31:59.797Z"}
