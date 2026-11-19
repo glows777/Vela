@@ -7,9 +7,13 @@ import { Sidebar } from './frame/sidebar.tsx'
 import { Home } from './home/home.tsx'
 import type { Panel } from './panel.ts'
 import { ProjectPage } from './project/project-page.tsx'
+import { RoutinesPage } from './routines/routines-page.tsx'
 import { loadProject, start, useStore } from './store.ts'
 
-type View = { name: 'home' } | { name: 'project'; projectId: string }
+type View =
+  | { name: 'home' }
+  | { name: 'routines' }
+  | { name: 'project'; projectId: string }
 
 /** The frame: a fixed sidebar and header bar around Home or one project. */
 export function App() {
@@ -51,8 +55,9 @@ export function App() {
     <div className={styles.app}>
       <Sidebar
         projects={snapshot.projects}
-        current={view.name === 'home' ? 'home' : view.projectId}
+        current={view.name === 'project' ? view.projectId : view.name}
         onHome={() => setView({ name: 'home' })}
+        onRoutines={() => setView({ name: 'routines' })}
         onProject={openProjectPage}
         onNewSession={() => {
           setView({ name: 'home' })
@@ -61,9 +66,15 @@ export function App() {
         onNewProject={() => setCreating(true)}
       />
       <div className={styles.main}>
-        <HeaderBar project={project} waiting={waiting} />
+        <HeaderBar
+          project={project}
+          title={view.name === 'routines' ? 'Routines' : undefined}
+          waiting={waiting}
+        />
         <main className={styles.content}>
-          {project ? (
+          {view.name === 'routines' ? (
+            <RoutinesPage snapshot={snapshot} />
+          ) : project ? (
             <ProjectPage
               snapshot={snapshot}
               project={project}

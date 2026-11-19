@@ -33,11 +33,12 @@ function Row({
   )
 }
 
-/** Fixed frame: the wordmark, the two ways to create, projects, and the two pages that come later. */
+/** Fixed frame: the wordmark, the two ways to create, projects, and the pages under them. */
 export function Sidebar({
   projects,
   current,
   onHome,
+  onRoutines,
   onProject,
   onNewSession,
   onNewProject,
@@ -45,6 +46,7 @@ export function Sidebar({
   projects: Project[]
   current: string
   onHome: () => void
+  onRoutines: () => void
   onProject: (projectId: string) => void
   onNewSession: () => void
   onNewProject: () => void
@@ -103,7 +105,8 @@ export function Sidebar({
         <Row
           icon={<Clock size={16} aria-hidden="true" />}
           label="Routines"
-          disabled
+          current={current === 'routines'}
+          onClick={onRoutines}
         />
         <Row
           icon={<SlidersHorizontal size={16} aria-hidden="true" />}

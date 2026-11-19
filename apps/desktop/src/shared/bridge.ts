@@ -27,6 +27,29 @@ export type Message = {
   createdAt: string
   clientMessageId?: string
 }
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+/**
+ * Deployment-local wall clock, as the host takes it: `at` is `YYYY-MM-DDTHH:mm` with
+ * no offset, and `time` is `HH:MM`. Nothing here is UTC.
+ */
+export type RoutineSchedule =
+  | { at: string }
+  | { time: string; days?: Weekday[] }
+/** A routine as the host records it, with the display strings it built for its timezone. */
+export type Routine = {
+  id: string
+  message: string
+  /** A stored one-off `at` is the UTC instant the host resolved; its wall clock is in `scheduleText`. */
+  schedule: RoutineSchedule
+  creator: { id: string; name: string }
+  timezone: string
+  /** Local wall clock, such as `2026-11-21 09:00` or `mon,tue at 09:00`. */
+  scheduleText: string
+  /** `Group channel`, `Topic: <task>` or `Direct chat`, in the host's words. */
+  target: string
+  /** Local wall clock of the next run; null when the host finds none. */
+  nextRun: string | null
+}
 type ChannelInput = {
   channelId: string
   senderId: string
@@ -119,6 +142,22 @@ export interface DesktopBridge {
     after?: string
     limit?: number
   }): Promise<{ messages: Message[]; nextCursor?: string }>
+  listRoutines(
+    channel: string,
+    chatId: string,
+  ): Promise<{ timezone: string; routines: Routine[] }>
+  createRoutine(
+    channel: string,
+    target: { chatId: string; rootId?: string },
+    input: { message: string; schedule: RoutineSchedule },
+  ): Promise<Routine>
+  editRoutine(
+    channel: string,
+    chatId: string,
+    id: string,
+    input: { message?: string; schedule?: RoutineSchedule },
+  ): Promise<Routine | undefined>
+  cancelRoutine(channel: string, chatId: string, id: string): Promise<boolean>
   onEvent(listener: (event: Event) => void): () => void
 }
 /** IPC channels carry only the fixed methods above, never arbitrary SDK access. */
@@ -158,3 +197,18 @@ export type Request =
         limit?: number
       }
     }
+  | { method: 'listRoutines'; channel: string; chatId: string }
+  | {
+      method: 'createRoutine'
+      channel: string
+      target: { chatId: string; rootId?: string }
+      input: { message: string; schedule: RoutineSchedule }
+    }
+  | {
+      method: 'editRoutine'
+      channel: string
+      chatId: string
+      id: string
+      input: { message?: string; schedule?: RoutineSchedule }
+    }
+  | { method: 'cancelRoutine'; channel: string; chatId: string; id: string }

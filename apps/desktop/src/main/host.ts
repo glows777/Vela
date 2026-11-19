@@ -5,6 +5,16 @@ import { lark, larkConfig } from '@glows777/vela-lark'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
 
+/**
+ * Local attributes every input to this one person, and the app has no signed-in user,
+ * so a routine the person creates here is set by the same `You` the chat records.
+ */
+const routineCreator = (channel: string) => {
+  if (channel !== 'local')
+    throw new Error(`The app has no identity to set routines in ${channel}`)
+  return { id: 'local-user', name: 'You' }
+}
+
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
 export async function startHost() {
   const cwd = process.cwd()
@@ -119,6 +129,27 @@ export async function startHost() {
         }
         case 'messages':
           return localHost.messages(request.input)
+        case 'listRoutines':
+          return vela
+            .channel(request.channel)
+            .routines.list({ chatId: request.chatId })
+        case 'createRoutine':
+          return vela.channel(request.channel).routines.create(request.target, {
+            ...request.input,
+            creator: routineCreator(request.channel),
+          })
+        case 'editRoutine':
+          return vela
+            .channel(request.channel)
+            .routines.edit(
+              { chatId: request.chatId },
+              request.id,
+              request.input,
+            )
+        case 'cancelRoutine':
+          return vela
+            .channel(request.channel)
+            .routines.cancel({ chatId: request.chatId }, request.id)
         default:
           throw new Error('Unknown desktop request')
       }
