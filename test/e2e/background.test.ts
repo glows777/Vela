@@ -308,6 +308,21 @@ test('background tools run in the group session and its topics, never in a DM', 
     expect(t.model.calls[2]!.tools).not.toContain(name)
 })
 
+test('a session with bash but not the job tools is not told to use run_in_background', async () => {
+  const t = createTestVela({
+    responses: [fauxText('hello')],
+    extensions: [background()],
+    // A legitimate narrow configuration whose bash must refuse the parameter.
+    session: { tools: ['bash'] },
+  })
+  await t.run('hi')
+  const system = t.model.calls[0]!.system
+  expect(system).not.toContain('run_in_background')
+  // The parameter explains its own condition where the model sees it.
+  const bash = t.session.registry.get('bash')!
+  expect(bash.description).toContain('run_in_background')
+})
+
 test('a nested bash call cancelled while its job is being recorded starts nothing', async () => {
   // The calling tool's own signal: no agent_end cleanup covers this path.
   const controller = new AbortController()

@@ -20,7 +20,7 @@ const bashToolParamSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Run the command as a background task and return at once with its id and output file. Its output arrives here when it exits; read the file to see output so far. Use it for a server, a watch build or a long test run instead of blocking the turn.',
+      'Run the command as a background task and return at once with its id. Its output arrives here when it exits. Available only when this session has the background tools; otherwise the call fails and the command does not run. Use it for a server, a watch build or a long test run instead of blocking the turn.',
     ),
 })
 
@@ -34,13 +34,10 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout. With run_in_background the command starts as a background task: the call returns at once with its id and output file, and its result arrives here when it exits.`,
+  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout. With run_in_background the command starts as a background task: the call returns at once with its id, and its result arrives here when it exits.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
-  promptGuidelines: [
-    'A command that may keep running (a dev server, a watch build, a long test run) starts with run_in_background: true instead of blocking the turn.',
-  ],
   execute: async (
     {
       command,
