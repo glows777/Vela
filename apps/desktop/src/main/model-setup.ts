@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { saveModelSetup } from '@glows777/vela'
+import type { Credential } from '@glows777/vela-core'
 import {
   fileCredentialStore,
   loadModels,
@@ -57,10 +58,21 @@ function readModelSetup(input: unknown): ModelSetup {
   }
 }
 
+/** A saved sign-in the check refreshed: the provider already rotated it, so it has to be kept. */
+function rotated(
+  stored: Credential | undefined,
+  checked: Credential | undefined,
+): Credential | undefined {
+  if (stored?.type !== 'oauth' || checked?.type !== 'oauth') return undefined
+  const same =
+    checked.access === stored.access && checked.refresh === stored.refresh
+  return same ? undefined : checked
+}
+
 /**
  * Checks a provider and model with one small request, then saves it through the same steps
  * `vela setup` uses: `auth.json`, `models.json` (custom providers) and `settings.json`. Nothing is
- * written before the check passes.
+ * written before the check passes, except the renewed sign-in the provider itself rotated.
  */
 export async function saveModel(options: {
   agentDir: string
@@ -124,23 +136,35 @@ export async function saveModel(options: {
       AbortSignal.timeout(VERIFY_TIMEOUT_MS),
     )
   } catch (error) {
+    // Using a saved sign-in can refresh it, and the provider has rotated the old refresh token by
+    // then. That rotation is written back even though this model was refused, or the next run has
+    // nothing to sign in with. A typed key is never saved here: it has not been verified, and the
+    // saved model stays as it was.
+    const kept =
+      key === undefined ? rotated(stored, memory.get(provider)) : undefined
+    if (kept)
+      await fileCredentialStore(authPath).modify(provider, async () => kept)
     if (
       error instanceof Error &&
       (error.name === 'TimeoutError' || error.name === 'AbortError')
     )
-      throw new Error('The provider did not answer within a minute')
+      throw new Error(
+        kept
+          ? 'The provider did not answer within a minute. The renewed sign-in was saved.'
+          : 'The provider did not answer within a minute',
+      )
     // Electron gives the page a plain Error's message; an AI SDK error class would arrive as
     // "AI_APICallError: <reason>".
-    throw new Error(error instanceof Error ? error.message : String(error))
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      kept ? `${message}. The renewed sign-in was saved.` : message,
+    )
   }
   // A saved OAuth credential can be refreshed while it is checked (the provider rotates tokens);
   // write that back too, or auth.json keeps the expired one the next run cannot use.
-  const checked = memory.get(provider)
   const toSave = key
     ? { type: 'api_key' as const, key }
-    : checked && JSON.stringify(checked) !== JSON.stringify(stored)
-      ? checked
-      : undefined
+    : rotated(stored, memory.get(provider))
   const saved = await saveModelSetup({
     agentDir,
     ref,
