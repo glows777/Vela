@@ -10,6 +10,10 @@ This page covers running Vela in a group chat and connecting a local app or scri
 
 The shared topic tools now use `channel_*` on Lark too: `channel_start_topic`, `channel_forward_to_topic`, `channel_list_topics`, `channel_read_topic`, `channel_wait_for_input`, `channel_skip_reply` and `channel_routines`. Replace explicit old `lark_*` names in tool selections, permission rules and custom prompts; no compatibility aliases remain. Mandatory tools are still added to a configured Lark group tool list. `lark_search_history` is unchanged because it reads the Lark service. Existing chat/topic IDs, saved sessions, routines and history keep their identities.
 
+## Send a workspace file
+
+Ask in the conversation that should receive the file, for example “Send me `out/report.patch` as a file.” The sequential `channel_send_file` tool takes one workspace-relative path. The limit is 30 MB (30,000,000 bytes). Lark posts supported images up to 10 MB inline and larger images as file attachments. An enabled Lark group with an explicit tool list must include `channel_send_file` to use it. The bot needs `im:resource` or `im:resource:upload` and its existing send permission. If Feishu rejects the attachment post, the reply reports its error code and message. If the reply says delivery is uncertain, check the conversation before requesting another send.
+
 ## Isolation scope
 
 Each group's workspace is a default path, **not a security sandbox**. Absolute paths, traversal, symlinks, bash, shared extensions and credentials can still reach host resources. Memory/global-write restrictions apply to the memory API, not OS access. Enabled chats remain the trust boundary; topics share their group's workspace and notes, and all groups intentionally read global notes. Vela provides routine workspace/context separation, not hostile-user containment.

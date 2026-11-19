@@ -5,6 +5,7 @@ import type {
   LarkHistoryMessage,
   LarkMessageEvent,
   LarkSentMessage,
+  LarkTransport,
 } from './transport.ts'
 
 /** One named line of chat history; `time` is the local send time when the message has one */
@@ -157,7 +158,7 @@ export async function readTopicContext(
 }
 
 /** Named text lines of a topic, in order; own-app messages are named Vela. */
-export async function topicLines(
+async function topicLines(
   history: LarkHistoryMessage[],
   options: Pick<
     GroupContextOptions,
@@ -195,4 +196,28 @@ export async function topicLines(
     )
   }
   return { lines, images }
+}
+
+/** Visible history of an owned topic for channel_read_topic. */
+export async function readTopicLines(
+  transport: LarkTransport,
+  chatId: string,
+  threadId: string,
+  appId: string,
+  senderName: (id: string) => Promise<string>,
+) {
+  const history = []
+  let pageToken: string | undefined
+  do {
+    const page = await transport.listTopicMessages(threadId, pageToken)
+    history.push(...page.items)
+    pageToken = page.pageToken
+  } while (pageToken)
+  const { lines } = await topicLines(history, {
+    chatId,
+    appId,
+    senderName,
+    downloadImages: async () => [],
+  })
+  return lines.join('\n')
 }

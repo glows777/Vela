@@ -126,6 +126,7 @@ test('hello-tool: the registered tool is offered to the model and runs', async (
         'channel_forward_to_topic',
         'channel_read_topic',
         'channel_list_topics',
+        'channel_send_file',
       ],
       providers: [],
       commands: [],

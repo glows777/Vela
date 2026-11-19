@@ -14,6 +14,7 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
+    sendFile?: ((route: Omit<OutgoingMessage, "text">, file: { path: string; bytes: Uint8Array; }) => Promise<void>) | undefined
     sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
     start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
@@ -267,6 +268,7 @@
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
     openProject: (input: { cwd: string; name?: string; }) => Promise<LocalProject>
     projects: () => LocalProject[]
+    readAttachment: (input: { projectId: string; sessionId: string; messageId: string; }) => Promise<Uint8Array>
     routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
     sessions: (projectId?: string) => LocalSession[]
     stop: (target: ChannelTarget, runId: string) => Promise<boolean>
@@ -274,6 +276,7 @@
   interface LocalMessage
     clientMessageId?: string | undefined
     createdAt: string
+    file?: { name: string; size: number; } | undefined
     id: string
     role: "user" | "assistant" | "system"
     sessionId: string

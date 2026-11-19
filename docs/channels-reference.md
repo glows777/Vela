@@ -90,6 +90,8 @@ off()
 
 ### Local projects and visible history
 
+An assistant message with `file: { name, size }` identifies a snapshot of the file at send time. Use `await host.readAttachment({ projectId, sessionId, messageId: message.id })` for its bytes. The owning Local history and its message events expose the same metadata. SDK pickup survives workspace edits, deletion and host restart.
+
 `vela.channel('local')` returns a typed `LocalHost`, extending `ChannelHost` without another factory, store or runtime. The literal overload is available through both `@glows777/vela-channels` and `@glows777/vela`.
 
 ```ts
@@ -129,6 +131,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `name`, `description` | Yes | Stable channel name (part of session identity) and description shown in channel listings. |
 | `canRecover(message, chatKind)` | No | Recheck current access for a stored group/direct conversation. Return false to leave it untouched during startup recovery. |
 | `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. Return `false` when the channel is not configured to connect; the gateway then skips its startup line, routines and recovery. A rejected start is logged without preventing other channels from starting. |
+| `sendFile(route, { path, bytes })` | No | Deliver one file to the current outbound route. Providing this capability makes `channel_send_file` eligible for the session's tool selection. |
 | `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
 | `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
 | `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
@@ -268,6 +271,8 @@ Custom `LarkTransport` implementations must provide `getBotId`, `getSenderName`,
 `startTopic(messageId, title)` posts the title as the first visible message and returns `{ messageId, createTime, rootId, threadId }` from the successful threaded reply. `forward(messageId, threadId)` returns `{ messageId, createTime }` from the successful forward. Missing required receipt fields and platform errors must reject; do not pretend an unthreaded send created a topic.
 
 A channel can include `files` on an incoming message. Each entry carries `{ name, hostPath }` for a completed private download and has a matching `[file: <name>]` marker in that message’s text. After selecting a local session, the gateway inserts the host path into that marker. Normal delivery and steering use the same rule. Non-local delivery fails before exposing any host path.
+
+An injected Lark transport can implement `sendFile(chatId, { kind, name, bytes }, { replyToId?, replyInThread?, uuid? })`, returning a sent message receipt. The built-in transport uploads to the Feishu IM image or file endpoint, then posts the returned resource key. An owned topic uses an explicit in-thread reply to its root. A failed or uncertain post never redirects to the group.
 
 For attachments, implement `getResource(messageId, key, type)` returning a Node readable stream, where `type` is `image` or `file`. The default transport calls `im.messageResource.get` and uses `getReadableStream()`.
 

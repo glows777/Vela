@@ -308,6 +308,11 @@ export interface ChannelDefinition {
   start(): Promise<boolean | void> | boolean | void
   stop(): Promise<void> | void
   send(message: OutgoingMessage): Promise<void>
+  /** Deliver snapshot bytes to the admitted conversation. Optional on text-only adapters. */
+  sendFile?(
+    route: Omit<OutgoingMessage, 'text'>,
+    file: { path: string; bytes: Uint8Array },
+  ): Promise<void>
 
   /** Await the handler to wait until the gateway finishes this message and its reply. */
   onMessage?: (handler: (msg: IncomingMessage) => void | Promise<void>) => void

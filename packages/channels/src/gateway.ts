@@ -1,4 +1,5 @@
 import type {
+  ExtensionAPI,
   SessionOptions,
   VelaLogger,
   VelaSession,
@@ -18,6 +19,7 @@ import { errorMessage } from './log.ts'
 import { ChannelRecovery, storedMessage } from './recovery.ts'
 import { ChannelRoutines } from './routines.ts'
 import { ScopedChannelRuntime } from './runtime.ts'
+import { registerSendFile } from './send-file.ts'
 import { channelSessionId } from './session-id.ts'
 import { ChannelSessions } from './sessions.ts'
 import { ChannelTopics } from './topics.ts'
@@ -46,6 +48,7 @@ export class ChannelGateway {
   readonly events: ChannelEvents
   readonly handoff: ChannelHandoff
   readonly topicTools: ChannelTopics
+  readonly registerFileTool: (api: ExtensionAPI) => void
   private readonly directory: ChannelDirectory
   private readonly recovery: ChannelRecovery
   private readonly sessions: ChannelSessions
@@ -161,6 +164,26 @@ export class ChannelGateway {
             ?.status({ chatId: record.chatId, rootId: record.rootId, text })
       },
     )
+    this.registerFileTool = (api) =>
+      registerSendFile(api, (id) => {
+        const record = this.directory.get(this.directory.keyForSession(id))
+        const message = liveTrigger(id)
+        const channel = record && this.channels.get(record.channel)
+        const session = this.find(id)
+        if (
+          !record ||
+          record.activeSessionId !== id ||
+          !message ||
+          !session ||
+          !channel ||
+          message.channelId !== record.chatId ||
+          message.topic?.rootId !== record.rootId ||
+          message.topic?.threadId !== record.threadId ||
+          channel.canRecover?.(message, record.chatKind) === false
+        )
+          return
+        return { session, message, channel }
+      })
     this.topicTools = new ChannelTopics((id) => {
       const record = this.directory.get(this.directory.keyForSession(id))
       const runtime = record && this.runtimes.get(record.channel)?.api

@@ -99,6 +99,7 @@
     prepareMessage?: ((msg: IncomingMessage, activeMessage?: IncomingMessage) => Promise<IncomingMessage | undefined>) | undefined
     prepareRoutine?: ((msg: IncomingMessage, chatKind: "group" | "direct", reminder: { message: string; lateByMs: number; }) => Promise<IncomingMessage | undefined>) | undefined
     send: (message: OutgoingMessage) => Promise<void>
+    sendFile?: ((route: Omit<OutgoingMessage, "text">, file: { path: string; bytes: Uint8Array; }) => Promise<void>) | undefined
     sessionOptions?: ((msg: IncomingMessage) => { cwd?: string; tools?: string[]; model?: string; thinkingLevel?: ThinkingLevel; }) | undefined
     start: () => Promise<boolean | void> | boolean | void
     startRun?: ((message: IncomingMessage, options: { acknowledge: boolean; }) => Promise<ChannelRunFeedback | void>) | undefined
@@ -428,6 +429,7 @@
     searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: LarkHistoryMessage[]; pageToken?: string; }>
     send: (chatId: string, text: string, uuid?: string) => Promise<void | LarkSentMessage>
     sendCard: (chatId: string, card: LarkCard, replyToId?: string) => Promise<string>
+    sendFile?: ((chatId: string, file: { kind: "image" | "file"; name: string; bytes: Uint8Array; }, options?: { replyToId?: string; replyInThread?: boolean; uuid?: string; }) => Promise<LarkSentMessage>) | undefined
     start: (onMessage: (event: LarkMessageEvent) => void, onAction: (event: LarkCardAction) => LarkCardResponse) => Promise<void>
     startTopic: (messageId: string, title: string, uuid?: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
@@ -497,6 +499,7 @@
     onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
     openProject: (input: { cwd: string; name?: string; }) => Promise<LocalProject>
     projects: () => LocalProject[]
+    readAttachment: (input: { projectId: string; sessionId: string; messageId: string; }) => Promise<Uint8Array>
     routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
     sessions: (projectId?: string) => LocalSession[]
     stop: (target: ChannelTarget, runId: string) => Promise<boolean>
@@ -504,6 +507,7 @@
   interface LocalMessage
     clientMessageId?: string | undefined
     createdAt: string
+    file?: { name: string; size: number; } | undefined
     id: string
     role: "user" | "system" | "assistant"
     sessionId: string

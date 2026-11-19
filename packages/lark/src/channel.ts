@@ -37,12 +37,13 @@ import {
   messageTime,
   readGroupContext,
   readTopicContext,
-  topicLines,
+  readTopicLines,
 } from './history.ts'
 import { type LarkHost, LarkHostEvents, larkHost } from './host.ts'
 import { errorMessage } from './log.ts'
 import { imageKeys, messageText } from './messages.ts'
 import { finishProgress, LarkProgress } from './progress.ts'
+import { channelFileSender } from './send-file.ts'
 import { LarkTopics } from './topics.ts'
 import type {
   LarkMessageEvent,
@@ -106,31 +107,31 @@ export class LarkChannel implements ChannelDefinition {
     },
     (chatId, messageId, createTime) =>
       this.noteHandled(chatId, messageId, createTime),
-    (chatId, threadId) => this.readTopic(chatId, threadId),
+    (chatId, threadId) => {
+      if (!this.transport) throw new Error('Lark is not connected')
+      return readTopicLines(
+        this.transport,
+        chatId,
+        threadId,
+        this.config.appId,
+        (id) => this.senderName(id),
+      )
+    },
   )
 
   get topicCapabilities() {
     return this.topics.capabilities
   }
 
-  /** Another topic's visible messages as named text lines, for channel_read_topic. */
-  private async readTopic(chatId: string, threadId: string): Promise<string> {
-    if (!this.transport) throw new Error('Lark is not connected')
-    const history = []
-    let pageToken: string | undefined
-    do {
-      const page = await this.transport.listTopicMessages(threadId, pageToken)
-      history.push(...page.items)
-      pageToken = page.pageToken
-    } while (pageToken)
-    const { lines } = await topicLines(history, {
-      chatId,
-      appId: this.config.appId,
-      senderName: (id) => this.senderName(id),
-      downloadImages: async () => [],
-    })
-    return lines.join('\n')
+  get sendFile() {
+    const transport = this.transport
+    return transport?.sendFile
+      ? channelFileSender(transport, (route) =>
+          this.historyChanged(route.channelId, route.topic),
+        )
+      : undefined
   }
+
   connect: NonNullable<ChannelDefinition['connect']> = (runtime) => {
     this.topics.runtime = runtime
   }

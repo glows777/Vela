@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import * as sdk from '@larksuiteoapi/node-sdk'
@@ -13,6 +14,7 @@ interface Call {
   method: string
   path: string
   params: Record<string, unknown>
+  multipart?: Buffer
   body: Record<string, unknown>
 }
 type Route = (call: Call) => unknown
@@ -112,6 +114,7 @@ beforeAll(() => {
       path: url.pathname,
       params: { ...config.params },
       body: typeof config.data === 'string' ? JSON.parse(config.data) : {},
+      multipart: config.data?.getBuffer?.(),
     }
     calls.push(call)
     for (const route of [...routes, ...defaults]) {
@@ -463,3 +466,117 @@ test('the typed Lark host uses real SDK history paging and explicit thread repli
     }
   }
 })
+
+for (const fixture of [
+  {
+    name: 'report.patch',
+    content: Buffer.from('diff'),
+    endpoint: 'files',
+    msgType: 'file',
+    key: 'file_key',
+  },
+  {
+    name: 'plot.png',
+    content: Buffer.from('89504e470d0a1a0a', 'hex'),
+    endpoint: 'images',
+    msgType: 'image',
+    key: 'image_key',
+  },
+]) {
+  test(`the SDK uploads ${fixture.name} and replies with its resource key`, async () => {
+    const t = await start([
+      fauxToolCall('channel_send_file', { path: fixture.name }),
+      fauxText('done'),
+    ])
+    const workspace = t.dataPath('channels/lark-oc_group/workspace')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(`${workspace}/${fixture.name}`, fixture.content)
+    routes = [
+      (c) =>
+        c.path === `/open-apis/im/v1/${fixture.endpoint}` &&
+        ok({ [fixture.key]: 'uploaded' }),
+    ]
+    await receive({})
+    await until(() => reactions().includes('DONE'))
+    const uploads = calls.filter(
+      (c) => c.path === `/open-apis/im/v1/${fixture.endpoint}`,
+    )
+    expect(uploads).toHaveLength(1)
+    const form = uploads[0]?.multipart
+    expect(form?.includes(fixture.content)).toBe(true)
+    if (fixture.msgType === 'image') {
+      expect(form?.toString('latin1')).toContain(
+        'name="image_type"\r\n\r\nmessage',
+      )
+    } else {
+      expect(form?.toString('latin1')).toContain(
+        'name="file_type"\r\n\r\nstream',
+      )
+      expect(form?.toString('latin1')).toContain(
+        'name="file_name"\r\n\r\nreport.patch',
+      )
+    }
+    const posts = calls.filter((c) => c.body.msg_type === fixture.msgType)
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toMatchObject({
+      path: '/open-apis/im/v1/messages/om_in/reply',
+      body: {
+        content: JSON.stringify({ [fixture.key]: 'uploaded' }),
+        uuid: expect.any(String),
+      },
+    })
+  })
+}
+
+const rejectedFile = {
+  code: 230002,
+  msg: 'Bot/User can NOT be out of the chat.\nProvider diagnostics.',
+  error: { troubleshooting: 'Private request details' },
+}
+const rejectedReply = 'Lark 230002: Bot/User can NOT be out of the chat.'
+const uncertainReply =
+  'Lark did not confirm delivery. Check this conversation before asking me to resend.'
+
+for (const [scenario, post, expected] of [
+  ['provider rejection', () => rejectedFile, rejectedReply],
+  [
+    'HTTP rejection with a Feishu code',
+    () => {
+      throw Object.assign(new Error('Request failed with status code 400'), {
+        response: { status: 400, data: rejectedFile },
+      })
+    },
+    rejectedReply,
+  ],
+  ['missing receipt', () => ok({}), uncertainReply],
+  [
+    'lost connection',
+    () => {
+      throw new Error('Connection reset after posting')
+    },
+    uncertainReply,
+  ],
+] as const) {
+  test(`an attachment post with ${scenario} reports one result without resending`, async () => {
+    const t = await start([
+      fauxToolCall('channel_send_file', { path: 'report.patch' }),
+      (req) => fauxText(req.toolResults.at(-1)!.output),
+    ])
+    const workspace = t.dataPath('channels/lark-oc_group/workspace')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(`${workspace}/report.patch`, 'diff')
+    routes = [
+      (c) => c.path.endsWith('/files') && ok({ file_key: 'uploaded' }),
+      (c) => c.body.msg_type === 'file' && post(),
+    ]
+    await receive({})
+    await until(() => reactions().includes('DONE'))
+    expect(calls.filter((c) => c.path.endsWith('/files'))).toHaveLength(1)
+    expect(
+      calls.filter((c) => c.body.msg_type === 'file').map((c) => c.path),
+    ).toEqual(['/open-apis/im/v1/messages/om_in/reply'])
+    expect(t.eventsOf('channel_reply').map((event) => event.text)).toEqual([
+      expected,
+    ])
+  })
+}

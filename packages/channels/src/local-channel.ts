@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import type { VelaLogger } from '@glows777/vela-core/extension-api'
 import { z } from 'zod'
 import { LocalEvents, localProgress } from './local-events.ts'
@@ -158,6 +159,10 @@ export class LocalChannel implements ChannelDefinition {
           : this.projectSessions(this.project(projectId))
       },
       messages: (input) => this.messages(input),
+      readAttachment: async ({ projectId, sessionId, messageId }) => {
+        this.session(projectId, sessionId)
+        return this.store.readAttachment(projectId, sessionId, messageId)
+      },
       submit: ((
         input: IncomingMessage | Parameters<LocalHost['submit']>[0],
       ) => {
@@ -321,17 +326,47 @@ export class LocalChannel implements ChannelDefinition {
     }
   }
 
+  readonly sendFile: NonNullable<ChannelDefinition['sendFile']> = async (
+    route,
+    file,
+  ) => {
+    const name = basename(file.path)
+    try {
+      await this.sendVisible(route, name, { name, bytes: file.bytes })
+    } catch (error) {
+      this.logger.error(
+        `[local] Could not save attachment: ${errorMessage(error)}`,
+      )
+      throw new LocalError(
+        'unavailable',
+        `Could not save ${name} in this conversation.`,
+      )
+    }
+  }
+
   async send(message: OutgoingMessage): Promise<void> {
+    await this.sendVisible(message, message.text)
+  }
+
+  private async sendVisible(
+    message: Omit<OutgoingMessage, 'text'>,
+    text: string,
+    attachment?: { name: string; bytes: Uint8Array },
+  ): Promise<void> {
     const sessionId = channelSessionId(
       'local',
       message.channelId,
       message.topic?.rootId,
     )
-    const visible = await this.store.append(message.channelId, {
-      sessionId,
-      role: 'assistant',
-      text: message.text,
-    })
+    const visible = await this.store.append(
+      message.channelId,
+      {
+        sessionId,
+        role: 'assistant',
+        text,
+      },
+      attachment,
+    )
     this.visible(message.channelId, visible)
   }
 
