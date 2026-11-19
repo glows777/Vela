@@ -14,7 +14,9 @@ Every session has an id, which is also the name of its directory. Ids use letter
 
 The CLI stores each session in the sessions directory of the [project data directory](settings.md#data-directory): `sessions/<id>/transcript.jsonl` holds the session's entries (messages, compactions, setting changes), next to the long tool output and tool call history in the same directory. Vela 0.5 kept the transcript as `sessions/<id>.jsonl`; such a session is listed from that file and moved into its directory the first time it is opened or written. Stop other Vela processes on the data directory before upgrading, so an older process cannot recreate the old file after the move. `--no-session` keeps the transcript, tool history and usage log out of that directory; tool history and long output go to a temporary directory removed when the session closes. Memory and the knowledge base are unchanged.
 
-To delete a session, delete its `<id>/` directory. Manual deletion of host metadata leaves any guest upload cache at `~/.vela/uploads/<sessionId>/` in its environment. Archiving and closing a session preserve its files.
+Persistent session deletion is manual. Before removing `<dataDir>/sessions/<id>/`, record the exact session ID and the environments in its transcript header and [location entries](session-format.md#entries). For each Docker environment the session used, match the container to that environment name and the same owner data directory. Inside that container, `~/.vela/uploads/<id>/` under the guest user's home is the cache for this session. A fork or clone has its own ID and cache.
+
+The owner can retain or remove each matching guest directory as part of the same retention decision. Removing the host session directory alone leaves these caches in place. The canonical downloads belong to the chat's private `files/` directory and can be shared across topics. Archiving and closing a persistent session preserve its files.
 
 In the SDK, sessions are stored in `<dataDir>/sessions/` when you pass `dataDir`, in memory when you don't, or wherever a custom `sessionStorage` puts them. See [SDK](sdk.md#session-storage).
 
