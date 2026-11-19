@@ -32,5 +32,9 @@ if (import.meta.main) {
       await chmod(join(dir, 'dist/cli/main.js'), 0o755)
     }
   }
-  await buildDockerAdapter(join(root, 'dist', 'docker'))
+  const docker = join(root, 'dist', 'docker')
+  await buildDockerAdapter(docker)
+  await cp(docker, join(root, 'packages', 'vela', 'dist', 'docker'), {
+    recursive: true,
+  })
 }

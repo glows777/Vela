@@ -1,5 +1,4 @@
 import { execFile, spawn } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { ExecutionEnv } from '@glows777/vela-core'
 import { dockerOperations } from './operations.ts'
@@ -29,12 +28,12 @@ export async function runDocker(args: string[]) {
 }
 
 // Operations always address the immutable ID that lifecycle inspection approved.
-export async function containerOperations(
+export function containerOperations(
   id: string,
   name: string,
   cwd: string,
-): Promise<ExecutionEnv> {
-  const guest = await readFile(new URL('./guest.cjs', import.meta.url), 'utf8')
+  guest: string,
+): ExecutionEnv {
   return dockerOperations(name, cwd, (op, workdir) =>
     spawn(
       'docker',

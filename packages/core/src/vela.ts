@@ -505,8 +505,10 @@ export function createVela(options: VelaOptions = {}): Vela {
     const key = workspaceKey(session.id, location)
     const local = location.environment === 'local'
     const target = { sessionId: session.id, location }
-    let env = options.env
-      ? await options.env(target)
+    const resolver =
+      local && resourceSplit?.useBuiltinLocal ? undefined : options.env
+    let env = resolver
+      ? await resolver(target)
       : local
         ? createSessionLocalExecutionEnv({
             cwd: location.cwd,
@@ -533,14 +535,14 @@ export function createVela(options: VelaOptions = {}): Vela {
         resourceSplit?.fallbackShellPath
       signal?.throwIfAborted()
       sessionShells.set(key, shellPath)
-      if (!options.env && shellPath !== options.shellPath)
+      if (!resolver && shellPath !== options.shellPath)
         env = createSessionLocalExecutionEnv({
           cwd: location.cwd,
           shellPath,
           tempRoot: session.registry.results.dir,
         })
     }
-    return local && options.env
+    return local && resolver
       ? scopeLocalResults(env, session.registry.results.dir)
       : env
   }

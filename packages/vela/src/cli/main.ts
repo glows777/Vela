@@ -34,6 +34,7 @@ import {
 } from '../config/index.ts'
 import { usableModel } from '../settings.ts'
 import { createVela } from '../vela.ts'
+import { ownerDocker } from './docker.ts'
 import { errorMessage } from './error.ts'
 import { readAttachments } from './files.ts'
 import { runInteractive } from './interactive.ts'
@@ -276,7 +277,9 @@ const logger =
   createConsoleLogger({ debug: env.VELA_DEBUG === '1', stderr: true })
 // Extensions that failed to load (already reported on stderr); --list-models exits 1 when there are any
 const extensionErrors: string[] = []
+const docker = ownerDocker(config)
 const vela = createVela({
+  ...docker,
   model:
     recorder?.model ??
     (args.model ||
@@ -292,6 +295,7 @@ const vela = createVela({
   sessionStorage: args.noSession ? memorySessionStorage() : undefined,
   sessionResources: config.sessionResources && {
     ...config.sessionResources,
+    useBuiltinLocal: !!docker,
     projectExtensions: cliProjectExtensions(config, args, (message) =>
       logger.warn(message),
     ),
