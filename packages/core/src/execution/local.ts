@@ -23,7 +23,7 @@ function error(
     code,
   })
 }
-class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
+export class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
   constructor(options: {
     cwd: string
     shellPath?: string
@@ -44,13 +44,7 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
   ): Promise<Result<ShellExecResult, ExecutionError>> {
     if (signal?.aborted)
       return { ok: false, error: error('aborted', 'aborted') }
-    if (process.platform !== 'win32')
-      for (const child of this.active)
-        if (
-          (child.exitCode !== null || child.signalCode !== null) &&
-          this.groupStatus(child) === 'missing'
-        )
-          this.active.delete(child)
+    this.pruneFinishedGroups()
     if (
       options.timeout !== undefined &&
       (!Number.isFinite(options.timeout) ||
@@ -300,6 +294,20 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
       if (process.platform === 'win32' || this.groupStatus(child) === 'missing')
         this.active.delete(child)
     }
+  }
+  private pruneFinishedGroups() {
+    if (process.platform !== 'win32')
+      for (const child of this.active)
+        if (
+          (child.exitCode !== null || child.signalCode !== null) &&
+          this.groupStatus(child) === 'missing'
+        )
+          this.active.delete(child)
+  }
+  /** A command-scoped Docker guest may exit once its last descendant is gone. */
+  hasActiveGroups(): boolean {
+    this.pruneFinishedGroups()
+    return this.active.size > 0
   }
   async cleanup(): Promise<void> {
     await Promise.all(

@@ -28,6 +28,7 @@ const SOURCES = [
     join(ROOT, 'packages', name, 'src'),
   ),
   join(ROOT, 'apps/desktop/src'),
+  join(ROOT, 'extensions/docker'),
 ]
 const LINE_LIMIT = 800
 
