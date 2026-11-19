@@ -200,7 +200,9 @@ try {
 const previousDataDir = config.sessionResources?.previousDataDir
 if (previousDataDir)
   console.error(
-    `[data] Owner environments select ${config.dataDir}. The previous settings select ${previousDataDir}. To keep using that history, pin dataDir to ${JSON.stringify(previousDataDir)} in the owner settings and restart.`,
+    config.sessionResources?.userSettings?.dataDir
+      ? `[data] Using owner dataDir ${config.dataDir}. The project dataDir ${previousDataDir} is ignored.`
+      : `[data] Owner environments select ${config.dataDir}. The previous settings select ${previousDataDir}. To keep using that history, pin dataDir to ${JSON.stringify(previousDataDir)} in the owner settings and restart.`,
   )
 const legacyHint = legacyDataHint(cwd, config.dataDir)
 if (legacyHint) console.error(legacyHint)

@@ -73,13 +73,26 @@ test('owner environments warn on stderr when the previously effective project da
   const checkConfig = ['--approve', '--no-extensions', '--list-models']
   const pinned = await cli(checkConfig, options)
   expect(pinned.code).toBe(0)
-  expect(pinned.stderr).not.toMatch(/pin.*dataDir/i)
+  expect(pinned.stderr).not.toContain('[data]')
+  const explicit = join(owner.path, 'chosen-store')
+  await Bun.write(
+    settings,
+    JSON.stringify({ environments: {}, dataDir: explicit }),
+  )
+  const ignored = await cli(checkConfig, options)
+  expect(ignored.code).toBe(0)
+  expect(ignored.stderr).not.toMatch(/pin.*dataDir/i)
+  expect(ignored.stderr).toMatch(/project.*ignored|ignor.*project/i)
+  expect(ignored.stderr).toContain(explicit)
+  expect(ignored.stderr).toContain(legacy)
+  expect(ignored.stdout).not.toContain(legacy)
+  expect(ignored.stdout).not.toContain(explicit)
   const ownerOnly = await cli(checkConfig, {
     ...options,
     files: { '.vela/settings.json': '{}' },
   })
   expect(ownerOnly.code).toBe(0)
-  expect(ownerOnly.stderr).not.toMatch(/pin.*dataDir/i)
+  expect(ownerOnly.stderr).not.toContain('[data]')
 })
 
 test.concurrent.if(hasScript)(
