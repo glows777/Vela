@@ -6,6 +6,7 @@ import {
   DialogClose,
   DialogContent,
 } from '../components/arc/dialog/dialog.tsx'
+import { Field, Input } from '../components/field.tsx'
 import { errorMessage, openProject } from '../store.ts'
 import { vela } from '../vela.ts'
 import styles from './new-project.module.css'
@@ -71,14 +72,11 @@ export function NewProjectDialog({
             void create()
           }}
         >
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="project-folder">
-              Folder path
-            </label>
+          <Field label="Folder path" htmlFor="project-folder">
             <div className={styles.row}>
-              <input
+              <Input
                 id="project-folder"
-                className={styles.input}
+                className={styles.grow}
                 value={folder}
                 onChange={(event) => setFolder(event.target.value)}
                 autoComplete="off"
@@ -92,23 +90,20 @@ export function NewProjectDialog({
                 Choose folder
               </Button>
             </div>
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="project-name">
-              Name
-            </label>
-            <input
+          </Field>
+          <Field
+            label="Name"
+            htmlFor="project-name"
+            note="The name is optional; Vela uses the folder's name otherwise."
+          >
+            <Input
               id="project-name"
-              className={styles.input}
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="The folder's name"
               autoComplete="off"
             />
-            <p className={styles.note}>
-              The name is optional; Vela uses the folder's name otherwise.
-            </p>
-          </div>
+          </Field>
           {error ? (
             <p className={styles.error} role="alert">
               {error}

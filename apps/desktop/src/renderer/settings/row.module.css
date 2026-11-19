@@ -1,0 +1,30 @@
+.row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--vela-line);
+}
+
+.label {
+  color: var(--vela-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.value {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--vela-ink);
+  font-family: var(--vela-family-mono);
+  font-size: var(--text-xs);
+}
+
+.file {
+  margin: 0;
+  color: var(--vela-muted);
+  font-family: var(--vela-family-mono);
+  font-size: var(--text-xs);
+}

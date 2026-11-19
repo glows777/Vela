@@ -4,6 +4,8 @@ import { loadConfig, resolveShellPath } from '@glows777/vela-core'
 import { lark, larkConfig } from '@glows777/vela-lark'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { EVENT, type Event, REQUEST, type Request } from '../shared/bridge.ts'
+import { saveModel } from './model-setup.ts'
+import { readSettings } from './settings.ts'
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
 export async function startHost() {
@@ -51,6 +53,18 @@ export async function startHost() {
       local({}),
     ],
   })
+  /**
+   * A model handed to the host (`VELA_MODEL=faux:<scenario>`) skips the setup screen: nothing is
+   * saved, and the host answers with that model.
+   */
+  const directModel = typeof model === 'object'
+  const settings = () =>
+    readSettings({
+      agentDir: config.agentDir,
+      cwd,
+      directModel,
+      hasAvailableModel: vela.models().length > 0,
+    })
   const off: (() => void)[] = []
   try {
     await vela.ready()
@@ -87,6 +101,22 @@ export async function startHost() {
       switch (request.method) {
         case 'channels':
           return vela.channels()
+        case 'settings':
+          return settings()
+        case 'saveModel': {
+          const saved = await saveModel({
+            agentDir: config.agentDir,
+            input: request.input,
+            env: process.env,
+          })
+          vela.configureProvider(saved.provider, saved.definition)
+          vela.setDefaults(
+            saved.ref,
+            // The host's own default when settings.json has no level (core's DEFAULT_THINKING_LEVEL).
+            config.settings.defaultThinkingLevel ?? 'medium',
+          )
+          return settings()
+        }
         case 'sessions':
           return vela.channel(request.channel).sessions(request.chatId)
         case 'connection':

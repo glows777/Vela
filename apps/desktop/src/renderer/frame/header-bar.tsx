@@ -7,14 +7,17 @@ import styles from './header-bar.module.css'
  */
 export function HeaderBar({
   project,
+  title,
   waiting = false,
 }: {
   project?: Project
+  /** The page name when it isn't Home or a project. */
+  title?: string
   waiting?: boolean
 }) {
   return (
     <header className={styles.bar}>
-      <h2 className={styles.title}>{project?.name ?? 'Home'}</h2>
+      <h2 className={styles.title}>{title ?? project?.name ?? 'Home'}</h2>
       {project ? (
         <>
           <span className={styles.tag}>Local</span>

@@ -1,0 +1,53 @@
+.page {
+  display: grid;
+  place-items: start center;
+  min-height: 100dvh;
+  padding: var(--space-24) var(--space-6) var(--space-10);
+  overflow-y: auto;
+  background: var(--vela-white);
+  color: var(--vela-ink);
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: 460px;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  color: var(--vela-ink);
+  font-family: var(--vela-family-display);
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
+}
+
+.reason {
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.files {
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
+.files code {
+  color: var(--vela-teal);
+  font-family: var(--vela-family-mono);
+  font-size: var(--text-xs);
+}

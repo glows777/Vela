@@ -21,6 +21,11 @@
   min-width: 0;
 }
 
+.booting {
+  min-height: 100dvh;
+  background: var(--vela-white);
+}
+
 .hostError {
   display: grid;
   gap: var(--space-4);

@@ -9,6 +9,13 @@ export const stateWord = {
   stopped: 'Stopped',
 } as const satisfies Record<Session['state'], string>
 
+/** The provider of a `provider/id` ref. */
+export const providerOf = (ref?: string) =>
+  ref === undefined ? '' : (ref.split('/')[0] ?? '')
+
+/** The last segment of a path from main: a row names its file, not the folder above it. */
+export const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path
+
 const newestFirst = (one: Session, other: Session) =>
   other.updatedAt.localeCompare(one.updatedAt)
 
