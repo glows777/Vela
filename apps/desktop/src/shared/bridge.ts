@@ -50,7 +50,7 @@ export type SettingsState = {
   /** Nothing can answer before a model and its credential are saved. */
   setup: {
     required: boolean
-    reason?: 'no-model' | 'missing-credential'
+    reason?: 'no-model' | 'missing-credential' | 'unknown-model'
     /** The provider that has no credential, for `missing-credential`. */
     provider?: string
   }

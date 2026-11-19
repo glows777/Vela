@@ -6,6 +6,8 @@ import styles from './first-run.module.css'
 function reason(settings: SettingsState): string {
   if (settings.setup.reason === 'missing-credential')
     return `${settings.model} is the saved model, but ${settings.setup.provider} has no key. Add one below; Vela checks it before saving.`
+  if (settings.setup.reason === 'unknown-model')
+    return `${settings.model} is the saved model, but it can't be used any more: its provider is gone. Choose a provider and a model; the key is checked before it is saved.`
   return 'Vela has no model to answer with yet. Choose a provider and a model; the key is checked before it is saved.'
 }
 

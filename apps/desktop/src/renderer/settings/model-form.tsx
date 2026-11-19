@@ -19,6 +19,29 @@ const APIS: { value: ProviderApi; label: string }[] = [
 ]
 
 /**
+ * The provider to open on and its model, chosen once: the saved one when its provider still exists,
+ * otherwise the first provider with a key. Both come from the same provider, so the model field is
+ * never empty while the select shows an option.
+ */
+function initialSelection(settings: SettingsState): {
+  provider: string
+  model: string
+} {
+  const saved = providerOf(settings.model)
+  const provider = settings.providers.some((item) => item.name === saved)
+    ? saved
+    : (settings.providers.find((item) => item.credential)?.name ??
+      settings.providers[0]?.name ??
+      CUSTOM)
+  const model =
+    settings.model !== undefined && provider === saved
+      ? settings.model.slice(provider.length + 1)
+      : (settings.providers.find((item) => item.name === provider)?.models[0]
+          ?.id ?? '')
+  return { provider, model }
+}
+
+/**
  * Provider, key, then model. `saveModel` checks the key with one small request before anything is
  * written, so a wrong key never reaches auth.json.
  */
@@ -31,25 +54,12 @@ export function ModelForm({
   submitLabel: string
   done?: () => void
 }) {
-  const savedProvider = providerOf(settings.model)
-  const [provider, setProvider] = useState(() =>
-    settings.providers.some((item) => item.name === savedProvider)
-      ? savedProvider
-      : (settings.providers.find((item) => item.credential)?.name ??
-        settings.providers[0]?.name ??
-        CUSTOM),
-  )
+  const [initial] = useState(() => initialSelection(settings))
+  const [provider, setProvider] = useState(initial.provider)
   const [name, setName] = useState('')
   const [api, setApi] = useState<ProviderApi>('openai-completions')
   const [baseUrl, setBaseUrl] = useState('')
-  const [model, setModel] = useState(() => {
-    if (savedProvider && settings.model)
-      return settings.model.slice(savedProvider.length + 1)
-    return (
-      settings.providers.find((item) => item.name === savedProvider)?.models[0]
-        ?.id ?? ''
-    )
-  })
+  const [model, setModel] = useState(initial.model)
   const [key, setKey] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -67,11 +77,11 @@ export function ModelForm({
   const pickProvider = (value: string) => {
     setProvider(value)
     setError('')
-    const next = settings.providers.find((item) => item.name === value)
     setModel(
-      value === savedProvider && settings.model
+      settings.model !== undefined && value === providerOf(settings.model)
         ? settings.model.slice(value.length + 1)
-        : (next?.models[0]?.id ?? ''),
+        : (settings.providers.find((item) => item.name === value)?.models[0]
+            ?.id ?? ''),
     )
   }
 

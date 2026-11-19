@@ -46,9 +46,9 @@ export async function saveModel(options: {
     : undefined
   const authPath = join(agentDir, 'auth.json')
   const stored = fileCredentialStore(authPath).get(provider)
-  const credential = key ? { type: 'api_key' as const, key } : stored
+  const storedOrNew = key ? { type: 'api_key' as const, key } : stored
   const memory = memoryCredentialStore(
-    credential ? { [provider]: credential } : {},
+    storedOrNew ? { [provider]: storedOrNew } : {},
   )
   const providers = loadModels({
     agentDir,
@@ -82,11 +82,19 @@ export async function saveModel(options: {
     // "AI_APICallError: <reason>".
     throw new Error(error instanceof Error ? error.message : String(error))
   }
+  // A saved OAuth credential can be refreshed while it is checked (the provider rotates tokens);
+  // write that back too, or auth.json keeps the expired one the next run cannot use.
+  const checked = memory.get(provider)
+  const toSave = key
+    ? { type: 'api_key' as const, key }
+    : checked && JSON.stringify(checked) !== JSON.stringify(stored)
+      ? checked
+      : undefined
   const saved = await saveModelSetup({
     agentDir,
     ref,
     providers,
-    ...(key ? { credential: { type: 'api_key', key } } : {}),
+    ...(toSave ? { credential: toSave } : {}),
     ...(preset ? { preset } : {}),
   })
   return {

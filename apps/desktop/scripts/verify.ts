@@ -48,6 +48,8 @@ const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
 const disabledConfig = process.env.VELA_DESKTOP_VERIFY_DISABLED === '1'
+/** A saved model whose provider is gone: setup must open, not Home. */
+const staleModel = process.env.VELA_DESKTOP_VERIFY_STALE_MODEL === '1'
 await Promise.all(
   [home, data, profile, project, alpha, beta, gamma].map((path) =>
     mkdir(path, { recursive: true }),
@@ -70,6 +72,7 @@ await Bun.write(
         ...(disabledConfig
           ? { extensions: ['-builtin:web', '-builtin:lark'] }
           : {}),
+        ...(staleModel ? { defaultModel: 'removed-provider/some-model' } : {}),
       }),
 )
 await Bun.write(
@@ -1254,7 +1257,8 @@ async function launchDev(overrides: Record<string, string | undefined> = {}) {
 }
 
 async function development() {
-  const first = await launchDev()
+  // The stale-model mode has no model handed to the host, or there would be nothing to check.
+  const first = await launchDev(staleModel ? { VELA_MODEL: undefined } : {})
   try {
     const { page } = first
     if (badConfig) {
@@ -1279,6 +1283,20 @@ async function development() {
     await snapshot(page, 'specimen-minimum')
     checks.push('Minimum preview layout passes.')
     await page.goto(new URL('index.html', page.url()).href)
+    if (staleModel) {
+      // Setup replaces the frame, so the wordmark is not the page heading here.
+      await page.getByRole('heading', { name: 'Give Vela a model.' }).waitFor()
+      await rendererSafety(page)
+      await page
+        .getByText(/removed-provider\/some-model/, { exact: false })
+        .waitFor()
+      checks.push(
+        'A saved model whose provider is gone opens setup and names that model.',
+      )
+      await noOverflow(page)
+      await snapshot(page, 'stale-model')
+      return
+    }
     await page.getByRole('heading', { name: 'VELA', exact: true }).waitFor()
     await rendererSafety(page)
     await noOverflow(page)
@@ -1362,6 +1380,31 @@ async function firstRunJourney() {
     ])
     checks.push(
       'The provider list offers the four built-in providers and a custom one.',
+    )
+
+    // A fresh install starts on a built-in provider with its first model already chosen, so a key
+    // alone is enough to submit; a model field left empty while the select shows an option would
+    // keep the button disabled with no way forward.
+    assert.equal(await providers.inputValue(), 'anthropic')
+    const submit = page.getByRole('button', { name: 'Verify and save' })
+    assert.equal(
+      await page.getByLabel('Model', { exact: true }).inputValue(),
+      await page
+        .getByLabel('Model', { exact: true })
+        .locator('option')
+        .first()
+        .getAttribute('value'),
+    )
+    assert.equal(await submit.isDisabled(), true, 'No key yet')
+    await snapshot(page, 'journey-6-first-run')
+    await page.getByLabel(/^API key/).fill(GOOD_KEY)
+    assert.equal(
+      await submit.isDisabled(),
+      false,
+      'A prefilled model and a key are enough to submit',
+    )
+    checks.push(
+      'A fresh install opens on a built-in provider with its model chosen, and a key is the only thing missing.',
     )
 
     await providers.selectOption({ label: 'Custom provider' })

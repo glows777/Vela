@@ -102,7 +102,7 @@ export async function larkSetup(host: Host): Promise<boolean> {
     )
     if (confirmed !== 'yes') return false
     try {
-      saveLarkSection({
+      await saveLarkSection({
         agentDir: host.agentDir,
         ...(appId ? { appId: id } : {}),
         ...(secretInput ? { appSecret: secret } : {}),

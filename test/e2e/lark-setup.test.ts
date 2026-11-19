@@ -17,7 +17,13 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
 })
 function fixture(
-  opts: { tokenError?: string; confirm?: boolean; cancel?: boolean } = {},
+  opts: {
+    tokenError?: string
+    confirm?: boolean
+    cancel?: boolean
+    /** Save chats as this instead of the parsed entries, to exercise an environment expression. */
+    chats?: unknown
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'vela-lark-setup-'))
   dirs.push(dir)
@@ -29,7 +35,7 @@ function fixture(
       extensionConfig: {
         lark: {
           owners: ['owner'],
-          chats: [{ id: 'old', tools: ['read_file'] }],
+          chats: opts.chats ?? [{ id: 'old', tools: ['read_file'] }],
         },
       },
     }),
@@ -95,6 +101,14 @@ test('missing-scope errors show the provider detail', async () => {
   await larkSetup(f.host)
   expect(f.notices.join('\n')).toContain('im:message:send_as_bot')
   expect(readFileSync(f.settings, 'utf8')).toBe(f.before)
+})
+
+test('a chats expression stops setup before it sends a success message', async () => {
+  const f = fixture({ chats: '$LARK_CHATS' })
+  expect(await larkSetup(f.host)).toBe(false)
+  expect(f.sent).toEqual([])
+  expect(readFileSync(f.settings, 'utf8')).toBe(f.before)
+  expect(f.notices.join('\n')).toContain('environment expression')
 })
 
 test('confirmed group merges settings, protects secrets, sends and closes', async () => {

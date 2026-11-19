@@ -1,8 +1,31 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { usableModel } from '@glows777/vela'
-import { loadConfig, type ProviderDefinition } from '@glows777/vela-core'
+import {
+  type CredentialStore,
+  loadConfig,
+  type ProviderDefinition,
+} from '@glows777/vela-core'
+import { resolveModel } from '@glows777/vela-core/diagnostics'
 import type { SettingsProvider, SettingsState } from '../shared/bridge.ts'
+
+/**
+ * Whether a saved `provider/id` names something a session could use: the same resolution a session
+ * does, so a model whose provider was removed from models.json reads as unusable instead of opening
+ * the app on a model that would fail at the first reply.
+ */
+function resolves(
+  ref: string,
+  providers: Record<string, ProviderDefinition>,
+  credentials: CredentialStore,
+): boolean {
+  try {
+    resolveModel(ref, { providers, credentials })
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** Providers `models.json` defines, by name only: their values may hold a key or a header. */
 export function customProviders(agentDir: string): Set<string> {
@@ -62,17 +85,19 @@ export function readSettings(options: {
     },
     setup: options.directModel
       ? { required: false }
-      : model
-        ? usableSetup(
-            usableModel({
-              providers: config.providers,
-              credentials: config.credentials,
-              model,
-            }),
-          )
-        : options.hasAvailableModel
+      : model === undefined
+        ? options.hasAvailableModel
           ? { required: false }
-          : { required: true, reason: 'no-model' },
+          : { required: true, reason: 'no-model' }
+        : resolves(model, config.providers, config.credentials)
+          ? usableSetup(
+              usableModel({
+                providers: config.providers,
+                credentials: config.credentials,
+                model,
+              }),
+            )
+          : { required: true, reason: 'unknown-model' },
     ...(model === undefined ? {} : { model }),
     ...(config.settings.defaultThinkingLevel === undefined
       ? {}
