@@ -630,7 +630,10 @@ test('background commands use their session environment, not host spawn', async 
   const marker = join(dir.path, 'bg-host-marker')
   const model = createFauxModel({
     responses: [
-      fauxToolCall('background_start', { command: 'touch bg-host-marker' }),
+      fauxToolCall('bash', {
+        command: 'touch bg-host-marker',
+        run_in_background: true,
+      }),
       fauxText('done'),
       fauxText('failure received'),
     ],
@@ -655,9 +658,7 @@ test('background commands use their session environment, not host spawn', async 
     },
   })
   try {
-    await vela
-      .session('bg-boundary', { tools: ['+background_start'] })
-      .prompt('start')
+    await vela.session('bg-boundary').prompt('start')
     await Bun.sleep(80)
     expect(execs).toBe(1)
     expect(existsSync(marker)).toBe(false)

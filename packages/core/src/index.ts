@@ -62,10 +62,7 @@ export type {
   ShellExecOptions,
   ShellExecResult,
 } from './execution/types.ts'
-export {
-  type BackgroundOptions,
-  background,
-} from './extensions/background/index.ts'
+export { background } from './extensions/background/index.ts'
 export { memory } from './extensions/memory/index.ts'
 export type { LoadedExtension } from './extensions/runner.ts'
 export { todo } from './extensions/todo/index.ts'

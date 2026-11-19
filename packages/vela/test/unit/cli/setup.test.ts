@@ -418,6 +418,17 @@ test('--tools / --no-tools / --exclude-tools pick tools by name or * pattern (li
   ).toThrow('Unknown tools: read, nope*. Available: read_file')
 })
 
+test('a tools list that names the removed background_start fails at startup', () => {
+  const all = ['bash', 'background_output', 'background_stop']
+  expect(() =>
+    selectTools(all, {
+      tools: ['+background_start'],
+      noTools: false,
+      excludeTools: [],
+    }),
+  ).toThrow('Unknown tool: background_start')
+})
+
 test('+name / -name adjust the default set and defaultTools applies like pi', () => {
   const all = ['read_file', 'write_file', 'edit_file', 'bash', 'grep']
   const settings = ['+grep']

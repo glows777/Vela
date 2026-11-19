@@ -160,7 +160,8 @@ class LocalExecutionEnv extends LocalFiles implements ExecutionEnv {
                 stop('callback_error')
               }
             }
-            if (options.spill) {
+            if (options.outputPath) await appendFile(options.outputPath, chunk)
+            else if (options.spill) {
               bytes += chunk.length
               for (const byte of chunk) if (byte === 10) lines++
               if (!spillPath) {

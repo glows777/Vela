@@ -1,5 +1,6 @@
 import { createSessionLocalExecutionEnv } from '../execution/local.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
+import type { BackgroundCommands } from './background.ts'
 import {
   fitOutputTail,
   OUTPUT_MAX_BYTES,
@@ -114,4 +115,46 @@ export async function environmentBash(
   }
   preview += status
   return new ToolExecutionResult(preview, preview, execution)
+}
+
+/**
+ * Starts a command as a background task: the call returns at once with the job's id and the file
+ * that receives its complete output, and the job table delivers the exit to the session.
+ */
+export async function backgroundBash(
+  command: string,
+  timeout: number | undefined,
+  cwd: string | undefined,
+  shellPath: string | undefined,
+  context: ToolContext | undefined,
+  commands: BackgroundCommands,
+): Promise<ToolExecutionResult> {
+  const results = context?.results ?? new ToolResultStore()
+  const env =
+    context?.execution ??
+    createSessionLocalExecutionEnv({
+      cwd: cwd ?? process.cwd(),
+      shellPath,
+      tempRoot: results.dir,
+    })
+  // In the session's environment, so a container session can page it with read_file.
+  const file = await env.createTempFile({
+    prefix: 'vela-bash-',
+    suffix: '.log',
+  })
+  if (!file.ok)
+    throw new Error(
+      `Could not create a file for the background command's output: ${file.error.message}`,
+    )
+  const outputPath = file.value
+  const id = await commands.adopt({
+    command,
+    // The job outlives this call: it gets its own signal instead of the tool call's.
+    start: ({ onOutput, signal }) =>
+      env.exec(command, { timeout, outputPath, onOutput }, signal),
+  })
+  const text = `Command running in background with ID: ${id}. Output is being written to: ${outputPath}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+  return new ToolExecutionResult({ id, outputPath }, text, {
+    backgroundTaskId: id,
+  })
 }

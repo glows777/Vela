@@ -1,6 +1,6 @@
 import z from 'zod'
 import type { ExecutionEnv } from '../execution/types.ts'
-import { environmentBash } from './environment-bash.ts'
+import { backgroundBash, environmentBash } from './environment-bash.ts'
 import {
   fitOutputTail,
   OUTPUT_MAX_BYTES,
@@ -16,6 +16,12 @@ const bashToolParamSchema = z.object({
     .number()
     .optional()
     .describe('Timeout in seconds (optional, no default timeout)'),
+  run_in_background: z
+    .boolean()
+    .optional()
+    .describe(
+      'Run the command as a background task and return at once with its id and output file. Its output arrives here when it exits; read the file to see output so far. Use it for a server, a watch build or a long test run instead of blocking the turn.',
+    ),
 })
 
 export interface BashToolOptions {
@@ -28,12 +34,16 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
+  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout. With run_in_background the command starts as a background task: the call returns at once with its id and output file, and its result arrives here when it exits.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
   execute: async (
-    { command, timeout }: { command: string; timeout?: number },
+    {
+      command,
+      timeout,
+      run_in_background: runInBackground,
+    }: { command: string; timeout?: number; run_in_background?: boolean },
     context,
   ) => {
     if (
@@ -45,7 +55,20 @@ export const createBashTool = (
       throw new Error(
         `Invalid timeout: must be a positive number of seconds, at most ${MAX_TIMEOUT_SECONDS}`,
       )
-    return environmentBash(command, timeout, cwd, shellPath, context)
+    if (!runInBackground)
+      return environmentBash(command, timeout, cwd, shellPath, context)
+    // Only the extension installs the capability, and a job needs the tool that reads and ends it:
+    // a session without both (no extension, a DM, a narrowed tool list) refuses the parameter instead
+    // of starting a command nothing could stop.
+    const commands = context?.background
+    const stoppable = context?.registry
+      ?.getActiveTools()
+      .some((tool) => tool.name === 'background_stop')
+    if (!commands || !stoppable)
+      throw new Error(
+        'Background commands are not enabled in this session: it has no background tools. Run the command without run_in_background, or enable the background extension and its tools for this session.',
+      )
+    return backgroundBash(command, timeout, cwd, shellPath, context, commands)
   },
 })
 

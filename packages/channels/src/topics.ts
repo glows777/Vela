@@ -28,14 +28,10 @@ export const handoffToolNames = [
 ]
 /** A topic may look around and hand off, but only the group session starts or forwards topics. */
 const groupOnlyToolNames = ['channel_start_topic', 'channel_forward_to_topic']
-/** Commands whose result arrives on its own; the hub and its topics both run them. */
-const backgroundToolNames = [
-  'background_start',
-  'background_output',
-  'background_stop',
-]
+/** Commands whose result arrives on its own; a DM removes them, every other session keeps them. */
+const backgroundToolNames = ['background_output', 'background_stop']
 const channelPrompt =
-  'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply. A quick one-step command such as `gh pr view` is yours to run too. A command that may keep running starts with background_start from here, so this conversation stays available while it runs and its output arrives as the next message. Manage scheduled wake-ups directly with channel_routines in the conversation where they should run; do not start a topic just to create, list, edit or cancel a wake-up. For any other request (investigation, multi-step execution, tool-based work, or a longer exchange) start a topic with channel_start_topic: a longer task must not be answered in the group. The title is posted as the topic’s first visible message: name the task the way a person would, in one line of at most 40 characters, with no requirements, method or status. The brief is sent only to the topic session and holds the goal of the requester and the facts it needs, including the requirements. Neither holds a plan or method. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. The task field is the original title of the topic, not a summary of every later request. waitingReason describes the current required input after follow-up work; a difference from the original title alone does not indicate corrupt or misassigned data. Report the current state and waitingReason without inventing a mismatch. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the title passed to channel_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the brief.'
+  'You are the channel session for this group. Answer a short question directly: a short question can be answered from the visible conversation, in one reply. A quick one-step command such as `gh pr view` is yours to run too. A command that may keep running starts with bash and run_in_background from here, so this conversation stays available while it runs and its output arrives as the next message. Manage scheduled wake-ups directly with channel_routines in the conversation where they should run; do not start a topic just to create, list, edit or cancel a wake-up. For any other request (investigation, multi-step execution, tool-based work, or a longer exchange) start a topic with channel_start_topic: a longer task must not be answered in the group. The title is posted as the topic’s first visible message: name the task the way a person would, in one line of at most 40 characters, with no requirements, method or status. The brief is sent only to the topic session and holds the goal of the requester and the facts it needs, including the requirements. Neither holds a plan or method. Forward a message to an existing topic only when it belongs to that task. Use the topic list to report actual state; do not invent progress. The task field is the original title of the topic, not a summary of every later request. waitingReason describes the current required input after follow-up work; a difference from the original title alone does not indicate corrupt or misassigned data. Report the current state and waitingReason without inventing a mismatch. When a follow-up clearly refers to earlier work missing from the list, say that the earlier topic could not be found before starting a new one; include that notice at the beginning of the title passed to channel_start_topic so people see it in the topic entry. An empty list does not mean there are no tasks. After handing off, do not repeat the task in the main timeline. Do not copy unrelated conversations into the brief.'
 const topicPrompt =
   'This topic contains a conversation about one task. Progress is shown to people automatically, so do not narrate progress in separate replies. Continue unfinished work and apply requested additions or corrections using the topic context. When completing requested work, give its result once. When you need a decision, call channel_wait_for_input with the required decision as its reason, then ask one clear question and end the run. To see the group’s other topics, use channel_list_topics; to read what one of them asked or delivered, use channel_read_topic.\n\nRespond to the latest user message. Earlier tasks and completed reports are context, not a standing request to repeat them. Treat completed answers in the history as already reported, not as pending delivery. Once a result has been delivered, do not repeat or resume the task unless the latest user asks for that. A greeting should receive only a brief greeting. Acknowledgments, completion notices, and requests to stop repetition should receive only a brief acknowledgment, without repeating the report, its checklist, or the earlier task constraints.'
 
@@ -302,13 +298,12 @@ export class ChannelTopics {
 
 export function topicSessionOptions(msg: IncomingMessage) {
   const off = (names: string[]) => names.map((name) => `-${name}`)
-  const on = backgroundToolNames.map((name) => `+${name}`)
   const tools = isChannel(msg)
     ? // A hub answers and runs quick work itself; a long command runs in the background so the
       // conversation stays available, and a longer task goes to a topic.
-      [...off(['channel_wait_for_input']), ...on]
+      off(['channel_wait_for_input'])
     : msg.topic && msg.chatKind !== 'direct'
-      ? [...off(groupOnlyToolNames), ...on]
+      ? off(groupOnlyToolNames)
       : off([
           ...topicToolNames.filter((name) => name !== 'channel_routines'),
           ...handoffToolNames,

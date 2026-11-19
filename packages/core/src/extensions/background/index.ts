@@ -1,51 +1,46 @@
+import type { BackgroundCommands } from '../../tools/background.ts'
 import type { VelaExtension } from '../types.ts'
 import { BackgroundJobs } from './jobs.ts'
 import { createBackgroundTools } from './tool.ts'
 
-export interface BackgroundOptions {
-  /** Resolved shell, as the bash tool receives it; default bash on PATH, or bash.exe on Windows */
-  shellPath?: string
-}
-
 /**
- * Long-running commands whose result arrives on its own: `background_start` returns an id at once,
- * `background_output` reads the tail, `background_stop` ends the command. Core's `bash` stays
- * synchronous. Jobs belong to their session: Stop, close and process restart end them, and nothing
- * about execution is persisted. A host may persist jobs whose results are still owed. In a channel
- * session the exit enters the gateway's queue, so it arrives as an
- * ordinary reply in the session's topic; elsewhere it is a custom message that starts a turn.
+ * Long-running commands whose result arrives on its own: `bash` with `run_in_background` returns an
+ * id at once, `background_output` reads the tail, `background_stop` ends the command. The extension
+ * installs the session's job table, which `bash` reaches through `ToolContext`, so one shell tool
+ * covers both foreground and background work and no second id, stop or delivery implementation
+ * exists. Jobs belong to their session: Stop, close and process restart end them, and nothing about
+ * execution is persisted. A host may persist jobs whose results are still owed. In a channel session
+ * the exit enters the gateway's queue, so it arrives as an ordinary reply in the session's topic;
+ * elsewhere it is a custom message that starts a turn.
  */
-export function background(options: BackgroundOptions = {}): VelaExtension {
+export function background(): VelaExtension {
   return function background(vela) {
-    const shell = () =>
-      options.shellPath ?? (process.platform === 'win32' ? 'bash.exe' : 'bash')
-    const sessions = new Map<string, BackgroundJobs>()
-    const jobs = (context: { sessionId?: string } | undefined) => {
-      const id = context?.sessionId
-      // Tools are shared by every session, so an id comes from the call itself.
-      const current = id === undefined ? undefined : sessions.get(id)
+    const commands = (
+      context: { background?: BackgroundCommands } | undefined,
+    ) => {
+      // Tools are shared by every session, so the capability comes from the call itself.
+      const current = context?.background
       if (!current)
         throw new Error('Background commands require an open session')
       return current
     }
-    for (const tool of createBackgroundTools(jobs)) vela.registerTool(tool)
+    for (const tool of createBackgroundTools(commands)) vela.registerTool(tool)
     vela.on('session_start', (_event, { session }) => {
-      sessions.set(session.id, new BackgroundJobs(session, shell, vela.logger))
+      session.registry.background = new BackgroundJobs(session, vela.logger)
     })
     // Stop aborts the run; every job in the session goes with it, so none can be orphaned.
     vela.on('agent_end', (event, { session }) => {
       if (event.reason !== 'aborted') return
-      void sessions
-        .get(session.id)
+      void session.registry.background
         ?.stopAll()
         .catch((error) =>
           vela.logger.error(`[background] Could not stop jobs: ${error}`),
         )
     })
     vela.on('session_shutdown', async (_event, { session }) => {
-      const current = sessions.get(session.id)
-      sessions.delete(session.id)
-      await current?.stopAll()
+      const jobs = session.registry.background
+      session.registry.background = undefined
+      await jobs?.stopAll()
     })
   }
 }

@@ -45,15 +45,10 @@ test('the umbrella exports background, and a session can turn its tools on', asy
   const vela = createVela({ extensions: [background()] })
   try {
     await vela.ready()
-    const session = vela.session('background', {
-      tools: ['+background_start', '+background_output', '+background_stop'],
-    })
+    // The one entry is enough: bash takes run_in_background and both job tools are on.
+    const session = vela.session('background')
     expect(session.getActiveTools()).toEqual(
-      expect.arrayContaining([
-        'background_start',
-        'background_output',
-        'background_stop',
-      ]),
+      expect.arrayContaining(['bash', 'background_output', 'background_stop']),
     )
   } finally {
     await vela.dispose()
