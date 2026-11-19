@@ -531,6 +531,113 @@ const journeyOne = async (page: Page) => {
   checks.push(
     'The composer names the folder where Vela runs, in light and dark, with no horizontal overflow.',
   )
+  await longPathHeader(page)
+}
+
+/** The 44px header's name, tag and folder, as the layout resolved them. */
+const headerLayout = (page: Page, cwd: string) =>
+  page.getByRole('banner').evaluate((bar, cwd) => {
+    const title = bar.querySelector('h2')!
+    const path = [...bar.querySelectorAll('span')].find(
+      (span) => span.textContent === cwd,
+    )!
+    const lines = document.createRange()
+    lines.selectNodeContents(title)
+    return {
+      name: title.textContent,
+      lines: lines.getClientRects().length,
+      textOverflow: getComputedStyle(path).textOverflow,
+      clipped: path.scrollWidth > path.clientWidth,
+      hover: path.title,
+    }
+  }, cwd)
+
+/**
+ * A folder nested deep enough that its path cannot fit the 44px header. The scratch
+ * prefix differs by platform (`/var/folders/…` on macOS, `/tmp` on Linux), so the
+ * nesting grows until the whole path reaches the ~200 characters the issue reproduced
+ * with rather than relying on a fixed suffix that a short prefix would undercut.
+ */
+const deepFolder = () => {
+  const segments = [
+    'clients',
+    'northwind-retail',
+    'platform-migration',
+    'services',
+    'billing',
+    'legacy-importer',
+    'fixtures',
+    '2026-08-nightly',
+    'snapshots',
+    '2026-08-19',
+    'tenant-northwind-eu-west-1',
+    'original',
+    'transcripts',
+  ]
+  let path = resolve(scratch, ...segments)
+  for (let n = 1; path.length < 200; n += 1) {
+    segments.push(`archive-${n}`)
+    path = resolve(scratch, ...segments)
+  }
+  return path
+}
+
+/**
+ * Journey 1's last step: a folder nested ~200 characters deep. The path shares the
+ * 44px header with the project name, so it must ellipsize rather than squeeze the
+ * name onto two lines (#470). The document-level overflow check alone missed that.
+ */
+const longPathHeader = async (page: Page) => {
+  const sidebar = page.getByLabel('Sidebar')
+  const longPath = deepFolder()
+  await mkdir(longPath, { recursive: true })
+  await sidebar.getByRole('button', { name: 'New project' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Folder path').fill(longPath)
+  await dialog.getByLabel('Name').fill('Long path')
+  await dialog.getByRole('button', { name: 'Create project' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  await page
+    .getByRole('banner')
+    .getByRole('heading', { name: 'Long path' })
+    .waitFor()
+
+  for (const { name, width, height } of [
+    { name: 'wide', width: 1280, height: 800 },
+    { name: 'minimum', width: 800, height: 600 },
+  ]) {
+    await page.setViewportSize({ width, height })
+    const header = await headerLayout(page, longPath)
+    assert.equal(header.name, 'Long path')
+    assert.equal(
+      header.lines,
+      1,
+      `The project name stays on one line at ${width}×${height}`,
+    )
+    assert.equal(
+      header.textOverflow,
+      'ellipsis',
+      `The folder path ellipsizes at ${width}×${height}`,
+    )
+    assert(
+      header.clipped,
+      `The long folder path is clipped at ${width}×${height}`,
+    )
+    assert.equal(
+      header.hover,
+      longPath,
+      'The path names the whole folder when hovered',
+    )
+    await noOverflow(page)
+    await themes(page, `journey-1-long-path-${name}`)
+  }
+
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
+  await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor()
+  checks.push(
+    'A long folder path ellipsizes in the header while the project name stays on one line, at 800×600 and wider.',
+  )
 }
 /** The same screen in light and dark, each once the tokens have switched. */
 const themes = async (page: Page, name: string) => {

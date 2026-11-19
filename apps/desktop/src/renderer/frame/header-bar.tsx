@@ -21,7 +21,9 @@ export function HeaderBar({
       {project ? (
         <>
           <span className={styles.tag}>Local</span>
-          <span className={styles.path}>{project.cwd}</span>
+          <span className={styles.path} title={project.cwd}>
+            {project.cwd}
+          </span>
         </>
       ) : null}
       {waiting ? (
