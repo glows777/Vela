@@ -2,7 +2,11 @@ import { Buffer } from 'node:buffer'
 import { basename } from 'node:path'
 import type { ChannelDefinition } from '@glows777/vela-channels'
 import { imageMetadata, imageMimeType } from '@glows777/vela-core/images'
-import { type LarkTransport, LarkUploadError } from './transport.ts'
+import {
+  LarkResponseError,
+  type LarkTransport,
+  LarkUploadError,
+} from './transport.ts'
 
 /** Feishu's native IM image limits. Other pictures can still be delivered as files. */
 function nativeImage(bytes: Uint8Array): boolean {
@@ -62,6 +66,12 @@ export function channelFileSender(
       if (!receipt?.messageId) throw new Error('Missing message receipt')
     } catch (error) {
       if (error instanceof LarkUploadError) throw error
+      if (error instanceof LarkResponseError) {
+        // Only the bounded first line belongs in the conversation.
+        throw new Error(
+          error.message.split(/[\p{Cc}\u2028\u2029]/u, 1)[0]!.slice(0, 300),
+        )
+      }
       throw new Error(
         'Lark did not confirm delivery. Check this conversation before asking me to resend.',
         { cause: error },

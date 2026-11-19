@@ -12,7 +12,7 @@ The shared topic tools now use `channel_*` on Lark too: `channel_start_topic`, `
 
 ## Send a workspace file
 
-Ask in the conversation that should receive the file, for example “Send me `out/report.patch` as a file.” The sequential `channel_send_file` tool takes one workspace-relative path. The limit is 30 MB (30,000,000 bytes). Lark posts supported images up to 10 MB inline and larger images as file attachments. An enabled Lark group with an explicit tool list must include `channel_send_file` to use it. The bot needs `im:resource` or `im:resource:upload` and its existing send permission. If the reply says delivery is uncertain, check the conversation before requesting another send.
+Ask in the conversation that should receive the file, for example “Send me `out/report.patch` as a file.” The sequential `channel_send_file` tool takes one workspace-relative path. The limit is 30 MB (30,000,000 bytes). Lark posts supported images up to 10 MB inline and larger images as file attachments. An enabled Lark group with an explicit tool list must include `channel_send_file` to use it. The bot needs `im:resource` or `im:resource:upload` and its existing send permission. If Feishu rejects the attachment post, the reply reports its error code and message. If the reply says delivery is uncertain, check the conversation before requesting another send.
 
 ## Isolation scope
 

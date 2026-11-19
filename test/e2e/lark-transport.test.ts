@@ -527,3 +527,56 @@ for (const fixture of [
     })
   })
 }
+
+const rejectedFile = {
+  code: 230002,
+  msg: 'Bot/User can NOT be out of the chat.\nProvider diagnostics.',
+  error: { troubleshooting: 'Private request details' },
+}
+const rejectedReply = 'Lark 230002: Bot/User can NOT be out of the chat.'
+const uncertainReply =
+  'Lark did not confirm delivery. Check this conversation before asking me to resend.'
+
+for (const [scenario, post, expected] of [
+  ['provider rejection', () => rejectedFile, rejectedReply],
+  [
+    'HTTP rejection with a Feishu code',
+    () => {
+      throw Object.assign(new Error('Request failed with status code 400'), {
+        response: { status: 400, data: rejectedFile },
+      })
+    },
+    rejectedReply,
+  ],
+  ['missing receipt', () => ok({}), uncertainReply],
+  [
+    'lost connection',
+    () => {
+      throw new Error('Connection reset after posting')
+    },
+    uncertainReply,
+  ],
+] as const) {
+  test(`an attachment post with ${scenario} reports one result without resending`, async () => {
+    const t = await start([
+      fauxToolCall('channel_send_file', { path: 'report.patch' }),
+      (req) => fauxText(req.toolResults.at(-1)!.output),
+    ])
+    const workspace = t.dataPath('channels/lark-oc_group/workspace')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(`${workspace}/report.patch`, 'diff')
+    routes = [
+      (c) => c.path.endsWith('/files') && ok({ file_key: 'uploaded' }),
+      (c) => c.body.msg_type === 'file' && post(),
+    ]
+    await receive({})
+    await until(() => reactions().includes('DONE'))
+    expect(calls.filter((c) => c.path.endsWith('/files'))).toHaveLength(1)
+    expect(
+      calls.filter((c) => c.body.msg_type === 'file').map((c) => c.path),
+    ).toEqual(['/open-apis/im/v1/messages/om_in/reply'])
+    expect(t.eventsOf('channel_reply').map((event) => event.text)).toEqual([
+      expected,
+    ])
+  })
+}

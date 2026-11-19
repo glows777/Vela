@@ -100,9 +100,11 @@ export interface LarkTransport {
   ): Promise<LarkHistoryMessage[]>
 }
 
+export class LarkResponseError extends Error {}
+
 function checked<T extends { code?: number; msg?: string }>(response: T): T {
   if (response.code !== undefined && response.code !== 0)
-    throw new Error(
+    throw new LarkResponseError(
       `Lark ${response.code}: ${response.msg ?? 'request failed'}`,
     )
   return response
@@ -378,6 +380,19 @@ export function larkTransport(
 
 export class LarkUploadError extends Error {}
 
+function filePostRejection(error: unknown) {
+  // The SDK rejects non-2xx HTTP responses and leaves the Feishu body on the error.
+  const body = (
+    error as { response?: { data?: { code?: unknown; msg?: unknown } } } | null
+  )?.response?.data
+  if (typeof body?.code !== 'number' || !body.code) throw error
+  return {
+    code: body.code,
+    msg: typeof body.msg === 'string' ? body.msg : undefined,
+    data: undefined,
+  }
+}
+
 function larkFileSender(
   client: lark.Client,
 ): NonNullable<LarkTransport['sendFile']> {
@@ -414,24 +429,21 @@ function larkFileSender(
       )
     }
     const data = { msg_type: file.kind, content, uuid: options.uuid }
-    const response = options.replyToId
-      ? await client.im.message.reply({
+    const post = options.replyToId
+      ? client.im.message.reply({
           path: { message_id: options.replyToId },
           data: { ...data, reply_in_thread: options.replyInThread },
         })
-      : await client.im.message.create({
+      : client.im.message.create({
           params: { receive_id_type: 'chat_id' },
           data: { ...data, receive_id: chatId },
         })
-    if (
-      response.code ||
-      !response.data?.message_id ||
-      !response.data.create_time
-    )
+    const { data: receipt } = checked(await post.catch(filePostRejection))
+    if (!receipt?.message_id || !receipt.create_time)
       throw new Error('Missing Lark file delivery receipt')
     return {
-      messageId: response.data.message_id,
-      createTime: response.data.create_time,
+      messageId: receipt.message_id,
+      createTime: receipt.create_time,
     }
   }
 }
