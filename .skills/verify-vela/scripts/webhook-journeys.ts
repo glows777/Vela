@@ -31,6 +31,7 @@ const model = createFauxModel({
     fauxText('Subscribed to fixture PR'),
     fauxText('Fixture CI handled'),
     fauxText('Fixture comment handled'),
+    fauxText('Fixture review handled'),
   ],
 })
 const vela = createVela({
@@ -422,6 +423,60 @@ try {
   assert(model.calls.at(-1)!.lastUserText.includes('!stop'))
   console.log(
     'PASS full-body self-origin marker skips echo; unmarked same-author command text stays untrusted data',
+  )
+
+  assert.equal(
+    (
+      await send(
+        {
+          action: 'submitted',
+          repository: { full_name: 'owner/repo' },
+          pull_request: { number: 171 },
+          review: {
+            id: 5968407723,
+            body: 'Here are some automated review suggestions',
+            user: { login: 'chatgpt-codex-connector[bot]' },
+            html_url:
+              'https://github.com/owner/repo/pull/171#pullrequestreview-5968407723',
+            state: 'commented',
+            commit_id: 'b'.repeat(40),
+          },
+        },
+        'pull_request_review',
+        'review',
+      )
+    ).status,
+    202,
+  )
+  await drainChannels(vela)
+  assert.equal(model.calls.length, calls + 3)
+  assert(
+    model.calls
+      .at(-1)!
+      .lastUserText.includes(
+        'GET /repos/owner/repo/pulls/171/reviews/5968407723/comments',
+      ),
+  )
+  assert.equal(fake.sent.at(-1)?.messageId, 'root')
+  console.log(
+    'PASS a signed review wakes the topic with its review id and inline-comment endpoint',
+  )
+
+  assert.equal(
+    (await send(suite, 'pull_request_review_comment', 'inline')).status,
+    202,
+  )
+  await drainChannels(vela)
+  assert.equal(model.calls.length, calls + 3)
+  assert(
+    logs.some((line) =>
+      line.includes(
+        'GitHub "pull_request_review_comment" event type is not mapped',
+      ),
+    ),
+  )
+  console.log(
+    'PASS an unmapped inline-comment delivery logs one debug line and wakes nobody',
   )
 
   const feedSubscribed = Promise.withResolvers<void>()

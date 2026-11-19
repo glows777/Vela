@@ -8,6 +8,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 - Fix Lark startup recovery repeatedly posting feedback errors for expired or conflicting saved delivery intents; terminal refusals now settle locally without another chat message.
 
+- **A GitHub review delivery names its inline comments.** A `pull_request_review` wake now carries the review id and the `GET /repos/<owner>/<repo>/pulls/<n>/reviews/<id>/comments` endpoint, so a subscribed topic can read the inline findings with its own tools; an event type outside the mapped webhook list is dropped with one bounded `debug` line instead of silently. A review payload without an id still wakes with the plain notice and no endpoint ([#487](https://github.com/glows777/Vela/issues/487)).
+
 ### Breaking Changes
 
 - **Esc no longer stops a background command.** A job belongs to its session, not to the run that started it: an interrupted run leaves it running and its exit still arrives; `background_stop`, `session.close()` and process shutdown stop it. A command still in the foreground when the run is interrupted is cancelled with it, as before ([#430](https://github.com/glows777/Vela/issues/430)).
