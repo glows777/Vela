@@ -1,14 +1,40 @@
 import { createSessionLocalExecutionEnv } from '../execution/local.ts'
+import type {
+  ExecutionError,
+  Result,
+  ShellExecResult,
+} from '../execution/types.ts'
 import { StoredToolResult, ToolResultStore } from '../session/tool-results.ts'
+import type { BackgroundAdmission, BackgroundCommands } from './background.ts'
 import {
-  fitOutputTail,
   OUTPUT_MAX_BYTES,
   OUTPUT_MAX_LINES,
+  OutputTail,
 } from './output-tail.ts'
 import type { ToolContext } from './registry.ts'
 import { ToolExecutionResult } from './types.ts'
 
-/** Execute within the selected session environment, retaining a bounded output tail. */
+/** The result of a call the user moved to the background while it ran. */
+function movedToBackground({
+  id,
+  output,
+  truncated,
+}: BackgroundAdmission): ToolExecutionResult {
+  const tail = output
+    ? `${output}${truncated ? '\n\n[Showing the last output only]' : ''}\n\n`
+    : ''
+  const text = `${tail}Command was manually moved to the background with ID: ${id}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+  return new ToolExecutionResult({ id }, text, {
+    backgroundTaskId: id,
+    backgroundedByUser: true,
+  })
+}
+
+/**
+ * Execute within the selected session environment, retaining a bounded output tail. In a session with
+ * background commands the call is registered while it runs, so `session.backgroundTasks()` can move it
+ * to the background: it then returns this synthetic result and the job table owns the exit.
+ */
 export async function environmentBash(
   command: string,
   timeout: number | undefined,
@@ -24,31 +50,24 @@ export async function environmentBash(
       shellPath,
       tempRoot: results.dir,
     })
-  let tail = '',
-    cut = false,
-    bytes = 0
+  const tail = new OutputTail()
   let updateTimer: ReturnType<typeof setTimeout> | undefined
   const onUpdate = context?.onUpdate
-  const result = await env
-    .exec(
+  const start = (signal: AbortSignal | undefined) =>
+    env.exec(
       command,
       {
         timeout,
         spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
         onOutput: (text) => {
-          bytes += Buffer.byteLength(text)
-          const combined = Buffer.from(tail + text)
-          if (combined.length > OUTPUT_MAX_BYTES) cut = true
-          tail = combined.subarray(-OUTPUT_MAX_BYTES).toString()
+          tail.append(text)
           if (onUpdate && !updateTimer) {
             // Publish the latest tail even if the command goes quiet after a burst.
             updateTimer = setTimeout(() => {
               updateTimer = undefined
               try {
                 onUpdate({
-                  content: [
-                    { type: 'text', text: fitOutputTail(tail, cut).text },
-                  ],
+                  content: [{ type: 'text', text: tail.read().text }],
                 })
               } catch {
                 // A failed progress notification does not interrupt the command.
@@ -57,11 +76,44 @@ export async function environmentBash(
           }
         },
       },
-      context?.signal,
+      signal,
     )
-    .finally(() => clearTimeout(updateTimer))
+  const foreground = context?.background?.watch({
+    command,
+    ...(context?.toolCallId === undefined
+      ? {}
+      : { toolCallId: context.toolCallId }),
+    signal: context?.signal,
+    output: tail,
+    start,
+    exit: (settled) =>
+      settled.ok
+        ? {
+            exitCode: settled.value.exitCode,
+            spillPath: settled.value.spillPath,
+          }
+        : { spillPath: settled.error.spillPath, error: settled.error.message },
+  })
+  let result: Result<ShellExecResult, ExecutionError>
+  try {
+    if (!foreground) result = await start(context?.signal)
+    else {
+      const outcome = await Promise.race([
+        foreground.result.then((value) => ({ type: 'result' as const, value })),
+        foreground.detached.then((admission) => ({
+          type: 'detached' as const,
+          admission,
+        })),
+      ])
+      if (outcome.type === 'detached')
+        return movedToBackground(outcome.admission)
+      result = outcome.value
+    }
+  } finally {
+    clearTimeout(updateTimer)
+  }
   if (!result.ok) {
-    const output = fitOutputTail(tail, cut).text || '(no output)'
+    const output = tail.read().text || '(no output)'
     const message =
       result.error.code === 'unknown' &&
       result.error.message.startsWith(
@@ -87,7 +139,7 @@ export async function environmentBash(
       const stored = new StoredToolResult(
         path,
         results.indexPath,
-        info.ok ? info.value.size : bytes,
+        info.ok ? info.value.size : tail.bytes,
         `${output}\n\n[Full output: ${path}]\n\n${message}`,
       )
       stored.execution = execution
@@ -99,14 +151,14 @@ export async function environmentBash(
   const status =
     exitCode === 0 ? '' : `\n\nCommand exited with code ${exitCode}`
   const execution = { exitCode, isError: exitCode !== 0 }
-  const fit = fitOutputTail(tail, cut)
+  const fit = tail.read()
   let preview = fit.text || '(no output)'
   if (spillPath) {
-    preview += `\n\n[Showing the last ${fit.lines} lines${fit.partialLine ? ' (the last line is cut)' : ''} of ${bytes} bytes of output. Full output: ${spillPath}]`
+    preview += `\n\n[Showing the last ${fit.lines} lines${fit.partialLine ? ' (the last line is cut)' : ''} of ${tail.bytes} bytes of output. Full output: ${spillPath}]`
     const stored = new StoredToolResult(
       spillPath,
       results.indexPath,
-      bytes,
+      tail.bytes,
       preview + status,
     )
     stored.execution = execution
@@ -114,4 +166,50 @@ export async function environmentBash(
   }
   preview += status
   return new ToolExecutionResult(preview, preview, execution)
+}
+
+/**
+ * Starts a command as a background task: the call returns at once with the job's id and the tail the
+ * command already wrote, and the job table delivers the exit to the session. The complete output goes
+ * to the environment's own spill file, so a session whose environment is not the host can page it.
+ */
+export async function backgroundBash(
+  command: string,
+  timeout: number | undefined,
+  cwd: string | undefined,
+  shellPath: string | undefined,
+  context: ToolContext | undefined,
+  commands: BackgroundCommands,
+): Promise<ToolExecutionResult> {
+  const results = context?.results ?? new ToolResultStore()
+  const env =
+    context?.execution ??
+    createSessionLocalExecutionEnv({
+      cwd: cwd ?? process.cwd(),
+      shellPath,
+      tempRoot: results.dir,
+    })
+  const { id, output, truncated } = await commands.adopt({
+    command,
+    // Cancelling this call during admission starts nothing; the running job gets its own signal.
+    signal: context?.signal,
+    start: ({ onOutput, signal, shell }) =>
+      env.exec(
+        // Only a local session has a host shell to honour; other environments run the command.
+        shell !== undefined && env.id === 'node:local'
+          ? [shell, '-lc', command]
+          : command,
+        {
+          timeout,
+          spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
+          onOutput,
+        },
+        signal,
+      ),
+  })
+  const tail = output
+    ? `${output}${truncated ? '\n\n[Showing the last output only]' : ''}\n\n`
+    : ''
+  const text = `${tail}Command running in background with ID: ${id}.\nYou will be notified when it completes; do not poll the file or start a second copy.`
+  return new ToolExecutionResult({ id }, text, { backgroundTaskId: id })
 }

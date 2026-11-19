@@ -1,13 +1,23 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  type ChannelHost,
   type ChannelVela,
   type ChannelVelaOptions,
   createChannelVela,
+  type LocalHost,
 } from '@glows777/vela-channels'
 import type { DocsPaths } from '@glows777/vela-core'
 
-export type { ChannelVela as Vela, ChannelVelaOptions as VelaOptions }
+import type { LarkHost } from '@glows777/vela-lark'
+
+export type { ChannelVelaOptions as VelaOptions }
+
+export interface Vela extends ChannelVela {
+  channel(name: 'local'): LocalHost
+  channel(name: 'lark'): LarkHost
+  channel(name: string): ChannelHost
+}
 
 /**
  * Vela's own README, docs and examples, next to this package (`bun run build` copies docs and examples into
@@ -31,6 +41,9 @@ function docsPaths(): DocsPaths {
  * The SDK entry point: core Vela plus channels. The system prompt's docs section points at this package, so
  * "how do I write an extension" starts from the installed documentation.
  */
-export function createVela(options: ChannelVelaOptions = {}): ChannelVela {
-  return createChannelVela({ ...options, docs: options.docs ?? docsPaths() })
+export function createVela(options: ChannelVelaOptions = {}): Vela {
+  return createChannelVela({
+    ...options,
+    docs: options.docs ?? docsPaths(),
+  }) as Vela
 }

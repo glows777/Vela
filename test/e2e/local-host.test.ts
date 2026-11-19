@@ -338,8 +338,8 @@ test('a project hub gets the group tool split, including in a session the host o
   mkdirSync(other)
   const later = await host.openProject({ cwd: other })
   const early = t.vela.session(later.sessionId)
-  // A bare session has neither the hub's channel tools nor its background tools.
-  expect(early.getActiveTools()).not.toContain('background_start')
+  // A bare session has the extension's tools but not the hub's channel tools.
+  expect(early.getActiveTools()).toContain('background_output')
   expect(early.getActiveTools()).not.toContain('channel_start_topic')
   await host.submit({
     projectId: later.id,

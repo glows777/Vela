@@ -22,7 +22,7 @@ const connection = channel.connection()            // { connected: boolean, erro
 
 - `sessions(chatId?)` returns detached `ChannelSessionSnapshot` values, including `waitingReason` and the current `runId`, with the same enabled-scope checks as the adapter. Listing never opens a model session.
 - `onSession` and `onStatus` preserve their existing event shapes. Subscriptions can be installed before startup, observe only future events, isolate listener exceptions and are cleared on disposal. Subscribe and then read snapshots to initialize a UI.
-- `submit(message)` resolves after durable admission, before preparation, model work or delivery. It rechecks channel access. A topic follow-up must match an owned root and thread in that chat; the host view forces `requireExistingSession: true`. Unknown or mismatched topics are rejected without creating a new one. Group/topic input needs a real service `replyToId` anchor, especially on Lark, whose reply operation uses that ID. Do not fabricate service IDs. Owner DMs keep the existing direct-message form without `replyToId`. Creating an anchorless new Lark topic is not supported.
+- `submit(message)` resolves after durable admission, before preparation, model work or delivery. It rechecks channel access. A topic follow-up must match an owned root and thread in that chat; the host view forces `requireExistingSession: true`. Unknown or mismatched topics are rejected without creating a new one. Group/topic input needs a real service `replyToId` anchor, especially on Lark, whose reply operation uses that ID. Do not fabricate service IDs. Owner DMs keep the existing direct-message form without `replyToId`. To open a Lark topic from an app without an anchor, use the typed Lark host overload below; it creates a real anchor before submitting.
 - `stop({ chatId, rootId? }, runId)` targets the exact current preparation/run. Expired, repeated or unavailable stops return false; stopping does not discard later queued input.
 - Host access preserves channel enablement, project existence, topic ownership and configured tools. It does not expose model-run-only `scope`, `session`, `context`, `topics`, `topicCoverage`, `dispatch`, `skipReply` or `waitForInput` operations. After disposal, mutations fail and Stop returns false.
 
@@ -58,7 +58,39 @@ For another adapter, optional `ChannelDefinition.onConnection(listener)` reports
 
 Local reports connected after its store and optional listener are ready. `local({})` (or `local({ timezone })`) starts the in-process core without opening any listener. Providing a nonempty `token` enables the existing authenticated loopback HTTP/SSE adapter; `port` alone never enables HTTP.
 
+### Lark groups and visible history
+
+The umbrella SDK (`@glows777/vela`) returns a typed `LarkHost` from `createVela().channel('lark')`. `@glows777/vela-lark` owns `LarkHost`, `LarkVisibleMessage` and `LarkHostEvent`. Both Local and Lark attach their scoped host operations through the optional `ChannelDefinition.host(base)` decorator. `createChannelVela()` keeps its platform-neutral Lark accessor.
+
+```ts
+const vela = createVela({ extensions: [lark(options)] })
+await vela.ready()
+const host = vela.channel('lark')
+const off = host.onEvent(event => invalidateVisibleHistory(event))
+await vela.startChannels()
+
+const receipt = await host.submit({
+  chatId: 'oc_group',
+  newTopic: { title: 'Review the report' },
+  text: 'Please check the totals',
+  author: { id: 'desktop-alex', name: 'Alex' },
+})
+const { messages, nextCursor } = await host.messages({
+  chatId: 'oc_group',
+  sessionId: receipt.sessionId,
+  limit: 30,
+})
+off()
+```
+
+- `messages({ chatId, sessionId, cursor?, limit? })` reads one enabled group or one of its owned topics straight from Lark. A group's logical ID is `channelSessionId('lark', chatId)` (the helper is exported by `@glows777/vela-channels`), even before its first run; topic IDs come from `sessions(chatId)`. Group pages are newest first and include topic roots, not thread replies. Topic pages are oldest first. The limit is 1–50 provider rows per page. Deleted or unsupported rows can produce a short or empty page with a next cursor. Keep passing the opaque cursor with the same chat and session until it is absent.
+- To post into an existing session, pass `sessionId` instead of `newTopic`. The bot posts signed text; the author ID is host attribution, not a Lark user ID or a permission. Group input still goes through group triage. Creating a topic posts the signed root and adds the title inside its thread before admitting the run directly in that topic. An existing topic reply targets the same thread. Follow work through `onSession`; the receipt identifies the session and posted message, not a particular queued run.
+- A failed submission is not automatically retried. The error includes the message ID if posting succeeded and a later step failed. If the transport returns no ID (including a custom transport whose `send` returns void), the result is uncertain and no run starts. Refresh history before sending again.
+- `onEvent` is best effort: `history_changed` invalidates a group or a named topic, and `reset` tells the app to re-read visible history after connecting or reconnecting. Await `startChannels()` before acting on signals from startup, as with other host calls. Without group-message read permissions, or when `readUntagged` is off, some human messages may only appear after a re-read. Bot echo does not start work or duplicate an invalidation for the host post. Neither event is a durable delivery acknowledgement.
+
 ### Local projects and visible history
+
+An assistant message with `file: { name, size }` identifies a snapshot of the file at send time. Use `await host.readAttachment({ projectId, sessionId, messageId: message.id })` for its bytes. The owning Local history and its message events expose the same metadata. SDK pickup survives workspace edits, deletion and host restart.
 
 `vela.channel('local')` returns a typed `LocalHost`, extending `ChannelHost` without another factory, store or runtime. The literal overload is available through both `@glows777/vela-channels` and `@glows777/vela`.
 
@@ -99,6 +131,7 @@ Register a `ChannelDefinition` through `vela.registerChannel()` from an extensio
 | `name`, `description` | Yes | Stable channel name (part of session identity) and description shown in channel listings. |
 | `canRecover(message, chatKind)` | No | Recheck current access for a stored group/direct conversation. Return false to leave it untouched during startup recovery. |
 | `start()` | Yes | Open the service connection when channels start; may be synchronous or asynchronous. Return `false` when the channel is not configured to connect; the gateway then skips its startup line, routines and recovery. A rejected start is logged without preventing other channels from starting. |
+| `sendFile(route, { path, bytes })` | No | Deliver one file to the current outbound route. Providing this capability makes `channel_send_file` eligible for the session's tool selection. |
 | `stop()` | Yes | Close transport/resources after the gateway drains active work. May be synchronous or asynchronous; failures are collected during shutdown. |
 | `send(message)` | Yes | Deliver an outgoing message; resolve after delivery, reject on failure. A successful send emits `channel_reply`; a failed send emits `channel_error`. |
 | `onMessage(handler)` | No | Capture the gateway's incoming handler at registration. Its promise settles after processing, reply and feedback. Deliver new inputs immediately if you want controls during a previous run; do not wait for the earlier handler before delivering them. |
@@ -238,6 +271,8 @@ Custom `LarkTransport` implementations must provide `getBotId`, `getSenderName`,
 `startTopic(messageId, title)` posts the title as the first visible message and returns `{ messageId, createTime, rootId, threadId }` from the successful threaded reply. `forward(messageId, threadId)` returns `{ messageId, createTime }` from the successful forward. Missing required receipt fields and platform errors must reject; do not pretend an unthreaded send created a topic.
 
 A channel can include `files` on an incoming message. Each entry carries `{ name, hostPath }` for a completed private download and has a matching `[file: <name>]` marker in that message’s text. After selecting a local session, the gateway inserts the host path into that marker. Normal delivery and steering use the same rule. Non-local delivery fails before exposing any host path.
+
+An injected Lark transport can implement `sendFile(chatId, { kind, name, bytes }, { replyToId?, replyInThread?, uuid? })`, returning a sent message receipt. The built-in transport uploads to the Feishu IM image or file endpoint, then posts the returned resource key. An owned topic uses an explicit in-thread reply to its root. A failed or uncertain post never redirects to the group.
 
 For attachments, implement `getResource(messageId, key, type)` returning a Node readable stream, where `type` is `image` or `file`. The default transport calls `im.messageResource.get` and uses `getReadableStream()`.
 

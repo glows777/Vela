@@ -425,8 +425,24 @@ if (recorder)
       recorder.addInput(event.input)
   })
 
+/** Print and interactive CLI tool settings, never a serve channel's tool policy. */
+function applyCliTools(target: VelaSession, defaultTools?: readonly string[]) {
+  if (
+    mode === 'serve' ||
+    (!args.tools && !args.noTools && !args.excludeTools.length && !defaultTools)
+  )
+    return
+  const toolLoadout = selectTools(
+    target.registry.getAllTools().map((tool) => tool.name),
+    args,
+    defaultTools,
+  )
+  if (toolLoadout?.selection) target.setActiveTools(toolLoadout.selection)
+  else if (toolLoadout?.modifiers)
+    setDefaultToolModifiers(target, toolLoadout.modifiers)
+}
+
 /**
- * Applies --tools / --no-tools / --exclude-tools to each session the CLI opens.
  * A resumed session carries its saved model and thinking level. Explicit command-line values win, and so do
  * VELA_MODEL=mock / faux and VELA_RECORD-wrapped models (otherwise --continue would bypass replay / recording
  * and use the saved real model). Returns whether the model is usable; `quiet` skips the diagnostic the
@@ -434,32 +450,26 @@ if (recorder)
  */
 function applyModelArgs(
   target: VelaSession,
-  { quiet = false }: { quiet?: boolean } = {},
+  {
+    quiet = false,
+    startup = true,
+    defaultTools,
+  }: {
+    quiet?: boolean
+    startup?: boolean
+    defaultTools?: readonly string[]
+  } = {},
 ): boolean {
-  recordedSession = target.id
-  let toolLoadout: ReturnType<typeof selectTools>
   try {
-    if (
-      mode !== 'serve' &&
-      (args.tools ||
-        args.noTools ||
-        args.excludeTools.length ||
-        config.settings.defaultTools)
-    )
-      toolLoadout = selectTools(
-        target.registry.getAllTools().map((tool) => tool.name),
-        args,
-        config.settings.defaultTools,
-      )
+    applyCliTools(target, defaultTools)
   } catch (error) {
+    if (!startup) throw error
     console.error(error instanceof Error ? error.message : String(error))
     configurationExitCode = 2
     void exit(2)
     return false
   }
-  if (toolLoadout?.selection) target.setActiveTools(toolLoadout.selection)
-  else if (toolLoadout?.modifiers)
-    setDefaultToolModifiers(target, toolLoadout.modifiers)
+  recordedSession = target.id
   if (args.thinking) target.setThinkingLevel(args.thinking)
   // The recorder wraps the --model / default model, so it goes first or --model would bypass recording
   const override =
@@ -479,13 +489,15 @@ function applyModelArgs(
   }
 }
 
-async function reportContextFiles(session: VelaSession): Promise<void> {
-  const line = formatContextFileList((await session.resources()).contextFiles, {
-    cwd,
+async function reportContextFiles(session: VelaSession) {
+  const resources = await session.resources()
+  const line = formatContextFileList(resources.contextFiles, {
+    cwd: session.cwd,
     homeDir: homedir(),
     agentDir,
   })
   if (line) logger.info(`[context] ${line}`)
+  return resources
 }
 
 /** `--system-prompt` and `--append-system-prompt` take text or a file path (like pi: an existing file is read). */
@@ -519,10 +531,10 @@ try {
     // Print mode has no UI: extension confirms always answer "no" (like pi's print mode)
     const session = vela.session(sessionId)
     if (resume) await session.resume()
-    await reportContextFiles(session)
+    const { defaultTools } = await reportContextFiles(session)
     // Extension providers resolve only after extensions load (if loading fails, prompt reports it)
     await vela.ready().catch(() => {})
-    if (!applyModelArgs(session)) await exit(1)
+    if (!applyModelArgs(session, { defaultTools })) await exit(1)
     await exit(
       await runPrintMode({
         vela,
@@ -544,12 +556,16 @@ try {
       resume,
       newSessionId,
       // Start even without a model; the client can set_model (the error goes to stderr)
-      configure: (session) => void applyModelArgs(session),
-      onReady: reportContextFiles,
+      configure: (session, { startup, defaultTools }) => {
+        if (startup) applyModelArgs(session, { defaultTools })
+        else applyCliTools(session, defaultTools)
+      },
+      onReady: async (session) => {
+        await reportContextFiles(session)
+      },
       input: process.stdin,
       write: writeStdout,
       describeError: cliErrorMessage,
-      enabledModels: config.settings.enabledModels,
     })
     await exit(0)
   } else if (mode === 'serve') {
@@ -570,7 +586,6 @@ try {
       newSessionId,
       configure: applyModelArgs,
       describeError: cliErrorMessage,
-      enabledModels: config.settings.enabledModels,
       loginOptions: { getDeviceId: () => installationId(agentDir) },
       agentDir,
       attachLogger: interactiveLogger?.attach,

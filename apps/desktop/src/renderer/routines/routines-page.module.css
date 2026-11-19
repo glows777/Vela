@@ -1,0 +1,133 @@
+.page {
+  width: 100%;
+  overflow-y: auto;
+  padding: var(--space-8) var(--space-6) var(--space-10);
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.lead {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.note {
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-sm);
+}
+
+.error {
+  margin: 0;
+  color: var(--vela-accent-ink);
+  font-size: var(--text-sm);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 0 var(--space-1);
+  color: var(--vela-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tag,
+.zone {
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.zone {
+  margin-left: auto;
+  font-family: var(--vela-family-mono);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--vela-line);
+  border-radius: var(--radius-panel);
+  background: var(--vela-paper);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.row + .row {
+  border-top: 1px solid var(--vela-line);
+}
+
+.clock {
+  flex: none;
+  color: var(--vela-muted);
+}
+
+.what {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.message {
+  margin: 0;
+  color: var(--vela-ink);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.meta {
+  margin: 0;
+  color: var(--vela-muted);
+  font-size: var(--text-xs);
+}
+
+.when {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+}
+
+.schedule {
+  margin: 0;
+  color: var(--vela-ink);
+  font-size: var(--text-sm);
+}

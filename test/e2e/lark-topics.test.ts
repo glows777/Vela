@@ -621,7 +621,6 @@ test('the group session runs execution and background tools like its topics, and
       'bash',
       'write_file',
       'edit_file',
-      'background_start',
       'background_output',
       'background_stop',
     ]),
@@ -670,7 +669,7 @@ test('a chat tool list cannot add the waiting control to its group session, and 
   expect(groupTools).toEqual(expect.arrayContaining(['read_file', 'bash']))
   expect(groupTools).not.toContain('channel_wait_for_input')
   // A narrowed list also drops the hub's background tools; only a chat without one keeps them.
-  expect(groupTools).not.toContain('background_start')
+  expect(groupTools).not.toContain('background_output')
 
   const topic = larkEvent({
     message_id: 'topic',

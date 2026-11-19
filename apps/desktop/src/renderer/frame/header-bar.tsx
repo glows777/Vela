@@ -11,13 +11,13 @@ export function HeaderBar({
   waiting = false,
 }: {
   project?: Project
-  /** The page name when it isn't Home or a project. */
+  /** The page name when no project is open; Home otherwise. */
   title?: string
   waiting?: boolean
 }) {
   return (
     <header className={styles.bar}>
-      <h2 className={styles.title}>{title ?? project?.name ?? 'Home'}</h2>
+      <h2 className={styles.title}>{project?.name ?? title ?? 'Home'}</h2>
       {project ? (
         <>
           <span className={styles.tag}>Local</span>

@@ -67,6 +67,7 @@ export type {
   LarkCardAction,
   LarkCardResponse,
 } from './cards.ts'
+export type { LarkHost, LarkHostEvent, LarkVisibleMessage } from './host.ts'
 export { connectLarkSetup, discoverLarkGroup } from './setup.ts'
 export type {
   LarkHistoryMessage,

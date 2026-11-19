@@ -12,6 +12,7 @@ import {
 import z from 'zod'
 import confirmDangerous from '../../examples/extensions/confirm-dangerous.ts'
 import todo from '../../examples/extensions/todo-command.ts'
+import { background } from '../../packages/core/src/extensions/background/index.ts'
 import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 import { cleanupTestVelas, createTestVela, tempDir } from '../support/vela.ts'
 
@@ -819,11 +820,11 @@ test('the model picker filters as you type; Ctrl+P cycles through enabledModels'
 
   // plain is not in enabledModels: cycling starts from the first scoped model
   tui.terminal.press(KEYS.ctrlP)
-  expect(session.modelInfo.ref).toBe('fake/big')
+  await tui.until(() => session.modelInfo.ref === 'fake/big')
   tui.terminal.press(KEYS.ctrlP)
-  expect(session.modelInfo.ref).toBe('fake/other')
+  await tui.until(() => session.modelInfo.ref === 'fake/other')
   tui.terminal.press(KEYS.ctrlP)
-  expect(session.modelInfo.ref).toBe('fake/big')
+  await tui.until(() => session.modelInfo.ref === 'fake/big')
 })
 
 test('/login stores an API key or runs an OAuth sign-in; /logout removes it', async () => {
@@ -1311,4 +1312,56 @@ test('a resumed session shows only the current branch of the tree, with its ! co
   expect(screen).toContain('Summary of the conversation branch you left')
   expect(screen).toContain('$ echo on-branch')
   expect(screen).not.toContain('left answer')
+})
+
+test('Ctrl+B moves the running bash call to the background; the footer counts it and /tasks lists it', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', {
+        command:
+          'X=OUT; echo "READY-$X"; until [ -f go ]; do sleep 0.02; done; echo "DONE-$X"',
+      }),
+      fauxText('Still working while it runs.'),
+      (request) =>
+        fauxText(
+          `The exit arrived: ${request.lastUserText.includes('DONE-OUT')}`,
+        ),
+    ],
+    extensions: [background()],
+  })
+  const tui = await startTui(t.vela)
+  await tui.started
+  tui.terminal.type('start a slow check')
+  tui.terminal.press(KEYS.enter)
+  await tui.until('READY-OUT')
+  tui.terminal.press(KEYS.ctrlB)
+  // The row settles with the job's id, the footer counts it, and the run keeps going.
+  await tui.until('Command was manually moved to the background with ID: bg-1.')
+  await tui.until('1 background task · bg-1')
+  await tui.until('Still working while it runs.')
+  // The editor still takes input while the job runs.
+  tui.terminal.type('typed while it runs')
+  expect(Reflect.get(tui.mode, 'editor').getText()).toBe('typed while it runs')
+  tui.terminal.press(KEYS.ctrlC)
+  tui.submit('/tasks')
+  await tui.until(() => /bg-1 · running[\s\S]*READY-OUT/.test(tui.screen()))
+  // The exit starts its own turn; the footer drops the count and the list is empty.
+  await Bun.write(t.path('go'), '')
+  await tui.until('The exit arrived: true', 5000)
+  await tui.until(() => !tui.screen().includes('background task · bg-1'))
+  const session = Reflect.get(tui.mode, 'session') as { isRunning: boolean }
+  await tui.until(() => !session.isRunning)
+  tui.submit('/tasks')
+  await tui.until('No background tasks')
+  tui.terminal.press(KEYS.ctrlB)
+  await tui.until('No foreground command to background')
+})
+
+test('Ctrl+B before the first prompt says nothing is running instead of refusing the session', async () => {
+  const t = createTestVela({ extensions: [background()] })
+  const tui = await startTui(t.vela)
+  await tui.started
+  tui.terminal.press(KEYS.ctrlB)
+  await tui.until('No foreground command to background')
+  expect(tui.screen()).not.toContain('Background commands are not enabled')
 })

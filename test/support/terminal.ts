@@ -1,5 +1,8 @@
 import { stripTerminalSequences, type Terminal } from '@earendil-works/pi-tui'
-import { InteractiveMode } from '../../packages/vela/src/cli/interactive.ts'
+import {
+  InteractiveMode,
+  type InteractiveOptions,
+} from '../../packages/vela/src/cli/interactive.ts'
 import type { Vela } from './compat-vela.ts'
 
 /** Fake implementation of pi-tui's Terminal interface: writes nothing and sends keys straight to the TUI. */
@@ -44,6 +47,7 @@ export const KEYS = {
   up: '\x1b[A',
   down: '\x1b[B',
   shiftTab: '\x1b[Z',
+  ctrlB: '\x02',
   ctrlC: '\x03',
   ctrlD: '\x04',
   ctrlL: '\x0c',
@@ -74,7 +78,7 @@ export async function startTui(
     openBrowser?: (url: string) => void
     enabledModels?: string[]
     /** Model check for the setup wizard: false runs it (first run without a usable model) */
-    configure?: () => boolean
+    configure?: InteractiveOptions['configure']
     hasUsableModel?: () => boolean
     agentDir?: string
   } = {},

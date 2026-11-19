@@ -23,6 +23,19 @@
     message_id?: string | undefined
     msg_type?: string | undefined
     sender?: { id?: string; sender_type?: string; } | undefined
+  interface LarkHost
+    connection: () => ChannelConnection
+    messages: (input: { chatId: string; sessionId: string; cursor?: string; limit?: number; }) => Promise<{ messages: LarkVisibleMessage[]; nextCursor?: string; }>
+    onConnection: (listener: (connection: ChannelConnection) => void) => () => void
+    onEvent: (listener: (event: LarkHostEvent) => void) => () => void
+    onSession: (listener: (update: ChannelSessionUpdate) => void) => () => void
+    onStatus: (listener: (line: ChannelStatusLine) => void) => () => void
+    routines: { create(target: ChannelTarget, input: { message: string; schedule: RoutineSchedule; creator: ChannelRoutine["creator"]; }): Promise<ChannelRoutineInfo>; list(target: Pick<ChannelTarget, "chatId">): ReturnType<ChannelRuntime["routines"]["list"]>; edit(target: Pick<ChannelTarget, "chatId">, id: string, input: { message?: string; schedule?: RoutineSchedule; }): Promise<ChannelRoutineInfo | undefined>; cancel(target: Pick<ChannelTarget, "chatId">, id: string): Promise<boolean>; }
+    sessions: (chatId?: string) => ChannelSessionSnapshot[]
+    stop: (target: ChannelTarget, runId: string) => Promise<boolean>
+    submit: { (message: IncomingMessage): Promise<{ sessionId: string; }>; (input: SubmitInput & { sessionId: string; }): Promise<{ sessionId: string; messageId: string; }>; (input: SubmitInput & { newTopic: { title: string; }; }): Promise<{ sessionId: string; messageId: string; topic: { rootId: string; threadId: string; }; }>; }
+  type LarkHostEvent = | { type: 'reset' }
+      | { type: 'history_changed'; chatId: string; sessionId?: string }
   interface LarkMessageEvent
     message: { message_id?: string; root_id?: string; thread_id?: string; create_time?: string; chat_id: string; chat_type?: string; message_type: string; content: string; mentions?: { key: string; id?: { open_id?: string; }; }[]; }
     sender: { sender_id?: { open_id?: string; }; sender_type: string; }
@@ -49,6 +62,14 @@
     searchMessages: (chatId: string, options: { startTime: string; endTime: string; limit: number; pageToken?: string; }) => Promise<{ items: LarkHistoryMessage[]; pageToken?: string; }>
     send: (chatId: string, text: string, uuid?: string) => Promise<void | LarkSentMessage>
     sendCard: (chatId: string, card: LarkCard, replyToId?: string) => Promise<string>
+    sendFile?: ((chatId: string, file: { kind: "image" | "file"; name: string; bytes: Uint8Array; }, options?: { replyToId?: string; replyInThread?: boolean; uuid?: string; }) => Promise<LarkSentMessage>) | undefined
     start: (onMessage: (event: LarkMessageEvent) => void, onAction: (event: LarkCardAction) => LarkCardResponse) => Promise<void>
     startTopic: (messageId: string, title: string, uuid?: string) => Promise<LarkSentMessage & { rootId: string; threadId: string; }>
     stop: () => void
+  interface LarkVisibleMessage
+    createdAt: string
+    id: string
+    role: "user" | "assistant"
+    senderName: string
+    sessionId: string
+    text: string

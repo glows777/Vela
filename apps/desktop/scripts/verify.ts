@@ -42,13 +42,14 @@ const profile = resolve(scratch, 'user-data')
 const project = resolve(scratch, 'project')
 const alpha = resolve(scratch, 'alpha')
 const beta = resolve(scratch, 'beta')
+const gamma = resolve(scratch, 'gamma')
 const scenario = resolve(scratch, 'faux.json')
 const shell = resolve(scratch, 'shell')
 const shellMarker = resolve(scratch, 'shell-used')
 const badConfig = process.env.VELA_DESKTOP_VERIFY_BAD_CONFIG === '1'
 const disabledConfig = process.env.VELA_DESKTOP_VERIFY_DISABLED === '1'
 await Promise.all(
-  [home, data, profile, project, alpha, beta].map((path) =>
+  [home, data, profile, project, alpha, beta, gamma].map((path) =>
     mkdir(path, { recursive: true }),
   ),
 )
@@ -930,6 +931,184 @@ const journeyFour = async (page: Page) => {
   await themes(page, 'journey-4')
 }
 
+/** Local wall clock, which is the timezone the host resolves a one-off `at` in. */
+const localTime = (offsetMs: number) => {
+  const at = new Date(Date.now() + offsetMs)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return {
+    date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
+    time: `${pad(at.getHours())}:${pad(at.getMinutes())}`,
+  }
+}
+
+/** The host's own view of one chat's routines, which every row must match. */
+const routinesIn = (page: Page, chatId: string) =>
+  page.evaluate((id) => window.vela.listRoutines('local', id), chatId)
+
+/** Journey 5: a routine created, edited and cancelled on its own page. */
+const journeyFive = async (page: Page) => {
+  const sidebar = page.getByLabel('Sidebar')
+  const main = page.locator('main')
+  const alpha = await projectNamed(page, 'Alpha')
+
+  await sidebar.getByRole('button', { name: 'Routines' }).click()
+  await page.getByRole('heading', { name: 'Routines', exact: true }).waitFor()
+  const alphaGroup = main.getByRole('region', { name: 'Alpha' })
+  await alphaGroup.getByText('No routines yet.').waitFor()
+  checks.push('Routines opens from the sidebar, grouped by project.')
+
+  // A project nobody wrote to has no routine target. Say so in the group; asking the
+  // host would answer with its own `Unknown or disabled channel target`.
+  await sidebar.getByRole('button', { name: 'New project' }).click()
+  const newProject = page.getByRole('dialog')
+  await newProject.getByLabel('Folder path').fill(gamma)
+  await newProject.getByLabel('Name').fill('Gamma')
+  await newProject.getByRole('button', { name: 'Create project' }).click()
+  await newProject.waitFor({ state: 'hidden' })
+  await sidebar.getByRole('button', { name: 'Routines' }).click()
+  const gammaGroup = main.getByRole('region', { name: 'Gamma' })
+  await gammaGroup
+    .getByText(/Routines can point here after the first message/)
+    .waitFor()
+  assert.equal(
+    await gammaGroup.getByRole('alert').count(),
+    0,
+    'A project with no message shows no host error',
+  )
+  checks.push(
+    'A project with no message says where routines can point, without a host error.',
+  )
+
+  const twoDays = localTime(2 * 86_400_000)
+  const dialog = page.getByRole('dialog')
+  await page.getByRole('button', { name: 'New routine' }).click()
+  await dialog.getByRole('heading', { name: 'New routine' }).waitFor()
+  await dialog.getByLabel('What Vela should do').fill('Review the report')
+  await dialog.getByLabel('Date').fill(twoDays.date)
+  await dialog.getByLabel('Time').fill('09:00')
+  const where = dialog.getByLabel('Where')
+  const places = await where.locator('option').allTextContents()
+  for (const label of [
+    'Alpha · the project chat',
+    'Alpha · topic “Fix the retry backoff”',
+    'Beta · the project chat',
+    'Beta · topic “Write the Beta notes”',
+  ])
+    assert(
+      places.includes(label),
+      `Where offers ${label}, and offers ${places.join(', ')}`,
+    )
+  assert(
+    !places.some((label) => label.startsWith('Gamma')),
+    'A project with no message is not a place to answer',
+  )
+  await where.selectOption({ label: 'Alpha · the project chat' })
+  await dialog.getByRole('button', { name: 'Create routine' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+
+  const created = (await routinesIn(page, alpha.id)).routines
+  assert.equal(created.length, 1)
+  const routine = created[0]!
+  assert.equal(routine.message, 'Review the report')
+  assert.equal(routine.target, 'Group channel')
+  assert.notEqual(routine.nextRun, null)
+  await alphaGroup.getByText('Review the report', { exact: true }).waitFor()
+  await alphaGroup.getByText(routine.scheduleText, { exact: true }).waitFor()
+  await alphaGroup
+    .getByText(`Next: ${routine.nextRun}`, { exact: true })
+    .waitFor()
+  await alphaGroup
+    .getByText('Group channel · set by You', { exact: true })
+    .waitFor()
+  checks.push(
+    'A new routine lists with what it does, where, who set it and the host’s next run.',
+  )
+
+  await alphaGroup
+    .getByRole('button', { name: 'Edit routine: Review the report' })
+    .click()
+  await dialog.getByRole('heading', { name: 'Edit routine' }).waitFor()
+  assert.equal(await dialog.getByLabel('Date').inputValue(), twoDays.date)
+  assert.equal(await dialog.getByLabel('Time').inputValue(), '09:00')
+  await dialog.getByText('Group channel', { exact: true }).waitFor()
+  await snapshot(page, 'journey-5-edit')
+  await dialog.getByLabel('Time').fill('10:30')
+  await dialog.getByRole('button', { name: 'Save' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+
+  const edited = (await routinesIn(page, alpha.id)).routines[0]!
+  assert.equal(edited.id, routine.id)
+  assert.equal(edited.message, 'Review the report')
+  assert.notEqual(edited.nextRun, routine.nextRun, 'The new time has a new run')
+  await alphaGroup
+    .getByText(`Next: ${edited.nextRun}`, { exact: true })
+    .waitFor()
+  checks.push(
+    'Edit changes the time in place, the message and id stay, and the row shows the new next run.',
+  )
+
+  // A repeated routine in one topic, three hours out so it cannot fire during the run.
+  await page.getByRole('button', { name: 'New routine' }).click()
+  await dialog.getByRole('heading', { name: 'New routine' }).waitFor()
+  await dialog.getByLabel('What Vela should do').fill('Check the CI log')
+  await dialog.getByRole('button', { name: 'Repeat' }).click()
+  await dialog.getByLabel('Time').fill(localTime(3 * 3_600_000).time)
+  await snapshot(page, 'journey-5-repeat')
+  await dialog
+    .getByLabel('Where')
+    .selectOption({ label: 'Alpha · topic “Fix the retry backoff”' })
+  await dialog.getByRole('button', { name: 'Create routine' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+
+  const topic = (await routinesIn(page, alpha.id)).routines.find(
+    (item) => item.message === 'Check the CI log',
+  )!
+  assert.equal(topic.target, 'Topic: Fix the retry backoff')
+  await alphaGroup.getByText('Check the CI log', { exact: true }).waitFor()
+  await alphaGroup
+    .getByText('Topic: Fix the retry backoff · set by You', { exact: true })
+    .waitFor()
+  await alphaGroup
+    .getByText(`Next: ${topic.nextRun}`, { exact: true })
+    .waitFor()
+  checks.push(
+    'A routine can answer in a topic, named the way the host names it.',
+  )
+
+  await alphaGroup
+    .getByRole('button', { name: 'Delete routine: Review the report' })
+    .click()
+  await alphaGroup
+    .getByText('Review the report', { exact: true })
+    .waitFor({ state: 'detached' })
+  await alphaGroup.getByText('Check the CI log', { exact: true }).waitFor()
+  assert.equal((await routinesIn(page, alpha.id)).routines.length, 1)
+  checks.push('Cancel removes the routine and leaves the other one.')
+
+  // A real rejection: yesterday's 09:00 is in the past, so the host refuses it.
+  const yesterday = localTime(-86_400_000)
+  await page.getByRole('button', { name: 'New routine' }).click()
+  await dialog.getByRole('heading', { name: 'New routine' }).waitFor()
+  await dialog.getByLabel('What Vela should do').fill('Write the weekly note')
+  await dialog.getByLabel('Date').fill(yesterday.date)
+  await dialog.getByLabel('Time').fill('09:00')
+  await dialog.getByRole('button', { name: 'Create routine' }).click()
+  await dialog
+    .getByRole('alert')
+    .getByText('A one-off routine must be in the future', { exact: true })
+    .waitFor()
+  assert.equal((await routinesIn(page, alpha.id)).routines.length, 1)
+  await snapshot(page, 'journey-5-rejected')
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  checks.push(
+    'A schedule the host rejects shows the host’s message and adds nothing.',
+  )
+
+  await noOverflow(page)
+  await themes(page, 'journey-5')
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -1130,6 +1309,9 @@ async function development() {
     console.log('Desktop verification: starting journey 4')
     await journeyFour(page)
     console.log('Desktop verification: journey 4 passed')
+    console.log('Desktop verification: starting journey 5')
+    await journeyFive(page)
+    console.log('Desktop verification: journey 5 passed')
   } finally {
     await first.close()
   }
@@ -1138,11 +1320,11 @@ async function development() {
 }
 
 /**
- * Journey 5: an empty data directory opens on setup. A wrong key is refused before anything is
+ * Journey 6: an empty data directory opens on setup. A wrong key is refused before anything is
  * written; a good one saves the model, and the CLI then reads the same configuration.
  */
 async function firstRunJourney() {
-  console.log('Desktop verification: starting journey 5')
+  console.log('Desktop verification: starting journey 6')
   const provider = startVerifyProvider()
   const dir = await mkdtemp(resolve(dataParent, 'vela-first-run-'))
   firstRunData = dir
@@ -1206,7 +1388,7 @@ async function firstRunJourney() {
     checks.push(
       'A wrong key is refused with the provider’s reason and writes none of the three files.',
     )
-    await themes(page, 'journey-5-setup-error')
+    await themes(page, 'journey-6-setup-error')
 
     await page.getByLabel('API key').fill(GOOD_KEY)
     await page.getByRole('button', { name: 'Verify and save' }).click()
@@ -1252,7 +1434,7 @@ async function firstRunJourney() {
     await page.getByRole('heading', { name: 'Home', exact: true }).waitFor()
     assert.equal(await title.count(), 0)
     checks.push('A reload opens Home, because the saved configuration is read.')
-    await themes(page, 'journey-5-home')
+    await themes(page, 'journey-6-home')
 
     const settingsTitle = page.getByRole('heading', {
       level: 1,
@@ -1287,7 +1469,7 @@ async function firstRunJourney() {
     checks.push(
       'Settings › Models shows the saved model, thinking level, key source and the file each row writes.',
     )
-    await themes(page, 'journey-5-settings')
+    await themes(page, 'journey-6-settings')
 
     await page.getByRole('button', { name: 'Change model' }).click()
     const dialog = page.getByRole('dialog')
@@ -1302,7 +1484,7 @@ async function firstRunJourney() {
       '',
       'A saved key never comes back to the page',
     )
-    await snapshot(page, 'journey-5-model-dialog')
+    await snapshot(page, 'journey-6-model-dialog')
     checks.push(
       'Change model opens the same form on the saved provider and model, with an empty key field.',
     )
@@ -1338,14 +1520,14 @@ async function firstRunJourney() {
     checks.push(
       'The CLI reads the same directory: vela --list-models prints faux faux-model.',
     )
-    console.log('Desktop verification: journey 5 passed')
+    console.log('Desktop verification: journey 6 passed')
   } finally {
     await third.close()
     provider.stop()
   }
 }
 
-/** Journey 4's second half: the app starts again on the same scratch data. */
+/** Journeys 4 and 5 end by starting the app again on the same scratch data. */
 async function restartJourney() {
   console.log('Desktop verification: restarting Electron')
   const second = await launchDev()
@@ -1371,6 +1553,30 @@ async function restartJourney() {
       'After a restart the same data directory brings back both projects and their conversations.',
     )
     await snapshot(page, 'journey-4-restart')
+
+    // Journey 5: the cancelled routine stays gone, the other one keeps its next run.
+    await sidebar.getByRole('button', { name: 'Routines' }).click()
+    await page.getByRole('heading', { name: 'Routines', exact: true }).waitFor()
+    const alphaGroup = page
+      .locator('main')
+      .getByRole('region', { name: 'Alpha' })
+    const alpha = await projectNamed(page, 'Alpha')
+    const remaining = (await routinesIn(page, alpha.id)).routines
+    assert.equal(remaining.length, 1)
+    assert.equal(remaining[0]?.message, 'Check the CI log')
+    await alphaGroup.getByText('Check the CI log', { exact: true }).waitFor()
+    assert.equal(
+      await alphaGroup.getByText('Review the report', { exact: true }).count(),
+      0,
+      'The cancelled routine stayed cancelled',
+    )
+    await alphaGroup
+      .getByText(`Next: ${remaining[0]!.nextRun}`, { exact: true })
+      .waitFor()
+    await snapshot(page, 'journey-5-restart')
+    checks.push(
+      'After a restart a cancelled routine is still gone and the kept one has its next run.',
+    )
   } finally {
     await second.close()
   }

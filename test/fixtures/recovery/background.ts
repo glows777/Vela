@@ -76,12 +76,13 @@ const t = createTestVela({
     : [
         (request) => {
           report('initial-system.json', request.system)
-          return fauxToolCall('background_start', { command })
+          return fauxToolCall('bash', { command, run_in_background: true })
         },
         ...(mode === 'multiple'
           ? [
-              fauxToolCall('background_start', {
+              fauxToolCall('bash', {
                 command: command.replace('shell.pid', 'shell-second.pid'),
+                run_in_background: true,
               }),
             ]
           : []),

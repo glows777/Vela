@@ -24,6 +24,8 @@ export interface LocalMessage {
   role: 'user' | 'assistant' | 'system'
   text: string
   createdAt: string
+  /** Snapshot attached to this visible message; retrieve through LocalHost.readAttachment. */
+  file?: { name: string; size: number }
   /** Correlation only: repeating a POST admits another message, not a deduplicated retry. */
   clientMessageId?: string
 }
@@ -81,6 +83,11 @@ export interface LocalHost extends ChannelHost {
     after?: string
     limit?: number
   }): { messages: LocalMessage[]; nextCursor?: string }
+  readAttachment(input: {
+    projectId: string
+    sessionId: string
+    messageId: string
+  }): Promise<Uint8Array>
   submit(message: IncomingMessage): Promise<{ sessionId: string }>
   submit(input: {
     projectId: string

@@ -1,10 +1,10 @@
 import z from 'zod'
 import type { ExecutionEnv } from '../execution/types.ts'
-import { environmentBash } from './environment-bash.ts'
+import { backgroundBash, environmentBash } from './environment-bash.ts'
 import {
-  fitOutputTail,
   OUTPUT_MAX_BYTES,
   OUTPUT_MAX_LINES,
+  OutputTail,
 } from './output-tail.ts'
 import type { ToolDefinition } from './registry.ts'
 
@@ -16,6 +16,12 @@ const bashToolParamSchema = z.object({
     .number()
     .optional()
     .describe('Timeout in seconds (optional, no default timeout)'),
+  run_in_background: z
+    .boolean()
+    .optional()
+    .describe(
+      'Run the command as a background task and return at once with its id. Its output arrives here when it exits. Available only when this session has the background tools; otherwise the call fails and the command does not run. Use it for a server, a watch build or a long test run instead of blocking the turn.',
+    ),
 })
 
 export interface BashToolOptions {
@@ -28,12 +34,16 @@ export const createBashTool = (
   { shellPath }: BashToolOptions = {},
 ): ToolDefinition => ({
   name: 'bash',
-  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout.`,
+  description: `Runs a shell command in the working directory. Returns the combined stdout/stderr, truncated to the last ${OUTPUT_MAX_LINES} lines or ${OUTPUT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a file that read_file can page through. Optionally provide a timeout in seconds; there is no default timeout. With run_in_background the command starts as a background task: the call returns at once with its id, and its result arrives here when it exits.`,
   inputSchema: bashToolParamSchema,
   annotations: { destructiveHint: true, openWorldHint: true },
   promptSnippet: 'Run a shell command',
   execute: async (
-    { command, timeout }: { command: string; timeout?: number },
+    {
+      command,
+      timeout,
+      run_in_background: runInBackground,
+    }: { command: string; timeout?: number; run_in_background?: boolean },
     context,
   ) => {
     if (
@@ -45,7 +55,20 @@ export const createBashTool = (
       throw new Error(
         `Invalid timeout: must be a positive number of seconds, at most ${MAX_TIMEOUT_SECONDS}`,
       )
-    return environmentBash(command, timeout, cwd, shellPath, context)
+    if (!runInBackground)
+      return environmentBash(command, timeout, cwd, shellPath, context)
+    // Only the extension installs the capability, and a job needs the tool that reads and ends it:
+    // a session without both (no extension, a DM, a narrowed tool list) refuses the parameter instead
+    // of starting a command nothing could stop.
+    const commands = context?.background
+    const stoppable = context?.registry
+      ?.getActiveTools()
+      .some((tool) => tool.name === 'background_stop')
+    if (!commands || !stoppable)
+      throw new Error(
+        'Background commands are not enabled in this session: it has no background tools. Run the command without run_in_background, or enable the background extension and its tools for this session.',
+      )
+    return backgroundBash(command, timeout, cwd, shellPath, context, commands)
   },
 })
 
@@ -53,13 +76,18 @@ export const createBashTool = (
 export interface BashResult {
   /** The output's last OUTPUT_MAX_LINES lines / OUTPUT_MAX_BYTES bytes (stdout and stderr combined) */
   output: string
-  /** Undefined when the command was cancelled */
+  /** Undefined when the command was cancelled, or when the user moved it to the background */
   exitCode: number | undefined
   cancelled: boolean
   /** Whether `output` is only the end of the output */
   truncated: boolean
   /** File with the whole output, set when `output` is truncated */
   fullOutputPath?: string
+  /**
+   * Set when the command was moved to the background while it ran: `output` is the tail so far and
+   * the exit arrives as a background result.
+   */
+  backgroundTaskId?: string
 }
 
 /** Run a user command inside the selected execution environment. */
@@ -70,10 +98,11 @@ export async function runBash(
     signal?: AbortSignal
     onUpdate?: (output: string) => void
     onDelta?: (delta: string) => void
+    /** The tail the job table also holds, so a moved command keeps reporting from the same buffer */
+    output?: OutputTail
   },
 ): Promise<BashResult> {
-  let body = '',
-    cut = false
+  const output = options.output ?? new OutputTail()
   let pendingDelta = ''
   let timer: ReturnType<typeof setTimeout> | undefined
   const publish = (final: boolean) => {
@@ -88,7 +117,7 @@ export async function runBash(
     }
     if (!final) {
       try {
-        options.onUpdate?.(fitOutputTail(body, cut).text)
+        options.onUpdate?.(output.read().text)
       } catch {}
     }
   }
@@ -98,9 +127,7 @@ export async function runBash(
       {
         spill: { afterBytes: OUTPUT_MAX_BYTES, afterLines: OUTPUT_MAX_LINES },
         onOutput: (text) => {
-          const combined = Buffer.from(body + text)
-          if (combined.length > OUTPUT_MAX_BYTES) cut = true
-          body = combined.subarray(-OUTPUT_MAX_BYTES).toString()
+          output.append(text)
           if (options.onDelta) pendingDelta += text
           if (!timer && (options.onDelta || options.onUpdate))
             timer = setTimeout(() => publish(false), 100)
@@ -109,7 +136,7 @@ export async function runBash(
       options.signal,
     )
     .finally(() => publish(true))
-  const tail = fitOutputTail(body, cut)
+  const tail = output.read()
   if (!run.ok) {
     if (run.error.code === 'aborted')
       return {

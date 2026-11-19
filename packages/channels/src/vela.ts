@@ -141,6 +141,7 @@ export function createChannelVela(
     )
     runtime(api).handoff.register(api)
     runtime(api).topicTools.register(api)
+    runtime(api).registerFileTool(api)
   })
   core = createCoreVela({
     ...options,

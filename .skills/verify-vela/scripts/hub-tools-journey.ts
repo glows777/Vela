@@ -44,14 +44,18 @@ function router(req: FauxRequest): FauxResponse {
   })
   if (text.startsWith('Background command'))
     return { text: 'exit answered in the group' }
-  if (last?.toolName === 'bash') return { text: 'hub ran bash' }
-  if (last?.toolName === 'background_start')
-    return { text: 'started slow check' }
+  if (last?.toolName === 'bash')
+    return {
+      text: /Command running in background with ID:/.test(last.output)
+        ? 'started slow check'
+        : 'hub ran bash',
+    }
   if (last) return { text: `after ${last.toolName}` }
   if (/run gh/i.test(text)) return call('bash', { command: 'echo HUB_TOOL_OK' })
   if (/start slow check/i.test(text))
-    return call('background_start', {
+    return call('bash', {
       command: 'sleep 0.6; echo BACKGROUND_READY',
+      run_in_background: true,
     })
   if (/status now/i.test(text)) return { text: 'still running' }
   if (/investigate/i.test(text) && req.tools.includes('channel_start_topic'))
@@ -107,10 +111,10 @@ check(
     'bash',
     'write_file',
     'edit_file',
-    'background_start',
     'background_output',
     'background_stop',
-  ].every((name) => hubTools.includes(name)),
+  ].every((name) => hubTools.includes(name)) &&
+    !hubTools.includes('background_start'),
 )
 const waitsInHub = hubTools.includes('channel_wait_for_input')
 check('no waiting tool in the hub', waitsInHub, !waitsInHub)
@@ -176,9 +180,9 @@ const topicTools = model.calls.find((entry) =>
 check(
   'topic tools',
   topicTools?.filter((name) => /^(bash|background_)/.test(name)),
-  ['bash', 'background_start', 'background_output', 'background_stop'].every(
-    (name) => (topicTools ?? []).includes(name),
-  ),
+  ['bash', 'background_output', 'background_stop'].every((name) =>
+    (topicTools ?? []).includes(name),
+  ) && !(topicTools ?? []).includes('background_start'),
 )
 
 // 4. A DM keeps no execution or background tools

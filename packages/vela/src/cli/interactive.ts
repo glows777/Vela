@@ -39,6 +39,7 @@ import {
 import { createCliDispatcher } from './dispatcher.ts'
 import { formatContextFileList } from './status-display.ts'
 import { loginCommand, logoutCommand } from './tui/auth-dialogs.ts'
+import { backgroundRunning } from './tui/background.ts'
 import { commandCompletions, HOTKEYS } from './tui/commands.ts'
 import {
   AssistantMessage,
@@ -65,12 +66,17 @@ import { createInteractiveTui } from './tui/layout.ts'
 import { captureCliLogs } from './tui/logs.ts'
 import { isModelUsable } from './tui/model-availability.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
+import { prepareInteractiveSession } from './tui/session-open.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
 import { editorTheme, theme } from './tui/theme.ts'
 import type { InteractiveOptions, LogLevel } from './tui/types.ts'
 
 export type { InteractiveOptions } from './tui/types.ts'
+
+/** The one refusal every command that needs an idle session gives. */
+const BUSY =
+  'A task is running; press Esc to interrupt or wait for it to finish'
 
 /**
  * Interactive mode (TUI, like pi's interactive mode): pi-tui provides components and rendering.
@@ -282,24 +288,12 @@ export class InteractiveMode {
 
   private async openSession(id: string, resume: boolean, startup = false) {
     const session = this.vela.session(id, { ui: this.ui })
+    const { resources, resumed, resumeFailure, setupNext } =
+      await prepareInteractiveSession(session, this.options, resume, startup)
     this.session = session
     this.resetChat()
-    let resumed = false
-    if (resume) {
-      try {
-        resumed = await session.resume()
-      } catch (error) {
-        this.addNotice(
-          `Failed to resume session: ${errorMessage(error)}`,
-          'error',
-        )
-      }
-    }
-    const resources = await session.resources()
-    const setupNext = startup && Boolean(this.options.agentDir)
-    const silent =
-      setupNext && !isModelUsable(session, this.options.hasUsableModel)
-    this.options.configure(session, { quiet: silent })
+    if (resumeFailure)
+      this.addNotice(`Failed to resume session: ${resumeFailure}`, 'error')
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
     this.refreshCompletion = () =>
       this.editor.setAutocompleteProvider(
@@ -343,16 +337,13 @@ export class InteractiveMode {
 
   private async switchSession(id: string, resume: boolean): Promise<void> {
     if (this.session.isRunning) {
-      this.addNotice(
-        'A task is running; press Esc to interrupt or wait for it to finish',
-        'warning',
-      )
+      this.addNotice(BUSY, 'warning')
       return
     }
     const previous = this.session
     if (id === previous.id) return
-    await previous.close()
     await this.openSession(id, resume)
+    await previous.close()
   }
 
   private async pickSession(): Promise<string | undefined> {
@@ -841,6 +832,10 @@ export class InteractiveMode {
     })
     actions.set('exit', () => void this.shutdown())
     actions.set('pasteImage', () => void this.pasteClipboard())
+    actions.set(
+      'background',
+      () => void backgroundRunning(this.session, this.addNotice.bind(this)),
+    )
     actions.set('cycleThinking', () => {
       // Like pi: only the levels the model supports
       const levels = this.session.availableThinkingLevels()
@@ -987,18 +982,20 @@ export class InteractiveMode {
         await this.copyLastAnswer()
         return
       case '/new':
-        await this.switchSession(this.options.newSessionId(), false)
+        await this.switchSession(this.options.newSessionId(), false).catch(
+          (error) => this.addNotice(errorMessage(error), 'error'),
+        )
         return
       case '/resume': {
         if (this.session.isRunning) {
-          this.addNotice(
-            'A task is running; press Esc to interrupt or wait for it to finish',
-            'warning',
-          )
+          this.addNotice(BUSY, 'warning')
           return
         }
         const id = await this.pickSession()
-        if (id) await this.switchSession(id, true)
+        if (id)
+          await this.switchSession(id, true).catch((error) =>
+            this.addNotice(errorMessage(error), 'error'),
+          )
         return
       }
       case '/name':
@@ -1058,10 +1055,7 @@ export class InteractiveMode {
         return
       case '/compact':
         if (this.session.isRunning) {
-          this.addNotice(
-            'A task is running; press Esc to interrupt or wait for it to finish',
-            'warning',
-          )
+          this.addNotice(BUSY, 'warning')
           return
         }
         this.startLoader('Compacting context…')
@@ -1112,10 +1106,7 @@ export class InteractiveMode {
 
   private busyNotice(): boolean {
     if (!this.session.isRunning) return false
-    this.addNotice(
-      'A task is running; press Esc to interrupt or wait for it to finish',
-      'warning',
-    )
+    this.addNotice(BUSY, 'warning')
     return true
   }
 
@@ -1210,7 +1201,7 @@ export class InteractiveMode {
     return selectModel(this.modelHost())
   }
   private cycleModel(direction: 1 | -1): void {
-    cycleModel(this.modelHost(), direction)
+    void cycleModel(this.modelHost(), direction)
   }
 
   private authHost() {

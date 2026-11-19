@@ -56,6 +56,9 @@ export class ChannelSessions {
     )
     const options = channel.sessionOptions?.(msg)
     const modifiers = [
+      channel.sendFile && !options?.tools?.includes('-channel_send_file')
+        ? '+channel_send_file'
+        : '-channel_send_file',
       ...topicSessionOptions({ ...msg, chatKind }).tools,
       ...(!channel.topicCapabilities
         ? [

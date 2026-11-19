@@ -13,6 +13,7 @@ export type AppAction =
   | 'cycleModelBackward'
   | 'expandTools'
   | 'toggleThinking'
+  | 'background'
   | 'pasteImage'
 
 function pasteImageKey(platform: string): KeyId {
@@ -31,6 +32,8 @@ const APP_KEYS: Record<AppAction, KeyId> = {
   cycleModelBackward: 'shift+ctrl+p',
   expandTools: 'ctrl+o',
   toggleThinking: 'ctrl+t',
+  // Replaces pi-tui's cursor-left alias; docs/cli.md and /hotkeys say so
+  background: 'ctrl+b',
   pasteImage: pasteImageKey(process.platform),
 }
 

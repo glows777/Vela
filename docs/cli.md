@@ -148,6 +148,7 @@ Vela's own keys:
 | Ctrl+V (Windows: Alt+V) | Paste a clipboard image as a temporary file path for the model to read with `read_file`. |
 | Alt+Up | Move queued messages back into the editor. |
 | Esc | Cancel a running `!` command; otherwise interrupt the running task (queued messages go back into the editor), or clear a `!` input. Closes the autocomplete menu first if it is open. |
+| Ctrl+B | Move the running shell command to the background, whether the model started it or you did with `!`. The row settles with the job's id and the run keeps going. With nothing running it says `No foreground command to background`. In tmux, press it twice: the tmux prefix consumes the first press. This key replaces the editor's Ctrl+B cursor-left (see the editor table); use Left. |
 | Shift+Tab | Cycle the thinking level. |
 | Ctrl+L | Open the model picker. |
 | Ctrl+P, Shift+Ctrl+P | Switch to the next or previous model in `enabledModels` (all available models when unset). |
@@ -163,7 +164,7 @@ Vela's own keys:
 | Shift+Enter, Ctrl+J | New line |
 | Tab | Complete a command or path |
 | Up, Down | Move the cursor; at the first or last line, browse prompt history |
-| Left / Ctrl+B, Right / Ctrl+F | Move by character |
+| Left, Right / Ctrl+F | Move by character |
 | Alt+Left / Ctrl+Left / Alt+B, Alt+Right / Ctrl+Right / Alt+F | Move by word |
 | Home / Ctrl+A, End / Ctrl+E | Line start, line end |
 | Ctrl+], Ctrl+Alt+] | Jump forward or backward to a character |
@@ -249,6 +250,8 @@ Two more kinds of `/` input are expanded by the session itself, so they also wor
 | `/rag` | `rag` | Show the knowledge base size and sources. |
 | `/rag ingest <path>` | `rag` | Ingest a document into the knowledge base. |
 | `/rag clear` | `rag` | Delete every chunk, for example after changing the embedding model. |
+| `/tasks`, `/bashes` | `background` | List this session's background tasks: id, state, elapsed time, command head and output tail. |
+| `/tasks stop <id>` | `background` | End a running background task through `background_stop` and print its final tail. An id that already delivered prints the same unknown-command message as `background_stop`. |
 
 Other extensions add their own commands; `/extensions` lists them. See [Built-in extensions](built-in-extensions.md) and [Extensions](extensions.md).
 

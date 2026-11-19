@@ -78,7 +78,7 @@ export async function runPrintMode(options: {
       toJsonLine({
         type: 'session',
         id: session.id,
-        cwd: vela.cwd,
+        cwd: session.cwd,
         model,
         thinkingLevel: session.thinkingLevel,
       }),

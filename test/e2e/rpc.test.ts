@@ -24,9 +24,9 @@ function startRpc(
   model: string,
   args: string[] = [],
   files: Record<string, string> = {},
+  roots = { cwd: tempDir('vela-rpc-'), home: tempDir('vela-home-') },
 ) {
-  const cwd = tempDir('vela-rpc-')
-  const home = tempDir('vela-home-')
+  const { cwd, home } = roots
   dirs.push(cwd, home)
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(home.path, path)), { recursive: true })
@@ -552,5 +552,117 @@ test.concurrent('rpc: malformed image arrays fail clearly and a later valid prom
     await rpc.waitFor((r) => r.type === 'agent_settled')
   } finally {
     expect(await rpc.close()).toBe(0)
+  }
+})
+
+test('rpc: a failed project tool selection leaves the active session and can be retried', async () => {
+  const a = tempDir('vela-rpc-a-')
+  const b = tempDir('vela-rpc-b-')
+  const home = tempDir('vela-rpc-home-')
+  dirs.push(b)
+  mkdirSync(join(b.path, '.vela'))
+  const settings = join(b.path, '.vela', 'settings.json')
+  const files = {
+    'settings.json': JSON.stringify({ dataDir: join(home.path, 'data') }),
+    'trust.json': JSON.stringify({ [a.path]: true, [b.path]: true }),
+  }
+  writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+  const model = `faux:${scenario('hello')}`
+  const seed = startRpc(model, ['--session', 'saved-b'], files, {
+    cwd: b,
+    home,
+  })
+  try {
+    expect(
+      await seed.call({ type: 'prompt', message: 'Save B' }),
+    ).toMatchObject({ success: true })
+    await seed.waitFor((record) => record.type === 'agent_settled')
+  } finally {
+    await seed.close()
+  }
+  writeFileSync(
+    settings,
+    JSON.stringify({ defaultTools: ['stale_project_tool'] }),
+  )
+  const rpc = startRpc(model, ['--session', 'active-a'], files, {
+    cwd: a,
+    home,
+  })
+  try {
+    expect(
+      await rpc.call({ type: 'switch_session', sessionId: 'saved-b' }),
+    ).toMatchObject({
+      success: false,
+      error: expect.stringContaining('stale_project_tool'),
+    })
+    expect((await rpc.call({ type: 'get_state' })).data).toMatchObject({
+      sessionId: 'active-a',
+    })
+    writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+    expect(
+      await rpc.call({ type: 'switch_session', sessionId: 'saved-b' }),
+    ).toMatchObject({
+      success: true,
+      data: { sessionId: 'saved-b' },
+    })
+  } finally {
+    await rpc.close()
+  }
+})
+
+test.concurrent('rpc: background_tasks moves one bash call by id, or every running call', async () => {
+  const rpc = startRpc(`faux:${scenario('slow-bash')}`)
+  try {
+    expect(
+      await rpc.call({ type: 'prompt', message: 'Run the slow checks' }),
+    ).toMatchObject({ success: true, data: { disposition: 'started' } })
+    // Wait until both commands have produced output, like a client pressing the key mid-run.
+    const updates = new Map<string, unknown>()
+    for (;;) {
+      const record = await rpc.waitFor(
+        (r) =>
+          r.type === 'tool_execution_update' &&
+          r.toolName === 'bash' &&
+          !updates.has(r.toolCallId as string),
+      )
+      updates.set(record.toolCallId as string, record)
+      if (updates.size === 2) break
+    }
+    // The ids arrive in an order the model's parallel calls decide, so sort them like the error does.
+    const [first, second] = [...updates.keys()].sort() as [string, string]
+    // An unknown id is a response error that names what is running, and changes nothing.
+    expect(
+      await rpc.call({ type: 'background_tasks', tool_use_id: 'not-a-call' }),
+    ).toMatchObject({
+      command: 'background_tasks',
+      success: false,
+      error: expect.stringContaining(
+        `No running bash call with tool call ID not-a-call. Running: ${first}, ${second}`,
+      ),
+    })
+    expect(
+      await rpc.call({ type: 'background_tasks', tool_use_id: first }),
+    ).toMatchObject({ success: true, data: { ids: ['bg-1'] } })
+    // Without an id, every call still in the foreground moves.
+    expect(await rpc.call({ type: 'background_tasks' })).toMatchObject({
+      success: true,
+      data: { ids: ['bg-2'] },
+    })
+    await rpc.waitFor((r) => r.type === 'agent_settled')
+    const messages = await rpc.call({ type: 'get_messages' })
+    const text = JSON.stringify(
+      (messages.data as { messages: unknown[] }).messages,
+    )
+    expect(text).toContain(
+      'Command was manually moved to the background with ID: bg-1.',
+    )
+    expect(text).toContain(
+      'Command was manually moved to the background with ID: bg-2.',
+    )
+    expect(text).toContain('ONE')
+    expect(text).toContain('TWO')
+  } finally {
+    // Closing ends the session, which stops both jobs without delivering.
+    await rpc.close()
   }
 })

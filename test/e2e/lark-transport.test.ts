@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import * as sdk from '@larksuiteoapi/node-sdk'
@@ -13,6 +14,7 @@ interface Call {
   method: string
   path: string
   params: Record<string, unknown>
+  multipart?: Buffer
   body: Record<string, unknown>
 }
 type Route = (call: Call) => unknown
@@ -112,6 +114,7 @@ beforeAll(() => {
       path: url.pathname,
       params: { ...config.params },
       body: typeof config.data === 'string' ? JSON.parse(config.data) : {},
+      multipart: config.data?.getBuffer?.(),
     }
     calls.push(call)
     for (const route of [...routes, ...defaults]) {
@@ -373,3 +376,207 @@ test('a Lark error code is reported with its code and message, not treated as su
   await until(() => reactions().length === 2)
   expect(reactions()).toEqual(['OnIt', 'CrossMark'])
 })
+
+test('the typed Lark host uses real SDK history paging and explicit thread replies', async () => {
+  sdk.WSClient.prototype.start = async function () {
+    ;(this as unknown as { onReady: () => void }).onReady()
+  }
+  try {
+    routes = [
+      (c) =>
+        c.method === 'GET' &&
+        c.path === '/open-apis/im/v1/messages' &&
+        c.params.container_id_type === 'chat' &&
+        c.params.start_time === '0' &&
+        ok(
+          c.params.page_token
+            ? { has_more: false, items: [] }
+            : { has_more: true, page_token: 'next', items: [] },
+        ),
+      (c) =>
+        c.path === '/open-apis/im/v1/messages/om_sent/reply' &&
+        c.body.reply_in_thread === true &&
+        sentMessage(
+          (c.body.content as string).includes('Continue')
+            ? 'om_followup'
+            : 'om_title',
+          { root_id: 'om_sent', thread_id: 'omt_owned' },
+        ),
+    ]
+    const t = await start([
+      fauxText('First reply'),
+      fauxText('Continued reply'),
+    ])
+    const host = t.vela.channel('lark')
+    const chatId = 'oc_group'
+    const author = { id: 'desktop-alex', name: 'Alex' }
+    const group = await host.messages({
+      chatId,
+      sessionId: 'lark-oc_group',
+      limit: 1,
+    })
+    expect(group.nextCursor).toBeDefined()
+    await host.messages({
+      chatId,
+      sessionId: 'lark-oc_group',
+      cursor: group.nextCursor,
+    })
+    const listings = calls.filter((c) => c.params.start_time === '0')
+    expect(listings).toHaveLength(2)
+    expect(listings[1]!.params).toEqual({
+      ...listings[0]!.params,
+      page_token: 'next',
+    })
+    const opened = await host.submit({
+      chatId,
+      author,
+      text: 'Please review',
+      newTopic: { title: 'Review' },
+    })
+    expect(opened.topic).toEqual({ rootId: 'om_sent', threadId: 'omt_owned' })
+    await until(() =>
+      t.eventsOf('channel_reply').some((e) => e.text === 'First reply'),
+    )
+    const followup = await host.submit({
+      chatId,
+      author,
+      sessionId: opened.sessionId,
+      text: 'Continue',
+    })
+    expect(followup.messageId).toBe('om_followup')
+    await until(() =>
+      t.eventsOf('channel_reply').some((e) => e.text === 'Continued reply'),
+    )
+    expect(calls.find((c) => c.body.receive_id === chatId)?.body.content).toBe(
+      '{"text":"Alex: Please review"}',
+    )
+    expect(
+      calls.filter((c) => c.body.reply_in_thread).map((c) => c.body.content),
+    ).toEqual(['{"text":"Review"}', '{"text":"Alex: Continue"}'])
+    expect(shape()).toContain('POST /open-apis/im/v1/messages/om_title/reply')
+    expect(shape()).toContain(
+      'POST /open-apis/im/v1/messages/om_followup/reply',
+    )
+  } finally {
+    // Restore this file's connect stub and don't change unrelated test lifetimes.
+    sdk.WSClient.prototype.start = async (params: {
+      eventDispatcher: typeof dispatcher
+    }) => {
+      dispatcher = params.eventDispatcher
+    }
+  }
+})
+
+for (const fixture of [
+  {
+    name: 'report.patch',
+    content: Buffer.from('diff'),
+    endpoint: 'files',
+    msgType: 'file',
+    key: 'file_key',
+  },
+  {
+    name: 'plot.png',
+    content: Buffer.from('89504e470d0a1a0a', 'hex'),
+    endpoint: 'images',
+    msgType: 'image',
+    key: 'image_key',
+  },
+]) {
+  test(`the SDK uploads ${fixture.name} and replies with its resource key`, async () => {
+    const t = await start([
+      fauxToolCall('channel_send_file', { path: fixture.name }),
+      fauxText('done'),
+    ])
+    const workspace = t.dataPath('channels/lark-oc_group/workspace')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(`${workspace}/${fixture.name}`, fixture.content)
+    routes = [
+      (c) =>
+        c.path === `/open-apis/im/v1/${fixture.endpoint}` &&
+        ok({ [fixture.key]: 'uploaded' }),
+    ]
+    await receive({})
+    await until(() => reactions().includes('DONE'))
+    const uploads = calls.filter(
+      (c) => c.path === `/open-apis/im/v1/${fixture.endpoint}`,
+    )
+    expect(uploads).toHaveLength(1)
+    const form = uploads[0]?.multipart
+    expect(form?.includes(fixture.content)).toBe(true)
+    if (fixture.msgType === 'image') {
+      expect(form?.toString('latin1')).toContain(
+        'name="image_type"\r\n\r\nmessage',
+      )
+    } else {
+      expect(form?.toString('latin1')).toContain(
+        'name="file_type"\r\n\r\nstream',
+      )
+      expect(form?.toString('latin1')).toContain(
+        'name="file_name"\r\n\r\nreport.patch',
+      )
+    }
+    const posts = calls.filter((c) => c.body.msg_type === fixture.msgType)
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toMatchObject({
+      path: '/open-apis/im/v1/messages/om_in/reply',
+      body: {
+        content: JSON.stringify({ [fixture.key]: 'uploaded' }),
+        uuid: expect.any(String),
+      },
+    })
+  })
+}
+
+const rejectedFile = {
+  code: 230002,
+  msg: 'Bot/User can NOT be out of the chat.\nProvider diagnostics.',
+  error: { troubleshooting: 'Private request details' },
+}
+const rejectedReply = 'Lark 230002: Bot/User can NOT be out of the chat.'
+const uncertainReply =
+  'Lark did not confirm delivery. Check this conversation before asking me to resend.'
+
+for (const [scenario, post, expected] of [
+  ['provider rejection', () => rejectedFile, rejectedReply],
+  [
+    'HTTP rejection with a Feishu code',
+    () => {
+      throw Object.assign(new Error('Request failed with status code 400'), {
+        response: { status: 400, data: rejectedFile },
+      })
+    },
+    rejectedReply,
+  ],
+  ['missing receipt', () => ok({}), uncertainReply],
+  [
+    'lost connection',
+    () => {
+      throw new Error('Connection reset after posting')
+    },
+    uncertainReply,
+  ],
+] as const) {
+  test(`an attachment post with ${scenario} reports one result without resending`, async () => {
+    const t = await start([
+      fauxToolCall('channel_send_file', { path: 'report.patch' }),
+      (req) => fauxText(req.toolResults.at(-1)!.output),
+    ])
+    const workspace = t.dataPath('channels/lark-oc_group/workspace')
+    await mkdir(workspace, { recursive: true })
+    await writeFile(`${workspace}/report.patch`, 'diff')
+    routes = [
+      (c) => c.path.endsWith('/files') && ok({ file_key: 'uploaded' }),
+      (c) => c.body.msg_type === 'file' && post(),
+    ]
+    await receive({})
+    await until(() => reactions().includes('DONE'))
+    expect(calls.filter((c) => c.path.endsWith('/files'))).toHaveLength(1)
+    expect(
+      calls.filter((c) => c.body.msg_type === 'file').map((c) => c.path),
+    ).toEqual(['/open-apis/im/v1/messages/om_in/reply'])
+    expect(t.eventsOf('channel_reply').map((event) => event.text)).toEqual([
+      expected,
+    ])
+  })
+}

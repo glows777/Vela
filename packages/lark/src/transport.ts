@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+import { extname } from 'node:path'
 import type { Readable } from 'node:stream'
 import type { ChannelConnection } from '@glows777/vela-channels'
 import * as lark from '@larksuiteoapi/node-sdk'
@@ -60,6 +62,11 @@ export interface LarkTransport {
     text: string,
     uuid?: string,
   ): Promise<LarkSentMessage>
+  sendFile?(
+    chatId: string,
+    file: { kind: 'image' | 'file'; name: string; bytes: Uint8Array },
+    options?: { replyToId?: string; replyInThread?: boolean; uuid?: string },
+  ): Promise<LarkSentMessage>
   sendCard(chatId: string, card: LarkCard, replyToId?: string): Promise<string>
   patchCard(messageId: string, card: LarkCard): Promise<void>
   addReaction(
@@ -93,9 +100,11 @@ export interface LarkTransport {
   ): Promise<LarkHistoryMessage[]>
 }
 
+export class LarkResponseError extends Error {}
+
 function checked<T extends { code?: number; msg?: string }>(response: T): T {
   if (response.code !== undefined && response.code !== 0)
-    throw new Error(
+    throw new LarkResponseError(
       `Lark ${response.code}: ${response.msg ?? 'request failed'}`,
     )
   return response
@@ -222,6 +231,7 @@ export function larkTransport(
         throw new Error('Lark send returned no message receipt')
       return { messageId: data.message_id, createTime: data.create_time }
     },
+    sendFile: larkFileSender(client),
     async sendCard(chatId, card, replyToId) {
       const data = { msg_type: 'interactive', content: JSON.stringify(card) }
       const response = checked(
@@ -365,5 +375,75 @@ export function larkTransport(
       )
       return response.data?.items ?? []
     },
+  }
+}
+
+export class LarkUploadError extends Error {}
+
+function filePostRejection(error: unknown) {
+  // The SDK rejects non-2xx HTTP responses and leaves the Feishu body on the error.
+  const body = (
+    error as { response?: { data?: { code?: unknown; msg?: unknown } } } | null
+  )?.response?.data
+  if (typeof body?.code !== 'number' || !body.code) throw error
+  return {
+    code: body.code,
+    msg: typeof body.msg === 'string' ? body.msg : undefined,
+    data: undefined,
+  }
+}
+
+function larkFileSender(
+  client: lark.Client,
+): NonNullable<LarkTransport['sendFile']> {
+  return async (chatId, file, options = {}) => {
+    const bytes = Buffer.from(
+      file.bytes.buffer,
+      file.bytes.byteOffset,
+      file.bytes.byteLength,
+    )
+    let content: string
+    try {
+      if (file.kind === 'image') {
+        const uploaded = await client.im.image.create({
+          data: { image_type: 'message', image: bytes },
+        })
+        if (!uploaded?.image_key) throw new Error('Missing image key')
+        content = JSON.stringify({ image_key: uploaded.image_key })
+      } else {
+        const ext = extname(file.name).slice(1).toLowerCase()
+        const file_type =
+          ext === 'pdf' || ext === 'doc' || ext === 'xls' || ext === 'ppt'
+            ? ext
+            : 'stream'
+        const uploaded = await client.im.file.create({
+          data: { file_type, file_name: file.name, file: bytes },
+        })
+        if (!uploaded?.file_key) throw new Error('Missing file key')
+        content = JSON.stringify({ file_key: uploaded.file_key })
+      }
+    } catch (cause) {
+      throw new LarkUploadError(
+        `Lark could not upload ${file.name}. Check its format and the bot's upload permission.`,
+        { cause },
+      )
+    }
+    const data = { msg_type: file.kind, content, uuid: options.uuid }
+    const post = options.replyToId
+      ? client.im.message.reply({
+          path: { message_id: options.replyToId },
+          data: { ...data, reply_in_thread: options.replyInThread },
+        })
+      : client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { ...data, receive_id: chatId },
+        })
+    const { data: receipt } = checked(await post.catch(filePostRejection))
+    if (!receipt?.message_id || !receipt.create_time)
+      throw new Error('Missing Lark file delivery receipt')
+    return {
+      messageId: receipt.message_id,
+      createTime: receipt.create_time,
+    }
   }
 }
