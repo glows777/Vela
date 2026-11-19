@@ -92,12 +92,22 @@ test('visible submissions validate addresses and history cursors and correlate r
   const address = { projectId: project.id, sessionId: project.sessionId }
   for (const body of [
     { ...address, text: '' },
-    { ...address, text: '   ' },
     { ...address, text: 'x', clientMessageId: '' },
     { ...address, text: 'x', projectId: 'missing' },
     { ...address, text: 'x', sessionId: 'missing' },
   ])
     await expect(host.submit(body)).rejects.toThrow()
+  // A text limit the sender can act on says which one; a malformed request keeps
+  // the generic message, since nothing in the draft would fix it.
+  await expect(
+    host.submit({ ...address, text: 'x'.repeat(100_001) }),
+  ).rejects.toThrow('Message is too long (max 100000 characters)')
+  await expect(host.submit({ ...address, text: '   ' })).rejects.toThrow(
+    'Message must not be empty',
+  )
+  await expect(
+    host.submit({ ...address, text: 'x', clientMessageId: 'x'.repeat(201) }),
+  ).rejects.toThrow('Invalid JSON request body')
   await expect(
     host.openProject({ cwd: join(t.cwd, 'missing') }),
   ).rejects.toThrow()

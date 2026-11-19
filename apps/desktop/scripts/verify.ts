@@ -176,22 +176,6 @@ const noOverflow = async (page: Page) =>
     false,
     'No horizontal overflow',
   )
-/**
- * A refused action shows the reason the host gave, in words a person can act on:
- * never Electron's transport wrapper, an error type name, or HTTP-era wording for
- * a validation failure.
- */
-const assertProductReason = (reason: string) => {
-  for (const wording of [
-    'Error invoking remote method',
-    'LocalError:',
-    'Invalid JSON request body',
-  ])
-    assert(
-      !reason.includes(wording),
-      `A product alert says "${wording}": ${reason}`,
-    )
-}
 const snapshot = async (page: Page, name: string) => {
   await page.screenshot({
     path: resolve(evidence, `${name}.png`),
@@ -331,21 +315,6 @@ const bridgeJourney = async (page: Page) => {
     'The real window hosts the SDK: channels, project, session, submit, Stop and events answer through preload.',
   )
 
-  const refused = await page.evaluate(
-    ({ projectId, sessionId }) =>
-      window.vela
-        .submit('local', { projectId, sessionId, text: 'x'.repeat(100_001) })
-        .then(
-          () => 'accepted',
-          (cause: Error) => cause.message,
-        ),
-    { projectId: created.id, sessionId: created.sessionId },
-  )
-  assert.equal(refused, 'Message is too long (max 100000 characters)')
-  checks.push(
-    'The bridge refuses an over-long submission with the length, in words a person can read.',
-  )
-
   const image = (
     await readFile(resolve(root, '../../test/fixtures/images/blue.png'))
   ).toString('base64')
@@ -444,10 +413,9 @@ const journeyOne = async (page: Page) => {
   await folderAlert.waitFor()
   const folderReason = (await folderAlert.textContent()) ?? ''
   assert.equal(folderReason, 'Project must be an existing directory')
-  assertProductReason(folderReason)
-  await snapshot(page, 'journey-1-rejected-folder')
+  await themes(page, 'journey-1-rejected-folder')
   checks.push(
-    "A folder that does not exist is refused with the host's own reason, and no transport wording.",
+    "A folder that does not exist is refused with the host's own reason.",
   )
   await dialog.getByLabel('Folder path').fill(alpha)
   await dialog.getByLabel('Name').fill('Alpha')
@@ -552,7 +520,6 @@ const journeyOne = async (page: Page) => {
   await tooLongAlert.waitFor()
   const tooLongReason = (await tooLongAlert.textContent()) ?? ''
   assert.equal(tooLongReason, 'Message is too long (max 100000 characters)')
-  assertProductReason(tooLongReason)
   assert.equal(
     (await projectComposer.inputValue()).length,
     tooLong.length,

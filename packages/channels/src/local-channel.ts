@@ -42,10 +42,10 @@ const messageSchema = z
   })
   .strict()
 /**
- * A reason the sender can fix in the draft itself: one of the `text` limits below.
- * Any other shape failure is a malformed request, which keeps its generic message.
+ * A reason the sender can fix in the draft: one of the `text` limits in the schema
+ * above. Any other shape failure is a malformed request and keeps its generic message.
  */
-const messageProblem = (error: z.ZodError) =>
+const refusalReason = (error: z.ZodError) =>
   error.issues.find(
     (issue) =>
       issue.path[0] === 'text' &&
@@ -271,7 +271,7 @@ export class LocalChannel implements ChannelDefinition {
     const session = this.session(projectId, sessionId)
     const body = messageSchema.safeParse(input)
     if (!body.success)
-      throw new LocalError('invalid_request', messageProblem(body.error))
+      throw new LocalError('invalid_request', refusalReason(body.error))
     return this.submit(
       project,
       session,
