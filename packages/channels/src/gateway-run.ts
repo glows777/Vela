@@ -13,7 +13,7 @@ import type { ChannelDirectory } from './directory.ts'
 import type { RunFeedback } from './feedback.ts'
 import type { GatewayIdle } from './gateway-idle.ts'
 import type { ChannelHandoff } from './handoff.ts'
-import { errorMessage } from './log.ts'
+import { errorMessage, WorkspacePreparationError } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import type { ChannelRoutines } from './routines.ts'
 import type { ChannelSessions } from './sessions.ts'
@@ -154,9 +154,10 @@ export class GatewayRun {
       if (!record || channel?.canRecover?.(trigger, record.chatKind) === false)
         return 'done'
     }
+    const cancelled = () => processing.stopped
     const topicSession =
       trigger.topic || trigger.passive
-        ? await this.admission.admit(id, channel, trigger)
+        ? await this.admission.admit(id, channel, trigger, cancelled)
         : undefined
     if (trigger.topic && !topicSession) return 'failed'
     let batch = messages
@@ -281,7 +282,8 @@ export class GatewayRun {
       (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
       !this.admission.resumed.has(session)
     ) {
-      await this.sessions.resume(session)
+      await this.sessions.resume(session, cancelled)
+      if (cancelled()) return stopped(session)
       this.admission.resumed.add(session)
     }
     if (
@@ -317,7 +319,15 @@ export class GatewayRun {
 
     if (!recovered && !trigger.backgroundJobToken) {
       try {
-        await this.reconcileLocation(id, channelName, session, merged)
+        await this.reconcileLocation(
+          id,
+          channelName,
+          session,
+          merged,
+          false,
+          cancelled,
+        )
+        if (cancelled()) return stopped(session)
       } catch (error) {
         this.admission.resumed.delete(session)
         throw error
@@ -386,15 +396,21 @@ export class GatewayRun {
     session: VelaSession,
     msg: IncomingMessage,
     recovering = false,
+    cancelled?: () => boolean,
   ) {
-    return this.sessions.reconcile(
-      key,
-      session,
-      msg,
-      (route, text, identity) =>
-        this.sendReply(session, channel, route, text, identity),
-      recovering,
-    )
+    return this.sessions
+      .reconcile(
+        key,
+        session,
+        msg,
+        (route, text, identity) =>
+          this.sendReply(session, channel, route, text, identity),
+        recovering,
+        cancelled,
+      )
+      .catch((error) => {
+        throw new WorkspacePreparationError(error)
+      })
   }
 
   async sendReply(

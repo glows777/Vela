@@ -11,7 +11,7 @@ import { materializeAttachments } from './attachments.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { lastAssistantText } from './feedback-message.ts'
 import { modelInputText } from './input.ts'
-import { errorMessage } from './log.ts'
+import { errorMessage, feedbackFailure } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
@@ -514,16 +514,11 @@ export class RunFeedback {
     msg: IncomingMessage,
     error: unknown,
   ): Promise<void> {
-    this.publishError(channelName, msg, error)
-    this.options.logger.error(
-      `[${channelName}] Feedback failed: ${errorMessage(error)}`,
-    )
-    if (msg.passive || msg.externalEvent) return
-    await this.sendErrorText(
-      channelName,
-      msg,
-      `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
-    )
+    const { diagnostic, eventError, text } = feedbackFailure(error)
+    this.publishError(channelName, msg, eventError)
+    this.options.logger.error(`[${channelName}] Feedback failed: ${diagnostic}`)
+    if (!msg.passive && !msg.externalEvent)
+      await this.sendErrorText(channelName, msg, text)
   }
 
   /**

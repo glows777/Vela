@@ -9,6 +9,7 @@ import {
   type ChannelRecord,
   isGroupInput,
 } from './directory.ts'
+import { WorkspacePreparationError } from './log.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import { topicSessionOptions } from './topics.ts'
@@ -44,6 +45,7 @@ export class ChannelSessions {
       identity: string,
     ) => Promise<boolean>,
     recovering = false,
+    cancelled?: () => boolean,
   ) {
     const target = this.targets.get(session)
     if (!target) return
@@ -67,7 +69,11 @@ export class ChannelSessions {
         }
         await this.directory.setLocationNotice(key, session.id, notice)
       }
-      await this.whenIdle(session, () => session.setLocation(target))
+      await this.whenIdle(session, () => session.setLocation(target), cancelled)
+      if (!this.matchesLocation(session)) {
+        await this.directory.setLocationNotice(key, session.id, undefined)
+        return
+      }
     }
     if (!notice) return
     if (!notice.text) {
@@ -102,15 +108,36 @@ export class ChannelSessions {
     await this.directory.setLocationNotice(key, session.id, undefined)
   }
 
-  resume(session: VelaSession) {
-    return this.whenIdle(session, () => session.resume())
+  async resume(session: VelaSession, cancelled?: () => boolean) {
+    try {
+      const restored = await this.whenIdle(
+        session,
+        () => session.resume(),
+        cancelled,
+      )
+      // First admission has no transcript. Prepare its selected guest before handing the input
+      // to the model path, so operator-only engine failures receive the same handling as moves.
+      if (
+        restored === false &&
+        session.location.environment !== 'local' &&
+        this.matchesLocation(session)
+      )
+        await session.resources()
+      return restored
+    } catch (error) {
+      if (session.location.environment !== 'local')
+        throw new WorkspacePreparationError(error)
+      throw error
+    }
   }
 
   private async whenIdle<T>(
     session: VelaSession,
     task: () => Promise<T>,
-  ): Promise<T> {
+    cancelled?: () => boolean,
+  ): Promise<T | undefined> {
     while (!this.stopped()) {
+      if (cancelled?.()) return
       try {
         return await task()
       } catch (error) {

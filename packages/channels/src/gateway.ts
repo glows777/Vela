@@ -404,7 +404,7 @@ export class ChannelGateway {
               )
                 return
               const session = this.sessions.open(record.activeSessionId)
-              await session.resume()
+              await this.sessions.resume(session)
               this.admission.resumed.add(session)
               if (record.locationNotice)
                 await this.run.reconcileLocation(

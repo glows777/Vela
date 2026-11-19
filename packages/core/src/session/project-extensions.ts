@@ -94,17 +94,14 @@ export class ProjectExtensions {
       settings: projectSettings,
     })
     for (const message of discovered.diagnostics) logger.warn(message)
-    const selected =
-      env.id !== 'node:local'
-        ? undefined
-        : await split!.projectExtensions?.({
-            cwd: env.cwd,
-            environmentId: env.id,
-            trusted,
-            settings,
-            projectSettings,
-            entries: discovered.entries,
-          })
+    const selected = await split!.projectExtensions?.({
+      cwd: env.cwd,
+      environmentId: env.id,
+      trusted,
+      settings,
+      projectSettings,
+      entries: discovered.entries,
+    })
     const extensionConfig =
       selected?.extensionConfig ?? settings.extensionConfig ?? {}
     const key = JSON.stringify([

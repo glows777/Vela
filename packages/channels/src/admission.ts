@@ -21,11 +21,13 @@ export class TopicAdmission {
     id: string,
     channel: ChannelDefinition | undefined,
     msg: IncomingMessage,
+    cancelled?: () => boolean,
   ): Promise<VelaSession | undefined> {
     const session = this.sessions.open(id, channel?.name, msg)
     const exists = this.resumed.has(session)
       ? session.getEntries().length > 0
-      : await this.sessions.resume(session)
+      : await this.sessions.resume(session, cancelled)
+    if (exists === undefined) return session
     if (msg.requireExistingSession && !exists && !this.directory.get(id)) {
       await session.close()
       return

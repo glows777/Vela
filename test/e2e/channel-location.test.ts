@@ -6,8 +6,14 @@ import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { drainChannels } from '@glows777/vela-channels/testing'
 import { createLocalExecutionEnv } from '@glows777/vela-core'
 import { lark } from '@glows777/vela-lark'
-import { cliHostExtensionConfig } from '../../packages/vela/src/cli/project-extensions.ts'
-import { parseArgs } from '../../packages/vela/src/cli/setup.ts'
+import {
+  cliHostExtensionConfig,
+  cliProjectExtensions,
+} from '../../packages/vela/src/cli/project-extensions.ts'
+import {
+  BUILTIN_EXTENSIONS,
+  parseArgs,
+} from '../../packages/vela/src/cli/setup.ts'
 import { loadConfig } from '../../packages/vela/src/config/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 
@@ -56,10 +62,16 @@ test('project settings cannot redirect an owner environment, group or Docker dat
   }
 })
 
-function host(dataDir: string, environment?: string, env?: VelaOptions['env']) {
+function host(
+  dataDir: string,
+  environment?: string,
+  env?: VelaOptions['env'],
+  extra?: Pick<VelaOptions, 'logger' | 'sessionResources'>,
+) {
   const fake = fakeLark()
   const model = createFauxModel({ cache: true })
   const vela = createVela({
+    ...extra,
     dataDir,
     cwd: dataDir,
     model,
@@ -206,14 +218,32 @@ test('failed target preparation keeps an existing hub local and never admits the
     await h.start()
     const local = await h.input(false, 'seed')
     await h.vela.dispose()
-    h = host(dir.path, 'missing', ({ location }) =>
-      location.environment === 'local'
-        ? createLocalExecutionEnv({ cwd: location.cwd })
-        : undefined,
+    const diagnostic = 'ENOENT /synthetic/operator/install/guest.cjs'
+    const logs: string[] = []
+    h = host(
+      dir.path,
+      'missing',
+      ({ location }) => {
+        if (location.environment === 'local')
+          return createLocalExecutionEnv({ cwd: location.cwd })
+        throw Error(diagnostic)
+      },
+      {
+        logger: {
+          debug() {},
+          info() {},
+          warn() {},
+          error: (m) => logs.push(m),
+        },
+      },
     )
     await h.start()
     await h.input(false, 'unavailable').catch(() => {})
     expect(h.model.calls).toHaveLength(0)
+    expect(logs.some((m) => m.includes(diagnostic))).toBe(true)
+    const feedback = h.fake.sent.map((m) => m.text).join(' ')
+    expect(feedback).not.toContain('/synthetic/operator')
+    expect(feedback).toMatch(/workspace.*operator/i)
     expect(h.vela.session(local.id).location).toEqual(local.location)
     expect(h.replies.some((text) => text.includes('Moved'))).toBe(false)
   } finally {
@@ -222,37 +252,56 @@ test('failed target preparation keeps an existing hub local and never admits the
   }
 })
 
-test('a hub with tracked work waits for idle before migration and admission', async () => {
-  const dir = tempDir(),
-    g = guest(false)
-  let h = host(dir.path)
-  const job = Promise.withResolvers<void>()
-  try {
-    await h.start()
-    const initial = await h.input(false, 'seed')
-    await h.vela.dispose()
-    h = host(dir.path, 'blue', ({ location }) =>
-      location.environment === 'local'
-        ? createLocalExecutionEnv({ cwd: location.cwd })
-        : g.backend,
-    )
-    await h.start()
-    const active = h.vela.session(initial.id, { location: initial.location })
-    active.trackWork(job.promise)
-    const next = h.input(false, 'while-busy')
-    await Bun.sleep(100)
-    expect(g.count()).toBe(0)
-    expect(h.model.calls).toHaveLength(0)
-    job.resolve()
-    await next
-    expect(active.location.environment).toBe('blue')
-    expect(h.model.calls).toHaveLength(1)
-  } finally {
-    job.resolve()
-    await h.vela.dispose()
-    dir.cleanup()
-  }
-})
+test.each([false, true])(
+  'tracked work holds a hub migration until idle or Stop (stop=%s)',
+  async (stop) => {
+    const dir = tempDir(),
+      g = guest(false)
+    let h = host(dir.path)
+    const job = Promise.withResolvers<void>()
+    try {
+      await h.start()
+      const initial = await h.input(false, 'seed')
+      await h.vela.dispose()
+      h = host(dir.path, 'blue', ({ location }) =>
+        location.environment === 'local'
+          ? createLocalExecutionEnv({ cwd: location.cwd })
+          : g.backend,
+      )
+      await h.start()
+      const active = h.vela.session(initial.id, { location: initial.location })
+      active.trackWork(job.promise)
+      const next = h.input(false, 'while-busy')
+      await Bun.sleep(100)
+      expect(g.count()).toBe(0)
+      expect(h.model.calls).toHaveLength(0)
+      if (stop) {
+        const channel = h.vela.channel('lark')
+        const runId = channel.sessions('oc_group')[0]!.runId!
+        expect(await channel.stop({ chatId: 'oc_group' }, runId)).toBe(true)
+        expect(
+          await Promise.race([
+            next.then(() => true),
+            Bun.sleep(500).then(() => false),
+          ]),
+        ).toBe(true)
+        expect(active.location).toEqual(initial.location)
+        expect(h.model.calls).toHaveLength(0)
+        expect(g.count()).toBe(0)
+        expect(h.replies.some((text) => text.includes('Moved'))).toBe(false)
+        return
+      }
+      job.resolve()
+      await next
+      expect(active.location.environment).toBe('blue')
+      expect(h.model.calls).toHaveLength(1)
+    } finally {
+      job.resolve()
+      await h.vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
 
 test.each([false, true])(
   'restart settles a lost migration-notice receipt using its original Lark identity (expired=%s)',
@@ -325,3 +374,129 @@ test.each([false, true])(
     }
   },
 )
+
+test('a migrated group retains eligible CLI built-ins and their warm tool prefix', async () => {
+  const dir = tempDir(),
+    g = guest(true),
+    reports: string[] = []
+  const config = loadConfig({
+    cwd: dir.path,
+    agentDir: join(dir.path, 'owner'),
+    env: {},
+    builtins: Object.keys(BUILTIN_EXTENSIONS),
+  })
+  const resources = {
+    ...config.sessionResources!,
+    projectExtensions: cliProjectExtensions(config, parseArgs([]), (m) =>
+      reports.push(m),
+    ),
+  }
+  let h = host(dir.path, undefined, undefined, { sessionResources: resources })
+  try {
+    await h.start()
+    const local = await h.input(false, 'seed')
+    const names = ['background_output', 'background_stop', 'web_fetch', 'todo']
+    expect(local.registry.getAllTools().map((t) => t.name)).toEqual(
+      expect.arrayContaining(names),
+    )
+    await h.vela.dispose()
+    h = host(
+      dir.path,
+      'blue',
+      ({ location }) =>
+        location.environment === 'local'
+          ? createLocalExecutionEnv({ cwd: location.cwd })
+          : g.backend,
+      { sessionResources: resources },
+    )
+    await h.start()
+    const moved = await h.input(false, 'move')
+    expect(moved.registry.getAllTools().map((t) => t.name)).toEqual(
+      expect.arrayContaining(names),
+    )
+    expect(
+      reports.some((m) => m.includes('Skipped project extensions and MCP')),
+    ).toBe(true)
+    const calls = g.count()
+    await h.input(false, 'again')
+    expect(g.count()).toBe(calls)
+    expect(h.model.calls[1]!.tools).toEqual(h.model.calls[0]!.tools)
+    expect(h.model.calls[1]!.system).toBe(h.model.calls[0]!.system)
+  } finally {
+    await h.vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('first admission keeps an operator installation diagnostic out of the group', async () => {
+  const dir = tempDir(),
+    logs: string[] = []
+  const diagnostic = 'ENOENT /synthetic/owner/private/install/guest.cjs'
+  const h = host(
+    dir.path,
+    'blue',
+    () => {
+      throw Error(diagnostic)
+    },
+    {
+      logger: { debug() {}, info() {}, warn() {}, error: (m) => logs.push(m) },
+    },
+  )
+  try {
+    await h.start()
+    await h.input(false, 'first')
+    const reply = h.fake.sent.map((m) => m.text).join(' ')
+    expect(reply).not.toContain('/synthetic/owner')
+    expect(reply).toMatch(/workspace.*operator/i)
+    expect(logs.some((m) => m.includes(diagnostic))).toBe(true)
+    expect(h.model.calls).toHaveLength(0)
+  } finally {
+    await h.vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('Stop after resume clears a waiting migration notice while existing work stays active', async () => {
+  const dir = tempDir(),
+    g = guest(false),
+    job = Promise.withResolvers<void>()
+  let h = host(dir.path)
+  try {
+    await h.start()
+    const source = await h.input(false, 'seed')
+    await h.vela.dispose()
+    h = host(dir.path, 'blue', ({ location }) =>
+      location.environment === 'local'
+        ? createLocalExecutionEnv({ cwd: location.cwd })
+        : g.backend,
+    )
+    await h.start()
+    const active = h.vela.session(source.id, { location: source.location })
+    h.vela.subscribe((e) => {
+      if (e.type === 'channel_message') active.trackWork(job.promise)
+    })
+    const queued = h.input(false, 'held')
+    const index = join(dir.path, 'channels/index.json')
+    const notice = () =>
+      JSON.parse(readFileSync(index, 'utf8')).records[0].locationNotice
+    for (let n = 0; n < 150 && !notice(); n++) await Bun.sleep(10)
+    expect(notice()).toBeDefined()
+    const channel = h.vela.channel('lark'),
+      run = channel.sessions('oc_group')[0]!.runId!
+    expect(await channel.stop({ chatId: 'oc_group' }, run)).toBe(true)
+    expect(
+      await Promise.race([
+        queued.then(() => true),
+        Bun.sleep(600).then(() => false),
+      ]),
+    ).toBe(true)
+    expect(notice()).toBeUndefined()
+    expect(active.location).toEqual(source.location)
+    expect(h.model.calls).toHaveLength(0)
+    expect(g.count()).toBe(0)
+  } finally {
+    job.resolve()
+    await h.vela.dispose()
+    dir.cleanup()
+  }
+})
