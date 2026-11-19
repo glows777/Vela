@@ -44,6 +44,12 @@ export interface VelaSettings {
   extensionConfig?: Record<string, Record<string, unknown>>
 }
 
+// These select execution authority. Strip them at both project-layer entry points.
+export function omitProjectLocation(settings: VelaSettings) {
+  if ('environments' in settings) delete settings.environments
+  if ('location' in settings) delete settings.location
+}
+
 export const RESOURCE_KEYS = ['extensions', 'skills', 'prompts'] as const
 
 /** setTimeout's limit in seconds: a budget above it would fire at once instead of waiting. */

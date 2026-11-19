@@ -75,7 +75,12 @@ import {
   pendingToolCalls,
   reconcileInterruptedTools,
 } from './session/recovery.ts'
-import { switchWorkspace } from './session/relocation.ts'
+import {
+  busyLocationError,
+  needsRestoredWorkspace,
+  restoredLocation,
+  switchWorkspace,
+} from './session/relocation.ts'
 import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
@@ -125,12 +130,13 @@ export class VelaSession {
     task: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     if (
+      this.busy.locked ||
       this.isBashRunning ||
       this.hasWork ||
       this.commands.size ||
       this.registry.hasActiveCalls
     )
-      return Promise.reject(new Error('Session is busy'))
+      return Promise.reject(busyLocationError())
     return this.exclusive('change or restore location', async (signal) => {
       this.moving = true
       try {
@@ -833,14 +839,7 @@ export class VelaSession {
     await this.store.flush()
     const saved = await this.store.loadSaved()
     if (!saved) return false
-    const target = resolveLocation(
-      saved.location ??
-        (this.options.location?.environment === 'local'
-          ? this.options.location
-          : undefined),
-      this.deps.cwd,
-      this.options.cwd,
-    )
+    const target = restoredLocation(saved.location, this.options, this.deps.cwd)
     await this.switchLocation(target)
     this.displayName = saved.name
     await this.loadBranch(saved)
@@ -849,7 +848,7 @@ export class VelaSession {
     this.defaults.applyOpenChoices(this.options, (model) =>
       this.selectModel(model, false),
     )
-    await this.prepare(signal)
+    if (needsRestoredWorkspace(this.options, target)) await this.prepare(signal)
     return true
   }
 

@@ -24,6 +24,7 @@ import type {
 
 /** Whether the run that owns a presentation can still retry it. */
 type Phase = 'live' | 'final'
+type Report = (error: unknown, phase: Phase) => Promise<void>
 
 /**
  * One presentation report per input (or per merged passive batch). The live card and the final
@@ -31,10 +32,7 @@ type Phase = 'live' | 'final'
  */
 class PresentationGate {
   private reported = false
-  private readonly report: (error: unknown, phase: Phase) => Promise<void>
-  constructor(report: (error: unknown, phase: Phase) => Promise<void>) {
-    this.report = report
-  }
+  constructor(private readonly report: Report) {}
   run(error: unknown, phase: Phase = 'live'): Promise<void> {
     if (this.reported) return Promise.resolve()
     this.reported = true
@@ -53,7 +51,7 @@ export class MessageFeedback {
   constructor(
     channel: ChannelDefinition,
     readonly message: IncomingMessage,
-    private report: (error: unknown, phase: Phase) => Promise<void>,
+    private report: Report,
     acknowledge = true,
   ) {
     this.gate = new PresentationGate((error, phase) =>
@@ -125,7 +123,7 @@ class DeferredMessageFeedback {
   constructor(
     private channel: ChannelDefinition,
     private message: IncomingMessage,
-    report: (error: unknown, phase: Phase) => Promise<void>,
+    report: Report,
     gate = new PresentationGate(report),
   ) {
     this.gate = gate
@@ -189,7 +187,7 @@ class MergedMessageFeedback {
   constructor(
     channel: ChannelDefinition,
     messages: IncomingMessage[],
-    report: (error: unknown, phase: Phase) => Promise<void>,
+    report: Report,
   ) {
     // One burst is one evaluation: its inputs share a report instead of one each.
     this.gate = new PresentationGate(report)
@@ -232,6 +230,7 @@ interface ChannelRun {
 }
 
 interface FeedbackOptions {
+  matchesLocation: (session: VelaSession) => boolean
   changed: (key: string) => void
   directory: ChannelDirectory
   recovery: ChannelRecovery
@@ -427,6 +426,7 @@ export class RunFeedback {
       )
       return true
     }
+    if (!this.options.matchesLocation(run.session)) return false
     const inputs = this.acknowledge(channel, msg)
     await Promise.all(inputs.map((input) => input.ready))
     if (msg.topic) msg.isNewTopic = false

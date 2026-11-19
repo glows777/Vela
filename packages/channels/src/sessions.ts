@@ -18,6 +18,106 @@ export class ChannelSessions {
   /** Sessions this class has already given the chat's tool split (once per object, like resume). */
   private readonly toolSplitApplied = new WeakSet<VelaSession>()
 
+  private readonly targets = new WeakMap<
+    VelaSession,
+    NonNullable<SessionOptions['location']>
+  >()
+
+  matchesLocation(session: VelaSession) {
+    const target = this.targets.get(session)
+    return (
+      !target ||
+      (session.cwd === target.cwd &&
+        session.location.environment === target.environment)
+    )
+  }
+
+  async reconcile(
+    key: string,
+    session: VelaSession,
+    msg: IncomingMessage,
+    send: (
+      msg: IncomingMessage,
+      text: string,
+      identity: string,
+    ) => Promise<boolean>,
+    recovering = false,
+  ) {
+    const target = this.targets.get(session)
+    if (!target) return
+    let notice = this.directory.get(key)?.locationNotice
+    if (
+      notice &&
+      (target.environment !== notice.environment || target.cwd !== notice.cwd)
+    ) {
+      await this.directory.setLocationNotice(key, session.id, undefined)
+      notice = undefined
+    }
+    if (!this.matchesLocation(session)) {
+      // Startup can finish delivery of a committed move. Only normal admission can initiate one.
+      if (recovering) return
+      if (!notice) {
+        notice = {
+          ...target,
+          token: crypto.randomUUID(),
+          senderId: msg.senderId,
+          replyToId: msg.replyToId,
+        }
+        await this.directory.setLocationNotice(key, session.id, notice)
+      }
+      await this.whenIdle(session, () => session.setLocation(target))
+    }
+    if (!notice) return
+    if (!notice.text) {
+      let text = `Moved this session to the ${target.environment} workspace.`
+      if (target.environment !== 'local') {
+        try {
+          const env = await session.execEnv()
+          const entries = await env.listDir(target.cwd)
+          if (entries.ok && !entries.value.length)
+            text +=
+              ' The workspace is empty. To use the repository, clone it there.'
+        } catch {
+          /* An unreadable destination has no verified contents. */
+        }
+      }
+      notice = { ...notice, text }
+      await this.directory.setLocationNotice(key, session.id, notice)
+    }
+    const address = {
+      ...msg,
+      senderId: notice.senderId,
+      replyToId: notice.replyToId,
+      routine: undefined,
+      handoff: undefined,
+    }
+    if (await send(address, notice.text!, `move:${notice.token}`))
+      await this.directory.setLocationNotice(key, session.id, undefined)
+  }
+
+  resume(session: VelaSession) {
+    return this.whenIdle(session, () => session.resume())
+  }
+
+  private async whenIdle<T>(
+    session: VelaSession,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    while (!this.stopped()) {
+      try {
+        return await task()
+      } catch (error) {
+        if (
+          !this.targets.has(session) ||
+          (error as { code?: string })?.code !== 'SESSION_BUSY'
+        )
+          throw error
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    throw Error('Channel is shutting down')
+  }
+
   constructor(
     private directory: ChannelDirectory,
     private channel: (name: string) => ChannelDefinition | undefined,
@@ -54,7 +154,7 @@ export class ChannelSessions {
       chatKind,
       this.directory.storageKey(channel.name, msg.channelId),
     )
-    const options = channel.sessionOptions?.(msg)
+    const options: SessionOptions | undefined = channel.sessionOptions?.(msg)
     const modifiers = [
       channel.sendFile && !options?.tools?.includes('-channel_send_file')
         ? '+channel_send_file'
@@ -136,6 +236,7 @@ export class ChannelSessions {
             }
           : undefined,
     })
+    if (options?.location) this.targets.set(session, options.location)
     // The chat's own split applies to a session something else opened too: a tool its chat turns off is
     // removed, and a hub's background commands are added, as when this call constructs the session.
     // What it never does is widen an allowlist the session already had: a positive list is

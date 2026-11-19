@@ -4,7 +4,7 @@ import { publishChannelEvent } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
 import { materializeAttachments } from './attachments.ts'
 import type { TopicCommands } from './commands.ts'
-import { sendAnswer } from './delivery.ts'
+import { larkDelivery, sendAnswer } from './delivery.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type { RunFeedback } from './feedback.ts'
 import type { GatewayIdle } from './gateway-idle.ts'
@@ -277,7 +277,7 @@ export class GatewayRun {
       (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
       !this.admission.resumed.has(session)
     ) {
-      await session.resume()
+      await this.sessions.resume(session)
       this.admission.resumed.add(session)
     }
     if (
@@ -311,6 +311,14 @@ export class GatewayRun {
       return 'failed'
     }
 
+    if (!recovered && !trigger.backgroundJobToken) {
+      try {
+        await this.reconcileLocation(id, channelName, session, merged)
+      } catch (error) {
+        this.admission.resumed.delete(session)
+        throw error
+      }
+    }
     if (evaluated.some((message) => message.files?.length)) {
       const resolved = await Promise.all(
         evaluated.map((message) => materializeAttachments(session, message)),
@@ -368,11 +376,29 @@ export class GatewayRun {
       this.skippedNotices.add(id)
   }
 
+  reconcileLocation(
+    key: string,
+    channel: string,
+    session: VelaSession,
+    msg: IncomingMessage,
+    recovering = false,
+  ) {
+    return this.sessions.reconcile(
+      key,
+      session,
+      msg,
+      (route, text, identity) =>
+        this.sendReply(session, channel, route, text, identity),
+      recovering,
+    )
+  }
+
   async sendReply(
     session: VelaSession,
     channelName: string,
     msg: IncomingMessage,
     replyText: string,
+    noticeIdentity?: string,
   ): Promise<boolean> {
     const channel = this.channel(channelName)
     if (!replyText || !channel) return false
@@ -386,7 +412,11 @@ export class GatewayRun {
       ...(msg.replyToId ? { replyToId: msg.replyToId } : {}),
     }
     try {
-      await sendAnswer(session, channel, reply)
+      if (noticeIdentity && channelName === 'lark')
+        await larkDelivery(session, noticeIdentity, reply, (deliveryId) =>
+          channel.send({ ...reply, deliveryId }),
+        )
+      else await sendAnswer(session, channel, reply)
     } catch (error) {
       publishChannelEvent(session, {
         type: 'channel_error',

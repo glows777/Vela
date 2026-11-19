@@ -95,9 +95,7 @@ export class ChannelGateway {
       (name, msg) => void this.handleIncoming(name, msg),
       () => this.stopped,
     )
-    this.admission = new TopicAdmission(this.directory, (id, name, msg) =>
-      this.sessions.open(id, name, msg),
-    )
+    this.admission = new TopicAdmission(this.directory, this.sessions)
     this.idle = new GatewayIdle(
       options.idleMs,
       (id) => this.find(id),
@@ -106,6 +104,7 @@ export class ChannelGateway {
       this.logger,
     )
     this.feedback = new RunFeedback({
+      matchesLocation: (session) => this.sessions.matchesLocation(session),
       directory: this.directory,
       recovery: this.recovery,
       changed: (key) => this.sessionChanged(key),
@@ -388,6 +387,7 @@ export class ChannelGateway {
           .entries(name)
           .filter(
             (record) =>
+              !!record.locationNotice ||
               record.state === 'running' ||
               record.pendingMessageIds.length ||
               record.outstandingJobs?.length,
@@ -406,6 +406,14 @@ export class ChannelGateway {
               const session = this.sessions.open(record.activeSessionId)
               await session.resume()
               this.admission.resumed.add(session)
+              if (record.locationNotice)
+                await this.run.reconcileLocation(
+                  record.key,
+                  name,
+                  session,
+                  msg,
+                  true,
+                )
               await this.recovery.recover(record, ch, session, (input) =>
                 this.run.process(record.key, name, input, true),
               )

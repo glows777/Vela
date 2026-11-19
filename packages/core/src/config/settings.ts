@@ -25,6 +25,7 @@ import {
 
 import {
   mergeSettings,
+  omitProjectLocation,
   parseSettings,
   type VelaSettings,
 } from './settings-values.ts'
@@ -152,7 +153,7 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
     if (file === userFile) {
       userSettings = settings
       userExtensionConfig = interpolateDeep(settings.extensionConfig ?? {}, env)
-    }
+    } else omitProjectLocation(settings)
     files.push(file)
     layers.push(settings)
   }
@@ -198,11 +199,13 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       : [agentDir]
   const systemPrompt = readLocalSystemFile(promptDirs, 'SYSTEM.md')
   const appendSystemPrompt = readLocalSystemFile(promptDirs, 'APPEND_SYSTEM.md')
+  const dataDir = ('environments' in userSettings ? userSettings : settings)
+    .dataDir
   return {
     cwd,
     agentDir,
-    dataDir: settings.dataDir
-      ? resolveConfigPath(cwd, settings.dataDir)
+    dataDir: dataDir
+      ? resolveConfigPath(cwd, dataDir)
       : projectDataDir(agentDir, cwd),
     settings,
     userExtensionConfig,
