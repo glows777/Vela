@@ -161,8 +161,8 @@ function readCursor(cursor: string, sessionId: string): Page {
 interface Operations {
   enabled(chatId: string): boolean
   chatIds(): string[]
-  chatName(chatId: string): Promise<string | undefined>
-  transport(): LarkTransport
+  /** The transport while Lark is connected; undefined otherwise, including after Stop. */
+  transport(): LarkTransport | undefined
   senderName(id: string): Promise<string>
   ownAppId: string
   submitNewTopic(message: IncomingMessage): Promise<{ sessionId: string }>
@@ -188,9 +188,10 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
     ...base,
     async chats() {
       // The list is the saved configuration: a missing name never removes a group.
+      const transport = ops.transport()
       return Promise.all(
         ops.chatIds().map(async (chatId) => {
-          const name = await ops.chatName(chatId)
+          const name = await chatName(transport, chatId)
           return name === undefined ? { chatId } : { chatId, name }
         }),
       )
@@ -209,6 +210,7 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
             }
           : readCursor(cursor, sessionId)
       const transport = ops.transport()
+      if (!transport) throw new Error('Lark is not connected')
       const result = topic
         ? await transport.listTopicMessages(topic.threadId, page.token)
         : await transport.searchMessages(chatId, {
@@ -259,7 +261,9 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
           throw new Error(
             'Lark submit requires text, an author, and a title for a new topic',
           )
-        transport = ops.transport()
+        const connected = ops.transport()
+        if (!connected) throw new Error('Lark is not connected')
+        transport = connected
       } catch (error) {
         throw new LarkSubmitError(errorMessage(error), 'not-sent', {
           cause: error,
@@ -329,6 +333,20 @@ export function larkHost(base: ChannelHost, ops: Operations): LarkHost {
       }
     }) as LarkHost['submit'],
     onEvent: ops.onEvent,
+  }
+}
+
+/** A name is display decoration: any failure leaves the group listed by its chat ID. */
+async function chatName(
+  transport: LarkTransport | undefined,
+  chatId: string,
+): Promise<string | undefined> {
+  if (!transport?.getChat) return undefined
+  try {
+    const name = (await transport.getChat(chatId))?.name?.trim()
+    return name || undefined
+  } catch {
+    return undefined
   }
 }
 

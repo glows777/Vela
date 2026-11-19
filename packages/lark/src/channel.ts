@@ -29,7 +29,7 @@ import {
   runControlsCard,
   topicRunCard,
 } from './cards.ts'
-import { type LarkChat, parseChats } from './chats.ts'
+import { type LarkChat, parseChats, validateChatTools } from './chats.ts'
 import { LarkConnection } from './connection.ts'
 import { downloadFile } from './file-download.ts'
 import {
@@ -162,11 +162,7 @@ export class LarkChannel implements ChannelDefinition {
   }
 
   validateTools(names: readonly string[]): void {
-    const known = new Set(names)
-    for (const chat of this.chats.values())
-      for (const name of chat.tools ?? [])
-        if (!known.has(name))
-          throw new Error(`Unknown Lark tool "${name}" for chat ${chat.id}`)
+    validateChatTools(this.chats.values(), names)
   }
 
   private storage(chatId: string): string {
@@ -201,24 +197,10 @@ export class LarkChannel implements ChannelDefinition {
     this.view ??= larkHost(base, {
       enabled: (chatId) => this.chats.has(chatId),
       chatIds: () => [...this.chats.keys()],
-      chatName: async (chatId) => {
-        const transport = this.transport
-        // A name is display decoration: without a connection or the optional
-        // transport call, the host lists the chat id instead.
-        if (!transport?.getChat || this.stopped || !base.connection().connected)
-          return undefined
-        try {
-          const name = (await transport.getChat(chatId))?.name?.trim()
-          return name || undefined
-        } catch {
-          return undefined
-        }
-      },
-      transport: () => {
-        if (!this.transport || this.stopped || !base.connection().connected)
-          throw new Error('Lark is not connected')
-        return this.transport
-      },
+      transport: () =>
+        !this.stopped && base.connection().connected
+          ? this.transport
+          : undefined,
       senderName: (id) => this.senderName(id),
       ownAppId: this.config.appId,
       submitNewTopic: (msg) => {
