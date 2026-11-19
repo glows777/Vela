@@ -8,7 +8,7 @@ For human and bot reviewers alike. Repo conventions are in [CONTRIBUTING.md](CON
 - An error swallowed or replaced by a silent "safe" default. Vela fails loudly: errors say what went wrong and how to fix it.
 - `packages/*/src/` using `Bun.*` globals or `bun:` modules (the packages must run on Node ≥ 22.18), or a relative import without `.ts`.
 - A public API change without an updated `api/public-api.txt`, or a user-facing change without a CHANGELOG line.
-- A user- or model-visible change without the docs pages that describe that behavior updated in the same change as the CHANGELOG entry. Leftover wording next to the new text is the same miss when that wording still calls the shipped slice a follow-up, or says the shipped slice is not in this PR.
+- A user- or model-visible change without the docs pages that describe that behavior updated in the same change as the CHANGELOG entry. Leftover wording is the same miss wherever it sits: search the whole changed file, the rest of `docs/`, the Unreleased changelog and `agent-lessons.md` for the old statement — a table cell, a later section about the same path, or a present-tense lesson sentence — not only the paragraph being edited. It still counts when that wording calls the shipped slice a follow-up or says the slice is not in this PR.
 - A new public method on `ChannelVela` or the umbrella `Vela` that is absent from the Vela member table in [docs/sdk.md](docs/sdk.md), with no decision on that page to leave the method out.
 - Behavior that departs from pi without the PR saying why.
 - Security: channel access outside the enabled-chat list, path or command injection, secrets in logs. These are never optional.
