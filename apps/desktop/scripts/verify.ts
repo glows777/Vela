@@ -553,22 +553,44 @@ const headerLayout = (page: Page, cwd: string) =>
   }, cwd)
 
 /**
+ * A folder nested deep enough that its path cannot fit the 44px header. The scratch
+ * prefix differs by platform (`/var/folders/…` on macOS, `/tmp` on Linux), so the
+ * nesting grows until the whole path reaches the ~200 characters the issue reproduced
+ * with rather than relying on a fixed suffix that a short prefix would undercut.
+ */
+const deepFolder = () => {
+  const segments = [
+    'clients',
+    'northwind-retail',
+    'platform-migration',
+    'services',
+    'billing',
+    'legacy-importer',
+    'fixtures',
+    '2026-08-nightly',
+    'snapshots',
+    '2026-08-19',
+    'tenant-northwind-eu-west-1',
+    'original',
+    'transcripts',
+  ]
+  let path = resolve(scratch, ...segments)
+  for (let n = 1; path.length < 200; n += 1) {
+    segments.push(`archive-${n}`)
+    path = resolve(scratch, ...segments)
+  }
+  return path
+}
+
+/**
  * Journey 1's last step: a folder nested ~200 characters deep. The path shares the
  * 44px header with the project name, so it must ellipsize rather than squeeze the
  * name onto two lines (#470). The document-level overflow check alone missed that.
  */
 const longPathHeader = async (page: Page) => {
   const sidebar = page.getByLabel('Sidebar')
-  const longPath = resolve(
-    scratch,
-    'clients/northwind-retail/platform-migration/services/billing/legacy-importer/fixtures/2026-08-nightly/snapshots/2026-08-19/tenant-northwind-eu-west-1/original/transcripts',
-  )
+  const longPath = deepFolder()
   await mkdir(longPath, { recursive: true })
-  // The issue's repro: a folder about 200 characters deep.
-  assert(
-    longPath.length >= 200,
-    `The fixture folder is only ${longPath.length} characters long`,
-  )
   await sidebar.getByRole('button', { name: 'New project' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('Folder path').fill(longPath)
