@@ -699,15 +699,15 @@ export async function start() {
             [event.value.sessionId]: event.value.text,
           },
         })
-      else if (event.type === 'connection') {
+      else if (event.type === 'connection')
+        // Lark reconnecting also sends its own `reset`, which re-reads what is shown.
         publish({
           connections: {
             ...snapshot.connections,
             [event.channel]: event.value,
           },
         })
-        if (event.channel !== 'local') void refresh()
-      } else if (event.type === 'lark') applyLark(event.value)
+      else if (event.type === 'lark') applyLark(event.value)
     })
     await reload()
   })()
