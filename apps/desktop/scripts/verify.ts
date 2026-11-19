@@ -412,11 +412,23 @@ const journeyOne = async (page: Page) => {
     true,
     'Create project stays disabled without a folder',
   )
-  await dialog.getByLabel('Folder path').fill(alpha)
-  await dialog.getByLabel('Name').fill('Alpha')
   checks.push(
     'New project asks for a folder and a name, and cannot be submitted while the folder is empty.',
   )
+  await dialog
+    .getByLabel('Folder path')
+    .fill(resolve(scratch, 'no-such-folder'))
+  await create.click()
+  const folderAlert = dialog.getByRole('alert')
+  await folderAlert.waitFor()
+  const folderReason = (await folderAlert.textContent()) ?? ''
+  assert.equal(folderReason, 'Project must be an existing directory')
+  await themes(page, 'journey-1-rejected-folder')
+  checks.push(
+    "A folder that does not exist is refused with the host's own reason.",
+  )
+  await dialog.getByLabel('Folder path').fill(alpha)
+  await dialog.getByLabel('Name').fill('Alpha')
   await create.click()
   await dialog.waitFor({ state: 'hidden' })
   await page.getByRole('heading', { name: 'Alpha', exact: true }).waitFor()
@@ -514,7 +526,10 @@ const journeyOne = async (page: Page) => {
   const tooLong = 'x'.repeat(100_001)
   await projectComposer.fill(tooLong)
   await page.getByRole('button', { name: 'Send' }).click()
-  await page.getByRole('alert').waitFor()
+  const tooLongAlert = page.getByRole('alert')
+  await tooLongAlert.waitFor()
+  const tooLongReason = (await tooLongAlert.textContent()) ?? ''
+  assert.equal(tooLongReason, 'Message is too long (max 100000 characters)')
   assert.equal(
     (await projectComposer.inputValue()).length,
     tooLong.length,
@@ -526,7 +541,7 @@ const journeyOne = async (page: Page) => {
     'A rejected draft leaves no message behind',
   )
   checks.push(
-    'A submission the host rejects shows the error, restores the draft and records no message.',
+    'A submission the host rejects shows the reason in words a person can act on, restores the draft and records no message.',
   )
   await projectComposer.fill('')
 
