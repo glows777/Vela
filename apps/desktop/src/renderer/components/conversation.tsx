@@ -1,18 +1,36 @@
-import { type ReactNode, useEffect, useRef } from 'react'
+import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import styles from './conversation.module.css'
 
-/** The scrolling conversation column. New turns follow only when the reader is at the bottom. */
+/** Where each conversation was left, so switching projects or sessions keeps its place. */
+const places = new Map<string, number>()
+
+/**
+ * The scrolling conversation column. A conversation opens where it was left, or at
+ * its newest turn; new turns follow only when the reader is at the bottom.
+ */
 export function Conversation({
   label,
+  place,
   children,
 }: {
   label: string
+  place: string
   children: ReactNode
 }) {
   const box = useRef<HTMLElement>(null)
   const pinned = useRef(true)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const node = box.current
+    if (!node) return
+    const saved = places.get(place)
+    node.scrollTop = saved ?? node.scrollHeight
+    pinned.current =
+      saved === undefined ||
+      node.scrollHeight - node.scrollTop - node.clientHeight < 48
+  }, [place])
+
+  useLayoutEffect(() => {
     const node = box.current
     if (node && pinned.current) node.scrollTop = node.scrollHeight
   })
@@ -24,6 +42,7 @@ export function Conversation({
       aria-label={label}
       onScroll={(event) => {
         const node = event.currentTarget
+        places.set(place, node.scrollTop)
         pinned.current =
           node.scrollHeight - node.scrollTop - node.clientHeight < 48
       }}
