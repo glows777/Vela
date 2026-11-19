@@ -2,7 +2,7 @@
 
 The private Electron workspace hosts the SDK in its main process and shows Home, Local projects and their chats alongside the separate design specimen. Product pages are separate work. Process ownership is defined in [AGENTS.md](AGENTS.md). Desktop's `0.0.0` is an internal packaging identifier.
 
-Main loads the normal user settings from `VELA_DIR` (or `~/.vela`), owns the Local and Lark channels, and disposes them on quit. Do not run this app and `vela serve` against the same Lark credentials at once. A constrained preload bridge exposes channel and Local host operations; renderer code never imports the SDK. The window is the app frame with Home, a project page, its session side panel and the New project dialog; Lark pages, routines and settings are later issues.
+Main loads the normal user settings from `VELA_DIR` (or `~/.vela`), owns the Local and Lark channels, and disposes them on quit. Do not run this app and `vela serve` against the same Lark credentials at once. A constrained preload bridge exposes channel and Local host operations; renderer code never imports the SDK. The window is the app frame with Home, a project page, its session side panel, the New project dialog and the Routines page; Lark pages and settings are later issues.
 
 ## Run locally
 
