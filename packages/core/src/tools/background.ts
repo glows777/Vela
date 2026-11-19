@@ -41,6 +41,11 @@ export interface BackgroundCommands {
     start: (
       run: BackgroundStart,
     ) => Promise<Result<ShellExecResult, ExecutionError>>
+    /**
+     * The calling tool's signal. Admission follows it, so a cancelled call launches nothing; the
+     * running job does not, because it outlives the call.
+     */
+    signal?: AbortSignal
   }): Promise<string>
   /** A job's state and output tail; throws for an id that already delivered or was stopped. */
   snapshot(id: string): BackgroundSnapshot

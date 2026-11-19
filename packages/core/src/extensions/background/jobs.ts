@@ -85,11 +85,13 @@ export class BackgroundJobs implements BackgroundCommands {
   async adopt({
     command,
     start,
+    signal,
   }: {
     command: string
     start: (
       run: BackgroundStart,
     ) => Promise<Result<ShellExecResult, ExecutionError>>
+    signal?: AbortSignal
   }): Promise<string> {
     const id = `bg-${++this.sequence}`
     const controller = new AbortController()
@@ -103,8 +105,10 @@ export class BackgroundJobs implements BackgroundCommands {
       finished: Promise.resolve(),
     }
     this.jobs.set(id, job)
-    // Stop/close can find the job while its start record is being saved. Only the
-    // admission phase waits here; a running job has its own lifetime.
+    // Stop/close can find the job while its start record is being saved. Only this
+    // admission phase follows the calling tool's signal; a running job has its own lifetime.
+    const abort = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', abort, { once: true })
     const prepared = Promise.resolve().then(async () => {
       await this.session.host?.background?.({
         type: 'started',
@@ -127,6 +131,7 @@ export class BackgroundJobs implements BackgroundCommands {
       return id
     } catch (error) {
       // A failed/cancelled admission never launches a process or claims it started.
+      job.silent = true
       await this.notifyStopped(job).catch((cleanupError) =>
         this.logger.error(
           `[background] Could not clear ${id}: ${errorMessage(cleanupError)}`,
@@ -134,6 +139,8 @@ export class BackgroundJobs implements BackgroundCommands {
       )
       if (!job.stopped) this.jobs.delete(id)
       throw error
+    } finally {
+      signal?.removeEventListener('abort', abort)
     }
   }
 

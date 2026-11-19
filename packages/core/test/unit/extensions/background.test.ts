@@ -361,35 +361,51 @@ test('failed start persistence rejects without executing or promising a backgrou
   expect(kinds).toEqual(['started', 'stopped'])
 })
 
-test('Stop during start persistence never launches a command', async () => {
-  const root = directory()
-  const gate = Promise.withResolvers<void>()
-  let saving = false
-  const stopped: unknown[] = []
-  const session = sessionStub(root, [], undefined, async (event) => {
-    if (event.type === 'started') {
-      saving = true
-      await gate.promise
-    }
-    if (event.type === 'stopped') stopped.push(event)
-  })
-  const jobs = new BackgroundJobs(session, silentLogger)
-  const starting = startJob(
-    jobs,
-    createLocalExecutionEnv({ cwd: root }),
-    'touch marker',
-  ).then(
-    () => 'started',
-    () => 'cancelled',
-  )
-  await until(() => saving)
-  const stopping = jobs.stopAll()
-  gate.resolve()
-  expect(await starting).toBe('cancelled')
-  await stopping
-  expect(existsSync(join(root, 'marker'))).toBe(false)
-  expect(stopped.length).toBeGreaterThan(0)
-})
+test.each(['signal', 'stopAll'] as const)(
+  '%s during start persistence never launches a command',
+  async (mode) => {
+    const root = directory()
+    const gate = Promise.withResolvers<void>()
+    let saving = false
+    const stopped: unknown[] = []
+    const delivered: string[] = []
+    const session = sessionStub(root, delivered, undefined, async (event) => {
+      if (event.type === 'started') {
+        saving = true
+        await gate.promise
+      }
+      if (event.type === 'stopped') stopped.push(event)
+    })
+    const controller = new AbortController()
+    const jobs = new BackgroundJobs(session, silentLogger)
+    const starting = jobs
+      .adopt({
+        command: 'touch marker',
+        signal: controller.signal,
+        start: ({ onOutput, signal }) =>
+          createLocalExecutionEnv({ cwd: root }).exec(
+            'touch marker',
+            { onOutput },
+            signal,
+          ),
+      })
+      .then(
+        () => 'started',
+        () => 'cancelled',
+      )
+    await until(() => saving)
+    const stopping =
+      mode === 'stopAll' ? jobs.stopAll() : Promise.resolve(controller.abort())
+    gate.resolve()
+    expect(await starting).toBe('cancelled')
+    await stopping
+    expect(existsSync(join(root, 'marker'))).toBe(false)
+    expect(stopped.length).toBeGreaterThan(0)
+    // A cancelled admission promised nothing, so it does not announce an exit either.
+    await Bun.sleep(50)
+    expect(delivered).toEqual([])
+  },
+)
 
 test('stopAll clears host-owned outstanding results without waiting for the queued result turn', async () => {
   const root = directory()

@@ -149,7 +149,8 @@ export async function backgroundBash(
   const outputPath = file.value
   const id = await commands.adopt({
     command,
-    // The job outlives this call: it gets its own signal instead of the tool call's.
+    // Cancelling this call during admission starts nothing; the running job gets its own signal.
+    signal: context?.signal,
     start: ({ onOutput, signal }) =>
       env.exec(command, { timeout, outputPath, onOutput }, signal),
   })
