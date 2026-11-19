@@ -1,9 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
+import { createVela } from '@glows777/vela'
+import { createFauxModel, tempDir } from '@glows777/vela/testing'
 import { local } from '@glows777/vela-channels'
+import type { ExecutionEnv } from '@glows777/vela-core'
 import { fauxText, fauxToolCall } from '@glows777/vela-core/testing'
 import { lark } from '@glows777/vela-lark'
 import z from 'zod'
+import { createLocalExecutionEnv } from '../../packages/core/src/execution/local.ts'
 import { background } from '../../packages/core/src/extensions/background/index.ts'
 import { fakeLark, larkEvent } from '../support/lark.ts'
 import { cleanupTestVelas, createTestVela } from '../support/vela.ts'
@@ -612,6 +616,10 @@ test('a long background command spills in the session environment, and read_file
   await t.run('start the noisy command')
   await until(() => t.model.calls.length === 3, 'the exit turn')
   await until(() => !t.session.isRunning, 'the delivery run to settle')
+  // The start reports the id and the tail it has; it never points at a log that is still empty.
+  const started = t.model.calls[1]!.toolResults[0]!.output
+  expect(started).toContain('Command running in background with ID: bg-1.')
+  expect(started).not.toContain('Full output')
   // The tail the model reads is bounded to the last 2,000 lines; the exit delivery names the file.
   const delivery = t.model.calls[2]!.lastUserText
   expect(delivery).toContain('\n18001\n')
@@ -623,6 +631,104 @@ test('a long background command spills in the session environment, and read_file
   expect((await Bun.file(log).text()).split('\n').length).toBe(20001)
   await t.run('read the log')
   expect(t.model.calls.length).toBe(6)
+})
+
+test('an adapter that only implements the published contract gets its own log named on exit', async () => {
+  const dir = tempDir()
+  // A host adapter written against today's `ExecutionEnv`: it forwards `onOutput` and keeps its own
+  // spill file, which it can name only once the command has finished.
+  const hostEnv = (cwd: string): ExecutionEnv => {
+    const base = createLocalExecutionEnv({ cwd })
+    const adapter: ExecutionEnv = Object.create(base)
+    adapter.exec = async (command, options, signal) => {
+      let collected = ''
+      const result = await base.exec(
+        command,
+        {
+          ...options,
+          spill: undefined,
+          onOutput: (chunk, chunkSignal, info) => {
+            collected += chunk
+            options?.onOutput?.(chunk, chunkSignal, info)
+          },
+        },
+        signal,
+      )
+      const full = await base.createTempFile(
+        { prefix: 'adapter-', suffix: '.log' },
+        signal,
+      )
+      if (!result.ok || !full.ok) return result
+      await base.writeFile(full.value, collected, signal)
+      return { ok: true, value: { ...result.value, spillPath: full.value } }
+    }
+    return adapter
+  }
+  let log = ''
+  const model = createFauxModel({
+    responses: [
+      fauxToolCall('bash', { command: 'seq 1 20000', run_in_background: true }),
+      fauxText('Started it.'),
+      fauxText('The command finished.'),
+      () => fauxToolCall('read_file', { path: log, offset: 1, limit: 2 }),
+      (request) => {
+        expect(request.toolResults[0]!.output).toStartWith('1\n2\n')
+        return fauxText('Read the adapter log.')
+      },
+    ],
+  })
+  const vela = createVela({
+    cwd: dir.path,
+    dataDir: '.data',
+    model,
+    extensions: [background()],
+    env: ({ location }) => hostEnv(location.cwd),
+  })
+  try {
+    const session = vela.session('adapter')
+    await session.prompt('start the noisy command')
+    await until(() => model.calls.length === 3, 'the exit turn')
+    // The start names the job and its tail, never a file that is still empty.
+    const started = model.calls[1]!.toolResults[0]!.output
+    expect(started).toContain('Command running in background with ID: bg-1.')
+    expect(started).not.toContain('Full output')
+    // The exit notification names the file the adapter spilled to, not one the session created.
+    const delivery = model.calls[2]!.lastUserText
+    expect(delivery).toContain('Background command bg-1 finished')
+    log = /Full output: (\S+)/.exec(delivery)?.[1] ?? ''
+    expect(log).toContain('adapter-')
+    expect((await Bun.file(log).text()).trimEnd().split('\n')).toHaveLength(
+      20000,
+    )
+    // The exit started its own turn; wait for it to settle before prompting again.
+    await until(() => !session.isRunning, 'the delivery run to settle')
+    await session.prompt('read the adapter log')
+    expect(model.calls.at(-1)!.toolResults[0]!.output).toStartWith('1\n2\n')
+  } finally {
+    await vela.dispose()
+    dir.cleanup()
+  }
+})
+
+test('a background command with no output says so and names no file', async () => {
+  const t = createTestVela({
+    responses: [
+      fauxToolCall('bash', { command: 'true', run_in_background: true }),
+      fauxText('Started the quiet check.'),
+      (request) => {
+        expect(request.lastUserText).toContain('Output:\n(no output)')
+        // Nothing spilled, so there is no log to point at.
+        expect(request.lastUserText).not.toContain('Full output')
+        return fauxText('The quiet check finished.')
+      },
+    ],
+    extensions: [background()],
+  })
+  await t.run('start the quiet check')
+  await until(() => t.model.calls.length === 3, 'the exit turn')
+  expect(t.model.calls[1]!.toolResults[0]!.output).toContain(
+    'Command running in background with ID: bg-1.',
+  )
 })
 
 test('without the background extension bash refuses run_in_background and starts nothing', async () => {
