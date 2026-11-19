@@ -4,7 +4,11 @@ import { publishChannelEvent } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
 import { materializeAttachments } from './attachments.ts'
 import type { TopicCommands } from './commands.ts'
-import { larkDelivery, sendAnswer } from './delivery.ts'
+import {
+  LarkDeliveryRefusedError,
+  larkDelivery,
+  sendAnswer,
+} from './delivery.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type { RunFeedback } from './feedback.ts'
 import type { GatewayIdle } from './gateway-idle.ts'
@@ -426,6 +430,8 @@ export class GatewayRun {
         aborted: false,
       })
       this.logger.error(`[${channelName}] Reply failed: ${errorMessage(error)}`)
+      if (noticeIdentity && error instanceof LarkDeliveryRefusedError)
+        throw error
       return false
     }
     publishChannelEvent(session, {

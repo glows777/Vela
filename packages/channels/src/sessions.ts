@@ -3,6 +3,7 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
+import { LarkDeliveryRefusedError } from './delivery.ts'
 import {
   type ChannelDirectory,
   type ChannelRecord,
@@ -76,7 +77,7 @@ export class ChannelSessions {
           const entries = await env.listDir(target.cwd)
           if (entries.ok && !entries.value.length)
             text +=
-              ' The workspace is empty. To use the repository, clone it there.'
+              ' The workspace was empty at the time of the move. To use the repository, clone it there.'
         } catch {
           /* An unreadable destination has no verified contents. */
         }
@@ -91,8 +92,13 @@ export class ChannelSessions {
       routine: undefined,
       handoff: undefined,
     }
-    if (await send(address, notice.text!, `move:${notice.token}`))
-      await this.directory.setLocationNotice(key, session.id, undefined)
+    try {
+      if (!(await send(address, notice.text!, `move:${notice.token}`))) return
+    } catch (error) {
+      // An expired or conflicting saved intent must never get a new delivery identity.
+      if (!(error instanceof LarkDeliveryRefusedError)) throw error
+    }
+    await this.directory.setLocationNotice(key, session.id, undefined)
   }
 
   resume(session: VelaSession) {

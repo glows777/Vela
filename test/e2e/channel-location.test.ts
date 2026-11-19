@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela, type VelaOptions } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
@@ -254,49 +254,74 @@ test('a hub with tracked work waits for idle before migration and admission', as
   }
 })
 
-test('a lost migration-notice receipt reuses the original Lark delivery identity and chat anchor on restart', async () => {
-  const dir = tempDir(),
-    g = guest(false)
-  const resolve: VelaOptions['env'] = ({ location }) =>
-    location.environment === 'local'
-      ? createLocalExecutionEnv({ cwd: location.cwd })
-      : g.backend
-  let h = host(dir.path)
-  const attempts: { anchor: string; text: string; uuid?: string }[] = []
-  function intercept(fail: boolean) {
-    const transport: import('@glows777/vela-lark').LarkTransport =
-      h.fake.transport
-    const reply = transport.reply.bind(transport)
-    transport.reply = async (anchor, text, uuid) => {
-      if (text.includes('Moved this session')) {
-        attempts.push({ anchor, text, uuid })
-        if (fail) throw Error('fixture lost receipt')
+test.each([false, true])(
+  'restart settles a lost migration-notice receipt using its original Lark identity (expired=%s)',
+  async (expired) => {
+    const dir = tempDir(),
+      g = guest(false)
+    const resolve: VelaOptions['env'] = ({ location }) =>
+      location.environment === 'local'
+        ? createLocalExecutionEnv({ cwd: location.cwd })
+        : g.backend
+    let h = host(dir.path)
+    const attempts: { anchor: string; text: string; uuid?: string }[] = []
+    function intercept(fail: boolean) {
+      const transport: import('@glows777/vela-lark').LarkTransport =
+        h.fake.transport
+      const reply = transport.reply.bind(transport)
+      transport.reply = async (anchor, text, uuid) => {
+        if (text.includes('Moved this session')) {
+          attempts.push({ anchor, text, uuid })
+          if (fail) throw Error('fixture lost receipt')
+        }
+        return reply(anchor, text, uuid)
       }
-      return reply(anchor, text, uuid)
     }
-  }
-  try {
-    await h.start()
-    await h.input(false, 'seed')
-    await h.vela.dispose()
-    h = host(dir.path, 'blue', resolve)
-    intercept(true)
-    await h.start()
-    const s = await h.input(false, 'move')
-    expect(s.location.environment).toBe('blue')
-    await h.vela.dispose()
-    h = host(dir.path, 'blue', resolve)
-    intercept(false)
-    await h.start()
-    await drainChannels(h.vela)
-    expect(attempts).toHaveLength(2)
-    expect(attempts[1]).toEqual(attempts[0])
-    expect(attempts[0]!.uuid).toBeString()
-    expect(h.model.calls).toHaveLength(0)
-    await h.input(false, 'later')
-    expect(attempts).toHaveLength(2)
-  } finally {
-    await h.vela.dispose()
-    dir.cleanup()
-  }
-})
+    try {
+      await h.start()
+      await h.input(false, 'seed')
+      await h.vela.dispose()
+      h = host(dir.path, 'blue', resolve)
+      intercept(true)
+      await h.start()
+      const s = await h.input(false, 'move')
+      expect(s.location.environment).toBe('blue')
+      await h.vela.dispose()
+      if (expired) {
+        const path = join(dir.path, 'sessions', s.id, 'transcript.jsonl')
+        const lines = readFileSync(path, 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+        const intent = lines.find(
+          (e) =>
+            e.customType === 'channel.lark_delivery' &&
+            e.data?.identity?.startsWith('move:'),
+        )
+        expect(intent).toBeDefined()
+        intent.data.startedAt -= 2 * 60 * 60 * 1000
+        writeFileSync(
+          path,
+          lines.map((e) => JSON.stringify(e)).join('\n') + '\n',
+        )
+      }
+      h = host(dir.path, 'blue', resolve)
+      intercept(false)
+      await h.start()
+      await drainChannels(h.vela)
+      expect(attempts).toHaveLength(expired ? 1 : 2)
+      if (!expired) expect(attempts[1]).toEqual(attempts[0])
+      const index = JSON.parse(
+        readFileSync(join(dir.path, 'channels/index.json'), 'utf8'),
+      )
+      expect(index.records[0].locationNotice).toBeUndefined()
+      expect(attempts[0]!.uuid).toBeString()
+      expect(h.model.calls).toHaveLength(0)
+      await h.input(false, 'later')
+      expect(attempts).toHaveLength(expired ? 1 : 2)
+    } finally {
+      await h.vela.dispose()
+      dir.cleanup()
+    }
+  },
+)
