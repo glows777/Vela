@@ -564,6 +564,11 @@ const longPathHeader = async (page: Page) => {
     'clients/northwind-retail/platform-migration/services/billing/legacy-importer/fixtures/2026-08-nightly/snapshots/2026-08-19/tenant-northwind-eu-west-1/original/transcripts',
   )
   await mkdir(longPath, { recursive: true })
+  // The issue's repro: a folder about 200 characters deep.
+  assert(
+    longPath.length >= 200,
+    `The fixture folder is only ${longPath.length} characters long`,
+  )
   await sidebar.getByRole('button', { name: 'New project' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('Folder path').fill(longPath)
@@ -575,32 +580,35 @@ const longPathHeader = async (page: Page) => {
     .getByRole('heading', { name: 'Long path' })
     .waitFor()
 
-  for (const [size, width, height] of [
-    ['a wider window', 1280, 800],
-    ['800×600', 800, 600],
-  ] as const) {
+  for (const { name, width, height } of [
+    { name: 'wide', width: 1280, height: 800 },
+    { name: 'minimum', width: 800, height: 600 },
+  ]) {
     await page.setViewportSize({ width, height })
     const header = await headerLayout(page, longPath)
     assert.equal(header.name, 'Long path')
     assert.equal(
       header.lines,
       1,
-      `The project name stays on one line at ${size}`,
+      `The project name stays on one line at ${width}×${height}`,
     )
     assert.equal(
       header.textOverflow,
       'ellipsis',
-      `The folder path ellipsizes at ${size}`,
+      `The folder path ellipsizes at ${width}×${height}`,
     )
-    assert(header.clipped, `The long folder path is clipped at ${size}`)
+    assert(
+      header.clipped,
+      `The long folder path is clipped at ${width}×${height}`,
+    )
     assert.equal(
       header.hover,
       longPath,
       'The path names the whole folder when hovered',
     )
     await noOverflow(page)
+    await themes(page, `journey-1-long-path-${name}`)
   }
-  await themes(page, 'journey-1-long-path')
 
   await page.setViewportSize({ width: 1280, height: 800 })
   await sidebar.getByRole('button', { name: 'Alpha Local' }).click()
