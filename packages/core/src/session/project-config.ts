@@ -6,7 +6,10 @@ import type { VelaLogger } from '../logger.ts'
 
 /** Pinned per-session settings; distinct sessions may observe newer project files. */
 export class ProjectConfig {
-  private readonly snapshots = new Map<string, Promise<VelaSettings>>()
+  private readonly snapshots = new Map<
+    string,
+    Promise<{ settings: VelaSettings; project: VelaSettings }>
+  >()
 
   constructor(
     private readonly split: ConfigResourceSplit | undefined,
@@ -27,7 +30,15 @@ export class ProjectConfig {
     this.snapshots.delete(id)
   }
 
-  get(id: string, env: ExecutionEnv): Promise<VelaSettings> {
+  async get(id: string, env: ExecutionEnv): Promise<VelaSettings> {
+    return (await this.snapshot(id, env)).settings
+  }
+
+  async project(id: string, env: ExecutionEnv): Promise<VelaSettings> {
+    return (await this.snapshot(id, env)).project
+  }
+
+  private snapshot(id: string, env: ExecutionEnv) {
     let pending = this.snapshots.get(id)
     if (!pending) {
       const split = this.split
@@ -52,9 +63,9 @@ export class ProjectConfig {
               merged.skills = settings.skills
               merged.prompts = settings.prompts
             }
-            return merged
+            return { settings: merged, project: settings }
           })
-        : Promise.resolve({})
+        : Promise.resolve({ settings: {}, project: {} })
       this.snapshots.set(id, pending)
       void pending.catch(() => {
         if (this.snapshots.get(id) === pending) this.snapshots.delete(id)

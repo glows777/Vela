@@ -125,7 +125,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
   const commandName = (message: string) => message.slice(1).split(/\s/, 1)[0]
   const isExtensionCommand = (message: string) =>
     message.startsWith('/') &&
-    vela.commands().some((c) => c.name === commandName(message))
+    vela.commands(session.id).some((c) => c.name === commandName(message))
   /**
    * A prompt already answered with started: failures before the loop starts (no model, model doesn't support the
    * thinking level, extension hook error) produce no agent_end, so like pi we send another success:false response
@@ -355,7 +355,7 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       return {
         commands: [
           ...vela
-            .commands()
+            .commands(session.id)
             .map((command) => ({ ...command, source: 'extension' as const })),
           ...resources.promptTemplates.map((t) => ({
             name: t.name,
