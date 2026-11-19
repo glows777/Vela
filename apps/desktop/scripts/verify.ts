@@ -1666,7 +1666,7 @@ async function firstRunJourney() {
     await page.getByText('auth.json', { exact: true }).waitFor()
     await page.getByText('models.json', { exact: true }).waitFor()
     checks.push(
-      'Settings › Models shows the saved model, thinking level, key source and the file each row writes.',
+      'Settings › Models shows the saved model and key source, without a thinking level nothing recorded, and the file each row writes.',
     )
     await themes(page, 'journey-6-settings')
 
