@@ -52,6 +52,8 @@ const commandHead = (command: string) => {
 class Foreground {
   /** `withdrawn` is a claim that was rolled back after the run aborted: nothing left to claim. */
   state: 'foreground' | 'moved' | 'withdrawn' = 'foreground'
+  /** When it started in the foreground: a moved job keeps clocking from there in `/tasks`. */
+  readonly startedAt = Date.now()
   /** Set as soon as the command's own result settles: from then on it can no longer be claimed. */
   settled = false
   /** Resolves with the job id and the tail so far once this call is moved */
@@ -262,7 +264,7 @@ export class BackgroundJobs implements BackgroundCommands {
       token: randomUUID(),
       id,
       command: entry.command,
-      startedAt: Date.now(),
+      startedAt: entry.startedAt,
       controller: entry.controller,
       output: entry.output,
       state: 'running',

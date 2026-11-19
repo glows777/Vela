@@ -1356,3 +1356,12 @@ test('Ctrl+B moves the running bash call to the background; the footer counts it
   tui.terminal.press(KEYS.ctrlB)
   await tui.until('No foreground command to background')
 })
+
+test('Ctrl+B before the first prompt says nothing is running instead of refusing the session', async () => {
+  const t = createTestVela({ extensions: [background()] })
+  const tui = await startTui(t.vela)
+  await tui.started
+  tui.terminal.press(KEYS.ctrlB)
+  await tui.until('No foreground command to background')
+  expect(tui.screen()).not.toContain('Background commands are not enabled')
+})

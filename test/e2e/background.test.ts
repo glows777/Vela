@@ -773,16 +773,22 @@ test('without the background extension bash refuses run_in_background and starts
   expect(existsSync(t.path('marker'))).toBe(false)
 })
 
-test('/tasks lists a running job, /tasks stop ends it with its tail, and the footer status follows', async () => {
+test('/tasks and /bashes list running jobs with their tails, stop ends them, and the footer status follows', async () => {
   const notices: string[] = []
   const statuses: (string | undefined)[] = []
   const t = createTestVela({
     responses: [
-      fauxToolCall('bash', {
-        command: 'echo READY; sleep 30',
-        run_in_background: true,
-      }),
-      fauxText('Started the check.'),
+      [
+        fauxToolCall('bash', {
+          command: 'echo READY; sleep 30',
+          run_in_background: true,
+        }),
+        fauxToolCall('bash', {
+          command: 'echo SECOND; sleep 30',
+          run_in_background: true,
+        }),
+      ],
+      fauxText('Started both checks.'),
     ],
     extensions: [background()],
     session: {
@@ -797,19 +803,26 @@ test('/tasks lists a running job, /tasks stop ends it with its tail, and the foo
       },
     },
   })
-  await t.run('start a slow check in the background')
-  expect(statuses).toEqual(['1 background task · bg-1'])
-  // The call returns at admission; the list shows the tail once the command writes it.
+  await t.run('start two slow checks in the background')
+  expect(statuses.at(-1)).toBe('2 background tasks · bg-1, bg-2')
+  // The calls return at admission; the list shows a tail once the commands write it.
   await until(async () => {
-    await t.run('/tasks')
-    return notices.at(-1)!.includes('\n  READY')
-  }, 'the job to write its output')
+    await t.run('/bashes')
+    return (
+      notices.at(-1)!.includes('\n  READY') &&
+      notices.at(-1)!.includes('\n  SECOND')
+    )
+  }, 'both jobs to write their output')
   expect(notices.at(-1)).toMatch(
-    /^\[tasks\] 1 background task\nbg-1 · running · \d+s · \$ echo READY; sleep 30\n {2}READY$/,
+    /^\[tasks\] 2 background tasks\nbg-1 · running · \d+s · \$ echo READY; sleep 30\n {2}READY\n\nbg-2 · running · \d+s · \$ echo SECOND; sleep 30\n {2}SECOND$/,
   )
   await t.run('/tasks stop bg-1')
   expect(notices.at(-1)).toMatch(
     /^bg-1 · stopped · \d+s · \$ echo READY; sleep 30\n {2}READY$/,
+  )
+  await t.run('/tasks stop bg-2')
+  expect(notices.at(-1)).toMatch(
+    /^bg-2 · stopped · \d+s · \$ echo SECOND; sleep 30\n {2}SECOND$/,
   )
   expect(statuses.at(-1)).toBeUndefined()
   await t.run('/tasks')
