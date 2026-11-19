@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect } from 'react'
 import type { Project, Session } from '../../shared/bridge.ts'
@@ -9,13 +9,14 @@ import { Conversation } from '../components/conversation.tsx'
 import { MessageView } from '../components/message.tsx'
 import { StateMark } from '../components/state-mark.tsx'
 import {
+  larkTopicComposer,
   sessionGroups,
   started,
   stateWord,
   visibleMessages,
 } from '../format.ts'
 import type { Snapshot } from '../store.ts'
-import { loadSession, send, stop } from '../store.ts'
+import { loadSession, openLarkChat, sendInSession, stop } from '../store.ts'
 import styles from './session-panel.module.css'
 
 /**
@@ -41,7 +42,11 @@ export function SessionPanel({
   const candidate = sessionId ? snapshot.sessions[sessionId] : undefined
   // A session belongs to the project whose chat started it.
   const session =
-    candidate && candidate.chatId === project.id ? candidate : undefined
+    candidate &&
+    candidate.chatId === project.id &&
+    candidate.channel === project.channel
+      ? candidate
+      : undefined
   return (
     <AnimatePresence>
       {open ? (
@@ -96,13 +101,18 @@ function SessionList({
   onSelect: (sessionId?: string) => void
   onClose: () => void
 }) {
-  const groups = sessionGroups(snapshot, project.id)
+  const groups = sessionGroups(snapshot, project)
+  const lark = project.channel === 'lark'
   return (
     <>
       <header className={styles.head}>
         <div>
           <h2 className={styles.title}>Sessions</h2>
-          <p className={styles.subtle}>Each one runs in this folder.</p>
+          <p className={styles.subtle}>
+            {lark
+              ? 'Each one is a topic in the group.'
+              : 'Each one runs in this folder.'}
+          </p>
         </div>
         <Button
           variant="ghost"
@@ -116,7 +126,9 @@ function SessionList({
       <div className={styles.body}>
         {groups.length === 0 ? (
           <p className={styles.subtle}>
-            No sessions yet. When you ask for bigger work, Vela starts one here.
+            {lark
+              ? 'No topics yet. When you start bigger work, Vela opens a topic in the group.'
+              : 'No sessions yet. When you ask for bigger work, Vela starts one here.'}
           </p>
         ) : (
           groups.map((group) => (
@@ -169,7 +181,9 @@ function SessionDetail({
 
   const progress = snapshot.progress[session.sessionId]
   const failure = snapshot.failures[session.sessionId]
+  const status = snapshot.statuses[session.sessionId]
   const running = session.state === 'running'
+  const lark = project.channel === 'lark'
   return (
     <>
       <header className={styles.head}>
@@ -215,6 +229,19 @@ function SessionDetail({
           <span className={styles.progress}>Retrying</span>
         ) : null}
       </p>
+      {status ? <p className={styles.subtle}>{status}</p> : null}
+      {lark ? (
+        <p className={styles.link}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void openLarkChat(project.id)}
+          >
+            <ExternalLink size={16} aria-hidden="true" />
+            Open the group in Lark
+          </Button>
+        </p>
+      ) : null}
       <div className={styles.body}>
         {failure ? <ErrorCard message={failure.message} /> : null}
         <Conversation
@@ -227,17 +254,23 @@ function SessionDetail({
                 !(message.role === 'system' && message.text === session.task),
             )
             .map((message) => (
-              <MessageView key={message.id} message={message} />
+              <MessageView key={message.id} message={message} group={lark} />
             ))}
         </Conversation>
       </div>
       <Composer
         key={session.sessionId}
-        label="Message in this session"
+        label={lark ? 'Message Vela in this topic' : 'Message in this session'}
         draftKey={`session:${session.sessionId}`}
         running={running}
-        onSend={(text) => send(project.id, session.sessionId, text)}
+        hint={lark ? larkTopicComposer : undefined}
+        onSend={(text) => sendInSession(project, session, text)}
       />
+      {lark && snapshot.error ? (
+        <p className={styles.notice} role="alert">
+          {snapshot.error}
+        </p>
+      ) : null}
     </>
   )
 }

@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react'
 import { Composer } from '../components/composer.tsx'
 import { StateMark } from '../components/state-mark.tsx'
 import {
+  larkStartHint,
   lastUsedProject,
   needsYou,
+  projectName,
   projectOf,
+  projectTag,
   recentSessions,
   stateWord,
 } from '../format.ts'
 import type { Snapshot } from '../store.ts'
-import { send } from '../store.ts'
+import { startSession } from '../store.ts'
 import styles from './home.module.css'
 
 /** What needs you, then recent sessions, then the composer that starts work in a project. */
@@ -70,7 +73,11 @@ export function Home({
                         {session.waitingReason}
                       </span>
                       <span className={styles.meta}>
-                        {[session.task, owner?.name, 'Local']
+                        {[
+                          session.task,
+                          owner ? projectName(owner) : undefined,
+                          owner ? projectTag(owner) : undefined,
+                        ]
                           .filter(Boolean)
                           .join(' · ')}
                       </span>
@@ -104,7 +111,9 @@ export function Home({
                       <StateMark state={session.state} />
                       <span className={styles.rowTitle}>{session.task}</span>
                       <span className={styles.meta}>
-                        {owner ? `${owner.name} · Local` : 'Local'}
+                        {owner
+                          ? `${projectName(owner)} · ${projectTag(owner)}`
+                          : 'Local'}
                       </span>
                       <span className={styles.word}>
                         {stateWord[session.state]}
@@ -128,12 +137,16 @@ export function Home({
               draftKey={`home:${project.id}`}
               focusSignal={focusSignal}
               hint={
-                <>
-                  Runs in <code>{project.cwd}</code> on this computer.
-                </>
+                project.channel === 'lark' ? (
+                  larkStartHint(projectName(project))
+                ) : (
+                  <>
+                    Runs in <code>{project.cwd}</code> on this computer.
+                  </>
+                )
               }
               onSend={async (text) => {
-                const accepted = await send(project.id, project.sessionId, text)
+                const accepted = await startSession(project, text)
                 if (accepted) onOpenProject(project.id)
                 return accepted
               }}
@@ -147,7 +160,7 @@ export function Home({
                 >
                   {snapshot.projects.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.name}
+                      {projectName(item)} · {projectTag(item)}
                     </option>
                   ))}
                 </select>

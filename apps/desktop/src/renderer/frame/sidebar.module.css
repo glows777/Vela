@@ -136,3 +136,45 @@
   padding-top: var(--space-3);
   border-top: 1px solid var(--vela-line);
 }
+
+.connection {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-inline: var(--space-2);
+}
+
+.connectionLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--vela-muted);
+  font-family: var(--vela-family-mono);
+  font-size: var(--text-xs);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--vela-muted);
+}
+
+.connectionLine[data-connected="true"] .dot {
+  background: var(--vela-ink);
+}
+
+.connectionError {
+  margin: 0;
+  overflow: hidden;
+  color: var(--vela-accent-ink);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--vela-family-mono);
+  font-size: var(--text-xs);
+}

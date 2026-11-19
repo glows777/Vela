@@ -101,6 +101,16 @@
   white-space: nowrap;
 }
 
+.link {
+  margin: 0;
+}
+
+.notice {
+  margin: 0;
+  color: var(--vela-accent-ink);
+  font-size: var(--text-sm);
+}
+
 .body {
   display: flex;
   flex: 1;
