@@ -1,6 +1,7 @@
 // Opt in with an owner-provided local image containing node, bash, rg and fd. Never pulls.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tempDir } from '@glows777/vela/testing'
 import type { ExecutionEnv } from '@glows777/vela-core'
@@ -69,6 +70,32 @@ describe.skipIf(!image)('prepared Docker image', () => {
     const b = await open('beta')
     expect(b.id).not.toBe(a.id)
     expect(await b.exists('page')).toEqual({ ok: true, value: false })
+  }, 240000)
+
+  test('the host owner can edit a file created in the isolated workspace', async () => {
+    const name = 'ownership'
+    const env = await open(name)
+    const file = join(
+      dir.path,
+      'environments',
+      owner(name),
+      'workspace',
+      'note',
+    )
+    const sentinel = join(dir.path, 'owner-only')
+    await writeFile(sentinel, 'private fixture')
+    expect(await env.exists(sentinel)).toEqual({ ok: true, value: false })
+    expect(await env.exists('/var/run/docker.sock')).toEqual({
+      ok: true,
+      value: false,
+    })
+    expect((await env.writeFile('note', 'guest')).ok).toBe(true)
+    expect(await readFile(file, 'utf8')).toBe('guest')
+    expect((await stat(file)).uid).toBe(process.getuid!())
+    await writeFile(file, 'host')
+    expect(await env.readTextFile('note')).toEqual({ ok: true, value: 'host' })
+    expect((await env.remove('note', {})).ok).toBe(true)
+    await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
   }, 240000)
 
   test('a failed Docker client call identifies the attempted local socket', async () => {

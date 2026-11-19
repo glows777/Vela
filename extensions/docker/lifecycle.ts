@@ -17,11 +17,11 @@ export async function prepareDocker(
   run: (args: string[]) => Promise<string>,
 ) {
   if (
-    process.platform !== 'linux' ||
+    (process.platform !== 'linux' && process.platform !== 'darwin') ||
     !process.getuid?.() ||
     !process.getgid?.()
   )
-    throw Error('Docker requires a non-root Linux host uid:gid')
+    throw Error('Docker requires a non-root Linux or macOS host uid:gid')
   if (
     typeof o.image !== 'string' ||
     !o.image.trim() ||

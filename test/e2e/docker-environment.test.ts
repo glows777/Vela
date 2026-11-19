@@ -11,7 +11,9 @@ import { dockerOperations } from '../../extensions/docker/operations.ts'
 
 describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
   const ownerTest = test.skipIf(
-    process.platform !== 'linux' || !process.getuid?.() || !process.getgid?.(),
+    (process.platform !== 'linux' && process.platform !== 'darwin') ||
+      !process.getuid?.() ||
+      !process.getgid?.(),
   )
   let dir: ReturnType<typeof tempDir>
   let resultRoot: string
