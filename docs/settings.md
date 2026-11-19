@@ -31,7 +31,7 @@ Resources and defaults are prepared once for the session's location. Opening B b
 
 `dataDir` is a bootstrap exception: the host resolves its storage directory at startup, before it can locate saved sessions. It does not move when a session resumes elsewhere. `serve` continues to ignore project `defaultTools`; channel tool selection retains its existing rules.
 
-This migration covers settings and declared resources only. Project extension instances, project MCP connections, frontend `enabledModels` filtering and the remaining `defaultTools` migration are follow-up work in [#452](https://github.com/glows777/Vela/issues/452); they are not yet isolated by this change. Providers and credentials remain host-level configuration.
+Project extension registrations and configuration-driven MCP connections also follow the prepared session location and configuration snapshot. Sessions at the same location and snapshot share an instance until the last session closes; new sessions see changed settings without mutating existing ones. User custom extensions remain host singletons with user configuration, and explicit SDK/CLI extension factories remain host-owned. Providers, credentials, listeners and `dataDir` remain host-level configuration. CLI `defaultTools` and the model-cycling list (`enabledModels`) come from the prepared session’s user/project settings, including after resume or RPC session switches. Explicit CLI tool flags still apply on top, and the unscoped model picker and `--list-models` still list the host’s available models. If a session switch finds an invalid project tool list, the CLI reports the problem and keeps the current session.
 
 ## Merge rules
 
@@ -68,7 +68,7 @@ Local is opt-in through **user-level** `extensionConfig.local` in `~/.vela/setti
 
 Local always binds `127.0.0.1` and requires Bearer authentication, including SSE and info. It has no cookie authentication or CORS support. The token grants the daemon's configured tool authority. **Do not tunnel Local**; keep it separate from the webhook listener on 8787. Restart the daemon after changes.
 
-An opened Local project's canonical cwd changes its tool working directory, not the daemon configuration or data directory. Opening it does not load its project settings, extensions or skills and is not a sandbox. Registry, deployment identity and visible history live under the daemon's `<dataDir>/local`; channel sessions use the existing stores. Keep the serve working directory/data directory stable across restarts because the CLI default data directory is cwd-specific. See [Local startup and protocol](channels.md#local) for client examples, SDK explicit-token configuration and persistence boundaries. No existing channel-data migration is required.
+An opened Local project's canonical cwd selects its tool directory and trusted project settings, resources and extension snapshot when its session prepares; a denied project uses the user baseline, never the daemon startup project's layer. It does not change the daemon listener configuration or data directory and is not a sandbox. Registry, deployment identity and visible history live under the daemon's `<dataDir>/local`; channel sessions use the existing stores. Keep the serve working directory/data directory stable across restarts because the CLI default data directory is cwd-specific. See [Local startup and protocol](channels.md#local) for client examples, SDK explicit-token configuration and persistence boundaries. No existing channel-data migration is required.
 
 ## Keys
 

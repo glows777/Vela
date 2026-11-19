@@ -113,9 +113,9 @@ export interface SessionDeps<Session> {
   extensions: SessionExtensionHooks<Session>
   /** Session events also go to Vela's subscribers */
   forward: (event: VelaEvent, sessionId: string) => void
-  onClose: (session: Session) => void
+  onClose: (session: Session) => void | Promise<void>
   onSaved: (sessionId: string) => void
-  onCwdChange: (session: Session) => void
+  onCwdChange: (session: Session) => void | Promise<void>
   ensureLocal: (session: Session) => Promise<ExecutionEnv>
   prepareWorkspace: (
     session: Session,

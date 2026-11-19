@@ -25,7 +25,14 @@ export interface InteractiveOptions {
    * Called after a session opens (and resumes): command-line --model / --thinking override saved settings;
    * returns whether the model is usable. `quiet` skips the model diagnostic because the setup wizard runs next.
    */
-  configure: (session: VelaSession, options?: { quiet?: boolean }) => boolean
+  configure: (
+    session: VelaSession,
+    options?: {
+      quiet?: boolean
+      startup?: boolean
+      defaultTools?: readonly string[]
+    },
+  ) => boolean
   /** Called before exit (dispose, write the recording file) */
   onExit: () => Promise<void>
   /** Fake terminal for tests; defaults to the real terminal */

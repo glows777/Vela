@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createVela } from '@glows777/vela'
 import { createFauxModel, fauxText, tempDir } from '@glows777/vela/testing'
 import { loadConfig, type ThinkingLevel } from '@glows777/vela-core'
+import { selectTools } from '../../packages/vela/src/cli/setup.ts'
+import { KEYS, startTui, stopTuis } from '../support/terminal.ts'
 
 function project(cwd: string, label: string, thinking: ThinkingLevel) {
   mkdirSync(join(cwd, '.vela', 'declared-skills', label), { recursive: true })
@@ -178,7 +180,7 @@ test('saved, manual and explicit thinking choices outrank the session project de
   }
 })
 
-test('real CLI launched from A resumes B and expands B declared prompt rather than A', async () => {
+test('real CLI launched from A resumes B and uses B declared prompt and default tools', async () => {
   const dir = tempDir()
   const a = join(dir.path, 'A'),
     b = join(dir.path, 'B'),
@@ -186,6 +188,15 @@ test('real CLI launched from A resumes B and expands B declared prompt rather th
   mkdirSync(home)
   project(a, 'A', 'low')
   project(b, 'B', 'high')
+  for (const [cwd, name] of [
+    [a, 'bash'],
+    [b, 'read_file'],
+  ] as const) {
+    const file = join(cwd, '.vela/settings.json')
+    const original = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...original, defaultTools: [name] }))
+  }
+  writeFileSync(join(b, 'report.txt'), 'B_TOOL_READ_PROOF')
   writeFileSync(
     join(home, 'settings.json'),
     JSON.stringify({ dataDir: join(dir.path, 'data') }),
@@ -196,7 +207,12 @@ test('real CLI launched from A resumes B and expands B declared prompt rather th
   )
   writeFileSync(
     join(home, 'scenario.json'),
-    JSON.stringify({ responses: [{ text: 'done' }] }),
+    JSON.stringify({
+      responses: [
+        { toolCalls: [{ name: 'read_file', input: { path: 'report.txt' } }] },
+        { text: 'done' },
+      ],
+    }),
   )
   const run = async (cwd: string, message: string) => {
     const child = Bun.spawn(
@@ -235,7 +251,92 @@ test('real CLI launched from A resumes B and expands B declared prompt rather th
     const output = await run(a, '/project')
     expect(output).toContain('B_DECLARED_PROMPT')
     expect(output).not.toContain('A_DECLARED_PROMPT')
+    expect(output).toContain('B_TOOL_READ_PROOF')
+    expect(JSON.parse(output.split('\n')[0]!)).toMatchObject({
+      type: 'session',
+      cwd: b,
+    })
   } finally {
     dir.cleanup()
   }
 }, 30000)
+
+test('TUI model cycling uses the active project instead of startup A', async () => {
+  const t = setup()
+  try {
+    writeFileSync(
+      join(t.b, '.vela/settings.json'),
+      JSON.stringify({
+        enabledModels: ['fake/b', 'fake/start'],
+      }),
+    )
+    t.vela.configureProvider('fake', {
+      models: ['a', 'b', 'start'].map((id) => ({ id })),
+      createModel: (id) => createFauxModel({ modelId: id }),
+    })
+    const session = t.vela.session('model-picker', {
+      cwd: t.b,
+      model: 'fake/start',
+    })
+    const tui = await startTui(t.vela, {
+      sessionId: session.id,
+      enabledModels: ['fake/a', 'fake/start'],
+    })
+    await tui.started
+    tui.terminal.press(KEYS.ctrlP)
+    await tui.until(() => session.modelInfo.ref !== 'fake/start')
+    expect(session.modelInfo.ref).toBe('fake/b')
+    tui.terminal.press(KEYS.ctrlP)
+    await tui.until(() => session.modelInfo.ref === 'fake/start')
+  } finally {
+    await stopTuis()
+    await t.vela.dispose()
+    t.dir.cleanup()
+  }
+})
+
+test('TUI rejects invalid project tools on resume without leaving the active session', async () => {
+  const t = setup()
+  try {
+    const b = t.vela.session('saved-b', { cwd: t.b })
+    await b.prompt('A saved message in B')
+    await b.close()
+    const settings = join(t.b, '.vela/settings.json')
+    writeFileSync(
+      settings,
+      JSON.stringify({ defaultTools: ['stale_project_tool'] }),
+    )
+    const tui = await startTui(t.vela, {
+      sessionId: 'active-a',
+      configure: (session, options) => {
+        const selected = selectTools(
+          session.registry.getAllTools().map((tool) => tool.name),
+          { noTools: false, excludeTools: [] },
+          options?.defaultTools,
+        )
+        if (selected?.selection) session.setActiveTools(selected.selection)
+        return true
+      },
+    })
+    await tui.started
+    tui.submit('/resume')
+    await tui.until('Resume Session')
+    tui.terminal.press(KEYS.enter)
+    await tui.until('Unknown tool: stale_project_tool')
+    expect(tui.exited()).toBe(false)
+    expect(tui.screen()).toContain('session active-a')
+    expect(t.vela.sessions().some((session) => session.id === 'saved-b')).toBe(
+      false,
+    )
+    writeFileSync(settings, JSON.stringify({ defaultTools: ['read_file'] }))
+    tui.submit('/resume')
+    await tui.until('Resume Session')
+    tui.terminal.press(KEYS.enter)
+    await tui.until('Resumed session saved-b')
+    expect(t.vela.session('saved-b').getActiveTools()).toContain('read_file')
+  } finally {
+    await stopTuis()
+    await t.vela.dispose()
+    t.dir.cleanup()
+  }
+})

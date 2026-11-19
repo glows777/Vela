@@ -65,6 +65,7 @@ import { createInteractiveTui } from './tui/layout.ts'
 import { captureCliLogs } from './tui/logs.ts'
 import { isModelUsable } from './tui/model-availability.ts'
 import { cycleModel, pickModel, selectModel } from './tui/model-selector.ts'
+import { prepareInteractiveSession } from './tui/session-open.ts'
 import { forkCommand, treeCommand } from './tui/session-tree.ts'
 import { setupWizard } from './tui/setup-wizard.ts'
 import { editorTheme, theme } from './tui/theme.ts'
@@ -282,24 +283,12 @@ export class InteractiveMode {
 
   private async openSession(id: string, resume: boolean, startup = false) {
     const session = this.vela.session(id, { ui: this.ui })
+    const { resources, resumed, resumeFailure, setupNext } =
+      await prepareInteractiveSession(session, this.options, resume, startup)
     this.session = session
     this.resetChat()
-    let resumed = false
-    if (resume) {
-      try {
-        resumed = await session.resume()
-      } catch (error) {
-        this.addNotice(
-          `Failed to resume session: ${errorMessage(error)}`,
-          'error',
-        )
-      }
-    }
-    const resources = await session.resources()
-    const setupNext = startup && Boolean(this.options.agentDir)
-    const silent =
-      setupNext && !isModelUsable(session, this.options.hasUsableModel)
-    this.options.configure(session, { quiet: silent })
+    if (resumeFailure)
+      this.addNotice(`Failed to resume session: ${resumeFailure}`, 'error')
     const modelOk = isModelUsable(session, this.options.hasUsableModel)
     this.refreshCompletion = () =>
       this.editor.setAutocompleteProvider(
@@ -351,8 +340,8 @@ export class InteractiveMode {
     }
     const previous = this.session
     if (id === previous.id) return
-    await previous.close()
     await this.openSession(id, resume)
+    await previous.close()
   }
 
   private async pickSession(): Promise<string | undefined> {
@@ -385,7 +374,7 @@ export class InteractiveMode {
 
   private renderHeader(modelOk: boolean): void {
     this.header.clear()
-    const extensions = this.vela.extensions().map((e) => e.name)
+    const extensions = this.vela.extensions(this.session.id).map((e) => e.name)
     const lines = [
       `${theme.bold(theme.fg('accent', 'Vela'))} ${theme.fg('dim', `session ${this.session.id}`)}`,
       theme.fg(
@@ -894,7 +883,7 @@ export class InteractiveMode {
   private isExtensionCommand(text: string): boolean {
     if (!text.startsWith('/')) return false
     const name = text.slice(1).split(/\s/, 1)[0]
-    return this.vela.commands().some((c) => c.name === name)
+    return this.vela.commands(this.session.id).some((c) => c.name === name)
   }
 
   private async queue(text: string, behavior: 'steer' | 'followUp') {
@@ -987,7 +976,9 @@ export class InteractiveMode {
         await this.copyLastAnswer()
         return
       case '/new':
-        await this.switchSession(this.options.newSessionId(), false)
+        await this.switchSession(this.options.newSessionId(), false).catch(
+          (error) => this.addNotice(errorMessage(error), 'error'),
+        )
         return
       case '/resume': {
         if (this.session.isRunning) {
@@ -998,7 +989,10 @@ export class InteractiveMode {
           return
         }
         const id = await this.pickSession()
-        if (id) await this.switchSession(id, true)
+        if (id)
+          await this.switchSession(id, true).catch((error) =>
+            this.addNotice(errorMessage(error), 'error'),
+          )
         return
       }
       case '/name':
@@ -1210,7 +1204,7 @@ export class InteractiveMode {
     return selectModel(this.modelHost())
   }
   private cycleModel(direction: 1 | -1): void {
-    cycleModel(this.modelHost(), direction)
+    void cycleModel(this.modelHost(), direction)
   }
 
   private authHost() {

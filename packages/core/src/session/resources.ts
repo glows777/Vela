@@ -18,6 +18,9 @@ export interface SessionResources {
   contextFiles: readonly ContextFile[]
   skills: readonly SkillDefinition[]
   promptTemplates: readonly PromptTemplate[]
+  /** Pinned settings for CLI model cycling, not a model availability filter. */
+  enabledModels?: readonly string[]
+  defaultTools?: readonly string[]
 }
 
 /** Internal effective defaults after user/project/explicit-host precedence has been applied. */

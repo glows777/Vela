@@ -35,19 +35,24 @@ vela -e ./hello.ts
 
 There is no build step. Bun imports `.ts` files directly, and Node strips the types (see [TypeScript on Node](#typescript-on-node)).
 
-The factory can be synchronous or `async`. It runs once per Vela instance, not once per session: everything it registers is shared by all sessions, and handlers find out which session fired an event from `ctx.session`. Only register things in the factory. Start long-lived resources (processes, sockets, timers) in a `session_start` handler or a channel's `start()`, and release them in `session_shutdown` or `stop()`.
+The factory can be synchronous or `async`. User extensions, explicitly supplied SDK factories and CLI `-e` extensions are host singletons. A trusted project's extensions belong to that project's prepared configuration snapshot: sessions at the same execution location with the same snapshot share a factory instance. Closing the last attached session runs its `onShutdown` handlers once. `session_start` and `session_shutdown` still run per session; use `onShutdown` for connections shared by an instance.
+
+`api.cwd` (called `vela.cwd` in examples) identifies where the factory instance was loaded. In every event handler, `ctx.cwd` and `ctx.session.cwd` identify the session's directory, including when a user-level extension handles another project. User extension configuration stays fixed at host initialization; project settings cannot reconfigure that singleton. A project factory receives its effective user-plus-project configuration.
+
+Project registrations are isolated, not arbitrary JavaScript execution: A and B may register the same tool or command name independently, but a project cannot override a name already registered by the host. Project `registerProvider` and `registerChannel` calls are reported and refused. Providers, credentials and listeners belong to the host. Module imports retain normal JavaScript caching, so this is neither isolation of module globals nor a security sandbox.
 
 ## Where extensions load from
 
-The CLI loads extensions in this order:
+The CLI composes two sources:
 
-1. Built-in extensions (`background`, `memory`, `todo`, `rag`, `web`, `lark`, `mcp`). All seven are on by default.
-2. `~/.vela/extensions/` (or `$VELA_DIR/extensions/`).
-3. `<cwd>/.vela/extensions/`, only when the project is trusted (see [Project trust](settings.md#project-trust)).
-4. Paths listed in the `extensions` array of `settings.json`, user settings before project settings.
-5. `-e, --extension <path>` on the command line (repeatable).
+- **Host:** the Lark listener, storage-owning `memory` and `rag`, user-discovered extensions, user-listed extensions, and explicit `-e` extensions. Configure `memory` and `rag` in the user settings: they share the host data directory and survive the close of an individual project session. Explicit SDK factories are host-owned too.
+- **Selected project:** configuration-driven `background`, `todo`, `web` and local `mcp` built-ins, followed by the trusted session project's discovered and listed files. Built-ins come first within their scope. A denied project contributes no project code or settings; user configuration still applies.
 
-In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension (`*.d.ts` is skipped), and each subdirectory with an `index.ts`, `index.js` or `index.mjs` is one extension. A directory that itself has an index file is a single extension. A file loaded twice (for example discovered and also passed with `-e`) loads once. The auto-discovered directories may be missing.
+Handlers run in stable **host → matching project → core** order. Core audit handlers remain last. Compared with the old flat startup list, user-listed host extensions now precede project-discovered extensions. Opening B does not dispatch A's project handlers for B or change A's registrations.
+
+Project preparation happens at start, resume and relocation, not every wake. An open session keeps its snapshot when settings or MCP configuration changes; a new session gets the new snapshot. The CLI loader keeps the available built-ins in a non-local snapshot, but skips project code and scoped MCP with a diagnostic; neither imports nor spawns on the host. This does not enable remote execution environments (E3).
+
+In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension (`*.d.ts` is skipped), and each subdirectory with an `index.ts`, `index.js` or `index.mjs` is one extension. A directory that itself has an index file is a single extension. Repeated discovered/listed file paths are deduplicated within their source scope; explicitly loaded CLI extension names take precedence over configurable discovery. The auto-discovered directories may be missing.
 
 `settings.json` entries are resolved relative to the settings file, and `~` expands to the home directory. A missing path is a config error. The same array turns built-ins on and off:
 
@@ -64,7 +69,7 @@ In a discovered directory, each `*.ts`, `*.js` or `*.mjs` file is one extension 
 | `-builtin:<name>` | Do not load this built-in |
 | `builtin:<name>` or `+builtin:<name>` | Load this built-in again, for example in a project after the user settings disabled it |
 
-The `builtin:` switches apply in order, user settings first, so a project can re-enable what the user disabled and the other way round. An unknown built-in name is a config error.
+For session-capable built-ins, `builtin:` switches apply in order, user settings first, so a project can re-enable what the user disabled and the other way round. Host-owned listener configuration is not relocated with a session. An unknown built-in name is a config error.
 
 `--no-extensions` (or `-ne`) skips configurable built-ins, discovered extensions and those listed in settings. Extensions passed with `-e` still load, and `-e builtin:<name>` loads a single built-in:
 
@@ -72,9 +77,11 @@ The `builtin:` switches apply in order, user settings first, so a project can re
 vela --no-extensions -e builtin:memory -e ./hello.ts
 ```
 
-When an extension fails to import or its factory throws, the CLI prints `[extensions] Failed to load <path>: <error>` to stderr and starts without it. Tools and commands it registered before failing stay registered. (The SDK is stricter: a synchronous throw makes `createVela()` throw, and a failed async factory makes `vela.ready()` and `prompt()` reject.)
+For host extensions, when an extension fails to import or its factory throws, the CLI prints `[extensions] Failed to load <path>: <error>` to stderr and starts without it. Tools and commands it registered before failing stay registered. (The SDK is stricter: a synchronous throw makes `createVela()` throw, and a failed async factory makes `vela.ready()` and `prompt()` reject.)
 
-`/extensions` in interactive mode lists loaded extensions with their tools, commands and channels. See [CLI](cli.md) and [Settings](settings.md) for the full flag and settings reference.
+A project initialization failure blocks preparation of that project and disposes its partial instance; it does not silently publish partial project registrations.
+
+`/extensions` in interactive mode prepares and lists the active session's host and project extensions with their tools, commands and channels. See [CLI](cli.md) and [Settings](settings.md) for the full flag and settings reference.
 
 ### Extension name
 
@@ -98,17 +105,17 @@ The factory's argument (`vela` below) is an `ExtensionAPI`:
 
 | Member | What it is |
 |---|---|
-| `vela.cwd` | Working directory for tools |
-| `vela.dataDir` | Vela's data directory for this project. Keep an extension's own files in `<dataDir>/<extension name>/` |
+| `vela.cwd` | Directory this extension instance was loaded for: host cwd for user/SDK/explicit extensions, project cwd for project instances |
+| `vela.dataDir` | Host-side durable data directory, unchanged by session relocation. Keep an extension's own files in `<dataDir>/<extension name>/`; project instances do not receive isolated storage directories |
 | `vela.config` | This extension's config section (see [Configuration](#configuration)); `{}` when none |
 | `vela.logger` | Logger (`debug`, `info`, `warn`, `error`). In the CLI it goes to stderr, or to the chat log in interactive mode |
 | `vela.registerTool(tool)` | Add a tool the model can call. Returns the registered name |
 | `vela.unregisterTool(name)` | Remove a tool this extension registered, by its registered name |
 | `vela.registerCommand(name, command)` | Add a `/name` command |
-| `vela.registerProvider(name, provider)` | Add a model provider |
-| `vela.registerChannel(channel)` | Add a message channel |
+| `vela.registerProvider(name, provider)` | Add a host model provider; project instances are diagnosed and refused |
+| `vela.registerChannel(channel)` | Add a host message channel; project instances are diagnosed and refused |
 | `vela.on(event, handler)` | Subscribe to an event. Returns a function that unsubscribes |
-| `vela.onShutdown(handler)` | Run once when the Vela is disposed, after all sessions closed: close resources shared by all sessions, such as server connections. Errors are logged and collected by `dispose()` after all handlers run |
+| `vela.onShutdown(handler)` | Run once when this instance is disposed: at host disposal for host factories, or after the last attached session closes for a project snapshot. Close resources shared by that instance, such as server connections |
 
 ### registerTool
 
@@ -339,7 +346,7 @@ Handlers and command handlers receive a context as their second argument:
 | `ctx.session` | The session that fired the event: `id`, `name`, `model`, `messages`, `getActiveTools()`, `setActiveTools(names)`, `setModel()`, `prompt()`, ... (see [SDK](sdk.md)) |
 | `ctx.ui` | How to talk to the user (below) |
 | `ctx.hasUI` | Whether `confirm`, `select` and `input` can actually ask someone |
-| `ctx.cwd` | Working directory |
+| `ctx.cwd` | The current session's working directory, for both host and project handlers |
 | `ctx.signal` | Abort signal of the running turn; `undefined` when the session is idle. In a command handler it is the command's own signal |
 
 `ctx.session.setActiveTools(names)` limits the tools of that one session; `undefined` restores all. Unknown names are ignored.
@@ -374,7 +381,7 @@ Handlers and command handlers receive a context as their second argument:
 const baseUrl = typeof vela.config.baseUrl === 'string' ? vela.config.baseUrl : 'http://localhost:11434/v1'
 ```
 
-The object is frozen and its values are `unknown`; validate them. Project settings deep-merge over user settings. With the SDK, pass `createVela({ extensionConfig: { 'local-provider': { ... } } })`. See [Settings](settings.md).
+The object is frozen and its values are `unknown`; validate them. For project instances, project settings deep-merge over user settings. User custom extension singletons keep their user configuration; project overrides targeting them are ignored with a diagnostic. Explicit CLI extensions retain their startup configuration. With the SDK, pass `createVela({ extensionConfig: { 'local-provider': { ... } } })`. See [Settings](settings.md).
 
 ## Using extensions from the SDK
 

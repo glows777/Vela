@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileCredentialStore } from '../auth/store.ts'
 import type { CredentialStore } from '../auth/types.ts'
 import type { ProviderDefinition } from '../models/index.ts'
@@ -10,6 +10,11 @@ import {
   loadContextFiles,
 } from '../prompt/context-files.ts'
 import type { ExtensionConfigDefinition } from './extension-config.ts'
+import {
+  discoverExtensions,
+  type ExtensionEntry,
+  resolveExtensionEntries,
+} from './extension-discovery.ts'
 import { interpolateDeep } from './interpolate.ts'
 import { loadModels } from './models.ts'
 import { defaultAgentDir, projectDataDir, resolveConfigPath } from './paths.ts'
@@ -24,12 +29,9 @@ import {
   type VelaSettings,
 } from './settings-values.ts'
 
+export type { ExtensionEntry } from './extension-discovery.ts'
+export { extensionName } from './extension-discovery.ts'
 export type { VelaSettings } from './settings-values.ts'
-
-/** An extension to load: built-ins by name, others by file path. */
-export type ExtensionEntry =
-  | { name: string; builtin: true }
-  | { name: string; path: string }
 
 export interface LoadConfigOptions {
   /** @internal Vela frontends select these files when preparing each session. */
@@ -156,29 +158,15 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
   }
   const settings = layers.reduce<VelaSettings>(mergeSettings, {})
 
-  // Built-ins: all by default except defaultOffBuiltins; apply ±builtin: in user → project order
-  const builtins = new Set(options.builtins ?? [])
-  const disabled = new Set(options.defaultOffBuiltins ?? [])
-  const paths: string[] = [
-    ...discoverExtensions(join(agentDir, 'extensions')),
-    ...(trusted ? discoverExtensions(join(projectDir, 'extensions')) : []),
-  ]
-  for (const entry of settings.extensions ?? []) {
-    const builtin = /^([+-]?)builtin:(.+)$/.exec(entry)
-    if (builtin) {
-      const [, sign, name] = builtin as unknown as [string, string, string]
-      if (!builtins.has(name))
-        throw new Error(`Unknown built-in extension builtin:${name}`)
-      if (sign === '-') disabled.add(name)
-      else disabled.delete(name)
-    } else paths.push(...discoverExtensions(entry, true))
-  }
-  const extensions: ExtensionEntry[] = [
-    ...[...builtins]
-      .filter((name) => !disabled.has(name))
-      .map((name) => ({ name, builtin: true as const })),
-    ...[...new Set(paths)].map((path) => ({ name: extensionName(path), path })),
-  ]
+  const extensions = resolveExtensionEntries(
+    settings.extensions ?? [],
+    [
+      ...discoverExtensions(join(agentDir, 'extensions')),
+      ...(trusted ? discoverExtensions(join(projectDir, 'extensions')) : []),
+    ],
+    options.builtins ?? [],
+    options.defaultOffBuiltins ?? [],
+  )
 
   // Project skills and prompts need trust like project extensions (pi skips .pi/skills, .agents/skills and
   // .pi/prompts when untrusted). Run from the home directory, `.skills` next to ~/.vela counts as user-level.
@@ -224,6 +212,16 @@ export function loadConfig(options: LoadConfigOptions = {}): VelaConfig {
       agentDir,
       cwd,
       userSettings,
+      hostExtensions: resolveExtensionEntries(
+        userSettings.extensions ?? [],
+        discoverExtensions(join(agentDir, 'extensions')),
+        options.builtins ?? [],
+        options.defaultOffBuiltins ?? [],
+      ),
+      extensionBuiltins: {
+        names: [...(options.builtins ?? [])],
+        defaultOff: [...(options.defaultOffBuiltins ?? [])],
+      },
       env: { ...env },
       userContextFiles: userContext ? [userContext] : [],
       hostSkillDirs,
@@ -306,52 +304,4 @@ function readSettings(file: string): VelaSettings | undefined {
   return parseSettings(readFileSync(file, 'utf-8'), file, (item) =>
     resolveConfigPath(dirname(file), item),
   )
-}
-
-const EXTENSION_FILE = /\.(ts|js|mjs)$/
-
-/**
- * Expands an extension path into entry files: a file is itself; a directory with
- * index.ts / index.js is one extension; in any other directory, each `*.ts` and each
- * subdirectory with an index is one extension. With `explicit`, a missing path throws.
- */
-function discoverExtensions(path: string, explicit = false): string[] {
-  if (!existsSync(path)) {
-    if (explicit) throw new Error(`Extension path does not exist: ${path}`)
-    return []
-  }
-  if (!statSync(path).isDirectory()) return [path]
-  const index = indexFile(path)
-  if (index) return [index]
-  const found: string[] = []
-  for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
-    const full = join(path, entry.name)
-    if (
-      entry.isFile() &&
-      EXTENSION_FILE.test(entry.name) &&
-      !entry.name.endsWith('.d.ts')
-    )
-      found.push(full)
-    else if (entry.isDirectory()) {
-      const nested = indexFile(full)
-      if (nested) found.push(nested)
-    }
-  }
-  return found
-}
-
-function indexFile(dir: string): string | undefined {
-  for (const name of ['index.ts', 'index.js', 'index.mjs']) {
-    const file = join(dir, name)
-    if (existsSync(file)) return file
-  }
-}
-
-/** Extension name: the file name without extension, or the directory name for index files. Sets the tool prefix and config section. */
-/** @experimental Shared frontend contract. */
-export function extensionName(path: string): string {
-  const file = basename(path, extname(path))
-  return file === 'index' ? basename(dirname(path)) : file
 }
