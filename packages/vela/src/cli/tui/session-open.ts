@@ -9,7 +9,12 @@ export async function prepareInteractiveSession(
   options: InteractiveOptions,
   resume: boolean,
   startup: boolean,
-) {
+): Promise<{
+  resources: Awaited<ReturnType<VelaSession['resources']>>
+  resumed: boolean
+  resumeFailure?: string
+  setupNext: boolean
+}> {
   let resumed = false
   let resumeFailure: string | undefined
   if (resume) {
