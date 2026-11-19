@@ -75,6 +75,7 @@ export class SessionStore {
   private started = false
   /** Whether storage was checked for (or loaded) an earlier session with this id */
   private checked = false
+  private unknownLocation?: Error
   /** Entries waiting to be written, in order */
   private readonly pending: SessionFileEntry[] = []
   private writing: Promise<void> = Promise.resolve()
@@ -88,7 +89,7 @@ export class SessionStore {
     /** Tool history lives in a temp dir (custom storage without dataDir): if it is gone on resume, start over instead of failing */
     private readonly temporaryResults = false,
     private readonly cwd?: string,
-    private readonly location?: ExecutionLocation,
+    private location?: ExecutionLocation,
     /** Internal notification after an actual storage write (not an empty flush). */
     private readonly onSaved?: () => void,
   ) {
@@ -148,6 +149,58 @@ export class SessionStore {
       return this.flush()
     this.append({ type: 'session_archived', archived })
     await this.flush()
+  }
+
+  assertLocationKnown(): void {
+    if (this.unknownLocation) throw this.unknownLocation
+  }
+
+  /** Write a relocation outside the normal retry queue: a rejected move must never replay on save. */
+  async persistLocation(location: ExecutionLocation): Promise<void> {
+    if (!this.started) {
+      await this.checkNew()
+      if (!this.started) this.startTranscript()
+    }
+    // Reserve a slot on the same write chain as names, routing and transcript entries.
+    // A rejected move releases that slot without adding its marker to the retry queue.
+    const parentId = this.leafId
+    const commit = this.flush().then(() =>
+      this.appendLocation(location, parentId),
+    )
+    this.writing = commit.catch(() => {})
+    await commit
+  }
+
+  private async appendLocation(
+    location: ExecutionLocation,
+    parentId: string | null,
+  ): Promise<void> {
+    // Session-wide metadata uses a separate ID namespace from ordinary branch entries.
+    const marker = {
+      type: 'custom' as const,
+      customType: 'vela.session.location',
+      data: location,
+      id: `location:${crypto.randomUUID()}`,
+      parentId,
+      timestamp: new Date().toISOString(),
+    }
+    try {
+      await this.storage.append(this.sessionId, [marker])
+    } catch (error) {
+      // A storage implementation can lose the acknowledgement after a successful write.
+      const saved = await this.storage
+        .load(this.sessionId)
+        .catch((readError) => {
+          this.unknownLocation = new Error(
+            'Session location is unknown. Call resume() when storage is available.',
+            { cause: new AggregateError([error, readError]) },
+          )
+          throw this.unknownLocation
+        })
+      if (!saved?.some((entry) => entry.id === marker.id)) throw error
+    }
+    this.location = location
+    this.saved()
   }
 
   /** The current leaf (like pi's getLeafId); null when the session has no entries or the leaf was reset. */
@@ -345,20 +398,24 @@ export class SessionStore {
       // Like pi: setup entries (model, thinking level, name) and extension state stay in memory until there is
       // a conversation
       if (!startsConversation(entry)) return
-      this.started = true
-      this.header ??= {
-        type: 'session',
-        version: SESSION_FORMAT_VERSION,
-        id: this.sessionId,
-        timestamp: new Date().toISOString(),
-        ...(this.cwd ? { cwd: this.cwd } : {}),
-        ...(this.location ? { location: this.location } : {}),
-        ...(this.channel ? { channel: this.channel } : {}),
-        toolHistoryId: this.results.historyId,
-      }
-      this.pending.push(this.header, ...this.entries)
+      this.startTranscript()
     } else this.pending.push(entry)
     this.writing = this.writing.then(() => this.write())
+  }
+
+  private startTranscript() {
+    this.started = true
+    this.header ??= {
+      type: 'session',
+      version: SESSION_FORMAT_VERSION,
+      id: this.sessionId,
+      timestamp: new Date().toISOString(),
+      ...(this.cwd ? { cwd: this.cwd } : {}),
+      ...(this.location ? { location: this.location } : {}),
+      ...(this.channel ? { channel: this.channel } : {}),
+      toolHistoryId: this.results.historyId,
+    }
+    this.pending.push(this.header, ...this.entries)
   }
 
   /** Appends what is pending; on failure keeps it for the next attempt (never rejects). */
@@ -541,6 +598,7 @@ export class SessionStore {
   > {
     const loaded = await this.storage.load(this.sessionId)
     if (!loaded?.length) {
+      this.assertLocationKnown()
       this.checked = true
       return
     }
@@ -558,12 +616,34 @@ export class SessionStore {
       )
     if ('location' in header) validateStoredLocation(header.location)
     // A write retried after it failed part way can repeat entries: the first copy of each id counts
+    let location = header.location
     const seen = new Set<string>()
-    const entries = (loaded.slice(1) as SessionEntry[]).filter(
-      (entry) =>
-        typeof entry.id !== 'string' ||
-        (!seen.has(entry.id) && !!seen.add(entry.id)),
-    )
+    const markerParents = new Map<string, string | null>()
+    const entries: SessionEntry[] = []
+    for (const entry of loaded.slice(1) as SessionEntry[]) {
+      if (typeof entry.id === 'string') {
+        if (seen.has(entry.id)) continue
+        seen.add(entry.id)
+      }
+      // External storage consumers (such as archive) may append under the last physical
+      // record. Reconnect that edge when removing session metadata from the branch.
+      const parentId =
+        entry.parentId && markerParents.has(entry.parentId)
+          ? markerParents.get(entry.parentId)!
+          : entry.parentId
+      if (
+        entry.type === 'custom' &&
+        entry.customType === 'vela.session.location' &&
+        entry.id?.startsWith('location:')
+      ) {
+        validateStoredLocation(entry.data)
+        location = entry.data
+        markerParents.set(entry.id, parentId)
+      } else
+        entries.push(
+          entry.parentId === parentId ? entry : { ...entry, parentId },
+        )
+    }
     // Like pi: the leaf is the last entry
     const context = buildSessionContext(entries, entries.at(-1)?.id ?? null)
     if (header.toolHistoryId) {
@@ -582,6 +662,7 @@ export class SessionStore {
       }
     }
     this.header = header
+    this.location = location
     const channel = summarizeSession(this.sessionId, [
       header,
       ...entries,
@@ -593,8 +674,9 @@ export class SessionStore {
     this.producers = context.producers
     this.started = true
     this.checked = true
+    this.unknownLocation = undefined
     this.pending.length = 0
-    return { ...context, channel, location: header.location }
+    return { ...context, channel, location }
   }
 }
 

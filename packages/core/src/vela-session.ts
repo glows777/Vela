@@ -14,11 +14,11 @@ import {
   createRequestSnapshot,
   type RequestSnapshot,
 } from './context/request.ts'
-import { abortable, localCwd } from './execution/location.ts'
+import { abortable, resolveLocation } from './execution/location.ts'
+import type { ExecutionLocation } from './execution/types.ts'
 import type {
   BeforeAgentStartResult,
   InputSource,
-  TreePreparation,
 } from './extensions/events.ts'
 import { withProviderHooks } from './extensions/provider-hooks.ts'
 import { type ExtensionUI, headlessUI, withDefaults } from './extensions/ui.ts'
@@ -34,6 +34,13 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { PromptContext, SystemPromptBuilder } from './prompt/index.ts'
+import {
+  cloneLeaf,
+  copyFork,
+  forkPoint,
+  prepareTree,
+  selectTreeBranch,
+} from './session/branch-selection.ts'
 import { SessionDefaultState } from './session/defaults.ts'
 import type {
   SessionDeps as SessionDependencies,
@@ -42,8 +49,6 @@ import type {
 import { waitForDrain } from './session/drain.ts'
 import {
   assertCustomType,
-  type BranchSummaryEntry,
-  messageText as contentText,
   type SessionContext,
   type SessionEntry,
   type SessionTreeNode,
@@ -70,10 +75,10 @@ import {
   pendingToolCalls,
   reconcileInterruptedTools,
 } from './session/recovery.ts'
+import { switchWorkspace } from './session/relocation.ts'
 import type { SessionResources } from './session/resources.ts'
 import * as routing from './session/routing.ts'
 import type { SessionScope } from './session/scope.ts'
-import { newSessionId } from './session/session-id.ts'
 import {
   type SessionPersistence,
   sessionArtifactsUseDataDir,
@@ -99,6 +104,62 @@ export class VelaSession {
   readonly id: string
   /** Effective working directory; not a filesystem sandbox. */
   readonly cwd: string
+
+  private position: Readonly<ExecutionLocation>
+  private moving = false
+
+  /** Current trusted execution target, restored from the session transcript. */
+  get location(): Readonly<ExecutionLocation> {
+    return this.position
+  }
+
+  /** Prepare and persist an idle session's target before switching its prompt and tools. */
+  async setLocation(location: ExecutionLocation): Promise<void> {
+    this.store.assertLocationKnown()
+    if (!location) throw new Error('Invalid execution location')
+    const target = resolveLocation(location, this.deps.cwd)
+    return this.locationTask((signal) => this.switchLocation(target, signal))
+  }
+
+  private locationTask<T>(
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (
+      this.isBashRunning ||
+      this.hasWork ||
+      this.commands.size ||
+      this.registry.hasActiveCalls
+    )
+      return Promise.reject(new Error('Session is busy'))
+    return this.exclusive('change or restore location', async (signal) => {
+      this.moving = true
+      try {
+        return await task(signal)
+      } finally {
+        this.moving = false
+      }
+    })
+  }
+
+  private switchLocation(
+    target: Readonly<ExecutionLocation>,
+    moveSignal?: AbortSignal,
+  ) {
+    return switchWorkspace(
+      this,
+      this.deps,
+      target,
+      this.started,
+      () => {
+        this.position = target
+        Object.assign(this, { cwd: target.cwd })
+        this.started = undefined
+        this.turn = { sections: {}, messages: [] }
+      },
+      moveSignal,
+    )
+  }
+
   /** Limits in effect (recomputed from the new model's context window on model switch) */
   readonly limits: VelaLimits
   /** Message history (in order). SDK users should treat it as read-only and use append() to add. */
@@ -111,7 +172,7 @@ export class VelaSession {
   readonly tracker: TokenTracker
   /** @internal */ readonly contextManager: ContextManager
   /** @internal */ execEnv = (signal?: AbortSignal) =>
-    abortable(this.deps.ensureLocal(this), signal)
+    abortable(this.deps.resolveExecution(this), signal)
   /** @internal This session's registry: shared tool definitions, separate tool results and discovered deferred tools */
   readonly registry: ToolRegistry
   /** @internal Run lock: held while any agent loop (prompt, skill, dream, defend, ingest) runs */
@@ -151,7 +212,12 @@ export class VelaSession {
   constructor(id: string, deps: SessionDeps, options: SessionOptions = {}) {
     assertSessionId(id)
     this.id = id
-    this.cwd = localCwd(options.location, deps.cwd, options.cwd)
+    this.position = resolveLocation(options.location, deps.cwd, options.cwd)
+    this.cwd = this.position.cwd
+    if (this.position.environment !== 'local' && !deps.hasResolver)
+      throw new Error(
+        `Execution environment unavailable for ${this.position.environment}:${this.cwd}`,
+      )
     this.deps = deps
     this.options = options
     this.defaults = new SessionDefaultState(deps, options)
@@ -164,7 +230,7 @@ export class VelaSession {
       deps.sessionStorage,
       deps.temporaryDataDir,
       this.cwd,
-      { environment: 'local', cwd: this.cwd },
+      this.location,
       () => deps.onSaved(id),
     )
     this.hasUI = options.ui !== undefined
@@ -174,7 +240,7 @@ export class VelaSession {
       sessionId: id,
       scope: () => this.scope,
     })
-    this.registry.isDraining = () => this.draining
+    this.registry.isDraining = () => this.draining || this.moving
     routing.applySessionRouting(this, options)
     const toolListError = options.tools
       ? getToolListError(options.tools)
@@ -591,26 +657,12 @@ export class VelaSession {
     if (targetId === oldLeafId && !isUser) return { cancelled: false }
     return this.exclusive('navigate the session tree', async (signal) => {
       await this.start(signal)
-      const oldBranch = this.store.getBranch(oldLeafId)
-      const targetIds = new Set(
-        this.store.getBranch(targetId).map((entry) => entry.id),
-      )
-      let common = -1
-      while (
-        common + 1 < oldBranch.length &&
-        targetIds.has((oldBranch[common + 1] as SessionEntry).id)
-      )
-        common++
-      const commonAncestorId = oldBranch[common]?.id ?? null
-      const preparation: TreePreparation = {
+      const { oldBranch, common, preparation } = prepareTree(
+        this.store,
         targetId,
         oldLeafId,
-        commonAncestorId,
-        entriesToSummarize: oldBranch.slice(common + 1),
-        userWantsSummary: options.summarize ?? false,
-        ...(options.focus ? { focus: options.focus } : {}),
-        ...(options.label ? { label: options.label } : {}),
-      }
+        options,
+      )
       const hook = await this.deps.extensions.beforeTree(
         this,
         preparation,
@@ -638,29 +690,16 @@ export class VelaSession {
           }
         }
       }
-      let newLeafId: string | null = targetId
-      let editorText: string | undefined
-      if (isUser) {
-        newLeafId = target.parentId
-        editorText = contentText(target.message.content)
-      }
-      let summaryEntry: BranchSummaryEntry | undefined
-      if (summary) {
-        summaryEntry = this.store.branchWithSummary(newLeafId, summary)
-        if (label) this.store.appendLabelChange(summaryEntry.id, label)
-      } else {
-        this.store.branch(newLeafId)
-        if (label) this.store.appendLabelChange(targetId, label)
-      }
-      await this.loadBranch(this.store.buildContext())
-      await this.deps.extensions.tree(this, {
-        type: 'session_tree',
-        newLeafId: this.store.getLeafId(),
+      const { editorText, event } = selectTreeBranch(
+        this.store,
+        target,
         oldLeafId,
-        ...(summaryEntry
-          ? { summaryEntry: structuredClone(summaryEntry), fromExtension }
-          : {}),
-      })
+        summary,
+        label,
+        fromExtension,
+      )
+      await this.loadBranch(this.store.buildContext())
+      await this.deps.extensions.tree(this, event)
       await this.saveOrReport()
       return {
         ...(editorText === undefined ? {} : { editorText }),
@@ -723,65 +762,26 @@ export class VelaSession {
    */
   async fork(entryId: string, options: ForkOptions = {}): Promise<ForkResult> {
     const position = options.position ?? 'before'
-    const entry = this.store.getEntry(entryId)
-    if (!entry) throw new Error(`Entry ${entryId} is not in the session`)
-    let leafId: string | null = entryId
-    let selectedText: string | undefined
-    if (position === 'before') {
-      if (entry.type !== 'message' || entry.message.role !== 'user')
-        throw new Error(`Entry ${entryId} is not a user message to fork from`)
-      leafId = entry.parentId
-      selectedText = contentText(entry.message.content)
-    }
-    // Holds the run lock so no prompt appends to this session (or its tool history) while it is copied
+    const point = forkPoint(this.store, entryId, position)
     return this.exclusive('fork', async (signal) => {
       await this.start(signal)
       if (await this.deps.extensions.beforeFork(this, entryId, position))
         return { cancelled: true }
-      const branch = leafId === null ? [] : this.store.getBranch(leafId)
-      // A copy answers nowhere: routing authority stays with the session it was copied from.
-      const unrouted = routing.unroutedOptions(this.options)
-      const session = this.deps.openSession(
-        options.sessionId ?? newSessionId(),
-        {
-          ...unrouted,
-          location: { environment: 'local', cwd: this.cwd },
-          model: this.defaults.modelChoice,
-          thinkingLevel: this.defaults.thinking,
-          autoCompaction: this.autoCompaction,
-        },
-      )
-      try {
-        await session.seedFrom(this, branch)
-      } catch (error) {
-        await session.close()
-        throw error
-      }
-      return {
-        cancelled: false,
-        session,
-        ...(selectedText === undefined ? {} : { selectedText }),
-      }
+      return copyFork(this, point, options.sessionId, this.deps.openSession, {
+        ...routing.unroutedOptions(this.options),
+        location: this.location,
+        model: this.defaults.modelChoice,
+        thinkingLevel: this.defaults.thinking,
+        autoCompaction: this.autoCompaction,
+      })
     })
   }
 
   /** Copies the current branch into a new session (like pi's /clone, a fork at the leaf). */
-  clone(options: Omit<ForkOptions, 'position'> = {}): Promise<ForkResult> {
-    const leafId = this.store.getLeafId()
-    // Setup entries (model, thinking level) alone are not a conversation to copy
-    const hasConversation = this.store
-      .getBranch()
-      .some(
-        (entry) =>
-          entry.type === 'custom_message' ||
-          entry.type === 'bash_execution' ||
-          (entry.type === 'message' &&
-            (entry.message.role === 'user' ||
-              entry.message.role === 'assistant')),
-      )
-    if (!leafId || !hasConversation)
-      return Promise.reject(new Error('Nothing to clone yet'))
-    return this.fork(leafId, { ...options, position: 'at' })
+  async clone(
+    options: Omit<ForkOptions, 'position'> = {},
+  ): Promise<ForkResult> {
+    return this.fork(cloneLeaf(this.store), { ...options, position: 'at' })
   }
 
   /** @internal Starts this new session as a copy of `parent`'s branch (fork / clone). */
@@ -814,7 +814,7 @@ export class VelaSession {
     return exportBranch({
       id: this.id,
       baseCwd: this.deps.cwd,
-      sessionCwd: this.cwd,
+      location: this.location,
       path,
       entries: this.store.getBranch(),
       name: this.name,
@@ -826,36 +826,30 @@ export class VelaSession {
   /** Restores saved history and a saved channel. Returns false when nothing was saved.
    * Throws while running, or `SessionRoutingConflictError` when the opened channel differs. */
   async resume(): Promise<boolean> {
-    if (this.busy.locked)
-      throw new Error(`Session ${this.id} is running; cannot restore history`)
+    return this.locationTask((signal) => this.restoreHistory(signal))
+  }
+  private async restoreHistory(signal: AbortSignal): Promise<boolean> {
     // Entries not yet written would be replaced by the loaded ones
     await this.store.flush()
     const saved = await this.store.loadSaved()
     if (!saved) return false
-    if (saved.location) {
-      if (this.started) {
-        await this.started.then(() =>
-          this.deps.extensions.sessionShutdown(this),
-        )
-        this.started = undefined
-      }
-      // The public property stays readonly; resume restores the persisted internal value.
-      ;(this as { cwd: string }).cwd = localCwd(saved.location)
-      await this.deps.onCwdChange(this)
-    }
+    const target = resolveLocation(
+      saved.location ??
+        (this.options.location?.environment === 'local'
+          ? this.options.location
+          : undefined),
+      this.deps.cwd,
+      this.options.cwd,
+    )
+    await this.switchLocation(target)
     this.displayName = saved.name
     await this.loadBranch(saved)
     if (saved.channel !== undefined)
       routing.bindSavedChannel(this, saved.channel)
-    // A model or thinking level given at open (a channel's current chat entry) wins over the saved choice
-    if (this.options.thinkingLevel !== undefined)
-      this.defaults.thinking = this.options.thinkingLevel
-    if (
-      this.options.model !== undefined &&
-      this.options.model !== this.defaults.modelChoice
+    this.defaults.applyOpenChoices(this.options, (model) =>
+      this.selectModel(model, false),
     )
-      this.selectModel(this.options.model, false)
-    await this.prepare()
+    await this.prepare(signal)
     return true
   }
 
@@ -912,6 +906,7 @@ export class VelaSession {
   ): Promise<BashResult> {
     if (this.draining) throw this.drainError()
     if (this.closed) throw new Error(`Session ${this.id} is closed`)
+    if (this.moving) throw new Error('Session is changing location')
     return this.userBash.execute(command, options)
   }
 
@@ -946,6 +941,8 @@ export class VelaSession {
     if (this.draining) return Promise.reject(this.drainError())
     if (this.closed)
       return Promise.reject(new Error(`Session ${this.id} is closed`))
+    if (this.moving)
+      return Promise.reject(new Error('Session is changing location'))
     const { expandInput, prepareCommands } = this.deps
     const slash = mode !== 'literal' && input.startsWith('/')
     const hooks = prepareCommands || this.deps.extensions.hasHandlers('input')
@@ -1205,6 +1202,7 @@ export class VelaSession {
   }
 
   private startExtensions(): Promise<void> {
+    this.store.assertLocationKnown()
     this.started ??= this.deps.extensions.ready.then(() =>
       this.deps.extensions.sessionStart(this),
     )

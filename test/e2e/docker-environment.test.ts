@@ -303,7 +303,7 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
     },
   )
 
-  test('the current SDK keeps nonlocal sessions closed until E3b', async () => {
+  test('the SDK rejects adapters that do not match the requested cwd or local identity', async () => {
     const { createVela } = await import('@glows777/vela')
     const { createFauxModel, fauxText } = await import('@glows777/vela/testing')
     const model = createFauxModel({ responses: [fauxText('unexpected')] })
@@ -314,11 +314,10 @@ describe.skipIf(process.platform === 'win32')('Docker adapter', () => {
       env: () => env,
     })
     try {
-      expect(() =>
-        vela.session('docker', {
-          location: { environment: 'docker-test', cwd: '/workspace' },
-        }),
-      ).toThrow('only local locations')
+      const wrong = vela.session('docker', {
+        location: { environment: 'docker-test', cwd: '/different-cwd' },
+      })
+      await expect(wrong.prompt('test')).rejects.toThrow('unavailable')
       await expect(vela.session('local').prompt('test')).rejects.toThrow(
         'unavailable',
       )

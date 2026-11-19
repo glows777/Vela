@@ -7,6 +7,7 @@ import type { ExtensionAPI, VelaExtension } from '../extensions/types.ts'
 import type { VelaLogger } from '../logger.ts'
 import type { ModelRegistry } from '../models/index.ts'
 import {
+  type ForegroundBudget,
   resolveForegroundBudget,
   setForegroundBudget,
 } from '../tools/foreground-budget.ts'
@@ -15,6 +16,7 @@ import type { VelaSession } from '../vela-session.ts'
 import type { ProjectConfig } from './project-config.ts'
 
 interface Scope {
+  budget: ForegroundBudget
   runner: ExtensionRunner
   registry: ToolRegistry
 }
@@ -43,10 +45,11 @@ export class ProjectExtensions {
   select(
     id: string | undefined,
     open: ReadonlyMap<string, VelaSession>,
+    key: string,
   ): ExtensionRunner {
     if (id !== undefined && !open.has(id))
       throw new Error(`Session ${id} is not open`)
-    return this.runner(id ?? 'default')
+    return this.runner(key)
   }
 
   runner(id: string): ExtensionRunner {
@@ -55,46 +58,53 @@ export class ProjectExtensions {
 
   private readonly bound = new Map<string, Scope>()
 
-  async prepare(session: VelaSession, env: ExecutionEnv): Promise<void> {
+  bind(key: string, registry: ToolRegistry) {
+    const scope = this.bound.get(key)
+    if (scope) {
+      setForegroundBudget(registry, scope.budget)
+      registry.bindScope(scope.registry)
+    } else registry.bindScope(this.deps.registry)
+  }
+
+  async prepare(id: string, env: ExecutionEnv): Promise<void> {
     if (!this.deps.split) return
-    let pending = this.sessions.get(session.id)
+    let pending = this.sessions.get(id)
     if (!pending) {
-      pending = this.acquire(session, env)
-      this.sessions.set(session.id, pending)
+      pending = this.acquire(id, env)
+      this.sessions.set(id, pending)
     }
     const shared = await pending
     const scope = await shared.ready
-    if (this.sessions.get(session.id) !== pending)
+    if (this.sessions.get(id) !== pending)
       throw new Error('Session is closed or relocated')
-    this.bound.set(session.id, scope)
-    session.registry.bindScope(scope.registry)
+    this.bound.set(id, scope)
   }
 
-  private async acquire(
-    session: VelaSession,
-    env: ExecutionEnv,
-  ): Promise<SharedScope> {
+  private async acquire(id: string, env: ExecutionEnv): Promise<SharedScope> {
     const { split, config, host, registry, models, dataDir, logger } = this.deps
-    const trusted = config.mode(env.cwd) === 'all'
-    const settings = await config.get(session.id, env)
+    const trusted = env.id === 'node:local' && config.mode(env.cwd) === 'all'
+    const settings = await config.get(id, env)
     // The session's own settings decide its shell and its foreground `bash` budget, so both travel
     // with the registry a call runs in.
-    setForegroundBudget(session.registry, resolveForegroundBudget(settings))
-    const projectSettings = await config.project(session.id, env)
+    const budget = resolveForegroundBudget(settings)
+    const projectSettings = await config.project(id, env)
     const discovered = await loadProjectExtensionEntries(env, {
       trusted,
       agentDir: split!.agentDir,
       settings: projectSettings,
     })
     for (const message of discovered.diagnostics) logger.warn(message)
-    const selected = await split!.projectExtensions?.({
-      cwd: env.cwd,
-      environmentId: env.id,
-      trusted,
-      settings,
-      projectSettings,
-      entries: discovered.entries,
-    })
+    const selected =
+      env.id !== 'node:local'
+        ? undefined
+        : await split!.projectExtensions?.({
+            cwd: env.cwd,
+            environmentId: env.id,
+            trusted,
+            settings,
+            projectSettings,
+            entries: discovered.entries,
+          })
     const extensionConfig =
       selected?.extensionConfig ?? settings.extensionConfig ?? {}
     const key = JSON.stringify([
@@ -157,7 +167,7 @@ export class ProjectExtensions {
             { cause: error },
           )
         }
-        return { runner, registry: scopedRegistry }
+        return { runner, registry: scopedRegistry, budget }
       })()
       shared = { ready, sessions: new Set() }
       this.scopes.set(key, shared)
@@ -166,7 +176,7 @@ export class ProjectExtensions {
         if (this.scopes.get(key) === current) this.scopes.delete(key)
       })
     }
-    shared.sessions.add(session.id)
+    shared.sessions.add(id)
     return shared
   }
 

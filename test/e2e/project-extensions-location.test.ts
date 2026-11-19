@@ -8,7 +8,12 @@ import {
   fauxToolCall,
   tempDir,
 } from '@glows777/vela/testing'
-import { loadConfig } from '@glows777/vela-core'
+import {
+  createLocalExecutionEnv,
+  loadConfig,
+  memorySessionStorage,
+  type VelaOptions,
+} from '@glows777/vela-core'
 import { inspectSession } from '@glows777/vela-core/diagnostics'
 import {
   cliHostExtensionConfig,
@@ -27,7 +32,10 @@ interface Record {
   session?: string
   cwd?: string
 }
-function setup(denied = false) {
+function setup(
+  denied = false,
+  host: Pick<VelaOptions, 'env' | 'sessionStorage'> = {},
+) {
   const dir = tempDir()
   const a = join(dir.path, 'A'),
     b = join(dir.path, 'B'),
@@ -83,6 +91,7 @@ export default function projectProbe(api) {
   const hostSeen: { session: string; cwd: string }[] = []
   const vela = createVela({
     cwd: a,
+    ...host,
     logger: {
       debug: () => {},
       info: (message) => reports.push(message),
@@ -549,5 +558,55 @@ test('CLI memory and RAG stay host-owned across two projects and project idle cl
   } finally {
     await vela.dispose()
     dir.cleanup()
+  }
+})
+
+test('preparing a same-cwd nonlocal target cannot inherit local project authority or prematurely replace its tools', async () => {
+  const storage = memorySessionStorage()
+  const t = setup(false, {
+    sessionStorage: storage,
+    env: ({ location }) => {
+      const env = createLocalExecutionEnv({ cwd: location.cwd })
+      if (location.environment !== 'local')
+        Object.defineProperty(env, 'id', { value: 'fixture:guest' })
+      return env
+    },
+  })
+  try {
+    const session = t.vela.session('scoped-move')
+    const target = { environment: 'guest', cwd: t.a }
+    t.model.push(
+      fauxText('start'),
+      fauxToolCall('projectProbe_who', {}),
+      fauxText('old tool'),
+      fauxText('moved'),
+    )
+    await session.prompt('source')
+    const append = storage.append.bind(storage)
+    storage.append = async () => {
+      throw Error('write refused')
+    }
+    await expect(session.setLocation(target)).rejects.toThrow('write refused')
+    storage.append = append
+    await session.prompt('which project')
+    expect(t.model.calls[2]!.toolResults[0]!.output).toContain('A_TOOL_1')
+    expect(t.model.calls[2]!.system).toBe(t.model.calls[0]!.system)
+    expect(t.read().filter((e) => e.kind === 'session_shutdown')).toHaveLength(
+      0,
+    )
+    await session.setLocation(target)
+    expect(session.getActiveTools()).not.toContain('projectProbe_who')
+    expect(t.vela.commands(session.id).some((c) => c.name === 'where')).toBe(
+      false,
+    )
+    await session.prompt('inspect guest')
+    expect(t.model.calls[3]!.system).not.toContain('A_VERSION_1')
+    expect(t.read().filter((e) => e.kind === 'factory')).toHaveLength(1)
+    expect(t.read().filter((e) => e.kind === 'session_shutdown')).toHaveLength(
+      1,
+    )
+  } finally {
+    await t.vela.dispose()
+    t.dir.cleanup()
   }
 })

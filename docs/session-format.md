@@ -16,7 +16,7 @@ In the CLI, `<dataDir>` is the [project data directory](settings.md#data-directo
 
 Vela 0.5 wrote `<dataDir>/sessions/<id>.jsonl`. A session in that layout is listed from the old file and moved to `<id>/transcript.jsonl` with one rename the first time it is opened or written, so the old file never holds half a session. Stop other Vela processes on the data directory before upgrading: an older process that keeps writing recreates the old file beside the converted one, and the session directory wins on the next read.
 
-Entries are appended as they happen; like pi, a session is written only once it has a user or assistant message, so opening a session and closing it leaves no file. Files are created with mode `0600` and the directory with `0700`. A line cut off by a crash is skipped when the file is read (and reported to the logger). A failed write is retried with the next entry; if the failed attempt had already written some entries, the repeated copies are ignored on resume (the first entry with an id counts). A file whose first entry is not a header (and not a version 1 file) fails to resume instead of being converted.
+Opening and closing an empty session leaves no file. The first conversation entry or an explicit location move starts the transcript. Files are created with mode `0600` and the directory with `0700`. A line cut off by a crash is skipped when the file is read (and reported to the logger). A failed write is retried with the next entry; if the failed attempt had already written some entries, the repeated copies are ignored on resume (the first entry with an id counts). A file whose first entry is not a header (and not a version 1 file) fails to resume instead of being converted.
 
 ## Header
 
@@ -36,7 +36,7 @@ interface SessionHeader {
 }
 ```
 
-New records persist `location` as `{ environment: 'local', cwd }`, the same directory as `cwd`. `resume()` restores that saved cwd even when the caller passes a different cwd. A header with no `location` keeps the prior fallback, the caller's cwd or the default cwd. `exportJsonl()`, `fork()`, and `clone()` keep `location` on the header they write.
+The header records the initial `{ environment, cwd }`. A trusted move appends a `custom` record with type `vela.session.location`, an ID prefixed with `location:`, and the target in `data`. Resume uses the latest such record across all branches. A legacy transcript with no recorded location uses the caller’s local cwd or the default local cwd. Export, fork and clone write the current location into the new header. Open migrated sessions with a core version that understands relocation records. Older versions read only the initial header location.
 
 ## Entries
 

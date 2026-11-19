@@ -4,6 +4,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ## [Unreleased]
 
+- SDK hosts can read `session.location` and move an idle session with `await session.setLocation(location)`. The move prepares resources through the host’s existing `env` resolver, persists the target, and restores it on reopen. ([#410](https://github.com/glows777/Vela/issues/410))
+
 - Channel sessions can deliver a workspace file to their current conversation. Lark posts native images or file attachments and reports Feishu’s error code and message if the post is rejected. Local hosts can retrieve a snapshot by message ID ([#402](https://github.com/glows777/Vela/issues/402)).
 
 - Fix Lark startup recovery repeatedly posting feedback errors for expired or conflicting saved delivery intents; terminal refusals now settle locally without another chat message.
