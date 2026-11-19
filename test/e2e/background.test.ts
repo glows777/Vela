@@ -612,6 +612,10 @@ test('a long background command spills in the session environment, and read_file
   await t.run('start the noisy command')
   await until(() => t.model.calls.length === 3, 'the exit turn')
   await until(() => !t.session.isRunning, 'the delivery run to settle')
+  // The start reports the id and the tail it has; it never points at a log that is still empty.
+  const started = t.model.calls[1]!.toolResults[0]!.output
+  expect(started).toContain('Command running in background with ID: bg-1.')
+  expect(started).not.toContain('Full output')
   // The tail the model reads is bounded to the last 2,000 lines; the exit delivery names the file.
   const delivery = t.model.calls[2]!.lastUserText
   expect(delivery).toContain('\n18001\n')

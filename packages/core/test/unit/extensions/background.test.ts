@@ -211,6 +211,106 @@ test('a running job keeps its own signal after the call that started it is cance
   expect(existsSync(join(root, 'marker'))).toBe(true)
 })
 
+test('an adapter that only implements the published contract still delivers its full log', async () => {
+  const root = directory()
+  const local = createLocalExecutionEnv({ cwd: root })
+  let spilled = ''
+  // A host adapter written against today's `ExecutionEnv`: it forwards `onOutput` and decides its
+  // own spill file, which it can only name once the command has finished. It knows nothing about
+  // how a background command reports that file.
+  const adapter: ExecutionEnv = {
+    ...local,
+    id: 'test:published',
+    exec: async (command, options, signal) => {
+      let collected = ''
+      const result = await local.exec(
+        command,
+        {
+          ...options,
+          spill: undefined,
+          onOutput: (chunk, chunkSignal, info) => {
+            collected += chunk
+            options?.onOutput?.(chunk, chunkSignal, info)
+          },
+        },
+        signal,
+      )
+      const spill =
+        Buffer.byteLength(collected) > (options?.spill?.afterBytes ?? Infinity)
+      if (spill) {
+        const created = await local.createTempFile(
+          { prefix: 'adapter-', suffix: '.log' },
+          signal,
+        )
+        if (created.ok) {
+          spilled = created.value
+          await local.writeFile(spilled, collected, signal)
+        }
+      }
+      return result.ok
+        ? {
+            ok: true,
+            value: {
+              ...result.value,
+              ...(spilled ? { spillPath: spilled } : {}),
+            },
+          }
+        : result
+    },
+  }
+  const results: string[] = []
+  const session = sessionStub(root, [], undefined, (event) => {
+    if (event.type === 'result') results.push(event.text)
+  })
+  const jobs = new BackgroundJobs(session, silentLogger)
+  const started = await backgroundBash(
+    'seq 1 20000',
+    undefined,
+    root,
+    undefined,
+    { execution: adapter, results: new ToolResultStore(join(root, 'results')) },
+    jobs,
+  )
+  // The start result names no file: only the exit knows where the adapter spilled the output.
+  expect(started.text).not.toContain('Full output')
+  await until(() => results.length === 1, 'the exit delivery')
+  expect(results[0]).toContain(
+    'Background command bg-1 finished with exit code 0.',
+  )
+  expect(spilled).not.toBe('')
+  expect(results[0]).toContain(`Full output: ${spilled}`)
+  // The adapter's own file holds the whole log, so the model can page it.
+  expect((await Bun.file(spilled).text()).trimEnd().split('\n')).toHaveLength(
+    20000,
+  )
+})
+
+test('a background command with no output reports none, and names no file', async () => {
+  const root = directory()
+  const results: string[] = []
+  const session = sessionStub(root, [], undefined, (event) => {
+    if (event.type === 'result') results.push(event.text)
+  })
+  const jobs = new BackgroundJobs(session, silentLogger)
+  const started = await backgroundBash(
+    'true',
+    undefined,
+    root,
+    undefined,
+    {
+      execution: createLocalExecutionEnv({ cwd: root }),
+      results: new ToolResultStore(join(root, 'results')),
+    },
+    jobs,
+  )
+  expect(started.text).toStartWith(
+    'Command running in background with ID: bg-1.',
+  )
+  await until(() => results.length === 1, 'the exit delivery')
+  expect(results[0]).toContain('Output:\n(no output)')
+  expect(results[0]).not.toContain('Full output')
+})
+
 test('the start result carries the tail a command already produced', async () => {
   const root = directory()
   const env = createLocalExecutionEnv({ cwd: root })
