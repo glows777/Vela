@@ -11,7 +11,7 @@
     "dev": "bun run sdk:build && electron-forge start",
     "preview": "bun run sdk:build && electron-forge start -- --vela-specimen",
     "tokens": "bun scripts/tokens.ts",
-    "check": "bun run sdk:build && bun scripts/tokens.ts --check && tsc -p tsconfig.main.json && tsc -p tsconfig.json && tsc -p tsconfig.tools.json && bun scripts/check.ts",
+    "check": "bun run sdk:build && bun scripts/tokens.ts --check && tsc -p tsconfig.main.json && tsc -p tsconfig.json && tsc -p tsconfig.tools.json && bun scripts/check.ts && bun test test",
     "package": "bun run sdk:build && electron-forge package",
     "verify": "bun run sdk:build && bun scripts/verify.ts",
     "sdk:build": "bun ../../scripts/build.ts"

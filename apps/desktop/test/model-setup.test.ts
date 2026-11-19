@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { saveModel } from '../../apps/desktop/src/main/model-setup.ts'
+import { saveModel } from '../src/main/model-setup.ts'
 
 const dirs: string[] = []
 const tempDir = () => {
