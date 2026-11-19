@@ -8,6 +8,30 @@
 - `.skills/<name>/SKILL.md` is an on-demand workflow entry point. Keep a skill's trigger description short and precise; put multi-flow content behind references or scripts (progressive disclosure), don't preload unrelated text, and don't write one task's temporary steps into shared rules.
 - **Prompt the What, not the How.** When exploration is needed, the agent builds its own iterative tools, such as several variants and checks that can be compared. It does not go back and forth with a human on trial and error.
 
+## Work loop
+
+GitHub issues and PRs are the source of truth. A piece of work starts with a Goal (the user-visible change) and Acceptance (how we will know it is done). Labels such as `to:vela` and implementation notes are process suggestions, not the goal.
+
+- `status:draft` means Goal or Acceptance is still missing or contested. Do not start implementation, and do not treat a verbal clarification in chat as enough until it is written on the issue.
+- `status:ready` means Goal and Acceptance are clear enough to start. It is not permission to invent the design only in the PR.
+- Before opening a PR, the implementer comments on the same issue, restating Goal and Acceptance in their own words. If that restatement does not match, ask on the issue; do not open the PR yet.
+- Merging a PR is not done. Done requires the agreed verification (tests, verify-vela, or the acceptance checks), posted on the original issue or PR, with evidence someone else can rerun. If acceptance is unmet, the work is not delivered.
+- After a UX miss, eval failure, or a repeated incident, open two issues when both apply: one to fix the product, and one to change the process (AGENTS.md, templates, or REVIEW.md). Agents may propose process changes; Claude reviews them; Liam decides whether they land.
+
+Roles stay as they are: Liam sets direction and merges high-risk work; Claude gates large enhancements and UX; Vela is the default implementer for `to:vela` + `status:ready`; Friday handles work Vela should not take and reviews Vela PRs; Forge handles small bugs and reviews Friday PRs; Taste files UX and bug issues after merges.
+
+### Decisions that need Liam
+
+Ask Liam, and do not proceed, for: merging to `main`, public API or eval-baseline changes he has not already authorized, and operations that can lose user or production data.
+
+Friday or Claude may block a change without asking Liam first when the risk is already covered by repo rules, such as a missing Evidence section, or a worktree force-push that could overwrite work.
+
+### Anti-examples
+
+- Merging because CI is green and a reviewer is ready, without Liam's own words, when the change is high-risk or the author was told not to self-merge.
+- Treating "open an issue", "wait for review", or "add a label" as the goal, instead of the user-visible acceptance.
+- Force-pushing a worktree or shared branch in a way that can discard someone else's commits, instead of stopping and reporting the risk.
+
 Default to using Bun instead of Node.js.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`

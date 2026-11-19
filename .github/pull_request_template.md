@@ -4,6 +4,10 @@
 
 <!-- How verified, Docs, Evidence, and How to revert are required. An empty section is a bounce. That bounce does not count as a bug-fix review round. -->
 
+## Work loop
+
+<!-- Link the source issue. Confirm that Goal and Acceptance were restated on that issue before opening this PR. Merge is not done until verification evidence is posted on the issue or this PR. -->
+
 ## How verified
 
 <!-- Commands you ran, a verify-vela journey, or both. Include what you checked by hand (CLI, SDK script, channel). -->

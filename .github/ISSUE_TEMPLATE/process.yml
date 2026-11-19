@@ -1,0 +1,22 @@
+name: Process
+description: Change the process after a UX miss, an eval failure, or a repeated incident.
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: The user-visible change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How we will know this is done.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence of a miss
+      description: Link the UX miss, eval failure, or repeated incident this change responds to.
