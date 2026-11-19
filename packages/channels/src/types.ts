@@ -269,6 +269,8 @@ export interface ChannelRunFeedback {
 export interface ChannelDefinition {
   name: string
   description: string
+  /** Add channel-specific SDK operations to the scoped host. */
+  host?(base: ChannelHost): ChannelHost
   /** Platform operations behind the shared channel topic tools. */
   topicCapabilities?: ChannelTopicCapabilities
   /** Deployment-local schedule zone, validated before transport startup. */

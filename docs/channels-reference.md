@@ -22,7 +22,7 @@ const connection = channel.connection()            // { connected: boolean, erro
 
 - `sessions(chatId?)` returns detached `ChannelSessionSnapshot` values, including `waitingReason` and the current `runId`, with the same enabled-scope checks as the adapter. Listing never opens a model session.
 - `onSession` and `onStatus` preserve their existing event shapes. Subscriptions can be installed before startup, observe only future events, isolate listener exceptions and are cleared on disposal. Subscribe and then read snapshots to initialize a UI.
-- `submit(message)` resolves after durable admission, before preparation, model work or delivery. It rechecks channel access. A topic follow-up must match an owned root and thread in that chat; the host view forces `requireExistingSession: true`. Unknown or mismatched topics are rejected without creating a new one. Group/topic input needs a real service `replyToId` anchor, especially on Lark, whose reply operation uses that ID. Do not fabricate service IDs. Owner DMs keep the existing direct-message form without `replyToId`. Creating an anchorless new Lark topic is not supported.
+- `submit(message)` resolves after durable admission, before preparation, model work or delivery. It rechecks channel access. A topic follow-up must match an owned root and thread in that chat; the host view forces `requireExistingSession: true`. Unknown or mismatched topics are rejected without creating a new one. Group/topic input needs a real service `replyToId` anchor, especially on Lark, whose reply operation uses that ID. Do not fabricate service IDs. Owner DMs keep the existing direct-message form without `replyToId`. To open a Lark topic from an app without an anchor, use the typed Lark host overload below; it creates a real anchor before submitting.
 - `stop({ chatId, rootId? }, runId)` targets the exact current preparation/run. Expired, repeated or unavailable stops return false; stopping does not discard later queued input.
 - Host access preserves channel enablement, project existence, topic ownership and configured tools. It does not expose model-run-only `scope`, `session`, `context`, `topics`, `topicCoverage`, `dispatch`, `skipReply` or `waitForInput` operations. After disposal, mutations fail and Stop returns false.
 
@@ -57,6 +57,36 @@ Edit changes the message and/or schedule in place: the id, creator, creation tim
 For another adapter, optional `ChannelDefinition.onConnection(listener)` reports live state and returns an unsubscribe callback; without it, the gateway uses `start()` success/failure. Error strings from an adapter must be safe for host display. Connection state is informational: `runningChannels()` still means successful startup, and disconnects do not change routine scheduling or replay submitted messages.
 
 Local reports connected after its store and optional listener are ready. `local({})` (or `local({ timezone })`) starts the in-process core without opening any listener. Providing a nonempty `token` enables the existing authenticated loopback HTTP/SSE adapter; `port` alone never enables HTTP.
+
+### Lark groups and visible history
+
+The umbrella SDK (`@glows777/vela`) returns a typed `LarkHost` from `createVela().channel('lark')`. `@glows777/vela-lark` owns `LarkHost`, `LarkVisibleMessage` and `LarkHostEvent`. Both Local and Lark attach their scoped host operations through the optional `ChannelDefinition.host(base)` decorator. `createChannelVela()` keeps its platform-neutral Lark accessor.
+
+```ts
+const vela = createVela({ extensions: [lark(options)] })
+await vela.ready()
+const host = vela.channel('lark')
+const off = host.onEvent(event => invalidateVisibleHistory(event))
+await vela.startChannels()
+
+const receipt = await host.submit({
+  chatId: 'oc_group',
+  newTopic: { title: 'Review the report' },
+  text: 'Please check the totals',
+  author: { id: 'desktop-alex', name: 'Alex' },
+})
+const { messages, nextCursor } = await host.messages({
+  chatId: 'oc_group',
+  sessionId: receipt.sessionId,
+  limit: 30,
+})
+off()
+```
+
+- `messages({ chatId, sessionId, cursor?, limit? })` reads one enabled group or one of its owned topics straight from Lark. A group's logical ID is `channelSessionId('lark', chatId)` (the helper is exported by `@glows777/vela-channels`), even before its first run; topic IDs come from `sessions(chatId)`. Group pages are newest first and include topic roots, not thread replies. Topic pages are oldest first. The limit is 1–50 provider rows per page. Deleted or unsupported rows can produce a short or empty page with a next cursor. Keep passing the opaque cursor with the same chat and session until it is absent.
+- To post into an existing session, pass `sessionId` instead of `newTopic`. The bot posts signed text; the author ID is host attribution, not a Lark user ID or a permission. Group input still goes through group triage. Creating a topic posts the signed root and adds the title inside its thread before admitting the run directly in that topic. An existing topic reply targets the same thread. Follow work through `onSession`; the receipt identifies the session and posted message, not a particular queued run.
+- A failed submission is not automatically retried. The error includes the message ID if posting succeeded and a later step failed. If the transport returns no ID (including a custom transport whose `send` returns void), the result is uncertain and no run starts. Refresh history before sending again.
+- `onEvent` is best effort: `history_changed` invalidates a group or a named topic, and `reset` tells the app to re-read visible history after connecting or reconnecting. Await `startChannels()` before acting on signals from startup, as with other host calls. Without group-message read permissions, or when `readUntagged` is off, some human messages may only appear after a re-read. Bot echo does not start work or duplicate an invalidation for the host post. Neither event is a durable delivery acknowledgement.
 
 ### Local projects and visible history
 

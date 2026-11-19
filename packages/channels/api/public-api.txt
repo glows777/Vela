@@ -7,6 +7,7 @@
     canRecover?: ((message: IncomingMessage, chatKind: "group" | "direct") => boolean) | undefined
     connect?: ((runtime: ChannelRuntime) => void) | undefined
     description: string
+    host?: ((base: ChannelHost) => ChannelHost) | undefined
     name: string
     onConnection?: ((listener: (connection: ChannelConnection) => void) => () => void) | undefined
     onMessage?: ((handler: (msg: IncomingMessage) => void | Promise<void>) => void) | undefined

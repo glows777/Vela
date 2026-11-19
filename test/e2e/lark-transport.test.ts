@@ -373,3 +373,93 @@ test('a Lark error code is reported with its code and message, not treated as su
   await until(() => reactions().length === 2)
   expect(reactions()).toEqual(['OnIt', 'CrossMark'])
 })
+
+test('the typed Lark host uses real SDK history paging and explicit thread replies', async () => {
+  sdk.WSClient.prototype.start = async function () {
+    ;(this as unknown as { onReady: () => void }).onReady()
+  }
+  try {
+    routes = [
+      (c) =>
+        c.method === 'GET' &&
+        c.path === '/open-apis/im/v1/messages' &&
+        c.params.container_id_type === 'chat' &&
+        c.params.start_time === '0' &&
+        ok(
+          c.params.page_token
+            ? { has_more: false, items: [] }
+            : { has_more: true, page_token: 'next', items: [] },
+        ),
+      (c) =>
+        c.path === '/open-apis/im/v1/messages/om_sent/reply' &&
+        c.body.reply_in_thread === true &&
+        sentMessage(
+          (c.body.content as string).includes('Continue')
+            ? 'om_followup'
+            : 'om_title',
+          { root_id: 'om_sent', thread_id: 'omt_owned' },
+        ),
+    ]
+    const t = await start([
+      fauxText('First reply'),
+      fauxText('Continued reply'),
+    ])
+    const host = t.vela.channel('lark')
+    const chatId = 'oc_group'
+    const author = { id: 'desktop-alex', name: 'Alex' }
+    const group = await host.messages({
+      chatId,
+      sessionId: 'lark-oc_group',
+      limit: 1,
+    })
+    expect(group.nextCursor).toBeDefined()
+    await host.messages({
+      chatId,
+      sessionId: 'lark-oc_group',
+      cursor: group.nextCursor,
+    })
+    const listings = calls.filter((c) => c.params.start_time === '0')
+    expect(listings).toHaveLength(2)
+    expect(listings[1]!.params).toEqual({
+      ...listings[0]!.params,
+      page_token: 'next',
+    })
+    const opened = await host.submit({
+      chatId,
+      author,
+      text: 'Please review',
+      newTopic: { title: 'Review' },
+    })
+    expect(opened.topic).toEqual({ rootId: 'om_sent', threadId: 'omt_owned' })
+    await until(() =>
+      t.eventsOf('channel_reply').some((e) => e.text === 'First reply'),
+    )
+    const followup = await host.submit({
+      chatId,
+      author,
+      sessionId: opened.sessionId,
+      text: 'Continue',
+    })
+    expect(followup.messageId).toBe('om_followup')
+    await until(() =>
+      t.eventsOf('channel_reply').some((e) => e.text === 'Continued reply'),
+    )
+    expect(calls.find((c) => c.body.receive_id === chatId)?.body.content).toBe(
+      '{"text":"Alex: Please review"}',
+    )
+    expect(
+      calls.filter((c) => c.body.reply_in_thread).map((c) => c.body.content),
+    ).toEqual(['{"text":"Review"}', '{"text":"Alex: Continue"}'])
+    expect(shape()).toContain('POST /open-apis/im/v1/messages/om_title/reply')
+    expect(shape()).toContain(
+      'POST /open-apis/im/v1/messages/om_followup/reply',
+    )
+  } finally {
+    // Restore this file's connect stub and don't change unrelated test lifetimes.
+    sdk.WSClient.prototype.start = async (params: {
+      eventDispatcher: typeof dispatcher
+    }) => {
+      dispatcher = params.eventDispatcher
+    }
+  }
+})
