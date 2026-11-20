@@ -184,7 +184,7 @@ export async function verifyLarkDiscovery(
       .waitFor()
 
     await send(page, 'Message Vela in this project', 'Keep this run active')
-    const running = await page.waitForFunction(async () =>
+    await page.waitForFunction(async () =>
       (await window.vela.sessions('local')).find((s) => s.runId),
     )
     await open()
@@ -194,13 +194,20 @@ export async function verifyLarkDiscovery(
       .filter({ hasText: /stop|finish/i })
       .waitFor()
     assert.equal(await readFile(settings, 'utf8'), original)
-    const session = await running.jsonValue()
-    assert(session?.runId)
     assert(
-      await page.evaluate(
-        (s) => window.vela.stop('local', { chatId: s.chatId }, s.runId!),
-        session,
-      ),
+      await page.evaluate(async () => {
+        const active = (await window.vela.sessions('local')).find(
+          (s) => s.runId,
+        )
+        return (
+          active?.runId &&
+          (await window.vela.stop(
+            'local',
+            { chatId: active.chatId },
+            active.runId,
+          ))
+        )
+      }),
     )
     await page.waitForFunction(
       async () => !(await window.vela.sessions('local')).some((s) => s.runId),
@@ -219,7 +226,7 @@ export async function verifyLarkDiscovery(
         senderName: 'Mira',
       })}\n`,
     )
-    const live = await page.waitForFunction(async () =>
+    await page.waitForFunction(async () =>
       (await window.vela.sessions('lark')).find((s) => s.runId),
     )
     await dialog.getByRole('button', { name: 'Enable group' }).click()
@@ -228,13 +235,18 @@ export async function verifyLarkDiscovery(
       .filter({ hasText: /stop|finish/i })
       .waitFor()
     assert.equal(await readFile(settings, 'utf8'), original)
-    const groupRun = await live.jsonValue()
-    assert(groupRun?.runId)
     assert(
-      await page.evaluate(
-        (s) => window.vela.stop('lark', { chatId: s.chatId }, s.runId!),
-        groupRun,
-      ),
+      await page.evaluate(async () => {
+        const active = (await window.vela.sessions('lark')).find((s) => s.runId)
+        return (
+          active?.runId &&
+          (await window.vela.stop(
+            'lark',
+            { chatId: active.chatId },
+            active.runId,
+          ))
+        )
+      }),
     )
     await page.waitForFunction(
       async () => !(await window.vela.sessions('lark')).some((s) => s.runId),
