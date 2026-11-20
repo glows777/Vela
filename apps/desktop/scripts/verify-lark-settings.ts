@@ -17,7 +17,7 @@ export async function verifyLarkSettings(
   const disk = async () => JSON.parse(await readFile(path, 'utf8'))
   const sidebar = page.getByLabel('Sidebar')
   const open = async () => {
-    await sidebar.getByRole('button', { name: 'Settings' }).click()
+    await sidebar.getByRole('button', { name: 'Settings', exact: true }).click()
     await page
       .getByLabel('Settings sections')
       .getByRole('button', { name: 'Lark' })
