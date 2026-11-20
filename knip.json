@@ -51,6 +51,7 @@
       "project": ["src/**/*.ts!", "test/**/*.ts"]
     },
     "packages/vela": {
+      "paths": { "#docker-adapter": ["../../extensions/docker/adapter.ts"] },
       "entry": [
         "src/index.ts!",
         "src/testing/index.ts!",

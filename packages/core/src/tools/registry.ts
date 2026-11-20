@@ -15,7 +15,11 @@ import { ToolResultStore } from '../session/tool-results.ts'
 import type { BackgroundCommands } from './background.ts'
 import { prepareCallResult } from './call-result.ts'
 import { validateToolDefinition } from './definition-validation.ts'
-import { ExecutionGate, NestedExecutionGate } from './execution-gate.ts'
+import {
+  ActiveCalls,
+  ExecutionGate,
+  NestedExecutionGate,
+} from './execution-gate.ts'
 import {
   type CallOptions,
   errorOutput,
@@ -169,20 +173,15 @@ export class ToolRegistry {
   private persistenceFailure: Error | undefined
   /** `ToolExecutionResult.value`s by tool call id, until the call's `tool_execution_end` takes them */
   private readonly details = new Map<string, unknown>()
-  private readonly active = new Set<Promise<unknown>>()
+  private readonly active = new ActiveCalls()
 
-  private track<T>(run: () => Promise<T>): Promise<T> {
-    const job = run()
-    this.active.add(job)
-    void job.then(
-      () => this.active.delete(job),
-      () => this.active.delete(job),
-    )
-    return job
+  /** @internal An idle move also excludes calls issued directly through the registry. */
+  get hasActiveCalls(): boolean {
+    return this.active.running
   }
 
   async waitForIdle(): Promise<void> {
-    while (this.active.size) await Promise.allSettled([...this.active])
+    await this.active.waitForIdle()
     this.assertHealthy()
   }
 
@@ -296,7 +295,7 @@ export class ToolRegistry {
       this.getActiveTools(),
       hostedTools,
       (tool, input, options) =>
-        this.track(() => this.runCall(tool, input, options)),
+        this.active.track(() => this.runCall(tool, input, options)),
     )
   }
 
@@ -515,7 +514,7 @@ export class ToolRegistry {
       input,
       signal,
       (tool, args, recovery) =>
-        this.track(() =>
+        this.active.track(() =>
           this.runCall(tool, args, {
             toolCallId: id,
             abortSignal: signal,
@@ -585,7 +584,7 @@ export class ToolRegistry {
       return finish(reason, true, false)
     }
     try {
-      const output = await this.track(() =>
+      const output = await this.active.track(() =>
         this.runCall(tool, input, {
           toolCallId,
           parentToolCallId,

@@ -1,17 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Project } from '../../shared/bridge.ts'
-import { Button } from '../components/arc/button/button.tsx'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-} from '../components/arc/dialog/dialog.tsx'
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '../components/arc/tabs/tabs.tsx'
 import { Field, Input } from '../components/field.tsx'
 import {
   confirmLarkGroup,
@@ -19,6 +7,9 @@ import {
   openProject,
   useStore,
 } from '../store.ts'
+import { Button } from '../ui/button.tsx'
+import { Dialog, DialogClose, DialogContent } from '../ui/dialog.tsx'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs.tsx'
 import { vela } from '../vela.ts'
 import styles from './new-project.module.css'
 
@@ -225,7 +216,7 @@ export function NewProjectDialog({
               </footer>
             </form>
           </TabsContent>
-          <TabsContent value="lark" forceMount hidden={source !== 'lark'}>
+          <TabsContent value="lark">
             <div className={styles.form}>
               {step === 'list' ? (
                 <>

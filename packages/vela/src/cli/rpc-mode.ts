@@ -224,9 +224,17 @@ export async function runRpcMode(options: RpcModeOptions): Promise<void> {
       const id = String(command.sessionId ?? '')
       if (!(await vela.listSessions()).some((s) => s.id === id))
         throw new Error(`No session ${id}`)
+      const alreadyOpen = vela
+        .sessions()
+        .some((candidate) => candidate.id === id)
       const next = vela.session(id, { ui })
-      if (next !== session) await next.resume()
-      await switchTo(next)
+      try {
+        if (next !== session) await next.resume()
+        await switchTo(next)
+      } catch (error) {
+        if (!alreadyOpen && next !== session) await next.close()
+        throw error
+      }
       return { sessionId: next.id }
     },
     list_sessions: async () => ({ sessions: await vela.listSessions() }),

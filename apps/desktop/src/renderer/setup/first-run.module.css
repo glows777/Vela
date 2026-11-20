@@ -2,7 +2,7 @@
   display: grid;
   place-items: start center;
   min-height: 100dvh;
-  padding: var(--space-24) var(--space-6) var(--space-10);
+  padding: var(--vela-space-12) var(--vela-space-6) var(--vela-space-10);
   overflow-y: auto;
   background: var(--vela-white);
   color: var(--vela-ink);
@@ -11,7 +11,7 @@
 .column {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--vela-space-6);
   width: 100%;
   max-width: 460px;
 }
@@ -19,7 +19,7 @@
 .head {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--vela-space-3);
 }
 
 .title {
@@ -35,19 +35,19 @@
 .reason {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-body);
+  font-size: var(--vela-text-sm);
+  line-height: var(--vela-leading-body);
 }
 
 .files {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
+  font-size: var(--vela-text-xs);
+  line-height: var(--vela-leading-body);
 }
 
 .files code {
   color: var(--vela-teal);
   font-family: var(--vela-family-mono);
-  font-size: var(--text-xs);
+  font-size: var(--vela-text-xs);
 }

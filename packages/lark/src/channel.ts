@@ -10,12 +10,7 @@ import type {
   IncomingMessage,
   OutgoingMessage,
 } from '@glows777/vela-channels'
-import {
-  channelSessionId,
-  chatDirectory,
-  handoffToolNames,
-  topicToolNames,
-} from '@glows777/vela-channels'
+import { channelSessionId, chatDirectory } from '@glows777/vela-channels'
 import { latestTodoList } from '@glows777/vela-core/diagnostics'
 import type {
   ImageContent,
@@ -29,7 +24,12 @@ import {
   runControlsCard,
   topicRunCard,
 } from './cards.ts'
-import { type LarkChat, parseChats, validateChatTools } from './chats.ts'
+import {
+  groupSessionOptions,
+  type LarkChat,
+  parseChats,
+  validateChatTools,
+} from './chats.ts'
 import { LarkConnection } from './connection.ts'
 import { downloadFile } from './file-download.ts'
 import {
@@ -138,28 +138,21 @@ export class LarkChannel implements ChannelDefinition {
   }
   sessionOptions: NonNullable<ChannelDefinition['sessionOptions']> = (msg) => {
     const options = this.topics.sessionOptions(msg)
-    if (!msg.topic && !msg.replyToId && !msg.handoff) return options
+    if (
+      msg.chatKind !== 'group' &&
+      !msg.topic &&
+      !msg.replyToId &&
+      !msg.handoff
+    )
+      return options
     const chat = this.chats.get(msg.channelId)
     if (!chat) throw new Error('Lark group is not enabled')
-    const cwd = this.workspace(chat.id, !msg.requireExistingSession)
-    return {
-      ...options,
-      cwd,
-      model: (msg.topic ? chat.topicModel : undefined) ?? chat.model,
-      thinkingLevel:
-        (msg.topic ? chat.topicThinkingLevel : undefined) ?? chat.thinkingLevel,
-      tools:
-        chat.tools === undefined
-          ? undefined
-          : [
-              ...new Set([
-                ...chat.tools,
-                ...topicToolNames,
-                ...handoffToolNames,
-                ...(msg.topic ? ['channel_wait_for_input'] : []),
-              ]),
-            ],
-    }
+    const environment = chat.environment ?? 'local'
+    const cwd = this.workspace(
+      chat.id,
+      environment === 'local' && !msg.requireExistingSession,
+    )
+    return { ...options, ...groupSessionOptions(chat, cwd, !!msg.topic) }
   }
 
   validateTools(names: readonly string[]): void {
@@ -526,7 +519,12 @@ export class LarkChannel implements ChannelDefinition {
     }
     let input = messageText(event.message) ?? msg.text
     if (!input) return
-    if (msg.topic || msg.replyToId) this.workspace(msg.channelId)
+
+    if (
+      (msg.topic || msg.replyToId) &&
+      (this.chats.get(msg.channelId)?.environment ?? 'local') === 'local'
+    )
+      this.workspace(msg.channelId)
     const attachmentType =
       event.message.message_type === 'file' ? 'file' : 'image'
     try {

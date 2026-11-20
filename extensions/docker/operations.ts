@@ -7,6 +7,11 @@ import type {
   Result,
   ShellExecOptions,
 } from '@glows777/vela-core'
+import type { readEnvironmentInventory } from '../../packages/core/src/session/environment-inventory.ts'
+import {
+  type InventoryEnv,
+  workspaceDiscovery,
+} from '../../packages/core/src/session/workspace-discovery.ts'
 
 type Failure = FileError | ExecutionError
 function failure<C extends Failure['code']>(code: C, message: string) {
@@ -165,7 +170,14 @@ export function dockerOperations(
       await channel?.stop()
     }
   }
-  const env: ExecutionEnv = {
+  const env: InventoryEnv = {
+    async [workspaceDiscovery](contextEnabled, signal) {
+      const result = await file<
+        Awaited<ReturnType<typeof readEnvironmentInventory>>
+      >('discoverWorkspace', [contextEnabled], signal)
+      if (!result.ok) throw result.error
+      return result.value
+    },
     id,
     cwd,
     absolutePath: (p, s) => file('absolutePath', [p], s),

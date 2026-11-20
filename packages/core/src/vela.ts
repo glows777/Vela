@@ -13,7 +13,7 @@ import {
   createSessionLocalExecutionEnv,
   scopeLocalResults,
 } from './execution/local.ts'
-import { abortable } from './execution/location.ts'
+import { abortable, sameLocation } from './execution/location.ts'
 import type { ExecutionEnv, ExecutionLocation } from './execution/types.ts'
 import { auditLog } from './extensions/audit.ts'
 import { ExtensionRunner, type LoadedExtension } from './extensions/runner.ts'
@@ -31,8 +31,6 @@ import {
   type ThinkingLevel,
 } from './models/index.ts'
 import type { ContextFile } from './prompt/context-files.ts'
-import { loadEnvironmentContextFiles } from './prompt/environment-context-files.ts'
-import { loadEnvironmentTemplates } from './prompt/environment-templates.ts'
 import type { DocsPaths, SystemPromptBuilder } from './prompt/index.ts'
 import {
   expandPromptTemplate,
@@ -45,7 +43,7 @@ import { assertSessionId } from './session/options.ts'
 import { ProjectConfig } from './session/project-config.ts'
 import { ProjectExtensions } from './session/project-extensions.ts'
 import { createSessionPrompt } from './session/prompt-builder.ts'
-import { sessionSystemFile, WorkspaceResources } from './session/resources.ts'
+import { WorkspaceResources } from './session/resources.ts'
 import { applySessionRouting } from './session/routing.ts'
 import { type SessionSearchHit, searchSessionText } from './session/search.ts'
 import {
@@ -55,10 +53,8 @@ import {
   type SessionSummary,
 } from './session/storage.ts'
 import { ToolResultStore } from './session/tool-results.ts'
-import {
-  expandEnvironmentSkill,
-  loadEnvironmentSkills,
-} from './skills/environment-skills.ts'
+import { loadWorkspaceInventory, workspaceKey } from './session/workspace.ts'
+import { expandEnvironmentSkill } from './skills/environment-skills.ts'
 import { SkillLoader } from './skills/loader.ts'
 import { type BinaryResolver, createBinaryResolver } from './tools/binaries.ts'
 import { createCoreTools } from './tools/index.ts'
@@ -341,18 +337,26 @@ export function createVela(options: VelaOptions = {}): Vela {
     string,
     { model?: string | LanguageModel; thinkingLevel?: ThinkingLevel }
   >()
-  const resources = new WorkspaceResources({
+  const hostResources = {
     systemPrompt: options.systemPrompt,
     appendSystemPrompt: options.appendSystemPrompt,
     contextFiles,
     skills: skillLoader.list(),
     promptTemplates,
-  })
+  }
+  const resources = new WorkspaceResources(hostResources)
 
+  const activeKey = (id: string) => {
+    const owner = sessions.get(id)
+    return owner ? workspaceKey(id, owner.location) : id
+  }
   const builder = createSessionPrompt(
-    (id) => resources.get(id),
+    (id) => resources.get(activeKey(id)),
     (id) => sessions.get(id)?.cwd ?? cwd,
-    (id) => sessionShells.get(id) ?? options.shellPath,
+    (id) =>
+      sessions.get(id)?.location.environment === 'local'
+        ? (sessionShells.get(activeKey(id)) ?? options.shellPath)
+        : undefined,
     options.docs,
   )
 
@@ -360,161 +364,6 @@ export function createVela(options: VelaOptions = {}): Vela {
   let disposed = false
   /** The one dispose in progress: a second caller (a signal racing the CLI's exit) waits for it to finish */
   let disposing: Promise<void> | undefined
-
-  const ensureLocal = async (session: VelaSession) => {
-    const target = {
-      sessionId: session.id,
-      location: { environment: 'local', cwd: session.cwd },
-    }
-    let env = options.env
-      ? await options.env(target)
-      : createSessionLocalExecutionEnv({
-          cwd: session.cwd,
-          shellPath: options.shellPath,
-          tempRoot: session.registry.results.dir,
-        })
-    if (env?.id !== 'node:local' || env.cwd !== session.cwd)
-      throw new Error(
-        `Execution environment unavailable for local:${session.cwd}`,
-      )
-    if (resourceSplit) {
-      const settings = await projectConfig.get(session.id, env)
-      const shellPath =
-        options.shellPath ??
-        settings.shellPath ??
-        resourceSplit?.fallbackShellPath
-      sessionShells.set(session.id, shellPath)
-      if (!options.env && shellPath !== options.shellPath)
-        env = createSessionLocalExecutionEnv({
-          cwd: session.cwd,
-          shellPath,
-          tempRoot: session.registry.results.dir,
-        })
-    }
-    return options.env
-      ? scopeLocalResults(env, session.registry.results.dir)
-      : env
-  }
-
-  const prepareWorkspace = async (
-    session: VelaSession,
-    signal?: AbortSignal,
-  ) => {
-    if (sessions.get(session.id) !== session)
-      throw new Error('Session is closed')
-    await resources.prepare(
-      session.id,
-      async (signal) => {
-        const location = session.cwd
-        const env = await abortable(ensureLocal(session), signal)
-        const pinned =
-          !resourceSplit &&
-          location === cwd &&
-          options.contextFiles !== undefined
-        const workspace =
-          options.contextFiles === false || pinned
-            ? []
-            : await loadEnvironmentContextFiles(env, location, signal)
-        const workspaceMode = projectConfig.mode(location)
-        const settings = await projectConfig.get(session.id, env)
-        await projects.prepare(session, env)
-        const workspaceSkills = (
-          workspaceMode === undefined
-            ? options.skillDirs && location === cwd
-            : workspaceMode === 'none'
-        )
-          ? []
-          : await loadEnvironmentSkills(
-              env,
-              location,
-              signal,
-              workspaceMode === 'home',
-              ({ path, message }) =>
-                logger.warn(`[resources] ${path}: ${message}`),
-              settings.skills ?? [],
-            )
-        const workspaceNames = new Set(
-          workspaceSkills.map((skill) => skill.name),
-        )
-        const hostSkills = env.id === 'node:local' ? skillLoader.list() : []
-        const skills = [
-          ...workspaceSkills,
-          ...hostSkills.filter((skill) => !workspaceNames.has(skill.name)),
-        ]
-        const workspaceTemplates = (
-          workspaceMode === undefined
-            ? options.promptTemplateDirs && location === cwd
-            : workspaceMode !== 'all'
-        )
-          ? []
-          : await loadEnvironmentTemplates(
-              env,
-              location,
-              signal,
-              settings.prompts ?? [],
-            )
-        const templateNames = new Set(
-          workspaceTemplates.map((template) => template.name),
-        )
-        const selectedTemplates = [
-          ...workspaceTemplates,
-          ...promptTemplates.filter(
-            (template) => !templateNames.has(template.name),
-          ),
-        ]
-        const readSystem = (name: 'SYSTEM.md' | 'APPEND_SYSTEM.md') =>
-          sessionSystemFile(
-            env,
-            name,
-            workspaceMode === 'all',
-            resourceSplit?.agentDir,
-            signal,
-          )
-        return {
-          enabledModels: settings.enabledModels,
-          defaultTools: settings.defaultTools,
-          defaults: resourceSplit
-            ? {
-                model:
-                  hostDefaults.get(session.id)?.model ??
-                  settings.defaultModel ??
-                  resourceSplit.fallbackModel,
-                thinkingLevel:
-                  hostDefaults.get(session.id)?.thinkingLevel ??
-                  settings.defaultThinkingLevel,
-                limits: { ...settings.limits, ...options.limits },
-                autoCompaction:
-                  options.autoCompaction ?? settings.autoCompaction,
-              }
-            : undefined,
-          systemPrompt: options.systemPrompt ?? (await readSystem('SYSTEM.md')),
-          appendSystemPrompt:
-            options.appendSystemPrompt ??
-            (await readSystem('APPEND_SYSTEM.md')),
-          skills,
-          promptTemplates: selectedTemplates,
-          contextFiles:
-            options.contextFiles === false
-              ? []
-              : resourceSplit
-                ? [
-                    ...resourceSplit.userContextFiles,
-                    ...workspace.filter(
-                      (item) =>
-                        !resourceSplit.userContextFiles.some(
-                          (host) => host.path === item.path,
-                        ),
-                    ),
-                  ]
-                : pinned
-                  ? contextFiles
-                  : workspace,
-        }
-      },
-      signal,
-    )
-    return resources.get(session.id)
-  }
 
   const session = (
     id = 'default',
@@ -556,8 +405,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         builder,
         // `/skill:<name> args`, then `/<template> args` (like pi; extension commands are tried first)
         expandInput: async (text, owner, signal) => {
-          await prepareWorkspace(owner, signal)
-          const snapshot = resources.get(owner.id)
+          const snapshot = await prepareWorkspace(owner, signal)
           const name = /^\/skill:([^\s]+)/.exec(text)?.[1]
           const skill =
             name && snapshot.skills.find((item) => item.name === name)
@@ -568,7 +416,7 @@ export function createVela(options: VelaOptions = {}): Vela {
                 : await expandEnvironmentSkill(
                     text,
                     snapshot.skills,
-                    await abortable(ensureLocal(owner), signal),
+                    await abortable(resolveExecution(owner), signal),
                     signal,
                   )
             if (expanded !== undefined) return expanded
@@ -576,33 +424,26 @@ export function createVela(options: VelaOptions = {}): Vela {
           return expandPromptTemplate(text, snapshot.promptTemplates) ?? text
         },
         get extensions() {
-          return projects.runner(id)
+          return projects.runner(activeKey(id))
         },
         forward: (event, sessionId) => {
           for (const listener of listeners) listener(event, sessionId)
           const source = sessions.get(sessionId)
-          if (source) projects.runner(sessionId).notify(event, source)
+          if (source)
+            projects.runner(activeKey(sessionId)).notify(event, source)
         },
         onSaved: (id) => options.onSessionSaved?.(id),
-        ensureLocal,
+        hasResolver: !!options.env,
+        resolveExecution,
         prepareWorkspace,
-        onCwdChange: async (changed) => {
-          await projects.release(changed.id)
-          changed.registry.bindScope(registry)
-          sessionCwds.set(changed.registry, changed.cwd)
-          resources.clear(changed.id)
-          projectConfig.clear(changed.id)
-          sessionShells.delete(changed.id)
-        },
+        bindWorkspace,
+        discardWorkspace,
         onClose: async (closed) => {
           if (sessions.get(closed.id) === closed) {
             sessions.delete(closed.id)
-            resources.clear(closed.id)
-            projectConfig.clear(closed.id)
-            sessionShells.delete(closed.id)
             hostDefaults.delete(closed.id)
           }
-          await projects.release(closed.id)
+          await discardWorkspace(closed, closed.location)
         },
       },
       sessionOptions,
@@ -635,6 +476,149 @@ export function createVela(options: VelaOptions = {}): Vela {
     logger,
   })
 
+  const identities = new Map<string, string>()
+  const bindWorkspace = (session: VelaSession) => {
+    sessionCwds.set(session.registry, session.cwd)
+    if (resourceSplit)
+      projects.bind(
+        workspaceKey(session.id, session.location),
+        session.registry,
+      )
+  }
+  const discardWorkspace = async (
+    session: VelaSession,
+    location: ExecutionLocation,
+  ) => {
+    const key = workspaceKey(session.id, location)
+    resources.clear(key)
+    projectConfig.clear(key)
+    sessionShells.delete(key)
+    identities.delete(key)
+    await projects.release(key)
+  }
+  const resolveExecution = async (
+    session: VelaSession,
+    location = session.location,
+    signal?: AbortSignal,
+  ) => {
+    session.store.assertLocationKnown()
+    const key = workspaceKey(session.id, location)
+    const local = location.environment === 'local'
+    const target = { sessionId: session.id, location }
+    const resolver =
+      local && resourceSplit?.useBuiltinLocal ? undefined : options.env
+    let env = resolver
+      ? await resolver(target)
+      : local
+        ? createSessionLocalExecutionEnv({
+            cwd: location.cwd,
+            shellPath: options.shellPath,
+            tempRoot: session.registry.results.dir,
+          })
+        : undefined
+    signal?.throwIfAborted()
+    if (
+      !env?.id ||
+      (env.id === 'node:local') !== local ||
+      env.cwd !== location.cwd ||
+      (identities.has(key) && identities.get(key) !== env.id)
+    )
+      throw new Error(
+        `Execution environment unavailable for ${location.environment}:${location.cwd}`,
+      )
+    identities.set(key, env.id)
+    if (local && resourceSplit) {
+      const settings = await projectConfig.get(key, env)
+      const shellPath =
+        options.shellPath ??
+        settings.shellPath ??
+        resourceSplit?.fallbackShellPath
+      signal?.throwIfAborted()
+      sessionShells.set(key, shellPath)
+      if (!resolver && shellPath !== options.shellPath)
+        env = createSessionLocalExecutionEnv({
+          cwd: location.cwd,
+          shellPath,
+          tempRoot: session.registry.results.dir,
+        })
+    }
+    return local && resolver
+      ? scopeLocalResults(env, session.registry.results.dir)
+      : env
+  }
+
+  const prepareWorkspace = async (
+    session: VelaSession,
+    signal?: AbortSignal,
+    target = session.location,
+  ) => {
+    session.store.assertLocationKnown()
+    if (sessions.get(session.id) !== session)
+      throw new Error('Session is closed')
+    const key = workspaceKey(session.id, target)
+    await resources.prepare(
+      key,
+      async (signal) => {
+        const location = target.cwd
+        const local = target.environment === 'local'
+        const env = await abortable(
+          resolveExecution(session, target, signal),
+          signal,
+        )
+        const workspaceMode = local ? projectConfig.mode(location) : undefined
+        const settings = await projectConfig.get(key, env)
+        signal.throwIfAborted()
+        await projects.prepare(key, env)
+        signal.throwIfAborted()
+        const inventory = await loadWorkspaceInventory(
+          env,
+          signal,
+          settings,
+          workspaceMode,
+          {
+            pinned:
+              local &&
+              !resourceSplit &&
+              location === cwd &&
+              options.contextFiles !== undefined,
+            contextEnabled: options.contextFiles !== false,
+            explicitSkills:
+              local && location === cwd && options.skillDirs !== undefined,
+            explicitTemplates:
+              local &&
+              location === cwd &&
+              options.promptTemplateDirs !== undefined,
+            split: resourceSplit,
+            host: hostResources,
+            logger,
+          },
+        )
+        return {
+          ...inventory,
+          enabledModels: settings.enabledModels,
+          defaultTools: settings.defaultTools,
+          defaults: resourceSplit
+            ? {
+                model:
+                  hostDefaults.get(session.id)?.model ??
+                  settings.defaultModel ??
+                  resourceSplit.fallbackModel,
+                thinkingLevel:
+                  hostDefaults.get(session.id)?.thinkingLevel ??
+                  settings.defaultThinkingLevel,
+                limits: { ...settings.limits, ...options.limits },
+                autoCompaction:
+                  options.autoCompaction ?? settings.autoCompaction,
+              }
+            : undefined,
+        }
+      },
+      signal,
+    )
+    if (sameLocation(target, session.location)) bindWorkspace(session)
+    return resources.get(key)
+  }
+
   registry.setInterception({
     before: async (name, input, context) => {
       const session = context.sessionId
@@ -644,18 +628,18 @@ export function createVela(options: VelaOptions = {}): Vela {
         try {
           const signal = session.signal
           if (signal?.aborted) throw signal.reason
-          context.execution = await abortable(ensureLocal(session), signal)
+          context.execution = await abortable(resolveExecution(session), signal)
         } catch {
           return {
             input,
             block: true,
-            reason: `Execution environment unavailable for local:${session.cwd}`,
+            reason: `Execution environment unavailable for ${session.location.environment}:${session.cwd}`,
           }
         }
       }
       return session
         ? await projects
-            .runner(session.id)
+            .runner(activeKey(session.id))
             .toolCall(
               session,
               context.toolCallId,
@@ -671,7 +655,7 @@ export function createVela(options: VelaOptions = {}): Vela {
         : undefined
       return session
         ? await projects
-            .runner(session.id)
+            .runner(activeKey(session.id))
             .toolResult(
               session,
               context.toolCallId,
@@ -745,8 +729,10 @@ export function createVela(options: VelaOptions = {}): Vela {
       return () => listeners.delete(listener)
     },
     ready: () => runner.ready,
-    extensions: (id) => projects.select(id, sessions).loaded(),
-    commands: (id) => projects.select(id, sessions).commands(),
+    extensions: (id) =>
+      projects.select(id, sessions, activeKey(id ?? 'default')).loaded(),
+    commands: (id) =>
+      projects.select(id, sessions, activeKey(id ?? 'default')).commands(),
     dispose() {
       disposed = true
       disposing ??= (async () => {

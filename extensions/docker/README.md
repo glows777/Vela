@@ -1,6 +1,6 @@
 # Docker execution environment
 
-This private adapter runs Linux containers from a non-root Linux or macOS host and implements Vela's existing `ExecutionEnv` contract. The workspace build emits `dist/docker/adapter.mjs` and its sibling `guest.cjs`. The owner-side factory is `openDockerEnvironment({ dataDir, name, image, network }, cwd)`. Its cwd defaults to `/workspace`. Session location selection and extension registration are pending E3b.
+This private adapter runs Linux containers from a non-root Linux or macOS host and implements Vela's existing `ExecutionEnv` contract. The workspace build emits `dist/docker/adapter.mjs` and its sibling `guest.cjs`. The owner-side factory is `openDockerEnvironment({ dataDir, name, image, network }, cwd)`. Its cwd defaults to `/workspace`. The CLI ships both files under the installed package’s private `dist/docker` directory. It resolves named entries from the owner's `environments` settings.
 
 First preparation creates or reopens one labeled container per canonical data directory and environment name. It mounts only the allocated workspace, runs as the host's non-root uid:gid, and checks for both `rg` and `fd` before returning an adapter. The owner supplies a local image. The reference Dockerfile includes the expected tools. Network defaults to `on`. The `off` setting uses Docker's `none` network. Commands run through the fixed local Linux Docker socket at `unix:///var/run/docker.sock`.
 

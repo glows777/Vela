@@ -11,7 +11,7 @@ import { materializeAttachments } from './attachments.ts'
 import { type ChannelDirectory, isGroupInput } from './directory.ts'
 import { lastAssistantText } from './feedback-message.ts'
 import { modelInputText } from './input.ts'
-import { errorMessage } from './log.ts'
+import { errorMessage, feedbackFailure } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import { channelSessionId } from './session-id.ts'
 import type {
@@ -24,6 +24,7 @@ import type {
 
 /** Whether the run that owns a presentation can still retry it. */
 type Phase = 'live' | 'final'
+type Report = (error: unknown, phase: Phase) => Promise<void>
 
 /**
  * One presentation report per input (or per merged passive batch). The live card and the final
@@ -31,10 +32,7 @@ type Phase = 'live' | 'final'
  */
 class PresentationGate {
   private reported = false
-  private readonly report: (error: unknown, phase: Phase) => Promise<void>
-  constructor(report: (error: unknown, phase: Phase) => Promise<void>) {
-    this.report = report
-  }
+  constructor(private readonly report: Report) {}
   run(error: unknown, phase: Phase = 'live'): Promise<void> {
     if (this.reported) return Promise.resolve()
     this.reported = true
@@ -53,7 +51,7 @@ export class MessageFeedback {
   constructor(
     channel: ChannelDefinition,
     readonly message: IncomingMessage,
-    private report: (error: unknown, phase: Phase) => Promise<void>,
+    private report: Report,
     acknowledge = true,
   ) {
     this.gate = new PresentationGate((error, phase) =>
@@ -125,7 +123,7 @@ class DeferredMessageFeedback {
   constructor(
     private channel: ChannelDefinition,
     private message: IncomingMessage,
-    report: (error: unknown, phase: Phase) => Promise<void>,
+    report: Report,
     gate = new PresentationGate(report),
   ) {
     this.gate = gate
@@ -189,7 +187,7 @@ class MergedMessageFeedback {
   constructor(
     channel: ChannelDefinition,
     messages: IncomingMessage[],
-    report: (error: unknown, phase: Phase) => Promise<void>,
+    report: Report,
   ) {
     // One burst is one evaluation: its inputs share a report instead of one each.
     this.gate = new PresentationGate(report)
@@ -232,6 +230,7 @@ interface ChannelRun {
 }
 
 interface FeedbackOptions {
+  matchesLocation: (session: VelaSession) => boolean
   changed: (key: string) => void
   directory: ChannelDirectory
   recovery: ChannelRecovery
@@ -427,6 +426,7 @@ export class RunFeedback {
       )
       return true
     }
+    if (!this.options.matchesLocation(run.session)) return false
     const inputs = this.acknowledge(channel, msg)
     await Promise.all(inputs.map((input) => input.ready))
     if (msg.topic) msg.isNewTopic = false
@@ -514,16 +514,11 @@ export class RunFeedback {
     msg: IncomingMessage,
     error: unknown,
   ): Promise<void> {
-    this.publishError(channelName, msg, error)
-    this.options.logger.error(
-      `[${channelName}] Feedback failed: ${errorMessage(error)}`,
-    )
-    if (msg.passive || msg.externalEvent) return
-    await this.sendErrorText(
-      channelName,
-      msg,
-      `Couldn't update task feedback: ${errorMessage(error)}. Check the bot's permissions and connection.`,
-    )
+    const { diagnostic, eventError, text } = feedbackFailure(error)
+    this.publishError(channelName, msg, eventError)
+    this.options.logger.error(`[${channelName}] Feedback failed: ${diagnostic}`)
+    if (!msg.passive && !msg.externalEvent)
+      await this.sendErrorText(channelName, msg, text)
   }
 
   /**

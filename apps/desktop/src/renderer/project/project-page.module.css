@@ -4,31 +4,36 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: var(--space-6);
 }
 
 .chat {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--space-3);
-  width: 100%;
-  max-width: 720px;
+  min-width: 0;
   min-height: 0;
-  margin: 0 auto;
+}
+
+.composerDock {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px max(24px, calc((100% - 720px) / 2)) 16px;
 }
 
 .empty {
   margin: 0;
   color: var(--vela-muted);
-  font-size: var(--text-base);
+  font-size: var(--vela-text-base);
   line-height: 1.6;
 }
 
 .error {
   margin: 0;
   color: var(--vela-accent-ink);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }
 
 .offTitle {

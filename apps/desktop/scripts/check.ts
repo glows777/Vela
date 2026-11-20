@@ -4,20 +4,13 @@ import { Glob } from 'bun'
 import ts from 'typescript'
 
 const root = resolve(import.meta.dir, '..')
-const foundation = await Bun.file(
-  resolve(root, 'src/renderer/components/arc/foundation.css'),
-).text()
-const arcVariables = new Set(
-  [...foundation.matchAll(/--[a-z][a-z0-9-]*/g)].map((match) => match[0]),
-)
 for await (const path of new Glob('src/styles/**/*.css').scan(root)) {
   const source = await Bun.file(resolve(root, path)).text()
   for (const match of source.matchAll(/(--[\w-]+)\s*:/g)) {
     const name = match[1]!
     if (name.startsWith('--vela-')) continue
-    if (path === 'src/styles/arc-theme.css' && arcVariables.has(name)) continue
     throw new Error(
-      `Unprefixed Vela token ${name} in ${path}. Use --vela-*; Arc overrides belong in arc-theme.css.`,
+      `Unprefixed Vela token ${name} in ${path}. Use --vela-* in design/tokens.json.`,
     )
   }
 }

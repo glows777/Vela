@@ -1,31 +1,51 @@
 import { isAbsolute, resolve } from 'node:path'
 import type { ExecutionLocation } from './types.ts'
 
-/** Nonlocal locations stay disabled until the host supports their isolation and artifact lifecycle. */
-export function localCwd(
-  location?: ExecutionLocation,
+/** Local paths follow host rules. A remote cwd is already in its environment's namespace. */
+export function resolveLocation(
+  location: ExecutionLocation | undefined,
   base?: string,
   cwd?: string,
-): string {
-  if (location && (typeof location.cwd !== 'string' || !location.cwd.trim()))
-    throw new Error('Invalid execution location: cwd is required')
-  if (location && location.environment !== 'local')
-    throw new Error(
-      `Execution environment ${location.environment} is unavailable (only local locations are supported)`,
-    )
-  return resolve(base ?? process.cwd(), location?.cwd ?? cwd ?? '.')
+): Readonly<ExecutionLocation> {
+  if (
+    location !== undefined &&
+    (!location ||
+      typeof location.environment !== 'string' ||
+      !location.environment.trim() ||
+      typeof location.cwd !== 'string' ||
+      !location.cwd.trim() ||
+      location.cwd.includes('\0'))
+  )
+    throw Error('Invalid execution location')
+  if (location && location.environment !== 'local') {
+    if (!location.cwd.startsWith('/'))
+      throw Error(
+        'Invalid execution location: expected absolute environment cwd',
+      )
+    return Object.freeze({
+      environment: location.environment,
+      cwd: location.cwd,
+    })
+  }
+  return Object.freeze({
+    environment: 'local',
+    cwd: resolve(base ?? process.cwd(), location?.cwd ?? cwd ?? '.'),
+  })
 }
 
-/** Stored locations are absolute; reject malformed state before any session becomes executable. */
-export function validateStoredLocation(location: unknown): void {
+export function validateStoredLocation(
+  input: unknown,
+): asserts input is ExecutionLocation {
+  const loc = input as ExecutionLocation | undefined
   if (
-    !location ||
-    typeof location !== 'object' ||
-    typeof (location as ExecutionLocation).cwd !== 'string' ||
-    !isAbsolute((location as ExecutionLocation).cwd)
+    !loc ||
+    typeof loc.cwd !== 'string' ||
+    !(loc.environment === 'local'
+      ? isAbsolute(loc.cwd)
+      : loc.cwd.startsWith('/'))
   )
-    throw new Error('Invalid saved execution location')
-  localCwd(location as ExecutionLocation)
+    throw Error('Invalid saved execution location')
+  resolveLocation(loc)
 }
 
 /** Wait for an adapter supplied by the host without leaving the caller blocked after cancellation. */
@@ -46,4 +66,11 @@ export async function abortable<T>(
   } finally {
     signal.removeEventListener('abort', onAbort)
   }
+}
+
+export function sameLocation(
+  left: ExecutionLocation,
+  right: ExecutionLocation,
+) {
+  return left.environment === right.environment && left.cwd === right.cwd
 }

@@ -3,20 +3,160 @@ import type {
   SessionOptions,
   VelaSession,
 } from '@glows777/vela-core/extension-api'
+import { LarkDeliveryRefusedError } from './delivery.ts'
 import {
   type ChannelDirectory,
   type ChannelRecord,
   isGroupInput,
 } from './directory.ts'
+import { WorkspacePreparationError } from './log.ts'
 import { storedMessage } from './recovery.ts'
 import { resolveChannelScope } from './scope.ts'
 import { topicSessionOptions } from './topics.ts'
 import type { ChannelDefinition, IncomingMessage } from './types.ts'
 
+/** Shared by resume and relocation for one queued input. */
+export interface AdmissionWait {
+  cancelled(): boolean
+  waiting(session: VelaSession, environment: string): Promise<void>
+}
+
 /** Every opening path resolves current options from the logical chat, before resume or hooks. */
 export class ChannelSessions {
   /** Sessions this class has already given the chat's tool split (once per object, like resume). */
   private readonly toolSplitApplied = new WeakSet<VelaSession>()
+
+  private readonly targets = new WeakMap<
+    VelaSession,
+    NonNullable<SessionOptions['location']>
+  >()
+
+  matchesLocation(session: VelaSession) {
+    const target = this.targets.get(session)
+    return (
+      !target ||
+      (session.location.environment === target.environment &&
+        // A local group binding preserves the cwd of a topic already opened by its host.
+        (target.environment === 'local' || session.cwd === target.cwd))
+    )
+  }
+
+  async reconcile(
+    key: string,
+    session: VelaSession,
+    msg: IncomingMessage,
+    send: (
+      msg: IncomingMessage,
+      text: string,
+      identity: string,
+    ) => Promise<boolean>,
+    recovering = false,
+    wait?: AdmissionWait,
+  ) {
+    const target = this.targets.get(session)
+    if (!target) return
+    let notice = this.directory.get(key)?.locationNotice
+    if (
+      notice &&
+      (target.environment !== notice.environment || target.cwd !== notice.cwd)
+    ) {
+      await this.directory.setLocationNotice(key, session.id, undefined)
+      notice = undefined
+    }
+    if (!this.matchesLocation(session)) {
+      // Startup can finish delivery of a committed move. Only normal admission can initiate one.
+      if (recovering) return
+      if (!notice) {
+        notice = {
+          ...target,
+          token: crypto.randomUUID(),
+          senderId: msg.senderId,
+          replyToId: msg.replyToId,
+        }
+        await this.directory.setLocationNotice(key, session.id, notice)
+      }
+      await this.whenIdle(session, () => session.setLocation(target), wait)
+      if (!this.matchesLocation(session)) {
+        await this.directory.setLocationNotice(key, session.id, undefined)
+        return
+      }
+    }
+    if (!notice) return
+    if (!notice.text) {
+      let text = `Moved this session to the ${target.environment} workspace.`
+      if (target.environment !== 'local') {
+        try {
+          const env = await session.execEnv()
+          const entries = await env.listDir(target.cwd)
+          if (entries.ok && !entries.value.length)
+            text +=
+              ' The workspace was empty at the time of the move. To use the repository, clone it there.'
+        } catch {
+          /* An unreadable destination has no verified contents. */
+        }
+      }
+      notice = { ...notice, text }
+      await this.directory.setLocationNotice(key, session.id, notice)
+    }
+    const address = {
+      ...msg,
+      senderId: notice.senderId,
+      replyToId: notice.replyToId,
+      routine: undefined,
+      handoff: undefined,
+    }
+    try {
+      if (!(await send(address, notice.text!, `move:${notice.token}`))) return
+    } catch (error) {
+      // An expired or conflicting saved intent must never get a new delivery identity.
+      if (!(error instanceof LarkDeliveryRefusedError)) throw error
+    }
+    await this.directory.setLocationNotice(key, session.id, undefined)
+  }
+
+  async resume(session: VelaSession, wait?: AdmissionWait) {
+    try {
+      const restored = await this.whenIdle(
+        session,
+        () => session.resume(),
+        wait,
+      )
+      // First admission has no transcript. Prepare its selected guest before handing the input
+      // to the model path, so operator-only engine failures receive the same handling as moves.
+      if (
+        restored === false &&
+        session.location.environment !== 'local' &&
+        this.matchesLocation(session)
+      )
+        await session.resources()
+      return restored
+    } catch (error) {
+      if (session.location.environment !== 'local')
+        throw new WorkspacePreparationError(error)
+      throw error
+    }
+  }
+
+  private async whenIdle<T>(
+    session: VelaSession,
+    task: () => Promise<T>,
+    wait?: AdmissionWait,
+  ): Promise<T | undefined> {
+    while (!this.stopped()) {
+      if (wait?.cancelled()) return
+      try {
+        return await task()
+      } catch (error) {
+        const target = this.targets.get(session)
+        if (!target || (error as { code?: string })?.code !== 'SESSION_BUSY')
+          throw error
+        if (wait && !wait.cancelled() && !this.matchesLocation(session))
+          await wait.waiting(session, target.environment)
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    throw Error('Channel is shutting down')
+  }
 
   constructor(
     private directory: ChannelDirectory,
@@ -54,7 +194,7 @@ export class ChannelSessions {
       chatKind,
       this.directory.storageKey(channel.name, msg.channelId),
     )
-    const options = channel.sessionOptions?.(msg)
+    const options: SessionOptions | undefined = channel.sessionOptions?.(msg)
     const modifiers = [
       channel.sendFile && !options?.tools?.includes('-channel_send_file')
         ? '+channel_send_file'
@@ -136,6 +276,7 @@ export class ChannelSessions {
             }
           : undefined,
     })
+    if (options?.location) this.targets.set(session, options.location)
     // The chat's own split applies to a session something else opened too: a tool its chat turns off is
     // removed, and a hub's background commands are added, as when this call constructs the session.
     // What it never does is widen an allowlist the session already had: a positive list is

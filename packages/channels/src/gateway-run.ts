@@ -4,15 +4,19 @@ import { publishChannelEvent } from '@glows777/vela-core/extension-api'
 import type { TopicAdmission } from './admission.ts'
 import { materializeAttachments } from './attachments.ts'
 import type { TopicCommands } from './commands.ts'
-import { sendAnswer } from './delivery.ts'
+import {
+  LarkDeliveryRefusedError,
+  larkDelivery,
+  sendAnswer,
+} from './delivery.ts'
 import type { ChannelDirectory } from './directory.ts'
 import type { RunFeedback } from './feedback.ts'
 import type { GatewayIdle } from './gateway-idle.ts'
 import type { ChannelHandoff } from './handoff.ts'
-import { errorMessage } from './log.ts'
+import { errorMessage, WorkspacePreparationError } from './log.ts'
 import type { ChannelRecovery } from './recovery.ts'
 import type { ChannelRoutines } from './routines.ts'
-import type { ChannelSessions } from './sessions.ts'
+import type { AdmissionWait, ChannelSessions } from './sessions.ts'
 import type {
   ChannelDefinition,
   ChannelOutcome,
@@ -150,9 +154,23 @@ export class GatewayRun {
       if (!record || channel?.canRecover?.(trigger, record.chatKind) === false)
         return 'done'
     }
+    let announced = false
+    const wait: AdmissionWait = {
+      cancelled: () => processing.stopped,
+      waiting: async (session, environment) => {
+        if (announced || recovered || trigger.backgroundJobToken) return
+        announced = true
+        await this.sendReply(
+          session,
+          channelName,
+          trigger,
+          `Waiting for active work to finish before moving to the ${environment} workspace. Stop cancels this message.`,
+        )
+      },
+    }
     const topicSession =
       trigger.topic || trigger.passive
-        ? await this.admission.admit(id, channel, trigger)
+        ? await this.admission.admit(id, channel, trigger, wait)
         : undefined
     if (trigger.topic && !topicSession) return 'failed'
     let batch = messages
@@ -277,7 +295,8 @@ export class GatewayRun {
       (this.saveFailures.get(id) ?? 0) < MAX_SAVE_FAILURES &&
       !this.admission.resumed.has(session)
     ) {
-      await session.resume()
+      await this.sessions.resume(session, wait)
+      if (wait.cancelled()) return stopped(session)
       this.admission.resumed.add(session)
     }
     if (
@@ -311,6 +330,22 @@ export class GatewayRun {
       return 'failed'
     }
 
+    if (!recovered && !trigger.backgroundJobToken) {
+      try {
+        await this.reconcileLocation(
+          id,
+          channelName,
+          session,
+          merged,
+          false,
+          wait,
+        )
+        if (wait.cancelled()) return stopped(session)
+      } catch (error) {
+        this.admission.resumed.delete(session)
+        throw error
+      }
+    }
     if (evaluated.some((message) => message.files?.length)) {
       const resolved = await Promise.all(
         evaluated.map((message) => materializeAttachments(session, message)),
@@ -368,11 +403,35 @@ export class GatewayRun {
       this.skippedNotices.add(id)
   }
 
+  reconcileLocation(
+    key: string,
+    channel: string,
+    session: VelaSession,
+    msg: IncomingMessage,
+    recovering = false,
+    wait?: AdmissionWait,
+  ) {
+    return this.sessions
+      .reconcile(
+        key,
+        session,
+        msg,
+        (route, text, identity) =>
+          this.sendReply(session, channel, route, text, identity),
+        recovering,
+        wait,
+      )
+      .catch((error) => {
+        throw new WorkspacePreparationError(error)
+      })
+  }
+
   async sendReply(
     session: VelaSession,
     channelName: string,
     msg: IncomingMessage,
     replyText: string,
+    noticeIdentity?: string,
   ): Promise<boolean> {
     const channel = this.channel(channelName)
     if (!replyText || !channel) return false
@@ -386,7 +445,11 @@ export class GatewayRun {
       ...(msg.replyToId ? { replyToId: msg.replyToId } : {}),
     }
     try {
-      await sendAnswer(session, channel, reply)
+      if (noticeIdentity && channelName === 'lark')
+        await larkDelivery(session, noticeIdentity, reply, (deliveryId) =>
+          channel.send({ ...reply, deliveryId }),
+        )
+      else await sendAnswer(session, channel, reply)
     } catch (error) {
       publishChannelEvent(session, {
         type: 'channel_error',
@@ -396,6 +459,8 @@ export class GatewayRun {
         aborted: false,
       })
       this.logger.error(`[${channelName}] Reply failed: ${errorMessage(error)}`)
+      if (noticeIdentity && error instanceof LarkDeliveryRefusedError)
+        throw error
       return false
     }
     publishChannelEvent(session, {

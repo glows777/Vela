@@ -2,7 +2,7 @@
   "tokens": {
     "source": "User-supplied Vela design export, tokens.json",
     "exportVersion": 2,
-    "transformation": "Pruned unused website scales and motion. Kept Vela brand colors and local font families in a small canonical manifest, with vela- names. Arc owns control size, radius, spacing, and motion."
+    "transformation": "Canonical Vela design tokens exported from design/vela-app.html with vela- prefixes across light, dark, and high-contrast themes. Owns colors, shadows, fonts, radii, spacing, control sizes, and motion."
   },
   "assets": [
     {
@@ -25,22 +25,5 @@
       "path": "src/assets/vela-icon-180.png",
       "source": "https://github.com/glows777/vela-website/blob/1996214dd255652ebec5a97b24071e0c3fdad55a/public/assets/vela-icon-180.png"
     }
-  ],
-  "arc": {
-    "license": "MIT",
-    "licensePath": "src/renderer/components/arc/LICENSE.txt",
-    "licenseSource": "https://github.com/kuratlielia/arc-library/blob/8302b52ed9dc79ae7ca699b158a98dfdf09656f7/LICENSE",
-    "retrievedAt": "2026-11-14T15:35:03.626Z",
-    "installer": "shadcn@4.23.0",
-    "command": "bunx shadcn@4.23.0 add @uiarc/arc-foundation @uiarc/button @uiarc/dialog @uiarc/tabs @uiarc/switch --yes",
-    "sources": [
-      "https://uiarc.dev/r/arc-foundation.json",
-      "https://uiarc.dev/r/arc-motion-tokens.json",
-      "https://uiarc.dev/r/button.json",
-      "https://uiarc.dev/r/dialog.json",
-      "https://uiarc.dev/r/tabs.json",
-      "https://uiarc.dev/r/switch.json"
-    ],
-    "adaptations": "Adopted as Vela-owned code. Removed unused default exports and exported type modifiers, replaced the redundant motion-token re-export with direct imports, and applied the repository formatter and lint fixes. Vela colors and fonts are mapped in arc-theme.css."
-  }
+  ]
 }

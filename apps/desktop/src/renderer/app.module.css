@@ -1,6 +1,6 @@
 .app {
   display: grid;
-  grid-template-columns: 272px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
   background: var(--vela-white);
@@ -12,6 +12,7 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--vela-white);
 }
 
 .content {
@@ -25,14 +26,15 @@
   max-width: 60ch;
   margin: 0 auto;
   overflow-wrap: anywhere;
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
+  user-select: text;
 }
 
 .hint {
   max-width: 45ch;
   margin: 0 auto;
   color: var(--vela-muted);
-  font-size: var(--text-sm);
+  font-size: var(--vela-text-sm);
 }
 
 .booting {
@@ -42,10 +44,10 @@
 
 .hostError {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--vela-space-4);
   place-content: center;
   min-height: 100dvh;
-  padding: var(--space-8);
+  padding: var(--vela-space-8);
   background: var(--vela-white);
   color: var(--vela-ink);
   text-align: center;

@@ -1,6 +1,6 @@
+import { ArrowRight } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { restoreDraft } from '../../shared/draft.ts'
-import { Button } from './arc/button/button.tsx'
 import styles from './composer.module.css'
 
 /** Unsent text per conversation, so switching away and back keeps what was typed. */
@@ -55,21 +55,22 @@ export function Composer({
   }
 
   return (
-    <form
-      className={[styles.composer, running ? styles.running : ''].join(' ')}
-      onSubmit={(event) => {
-        event.preventDefault()
-        submit()
-      }}
-    >
-      {children}
-      <div className={styles.field}>
+    <div className={styles.wrap}>
+      <form
+        className={[styles.composer, running ? styles.running : '']
+          .filter(Boolean)
+          .join(' ')}
+        onSubmit={(event) => {
+          event.preventDefault()
+          submit()
+        }}
+      >
         <textarea
           ref={field}
           className={styles.text}
           aria-label={label}
           placeholder={label}
-          rows={1}
+          rows={2}
           value={text}
           onChange={(event) => write(event.target.value)}
           onKeyDown={(event) => {
@@ -80,11 +81,20 @@ export function Composer({
             }
           }}
         />
-        <Button type="submit" size="lg" disabled={text.trim() === ''}>
-          Send
-        </Button>
-      </div>
+        <div className={styles.tools}>
+          {children}
+          <span className={styles.spacer} />
+          <button
+            type="submit"
+            className={styles.send}
+            aria-label="Send"
+            disabled={text.trim() === ''}
+          >
+            <ArrowRight size={20} aria-hidden="true" />
+          </button>
+        </div>
+      </form>
       {hint ? <p className={styles.hint}>{hint}</p> : null}
-    </form>
+    </div>
   )
 }

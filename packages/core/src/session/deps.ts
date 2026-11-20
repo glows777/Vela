@@ -1,7 +1,7 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider'
 import type { LanguageModel } from 'ai'
 import type { VelaEvent } from '../agent/events.ts'
-import type { ExecutionEnv } from '../execution/types.ts'
+import type { ExecutionEnv, ExecutionLocation } from '../execution/types.ts'
 import type {
   BeforeAgentStartResult,
   ExtensionEventName,
@@ -115,11 +115,17 @@ export interface SessionDeps<Session> {
   forward: (event: VelaEvent, sessionId: string) => void
   onClose: (session: Session) => void | Promise<void>
   onSaved: (sessionId: string) => void
-  onCwdChange: (session: Session) => void | Promise<void>
-  ensureLocal: (session: Session) => Promise<ExecutionEnv>
+  hasResolver: boolean
+  discardWorkspace: (
+    session: Session,
+    location: ExecutionLocation,
+  ) => Promise<void>
+  bindWorkspace: (session: Session) => void
+  resolveExecution: (session: Session) => Promise<ExecutionEnv>
   prepareWorkspace: (
     session: Session,
     signal?: AbortSignal,
+    location?: ExecutionLocation,
   ) => Promise<PreparedSessionResources>
 }
 

@@ -1230,6 +1230,7 @@
     get hasWork: boolean
     get isBashRunning: boolean
     get isRunning: boolean
+    get location: Readonly<ExecutionLocation>
     get model: LanguageModel
     get modelInfo: ModelInfo
     get name: string | undefined
@@ -1257,6 +1258,7 @@
     sendUserMessage: (content: string | (TextContent | ImageContent)[], options?: { deliverAs?: "steer" | "followUp"; }) => Promise<void>
     setActiveTools: (names: string[] | undefined) => void
     setLabel: (entryId: string, label: string | undefined) => void
+    setLocation: (location: ExecutionLocation) => Promise<void>
     setModel: (model: string | LanguageModel) => void
     setName: (name: string | undefined) => void
     setThinkingLevel: (level: ThinkingLevel) => void
