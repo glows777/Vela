@@ -94,7 +94,7 @@ Print mode sends each prompt in turn and writes only the final assistant text of
 
 If stdin is piped, its contents are prepended to the first prompt, separated by a blank line. If there is no prompt at all, Vela exits with code 2. If the turn fails or no model is available, the reason goes to stderr and the exit code is 1. Stopped by a signal, print, JSON and RPC modes abort the turn, kill the commands the model started, save the session and exit with 130 (SIGINT), 143 (SIGTERM) or 129 (SIGHUP); a second signal exits right away.
 
-After printing, Vela stays open for background commands and the turns that handle their results. Those turns do not replace the printed answer. JSON mode continues emitting their events. A background command that reaches its [unattended time limit](built-in-extensions.md#background) is stopped and reports why, so it cannot keep print mode open indefinitely on its own.
+After printing, Vela stays open for background commands and the turns that handle their results. Those turns do not replace the printed answer. JSON mode continues emitting their events. If a background result turn fails, the CLI exits 1; text mode keeps the original answer it already wrote. A background command that reaches its [unattended time limit](built-in-extensions.md#background) is stopped and reports why, so it cannot keep print mode open indefinitely on its own.
 
 Print mode has no UI: confirmation dialogs from extensions answer "no". Extension commands work (`vela -p /memory`), but the CLI's own slash commands such as `/context` or `/model` do not; they are sent to the model as plain text.
 

@@ -1198,6 +1198,51 @@ for (const { name, delay, input } of [
   })
 }
 
+for (const mode of ['text', 'json'] as const) {
+  test.concurrent(`print background (${mode}) returns failure when the result turn fails`, async () => {
+    const dir = tempDir('vela-cli-background-error-')
+    dirs.push(dir)
+    const file = join(dir.path, 'scenario.json')
+    await Bun.write(
+      file,
+      JSON.stringify({
+        responses: [
+          {
+            toolCalls: [
+              {
+                name: 'bash',
+                input: {
+                  command: 'sleep 1; printf done > finished.txt',
+                  run_in_background: true,
+                },
+              },
+            ],
+          },
+          { text: 'Original answer' },
+          { error: 'background provider rejected the request' },
+        ],
+      }),
+    )
+    const { stdout, stderr, code } = await cli(
+      [...(mode === 'text' ? ['-p'] : ['--mode', 'json']), 'Run it'],
+      { cwd: dir.path, model: `faux:${file}` },
+    )
+    expect(await Bun.file(join(dir.path, 'finished.txt')).exists()).toBe(true)
+    if (mode === 'text') expect(stdout).toBe('Original answer\n')
+    else
+      expect(
+        stdout
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line)),
+      ).toContainEqual(
+        expect.objectContaining({ type: 'agent_end', reason: 'error' }),
+      )
+    expect(stderr).toContain('background provider rejected the request')
+    expect(code).toBe(1)
+  })
+}
+
 test.concurrent('--mode json reports a model error in agent_end and exits 1', async () => {
   const { stdout, code, stderr } = await cli(['--mode', 'json', 'hi'], {
     model: `faux:${scenario('bad-request')}`,

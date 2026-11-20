@@ -47,7 +47,7 @@ export interface BackgroundStart {
   onOutput: (chunk: string) => void
   /** Aborts this command alone; a job outlives the tool call that started it */
   signal: AbortSignal
-  /** Explicit shell timeout for an interactive job; unattended jobs use the registry deadline. */
+  /** Explicit shell timeout in seconds for an interactive job; unattended jobs use the registry deadline. */
   timeout?: number
   /**
    * The shell to run a local command with, from `background({ shellPath })`; unset means the
