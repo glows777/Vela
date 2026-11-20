@@ -79,6 +79,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Fixed
 
+- At the default window size, the desktop first-run custom provider form keeps **Verify and save** in view, and after a rejected key it shows the provider’s reason alongside the retry action. Project headers keep their source tag and folder path visible even with a long title ([#513](https://github.com/glows777/Vela/pull/513)).
+
 - **A message the Local project chat refuses says why it was refused.** Local's message schema gives the two `text` rules a sender can fix their own words — `Message is too long (max 100000 characters)` past Local's limit and `Message must not be empty` — while any other shape failure keeps `Invalid JSON request body`. The desktop shows that reason as it is, without Electron's `Error invoking remote method '…': LocalError:` wrapper ([#469](https://github.com/glows777/Vela/issues/469)).
 
 - **The desktop project header keeps its name on one line.** A long folder path now ellipsizes beside the name instead of squeezing it onto two lines in the 44px bar, the path names the whole folder on hover, and `desktop:verify` opens a project whose folder is ~200 characters deep to check both ([#470](https://github.com/glows777/Vela/issues/470)).
