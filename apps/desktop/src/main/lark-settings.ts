@@ -51,22 +51,21 @@ export async function verifyCredentials(id: string, secret: string) {
 }
 
 /** Only the approved fields reach the shared writer, even for an untyped IPC caller. */
-export async function writeLark(
+export async function prepareLarkWrite(
   agentDir: string,
   section: Record<string, unknown>,
   input: LarkSetup,
   verify: (id: string, secret: string) => Promise<void>,
-  checkIdle: () => void,
 ) {
-  checkIdle()
   if ('runInApp' in input && typeof input.runInApp === 'boolean')
-    return saveLarkSection({ agentDir, runInApp: input.runInApp })
+    return () => saveLarkSection({ agentDir, runInApp: input.runInApp })
   if ('removeChat' in input && typeof input.removeChat === 'string')
-    return saveLarkSection({
-      agentDir,
-      removeChat: input.removeChat,
-      env: process.env,
-    })
+    return () =>
+      saveLarkSection({
+        agentDir,
+        removeChat: input.removeChat,
+        env: process.env,
+      })
   if (
     !('appId' in input) ||
     typeof input.appId !== 'string' ||
@@ -85,10 +84,18 @@ export async function writeLark(
       'Could not verify Lark credentials. Check the app ID and secret and try again.',
     )
   }
-  checkIdle()
-  return saveLarkSection({
-    agentDir,
-    ...(appId === section.appId ? {} : { appId }),
-    appSecret: input.appSecret,
-  })
+  return (current: Record<string, unknown>) => {
+    if (
+      current.appId !== section.appId ||
+      current.appSecret !== section.appSecret
+    )
+      throw new Error(
+        'Lark credentials changed during verification. Check the current settings and try again.',
+      )
+    return saveLarkSection({
+      agentDir,
+      ...(appId === current.appId ? {} : { appId }),
+      appSecret: input.appSecret,
+    })
+  }
 }

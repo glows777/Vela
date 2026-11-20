@@ -168,11 +168,132 @@ export async function verifyLarkSettings(
       saved.appSecret === secret &&
       saved.runInApp === true,
   )
+  await pendingCredentialJourney(page, dir, `${secret}-rotation`, submit)
+  assert(
+    (await disk()).extensionConfig.lark.appSecret === `${secret}-rotation`,
+    'The later credential edit remains saved',
+  )
+  await open()
+  const invalidDataDir = join(dir, 'unavailable-storage')
+  await writeFile(invalidDataDir, 'a file cannot be used as a data directory')
+  const original = await disk()
+  await writeFile(
+    path,
+    JSON.stringify({ ...original, dataDir: invalidDataDir }),
+  )
+  try {
+    await toggle.click()
+    const diagnostic = page
+      .getByRole('alert')
+      .filter({ hasText: /check.*data directory/i })
+    await diagnostic.waitFor({ timeout: 5000 })
+    assert(!(await diagnostic.innerText()).includes(invalidDataDir))
+    await themes(page, 'lark-settings-replacement-error')
+    assert.deepEqual(
+      await page.evaluate(async () =>
+        (await window.vela.channels()).map(({ name }) => name),
+      ),
+      ['local'],
+    )
+    await submit('Can Local answer after the replacement failed?')
+    await page.waitForFunction(async () => {
+      const project = (await window.vela.projects()).find(
+        (p) => p.name === 'Setup project',
+      )!
+      const { messages } = await window.vela.messages({
+        projectId: project.id,
+        sessionId: project.sessionId,
+      })
+      return (
+        messages.at(-2)?.text ===
+          'Can Local answer after the replacement failed?' &&
+        messages.at(-1)?.text === 'Local answer'
+      )
+    })
+    await page.waitForFunction(
+      async () =>
+        !(await window.vela.sessions('local')).some(
+          (s) => s.state === 'running' || s.state === 'queued',
+        ),
+    )
+  } finally {
+    const repaired = await disk()
+    delete repaired.dataDir
+    await writeFile(path, JSON.stringify(repaired))
+  }
+  await open()
+  await toggle.click()
+  await connected.waitFor()
   assert.equal(
     (await page.evaluate(() => window.vela.projects())).some(
       (p) => p.cwd === project,
     ),
     true,
+  )
+  return [
+    'A duplicate enabled chat at startup shows the setting to fix; Local answers, and turning ownership off clears the diagnostic.',
+    'Lark settings verify credentials, hide both secrets, disconnect and reconnect the desktop host, protect a running Local session, and remove an enabled chat.',
+    'While a credential check is pending, Local answers and another credential edit succeeds. The stale check cannot overwrite that edit.',
+    'When the replacement cannot use the configured data directory, Settings gives a repair instruction, Local answers, and the repaired host reconnects.',
+  ]
+}
+
+/** Hold a fake token request while the same window sends and reads a real Local reply. */
+async function pendingCredentialJourney(
+  page: Page,
+  dir: string,
+  rotatedSecret: string,
+  submit: (text: string) => Promise<void>,
+) {
+  const attempt = page.evaluate(async () => {
+    try {
+      await window.vela.saveLark({ appId: 'verify-held' })
+      return 'Saved'
+    } catch (error) {
+      return String(error)
+    }
+  })
+  try {
+    const deadline = Date.now() + 10_000
+    while (!(await Bun.file(join(dir, 'verification-started')).exists())) {
+      assert(Date.now() < deadline, 'The fake credential check did not start')
+      await Bun.sleep(50)
+    }
+    const message = 'Can Local answer before credential validation finishes?'
+    await submit(message)
+    await page.waitForFunction(
+      async (text) => {
+        const project = (await window.vela.projects()).find(
+          (p) => p.name === 'Setup project',
+        )!
+        const { messages } = await window.vela.messages({
+          projectId: project.id,
+          sessionId: project.sessionId,
+        })
+        const session = (await window.vela.sessions('local')).find(
+          (s) => s.sessionId === project.sessionId,
+        )
+        return (
+          messages.at(-2)?.text === text &&
+          messages.at(-1)?.text === 'Local answer' &&
+          session?.state === 'done'
+        )
+      },
+      message,
+      { timeout: 5000 },
+    )
+    // A second credential edit wins while the first is still verifying the old saved secret.
+    await page.evaluate(
+      (appSecret) => window.vela.saveLark({ appId: 'verify-app', appSecret }),
+      rotatedSecret,
+    )
+  } finally {
+    await writeFile(join(dir, 'release-verification'), '')
+  }
+  assert.match(await attempt, /credentials changed during verification/i)
+  assert.equal(
+    (await page.evaluate(() => window.vela.settings())).lark.appId,
+    'verify-app',
   )
 }
 

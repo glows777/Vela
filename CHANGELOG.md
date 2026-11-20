@@ -22,6 +22,8 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- The built-in Lark transport suppresses vendor SDK logs to keep credential payloads out of process output. This also suppresses SDK WebSocket warnings in `vela serve`.
+
 - **Settings › Lark** verifies app credentials, shows the connection and enabled chats, and can remove a chat or release the desktop connection for `vela serve` ([#420](https://github.com/glows777/Vela/issues/420)).
 
 - **A foreground `bash` call that outlives its budget moves to the background instead of being killed.** The call returns `Command did not complete within its 120s timeout and was moved to the background (ID: bg-1).` with the output so far, the command keeps running, and its exit arrives as the job's result; the tool result records `backgroundTaskId` with `timedOutAfterMs`, so it is not mistaken for a declared job or one moved with Ctrl+B. `bashForegroundTimeoutSeconds` (default `120`, `0` for no budget) and `bashForegroundTimeoutMaxSeconds` (default `600`, a larger requested `timeout` is clamped and the result names both values) set it per session; a command starting with `sleep` keeps the kill, and a session without the `background` extension or its `background_stop` tool keeps today's `Command timed out after N seconds` ([#432](https://github.com/glows777/Vela/issues/432)).

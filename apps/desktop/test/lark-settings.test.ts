@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   larkStartupDiagnostic,
   larkState,
-  writeLark,
+  prepareLarkWrite,
 } from '../src/main/lark-settings.ts'
 
 test('an ID-only edit verifies with the saved secret and keeps its expression on disk', async () => {
@@ -28,26 +28,24 @@ test('an ID-only edit verifies with the saved secret and keeps its expression on
       expect(id).toBe('new')
       expect(secret === effective.appSecret).toBe(true)
     }
-    await writeLark(agentDir, effective, { appId: 'new' }, verify, () => {})
+    const write = await prepareLarkWrite(
+      agentDir,
+      effective,
+      { appId: 'new' },
+      verify,
+    )
+    await write(effective)
     const saved = JSON.parse(await readFile(path, 'utf8')).extensionConfig.lark
     expect(saved).toEqual({ ...raw, appId: 'new' })
     const before = await readFile(path, 'utf8')
     await expect(
-      writeLark(
-        agentDir,
-        effective,
-        { appId: 'new' },
-        async () => {
-          throw new Error(effective.appSecret)
-        },
-        () => {},
-      ),
-    ).rejects.toThrow(/^Could not verify Lark credentials/)
-    await expect(
-      writeLark(agentDir, effective, { runInApp: false }, verify, () => {
-        throw new Error('Busy')
+      prepareLarkWrite(agentDir, effective, { appId: 'new' }, async () => {
+        throw new Error(effective.appSecret)
       }),
-    ).rejects.toThrow('Busy')
+    ).rejects.toThrow(/^Could not verify Lark credentials/)
+    expect(() => write({ ...effective, appSecret: 'rotated' })).toThrow(
+      'changed during verification',
+    )
     expect(await readFile(path, 'utf8')).toBe(before)
   } finally {
     await rm(agentDir, { recursive: true, force: true })

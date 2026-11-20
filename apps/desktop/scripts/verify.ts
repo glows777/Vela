@@ -1476,7 +1476,6 @@ async function development() {
   }
   await restartJourney()
   await firstRunJourney()
-  await backgroundSettingsJourney()
 }
 
 /**
@@ -1761,17 +1760,15 @@ async function firstRunJourney() {
       VELA_DESKTOP_LARK: 'fake',
     })
     try {
-      await verifyLarkSettings(
-        fourth.page,
-        dir,
-        project,
-        themes,
-        provider.hold,
-        testSecret,
-      )
       checks.push(
-        'A duplicate enabled chat at startup shows the setting to fix; Local answers, and turning ownership off clears the diagnostic.',
-        'Lark settings verify credentials, hide both secrets, disconnect and reconnect the desktop host, protect a running Local session, and remove an enabled chat.',
+        ...(await verifyLarkSettings(
+          fourth.page,
+          dir,
+          project,
+          themes,
+          provider.hold,
+          testSecret,
+        )),
       )
     } finally {
       await fourth.close()
@@ -1783,128 +1780,6 @@ async function firstRunJourney() {
     )
   } finally {
     provider.stop()
-  }
-}
-
-/** Exercise host replacement after a Local turn has returned with a background command. */
-async function backgroundSettingsJourney() {
-  const dir = await mkdtemp(resolve(scratch, 'settings-background-'))
-  const started = resolve(dir, 'started')
-  const release = resolve(dir, 'release')
-  const settings = resolve(dir, 'settings.json')
-  const original = JSON.stringify({
-    extensionConfig: { lark: { runInApp: true } },
-  })
-  await Bun.write(settings, original)
-  const script = resolve(dir, 'faux.json')
-  await Bun.write(
-    script,
-    JSON.stringify({
-      responses: [
-        {
-          toolCalls: [
-            {
-              name: 'bash',
-              input: {
-                run_in_background: true,
-                command:
-                  'touch "$JOB_STARTED"; while [ ! -f "$JOB_RELEASE" ]; do sleep 0.1; done; echo settings-job-finished',
-              },
-            },
-          ],
-        },
-        { text: 'The background command has started.' },
-        { text: 'The background result arrived.' },
-      ],
-    }),
-  )
-  const app = await launchDev({
-    VELA_DIR: dir,
-    VELA_MODEL: `faux:${script}`,
-    VELA_DESKTOP_LARK: 'fake',
-    VELA_DESKTOP_VERIFY_BACKGROUND: '1',
-    JOB_STARTED: started,
-    JOB_RELEASE: release,
-  })
-  try {
-    const { page } = app
-    await page.goto(new URL('index.html', page.url()).href)
-    const local = await page.evaluate(
-      (cwd) => window.vela.openProject({ cwd }),
-      project,
-    )
-    await page.evaluate(
-      ({ id, sessionId }) =>
-        window.vela.submit('local', {
-          projectId: id,
-          sessionId,
-          text: 'Start the background command.',
-        }),
-      local,
-    )
-    const finishedReply = async (text: string) => {
-      await waitForText(page, local.id, local.sessionId, text)
-      await page.waitForFunction(
-        async (id) =>
-          (await window.vela.sessions('local')).some(
-            (s) => s.sessionId === id && s.state === 'done' && !s.runId,
-          ),
-        local.sessionId,
-      )
-    }
-    await finishedReply('The background command has started.')
-    const deadline = Date.now() + 30_000
-    while (!(await Bun.file(started).exists())) {
-      assert(Date.now() < deadline, 'The background command did not start')
-      await Bun.sleep(50)
-    }
-    await page
-      .getByLabel('Sidebar')
-      .getByRole('button', { name: 'Settings' })
-      .click()
-    await page
-      .getByLabel('Settings sections')
-      .getByRole('button', { name: 'Lark' })
-      .click()
-    const toggle = page.getByRole('switch', { name: 'Run Lark in this app' })
-    const off = page.getByText('Off in this app', { exact: true })
-    const alert = page
-      .getByRole('alert')
-      .filter({ hasText: /background command/i })
-    await toggle.click()
-    await alert.or(off).first().waitFor()
-    assert(
-      await alert.isVisible(),
-      'Settings replaced the host during a background command',
-    )
-    assert(await toggle.isChecked())
-    assert.equal(await readFile(settings, 'utf8'), original)
-    await Bun.write(release, 'finish')
-    await finishedReply('The background result arrived.')
-    let delivered = false
-    for await (const file of new Bun.Glob('**/transcript.jsonl').scan(dir)) {
-      const lines = (await Bun.file(resolve(dir, file)).text()).split('\n')
-      if (
-        lines.some(
-          (line) =>
-            line.includes('finished with exit code 0') &&
-            line.includes('settings-job-finished'),
-        )
-      )
-        delivered = true
-    }
-    assert(
-      delivered,
-      'The background command completed and delivered its output',
-    )
-    await toggle.click()
-    await off.waitFor()
-    checks.push(
-      'Changing Lark settings preserves a background command after its Local turn ends, delivers its result to the same session, and succeeds on retry.',
-    )
-  } finally {
-    await Bun.write(release, 'finish')
-    await app.close()
   }
 }
 
@@ -2098,8 +1973,6 @@ try {
     const path = process.argv[option + 1]
     assert(path, 'Pass the packaged .app path')
     await packaged(resolve(root, '../..', path))
-  } else if (process.env.VELA_DESKTOP_VERIFY_SETTINGS_BACKGROUND === '1') {
-    await backgroundSettingsJourney()
   } else await development()
   assert.deepEqual(errors, [], 'No renderer console, page, or resource errors')
   await Bun.write(
