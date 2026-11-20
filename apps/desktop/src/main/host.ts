@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { IncomingMessage } from '@glows777/vela-channels'
 import {
   channelSessionId,
@@ -5,22 +6,23 @@ import {
   local,
 } from '@glows777/vela-channels'
 import { resolveShellPath } from '@glows777/vela-core'
-import { type LarkHost, LarkSubmitError, lark } from '@glows777/vela-lark'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import {
+  connectLarkSetup,
+  discoverLarkGroup,
+  type LarkHost,
+  LarkSubmitError,
+  lark,
+} from '@glows777/vela-lark'
+import { BrowserWindow, dialog, shell } from 'electron'
 import {
   EVENT,
   type Event,
   type LarkSubmit,
-  REQUEST,
   type Request,
 } from '../shared/bridge.ts'
-import {
-  larkStartupDiagnostic,
-  prepareLarkWrite,
-  verifyCredentials,
-} from './lark-settings.ts'
+import { larkStartupDiagnostic } from './lark-settings.ts'
 import { saveModel } from './model-setup.ts'
-import { loadDesktopConfig, readSettings } from './settings.ts'
+import { type loadDesktopConfig, readSettings } from './settings.ts'
 
 /**
  * Local attributes every input to this one person, and the app has no signed-in user,
@@ -31,9 +33,6 @@ const routineCreator = (channel: string) => {
     throw new Error(`The app has no identity to set routines in ${channel}`)
   return { id: 'local-user', name: 'You' }
 }
-
-const reloadDiagnostic =
-  'The app could not reload Lark settings. Check the data directory and settings.json, then try again.'
 
 /**
  * What the bot signs a message with when it posts for this app. It names the app, not
@@ -65,7 +64,7 @@ const larkChatLink = (chatId: string) =>
   `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`
 
 /** Owns the SDK in main. The renderer gets only the fixed preload contract. */
-async function openHost(
+export async function openHost(
   config: ReturnType<typeof loadDesktopConfig>,
   loadLark: boolean,
   larkStartupError?: string,
@@ -204,6 +203,10 @@ async function openHost(
             })),
           ]
         : localHost.projects()
+    // Before starting channels, chats() returns configured IDs without any name lookups.
+    const enabledChatIds = new Set(
+      (await larkHost?.chats())?.map((chat) => chat.chatId),
+    )
     await vela.startChannels()
     const handle = async (
       request: Exclude<Request, { method: 'saveLark' }>,
@@ -322,6 +325,60 @@ async function openHost(
     return {
       settings,
       handle,
+      groupSetup() {
+        const { appId, appSecret } = larkSettings
+        if (
+          !larkHost ||
+          larkSettings.runInApp === false ||
+          typeof appId !== 'string' ||
+          !appId ||
+          typeof appSecret !== 'string' ||
+          !appSecret
+        )
+          throw new Error(
+            'Configure Lark to run in this app before adding a group.',
+          )
+        return {
+          agentDir: config.agentDir,
+          async discover(signal: AbortSignal) {
+            if (transport) {
+              const discoveryTransport = fixtureDir
+                ? (await import('./testing/lark.ts')).fakeLark(
+                    join(fixtureDir, 'discovery'),
+                  )
+                : transport
+              try {
+                return await discoverLarkGroup(
+                  discoveryTransport,
+                  signal,
+                  enabledChatIds,
+                )
+              } finally {
+                discoveryTransport.stop()
+              }
+            }
+            try {
+              const connection = await connectLarkSetup(
+                appId,
+                appSecret,
+                signal,
+              )
+              try {
+                return await connection.waitForMention(enabledChatIds)
+              } finally {
+                connection.stop()
+              }
+            } catch (error) {
+              throw new Error(
+                (error instanceof Error
+                  ? error.message
+                  : String(error)
+                ).replaceAll(appSecret, '[redacted]'),
+              )
+            }
+          },
+        }
+      },
       checkIdle() {
         if (
           vela.channels().some(({ name }) =>
@@ -330,7 +387,9 @@ async function openHost(
               .sessions()
               .some(
                 (session) =>
-                  session.state === 'running' || session.state === 'queued',
+                  !!session.runId ||
+                  session.state === 'running' ||
+                  session.state === 'queued',
               ),
           )
         )
@@ -351,7 +410,9 @@ async function openHost(
 }
 
 /** Invalid Lark configuration must leave Settings and Local available across launches. */
-function openAvailableHost(config: ReturnType<typeof loadDesktopConfig>) {
+export function openAvailableHost(
+  config: ReturnType<typeof loadDesktopConfig>,
+) {
   const loadLark =
     config.extensionConfig.lark?.runInApp !== false &&
     config.extensions.some(
@@ -363,111 +424,4 @@ function openAvailableHost(config: ReturnType<typeof loadDesktopConfig>) {
         openHost(config, false, larkStartupDiagnostic(cause)),
       )
     : opening
-}
-
-/** Only writing settings and replacing the host require exclusive access. */
-export async function startHost() {
-  let workingConfig = loadDesktopConfig(process.cwd())
-  type Host = Awaited<ReturnType<typeof openHost>>
-  let host: Promise<Host> | undefined = Promise.resolve(
-    await openAvailableHost(workingConfig),
-  )
-  let barrier = Promise.resolve()
-  const active = new Set<Promise<unknown>>()
-  let closing = false
-  const verify =
-    process.env.VELA_DESKTOP_LARK === 'fake'
-      ? (await import('./settings-transport.ts')).verifySettingsCredentials
-      : verifyCredentials
-
-  // All readers share one recovery attempt. A repaired directory can be retried on the next request.
-  const restoreLocal = () =>
-    openHost(workingConfig, false, reloadDiagnostic).catch(() => {
-      host = undefined
-      throw new Error(
-        'Could not restore Local. Check the data directory and settings.json, then try again.',
-      )
-    })
-  const current = () => (host ??= restoreLocal())
-  const read = <T>(operation: (live: Host) => T) => {
-    const pending = barrier.then(current).then(operation)
-    const settled = pending.then(
-      () => {},
-      () => {},
-    )
-    active.add(settled)
-    void settled.then(() => active.delete(settled))
-    return pending
-  }
-  const section = () => {
-    try {
-      return (
-        loadDesktopConfig(workingConfig.cwd, workingConfig.agentDir)
-          .extensionConfig.lark ?? {}
-      )
-    } catch {
-      throw new Error(
-        'Could not read Lark settings. Check settings.json and try again.',
-      )
-    }
-  }
-  const save = async (
-    input: Extract<Request, { method: 'saveLark' }>['input'],
-  ) => {
-    const before = await read((live) => {
-      live.checkIdle()
-      return section()
-    })
-    const write = await prepareLarkWrite(
-      workingConfig.agentDir,
-      before,
-      input,
-      verify,
-    )
-    if (closing) throw new Error('The app is closing.')
-    const saved = Promise.all([barrier, ...active]).then(async () => {
-      const previous = await current()
-      previous.checkIdle()
-      await write(section())
-      // Never dispatch to a disposed SDK. Release its Lark connection before starting the replacement.
-      host = previous.dispose().then(
-        async () => {
-          try {
-            const config = loadDesktopConfig(
-              workingConfig.cwd,
-              workingConfig.agentDir,
-            )
-            const next = await openAvailableHost(config)
-            workingConfig = config
-            return next
-          } catch {
-            return restoreLocal()
-          }
-        },
-        () => {
-          // Ownership is uncertain. A second normal Lark host must wait for a fresh process.
-          throw new Error(
-            'Could not safely stop the desktop host. Quit and reopen Vela before changing Lark settings.',
-          )
-        },
-      )
-      return (await host).settings()
-    })
-    barrier = saved.then(
-      () => {},
-      () => {},
-    )
-    return saved
-  }
-  ipcMain.handle(REQUEST, (_event, request: Request) =>
-    request.method === 'saveLark'
-      ? save(request.input)
-      : read((live) => live.handle(request)),
-  )
-  return async () => {
-    closing = true
-    ipcMain.removeHandler(REQUEST)
-    await Promise.all([barrier, ...active])
-    await (await host?.catch(() => undefined))?.dispose()
-  }
 }

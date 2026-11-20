@@ -22,6 +22,7 @@ All notable changes to `@glows777/vela` are listed here. While Vela is on 0.x, a
 
 ### Added
 
+- New project → Lark lists enabled groups and can add a group after you mention the bot and confirm access for its members. The Lark setup helpers now accept an optional set of group IDs to ignore during discovery ([#418](https://github.com/glows777/Vela/issues/418)).
 - **Settings › Lark** verifies app credentials, shows the connection and enabled chats, and can remove a chat or release the desktop connection for `vela serve` ([#420](https://github.com/glows777/Vela/issues/420)).
 
 - **Lark projects and Lark sessions in the desktop app.** Enabled groups appear under Projects with the `Lark` tag and open in the same project page and session panel as Local: the project chat is the group's history with people's names, a session is a topic with its state and the last line it recorded, and a message sent from the app posts in the group as the bot signed `Vela app`. Starting a session from Home opens a topic. A submission that did not plainly post says where it may have landed and re-reads history instead of resending; only a send that never reached Lark restores the draft. A group the app cannot connect to says Lark is off while Local projects keep working ([#418](https://github.com/glows777/Vela/issues/418)).

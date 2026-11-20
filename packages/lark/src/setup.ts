@@ -4,6 +4,7 @@ import { type LarkTransport, larkTransport } from './transport.ts'
 export async function discoverLarkGroup(
   transport: LarkTransport,
   signal?: AbortSignal,
+  excludedChatIds?: ReadonlySet<string>,
 ): Promise<{ chatId: string }> {
   if (signal?.aborted) throw new Error('Lark setup cancelled')
   const botId = await new Promise<string>((resolve, reject) => {
@@ -31,6 +32,7 @@ export async function discoverLarkGroup(
           if (
             event.sender.sender_type !== 'user' ||
             message.chat_type !== 'group' ||
+            excludedChatIds?.has(message.chat_id) ||
             !message.mentions?.some((item) => item.id?.open_id === botId)
           )
             return
@@ -84,7 +86,7 @@ export async function connectLarkSetup(
     () => clearTimeout(timer),
   )
   return {
-    waitForMention: () =>
+    waitForMention: (excludedChatIds?: ReadonlySet<string>) =>
       Promise.race([
         new Promise<never>((_, reject) => {
           rejectConnection = reject
@@ -98,7 +100,7 @@ export async function connectLarkSetup(
             30000,
           )
         }),
-        discoverLarkGroup(transport, discoverySignal),
+        discoverLarkGroup(transport, discoverySignal, excludedChatIds),
       ]),
     send: (chatId: string, text: string) => transport.send(chatId, text),
     stop: () => {

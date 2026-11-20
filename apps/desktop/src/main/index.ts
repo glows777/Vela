@@ -2,7 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, nativeTheme, session } from 'electron'
 import tokens from '../../design/tokens.json'
-import { startHost } from './host.ts'
+import { startHost } from './restart-host.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const canvas = tokens.tokens['vela-white']

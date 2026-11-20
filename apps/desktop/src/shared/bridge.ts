@@ -236,6 +236,10 @@ export interface DesktopBridge {
     target: { chatId: string; rootId?: string },
     runId: string,
   ): Promise<boolean>
+  /** Wait for a mention. A cancelled wait returns undefined. Only main keeps the group to save. */
+  discoverLarkGroup(): Promise<{ chatId: string } | undefined>
+  confirmLarkGroup(): Promise<void>
+  cancelLarkSetup(): Promise<void>
   projects(): Promise<Project[]>
   openProject(input: { cwd: string; name?: string }): Promise<LocalProject>
   /** Native folder picker in main. Cancel and dismissal both return undefined. */
@@ -302,6 +306,7 @@ export type Request =
       target: { chatId: string; rootId?: string }
       runId: string
     }
+  | { method: 'discoverLarkGroup' | 'confirmLarkGroup' | 'cancelLarkSetup' }
   | { method: 'projects' }
   | { method: 'openProject'; input: { cwd: string; name?: string } }
   | { method: 'chooseFolder' }
